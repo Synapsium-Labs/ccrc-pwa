@@ -2,10 +2,11 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession, RunSummary } from '../../shared/api';
+import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import type { ProjectPlacementRead } from '../src/fleet/ProjectCard';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
-import { NEST_BRACKET, ProjectCard } from '../src/fleet/ProjectCard';
+import { NEST_BRACKET, POOL_UNAVAILABLE_TEXT, ProjectCard } from '../src/fleet/ProjectCard';
 import { CROSSING_GLYPH, waveLabel } from '../src/fleet/runWords';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -24,7 +25,8 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: 'claude', archived: [], ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: 'claude',
+  stranded: 0, archived: [], ...over,
 });
 
 describe('uniform shape', () => {
@@ -587,6 +589,322 @@ describe('the held cell opens the run board when a run is actually on it (Task 5
     render(<ProjectCard group={grp({ sessions: [other] })} runs={[childRun]} nowMs={FROZEN}
                         onOpen={() => {}} onActions={() => {}} />);
     expect(cell()?.tagName).toBe('SPAN');
+  });
+});
+
+// Account pools, wave 4, spec §5.10 and §11 row 24. The card is the only place
+// a project's pool is stated, so every measured state — plus the condition
+// where nobody said anything — has a distinct rendering.
+describe('the pool chip', () => {
+  const listed = (byProject: Record<string, ProjectPoolWire>, enforcement: PoolsEnforcement = 'enforced'):
+    ProjectPoolsWire => ({ listed: true, byProject, enforcement });
+  const measured = (pool: ProjectPoolWire): ProjectPlacementRead => ({
+    kind: 'measured', pool, placement: { kind: 'unmeasurable' },
+  });
+
+  it('renders NOTHING when no pools frame has arrived — absence is not a measurement', () => {
+    // The mutant this kills: defaulting a missing pool to `untagged` flags every
+    // project on a server that predates the pools frame.
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    expect(screen.queryByText(/pool/i)).not.toBeInTheDocument();
+    expect(screen.queryByText('no pool')).not.toBeInTheDocument();
+  });
+
+  it('names the pool a tagged project is in', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'tagged', name: 'pool-a' })}
+                        pools={listed({ demo: { state: 'tagged', name: 'pool-a' } })} />);
+    expect(screen.getByLabelText('project pool pool-a')).toHaveTextContent('pool-a');
+  });
+
+  it('flags a MEASURED untagged project — ruling 3\'s worklist', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'untagged' })} pools={listed({})} />);
+    const chip = screen.getByText('no pool');
+    expect(chip).toHaveAttribute('data-pool', 'untagged');
+  });
+
+  it('tells malformed from unreadable, in two aria-labels that each carry the full path', () => {
+    // Two conditions with two remedies — rewrite the file, or fix its
+    // permissions. One shared "bad tag" chip would send the operator to the
+    // wrong one half the time.
+    const { rerender } = render(
+      <ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                   placement={measured({ state: 'malformed' })}
+                   pools={listed({ demo: { state: 'malformed' } })} />);
+    const malformed = screen.getByText('pool malformed');
+    expect(malformed.getAttribute('aria-label')).toMatch(/malformed/i);
+    expect(malformed.getAttribute('aria-label')).toContain('~/.cc-sessions/pools/demo');
+    const malformedLabel = malformed.getAttribute('aria-label');
+
+    rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                          placement={measured({ state: 'unreadable' })}
+                          pools={listed({ demo: { state: 'unreadable' } })} />);
+    const unreadable = screen.getByText('pool unreadable');
+    expect(unreadable.getAttribute('aria-label')).toMatch(/could not be read/i);
+    expect(unreadable.getAttribute('aria-label')).toContain('~/.cc-sessions/pools/demo');
+    expect(unreadable.getAttribute('aria-label')).not.toBe(malformedLabel);
+  });
+
+  it('reads every project as unreadable when the whole listing failed', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'unreadable' })}
+                        pools={{ listed: false, enforcement: 'enforced' }} />);
+    expect(screen.getByText('pool unreadable')).toBeInTheDocument();
+  });
+
+  it('says an unrecognised runtime state needs a newer app, never names its raw residue', () => {
+    // The wire type names the states this bundle understands. A newer fleet can
+    // still send another runtime value, so this is deliberately a raw cast.
+    const residue = { state: 'archived', name: 'pool-z' } as unknown as ProjectPoolWire;
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured(residue)} pools={listed({ demo: residue })} />);
+    const chip = screen.getByText(/app older than fleet; reload/i);
+    expect(chip).toHaveAttribute('data-pool', 'unrecognised');
+    expect(chip).toHaveAccessibleName(/app bundle is older than the fleet; reload/i);
+    for (const absent of ['pool-z', 'pool unreadable', 'pool malformed', 'no pool']) {
+      expect(screen.queryByText(absent)).not.toBeInTheDocument();
+    }
+  });
+
+  it('opens the sheet on a tap, and is a tappable button only when there is somewhere to go', () => {
+    const onPool = vi.fn();
+    const { rerender } = render(
+      <ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                   placement={measured({ state: 'tagged', name: 'pool-a' })}
+                   pools={listed({ demo: { state: 'tagged', name: 'pool-a' } })} onPool={onPool} />);
+    fireEvent.click(screen.getByRole('button', { name: 'project pool pool-a' }));
+    expect(onPool).toHaveBeenCalledWith('demo');
+
+    // No handler: the chip still STATES the pool — it just is not a control.
+    rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                          placement={measured({ state: 'tagged', name: 'pool-a' })}
+                          pools={listed({ demo: { state: 'tagged', name: 'pool-a' } })} />);
+    expect(screen.queryByRole('button', { name: 'project pool pool-a' })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('project pool pool-a')).toBeInTheDocument();
+  });
+
+  it('dims and stops being a control when the fleet ccd predates pools', () => {
+    // `unavailable` says hand-written tags display but nothing enforces them;
+    // a tap could only fail with 501.
+    const onPool = vi.fn();
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'tagged', name: 'pool-a' })}
+                        pools={listed({ demo: { state: 'tagged', name: 'pool-a' } }, 'unavailable')}
+                        onPool={onPool} />);
+    const chip = screen.getByLabelText('project pool pool-a');
+    expect(screen.queryByRole('button', { name: 'project pool pool-a' })).not.toBeInTheDocument();
+    expect(chip).toHaveAttribute('data-dim', 'true');
+    expect(chip).toHaveAttribute('title', POOL_UNAVAILABLE_TEXT);
+  });
+
+  it('stays quiet under enforcement "unknown" — a chip that dims when nothing was checked stops being read', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER}
+                        placement={measured({ state: 'tagged', name: 'pool-a' })}
+                        pools={listed({ demo: { state: 'tagged', name: 'pool-a' } }, 'unknown')} />);
+    expect(screen.getByLabelText('project pool pool-a')).not.toHaveAttribute('data-dim');
+  });
+});
+
+describe('route-owned pool handoff to session rows', () => {
+  const roster = TEST_ROSTER.map((account) => ({
+    ...account,
+    pool: account.id === 'claude2' ? 'pool-b' : null,
+  }));
+  const placement: ProjectPlacementRead = {
+    kind: 'measured',
+    pool: { state: 'tagged', name: 'pool-a' },
+    placement: { kind: 'unmeasurable' },
+  };
+  const conflictingFrame: ProjectPoolsWire = {
+    listed: true,
+    byProject: { demo: { state: 'tagged', name: 'pool-b' } },
+    enforcement: 'enforced',
+  };
+
+  it('passes the route pool to an active row when the pools frame disagrees', () => {
+    const active = sess({ wrapper: 'claude2', home: 'claude2' });
+    render(<ProjectCard group={grp({ sessions: [active] })} placement={placement}
+                        pools={conflictingFrame} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+
+    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+
+  it('keeps an expanded archived dead row neutral when the pools frame disagrees', () => {
+    // Archived membership is the dead/archived wire shape. `SessionLine`
+    // intentionally suppresses off-pool on dead rows: nothing is running, so
+    // the route-owned prop is inert here. Its direct suite pins that policy;
+    // the active case above independently pins ProjectCard's handoff.
+    const archived = sess({
+      id: 'demo-quiet-basin', wrapper: 'claude2', home: 'claude2',
+      workspace: 'quiet-basin', status: 'dead', bucket: 'archived',
+      archivedAt: 1_785_300_000,
+    });
+    render(<ProjectCard group={grp({ archived: [archived] })} placement={placement}
+                        pools={conflictingFrame} roster={roster} archivedOpen
+                        onOpen={() => {}} onActions={() => {}} />);
+
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+});
+
+describe('the stranded cell', () => {
+  it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
+    const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
+    const [group] = groupFleet([
+      sess({ status: 'dead', bucket: 'dead', stranded: marker }),
+    ]);
+    render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
+
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+
+  it('says how many members have nowhere in their pool to go, folded or not', () => {
+    const { rerender } = render(
+      <ProjectCard group={grp({ stranded: 2 })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('2 stranded')).toBeInTheDocument();
+    rerender(<ProjectCard group={grp({ stranded: 2 })} collapsed onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('2 stranded')).toBeInTheDocument();
+  });
+
+  it('renders nothing at zero', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the + names in-pool accounts, never "all accounts"', () => {
+  const pooled = (byId: Record<string, string>) =>
+    TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
+
+  it('leaves the untagged copy byte-identical', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={null} roster={TEST_ROSTER} />);
+    expect(screen.getByLabelText('New workspace on demo — team·max, team·alt, team·b and team·d all disabled'))
+      .toBeInTheDocument();
+  });
+
+  it('names only the accounts the project\'s pool admits', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={null}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    const btn = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(btn.getAttribute('aria-label')).toContain('team·alt and team·d');
+    expect(btn.getAttribute('aria-label')).not.toContain('team·max');
+  });
+
+  it('says the pool is empty rather than listing nobody', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={null}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
+      .toBeInTheDocument();
+  });
+
+  it('uses the project placement over a truthy out-of-pool global projection (D-2643)', () => {
+    const placement: ProjectPlacementRead = {
+      kind: 'measured',
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    };
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={{ wrapper: 'claude', score: 18 }} placement={placement}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    const button = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(button).toHaveAccessibleName('New workspace on demo — team·alt, 91% free');
+    expect(button.getAttribute('aria-label')).not.toContain('team·max');
+  });
+
+  it('keeps a route-measured pool with its placement when the pools frame disagrees', () => {
+    const placement: ProjectPlacementRead = {
+      kind: 'measured',
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'none', pool: 'pool-a' },
+    };
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={{ wrapper: 'claude', score: 18 }} placement={placement}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
+
+    expect(screen.getByLabelText('project pool pool-b')).toHaveTextContent('pool-b');
+    const button = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(button.getAttribute('aria-label')).toContain('nothing in pool pool-b is placeable');
+    expect(button.getAttribute('aria-label')).toContain('team·alt and team·d all disabled');
+    expect(button.getAttribute('aria-label')).not.toContain('pool-a');
+  });
+
+  it('preserves measured none and unmeasurable without falling back to the global projection', () => {
+    const common = {
+      group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
+      projected: { wrapper: 'claude', score: 18 },
+      roster: pooled({ claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' }),
+      pools: { listed: true, byProject: { demo: { state: 'tagged' as const, name: 'pool-b' } }, enforcement: 'enforced' as const },
+    };
+    const { rerender } = render(
+      <ProjectCard {...common} placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b' } }} />,
+    );
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }).getAttribute('aria-label'))
+      .toContain('nothing in pool pool-b is placeable');
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }).getAttribute('aria-label'))
+      .not.toContain('team·max, 82% free');
+
+    rerender(<ProjectCard {...common} placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'unmeasurable' } }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo');
+
+    rerender(<ProjectCard {...common} projected={null}
+                          placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'unmeasurable' } }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo');
+  });
+
+  it('gives failed and missing route reads distinct recovery copy', () => {
+    const common = {
+      group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
+      projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+    };
+    const { rerender } = render(<ProjectCard {...common} placement={{ kind: 'failed' }} />);
+    const failed = screen.getByRole('button', { name: /New workspace on demo/ });
+    const failedLabel = 'New workspace on demo — placement check failed; reopen ccrc to retry';
+    expect(failed).toHaveAccessibleName(failedLabel);
+    expect(failed).toHaveAttribute('title', failedLabel);
+
+    rerender(<ProjectCard {...common} placement={{ kind: 'missing' }} />);
+    const missing = screen.getByRole('button', { name: /New workspace on demo/ });
+    expect(missing).toHaveAccessibleName(
+      'New workspace on demo — project absent from the latest placement check; reload ccrc',
+    );
+    expect(missing).toHaveAttribute('title', missing.getAttribute('aria-label'));
+    expect(missing).not.toHaveAccessibleName(failedLabel);
+  });
+
+  it('uses the legacy global projection without inventing pool state from a newer frame', () => {
+    const common = {
+      group: grp(), onOpen: () => {}, onActions: () => {}, onAddWorkspace: () => {},
+      projected: { wrapper: 'claude', score: 18 }, roster: TEST_ROSTER,
+      placement: { kind: 'legacy' as const },
+    };
+    const { rerender } = render(<ProjectCard {...common} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo — team·max, 82% free');
+
+    rerender(<ProjectCard {...common}
+                          pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo — team·max, 82% free');
+    expect(screen.queryByLabelText('project pool pool-a')).not.toBeInTheDocument();
+
+    rerender(<ProjectCard {...common} projected={null} />);
+    expect(screen.getByRole('button', { name: /New workspace on demo/ }))
+      .toHaveAccessibleName('New workspace on demo — team·max, team·alt, team·b and team·d all disabled');
   });
 });
 

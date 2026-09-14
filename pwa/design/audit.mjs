@@ -517,6 +517,34 @@ export const SELF_GROUNDED_EXEMPT = {
  *  is hand-written (a parser cannot recover it); the COLOUR is read from the
  *  stylesheet, so retinting the rule re-measures it. */
 export const INHERITED_GROUNDS = {
+  'fleet.css .proj-card-pool': {
+    under: ['var(--bg-surface)'],
+    why: 'the project-pool chip sits in .proj-card-head on the project card. Its selector names no ancestor and sets no ground, so the auditor cannot recover the card background from CSS alone',
+  },
+  "fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']": {
+    under: ['var(--bg-surface)'],
+    why: 'every attention-state project-pool chip uses the same project-card ground as the base chip. The grouped selector changes the ink but still names no painted ancestor, so it needs its own registration',
+  },
+  'fleet.css .proj-card-stranded': {
+    under: ['var(--bg-surface)'],
+    why: 'the stranded count sits inside .proj-card-toggle, whose transparent background leaves the project card\'s --bg-surface behind it. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .acct-pool': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .proj-row--selected .acct-pool': {
+    under: ['var(--accent-tint)'],
+    why: 'a selected crossing project paints --accent-tint behind its pool chip. The contrast test binds this registration to .proj-row--selected\'s declared background so the two cannot silently diverge',
+  },
+  'fleet.css .acct-disclosure': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .pool-note': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
@@ -528,6 +556,14 @@ export const INHERITED_GROUNDS = {
   'fleet.css .sess-spawn': {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',
+  },
+  'fleet.css .sess-stranded': {
+    under: ['var(--bg-surface)'],
+    why: 'the stranded chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row does not use this registered attention ink: .sess-line--active answers it through the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
+  },
+  'fleet.css .sess-offpool': {
+    under: ['var(--bg-surface)'],
+    why: 'the visible off-pool cue is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
   },
   'fleet.css .sheet-panel .proj-ready': {
     under: ['var(--bg-sheet)'],

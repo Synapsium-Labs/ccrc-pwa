@@ -161,6 +161,16 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
     // own docstring). Not being able to name its pool is not a mismatch.
     expect(accountPool(pooled({ claude: 'pool-a' }), 'claude-unrostered')).toBeNull();
   });
+
+  it('normalizes an empty pool from a malformed trusted wire to untagged', () => {
+    const malformed = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude' ? '' : null }));
+    expect(accountPool(malformed, 'claude')).toBeNull();
+  });
+
+  it('normalizes an off-grammar pool from a malformed trusted wire to untagged', () => {
+    const malformed = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude' ? 'Pool A' : null }));
+    expect(accountPool(malformed, 'claude')).toBeNull();
+  });
 });
 
 describe('poolSide — the rule, composed and never restated', () => {
@@ -256,6 +266,20 @@ describe('projectPoolOf — the frame, read by project name', () => {
     )).toEqual({ state: 'untagged' });
   });
 
+  it.each(['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty', 'isPrototypeOf'])(
+    'reads an absent prototype-named project as UNTAGGED',
+    (project) => {
+      expect(projectPoolOf({ listed: true, byProject: {}, enforcement: 'enforced' }, project))
+        .toEqual({ state: 'untagged' });
+    },
+  );
+
+  it('reads an own tagged prototype-named project rather than its inherited property', () => {
+    expect(projectPoolOf(
+      { listed: true, byProject: { constructor: tagged('pool-a') }, enforcement: 'enforced' }, 'constructor',
+    )).toEqual(tagged('pool-a'));
+  });
+
   it('reads every project as UNREADABLE when the listing itself failed', () => {
     // `listed:false` is "present at the root and unlistable", never "nothing
     // is tagged" — the polarity §6 disclosed. Untagged here would silently
@@ -310,7 +334,9 @@ Expected: FAIL — `Failed to resolve import "../src/lib/pools"` and `"accountPo
 
 - [ ] **Step 4: Add `accountPool` and extract `joinLabels`**
 
-In `pwa/src/lib/accounts.ts`, add after `accountHue` (currently ending at `:53`):
+In `pwa/src/lib/accounts.ts`, import `POOL_NAME_RE` as a value from
+`../../../shared/roster` beside the `Hue` type, then add after `accountHue`
+(currently ending at `:53`):
 
 ```ts
 /** This account's POOL NAME, or `null` for an untagged account, an account
@@ -323,13 +349,13 @@ In `pwa/src/lib/accounts.ts`, add after `accountHue` (currently ending at `:53`)
  *  "what pool is this account in" is answered in exactly one place and an
  *  older server's omission degrades once rather than five times.
  *
- *  `typeof p === 'string'`, never a truthiness test: the empty string is
- *  refused by `parseRoster` on the way in (`POOL_NAME_RE`), so it cannot be a
- *  real pool, and a bad JSON body that produced one must read as untagged
- *  rather than as a pool named "". */
+ *  The canonical parser refuses off-grammar values, but this client receives a
+ *  cast `/api/accounts` body and a shape-only offline roster cache. An invalid
+ *  string can therefore arrive here; it must forecast permissively as an
+ *  untagged account rather than inventing a crossing. */
 export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {
   const p = entryFor(roster, wrapper)?.pool;
-  return typeof p === 'string' ? p : null;
+  return typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null;
 }
 ```
 
@@ -446,7 +472,9 @@ export function projectPoolOf(
 ): ProjectPoolWire | null {
   if (pools === null) return null;
   if (!pools.listed) return { state: 'unreadable' };
-  return pools.byProject[project] ?? { state: 'untagged' };
+  return Object.hasOwn(pools.byProject, project)
+    ? pools.byProject[project]!
+    : { state: 'untagged' };
 }
 
 /** The distinct pool names this roster actually carries, in roster order.
@@ -495,17 +523,23 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/accounts-pool.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS, 22 tests; `tsc` exits 0.
+Expected: PASS, 33 tests; `tsc` exits 0. The 33 is a derived
+copy-completeness check, not a decreed cardinal: 27 direct `it(` calls plus
+six `it.each` prototype-name rows = 33 tests as written. After changing that
+block, re-derive both the direct call count and any parameterized rows;
+`it.each` means the direct `it(` count alone is not a test count.
 
 - [ ] **Step 7: Prove the guard by mutation**
 
 Run each mutation, confirm the named red, then revert it:
 
-1. In `splitByPool`, delete the `poolSide(null, projectPool) === 'unknown'` early return. Expected red: `offers EVERYTHING and flags unknown when the project pool is null` — `TypeError` or `expected false to be true` on `split.unknown`, and `does the same on an unreadable and on a malformed tag` fails with `expected [] to equal [ 'claude', 'claude2', 'claude-corp', 'claude-dev0' ]`.
+1. In `splitByPool`, delete the `poolSide(null, projectPool) === 'unknown'` early return. Expected red only: `offers EVERYTHING and flags unknown when the project pool is null` and `does the same on an unreadable and on a malformed tag` each fail with `expected false to be true` on `split.unknown`. The eligible and crossing arrays are identical through the fallthrough; this guard's observable contribution is `unknown: true`.
 2. In `poolSide`, change the last line to `return 'crossing';` (folding `pool-undecidable` into a mismatch). Expected red: `is unknown on an unreadable or malformed tag, for a TAGGED account too` — `expected 'crossing' to be 'unknown'`.
 3. In `projectPoolOf`, change the `!pools.listed` arm to `return { state: 'untagged' };`. Expected red: `reads every project as UNREADABLE when the listing itself failed` — `expected { state: 'untagged' } to deeply equal { state: 'unreadable' }`.
-4. In `accountPool`, change `typeof p === 'string'` to `p ?? null`. Expected red: `tsc --noEmit` fails with `Type 'string | null | undefined' is not assignable to type 'string | null'` — the compiler is the mechanism for this one; keep the runtime test as the reader's explanation.
+4. In `accountPool`, change the return to `return p;`. Expected red in TWO independent mechanisms: `tsc --noEmit` fails with `Type 'string | null | undefined' is not assignable to type 'string | null'`, and the focused Vitest suite's `an older server is untagged, not unknown` case fails because `undefined` is not `null`.
 5. In `poolLabelList`, change `!== 'crossing'` to `=== 'eligible'`. Expected red: `is byte-identical to homeAbleLabelList when nothing is known` — `expected '' to be 'team·max, team·alt, team·b and team·d'`.
+6. **D-2609 named mutation:** in `accountPool`, revert the predicate to `typeof p === 'string'`. Expected red: the empty and off-grammar malformed-wire cases each receive their string rather than `null`.
+7. **D-2610 named mutation:** in `projectPoolOf`, replace the `Object.hasOwn` ternary with `pools.byProject[project] ?? { state: 'untagged' }`. Expected red: all six absent prototype-name rows receive inherited values instead of `{ state: 'untagged' }`. For each named mutation, restore by its exact inverse and verify source sentinels before the final green run.
 
 - [ ] **Step 8: Commit**
 
@@ -533,7 +567,7 @@ git commit -m "feat(pwa): one reader for an account's pool, one place the rule i
 
 **Spec:** §5.10 `api.ts` row; §5.4.2 (the tag route's four refusals); §5.6 (the swap/sessions 409/503/501).
 
-**Mutation table:** no §11 row of its own — §11 row 26 pins the SHEET's use of `crossPool`, and this task pins the CLIENT's. Goes red when `swap`/`createSession` start sending a `crossPool` key on an ordinary call (the request stops being byte-identical to the one that shipped), or when the three new codes reach a toast as bare slugs. 501 already renders `UNSUPPORTED_VERB_TEXT` through the existing `unsupported` key (`api.ts:124`, `:176`) — nothing is added for it.
+**Mutation table:** no §11 row of its own — §11 row 26 pins the SHEET's use of `crossPool`, and this task pins the CLIENT's. Goes red when `swap`/`createSession` add a `crossPool` key to the ordinary parsed request shape, when `swap` changes its URL or complete `RequestInit`, or when the three new codes reach a toast as bare slugs. D-2619 adds a state-preservation red for malformed versus unreadable; D-2620 pins that global copy promises no surface-specific control. 501 already renders `UNSUPPORTED_VERB_TEXT` through the existing `unsupported` key (`api.ts:124`, `:176`) — nothing is added for it.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -542,11 +576,10 @@ Append to `pwa/test/api.test.ts`, at the end of the file:
 ```ts
 // Account pools, wave 4. The three writes and the three refusals.
 //
-// The BYTE-IDENTITY assertions are the point of the first two: an ordinary
-// swap and an ordinary start must send exactly the request they sent before
-// pools existed, because an older server reading an unexpected key is the
-// silent-success class this wire discipline exists to prevent. `archive(id,
-// {force:false})` above is the same shape for the same reason.
+// The ordinary-call assertions pin the compatibility property an older server
+// can observe: the same parsed keys and values, with no stray `crossPool` key.
+// Swap also owns its literal request construction here, so its two ordinary
+// cases pin the URL and complete RequestInit like `archive(id, {force:true})`.
 describe('account pools', () => {
   const okPool = (pool: unknown, extra: Record<string, unknown> = {}): Response =>
     jsonResponse(200, { ok: true, pool, ...extra });
@@ -583,20 +616,26 @@ describe('account pools', () => {
     expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects/a%20b/pool');
   });
 
-  it('swap(id, w) posts the byte-identical {wrapper} body it always did', async () => {
+  it('swap(id, w) posts the complete ordinary swap request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.swap('s1', 'claude2');
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }) },
+    ]);
   });
 
-  it('swap(id, w, {crossPool:false}) is still the UNCROSSED call — never a body that says no', async () => {
+  it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
     const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
     const api = createApi(fetchImpl as unknown as typeof fetch);
     await api.swap('s1', 'claude2', { crossPool: false });
-    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
-    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2' });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      { method: 'POST', headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }) },
+    ]);
   });
 
   it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
@@ -624,14 +663,41 @@ describe('account pools', () => {
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
   });
 
-  it('turns the three pool refusals into sentences, not slugs', () => {
-    // Each names what the box established and what would change it. A bare
-    // `pool-mismatch` under a failed toast says nothing about the disclosure
-    // that exists precisely to let the operator do it on purpose.
-    expect(apiErrorText(asError(409, { ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' })))
-      .toMatch(/different pool/i);
+  it('names both pools in a measured mismatch without promising a control', () => {
+    const mismatch = apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a',
+    }));
+    expect(mismatch).toMatch(/pool-b/);
+    expect(mismatch).toMatch(/pool-a/);
+    expect(mismatch).not.toMatch(/show other pools|pick an account/i);
+  });
+
+  it('uses the unchanged generic mismatch sentence when either pool name is absent', () => {
+    const generic = 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.';
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch', projectPool: 'pool-a',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch', accountPool: 'pool-b',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'pool-mismatch',
+      accountPool: { name: 'pool-b' }, projectPool: 'pool-a',
+    }))).toBe(generic);
+  });
+
+  it('does not interpolate pool fields for a different unmapped code', () => {
+    expect(apiErrorText(asError(409, {
+      ok: false, error: 'some-other-code',
+      accountPool: 'pool-b', projectPool: 'pool-a',
+    }))).toBe('some-other-code');
+  });
+
+  it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
     expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'unreadable' })))
       .toMatch(/could not be read/i);
+    expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'malformed' })))
+      .toMatch(/invalid pool name/i);
     expect(apiErrorText(asError(400, { error: 'bad-pool-name' })))
       .toMatch(/lowercase/i);
   });
@@ -683,10 +749,35 @@ Then, inside `API_ERROR_TEXT` (`:175`), after the `registry-unmeasurable` entry:
   // `sendErrorText` owns — they consume this function's OUTPUT as a KEY, so a
   // sentence here for a code one of them owns would lose its wording. The
   // suite asserts that in both directions.
-  'pool-mismatch': 'That account is in a different pool from this project. Open "show other pools" and confirm the crossing, or pick an account the project\'s pool admits.',
+  'pool-mismatch': 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.',
   'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
   'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 ```
+
+Per D-2619, preserve `stderr` precedence and then special-case the state the
+shared refusal code carries, before the static map lookup:
+
+```ts
+    const code = (err.body as { error?: unknown }).error;
+    if (code === 'pool-mismatch') {
+      const { accountPool, projectPool } = err.body as {
+        accountPool?: unknown;
+        projectPool?: unknown;
+      };
+      if (typeof accountPool === 'string' && typeof projectPool === 'string') {
+        return `The account pool (${accountPool}) differs from the project pool (${projectPool}).`;
+      }
+    }
+    if (code === 'pool-unreadable') {
+      const state = (err.body as { state?: unknown }).state;
+      if (state === 'malformed') {
+        return 'The project\'s pool tag contains an invalid pool name. Fix or clear its file under ~/.cc-sessions/pools/ and try again.';
+      }
+    }
+```
+
+The existing static `pool-unreadable` sentence remains the honest fallback for
+`state:'unreadable'` and for older/partial bodies with no `state`.
 
 - [ ] **Step 4: Add the three calls**
 
@@ -694,10 +785,9 @@ In `pwa/src/lib/api.ts`, replace the `createSession` entry (`:434-435`) and the 
 
 ```ts
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
-     *  start sends the byte-identical body it sent before pools existed —
-     *  `archive`'s `{force:true}` rule, for `archive`'s reason: a key an older
-     *  server does not know is the silent-success class, and a flag that only
-     *  ever means "yes" never needs to travel saying "no". */
+     *  start keeps the parsed request shape it sent before pools existed —
+     *  no key an older server does not know, and a flag that only ever means
+     *  "yes" never needs to travel saying "no". */
     createSession: ({ crossPool, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
     }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
@@ -721,8 +811,8 @@ In `pwa/src/lib/api.ts`, replace the `createSession` entry (`:434-435`) and the 
         `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
     stop: (id: string) => post(`${sid(id)}/stop`),
     /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
-     *  and an absent `opts` both send the byte-identical `{wrapper}` body the
-     *  route has always taken. Not a checkbox anywhere in the UI: it is what a
+     *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
+     *  Not a checkbox anywhere in the UI: it is what a
      *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
      *  a confirm sentence that names the crossing. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
@@ -737,13 +827,26 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/api.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS; `tsc` exits 0.
+Expected: PASS, 66 tests; `tsc` exits 0. The 66 is a derived
+copy-completeness check, not a decreed cardinal: the focused file contains 66
+direct `it(` calls and zero `it.each` calls after D-2619 split the distinct
+refusal facts and D-2621 added fallback/type/code-gate proofs. Re-derive both
+counts if the focused file changes; parameterized rows would make direct calls
+diverge from reported tests.
 
 - [ ] **Step 6: Prove the guard by mutation**
 
-1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: `swap(id, w) posts the byte-identical {wrapper} body it always did` — `expected { wrapper: 'claude2', crossPool: false } to deeply equal { wrapper: 'claude2' }`.
+1. In `swap`, change the ternary to `{ wrapper, crossPool: opts?.crossPool === true }`. Expected red: both complete ordinary-request tests receive a body containing `crossPool:false` instead of `JSON.stringify({ wrapper: 'claude2' })`.
 2. In `createSession`, change the body to plain `rest` regardless. Expected red: `createSession omits crossPool entirely unless it is true` — the third assertion fails, `expected {…} to deeply equal { …, crossPool: true }`.
-3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `turns the three pool refusals into sentences, not slugs` — `expected 'pool-mismatch' to match /different pool/i`.
+3. Delete the `'pool-mismatch'` entry from `API_ERROR_TEXT`. Expected red: `uses the unchanged generic mismatch sentence when either pool name is absent` receives the raw `pool-mismatch` slug instead of D-2620's generic fallback.
+4. **D-2618 URL pin:** change only `swap`'s suffix from `/swap` to `/swop`. Expected red: both complete ordinary-request tests receive `/api/sessions/s1/swop` instead of `/api/sessions/s1/swap`. Restore by exact inverse.
+5. **D-2618 complete-init pin:** change the JSON-body `post` helper's method from `POST` to `PUT`. Expected red includes both complete ordinary-request tests receiving `method:'PUT'`; existing independent callers red too. Restore by exact inverse.
+6. **D-2619 state-preservation pin:** make the `state === 'malformed'` branch return `API_ERROR_TEXT['pool-unreadable']!`. Expected red only in the distinct-state test: unreadable copy does not match `/invalid pool name/i`. Restore by exact inverse.
+7. **D-2620 global-copy pin:** restore the old sentence that promises `show other pools` and `pick an account`. Expected red in the absent-name fallback test because the static generic sentence changed. Restore by exact inverse.
+8. **D-2621 name-aware pin:** delete only the pre-map `code === 'pool-mismatch'` branch. Expected red only in `names both pools in a measured mismatch without promising a control`: the generic fallback does not match `/pool-b/`; all generic fallback assertions remain green. Restore the branch by exact inverse.
+9. **D-2621 account-name type pin:** replace only `typeof accountPool === 'string'` with account-side truthiness. Expected red only in the generic fallback test: truthy `{ name:'pool-b' }` renders `[object Object]` instead of the exact generic sentence. Restore by exact inverse.
+10. **D-2621 project-name type pin:** replace only `typeof projectPool === 'string'` with project-side truthiness. Expected red only in the generic fallback test: truthy `{ name:'pool-a' }` renders `[object Object]` instead of the exact generic sentence. Restore by exact inverse.
+11. **D-2621 code-gate pin:** widen `if (code === 'pool-mismatch')` to `if (code)`. Expected red only in `does not interpolate pool fields for a different unmapped code`: `some-other-code` is replaced by the pool-name sentence. Restore by exact inverse.
 
 - [ ] **Step 7: Commit**
 
@@ -767,7 +870,7 @@ git commit -m "feat(pwa): the tag write, the declared crossing, and three refusa
 
 **Spec:** §5.10 `stores/fleet.ts` row; §5.4.1 ("not in the PWA offline snapshot"); §5.9 ("Nothing about pools is persisted").
 
-**Mutation table:** no numbered §11 row; §10's "A cached tag renders as live policy → Nothing pooled is persisted; store slot null on load" is the guard. Goes red when the slot is hydrated from `loadFleetSnapshot()`, when `saveFleetSnapshot` grows a pools argument, or when `asFleetMsg` starts accepting a `pools` frame whose payload is not an object.
+**Mutation table:** §10's "A cached tag renders as live policy → Nothing pooled is persisted; store slot null on load" remains the persistence guard. **D-2622 adds the live-frame boundary guard:** after a valid frame, each malformed outer payload must leave that exact object in the slot. It goes red when the outer array refusal, `listed` boolean discriminant, `enforcement` vocabulary, or listed-true `byProject` non-array-object rule is weakened. Per-project members deliberately remain unvalidated here: D-2623 owns their downstream tolerance.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -918,13 +1021,20 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/stores.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS; `tsc` exits 0.
+Expected: PASS, 72 tests; `tsc` exits 0. The 72 is a derived
+copy-completeness check, not a decreed cardinal: this focused file has 72
+direct `it(` calls and zero `it.each` calls after D-2622's eight pools-frame
+cases land. Following D-2598, re-derive both quantities after changing the
+focused file; parameterized rows make direct calls diverge from reported tests.
 
 - [ ] **Step 5: Prove the guard by mutation**
 
-1. Change the initial state to `pools: (snapshot as unknown as { pools?: ProjectPoolsWire }).pools ?? null` and have the `fleet` branch call `saveFleetSnapshot` with a third argument that a locally-widened `saveFleetSnapshot` writes. Expected red: `is NOT persisted, and a fresh store starts null even with a snapshot on disk` — `expected '{"savedAt":…,"pools":…}' not to contain 'pool'`. Revert both edits.
-2. Delete the `typeof … === 'object'` half of the `asFleetMsg` arm. Expected red: `drops a pools frame whose payload is missing or not an object` — `expected 'enforced' to be null`.
-3. Delete the `else if (msg.type === 'pools')` branch. Expected red: `starts null and takes a well-formed frame` — `expected null to deeply equal { listed: true, … }`.
+1. Per D-2615, change the initial state to `pools: (snapshot as unknown as { pools?: ProjectPoolsWire } | null)?.pools ?? null` and have the `fleet` branch call `saveFleetSnapshot` with a third argument that a locally-widened writer writes (no new import). Expected red: `is NOT persisted, and a fresh store starts null even with a snapshot on disk` — `expected '{"savedAt":…,"pools":…}' not to contain 'pool'`. Revert all three edits by their exact inverses.
+2. **D-2622 outer-array pin:** after a valid frame, change only the array return to `return m as FleetMsg`. Expected red: `silently retains the exact prior valid state for an outer array payload` receives the array instead of the exact prior object. Restore by exact inverse.
+3. **D-2622 listed-discriminant pin:** change only `outer.listed === true` to `outer.listed !== false`. Expected red: `silently retains the exact prior valid state for a missing or invalid listed discriminant` accepts `{listed:'true', byProject:{}}`. Restore by exact inverse.
+4. **D-2622 enforcement-vocabulary pin:** replace only the three-value comparison with `typeof outer.enforcement === 'string'`. Expected red: `silently retains the exact prior valid state for a missing or unrecognised enforcement value` accepts `enforcement:'future'`. Restore by exact inverse.
+5. **D-2622 listed-true map-shape pin:** remove only `&& !Array.isArray(outer.byProject)`. Expected red: `silently retains the exact prior valid state for every invalid listed:true byProject shape` accepts `byProject:[]`. Restore by exact inverse.
+6. Delete the `else if (msg.type === 'pools')` branch. Expected red: `starts null and takes a well-formed frame without discarding additive fields` — `expected null to deeply equal { listed: true, … }`.
 
 - [ ] **Step 6: Commit**
 
@@ -1278,13 +1388,9 @@ Add above `PendingSpawn` (`:47`):
  *  Exported so the suite pins the sentence rather than a paraphrase of it. */
 export const POOL_UNAVAILABLE_TEXT = 'fleet ccd predates pools';
 
-/** The project's pool, as one chip. FIVE renderings for five conditions, and
- *  the fifth — "no frame has arrived" — is handled by the CALLER not rendering
- *  this at all, because a chip is a claim and absence is not one (§11 row 24).
- *
- *  `malformed` and `unreadable` are two chips, not one: rewrite the file and
- *  fix its permissions are different remedies, and each aria-label carries the
- *  full path so either is actionable from a phone with no shell. */
+/** The project's pool as one chip. Absence is handled by the caller: no frame
+ *  means no claim. Per D-2623, unrecognised residue means this app is older
+ *  than the fleet, not a tag that may be folded into any declared diagnosis. */
 function PoolChip({ pool, project, dim, onTap }: {
   pool: ProjectPoolWire;
   project: string;
@@ -1292,24 +1398,27 @@ function PoolChip({ pool, project, dim, onTap }: {
   onTap: ((project: string) => void) | undefined;
 }): ReactNode {
   const path = `~/.cc-sessions/pools/${project}`;
+  const unrecognised = !['tagged', 'untagged', 'malformed', 'unreadable'].includes(pool.state);
   const word =
     pool.state === 'tagged' ? pool.name
     : pool.state === 'untagged' ? 'no pool'
     : pool.state === 'malformed' ? 'pool malformed'
-    : 'pool unreadable';
+    : pool.state === 'unreadable' ? 'pool unreadable'
+    : 'app older than fleet; reload';
   const label =
     pool.state === 'tagged' ? `project pool ${pool.name}`
     : pool.state === 'untagged' ? 'no project pool — any account may serve this project'
     : pool.state === 'malformed' ? `project pool tag is malformed — rewrite ${path} as one pool name`
-    : `project pool tag could not be read — check permissions on ${path}`;
-  // A SPAN when there is nowhere to go: no handler, or a fleet whose ccd would
-  // answer 501. `.sess-held`'s own door/cell split, for its own reason — a
-  // control that cannot act is worse than a plain statement of the fact.
-  if (dim || onTap === undefined) {
+    : pool.state === 'unreadable' ? `project pool tag could not be read — check permissions on ${path}`
+    : 'app bundle is older than the fleet; reload to understand this project pool';
+  const dataPool = unrecognised ? 'unrecognised' : pool.state;
+  // A span when there is nowhere safe to go: no handler, a fleet whose ccd
+  // would answer 501, or a newer fleet state this app cannot interpret.
+  if (dim || onTap === undefined || unrecognised) {
     return (
       <span
         className="proj-card-pool"
-        data-pool={pool.state}
+        data-pool={dataPool}
         data-dim={dim || undefined}
         aria-label={label}
         title={dim ? POOL_UNAVAILABLE_TEXT : label}
@@ -1322,7 +1431,7 @@ function PoolChip({ pool, project, dim, onTap }: {
     <button
       type="button"
       className="proj-card-pool"
-      data-pool={pool.state}
+      data-pool={dataPool}
       aria-label={label}
       title={label}
       onClick={() => onTap(project)}
@@ -1455,8 +1564,8 @@ In `pwa/src/fleet/fleet.css`, immediately after the `.proj-card-pin[data-mixed]`
   font-size: var(--text-2xs);
   white-space: nowrap;
   color: var(--ink-tertiary);
-  cursor: pointer;
 }
+button.proj-card-pool { cursor: pointer; }
 button.proj-card-pool::before {
   content: '';
   position: absolute;
@@ -1472,16 +1581,14 @@ button.proj-card-pool::before {
    name in greyscale. */
 .proj-card-pool[data-pool='untagged'],
 .proj-card-pool[data-pool='malformed'],
-.proj-card-pool[data-pool='unreadable'] {
+.proj-card-pool[data-pool='unreadable'],
+.proj-card-pool[data-pool='unrecognised'] {
   color: var(--status-attention-text);
 }
-/* Nothing on the fleet is enforcing these tags yet (§5.11). Half opacity is
-   the whole cue plus the title; the chip is a span here, so there is no
-   disabled control to explain. */
-.proj-card-pool[data-dim] {
-  opacity: 0.55;
-  cursor: default;
-}
+/* Nothing on the fleet is enforcing these tags yet (§5.11). Per D-2631 the
+   small pool word stays at full contrast; inert span, neutral cursor, and title
+   carry the distinction without fading readable text. */
+.proj-card-pool[data-dim] { cursor: default; }
 
 /* The strand — ruling 6's loud cell on the card. Same attention ink as
    `.sess-acct-away`, which is an already-audited pair on this ground
@@ -1510,19 +1617,22 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
     expect(norm(rule)).toContain('var(--tap-min)');
   });
 
-  it('paints the worklist and both bad-tag states in the audited attention ink', () => {
+  it('reserves the pointer cursor for the button form, leaving inert spans at the default', () => {
+    expect(declValue(ruleFor('.proj-card-pool'), 'cursor')).toBeNull();
+    expect(declValue(ruleFor('button.proj-card-pool'), 'cursor')).toBe('pointer');
+  });
+
+  it('paints the worklist, both bad-tag states, and unrecognised residue in audited attention ink', () => {
     const sel = ".proj-card-pool[data-pool='untagged']";
     expect(declValue(ruleFor(sel), 'color')).toBe('var(--status-attention-text)');
     const group = selectorsOf(css, sel).map(normSel);
-    for (const state of ['malformed', 'unreadable']) {
+    for (const state of ['malformed', 'unreadable', 'unrecognised']) {
       expect(group).toContain(normSel(`.proj-card-pool[data-pool='${state}']`));
     }
   });
 
-  it('dims, rather than recolours, when the fleet ccd predates pools', () => {
-    // A third hue would be a fourth thing to name in greyscale. Opacity plus
-    // the title is the whole cue.
-    expect(ruleFor('.proj-card-pool[data-dim]')).toContain('opacity');
+  it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
+    expect(declValue(ruleFor('.proj-card-pool[data-dim]'), 'opacity')).toBeNull();
   });
 
   it('gives the strand cell the same audited pair `.sess-acct-away` already uses', () => {
@@ -1539,7 +1649,7 @@ Run:
 cd pwa && ./node_modules/.bin/vitest run test/project-card.test.tsx test/fleet-css.test.ts test/fleet-screen.test.tsx test/contrast.test.ts && ./node_modules/.bin/tsc --noEmit
 ```
 
-Expected: PASS on all four; `tsc` exits 0. `contrast.test.ts` runs the real `design/contrast-check.mjs` gate over the edited stylesheet — a new colour pair that is not already audited fails here, which is why both new rules reuse `--status-attention-text` on the surface ground.
+Expected: PASS on all four; `tsc` exits 0. `contrast.test.ts` runs the real `design/contrast-check.mjs` gate over the edited stylesheet. Reusing a token is not itself audit coverage: per D-2640, each new color-bearing selector must enter `report.measured` on the project card's inherited `--bg-surface` ground.
 
 - [ ] **Step 8: Prove the guard by mutation**
 
@@ -1549,6 +1659,9 @@ Expected: PASS on all four; `tsc` exits 0. `contrast.test.ts` runs the real `des
 4. In `PoolChip`, drop the `dim ||` from the span branch. Expected red: `dims and stops being a control when the fleet ccd predates pools` — `expected null not to be null` on the `queryByRole` assertion.
 5. In `ProjectCard`, change `poolLabelList(roster, pool)` back to `homeAbleLabelList(roster)`. Expected red: `names only the accounts the project's pool admits` — `expected '…team·max, team·alt, team·b and team·d…' not to contain 'team·max'`.
 6. Move the `{group.stranded > 0 && …}` cell into the `{collapsed && …}` branch beside `.proj-card-busy`. Expected red: `says how many members have nowhere in their pool to go, folded or not` — `Unable to find an element with the text: 2 stranded`.
+7. Per D-2623, restore the old residual tagged fallthrough in `poolRule`. Expected red: the three separate future-state rule cases return false mismatch, false named mismatch, and false permit while all six known-state controls remain green. Restore by exact inverse.
+8. Per D-2624, move `cursor:pointer` from `button.proj-card-pool` to the shared `.proj-card-pool` rule. Expected red: `reserves the pointer cursor for the button form, leaving inert spans at the default` observes pointer on the shared form. Restore by exact inverse.
+9. Per D-2631, add `opacity:0.55` to `.proj-card-pool[data-dim]`. Expected reds: `keeps unavailable chip text unfaded while its inert form carries the distinction` observes the opacity, and `node design/contrast-check.mjs` reports the unregistered failing fade. Restore by exact inverse.
 
 - [ ] **Step 9: Commit**
 
@@ -3132,6 +3245,8 @@ If nothing needed fixing, this step produces no commit and the wave is done.
 
 ## Deviations found
 
+- **D-2678 — Task 9's prescribed stranded style was unaudited, and registering only its ordinary ground would conceal a selected-row failure.** Step 5 adds `.sess-stranded { color: var(--status-attention-text); }`, making it a new color-bearing selector, but omitted `pwa/design/audit.mjs` despite D-2671/D-2672 requiring each such selector to contribute measured rows and remain absent from `report.uncovered`. After the exact planned production/test edits, the focused Task 9 gate registered and ran 496 assertions but failed the uncovered census: expected at most 255, received 256. The ratchet therefore caught the next instance of this defect class without a manual census. The coordinator measured the ordinary project-card pair at 10.09:1 dark / 5.92:1 light, but also measured the selector's own attention ink on a selected row's `--ink-primary` slab at only 1.55:1 dark / 2.80:1 light. Ruling: register `.sess-stranded` with its inherited `--bg-surface` ground, make the registration's rationale explicitly distinguish the selected-row path, keep `.sess-stranded` in the active row's achromatic group where `--edge-strong` measures 9.27:1 dark / 9.91:1 light, and pin both the two measured audit rows with zero uncovered entry and the selected-group membership in the same Task 9 commit.
+
 **Allocated and defined in one act, from the live allocator, on 2026-09-05.**
 `~/.local/bin/ccrc-api ledger allocate --json -` with `project: ccrc-pwa`, `count: 26` and `byId`
 filled from this pane (`ccrc-pwa-amber-summit`) answered **D-1663**–**D-1688** and moved the floor to
@@ -3151,3 +3266,1099 @@ plan-time refinements the PWA rides on are defined where they were decided — *
 `shared/poolrule.ts`, so `splitByPool` composes it and this wave tests the composition, not the table) in
 wave 1, and **D-1683** (the cold-start `pools` frame the store's `null` slot waits for) in wave 3. A
 deviation found while executing this plan is allocated in its own call at the moment it is found.
+
+- **D-2591 — The Task 1 `poolLabelList` test block contradicted itself.** Its
+  shared roster deliberately leaves the home-able `claude-dev0` untagged, and
+  its pool-b expectation correctly includes that account (`team·alt and
+  team·d`); its pool-c expectation incorrectly excluded the same account by
+  asserting an empty list. D-1664's shared `poolRule` admits an untagged
+  account to every tagged project, so the red-first implementation measured
+  `team·d`, not an empty string. The coordinator ruled that the first two
+  `poolLabelList` tests keep their shared roster, while only the empty-pool
+  test builds a roster that tags every home-able account before asserting that
+  pool-c is empty. Its test comment scopes the precondition to this label
+  projection: placement additionally requires `_account_ok` and `_avail`, so
+  the projection does not decide whether a session strands.
+
+- **D-2597 — Task 1 prescribed an inert mutation and understated the guard.**
+  Its fourth mutation changed `accountPool` from `typeof p === 'string' ? p :
+  null` to `p ?? null`, then expected TypeScript to retain `undefined` and
+  reject the return. Nullish coalescing instead converts `undefined` to `null`,
+  so the mutant is semantically equivalent and both the focused suite and
+  `tsc --noEmit` stayed green. The coordinator ruled that the intended mutation
+  is `return p;`. It independently reds in both mechanisms: TypeScript reports
+  `string | null | undefined` is not assignable to `string | null`, and the
+  older-wire runtime case observes `undefined` instead of `null`. The plan's
+  claim that only the compiler was the mechanism was therefore also false.
+  Literal leading `+` characters accidentally pasted with the initial D-TBD
+  entry were removed while replacing it with this issued definition.
+
+- **D-2598 — Task 1's focused-test cardinal did not survive counting.** Step 6
+  decreed 22 tests while the prescribed block contains 24 and the focused run
+  reports 24 passing tests. An independent census is four `accountPool` + six
+  `poolSide` + five `splitByPool` + four `projectPoolOf` + two `poolOptions` +
+  three `poolLabelList` cases = 24; `grep -cE '^\s*it\('` over the block also
+  returns 24. D-2475 is the precedent: a plan cardinal is derived from the list
+  it summarizes rather than decreed, because editing the list otherwise leaves
+  the cardinal stale. The ruling retains 24 as a copy-completeness check, states
+  that it equals the block's `it(` calls, tells editors to re-derive it after
+  changing that block, and warns that `it.each` rows make call count and test
+  count diverge.
+
+- **D-2606 — Task 2's fallback reasoned about file order, but the defect is
+  lexical scope.** Step 1 told an editor to append the new sibling
+  `describe('account pools', ...)` at EOF, with a fallback of putting it
+  immediately after the block that defines `asError`. At Task 1 HEAD
+  `a2c54690`, `pwa/test/api.test.ts:709-712` instead defines `const asError`
+  inside the existing sibling `describe('apiErrorText and the code translators
+  that compose with it', ...)`, which closes at `:774`. No placement of a
+  sibling describe can see that nested const: moving it after the enclosing
+  block changes file order but cannot cross lexical scope. The planned refusal
+  assertions would therefore fail from unavailable `asError` before their
+  `/different pool/i` prediction is observable. Ruling: hoist the helper to
+  module scope as a pure move, with its body byte-identical and all existing
+  uses untouched, then append the new sibling describe.
+
+- **D-2607 — Task 2's stated alphabetical location contradicted the import
+  order it asked the editor to read.** Step 3 said to place `ProjectPoolWire`
+  between `PrView` and `ReapResult`, while `pwa/src/lib/api.ts:5` orders the
+  relevant existing symbols `PasskeyRegisterStart, ProjectRow, PrView,
+  ReapResult`. The existing `ProjectRow`-before-`PrView` ordering proves the
+  list is case-insensitively alphabetical; on that order `ProjectPoolWire`
+  belongs after `PasskeyRegisterStart` and before `ProjectRow`. Ruling: use
+  that corrected position. The stale `API_ERROR_TEXT` and method line locators
+  are locator drift requiring a re-read, not a separate deviation.
+
+- **D-2608 — Task 1 mutation 1 overstated what deleting the unknown early
+  return changes.** The loop after `splitByPool`'s early return routes each
+  wrapper to `eligible` unless `poolSide` says `crossing`. For a null,
+  unreadable, or malformed project pool every side remains `unknown`; the
+  fallthrough therefore preserves the same eligible array and empty crossing
+  array as the early return. The guard's only observable contribution is
+  `unknown: true` instead of `false`. The external isolated verifier measured
+  the prior baseline at 24 passes and the deletion mutant at 2 failures / 22
+  passes, both `expected false to be true` on the null and
+  unreadable/malformed `split.unknown` assertions; no array assertion failed.
+  Ruling: retain the array assertions as the unknown-state contract but correct
+  Step 7 item 1 to name only those two `split.unknown` reds.
+
+- **D-2609 — The PWA must normalize a malformed account-pool string at its
+  own reader boundary.** Canonical server output cannot carry an off-grammar
+  pool because `parseRoster` rejects it, but the `/api/accounts` client casts
+  its JSON and the same-origin offline-cache reviver validates roster shape,
+  not `pool`; an empty or off-grammar string can therefore reach
+  `accountPool`. `typeof p === 'string' ? p : null` returned that string as a
+  real pool, putting it into `poolOptions` and falsely classifying the account
+  as crossing against a tagged project. Ruling: import the already-exported
+  `POOL_NAME_RE` from `shared/roster` and return a string only when it matches;
+  otherwise return `null`. This deliberately does NOT broaden server or
+  offline validation: the server's strict parser remains the canonical
+  refusal, while this PWA adapter safely normalizes stale/malformed trusted
+  data. That permissive forecast is the same `poolRule` rationale for an
+  absent account tag: a client that cannot validate a constraint may not claim
+  a crossing. The focused tests cover both `''` and an off-grammar string; the
+  named predicate-revert mutation must red those tests.
+
+- **D-2610 — `projectPoolOf` must distinguish an absent own tag from an
+  inherited JavaScript property.** A listed `byProject` map is a normal object
+  serialized from `Object.fromEntries`; direct indexing reads inherited values
+  for legal ccd project names including `constructor`, `__proto__`, `toString`,
+  `valueOf`, `hasOwnProperty`, and `isPrototypeOf`. An absent `constructor`
+  then yielded the inherited `Object` constructor rather than the untagged
+  fallback, making a tagged account look crossing. Ruling: use
+  `Object.hasOwn(pools.byProject, project) ? pools.byProject[project]! :
+  { state: 'untagged' }`. Focused tests prove all six names are untagged when
+  absent and that an own tagged `constructor` entry still wins; the named
+  mutation back to direct lookup must red the six absent-name rows. This is a
+  High finding because it is reachable through canonical output, not only a
+  malformed wire.
+
+- **D-2617 — Task 2's literal byte-identity claim exceeds both the compatibility
+  contract and its structural assertions.** At review time the four
+  ordinary/explicit-false cases compared parsed JSON shapes. That correctly
+  pins what old servers can observe — unchanged keys and values, especially no
+  unexpected `crossPool` key — because every server consumer parses JSON and no
+  route reads, signs, or
+  deduplicates raw bytes. Pinning raw create-session text would be false
+  confidence: rest-spread preserves caller insertion order, so harmless caller
+  reordering changes bytes without changing the contract while this unit test's
+  literal stays green. Ruling: retain structural create-session assertions and
+  reword Task 2's test, source, plan, and mutation prose from byte identity to
+  unchanged parsed request shape. This reframes and refutes the original
+  D-TBD finding's requested `.toBe` remedy.
+
+- **D-2618 — Task 2 added the first PWA `swap` tests but discarded its URL and
+  complete request init.** Before this task the focused suite contained no
+  `swap` occurrence, so a typo in `${sid(id)}/swap`, a method change, or loss of
+  the JSON content type had no pin. Unlike create-session rest-spread order,
+  swap's `{ wrapper }` literal is owned inside `api.ts`, so its whole wire shape
+  is stable at this seam. Ruling: the absent and explicit-false swap tests each
+  assert the URL plus the complete `RequestInit` — POST, JSON content type, and
+  `JSON.stringify({ wrapper: 'claude2' })`. Named URL and init mutations must
+  reach those assertions and red, then be restored by exact inverse.
+
+- **D-2619 — `apiErrorText` must preserve malformed versus unreadable in its
+  message while the server correctly folds both to one refusal decision.** The
+  route deliberately sends one `pool-unreadable` code plus `state:'unreadable'
+  |'malformed'`; safety requires the same fail-closed decision, but the PWA's
+  static map discarded `state` and falsely diagnosed a malformed name as an IO
+  read failure. This plan already requires distinct malformed/unreadable chip
+  and sheet wording, so the toast would contradict the same screen's measured
+  fact. Ruling: keep the static unreadable entry as the fallback for absent or
+  unreadable state, add one `state === 'malformed'` branch after stderr
+  precedence and before map lookup, test both states, and mutation-fold the
+  malformed sentence back to unreadable. Severity: Low; enforcement is intact
+  and both remedies point to the same file.
+
+- **D-2620 — Task 2's global `pool-mismatch` copy promises two controls absent
+  from a reachable caller.** `StartProgramSheet` consumes the server's account
+  projection computed against an UNTAGGED PROJECT forecast; the selected
+  account may itself be tagged and collide with the tagged project passed to
+  ordinary `createSession`. That sheet has neither `show other pools` nor an
+  account picker, yet the old global sentence promised both. The spec's PWA
+  surfaces table omits StartProgramSheet, and adding an account chooser would be
+  a product/scope decision that also contradicts its pinned two-call flow.
+  Ruling: do not touch the sheet; make global copy truthful by directing the
+  operator to a flow that can disclose and confirm crossing, or to changing the
+  project's pool. The named mutation restores both false promises and must red.
+
+- **D-2621 — A measured mismatch must name both carried pool names while an
+  older or partial body keeps D-2620's static generic sentence.** The initial
+  review recorded this as reported-not-taken because interpolating names looked
+  like a map redesign and SwapSheet/NewSessionSheet already expose their local
+  pool context. Measurement refuted the cost premise: `apiErrorText` already
+  short-circuits body-aware `stderr`, D-2619 adds the same pre-map idiom for
+  `state`, and the route already carries `accountPool` plus `projectPool` for
+  this exact diagnostic. Deferral would rewrite and re-review D-2620's same
+  sentence twice while StartProgramSheet — the one pool-blind surface — shipped
+  a merely non-false dead end. Ruling: TAKEN in the same logical Task 2/D-2620
+  fix. Before the map lookup, when `code === 'pool-mismatch'` and both fields are
+  strings, return a sentence naming both and promising no control. If either
+  field is absent or non-string, fall through unchanged to D-2620's static
+  sentence so older servers permit rather than print `undefined` or crash.
+  Tests pin both paths, reject truthy non-string names independently on each
+  side, and prove other error codes cannot enter this branch. Deleting only the
+  name-aware branch must red the with-names assertion while the static fallback
+  remains green; widening either one string check to truthiness and widening the
+  code gate must each red their own assertion. Restore every mutant by exact
+  inverse.
+
+- **D-2622 — Task 3's object-only `pools` cast could overwrite a good policy
+  with an unreadable envelope and crash a render path.** Coordinator mail 813
+  ruled that the existing cast posture remains acceptable for degradable row
+  fields, but not for this payload: `projectPoolOf` reads the envelope's
+  discriminated shape directly, so `{listed:true,enforcement:'enforced'}` could
+  replace a prior valid frame and then pass missing `byProject` to
+  `Object.hasOwn`. Arrays, wrong/missing `listed`, wrong/missing `enforcement`,
+  and absent/null/array/primitive `byProject` have the same overwrite path.
+  Ruling: validate only the outer `ProjectPoolsWire` envelope before accepting a
+  frame: a non-array object, `listed` exactly `true` or `false`, `enforcement`
+  exactly `enforced`, `unavailable`, or `unknown`, and for `listed:true` a
+  non-null non-array-object `byProject`. Preserve all additive outer fields and
+  do not validate member states: D-2623 owns its downstream future-member
+  tolerance. Every malformed envelope now silently retains the exact prior
+  valid state; tests establish that prior state before each malformed input, and
+  separate array, discriminant, vocabulary, and map-shape mutants each reach
+  their named post-frame assertion before exact-inverse restoration.
+
+- **D-2623 — An unrecognised per-project pool state must remain distinct and
+  fail shut, never become a false mismatch, permit, or read-failure diagnosis.**
+  Coordinator mail 813 confirmed TypeScript was the parity outlier: `ccd`
+  already fail-shuts every residual `_pool_ok` state, while the shared rule's
+  residual tagged fallthrough could produce a mismatch with `projectPool:
+  undefined`, name a carried future `name` as a plausible mismatch, or permit
+  the value when the account was untagged. Normalizing a future member to
+  `unreadable` was rejected because the tag may have been read successfully and
+  the wire contract forbids folding one measured state into another. Ruling:
+  `projectPoolOf` preserves the raw own member; `poolRule` positively recognizes
+  `tagged`, proves its residual with `const unhandled: never = projectPool`, and
+  returns `{ok:false,reason:'pool-undecidable',state:'unrecognised'}`. PWA
+  composition consequently reports unknown, preserves every candidate, creates
+  no crossing, and retains ordinary labels. `ProjectCard` and Task 6's
+  `currentCopy` give this state its own remediation: this app/bundle is older
+  than the fleet and should be reloaded. They must neither expose a carried
+  future name nor claim unreadable, malformed, or untagged. The raw runtime
+  token never becomes a CSS vocabulary; use `data-pool="unrecognised"`. Missing
+  `name` on the declared `{state:'tagged'}` arm remains deferred because `ccd`
+  has the same hole and a TypeScript-only change would create parity drift.
+  Separate future-state tests sit outside `POOL_RULE_CASES`, whose exact declared
+  state census remains unchanged; six known-state controls prove the residual
+  mutation changes only the intended mechanism.
+
+- **D-2624 — Only the actionable project-pool chip advertises a pointer
+  cursor.** The plan deliberately renders a `<span>` whenever the optional
+  `onPool` handler is absent, and also for enforcement unavailable or
+  unrecognised residue, but its original shared `.proj-card-pool` rule assigned
+  `cursor:pointer` to both forms. Task 6 later wires the FleetScreen control, yet
+  the optional inert public form remains valid and otherwise advertises a tap it
+  cannot take. Coordinator mail 813 ruled the correction low severity and
+  mechanical: keep the shared class cursor-neutral, scope pointer to
+  `button.proj-card-pool`, retain default cursor on inert spans, and pin both
+  selector forms in the stylesheet test.
+
+- **D-2631 — Task 5 must not dim readable pool-chip text with element
+  opacity.** The plan itself prescribed `.proj-card-pool[data-dim] {
+  opacity:0.55 }` while naming `node design/contrast-check.mjs` as its gate. The
+  gate correctly reports the fade as unregistered; registering it would only
+  turn the structural red into a measured contrast red. Coordinator mail 825
+  measured the repo's own contrast math on the relevant raised ground:
+  `--ink-tertiary` is 5.27:1 dark / 4.86:1 light at full strength but only
+  2.54:1 / 2.15:1 at 0.55, and needs at least 0.97 in the worst theme to clear
+  4.5:1. No human-perceptible text fade works; `--ink-disabled` also fails at
+  full opacity. Element opacity composites the whole subtree, so it cannot dim
+  the chip without dimming its word, and a `noText` registry exemption would be
+  false. Ruling: remove element opacity from the chip. Unavailability remains
+  conveyed by three non-color mechanisms already present: inert `<span>` rather
+  than button, `POOL_UNAVAILABLE_TEXT` in the title, and D-2624's absence of a
+  pointer cursor. An optional fourth cue may use an audited background/border or
+  decorative text-free sibling, but only if its worst light-theme state passes;
+  otherwise ship the three structural signals. The stylesheet test must assert
+  no opacity on `[data-dim]`, and mutating the rule back to `opacity:0.55` must
+  make both that assertion and the real contrast gate red.
+
+- **D-2628 — Task 6's toast tests are red at baseline, so their mutation rows
+  carry no evidence.** `toast()` pushes only to a module-level listener set and
+  `ToastHost` is its only subscriber, yet all ten prescribed PoolSheet render
+  sites mount the sheet alone. The warning/refusal messages therefore never
+  enter the DOM even with production branches intact. A mutation beneath a
+  baseline-red assertion remains red and conveys zero bits — the false-red
+  counterpart to a green mutant without a live control. Coordinator mail 823
+  upheld the in-tree mechanical remedy: import `ToastHost` and use one shared
+  render helper that mounts `<><ToastHost /><PoolSheet ... /></>` at every site,
+  as neighboring sheet suites do. Establish a green baseline first, then delete
+  warning and refusal toast arms independently and require each named DOM
+  assertion to become red before exact-inverse restoration.
+
+- **D-2629 — The measured route response yields to the first `pools` frame
+  newer than that response, without snapping back to a pre-write frame.** The
+  approved spec explicitly says the sheet "renders the measured `pool` from the
+  200 and settles on the next `pools` frame". The plan contradicted it by using
+  `measured ?? projectPoolOf(...)` until close. Coordinator mail 823 ruled that
+  the spec wins while preserving the plan's valid concern: a frame that predates
+  the write must not overwrite the route's fresh read-back. Implement this with
+  the same monotonic generation/frame-identity mechanism D-2630 needs, storing
+  the measured answer with the generation and frame identity it observed. Drop
+  it only when a later pools frame arrives after the response. Tests separately
+  prove a pre-write frame cannot snap the 200 back and the first post-response
+  frame replaces it without closing. Mutate each relevance check separately and
+  require the test to reach the intended assertion.
+
+- **D-2630 — A PoolSheet write continuation may update only the request,
+  project, and open generation that issued it.** The prescribed success,
+  refusal, toast, and finally arms were unconditional. With A in flight and the
+  mounted sheet closed/reopened on B, A could set B's measured state, toast A's
+  result over B, and clear the saving guard around B's newer request. Coordinator
+  mail 823 upheld the defect and ruled D-2629/D-2630 share one mechanism: one
+  monotonic generation, advanced on every write and every project change,
+  reopen, close, or unmount. Each async arm captures it and returns immediately
+  unless still current; measured state also carries the frame identity from
+  D-2629. Deferred tests start A, close/reopen on B, then resolve A and prove B's
+  rendered pool, toast surface, and saving state remain untouched; a newer-write
+  case proves ordering within one subject. Drop the generation guard in one
+  success, failure/toast, or finally arm at a time — never empty a shared helper
+  and mistake one pinned call site for proof of every continuation.
+
+- **D-2632 — An issued deviation is orphan-exposed until its definition is
+  committed, and no gate measures that working-tree window.** The definitions
+  for D-2622 through D-2624 and D-2628 through D-2631 were authored when their
+  rulings arrived but remained only in this unpushed branch's working tree while
+  later implementation continued. The ledger floor had already risen, so losing
+  that working tree would permanently orphan all seven numbers: the committed
+  reference gate can catch a committed citation without a committed definition,
+  but cannot see an uncommitted definition. No code commit carried an undefined
+  D-reference, so this was orphan exposure rather than a same-commit violation.
+  Coordinator mail 830 ruled the mitigation as ordering, not a new mechanism:
+  commit issued definitions before doing any further work with their numbers.
+  This forward-only commit records the true timing instead of amending an older
+  code commit to manufacture simultaneity.
+
+- **D-2633 — The coordinator's program ledger cites issued numbers before the
+  worker branch commits their definitions, so the coordinator branch cannot pass
+  `deviation-refs.test.ts` during that interval.** This is structural: citations
+  and definitions live on separate branches by design. The coordinator must
+  therefore measure the union of its ledger branch and the worker's committed
+  plan definitions rather than interpret its own branch's temporary red as a
+  collision. In this run, the coordinator's program ledger cited D-2622 through
+  D-2631 while this branch still held their definitions only in the working tree;
+  committing through D-2633 closes both the orphan window and the cross-branch
+  maximum imbalance without pretending the definitions landed earlier.
+
+- **D-2647 — Task 3's persistence substring assertion rejects the required
+  durable `RosterWire.pool` field while claiming to exclude project-pool
+  policy.** `expect(raw).not.toContain('pool')` is green only because its roster
+  fixture is empty; every realistic persisted roster contains its required
+  `pool` member. Deleting the assertion would also lose its depth-independent
+  tripwire against policy smuggled below the top level. Coordinator mail 850
+  therefore ruled a precise replacement: persist a realistic roster carrying
+  `pool`, assert `raw` does not contain `enforcement` (a token unique to
+  `ProjectPoolsWire`), and retain the exact top-level-key and cold-store
+  `pools === null` assertions. This accepts durable roster identity without
+  permitting live policy at any depth.
+
+- **D-2648 — A readable pool census with unavailable enforcement is accepted in
+  production but not mutation-pinned.** Tests enumerate all three enforcement
+  values only for `listed:false`; the `listed:true` fixtures cover `enforced` and
+  `unknown`. A mutant rejecting `enforcement:'unavailable'` only when
+  `listed:true` leaves all 72 store tests green, so a readable directory served
+  beside pre-pools `ccd` could be dropped and an older frame retained instead of
+  rendering its tags inert. Coordinator mail 850 upheld the remedy: add a
+  `listed:true`, object `byProject`, unavailable-enforcement case; apply that
+  one-combination rejection mutant, require its named assertion to red, then
+  restore exactly.
+
+- **D-2649 — The store documents pools as sticky across reconnects, but tests
+  retain prior state only after malformed frames on one socket.** Adding
+  `set({ pools:null })` to either `disconnect()` or a fresh `connect()` leaves
+  every pool test green. In that regression, the reconnect interval before the
+  watcher remeasures temporarily erases project chips and crossing disclosure.
+  Coordinator mail 850 upheld the remedy: drive a valid frame, disconnect,
+  reconnect through the next fake socket, and assert the exact prior object
+  remains until another valid frame arrives. Mutate the disconnect and connect
+  reset sites independently and restore each exactly.
+
+- **D-2650 — Array-envelope rejection was behaviorally present but its dedicated
+  outer guard was reported as redundant and unpinned.** Deleting the outer
+  `Array.isArray(pools)` clause leaves the suite green because exact downstream
+  discriminant and enforcement checks also reject arrays. Coordinator mail 850
+  ruled that the clause remains: the neighboring `!Array.isArray(byProject)` is
+  independently load-bearing, and a statement that “the array guard here is
+  redundant” invites deletion of the wrong one. The ruled remedy was to pin both
+  `{type:'pools', pools:[]}` retaining the prior live policy and `listed:true`
+  with `byProject:[]`, while preserving both clauses. The later execution-time
+  measurement below records that those exact cases already exist, so this
+  remedy is stopped pending its own ruling rather than silently manufacturing
+  duplicate evidence.
+
+- **D-2651 — D-2650's prescribed array fixtures already existed, and the outer
+  array rejection is intentionally over-determined.** Coordinator mail 854
+  superseded D-2650 after verifying that `pwa/test/stores.test.ts:1046` already
+  retained prior state for both an empty outer array and a non-empty array with a
+  valid-looking member, while `pwa/test/stores.test.ts:1071` already rejected
+  `listed:true` with `byProject:[]`. Deleting only the outer
+  `Array.isArray(pools)` clause remains green because the exact `listed` and
+  `enforcement` discriminants independently reject arrays; that green mutant did
+  not prove the fixtures absent. The clause remains as the local
+  envelope-narrowing idiom, not as an independently load-bearing mechanism. Add
+  one source comment distinguishing this redundant short-circuit from the
+  load-bearing inner `!Array.isArray(outer.byProject)` clause, but add no duplicate
+  fixture or source-shape test whose only property is preserving one redundant
+  line.
+
+- **D-2636 — A tagged project card announces the fleet-wide untagged projection
+  even when that account is outside this project's pool.** `ProjectCard` gives a
+  truthy global `projected` precedence over pooled copy, but the server computes
+  that value against `{state:'untagged'}`. The original client-side suppression
+  remedy was refuted: `RosterWire` omits telemetry and cannot reproduce placement
+  honestly. The server already ships the answer as each `ProjectRow.placement`,
+  including the selected wrapper and its own score. Coordinator mail 846 ruled
+  that the card must render account and headroom from that project-specific
+  measurement, never re-derive it. Graph-first/current-source cost measurement
+  compared a direct `api.projects` read, a fleet-store slot, and extending the
+  pools frame; mail 855 recommends the direct read as the only two-production-file
+  path with no new wire or global-store seam. The direct read landed in
+  `6a6476e3`. Its live latency remains honestly UNMEASURED: the local endpoint
+  refused connection and the tailnet endpoint returned 401, so neither timing was
+  route latency. The coordinator accepted the structural O(N) agent-side cost as
+  sufficient to forbid timer polling. D-2663 and D-2668 refine its invalidation
+  lifecycle, while D-2664 requires pool and placement to remain one route
+  measurement.
+
+- **D-2637 — The project-pool button's invisible target measures only 22.25px
+  tall, and wide chips receive that vertical extension only across their centre.**
+  The formula assumes `--leading-tight`, but the UA button's computed line height
+  is `normal`; three fixed labels are already wider than 44px. Positive horizontal
+  insets do not shrink total clickable width, but they leave outer columns only
+  the visible 12.75px high. Coordinator mail 846 ruled to declare the line height
+  the formula assumes (or compute from the measured box), use `--tap-min`
+  vertically, and clamp left/right with
+  `min(0px, calc((100% - var(--tap-min)) / 2))`. D-2641 moves this fix into the
+  Task 6 commit that first makes the button reachable.
+
+- **D-2638 — The pool-target CSS assertion can pass with `--tap-min` on neither
+  axis.** It searches the entire rule for one substring; an unused custom
+  property keeps 60/60 green after both target axes are erased. Coordinator mail
+  846 ruled per-declaration assertions for the two vertical and two horizontal
+  insets, plus deletion of the false “chip is narrow and unshrinkable” comment.
+  Mutations must remove each axis independently and reach the named assertion.
+
+- **D-2639 — Three pre-existing fleet overlays share the same whole-rule
+  substring anti-pattern.** `.sess-subagents::before`, `.sess-actions::before`
+  and `.proj-card-add::before` can lose their target formulas while an unused
+  `--tap-min` keeps the CSS suite green; the measured combined actions/add mutant
+  passed 60/60. Coordinator mail 847 defers this outside the wave unless the
+  D-2638 per-axis helper generalises trivially. This entry records the carry and
+  does not enlarge Task 6 by itself.
+
+- **D-2640 — This wave's pool-chip and stranded colours pass AA but never entered
+  the contrast auditor's measured census.** Audit measured 258 uncovered and 346
+  measured, with zero measured rows for `.proj-card-pool`, its attention variants,
+  or `.proj-card-stranded`. The actual pairs pass on the card's
+  `--bg-surface` ground: tertiary ink 5.77 dark/5.70 light, attention text
+  10.09/5.92. Coordinator mail 847 ruled to register a recoverable inherited
+  ground for every colour-bearing rule, assert each appears in `measured`, and
+  correct plan/test prose that previously claimed an audit occurred. No colour
+  changes.
+
+- **D-2641 — The broken pool-button target is dead CSS until Task 6 wires
+  `onPool`, then becomes immediately reachable.** Before Task 6 every production
+  card takes `PoolChip`'s inert span branch. Coordinator mail 847 therefore rules
+  D-2637 and D-2638 into the same Task 6 implementation commit as FleetScreen's
+  wiring; a separate later fix would ship an intermediate reachable regression.
+
+- **D-2642 — D-2620's “only fix is an account chooser” premise is superseded.**
+  `StartProgramSheet` already loads `ProjectRow[]` through `api.projects`, and
+  each row already carries its project-specific `placement`; consuming it needs
+  no chooser and does not change the sheet's two-call flow. Coordinator mail 847
+  preserves D-2620 as history and records this correction. The same ruled
+  server-measurement approach as D-2636 applies when this surface is repaired.
+
+- **D-2643 — Project-card tests never combine a tagged pool with a truthy global
+  projection, so the healthy branch could not expose D-2636.** Every truthy
+  `projected` fixture omits `pools`, while every pooled-copy fixture passes
+  `projected={null}`. Coordinator mail 847 requires a red-first crossed fixture:
+  tagged project, truthy projected wrapper outside the pool, and an assertion
+  that the project-specific placement supplies the announced account/score.
+
+- **D-2644 — `.proj-card-pool[data-dim] { cursor: default; }` is behaviorally
+  inert.** Only the span branch emits `data-dim`; it never matches the scoped
+  `button.proj-card-pool { cursor:pointer }`, and `default` is already the span's
+  UA cursor. Changing it to pointer left the relevant 120 tests green. Delete the
+  leftover rule; D-2624's load-bearing button-only pointer remains unchanged.
+
+- **D-2645 — The static `pool-mismatch` fallback promises a disclosure flow with
+  no production caller yet.** At the ruling point `crossPool` had zero callers,
+  even though Tasks 7 and 8 in this same wave are specified to land those flows.
+  Coordinator mail 847 permits either landing the disclosure callers or reducing
+  the copy to what exists. Keep this as a sequencing invariant: do not finish
+  the wave with the promise unless Tasks 7/8 make it true.
+
+- **D-2646 — `PoolSheet` renders the route's measured pool in its body but its
+  ordinary success toast echoes request intent.** A successful write can re-read
+  as unreadable, malformed, untagged, or a different tag. Coordinator mail 850
+  rules that ordinary toast copy derives from `response.pool` and stays `info`;
+  a successful divergent measurement is not an error. The `unknown-pool` warning
+  still names the submitted pool because its referent is the attempted name,
+  while ordinary success names resulting state. Add a divergent response test
+  pinning both body and toast, run one intent-echo mutant to the named failure,
+  and restore exactly.
+
+- **D-2634 — Task 2's route-response tests did not distinguish the server's
+  measured pool from the request intent.** The final isolated review mutated
+  `setProjectPool` to synthesize `response.pool` from the submitted `pool`; all
+  66 focused tests and strict TypeScript stayed green because both success
+  fixtures returned the state their request already implied. The production
+  docstring already makes measured response authoritative, so this was a
+  documented invariant with no mechanism. Coordinator mail 839 upheld the
+  test-only fix and required an honest post-write divergence: request `pool-a`
+  while the re-read returns `unreadable` or `malformed`, where echoing intent
+  would falsely announce a tagged pool after the box measured that nobody can
+  decide. Add that divergent response assertion, apply the one-mechanism
+  intent-echo mutant, record its actual failing assertion, and restore exactly.
+  Production code remains unchanged.
+
+- **D-2635 — Moving `apiErrorText`'s stderr branch below coded pool failures is
+  a real green mutant, but stderr-bearing and coded response bodies cannot
+  compete on the shipped server surface.** The initial review recommendation
+  would have fabricated a body containing both `stderr` and `error`. Coordinator
+  mail 839 measured every send site: stderr replies are `{ ok:false, stderr }`,
+  while `pool-mismatch`, `pool-unreadable`, and `unsupported` replies carry an
+  `error` with no stderr. Therefore ordering is not load-bearing and a competing
+  PWA fixture would freeze behavior for an impossible input. Correct the
+  `apiErrorText` docstring to name the measured disjoint send-site shapes rather
+  than imply precedence. A server-side assertion that no reply carries both
+  fields would protect the real invariant, but is explicitly deferred outside
+  this PWA wave. No production behavior or PWA test changes follow from this
+  entry.
+
+- **D-2615 — Task 3's combined persistence mutant must be null-safe at store
+  bootstrap.** Step 5 item 1 originally prescribed `pools: (snapshot as unknown
+  as { pools?: ProjectPoolsWire }).pools ?? null` while widening the offline
+  writer and passing the live slot into it. The module-level
+  `useFleetStore = createFleetStore()` constructs before a snapshot exists, so
+  `loadFleetSnapshot()` returns `null` and the direct `.pools` access throws
+  `TypeError: Cannot read properties of null (reading 'pools')` during module
+  evaluation. That is a FALSE red, not a weak one: zero tests register and the
+  named snapshot-byte assertion is never reached. A mutation must change one
+  target behavior and reach the assertion that names it. Ruling: use the
+  smaller null-safe hydration `(snapshot as unknown as { pools?:
+  ProjectPoolsWire } | null)?.pools ?? null`, keeping the same locally widened
+  writer and fleet-handler third argument, with no new import. This combined
+  mutant changes persistence/hydration only and reaches the structural
+  snapshot assertion; restore all three temporary edits by exact inverse.
+
+- **D-2671 — Task 7 adds three transparent color-bearing rules that pass
+  contrast but remain outside the measured census.** The implemented
+  `.acct-pool`, `.acct-disclosure`, and `.pool-note` selectors each set text
+  color without an opaque ground inside `Sheet`. The focused audit was
+  baseline-green while all three appeared in `report.uncovered` and contributed
+  zero measured rows. The actual painting ancestor is `.sheet-panel`, whose
+  `primitives.css:141` rule sets `background: var(--bg-sheet)`; the three
+  selectors name no painted ancestor, so the auditor cannot recover that ground.
+  Measured there, tertiary ink passes at 5.51 dark / 5.70 light and secondary
+  ink at 8.27 / 7.41. Coordinator mail 914 approved registration in
+  `INHERITED_GROUNDS`, with direct assertions that each selector contributes two
+  measured rows at 4.5 or better and appears zero times in `report.uncovered`.
+  Deleting a registration must red the census assertion while the standalone
+  contrast gate remains green.
+
+- **D-2672 — New color-bearing rules need an uncovered-census high-water gate.**
+  D-2671 is the second wave in which a new rule passed the contrast command while
+  remaining outside its measured census, requiring a human to notice. Review is
+  not the mechanism. Coordinator mail 914 ruled a separate post-Task-7 commit
+  that pins `audit().uncovered.length` to the count after D-2671's three
+  registrations. The baseline may only shrink: a new unmeasured color rule must
+  fail on arrival rather than waiting for another manual census. This gate is
+  deliberately not part of Task 7's feature commit.
+
+- **D-2652 — The `unknown-pool` warning branch still announces request intent as
+  measured state.** D-2646 moved ordinary success copy to
+  `measuredToast(requestProject, response.pool)`, but the warning branch says
+  `Tagged <project>` without consulting `response.pool`. The server computes
+  `warning:'unknown-pool'` from the submitted name independently of its
+  post-write measurement, so a successful request can warn about an unrostered
+  submitted pool while the route reports `unreadable`, `malformed`, `untagged`,
+  or a different tag. Coordinator mail 875 issued this number and ruled one
+  composed warning: derive the state clause through `measuredToast` from the
+  route's `response.pool`, name the submitted pool only in the empty-roster
+  warning clause, and retain the interruptive error channel because sessions
+  there can strand. Add a fixture combining `warning:'unknown-pool'` with a
+  divergent measured state, apply one intent-echo mutant to the named
+  assertion, and restore it exactly.
+
+- **D-2663 — Placement refresh must cover limit changes without timer polling.**
+  The Task 5 effect invalidates only when the pools-frame object changes, but a
+  project's placement also depends on roster limits. A limit change with no new
+  pools frame therefore leaves the card frozen indefinitely. Coordinator mail
+  912 ruled the app's existing visible-page `visibilitychange` idiom as a third
+  invalidation trigger: a hidden phone performs no work, while returning to a
+  visible page remeasures. Focus events and elapsed timers remain inert. Add a
+  red-first test that independently dispatches a visible `visibilitychange` and
+  observes one new projects request, with timer and focus controls remaining at
+  the prior count.
+
+- **D-2664 — Project pool and placement must come from the same projects-route
+  measurement.** The pools watcher and `/api/projects` have different budgets
+  and cadences, so reading `ProjectCard`'s pool from the frame while reading its
+  placement from the route permits a durable split-brain display. Coordinator
+  mail 912 ruled that `FleetScreen` carry `ProjectRow.pool` beside
+  `ProjectRow.placement` from the route's single `poolsRead`, and that
+  `ProjectCard` derive `pool`, `poolName`, `placeableNames`, `legacySafe`, and
+  `PoolChip` from that carried row value. The redundant `placement.pool` field is
+  not an authority and must not be read. A divergent frame-versus-row fixture
+  must prove that the row's pool and placement remain one measurement.
+
+- **D-2665 — Failed and missing placement states need an observable reader or an
+  honest collapse.** Task 5 introduced distinct `failed` and `missing` variants,
+  but the card maps both to the same absence of placement content, so callers and
+  tests cannot observe the distinction the seam claims to preserve. Coordinator
+  mail 912 ruled that each state receive actionable, truthful copy, or that the
+  type collapse them if no different response is intended. This wave retains the
+  distinction: failed tells the operator to retry the projects measurement;
+  missing says the project was absent from that measurement. Delete and
+  failed-to-missing fold mutants must independently red their named assertions.
+
+- **D-2666 — A duplicate PoolSheet test title describes the opposite behavior.**
+  The later test titled `toasts the unknown-pool warning from a successful write`
+  contains no warning response; it proves that a response from a replaced sheet
+  generation is suppressed. Coordinator mail 912 ruled a title-only correction
+  so the test names stale-response suppression rather than duplicating the real
+  warning test's title. No production behavior changes.
+
+- **D-2667 — PoolSheet's unknown-pool fixtures must be reachable from the real
+  route.** Existing tests synthesize `warning:'unknown-pool'` while the same
+  seeded roster already contains the selected pool, but the server emits that
+  warning only when its boot-time roster does not contain the submitted name.
+  Coordinator mail 912 ruled a roster-version-skew fixture: the fleet/UI roster
+  may have learned a pool after this box loaded its boot roster, so the UI can
+  offer a value that the route correctly warns is unknown locally. Keep D-2652's
+  measured-response composition and error channel unchanged; repair only the
+  reachability setup and its explanation.
+
+- **D-2668 — The initial null pools slot causes two O(N) projects sweeps on cold
+  load.** Task 5's mount effect calls `/api/projects` while `pools === null`, then
+  calls it again moments later for the first pools frame. Coordinator mail 912
+  ruled that the null-state mount request be skipped or coalesced. Preserve the
+  first real frame, each later frame, visible-page return, and successful-add
+  invalidations, plus monotonic stale-response suppression. Rewrite the existing
+  test that currently codifies the duplicate cold-load request and mutation-pin
+  the null guard.
+
+- **D-2669 — The contrast-ground explanation for `.proj-card-stranded` named a
+  false DOM relationship.** Its text sits inside `.proj-card-toggle`, not as the
+  project card's direct text child; the transparent toggle leaves the card's
+  `--bg-surface` behind it. Coordinator mail 912 ruled the audit explanation be
+  corrected without changing the measured ground or ratios. The wording fix
+  landed in `e86f5fa5` before this issued definition was appended; this
+  forward-only entry records the true chronology rather than rewriting history.
+
+- **D-2670 — Deleting the inert dimmed-pool cursor rule left its introductory
+  comment orphaned.** D-2644 removed `.proj-card-pool[data-dim]`, but the comment
+  immediately above then introduced no rule. Coordinator mail 912 ruled deletion
+  of that stale comment. The deletion landed in `e86f5fa5` before this issued
+  definition was appended; this forward-only entry records the true chronology
+  rather than amending the earlier commit.
+
+- **D-2688 — Task 7's legal maximum pool name overflows
+  the mobile account row.** `POOL_NAME_RE` permits 32 characters, while
+  `.acct-pool` is `flex:none` plus `white-space:nowrap` beside a nonshrinking
+  148px `.acct-gauges` column. The isolated Sonnet verifier measured a legal
+  32-character label making the account row 513.27px wide inside 288px of
+  available content at a 320px viewport. This is reachable in both SwapSheet and
+  NewSessionSheet because they share `.acct-pool`. The worker proposed preserving
+  the pool identity while letting the visual label shrink and ellipsize. After
+  independent verification, coordinator mail 954 upheld that direction and
+  sharpened it to the exact shrink/ellipsis declarations plus retention of the
+  full legal identity in the accessible name and `title`. Add a max-grammar-name mobile-
+  width assertion before changing CSS, then mutate the mechanism one declaration
+  at a time and restore exactly.
+  The coordinator issued this number and ruled the remedy before the fix began.
+
+- **D-2689 — D-2672's cardinality-only
+  contrast ratchet permits one blind spot to replace another.** The shipped
+  assertion checks only `report.uncovered.length <= 255`. Removing one
+  grandfathered uncovered rule and introducing a different ungrounded
+  color-bearing selector keeps the cardinal at 255 and the gate green, even
+  though D-2672 says a new unmeasured rule must fail on arrival. The isolated
+  Sonnet verifier confirmed this exact replacement case. The worker proposed
+  pinning the grandfathered identities as a shrinking-only set. After independent
+  verification, coordinator mail 955 upheld that subset invariant and required
+  the one-for-one selector substitution control. Add that replacement
+  mutation so it reaches the identity assertion rather than merely a count
+  assertion, then restore it exactly. The coordinator issued this number and ruled the
+  mechanism before the test fix began.
+
+- **D-2690 — SwapSheet's unknown-pool note can falsely
+  say every account is offered when no actionable account is offered.** Pool
+  uncertainty is permissive only over the candidate list after the current
+  wrapper and operator-disabled lanes have been filtered. With a one-account
+  roster, or with every other lane disabled, `emptyNote` renders a truthful empty
+  state while the unconditional `split.unknown` note simultaneously says
+  `every account is offered`. The isolated Sonnet verifier confirmed both paths.
+  The worker proposed copy that avoids quantifying the final rendered list while
+  preserving the distinct empty-state explanation; coordinator mail 939
+  independently upheld that exact copy-and-tests-only direction. Add red-first
+  one-account and all-disabled
+  assertions and mutation-pin the false universal wording. The coordinator issued this number and ruled the copy
+  before the fix began.
+
+- **D-2691 — Task 10's exact unavailable/remote
+  guard is present but its two compatibility edges are not independently
+  mutation-pinned.** An old server may omit the optional `projectPools` field;
+  replacing the condition with `(health.projectPools ?? 'unavailable') ===
+  'unavailable'` left all 11 focused banner tests green and would show a false
+  warning. A local server may validly measure `projectPools:'unavailable'` from
+  local ccd capabilities; deleting only `health.mode === 'remote'` also left all
+  11 focused tests green and would prescribe redeploying a nonexistent agent
+  lane. The isolated Sonnet verifier established both paths from shipped server
+  readers, with registered tests and independent red controls for the existing
+  unknown, connected, and precedence guards. The worker proposed exactly two
+  negative fixtures with no production change; coordinator mail 937 independently
+  upheld that scope. Add one omitted-field remote/connected negative and one local/connected/
+  unavailable negative; mutate the absence default and remote guard separately
+  and restore each exactly. Production behavior remains unchanged. The coordinator issued this
+  number and ruled the coverage seam before the test fix began.
+
+- **D-2692 — NewSessionSheet can authorize a
+  crossing that the operator selected while it was still eligible.** The chosen
+  `ProjectRow` persists across live roster updates, while `start()` recomputes
+  `isCrossing(project)` from the current roster. An isolated Sonnet verifier ran
+  a registered focused test: select `demo` while its pool-a matches the chosen
+  account's pool-a, update that account to pool-b while the sheet remains open,
+  observe `demo` move behind disclosure while remaining selected and Start
+  enabled, then observe `api.createSession` receive `crossPool:true`. That
+  violates Task 8's requirement that only projects deliberately chosen from the
+  disclosed crossing side send the override. The worker proposed clearing a
+  project selected while eligible when it later crosses. After independent
+  verification, coordinator mail 950 upheld and narrowed that to the
+  non-crossing-to-crossing transition only: unrelated updates and a deliberately
+  selected already-crossing project remain selected. Red-first all three
+  directions and mutation-pin the transition guard. The coordinator
+  issued this number and ruled the remedy before the source and test fix began.
+
+- **D-2693 — ProjectCard's two route-pool
+  handoffs are correct but independently unpinned.** Task 9's direct SessionLine
+  tests pass `projectPool` themselves, while project-card tests do not observe
+  off-pool semantics on either the active or expanded archived row. An isolated
+  Sonnet verifier established a clean registered baseline of 262 tests, then
+  deleted only the active `projectPool={pool}` prop and separately only the
+  archived prop; each mutant remained 262/262 green with no TypeScript errors.
+  Source SHA-256 changed distinctly for each mutant and restored to
+  `2da38ddc5d52406e82900e0321431c366c83907ac22a0fda3541136960c4ebc7`;
+  the test hash stayed unchanged. The worker proposed route-authoritative active
+  and expanded-archived integration fixtures. Coordinator mail 953 independently
+  upheld that tests-only scope and required deliberately disagreeing route and frame pools so each call-
+  site deletion independently reds. Production remains unchanged. The coordinator
+  issued this number and ruled the seam before the test fix began.
+
+- **D-2694 — The integrated branch computes
+  project-specific placement but StartProgramSheet still starts on the legacy
+  global projection.** `ProjectRow.placement` can select an eligible account in
+  pool A while the global untagged-project projection selects pool B;
+  StartProgramSheet labels, collision-checks, and submits the pool-B wrapper and
+  omits `crossPool`, so the server correctly returns `409 pool-mismatch` despite
+  an eligible measured pool-A target. The optional placement field lets this
+  integration regression compile, and existing 87 registered StartProgramSheet
+  tests plus strict PWA TypeScript remained green in isolated review. This is
+  the concrete reachable case D-2642 forecast after refuting the earlier claim
+  that only an account chooser could repair the surface. The worker proposed
+  making measured `ProjectRow.placement.wrapper` authoritative. Coordinator
+  mail 946 independently upheld that remedy and supplied the complete absence matrix:
+  render measured none/unmeasurable honestly; use the global projection only for
+  omitted old-server placement when the pool is also absent or measured untagged;
+  refuse a present non-untagged pool without placement; never silently add
+  `crossPool:true`. Add a divergent global-versus-route-placement
+  test before production changes. The coordinator issued this number and ruled
+  the remedy before the source and test fix began.
+
+- **D-2695 — FleetHostBanner lets an older health poll overwrite a newer
+  result.** Its effect starts one request on mount and another every 15 seconds,
+  but the only guard is an effect-lifetime `live` flag. If request A remains
+  pending until request B resolves, A can later replace B's newer state. An
+  isolated Sonnet verifier deferred A, resolved B to a divergent-roster state,
+  then resolved A to unreachable and observed the stale overwrite: the
+  registered baseline was 13/13, while the added newest-state assertion alone
+  failed on unmodified production. Coordinator mail 960 ruled an effect-local
+  monotonically increasing request generation: each load captures its issued
+  number and writes only while the effect is live and that number is still the
+  newest. Preserve interval polling and completion; mutation-pin deletion of
+  only the generation equality guard and restore it exactly.
+
+- **D-2696 — FleetHostBanner claims a visible project tag that it never
+  measures.** The warning mounts independently of project data and can render
+  while the project screen is empty, loading, has no pools frame, or contains
+  only measured untagged projects. Its clause `so a tag shown here is not being
+  enforced` is therefore false in reachable states with no tagged chip. An
+  isolated Sonnet full-screen fixture confirmed all four paths. Coordinator
+  mail 961 ruled replacing only the false clause with the exact complete copy
+  `The fleet host's ccd does not honour project pools yet. Redeploy the agent
+  lane.`, preserving state and priority behavior. Add an exact-copy assertion
+  in a reachable no-visible-tag state; restoring the old clause must red.
+
+- **D-2697 — ProjectCard's stranded aggregate counts dead rows whose visible
+  stranded cell is deliberately suppressed.** A `FleetSession` can retain a
+  `stranded` marker after its status becomes `dead`; live assembly and persisted
+  revival preserve that combination. `SessionLine` hides stranded on dead rows,
+  but `groupFleet` excludes only archived rows, so a card can say `1 stranded`
+  while its sole marked row shows no stranded cue. Coordinator mail 962 ruled
+  counting presence of the marker only on non-archived, non-dead sessions:
+  idle, working, and away marker-bearing rows count; dead and archived rows do
+  not, and `{at:0}` still counts. Add the classifications and an end-to-end dead
+  ProjectCard fixture; mutation-pin the dead exclusion, presence check, and the
+  breadth beyond idle-only, restoring each exactly.
+
+- **D-2698 — SessionLine's off-pool state is not visible to a sighted
+  operator.** For a known pool-B account on a known pool-A project, production
+  emits `data-offpool=true` and an exact accessible label, but no CSS or visible
+  text consumes the state, so the sighted account/meta presentation is identical
+  to a matching row. This is reachable while cooldown, hold, or non-idle gates
+  defer relocation. Coordinator mail 963 ruled preserving the existing data and
+  aria semantics while adding one concise conditional `off-pool` meta sibling,
+  rendered only when `offPoolLabel !== null`. Style it in mono attention ink and
+  include it in the selected-row achromatic override without changing the
+  account label, away arrow, or pool decision. Add conditional render, CSS, and
+  ordinary/selected contrast assertions; mutation-pin the sibling, both known-
+  pool guards, and selected override, restoring each exactly.
+
+- **D-2699 — The selected project-row pool chip's rendered ground is absent
+  from the contrast audit.** `.acct-pool` is registered only against the sheet
+  ground, but a crossing project selected in NewSessionSheet renders that chip
+  on `--accent-tint`. Current ratios pass; nevertheless, changing only the
+  selected ground to `--acct-amber-tint` leaves the existing audit green while
+  the rendered dark-theme ratio falls below 4.5. Coordinator mail 971 ruled
+  retaining the ordinary `.acct-pool` registration, adding the concrete rule
+  `.proj-row--selected .acct-pool { color: var(--ink-tertiary); }`, and
+  registering that exact identity separately against `--accent-tint`. Add a
+  focused two-theme floor assertion; mutation-pin a failing selected-ground
+  token while the ordinary row and cardinality/identity census remain green,
+  then restore source and tests exactly.
+
+- **D-2700 — NewSessionSheet does not disclose when visible project-pool
+  measurements are undecidable.** Unreadable and malformed route pool results
+  correctly remain fail-open and non-crossing, but their ordinary visible rows
+  carry no honest note that pool matching could not decide them. Coordinator
+  mail 974 ruled classifying each route result once as eligible, crossing, or
+  unknown while preserving the current `poolSide` policy. If any visible result
+  is unknown, render exactly one `.pool-note`: `One or more project pools are
+  not known from here, so pool matching does not hide those projects.` Unknown
+  rows remain visible with Start enabled and a plain request; known crossings
+  remain behind disclosure. Do not hide, disable, or classify an unknown row as
+  crossing, substitute placement for route pool, or add `crossPool`. Pin
+  unreadable, malformed, and mixed results; mutation-pin the note, unknown
+  predicate, and plain request independently, restoring each exactly.
+
+- **D-2701 — PoolSheet recomputes a selected card's pool from a potentially
+  divergent websocket frame.** FleetScreen's card can display route-coherent
+  `ProjectRow.pool` pool B, then store only the project name when opening the
+  sheet; PoolSheet independently reads pool A from the websocket frame and
+  claims the project is in pool A. Coordinator mail 977 ruled carrying the
+  card's optional route-owned pool snapshot with the selected project. Display
+  precedence is successful-write route read-back, then that selected snapshot,
+  then the existing websocket fallback for old-server absence. On successful
+  mutation, retain the response as the immediate snapshot and invoke the
+  existing `refreshProjects()` so pool and placement are remeasured together.
+  The action remains `setProjectPool(project, selectedName)` and no second policy
+  implementation is introduced. Pin divergent route/frame opening and the old-
+  server fallback; mutation-pin removal of the selected snapshot precedence and
+  restore exactly. Correct ProjectCard's misleading legacy-frame comment in the
+  same source fix without changing behavior.
+
+- **D-2702 — An unchanged reconnect frame can duplicate an in-flight visible
+  project refresh.** After an initial projects request, returning while the
+  socket is down starts a visibility-triggered request; an equal cold pools
+  frame on reconnect starts another before the visible request resolves. The
+  generation counter suppresses stale writes but does not suppress duplicate
+  work. Coordinator mail 978 ruled tracking the active visibility-triggered
+  request with a token and the stable pools fingerprint. When the pools effect
+  receives an equal cold-frame fingerprint while that visibility request is
+  unresolved, skip only that duplicate. Preserve direct visible refresh, stale-
+  write generation, overlapping completion, and an immediate refresh for a
+  genuinely changed fingerprint; do not serialize all requests. Pin a deferred
+  real-store reconnect at two total calls with one post-initial request still
+  outstanding, plus a changed-payload sibling that requires the third call.
+  Mutation-pin deletion of the equality/in-flight guard and restore exactly.
+
+- **D-2703 — D-2701's comment correction fixed the named instance while leaving
+  the false claim in place and adding a second false claim.** `ProjectCard`
+  never reads a project-pool value from the websocket frame: a non-measured
+  route row yields no pool and no chip, while only the placement forecast falls
+  back to the global projection for a legacy row. The post-D-2701 comments say
+  both that the caller falls back to the frame and that a legacy row does so.
+  The review found the same documentation-drift class in `FleetHostBanner`'s
+  enforcement census, `AccountRow.poolChip`'s two-caller contract, and
+  `StartProgramSheet`'s now-three-arm recovery contract. Coordinator mails 996
+  and 998 ruled comments/docstrings only: state each current mechanism exactly,
+  search the whole wave surface for the claim rather than only the named lines,
+  and gate with TypeScript plus focused suites without manufacturing mutation
+  evidence for prose.
+
+- **D-2704 — D-2701's successful-write bridge never expires and can permanently
+  override a fresher route measurement.** `FleetScreen.poolWrite` is written
+  after success and read before the current `ProjectRow.pool`, but is never
+  cleared; after its own route refresh lands, a later external pool change can
+  therefore make a card display one value while its chip reopens the sheet on
+  the remembered write. Coordinator mail 998 ruled that the bridge last only
+  until the refresh triggered by that write settles, without being cleared by
+  an unrelated request that was already in flight. Preserve the pending-race
+  read-back, then pin that a later route change wins after the triggered refresh
+  settles. Removing the clear must red the latter while leaving the pending
+  direction green.
+
+- **D-2705 — D-2700's undecidable-pool note treats old-server omission as a
+  measured unknown.** `c.pool ?? null` feeds absence into `poolSide`'s unknown
+  arm, so a server that omits optional `ProjectRow.pool` can show the warning on
+  every project even though it reports no pool matching. Coordinator mail 998
+  ruled changing only the note's local predicate: require a present measured
+  pool whose classification is unknown. Do not alter pool classification,
+  splitting, crossing, or permissive behavior. Pin an absent-pool row as
+  visible, startable, silent, and submitted without `crossPool`, while retaining
+  every D-2700 assertion.
+
+- **D-2706 — D-2699's selected-row audit ground is hand-written but not checked
+  against the stylesheet that paints it.** Retinting `.proj-row--selected` in
+  CSS leaves the audit registered against `--accent-tint`, so the report stays
+  green while measuring a ground the UI no longer renders. Coordinator mail
+  998 ruled retaining inherited-ground registration and adding a check for the
+  safely expressible case where one named selector directly sets the registered
+  token as its background. Mutating only that CSS background token must red the
+  new assertion, not merely a registry mutation; a focused selector pin is
+  preferred over a fragile generic parser if necessary.
+
+- **D-2707 — Project remeasurement erases the last good rows for every refresh.**
+  `refreshProjects` unconditionally sets `pending`, so visibility return, pools
+  frames, and successful writes temporarily remove pool chips, placement
+  forecasts, and off-pool cues. Coordinator mail 998 ruled preserving cold-load
+  pending/failed behavior while retaining prior ready rows throughout a refresh
+  and a failed remeasurement. Pin both the cold-load pending state and the
+  continued chip/off-pool cue during an unresolved refresh. Restoring the
+  unconditional pending reset must red only the retained-row direction.
+
+- **D-2708 — D-2693's archived route-pool fixture asserted an unreachable live
+  session shape.** Archived membership requires a dead session, and dead rows
+  intentionally suppress the off-pool cue; the fixture omitted `status:'dead'`
+  and therefore made its call-site mutation red using a state the wire cannot
+  carry. Coordinator mail 998 ruled correcting the fixture to a reachable
+  archived state, then pinning only the behavior `projectPool` can actually
+  affect there or recording that the prop is inert for the dead row and why it
+  remains passed. An accurate smaller assertion replaces the fictional cue.
+  Coordinator mail 1009 measured that `sessionBucket` admits an archived row
+  only when `archivedAt !== null && status === 'dead'`
+  (`shared/api.ts:1275`), while SessionLine gates its sole `projectPool` effect,
+  the off-pool label, on `!dead`. The earlier D-2693 archived handoff pin is
+  therefore retired rather than repaired: its red depended on an unreachable
+  session shape. Keep the route-pool prop at both call sites for signature
+  symmetry, and pin the reachable policy instead — a dead archived row with
+  genuinely disagreeing account and project pools has no off-pool cue,
+  `data-offpool`, or off-pool accessible text. Removing only the `!dead` guard
+  must red that assertion.
+
+- **D-2709 — StartProgramSheet keeps project placement as a once-per-open
+  snapshot.** A measured refusal or target cannot update while the sheet stays
+  open even when the screen receives its existing no-timer invalidations.
+  Polling every 20 seconds is explicitly rejected because `/api/projects` is an
+  O(N) fleet sweep and the programme requires fewer such calls. Coordinator
+  mail 998 ruled reusing visible-page and pools-frame invalidation while the
+  sheet is open, coalesced with D-2702 so no duplicate request is added. A
+  measured project-specific refusal must not be cleared merely because the
+  global projection changes; if the existing invalidation cannot be reused
+  without a new fetch path, park this smaller stale-until-reopen defect rather
+  than introduce polling. The final isolated verification measured that park:
+  FleetScreen privately owns `projectRows` and `refreshProjects`
+  (`pwa/src/screens/FleetScreen.tsx:170`, `:176`); RunsScreen passes
+  StartProgramSheet only `open`, `onClose`, `fleet`, and `openRunProjects`
+  (`pwa/src/screens/RunsScreen.tsx:747`); and StartProgramSheet independently
+  defaults `loadProjects` to `api.projects` and calls it only from its open-keyed
+  effect (`pwa/src/fleet/StartProgramSheet.tsx:339`, `:382`). App mounts the two
+  screens as siblings without a project-state seam (`pwa/src/app.tsx:116`,
+  `:130`). Reuse would therefore require a new shared state/callback seam, not
+  the existing invalidation. Park the stale-until-reopen defect; add no timer or
+  duplicate O(N) sweep. The placement reader already returns every present
+  route `ProjectRow.placement` before consulting the global fallback
+  (`pwa/src/fleet/StartProgramSheet.tsx:267`, `:277`), so a projection change
+  cannot erase a measured project-specific refusal.
+
+- **D-2710 — D-2688's fix commit also added account pool chips to
+  NewSessionSheet outside its ruling.** The product change is aligned with this
+  wave and makes the two shared account-row pickers consistent, so coordinator
+  mail 998 approved it after the fact rather than ordering churn. Keep the
+  behavior, correct `AccountRow.poolChip`'s falsified docstring to describe its
+  actual callers, and record the unruled addition. The durable process finding
+  is that a fix commit carried a separate product change outside the scope that
+  authorized it.
+
+- **D-2711 — D-2702's stable recursive pools fingerprint has no shipped red
+  behind key ordering.** Replacing the sorting replacer with plain
+  `JSON.stringify` left all 71 tests green, while an independently written
+  reordered-key probe failed on the same mutant and confirmed that production
+  correctly coalesces semantically equal objects despite insertion-order
+  differences. Coordinator mail 1000 ruled tests only: send a distinct equal
+  frame with reordered keys at the top level, in `byProject`, and inside each
+  project-pool object, and keep the request count coalesced. Removing the sorted
+  replacer must red that fixture while the remaining focused suite stays green.
+
+- **D-2712 — Seven review-deviation entries invert ruling provenance by naming
+  the later programme-ledger record as the act that ruled the fix.** D-2688
+  through D-2694 each cite programme-ledger commit `80c8b890` as upholding,
+  sharpening, or narrowing a remedy, but every described fix predates that
+  commit. Coordinator mail 1006 independently measured the chronology and
+  accepted responsibility for the incorrect instruction in mail 999. The
+  ruling acts are the earlier coordinator mails, whose IDs and timestamps
+  precede the fixes; the programme ledger is only the later durable record of
+  what was ruled. Mail 1006 ruled one docs-only correction across all seven
+  entries: cite the actual ruling mail ID, preserve each true closing sentence,
+  and describe the programme ledger only as a record, never as an actor. Before
+  committing, search the whole plan for the ledger SHA and for `programme ledger
+  at`; the search result, including what remains, is required evidence.
+
+- **D-2713 — StartProgramSheet's recovery docstring maintains a cardinal beside
+  the render-chain list and has already gone stale twice.** The same prose first
+  said two other arms, then three, while review disputed whether D-2694's
+  placement refusal is one arm or its `none`, `unmeasurable`, and `pool-blind`
+  branches should be counted separately. Coordinator mail 1006 ruled the
+  durable defect to be the duplicated cardinal rather than any chosen count.
+  Remove the cardinal and enumerate each conditional arm with what it renders
+  and why it displaces the final confirm fragment's recovery. Verify and report
+  that enumeration against current source with file and line evidence; the
+  prose must derive its extent from the list instead of asserting a parallel
+  number that can silently disagree with it.
+
+- **D-2714 — The named over-correction control for D-2704 never reads
+  FleetScreen's successful-write bridge.** Coordinator mail 1010 measured that
+  clearing `poolWrite` immediately rather than when its associated route refresh
+  settles leaves all 75 FleetScreen tests green. The existing `keeps the write
+  response visible while the coherent refresh is pending` fixture leaves the
+  sheet open, so PoolSheet's own measured-generation cache satisfies it without
+  exercising the card-chip `onPool` path, the sole reader of `poolWrite`.
+  Mail 1010 ruled a tests-only discriminating fixture: while the write refresh is
+  unresolved, close the sheet, reopen it through the card chip, and require the
+  just-written pool rather than the stale route value. Moving the bridge clear
+  from associated-request settlement to immediate write handling must red this
+  fixture while the existing pending-race test remains green. Do not rewrite the
+  existing test; record that it pins PoolSheet's local cache, not FleetScreen's
+  bridge.
+
+- **D-2721 — FleetScreen's open pool sheet keeps the route snapshot taken when
+  the card was tapped after a later route remeasurement has landed.** Coordinator
+  mail 1023 accepted the final-review finding after measuring one screen showing
+  the refreshed route pool on its card and the previous pool in the still-open
+  sheet. `PoolSheet`'s write read-back, selected route snapshot, then frame
+  precedence remains correct under D-2701; the defect is that FleetScreen never
+  reconciles `poolSelection` after `refreshProjects` updates `projectRows`.
+  Mail 1023 ruled extracting the existing card-tap calculation into one named
+  function, using it both when the card opens the sheet and while `poolOpen` is
+  true after a route remeasurement. A live same-project `poolWrite` must still
+  precede the measured route value under D-2704/D-2707/D-2714, and the selection
+  must remain frozen while the sheet is closing so vaul's exit animation retains
+  its subject. Do not edit `PoolSheet` or let the pools frame become a pool-value
+  source. Mail 1024 additionally ruled two regressions: the no-write divergent
+  frame/route transition and the post-write A then route-measured B transition
+  must both update the card and still-open sheet to B. Deleting the open-sheet
+  remeasurement must red; dropping its `poolOpen` guard must red a pinned
+  exit-animation fixture, or be reported as ambiguous until that property is
+  pinned. The D-2701 selected-route precedence fixture and the
+  D-2704/D-2707/D-2714 bridge fixtures must stay green.
+
+- **D-2722 — D-2721's own remedy hands the open sheet to the pools frame.**
+  `poolSelectionFor` omits the `pool` key for every read that is not
+  `{kind:'measured'}`. At the card tap that arm was effectively dead, because
+  the sheet's only entry point is `PoolChip` and `ProjectCard` renders no chip
+  at all for a non-measured read; the extraction was byte-faithful and moved a
+  dead arm into a live position. Applied by the open-sheet remeasurement to an
+  already-populated selection it clears `selectedPool`, so `PoolSheet` falls to
+  the third term of its precedence and the websocket frame becomes a pool-value
+  source — D-2721's own constraint violated by D-2721's own fix. Coordinator
+  mail 1031 confirmed it against a pre-fix control: the probe is green at
+  `1a9093e8` and red at `fc8ec80b`, so the commit causes it. Severity is HIGH
+  rather than Medium, because the frame does not merely state a stale pool, it
+  fabricates measurements: a project the frame never listed yields
+  `{state:'untagged'}` and the sheet asserts every account may serve it, which
+  is the constraint-lifting direction `shared/api.ts` forbids by name, and a
+  `listed:false` frame yields `{state:'unreadable'}` and the sheet names a tag
+  file nobody opened. Reachability is routine and needs no user action:
+  `listProjects` is built entirely on `io.readdir`, which folds absent,
+  unreadable and timed-out into one `null`, and `/api/projects` carries no 503
+  arm, so an agent-link drop answers 200 with an empty list while the same
+  outage emits a changed `listed:false` frame that drives the refresh. The
+  `legacy` arm is refuted as a live trigger, since that server age ships a new
+  PWA in the same artifact under `registerType:'autoUpdate'`; the finding rests
+  on `missing` alone. `pending` and `failed` are unreachable from a populated
+  selection, and the governing guard is that the sheet cannot be opened unless
+  the read was already measured. Mail 1031 ruled the remedy ACCEPTED with four
+  amendments: key the decision on the read's own kind rather than on the
+  result's shape, so a change to the helper's absence convention cannot
+  silently change the remedy's meaning; pin it, because the two owning suites
+  pass with and without it and that green is genuine non-coverage rather than
+  ambiguity, the delete-the-effect control having already proved the code
+  exercised; state in the comment that the seam has no vocabulary for
+  measured-absence so keeping the last route value is FORCED, and that it is
+  chosen over the frame because the frame fabricates, naming both fabrications,
+  rather than claiming a non-measured read is ignorance; and rewrite
+  `poolSelectionFor`'s docstring, whose justification cites an old-server frame
+  fallback that no shipped path reaches. The already-pushed comment predicting
+  that the degrade flips to "this box has not said" must also be corrected,
+  since that copy is reachable only when `pools` is null. Deleting the
+  keep-clause must red the new pin; the two D-2721 fixtures and D-2701's
+  selected-route precedence fixture must stay green. Closing the sheet was
+  rejected as the only option that can destroy operator input mid-write, and a
+  per-arm policy splitting `missing` from the rest was rejected because the
+  stack does not measure that distinction.
+
+- **D-2723 — the sheet's pool seam cannot express measured absence.** PARKED to
+  wave 6 by coordinator mail 1031. `PoolSheet`'s `selectedPool` documents
+  `undefined` as one thing, absent on old servers, while `ProjectPoolWire`'s
+  four members all assert that a tag file was reached, so nothing can say the
+  route answered and did not list this project. Adding a member is the wrong
+  lever, because that type is the element type of the pools frame itself and a
+  new member would become a state the frame can carry. D-2722's remedy
+  therefore masks the fabrication rather than removing it: `projectPoolOf`
+  still invents `{state:'untagged'}` whenever `selectedPool` is undefined, and
+  D-2722 only guarantees that this one parent never passes undefined, so a
+  second entry point or a direct `PoolSheet` render re-exposes it. The carrier
+  is already shipped: `ProjectPlacementRead` already distinguishes `legacy`,
+  where the frame fallback is correct and `pool-sheet.test.tsx` pins its exact
+  meaning, from `missing`, where the frame fallback is a false statement. It is
+  PWA-local and exported, the sibling component already takes it as a prop,
+  `placementFor` already computes it for this project, and one production call
+  site would migrate, with no wire change and no new type. It is parked rather
+  than done here only because it requires editing `PoolSheet`, which this
+  wave's rulings forbid; it is the only option that also fixes the fabrication
+  at its source.

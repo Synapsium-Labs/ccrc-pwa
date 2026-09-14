@@ -4,6 +4,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
+import { POOL_NAME_RE } from '../../shared/roster';
 import {
   atBlock, declValue, declaredValues, norm, normSel, ruleIn, selectorsOf, stripComments,
 } from './cssRule';
@@ -362,7 +363,10 @@ describe('selection is polarity, status is hue', () => {
                         // serves selects the dead row precisely to read
                         // "stopped by agent, 2d ago".
                         '.sess-held', '.sess-lifecycle', '.sess-swapblocked',
-                        '.sess-unmeasured',
+                        // `.sess-stranded` and `.sess-offpool` take attention
+                        // ink of their own, so each would strand on the selected
+                        // slab without this achromatic membership.
+                        '.sess-stranded', '.sess-offpool', '.sess-unmeasured',
                         // The substrate chip (spec §4) joined the same way:
                         // its own `color: var(--ink-tertiary)` beats the
                         // slab's inherited ink exactly like .sess-unmeasured
@@ -883,5 +887,104 @@ describe('the hold composer', () => {
     expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color'))
       .toBe(declValue(ruleIn(css, '.proj-search::placeholder'), 'color'));
     expect(declValue(ruleIn(css, '.sess-hold-input::placeholder'), 'color')).toBe('var(--ink-tertiary)');
+  });
+});
+
+describe('the pool chip and the strand are real cells, and the chip is a real target', () => {
+  it('gives the tappable form a full-width 44px overlay without growing the chip', () => {
+    const chip = ruleFor('.proj-card-pool');
+    expect(declValue(chip, 'line-height')).toBe('var(--leading-tight)');
+
+    const rule = ruleFor('button.proj-card-pool::before');
+    expect(declValue(rule, 'position')).toBe('absolute');
+    const vertical = norm('calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2)');
+    expect(declValue(rule, 'top')).toBe(vertical);
+    expect(declValue(rule, 'bottom')).toBe(vertical);
+    const horizontal = norm('min(0px, calc((100% - var(--tap-min)) / 2))');
+    expect(declValue(rule, 'left')).toBe(horizontal);
+    expect(declValue(rule, 'right')).toBe(horizontal);
+  });
+
+  it('reserves the pointer cursor for the button form, leaving inert spans at the default', () => {
+    expect(declValue(ruleFor('.proj-card-pool'), 'cursor')).toBeNull();
+    expect(declValue(ruleFor('button.proj-card-pool'), 'cursor')).toBe('pointer');
+    expect(css).not.toMatch(/\.proj-card-pool\[data-dim\]\s*\{/);
+  });
+
+  it('paints the worklist, both bad-tag states, and unrecognised residue in audited attention ink', () => {
+    const sel = ".proj-card-pool[data-pool='untagged']";
+    expect(declValue(ruleFor(sel), 'color')).toBe('var(--status-attention-text)');
+    const group = selectorsOf(css, sel).map(normSel);
+    for (const state of ['malformed', 'unreadable', 'unrecognised']) {
+      expect(group).toContain(normSel(`.proj-card-pool[data-pool='${state}']`));
+    }
+  });
+
+  it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
+    expect(css).not.toMatch(/\.proj-card-pool\[data-dim\][^}]*opacity\s*:/s);
+  });
+
+  it('gives the strand cell the same audited pair `.sess-acct-away` already uses', () => {
+    expect(declValue(ruleFor('.proj-card-stranded'), 'color')).toBe('var(--status-attention-text)');
+  });
+
+  it('keeps every pool option at the shared 44px touch-target floor', () => {
+    expect(declValue(ruleFor('.pool-row'), 'min-height')).toBe('var(--tap-min)');
+  });
+
+  it('makes the crossing disclosure a real target', () => {
+    expect(ruleFor('.acct-disclosure')).toContain('min-height: var(--tap-min)');
+  });
+
+  it('keeps the unknown-pool note quiet — it explains a longer list, it does not warn', () => {
+    expect(declValue(ruleFor('.pool-note'), 'color')).toBe('var(--ink-tertiary)');
+  });
+
+  it('gives the selected project pool chip its own audited ink rule', () => {
+    expect(declValue(ruleFor('.proj-row--selected .acct-pool'), 'color'))
+      .toBe('var(--ink-tertiary)');
+  });
+});
+
+describe('maximum pool name account-row fit (D-2688)', () => {
+  const maximumPool = `a${'z'.repeat(31)}`;
+
+  it('uses a legal 32-character pool name at the grammar boundary', () => {
+    expect(maximumPool).toHaveLength(32);
+    expect(POOL_NAME_RE.test(maximumPool)).toBe(true);
+  });
+
+  it('keeps the complete pool identity in both sheet renderers', () => {
+    const swapSheet = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'SwapSheet.tsx'), 'utf8');
+    const newSession = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'NewSessionSheet.tsx'), 'utf8');
+    const fullIdentity = '<span className="acct-pool" aria-label={poolLabel} title={poolLabel}>';
+
+    expect(swapSheet).toContain(fullIdentity);
+    expect(newSession).toContain(fullIdentity);
+    expect(newSession).toContain('<AccountRow');
+  });
+
+  it('makes only the pool label yield room to the fixed gauges at 320px', () => {
+    const primitives = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'components', 'primitives.css'), 'utf8');
+    const tokens = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'styles', 'tokens.css'), 'utf8');
+    const viewportWidth = 320;
+    const sheetPanel = ruleIn(primitives, '.sheet-panel');
+    const spacingFour = declValue(ruleIn(tokens, ':root'), '--sp-4');
+    const rule = ruleFor('.acct-pool');
+
+    expect(spacingFour).toBe('16px');
+    expect(declValue(sheetPanel, 'padding')).toContain('var(--sp-4)');
+    expect(viewportWidth - 2 * Number.parseInt(spacingFour ?? '', 10)).toBe(288);
+    expect(declValue(rule, 'flex')).toBe('1 1 0');
+    expect(declValue(rule, 'min-width')).toBe('0');
+    expect(declValue(rule, 'overflow')).toBe('hidden');
+    expect(declValue(rule, 'text-overflow')).toBe('ellipsis');
+    expect(declValue(rule, 'white-space')).toBe('nowrap');
+    expect(declValue(ruleFor('.acct-gauges'), 'flex')).toBe('none');
+    expect(declValue(ruleFor('.acct-gauges'), 'width')).toBe('148px');
   });
 });

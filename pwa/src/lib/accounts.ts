@@ -26,7 +26,7 @@
 // the label, `--ink-tertiary` as the colour — never a hidden account, never a
 // guessed hue.
 import type { RosterWire } from '../../../shared/api';
-import type { Hue } from '../../../shared/roster';
+import { POOL_NAME_RE, type Hue } from '../../../shared/roster';
 
 /** This account's roster entry, or `undefined` for a wrapper the roster does
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
@@ -52,6 +52,26 @@ export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue 
   return entryFor(roster, wrapper)?.hue;
 }
 
+/** This account's POOL NAME, or `null` for an untagged account, an account
+ *  this roster does not have, or a server built before pools existed (the key
+ *  is simply absent on that wire, and absence-permits means untagged).
+ *
+ *  THE ONLY READER of `RosterWire.pool` in this app (spec §5.3). Every pool
+ *  question the PWA asks — the swap split, the new-session split, the option
+ *  list in `PoolSheet`, the off-pool marker on a row — goes through here, so
+ *  "what pool is this account in" is answered in exactly one place and an
+ *  older server's omission degrades once rather than five times.
+ *
+ *  The canonical server parser refuses off-grammar values, but its API client
+ *  is a cast and the same-origin offline cache validates only roster shape. A
+ *  malformed value can therefore arrive here despite trusted canonical output
+ *  never carrying one. Treat it as untagged: `poolRule`'s permissive forecast
+ *  is for an absent account tag, not a tag this client cannot validate. */
+export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {
+  const p = entryFor(roster, wrapper)?.pool;
+  return typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null;
+}
+
 /** Token custom-property name for the account's chip colour, e.g. 'claude' →
  *  '--acct-cyan' (tint is `${colorVar}-tint`). Unknown wrappers get neutral
  *  meta-gray ink — never a status hue. A thin wrapper over `accountHue` for
@@ -63,6 +83,19 @@ export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue 
 export function accountColorVar(roster: readonly RosterWire[], wrapper: string): string {
   const hue = accountHue(roster, wrapper);
   return hue === undefined ? '--ink-tertiary' : `--acct-${hue}`;
+}
+
+/** "team·max, team·alt and team·b" — the shared punctuation for every
+ *  account-label list this app renders.
+ *
+ *  Exported, though it names no account fact of its own, because
+ *  `poolLabelList` (`lib/pools.ts`, which cannot live here without an import
+ *  cycle — it needs `poolSide`, which needs `accountPool`) renders the SAME
+ *  sentence over a filtered set. Two copies of "comma, comma and last" is two
+ *  places for one sentence's punctuation to drift, on two surfaces the
+ *  operator reads side by side. */
+export function joinLabels(labels: readonly string[]): string {
+  return labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
 }
 
 /** "team·max, team·alt and team·b" — the HOME_ABLE accounts by their
@@ -78,10 +111,11 @@ export function accountColorVar(roster: readonly RosterWire[], wrapper: string):
  *  an enabled gpt sitting in the same list would make that claim false on
  *  its face. Same discipline ccd's own placement refusal already uses
  *  (ccd/ccd's `cmd_ws_add`: `claude:disabled claude2:disabled
- *  claude-corp:disabled`, never "all accounts"). */
+ *  claude-corp:disabled`, never "all accounts"). Its pool-aware sibling is
+ *  `poolLabelList` (lib/pools.ts), which answers the same question for a
+ *  TAGGED project. */
 export function homeAbleLabelList(roster: readonly RosterWire[]): string {
-  const labels = roster.filter((a) => a.homeAble).map((a) => a.label);
-  return labels.length <= 1 ? labels.join('') : `${labels.slice(0, -1).join(', ')} and ${labels.at(-1)}`;
+  return joinLabels(roster.filter((a) => a.homeAble).map((a) => a.label));
 }
 
 /** The roster's ids, in declaration order — the base list `AccountsScreen`'s

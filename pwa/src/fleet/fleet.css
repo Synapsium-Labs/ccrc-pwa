@@ -858,6 +858,8 @@
 .sess-line--active .sess-held,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
+.sess-line--active .sess-stranded,
+.sess-line--active .sess-offpool,
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
@@ -1325,6 +1327,22 @@
   color: var(--ink-tertiary);
 }
 
+/* A strand is deliberately louder than the neighbouring durable markers.
+   Like them, it truncates while its title preserves the complete reason. */
+.sess-stranded {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--status-attention-text);
+}
+
+.sess-offpool {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--status-attention-text);
+}
+
 /* Task 5: the hold reason, when a run backs it, is a DOOR onto /runs. The
    element becomes a <button>; the cell must not. Everything below either
    undoes a UA button default (so the two forms are indistinguishable to the
@@ -1607,6 +1625,104 @@ button.sess-held {
   white-space: nowrap;
 }
 .proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
+
+/* The project's pool has the pin's quiet mono register. A button is interactive;
+   the shared class stays cursor-neutral so an inert span does not imitate one. */
+.proj-card-pool {
+  position: relative;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  color: var(--ink-tertiary);
+}
+button.proj-card-pool { cursor: pointer; }
+button.proj-card-pool::before {
+  content: '';
+  position: absolute;
+  top: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  bottom: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  left: min(0px, calc((100% - var(--tap-min)) / 2));
+  right: min(0px, calc((100% - var(--tap-min)) / 2));
+}
+/* An untagged project is the worklist, not a fault. Malformed, unreadable and
+   unrecognised all need attention; the wording tells their distinct remedies. */
+.proj-card-pool[data-pool='untagged'],
+.proj-card-pool[data-pool='malformed'],
+.proj-card-pool[data-pool='unreadable'],
+.proj-card-pool[data-pool='unrecognised'] {
+  color: var(--status-attention-text);
+}
+/* The loud card-level count for sessions with nowhere in their pool to go. */
+.proj-card-stranded {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--status-attention-text);
+}
+
+/* Roster-derived options only: a free-text pool with no member would strand
+   every constrained session. */
+.pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.pool-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.pool-row[data-none] { color: var(--ink-secondary); }
+
+/* A crossing names its destination pool on the revealed account row. */
+.acct-pool {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
+.proj-row--selected .acct-pool {
+  color: var(--ink-tertiary);
+}
+
+/* Revealing crossings is a separate, full-size choice from making a move. */
+.acct-disclosure {
+  min-height: var(--tap-min);
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* An unknown pool changes disclosure, not eligibility. */
+.pool-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
 
 /* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
    r-md corner — the same treatment .sess-actions gives the ··· below, so
