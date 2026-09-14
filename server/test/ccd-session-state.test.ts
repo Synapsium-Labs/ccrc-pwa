@@ -431,11 +431,15 @@ describe('ccd ls', () => {
     // §4.4: `ALIVE=no` said the same word about a session somebody stopped,
     // one that died unwatched and one that never started. Nothing parses
     // `ccd ls` — no server/agent/pwa caller, no other test — but
-    // ccd-limits.test.ts pins _codex_lane_status's strings verbatim, so the
-    // trailer is NOT this task's to touch, and that is asserted here rather
-    // than hoped for. The line names the lane and calls it a `codex lane`:
-    // it used to read `gpt overflow lane`, which by 2026-09-11 was wrong in
-    // both halves — see the trailer's own comment in cmd_ls.
+    // The trailer is NOT this task's to touch, and that is asserted here
+    // rather than hoped for — but as ABSENCE, which is what is true of this
+    // roster. DEFAULT_TEST_ROSTER's only external lane is `gpt` with
+    // `telemetry: 'none'` (the shape `ccrc account declare` writes), and the
+    // trailer follows `telemetry`, so no Codex line is printed at all. That is
+    // the assertion with content here: it pins that a declare-shaped external
+    // lane does NOT get Codex's usage prose told about it. The positive
+    // trailer coverage — two installed Codex lanes in differing states — lives
+    // in ccd-backend-vs-placement.test.ts against rosters built for it.
     h.sh(`_reg_set ${ID} uuid u
       _reg_set ${ID} wrapper claude-d
       _reg_set ${ID} workdir /data/projects/demo
@@ -444,7 +448,8 @@ describe('ccd ls', () => {
     expect(out).toContain('STATE');
     expect(out).not.toContain('ALIVE');
     expect(out).toMatch(new RegExp(`${ID}\\s+claude-d\\s+orphan\\s+/data/projects/demo`));
-    expect(out).toContain('codex lane gpt: not installed  —  0 session(s) currently on it');
+    expect(out).not.toContain('codex lane');
+    expect(out).not.toContain('overflow lane');
   });
 
   it('prints the same word for a stopped row that _session_state does', () => {
