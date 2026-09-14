@@ -2012,6 +2012,7 @@ MSG
 - Modify: `ccd/ccrc` — `_inst_skills` (`for name in coordinator-skill worker-skill` and its echo), `_acct_provision`'s installer loop (`:5482-5483`), `_uninst_cc_sessions` (`:11498-11502`)
 - Modify: `server/test/installTreeFixture.ts:158-161`, `server/test/ccrc-install.test.ts:1713-1716` and `:1760-1762`, `server/test/ccrc-account.test.ts:2168-2176` and `:2809-2814`, `server/test/ccrc-uninstall.test.ts:198-210` and `:440-446`, `agent/test/deploy-verify.test.ts:1545-1584`
 - Modify: `server/src/skillstate.ts:32,36` docstrings naming the installers
+- Modify (found executing Task 10): `ccd/ccrc`'s `_acct_unprovision` (`ccrc account remove` cleans the coordinator's, worker's and graphify's skill dirs — the reviewer's joins them) and its test in `server/test/ccrc-account.test.ts`; the security-scan corpora in `server/test/ccrc-api-closed.test.ts` and `server/test/auth-passkey.test.ts` that read `coordinator-skill`/`worker-skill` SKILL.md texts (curl ban, closed route table, auth-gate reachability) — `reviewer-skill/SKILL.md` calls `ccrc-api` and joins those corpora
 
 **Interfaces:**
 - Consumes: the worker installer's exact shape (`ccd/install-worker-skill.sh`, 89 lines — `REQUIRED_FILES=(SKILL.md)`, `--homes`, roster fallback, `diff -r -q` convergence, backup + staged `mv`).
