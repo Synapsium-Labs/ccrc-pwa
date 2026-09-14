@@ -994,7 +994,8 @@ SPAWN_EFFORT="ultracode"        # /effort sent at settle to a session with NO ro
                                 # ultracode DOES have `--settings` keys (measured Claude Code
                                 # 2.1.270, D-2809) — the old premise here (no settings.json key)
                                 # was wrong; `/effort ultracode` was measured NOT to persist a
-                                # per-model pin either (D-2810). Never CLAUDE_CODE_EFFORT_LEVEL.
+                                # per-model pin either (D-2810). Never the effort-override env
+                                # variable (the one `_check_routing` refuses).
 # D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
 # On `--resume`, Claude Code classifies a tail whose last turn died in an API
 # error (a limit banner) as an interrupted turn, writes a META user prompt
@@ -14972,11 +14973,12 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # session has no record, so a pre-slice-1 session's argv is byte-identical
   # to today's (`ccd-spawn-split.test.ts` pins that string;
   # `ccd-route-spawn.test.ts` pins this one). `default` passes no flag — the
-  # lane's settings.json decides. Effort is NOT an argv matter here: the
-  # settle types it (`_inject_spawn_effort`), and the one env variable that
-  # would pin it is the override `_check_routing` refuses — never composed.
-  # `--settings` for ultracode/workflows lands only once the slice's own
-  # measurement has said the keys are honoured (see the settle function).
+  # lane's settings.json decides. Effort IS an argv matter here (Task 8,
+  # controller ruling S1-R8/D-2809): a recorded non-auto effort rides
+  # `--effort`, and `--settings` carries the measured ultracode/enableWorkflows
+  # keys, both composed below on the Anthropic arm. The settle's keystroke
+  # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
+  # session with nothing composed here.
   local routeflags="" routeenv="" rclass rsub rwf reff inert=""
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class); reff=$(_route_effort_for "$id" "$rclass")
