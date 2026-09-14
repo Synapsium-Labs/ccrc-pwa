@@ -4181,6 +4181,399 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
   });
 });
 
+
+
+
+// ── D-2605: THE SELF-CHECKING `served` SCAN (plan Task 9) ────────────────
+// Task 9 removed `served` from the canonical set document — the hook never
+// writes it, and `measure` derives it from the exact nonce marker under the
+// final lock — and disposed of every assertion that read it from a set. All
+// seven dispositions were carried out; what was missing is the MECHANISM that
+// keeps them carried out. The regression it exists to catch is a future editor
+// re-adding `served` to the SET WRITER and to a set assertion together, which
+// reds nothing else in this file.
+//
+// THIS FILE READS ITSELF. Nothing else here does; the other scans read
+// `ccd/session-hook.sh`, `shared/api.ts`, `single-definition.test.ts` and
+// `ccd-authdead.test.ts`.
+describe('the compaction card — no test reads `served` off a set (plan Task 9)', () => {
+  const SELF = path.resolve(__dirname, 'session-hook.test.ts');
+  /** THE UNION OF TWO GRAMMARS, because neither sees both shapes: `\.served` is
+   *  the READ position and `served:` the PROPERTY position, and measured on
+   *  this file each grammar finds a disjoint set. */
+  const READ = /\.served\b/;
+  const PROP = /(^|[^A-Za-z_])served\s*:/;
+  const matches = (l: string): boolean => READ.test(l) || PROP.test(l);
+
+  /** A match inside an `it(…)`/`describe(…)` TITLE is out of scope — the same
+   *  treatment the canonical-write scan gives the helper's `writeAtomic`
+   *  primitives: excluded BY THE SCOPE, never by an allow-list entry, so it can
+   *  never be mistaken for something argued-for. */
+  const isTitle = (l: string): boolean => /^\s*(it|describe)\(/.test(l);
+  /** PROSE is out of scope for the same reason a title is: a `//` or `/** *\/`
+   *  line is a sentence about the member, never a read of it. */
+  const isProse = (l: string): boolean => /^\s*(\/\/|\/\*|\*)/.test(l);
+  /** AND SO IS THIS BLOCK. A scan that reads its own file must exclude its own
+   *  grammar, or it can never be green — the two regexes above are literal
+   *  `served` text. Bounded by NAME, from this describe's own banner to the
+   *  `});` that closes it, so the exclusion cannot silently widen. */
+  const SELF_BANNER = '// \u2500\u2500 D-2605: THE SELF-CHECKING `served` SCAN (plan Task 9)';
+  const selfRange = (lines: string[]): [number, number] => {
+    const a = lines.findIndex((l) => l.startsWith(SELF_BANNER));
+    if (a < 0) return [-1, -1];
+    let b = a;
+    while (b < lines.length && lines[b] !== '});') b++;
+    return [a, b];
+  };
+
+  /** The enclosing CONSTRUCT: from the statement head at or above this line to
+   *  the line that closes it. An allow-list entry is pinned to what the line is
+   *  PART OF, not to a free-text class name — so moving a planting line out of
+   *  its `fs.writeFileSync(setFile(), …)` call reds. */
+  const construct = (lines: string[], i: number): string => {
+    let a = i;
+    while (a > 0 && !/^\s*(expect|fs\.writeFileSync|fs\.appendFileSync|const|let|run|return)\b/.test(lines[a]!)) a--;
+    let b = i;
+    while (b < lines.length - 1 && !/;\s*$/.test(lines[b]!)) b++;
+    return lines.slice(a, b + 1).join('\n');
+  };
+
+  type Row = { line: number; text: string; klass: 0 | 1 | 2 };
+  /** `classTwo` is a parameter so the class-(2) control can turn it OFF and
+   *  measure that the class is load-bearing rather than decorative. */
+  const audit = (src: string, classTwo = true): { raw: Row[]; scoped: Row[]; unallowed: Row[] } => {
+    const lines = src.split('\n');
+    const [sa, sb] = selfRange(lines);
+    const raw: Row[] = []; const scoped: Row[] = []; const unallowed: Row[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      if (sa >= 0 && i >= sa && i <= sb) continue;
+      const l = lines[i]!;
+      if (!matches(l)) continue;
+      const row: Row = { line: i + 1, text: l.trim(), klass: 0 };
+      raw.push(row);
+      if (isTitle(l) || isProse(l)) continue;
+      const c = construct(lines, i);
+      // (1) SessionStart(compact) fixtures that PLANT a canonical set: inputs to
+      //     the hook, whose serve arm reads only the head's nonce.
+      if (/fs\.writeFileSync\(\s*setFile\(\)/.test(c)) row.klass = 1;
+      // (2) assertions on a JOURNAL record — the sixteen-key row, whose `served`
+      //     is true iff the exact nonce marker existed under the final lock.
+      else if (classTwo && /\bjournal\(\)|\bj\[0\]|readJournal/.test(c)) row.klass = 2;
+      scoped.push(row);
+      if (row.klass === 0) unallowed.push(row);
+    }
+    return { raw, scoped, unallowed };
+  };
+
+  it('every `served` in a SET context is on one of the two classes, and nothing else survives', () => {
+    const a = audit(fs.readFileSync(SELF, 'utf8'));
+    expect(a.unallowed.map((r) => `${r.line}: ${r.text}`),
+      'a `served` read off a set — the member Task 9 removed').toEqual([]);
+    // NON-VACUITY, ALL THREE NUMBERS, so a change to any one of them forces the
+    // sentence to be re-measured rather than silently absorbed. RE-DERIVED
+    // against the post-Task-9 file: the plan's own eleven/nine/seven were
+    // measured on the pre-Task-9 line set, where the seven were the assertions
+    // this task deleted.
+    expect(a.raw.length, 'raw union matches').toBe(8);
+    expect(a.scoped.length, 'in SET scope — the three `it(…)` titles and two prose lines are excluded BY THE SCOPE').toBe(3);
+    expect(a.scoped.filter((r) => r.klass === 1).length, 'class (1), the planting fixtures').toBe(2);
+    expect(a.scoped.filter((r) => r.klass === 2).length, 'class (2), journal-record assertions').toBe(1);
+  });
+
+  it('CONTROL: re-adding `served` to a SET assertion reds it, and moving a planting line out of its call reds it too', () => {
+    const src = fs.readFileSync(SELF, 'utf8');
+    // (a) THE REGRESSION THE SCAN EXISTS FOR: a set assertion reading the member
+    //     back. This is the exact shape the two retired pins had.
+    const readded = src.replace(
+      "expect(readSet(), 'an ordinary verdict publishes the member as false').toMatchObject({ scope: 'main', overlap: false });",
+      "expect(readSet(), 'an ordinary verdict publishes the member as false').toMatchObject({ scope: 'main', overlap: false, served: false });");
+    expect(readded, 'the mutation applied').not.toBe(src);
+    expect(audit(readded).unallowed.length, 'the re-added set assertion is found').toBe(1);
+    // (b) THE ENCLOSING-CONSTRUCT PIN: the same line, no longer inside an
+    //     `fs.writeFileSync(setFile(), …)` call, is no longer allow-listed.
+    const moved = src.replace('    fs.writeFileSync(setFile(), JSON.stringify({ v: 1, at, nonce, scope: \'main\', agent: null,',
+      '    const planted = JSON.stringify({ v: 1, at, nonce, scope: \'main\', agent: null,');
+    expect(moved, 'the mutation applied').not.toBe(src);
+    expect(audit(moved).unallowed.length, 'a planting line outside its call is found').toBeGreaterThan(0);
+  });
+
+  it('CONTROL: class (2) is load-bearing — the journal record\'s own `served` assertions red without it', () => {
+    const src = fs.readFileSync(SELF, 'utf8');
+    expect(audit(src, true).unallowed, 'green WITH the class').toEqual([]);
+    const without = audit(src, false).unallowed;
+    expect(without.length, 'and RED without it — the class is doing work, not decorating').toBeGreaterThan(0);
+    expect(without.every((r) => /served/.test(r.text)), 'and every one of them is a journal `served`').toBe(true);
+  });
+});
+// ── D-2605: jq AND SHELL-WORD DISCIPLINE IN THE COMPACTION ARMS (spec §5) ─
+// §5's row: "every `jq` invocation that receives lifecycle or graph text must
+// receive it through `--arg`/`--argjson`/`--rawfile`, and no `eval`, `bash -c`,
+// or unquoted expansion of a card/set/summary/graph variable may appear in
+// those arms". Its FIRST Plan-A leg reds behaviourally — interpolating card text
+// into a jq program breaks the program and ~15 tests go red — but its SECOND
+// does not and cannot: fixture HOMEs never contain a space, so word-splitting
+// from an unquoted `$src`/`$marker` is invisible to every behaviour test in this
+// file. That is why the row asks for a scan, and why the row's own mutant m28
+// (dropping the quotes from `_hook_compact_mark_served`'s `link`/`rm`) passed
+// 230/230 before this.
+describe('the compaction card — jq programs and shell words in the compaction arms (spec §5)', () => {
+  /** The three arms and every helper they reach that names a row artifact or
+   *  builds a jq program. `_hook_emit_context` is here because the row's own
+   *  non-vacuity clause names its `jq -cn --arg c "$text"` as a site the scan
+   *  must FIND. */
+  const ARMS = ['_hook_compact_scope', '_hook_compact_pre', '_hook_compact_card',
+    '_hook_compact_card_locked', '_hook_compact_mark_served', '_hook_compact_serve_end',
+    '_hook_compact_post', '_hook_compact_post_abandon', '_hook_compact_post_fail',
+    '_hook_lock_init', '_hook_lock_acquire', '_hook_lock_release', '_hook_lock_same',
+    '_hook_generation_ok', '_hook_write_atomic', '_hook_family_sweepable',
+    '_hook_emit_context'] as const;
+  /** The ONLY names a jq PROGRAM may expand: the three predicate constants,
+   *  which are jq source and are spelled once each (`single-definition` owns
+   *  that). Anything else inside a program's double quotes is shell text
+   *  reaching jq's parser, which is the injection this row forbids. */
+  const PRED_CONSTS = ['COMPACT_SHAPE_PRED', 'JOURNAL_RECORD_PRED_DEFS', 'JOURNAL_STAGE_PRED'];
+  /** jq flags and how many words they consume AFTER themselves. `--arg` takes
+   *  a NAME and a VALUE — two — and getting that wrong is not a near miss: the
+   *  walk then stops on the value and reports `"$CS_SCOPE"` as the program,
+   *  which reads as an injection on a compliant tree (measured, in the first
+   *  spelling of this scan). */
+  const JQ_TWO = ['--arg', '--argjson', '--rawfile', '--slurpfile'];
+  const JQ_ONE = ['--indent'];
+  const PRIMS = ['mktemp', 'link', 'rm', 'mv', 'touch'];
+  const OPS = new Set([';', '|', '&', '(', ')', '{', '}', '||', '&&', '\n', '$(']);
+
+  /** A QUOTE-AWARE splitter. Each word keeps its own quoting — `"$x"`, `'lit'`,
+   *  `$x` and `"$A"'lit'` stay four distinguishable answers — and unquoted
+   *  shell operators become their own words so an argument list has an end.
+   *
+   *  TWO THINGS IT MUST NOT DO, both measured as defects in the first spelling.
+   *  It must not swallow a `$( )` body: nearly every `jq` in this file is
+   *  captured (`j=$(jq -cn …)`), so a splitter that keeps the substitution
+   *  whole finds ZERO jq programs and the scan passes vacuously. And a NEWLINE
+   *  must end a command: without it an argument walk from `rm -f "$cardf"` ran
+   *  on into the next statement and reported `aged=$(find …)` — a word that is
+   *  not an argument of anything — as an unquoted expansion. */
+  const words = (code: string): string[] => {
+    const out: string[] = [];
+    let cur = ''; let i = 0;
+    const flush = (): void => { if (cur) { out.push(cur); cur = ''; } };
+    while (i < code.length) {
+      const c = code[i]!;
+      if (c === '\\' && code[i + 1] === '\n') { flush(); i += 2; continue; }   // a continued line is ONE line
+      if (c === '\\' && i + 1 < code.length) { cur += code.slice(i, i + 2); i += 2; continue; }
+      if (c === "'") { const j = code.indexOf("'", i + 1); const e = j < 0 ? code.length - 1 : j; cur += code.slice(i, e + 1); i = e + 1; continue; }
+      if (c === '"') {
+        let j = i + 1;
+        while (j < code.length) { if (code[j] === '\\') { j += 2; continue; } if (code[j] === '"') break; j++; }
+        cur += code.slice(i, Math.min(j + 1, code.length)); i = j + 1; continue;
+      }
+      if (c === '$' && code[i + 1] === '(') { flush(); out.push('$('); i += 2; continue; }
+      // A COMMENT ENDS AT THE LINE, and it is recognised HERE rather than by a
+      // line filter, because quoting is tracked in ONE place. A filter that
+      // dropped whole `#` lines left TRAILING comments standing, and one of
+      // those carries an apostrophe (`# this process's own`) — which opened a
+      // single-quoted run that swallowed the rest of `_hook_compact_post`:
+      // measured, the arm reported 2 jq programs where it has 9.
+      if (c === '#' && (out.length === 0 || cur === '')) {
+        const j = code.indexOf('\n', i); i = j < 0 ? code.length : j; continue;
+      }
+      if (c === '\n') { flush(); out.push('\n'); i++; continue; }
+      if (/\s/.test(c)) { flush(); i++; continue; }
+      if (';|&(){}'.includes(c)) { flush(); out.push(c); i++; continue; }
+      cur += c; i++;
+    }
+    flush();
+    return out;
+  };
+
+  /** A word is SAFE when every expansion in it is inside quotes: built only
+   *  from single-quoted chunks, double-quoted chunks and unquoted text with no
+   *  `$` in it. `link $src` fails; `link "$src"` passes. */
+  const safeWord = (w: string): boolean => {
+    let i = 0;
+    while (i < w.length) {
+      const c = w[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'") { const j = w.indexOf("'", i + 1); if (j < 0) return false; i = j + 1; continue; }
+      if (c === '"') {
+        let j = i + 1;
+        while (j < w.length) { if (w[j] === '\\') { j += 2; continue; } if (w[j] === '"') break; j++; }
+        if (j >= w.length) return false;
+        i = j + 1; continue;
+      }
+      if (c === '$') return false;
+      i++;
+    }
+    return true;
+  };
+
+  /** A jq PROGRAM word: single-quoted chunks freely, and double-quoted chunks
+   *  whose only expansions are the three predicate constants. */
+  const safeProgram = (w: string): boolean => {
+    let i = 0;
+    while (i < w.length) {
+      const c = w[i]!;
+      if (c === '\\') { i += 2; continue; }
+      if (c === "'") { const j = w.indexOf("'", i + 1); if (j < 0) return false; i = j + 1; continue; }
+      if (c === '"') {
+        let j = i + 1;
+        while (j < w.length) { if (w[j] === '\\') { j += 2; continue; } if (w[j] === '"') break; j++; }
+        if (j >= w.length) return false;
+        for (const m of w.slice(i + 1, j).matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)) {
+          if (!PRED_CONSTS.includes(m[1]!)) return false;
+        }
+        i = j + 1; continue;
+      }
+      if (c === '$') return false;
+      i++;
+    }
+    return true;
+  };
+
+  const armBodies = (src: string): Array<{ fn: string; body: string }> => {
+    const code = src;
+    return ARMS.map((fn) => {
+      const i = code.indexOf(`${fn}() {`);
+      const rest = i < 0 ? '' : code.slice(i);
+      return { fn, body: i < 0 ? '' : rest.slice(0, rest.indexOf('\n}\n') + 2) };
+    });
+  };
+
+  type Hit = { fn: string; what: string; word: string };
+  /** The found set: every jq PROGRAM, every argument of every named primitive,
+   *  and every `eval`/`bash -c` in the arms — each with its verdict. */
+  const audit = (src: string): { programs: Hit[]; args: Hit[]; shells: Hit[] } => {
+    const programs: Hit[] = []; const args: Hit[] = []; const shells: Hit[] = [];
+    for (const { fn, body } of armBodies(src)) {
+      const w = words(body);
+      for (let i = 0; i < w.length; i++) {
+        if (w[i] === 'eval') shells.push({ fn, what: 'eval', word: w.slice(i, i + 3).join(' ') });
+        if (w[i] === 'bash' && w[i + 1] === '-c') shells.push({ fn, what: 'bash -c', word: w.slice(i, i + 3).join(' ') });
+        if (w[i] === 'jq') {
+          let j = i + 1;
+          while (j < w.length && w[j]!.startsWith('-')) {
+            j += JQ_TWO.includes(w[j]!) ? 3 : JQ_ONE.includes(w[j]!) ? 2 : 1;
+          }
+          if (j < w.length && !OPS.has(w[j]!)) programs.push({ fn, what: 'jq program', word: w[j]! });
+        }
+        if (PRIMS.includes(w[i]!) && (i === 0 || OPS.has(w[i - 1]!) || w[i - 1] === '!' || w[i - 1] === 'then'
+          || w[i - 1] === 'else' || w[i - 1] === 'do' || w[i - 1] === 'exec')) {
+          for (let j = i + 1; j < w.length && !OPS.has(w[j]!); j++) {
+            if (/^\d?[<>]/.test(w[j]!)) { j++; continue; }      // a redirection and its target
+            args.push({ fn, what: `${w[i]} argument`, word: w[j]! });
+          }
+        }
+      }
+    }
+    return { programs, args, shells };
+  };
+
+  const hookSrc = (): string => fs.readFileSync(HOOK, 'utf8');
+
+  it('every jq PROGRAM in the arms is literal or a predicate constant, and no arm spawns a shell', () => {
+    const a = audit(hookSrc());
+    // NON-VACUITY, MANDATORY and BY IDENTITY — §5 names these two sites by
+    // pre-Task-9 line anchors that this task moved, so they are required by
+    // what they ARE rather than by where they sit.
+    expect(a.programs.length, 'the scan found every jq program in the arms — 3 in PreCompact, 9 in PostCompact, 1 in the emitter')
+      .toBe(13);
+    const emit = audit(hookSrc()).programs.filter((h) => h.fn === '_hook_emit_context');
+    expect(emit.length, 'the emitter\'s program is in the found set').toBeGreaterThan(0);
+    const pre = a.programs.filter((h) => h.fn === '_hook_compact_pre');
+    expect(pre.some((h) => h.word.includes('nonce:$nonce')), 'and the set-document build is too').toBe(true);
+    // THE RULE.
+    expect(a.programs.filter((h) => !safeProgram(h.word)).map((h) => `${h.fn}: ${h.word.slice(0, 60)}`),
+      'a jq program carrying shell text').toEqual([]);
+    expect(a.shells, 'no eval and no bash -c in any compaction arm').toEqual([]);
+  });
+
+  it('every mktemp/link/rm/mv/touch argument in the arms is quoted or literal', () => {
+    const a = audit(hookSrc());
+    expect(a.args.length, 'the scan found primitive arguments at all').toBeGreaterThan(20);
+    expect(a.args.some((h) => h.fn === '_hook_compact_mark_served'),
+      'including the marker publication\'s, which is where the row\'s own mutant lives').toBe(true);
+    expect(a.args.filter((h) => !safeWord(h.word)).map((h) => `${h.fn}: ${h.what} ${h.word}`),
+      'an unquoted expansion in a command word').toEqual([]);
+  });
+
+  it('CONTROL m28: dropping the quotes from the marker\'s link/rm is FOUND', () => {
+    // The row's second Plan-A mutant, and the one no behaviour test in this file
+    // can carry: fixture HOMEs never contain a space, so word-splitting here is
+    // invisible to every run.
+    const mutated = hookSrc()
+      .replace('link "$src" "$marker" 2>/dev/null || true', 'link $src $marker 2>/dev/null || true')
+      .replace('  rm -f "$src" 2>/dev/null || true\n  return 0\n}', '  rm -f $src 2>/dev/null || true\n  return 0\n}');
+    expect(mutated, 'the mutation applied').not.toBe(hookSrc());
+    const bad = audit(mutated).args.filter((h) => !safeWord(h.word));
+    expect(bad.map((h) => h.word).sort(), 'all three unquoted words are found').toEqual(['$marker', '$src', '$src']);
+  });
+
+  it('CONTROL m27: interpolating card text into the emitter\'s jq program is FOUND', () => {
+    // The row's FIRST Plan-A mutant. It also reds ~15 behaviour tests, because
+    // an interpolated program stops being valid jq — but a mutant that happened
+    // to stay valid would not, and this is the mechanism that does not care.
+    const mutated = hookSrc().replace('jq -cn --arg c "$text" \\', 'jq -cn \\');
+    expect(mutated, 'the mutation applied').not.toBe(hookSrc());
+    const injected = mutated.replace("'{hookSpecificOutput:", '"{hookSpecificOutput: $text,\n');
+    const bad = audit(injected).programs.filter((h) => !safeProgram(h.word));
+    expect(bad.length, 'the program carrying `$text` is found').toBeGreaterThan(0);
+    expect(bad.map((h) => h.fn), 'and the emitter is named among the arms it names').toContain('_hook_emit_context');
+  });
+});
+// ── D-2605: NO HOOKSTATE COMPACTION CACHE (spec §5, §8) ──────────────────
+// One of the four subjects §8 records as D-2605's headline REJECTIONS, listed
+// as covered while nothing executable named it: measured, the only thing in the
+// tree on this subject was a scan of the COMMENT that says it, and a mutant
+// adding `compaction:{n:1}` to the hookstate `jq -cn` object passed the whole
+// session-hook suite. Both halves the row states are built here — the writer's
+// source, and the document's key set on a real run.
+describe('the compaction card — no hookstate compaction cache (spec §5)', () => {
+  const SUMMARY = '1. Task\ndid a thing\n';
+
+  it('the hookstate document\'s key set is pinned BY EQUALITY on a real run, compaction and all', () => {
+    // BY EQUALITY, not by presence: a new member is as much a defect as a
+    // missing one here, and `readState()` is used everywhere else with
+    // `toMatchObject`, which a new key passes silently. Run through the two
+    // events that actually carry a compaction — so an arm that cached something
+    // would have had its chance — and assert the same key set both times.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const KEYS = ['ask', 'ccrcClaims', 'ccrcPeerReads', 'event', 'graphGateDenials', 'graphQueries',
+      'pid', 'sessionId', 'state', 'subagents', 'updatedAt', 'v'];
+    run(preCompact(tree, transcript));
+    expect(Object.keys(readState()).sort(), 'after PreCompact').toEqual(KEYS);
+    run(postCompact(tree, transcript, SUMMARY));
+    expect(Object.keys(readState()).sort(), 'after PostCompact — no ordinal, no cached measurement').toEqual(KEYS);
+    // And the journal really was written, so the assertion above is about a run
+    // that HAD a compaction to cache rather than about an inert one.
+    expect(fs.existsSync(journalFile()), 'the compaction really happened').toBe(true);
+  });
+
+  it('no arm BUILDS a `compaction` member into the hookstate document, and the writer is the one place that could', () => {
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const code = src.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    // THE WRITER'S OWN OBJECT, bounded to the `jq -cn` that builds it. A key is
+    // a `<name>:` at the head of a member, so this is a claim about the
+    // document's shape rather than about the word appearing somewhere.
+    const i = code.indexOf("'{v:$v, state:$state, event:$event");
+    expect(i, 'the hookstate writer').toBeGreaterThan(-1);
+    const obj = code.slice(i, code.indexOf("') || exit 0", i));
+    expect(obj, 'the writer builds no compaction member').not.toMatch(/\bcompaction\s*:/);
+    expect(obj, 'and no cached ordinal either').not.toMatch(/\bn\s*:/);
+    // NON-VACUITY: the bounded slice really is the object, and really does carry
+    // the members the equality above lists.
+    expect(obj).toContain('ccrcClaims:$ccrcClaims');
+    expect(obj).toContain('graphQueries:$graphQueries');
+    // THE THREE ARMS, none of which may write into that document at all: the
+    // hookstate write is a single site, and an arm reaching it would be a
+    // second author for one artifact.
+    for (const fn of ['_hook_compact_pre() {', '_hook_compact_card() {', '_hook_compact_post() {'] as const) {
+      const body = code.slice(code.indexOf(fn));
+      const arm = body.slice(0, body.indexOf('\n}\n'));
+      expect(arm, `${fn} names no hookstate path`).not.toContain('hookstate');
+    }
+  });
+});
 // ── D-2605: the generation gate, in all three arms (spec §3.1 step 5, §3.3) ─
 describe('the compaction card — the row generation authorizes every arm (spec §3.4)', () => {
   const genFile = (): string => path.join(home, '.cc-sessions', 'demo-quiet-basin.generation');
