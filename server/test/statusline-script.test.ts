@@ -206,3 +206,117 @@ describe('statusline-command.sh reads the roster instead of a hand-written map',
     expect(limitsRow(home, 'unclaimed')).toBeNull();
   });
 });
+
+/** The payload with the fields the usage sidecar reads. `model.id` beside
+ *  `display_name`: the id is what `familyClassOf` classifies (routing spec §6). */
+function usagePayload(extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    session_id: '11111111-2222-3333-4444-555555555555',
+    model: { id: 'claude-opus-5', display_name: 'Opus 5' },
+    effort: { level: 'high' },
+    workspace: { current_dir: '/nonexistent-for-this-test' },
+    context_window: { used_percentage: 12 },
+    cost: { total_cost_usd: 1.25 },
+    rate_limits: {
+      five_hour: { used_percentage: 41, resets_at: 1_800_000_000 },
+      seven_day: { used_percentage: 63, resets_at: 1_800_600_000 },
+    },
+    ...extra,
+  });
+}
+
+/** A fake tmux on PATH whose `display-message -p '#S'` answers `sessionName`.
+ *  The real hook derives the ccd id from exactly that call, gated on
+ *  `TMUX_PANE` being set. */
+function tmuxSaying(home: string, sessionName: string): string {
+  const bin = path.join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'tmux'),
+    `#!/bin/sh\n[ "$1" = display-message ] && printf '%s\\n' '${sessionName}'\nexit 0\n`, { mode: 0o755 });
+  return bin;
+}
+
+interface UsageRun { out: string; code: number }
+function runUsage(home: string, payload: string, opts: { tmux?: string; pane?: boolean; cfgDir?: string } = {}): UsageRun {
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+  delete env['CLAUDE_CONFIG_DIR']; delete env['TMUX_PANE'];
+  env['CLAUDE_CONFIG_DIR'] = opts.cfgDir ?? path.join(home, '.zeta');
+  if (opts.pane !== false) env['TMUX_PANE'] = '%3';
+  if (opts.tmux !== undefined) env['PATH'] = `${tmuxSaying(home, opts.tmux)}:${env['PATH'] ?? ''}`;
+  const r = spawnSync('bash', [SCRIPT], { input: payload, encoding: 'utf8', env });
+  return { out: r.stdout ?? '', code: r.status ?? -1 };
+}
+
+const usageFile = (home: string, rel: string): unknown => {
+  const p = path.join(home, '.cc-sessions', 'usage', rel);
+  return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null;
+};
+
+describe('statusline-command.sh writes the per-session usage sidecar (routing spec 2026-09-14 §6)', () => {
+  const seedReg = (home: string): void => { mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); };
+
+  it('writes ~/.cc-sessions/usage/<ccd-id>.json keyed by the tmux name with cc- stripped, carrying ts', () => {
+    const home = seed('ccrc-statusline-usage-'); seedReg(home);
+    const before = Math.floor(Date.now() / 1000);
+    const r = runUsage(home, usagePayload(), { tmux: 'cc-demo-quiet-basin' });
+    expect(r.code).toBe(0);
+    const row = usageFile(home, 'demo-quiet-basin.json') as Record<string, unknown>;
+    expect(row).toEqual({
+      ts: expect.any(Number), uuid: '11111111-2222-3333-4444-555555555555', account: 'zeta',
+      model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25, agent: null,
+    });
+    expect(row['ts'] as number).toBeGreaterThanOrEqual(before);
+    expect(row['ts'] as number).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 1);
+    // keyed by the ccd id, NEVER the uuid
+    expect(usageFile(home, '11111111-2222-3333-4444-555555555555.json')).toBeNull();
+    // the limits row still lands — the second side-effect did not displace the first
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
+  });
+
+  it('an agent render writes <ccd-id>.agents/<name>.json and leaves the main-loop row untouched', () => {
+    const home = seed('ccrc-statusline-usage-agent-'); seedReg(home);
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'usage', 'demo-a.json'), '{"ts":1,"marker":true}\n');
+    const r = runUsage(home, usagePayload({ agent: { name: 'refute-1' }, model: { id: 'claude-sonnet-5', display_name: 'Sonnet 5' } }),
+      { tmux: 'cc-demo-a' });
+    expect(r.code).toBe(0);
+    expect(usageFile(home, 'demo-a.agents/refute-1.json')).toMatchObject({ agent: 'refute-1', model: 'claude-sonnet-5' });
+    expect(usageFile(home, 'demo-a.json')).toEqual({ ts: 1, marker: true });
+  });
+
+  it('an agent name outside [A-Za-z0-9._-] writes NOTHING — not the agents file and not the main row', () => {
+    const home = seed('ccrc-statusline-usage-badagent-'); seedReg(home);
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'usage', 'demo-a.json'), '{"ts":1,"marker":true}\n');
+    runUsage(home, usagePayload({ agent: { name: '../escape' } }), { tmux: 'cc-demo-a' });
+    expect(usageFile(home, 'demo-a.json')).toEqual({ ts: 1, marker: true });
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage', 'demo-a.agents'))).toBe(false);
+  });
+
+  it.each([
+    ['no TMUX_PANE', { tmux: 'cc-demo-a', pane: false }],
+    ['a tmux session not named cc-*', { tmux: 'scratch' }],
+    ['a tmux name with a character outside the id alphabet', { tmux: 'cc-demo a' }],
+  ] as const)('%s: no sidecar, and the status line still renders', (_label, opts) => {
+    const home = seed('ccrc-statusline-usage-none-'); seedReg(home);
+    const r = runUsage(home, usagePayload(), opts);
+    expect(r.code).toBe(0);
+    expect(plain(r.out)).toContain('Opus 5');
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
+  });
+
+  it('no ~/.cc-sessions at all (a box without ccd): no sidecar, no error', () => {
+    const home = seed('ccrc-statusline-usage-noreg-');
+    const r = runUsage(home, usagePayload(), { tmux: 'cc-demo-a' });
+    expect(r.code).toBe(0);
+    expect(existsSync(path.join(home, '.cc-sessions'))).toBe(false);
+  });
+
+  it('a payload with no effort block and no cost writes nulls, not empty strings', () => {
+    const home = seed('ccrc-statusline-usage-nulls-'); seedReg(home);
+    const p = JSON.parse(usagePayload()) as Record<string, unknown>;
+    delete p['effort']; delete p['cost'];
+    runUsage(home, JSON.stringify(p), { tmux: 'cc-demo-a' });
+    expect(usageFile(home, 'demo-a.json')).toMatchObject({ effort: null, cost: null, model: 'claude-opus-5' });
+  });
+});

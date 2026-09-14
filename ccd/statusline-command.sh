@@ -251,6 +251,61 @@ if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
     > "$HOME/.cc-limits/.$acct_id.tmp" && mv -f "$HOME/.cc-limits/.$acct_id.tmp" "$HOME/.cc-limits/$acct_id.json"
 fi
 
+# ── Side-effect 2: the per-session usage sidecar (routing spec 2026-09-14 §6) ──
+#    Keyed by the CCD ID — the tmux session name with `cc-` stripped, derived
+#    exactly as session-hook.sh derives it — and NEVER by the Claude session
+#    uuid: Claude Code rotates the uuid on /clear and on compaction (`_sync_uuid`
+#    in ccd exists for that reason), so the uuid cannot key anything durable.
+#    `ts` is THIS writer's clock, so a reader can tell a live reading from a
+#    stale one the way `.cc-limits` rows carry it. A render that names an
+#    `agent` is a SUBAGENT's status bar: it shares the parent's session id and
+#    would overwrite the main-loop row, so it goes to `<id>.agents/<name>.json`.
+#    Gated on `~/.cc-sessions` existing: a laptop with the same dotfiles and no
+#    ccd gets no sidecar and no error. `model.id`, not `display_name`: the id is
+#    what the server classifies (`familyClassOf`); the display name is for
+#    people. Every failure below is silent on purpose — this runs on every
+#    render of every session and must never cost the status bar.
+usage_dir="$HOME/.cc-sessions/usage"
+ccd_id=""
+if [ -n "${TMUX_PANE:-}" ] && [ -d "$HOME/.cc-sessions" ]; then
+  tname=$(tmux display-message -p '#S' 2>/dev/null)
+  case "$tname" in cc-?*) ccd_id="${tname#cc-}" ;; esac
+  case "$ccd_id" in *[!A-Za-z0-9._-]*) ccd_id="" ;; esac
+fi
+if [ -n "$ccd_id" ]; then
+  agent_name=$(printf '%s' "$input" | jq -r '.agent.name // empty' 2>/dev/null)
+  agent_ok=1
+  if [ -n "$agent_name" ]; then
+    case "$agent_name" in *[!A-Za-z0-9._-]*|.|..) agent_ok=0 ;; esac
+  fi
+  if [ "$agent_ok" = 1 ]; then
+    usage_json=$(printf '%s' "$input" | jq -c \
+      --arg ts "$(date +%s)" --arg acct "$acct_id" --arg agent "$agent_name" '{
+        ts: ($ts | tonumber),
+        uuid: (.session_id // null),
+        account: (if $acct == "" then null else $acct end),
+        model: (.model.id // null),
+        effort: (.effort.level // null),
+        ctxPct: (.context_window.used_percentage // null),
+        cost: (.cost.total_cost_usd // null),
+        agent: (if $agent == "" then null else $agent end)
+      }' 2>/dev/null)
+    if [ -n "$usage_json" ]; then
+      if [ -n "$agent_name" ]; then
+        usage_target_dir="$usage_dir/$ccd_id.agents"; usage_file="$usage_target_dir/$agent_name.json"
+      else
+        usage_target_dir="$usage_dir"; usage_file="$usage_dir/$ccd_id.json"
+      fi
+      # atomic tmp-and-rename, the registry's own discipline (`_reg_set`)
+      usage_tmp="$usage_target_dir/.$ccd_id.$$.tmp"
+      mkdir -p "$usage_target_dir" 2>/dev/null \
+        && { printf '%s\n' "$usage_json" > "$usage_tmp"; } 2>/dev/null \
+        && mv -f "$usage_tmp" "$usage_file" 2>/dev/null \
+        || rm -f "$usage_tmp" 2>/dev/null
+    fi
+  fi
+fi
+
 # ── Assemble single-line output ───────────────────────────────────────────
 if [ ${#segments[@]} -eq 0 ]; then
   printf "claude-code\n"
