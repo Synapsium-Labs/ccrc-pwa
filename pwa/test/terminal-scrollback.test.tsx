@@ -1687,9 +1687,16 @@ describe('the newest read wins', () => {
     act(() => { t.wheel(-120); });                  // read B starts
     await waitFor(() => expect(gates).toHaveLength(2));
 
-    // B answers first, then the stale A.
-    await act(async () => { gates[1]!(); await flush(); });
+    // THE STALE READ ANSWERS FIRST. The order is the whole test, and the other
+    // way round proves nothing: if the FRESH read lands first it moves the state
+    // out of `reading` on its own, and the plain state check the drawer already
+    // had is then enough to turn the stale one away. Measured — with B first,
+    // this test passes against the code BEFORE the request id existed. It is
+    // A-before-B that the state check cannot survive: A is admitted because the
+    // state still says `reading`, it paints a history the reader had left, and B
+    // is then turned away for arriving into the state A just moved.
     await act(async () => { gates[0]!(); await flush(); });
+    await act(async () => { gates[1]!(); await flush(); });
 
     expect(h.write.mock.calls.map((c) => c[0]),
       'a read the reader had already left overwrote the one they asked for')
@@ -1720,15 +1727,19 @@ describe('the newest read wins', () => {
     act(() => { t.wheel(-120); });
     await waitFor(() => expect(gates).toHaveLength(2));
 
+    // Stale FIRST here too, and for the same reason: the stale 404 is admitted by
+    // the state check, puts its notice up, and the newer success then arrives into
+    // `empty` rather than `reading` and is discarded. Resolved the other way round
+    // the state check already copes, and this test cannot fail.
     await act(async () => {
-      gates[1]!(new Response(JSON.stringify(OK_HISTORY), {
-        status: 200, headers: { 'content-type': 'application/json' },
+      gates[0]!(new Response(JSON.stringify({ ok: false, error: 'gone' }), {
+        status: 404, headers: { 'content-type': 'application/json' },
       }));
       await flush();
     });
     await act(async () => {
-      gates[0]!(new Response(JSON.stringify({ ok: false, error: 'gone' }), {
-        status: 404, headers: { 'content-type': 'application/json' },
+      gates[1]!(new Response(JSON.stringify(OK_HISTORY), {
+        status: 200, headers: { 'content-type': 'application/json' },
       }));
       await flush();
     });
