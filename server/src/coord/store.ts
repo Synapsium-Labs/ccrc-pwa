@@ -2343,29 +2343,6 @@ export class CoordStore {
   }
 
   /**
-   * F7: every health fact for a set of runs, in FOUR statements TOTAL — not four
-   * per row.
-   *
-   * The cost is the design (D-1299). `hydrateRun` already spends two statements per
-   * row (`itemTally`, `unreadMailCount`), and `runs({includeClosed:true})` returns
-   * every open run — deliberately uncapped — plus up to 500 closed ones. Four naive
-   * per-row health reads would make six statements per row: ~3,000 for one board
-   * load. This spends AT MOST FOUR in total, whatever the row count.
-   *
-   * At most, not exactly: statement (4) runs only when some run names a
-   * coordinator, so the real count is three or four. The first version of this
-   * sentence said "FOUR TOTAL" and issued FIVE whenever a kickoff was actually
-   * outstanding — the one case the facet exists for — because it re-read `runs` a
-   * second time for `claimedBy`. That read now rides statement (3), which was
-   * already selecting from the same table by the same key.
-   *
-   * EVERY id in `runIds` gets a row, including a run with no mail at all. A caller
-   * forced to supply a default for a missing key is where an overloaded null is
-   * born, and this method exists to remove those, not to add one.
-   *
-   * SYNCHRONOUS, like the rest of this class. Reads only; writes nothing.
-   */
-  /**
    * THE ONE COUNT of a run's refused wave-dones — the `mail_rejections` rows
    * `closeRun` writes through `recordRejection` with a `DONE_AUTHORITY_CODES`
    * code — and, riding the same statement, the newest one's code.
@@ -2412,6 +2389,29 @@ export class CoordStore {
     return out;
   }
 
+  /**
+   * F7: every health fact for a set of runs, in FOUR statements TOTAL — not four
+   * per row.
+   *
+   * The cost is the design (D-1299). `hydrateRun` already spends two statements per
+   * row (`itemTally`, `unreadMailCount`), and `runs({includeClosed:true})` returns
+   * every open run — deliberately uncapped — plus up to 500 closed ones. Four naive
+   * per-row health reads would make six statements per row: ~3,000 for one board
+   * load. This spends AT MOST FOUR in total, whatever the row count.
+   *
+   * At most, not exactly: statement (4) runs only when some run names a
+   * coordinator, so the real count is three or four. The first version of this
+   * sentence said "FOUR TOTAL" and issued FIVE whenever a kickoff was actually
+   * outstanding — the one case the facet exists for — because it re-read `runs` a
+   * second time for `claimedBy`. That read now rides statement (3), which was
+   * already selecting from the same table by the same key.
+   *
+   * EVERY id in `runIds` gets a row, including a run with no mail at all. A caller
+   * forced to supply a default for a missing key is where an overloaded null is
+   * born, and this method exists to remove those, not to add one.
+   *
+   * SYNCHRONOUS, like the rest of this class. Reads only; writes nothing.
+   */
   runHealth(runIds: readonly number[], coordIds: readonly string[]): Map<number, RunHealth> {
     const out = new Map<number, RunHealth>();
     for (const id of runIds) {

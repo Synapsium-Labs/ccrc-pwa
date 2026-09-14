@@ -349,7 +349,11 @@ export interface FleetSession {
    *  verdict re-derived against the current sweep (see
    *  `FleetWatcher.sweepUsage`) rather than copied byte-for-byte, since
    *  `stale` is a verdict computed at read time, not a property of the
-   *  sidecar itself. */
+   *  sidecar itself. `reviveFleetSession` is the one reader that cannot do
+   *  that: it has no clock, so it REPUBLISHES whatever `stale` was persisted
+   *  into `state-cache.json` — a verdict measured against the sweep that wrote
+   *  it — and the first tick's `sweepUsage` re-derives it against the current
+   *  one. */
   readonly usage: SessionUsage | null;
 }
 
