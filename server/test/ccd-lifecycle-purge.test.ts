@@ -383,3 +383,129 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
     } finally { holder.kill('SIGKILL'); }
   }, 30_000);
 });
+
+// ── D-2605: the four callers, each answering for what it actually did ─────
+describe('the purge callers read its status (spec §3.4, "Locked purge and honest callers")', () => {
+  const lockOf = (id: string): string => path.join(h.home, '.cc-sessions', `.${id}.compactions.lock`);
+
+  /** Hold the row's mutex from a REAL process, resolving only once the child
+   *  reports it HAS it — so the caller under test races a genuinely held lock
+   *  rather than a hoped-for one. */
+  const hold = async (id: string, secs: number): Promise<() => void> => {
+    fs.mkdirSync(path.dirname(lockOf(id)), { recursive: true });
+    fs.closeSync(fs.openSync(lockOf(id), 'a'));
+    const child = spawn('bash', ['-c',
+      `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep ${secs}`, '_', lockOf(id)]);
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
+      child.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
+  };
+
+  it('the DEAD-REG arm DECLINES: one refused fact for its own tx, no done, no reclaimed, and the row STANDS', async () => {
+    const id = seed('demo-quiet-basin');
+    const release = await hold(id, 8);
+    try {
+      // The arm's own sequence is `_lc_tx`, `_lc_intent destroy`, then the
+      // purge — so this is the ONE caller whose refusal precedes anything
+      // irreversible, and the only one that may decline rather than fail.
+      const out = h.sh(`_ws_gc_prune_row dead-reg demo quiet-basin /nowhere 0; echo "DECLINED=$GC_DECLINED RECLAIMED=$GC_RECLAIMED"`);
+      expect(out, 'a declined row naming the id').toContain('declined');
+      expect(out).toContain('demo-quiet-basin');
+      expect(out, 'and NOT a reclaimed row').toContain('DECLINED=1 RECLAIMED=0');
+
+      const intents = eventsOf(h.home, 'destroy').filter((e) => e['outcome'] === 'intent');
+      expect(intents, 'the arm minted its intent before it learned').toHaveLength(1);
+      const tx = intents[0]!['tx'] as string;
+      expect(tx, 'a MINTED, non-empty tx').not.toBe('');
+      const terminal = eventsOf(h.home, 'destroy').filter((e) => e['tx'] === tx && e['outcome'] !== 'intent');
+      // EXACTLY ONE TERMINAL FACT for that minted tx, and it is the refusal.
+      // Reported only through `_gc_declined` — a printf report row, not a
+      // lifecycle emit — the intent above would be left with ZERO terminal
+      // facts, permanently, on every sweep.
+      expect(terminal.map((e) => e['outcome'])).toEqual(['refused']);
+      expect(terminal[0]!['refusal']).toBe('purge-refused');
+
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.uuid`)), 'the row still stands').toBe(true);
+    } finally { release(); }
+  }, 30_000);
+
+  it('ws-rm and forget FAIL rather than decline — the act is already done, and the message says what stands', async () => {
+    for (const [verb, act] of [['cmd_ws_rm', 'destroy'], ['cmd_forget', 'forget']] as const) {
+      const id = seed('demo-quiet-basin');
+      const release = await hold(id, 8);
+      try {
+        // Driven at `_reg_purge` plus the caller's own reporting shape, because
+        // the whole of `cmd_ws_rm` needs a real worktree; what is under test is
+        // the BRANCH, which measured did not exist before this task — all four
+        // callers fell straight through to an unconditional success echo.
+        const src = readFileSync(CCD, 'utf8');
+        const body = src.slice(src.indexOf(`${verb}() {`));
+        const end = body.indexOf('\n}\n');
+        const fn = body.slice(0, end);
+        expect(fn, `${verb} reads the purge's status`).toMatch(/if ! _reg_purge/);
+        expect(fn, `${verb} reports it as a FAILURE, not a decline`).toContain(`_lc_fail ${act}`);
+        expect(fn).toContain('purge-refused');
+        expect(fn, 'and names what still stands').toContain('still stand');
+        expect(fn, 'a refusal is never reported as success').toMatch(/return 1/);
+      } finally { release(); }
+    }
+  }, 30_000);
+
+  it('row creation acquires BEFORE any row field, and a miss leaves NOTHING', () => {
+    const src = readFileSync(CCD, 'utf8');
+    for (const verb of ['cmd_ws_add', 'cmd_start'] as const) {
+      const whole = src.slice(src.indexOf(`${verb}() {`));
+      // BOUNDED to the function, and CODE ONLY. Unbounded, `_reg_set "$id" `
+      // is found in a LATER function; with comments in, it is found in this
+      // one's own prose at `# \`_reg_set "$id" branch …\``, 15 KiB before the
+      // acquire — both of which read as a real ordering failure rather than as
+      // a broken scan.
+      const body = whole.slice(0, whole.indexOf('\n}\n'))
+        .split('\n').map((l) => (/^\s*#/.test(l) ? '' : l)).join('\n');
+      const acquire = body.indexOf('_compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"');
+      const firstSet = body.indexOf('_reg_set "$id" ');
+      expect(acquire, `${verb} acquires`).toBeGreaterThan(-1);
+      expect(firstSet, `${verb} writes row fields`).toBeGreaterThan(-1);
+      // BEFORE THE FIRST FIELD, so a miss leaves no `.uuid`, no `.generation`,
+      // no partial row — nothing irreversible has happened and re-running is
+      // the whole remedy. That is the OPPOSITE disposition from
+      // `_spawn_start`'s contended miss, and deliberately so.
+      expect(acquire, `${verb}: the acquire precedes every _reg_set`).toBeLessThan(firstSet);
+      const miss = body.slice(acquire, firstSet);
+      expect(miss, 'and a miss dies retryably, naming the lock').toMatch(/\|\| die "could not take .*compactions\.lock/);
+      expect(miss).toContain('nothing was');
+      expect(miss).toContain('retry');
+    }
+  });
+
+  it('_spawn_start CLOSES the lock before either tmux command, and a contended miss spawns without the generation', () => {
+    const src = readFileSync(CCD, 'utf8');
+    const body = src.slice(src.indexOf('_spawn_start() {'));
+    const fn = body.slice(0, body.indexOf('\n}\n'));
+    const acquire = fn.indexOf('_compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"');
+    const release = fn.indexOf('_compact_lock_release "$genfd"');
+    const tmux1 = fn.indexOf('_tmux_new_session -d -s "$tname"');
+    expect(acquire).toBeGreaterThan(-1);
+    expect(release).toBeGreaterThan(-1);
+    expect(tmux1).toBeGreaterThan(-1);
+    // The tmux server daemon can outlive this critical section and a held
+    // `{fd}<>` descriptor is inherited across fork/exec, so no compliant path
+    // may rely on tmux calling `closefrom()`.
+    expect(release, 'the release precedes the first tmux creation').toBeLessThan(tmux1);
+    expect(acquire, 'and the acquire precedes the release').toBeLessThan(release);
+    // BOTH commands carry it — the retry is the copy that gets forgotten.
+    expect([...fn.matchAll(/exec env \$\{genenv\}COLORTERM=truecolor/g)],
+      'both _tmux_new_session commands carry the generation env').toHaveLength(2);
+    // It READS AND VALIDATES; it never MINTS.
+    expect(fn).toContain('_reg_generation_read "$id"');
+    expect(fn, '_spawn_start is not a second minter').not.toContain('_reg_generation_init');
+    expect(fn, '...nor a direct one').not.toContain('_reg_generation_mint');
+    // A CONTENDED miss fails OPEN, and says so where a human can see it.
+    expect(fn).toMatch(/elif \(\( genrc == 1 \)\); then/);
+    expect(fn).toContain('spawning without CCRC_SESSION_GENERATION');
+    expect(fn).toContain('inert until its next respawn');
+  });
+});
