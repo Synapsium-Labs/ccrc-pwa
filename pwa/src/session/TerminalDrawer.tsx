@@ -115,6 +115,29 @@ export function historyScrollback(
   return pane.history * wrap + rows;
 }
 
+/**
+ * WHY THERE IS NO HISTORY, as a sentence rather than as a wire token.
+ *
+ * The route answers three distinct failures and PR #96 rendered all three raw —
+ * `no history · gone`, `· unmeasured`, `· unreachable` — on the one layer whose
+ * entire job is to explain a missing history. `detail` was discarded outright,
+ * which is the half that says WHICH tmux refusal it was.
+ *
+ * Anything that is not one of the three tokens is already a sentence (the two
+ * MEASURED-empty reasons the success path writes) and is returned untouched, so
+ * this never has to know about them.
+ */
+export function historyFailureSentence(error: string, detail?: string): string {
+  if (error === 'gone') return 'this session is gone — there is no pane to read';
+  if (error === 'unreachable') return 'could not reach the box to read this pane';
+  if (error === 'unmeasured') {
+    return detail !== undefined && detail !== ''
+      ? `could not read this pane — ${detail}`
+      : 'could not read this pane';
+  }
+  return error;
+}
+
 export type MakeHistoryTerm = (host: HTMLElement, lines: number, pane?: HistoryPane) => HistoryTerm;
 
 /** A token's resolved value at attach time — xterm paints to canvas and
@@ -394,7 +417,7 @@ type Hist =
   | { at: 'live' }
   | { at: 'reading' }
   | { at: 'history'; text: string; lines: number; pane?: HistoryPane }
-  | { at: 'empty'; why: string };
+  | { at: 'empty'; why: string; detail?: string };
 
 export interface TerminalDrawerProps {
   id: string;
@@ -503,12 +526,14 @@ export function TerminalDrawer({
       },
       (e: unknown) => {
         if (req !== reqRef.current) return;
-        // WHY, not just "failed": a dead pane and an unreachable box are
-        // different facts to the reader, and the server already told them
-        // apart. `ApiError.body` carries the route's own word for it.
-        const body = e instanceof ApiError ? (e.body as { error?: unknown }) : null;
+        // WHY, not just "failed": a dead pane, a tmux that could not answer and
+        // an unreachable box are three different facts to the reader, and the
+        // server already told them apart. `ApiError.body` carries the route's
+        // own word for it AND, for a 502, the tmux message underneath.
+        const body = e instanceof ApiError ? (e.body as { error?: unknown; detail?: unknown }) : null;
         const why = typeof body?.error === 'string' ? body.error : 'unreachable';
-        if (histRef.current.at === 'reading') goHist({ at: 'empty', why });
+        const detail = typeof body?.detail === 'string' ? body.detail : undefined;
+        if (histRef.current.at === 'reading') goHist({ at: 'empty', why, detail });
       },
     );
   };
@@ -1093,7 +1118,9 @@ export function TerminalDrawer({
           {(hist.at === 'reading' || hist.at === 'empty') && (
             <div className="term-histbar" role="status" aria-label="History">
               <span className="term-histbar-word">
-                {hist.at === 'reading' ? 'reading history…' : `no history · ${hist.why}`}
+                {hist.at === 'reading'
+                  ? 'reading history…'
+                  : `no history · ${historyFailureSentence(hist.why, hist.detail)}`}
               </span>
             </div>
           )}

@@ -15,7 +15,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Terminal } from '@xterm/xterm';
-import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
+import { TerminalDrawer, paintLag, defaultMakeHistoryTerm, historyScrollback, historyFailureSentence, type DrawerTerm, type HistoryTerm } from '../src/session/TerminalDrawer';
 
 afterEach(() => {
   cleanup();
@@ -629,9 +629,9 @@ describe('a read that fails says WHICH failure', () => {
       }),
     );
 
-    expect(gone).toContain('gone');
-    expect(unmeasured).toContain('unmeasured');
-    expect(unreachable).toContain('unreachable');
+    expect(gone).toContain('this session is gone');
+    expect(unmeasured).toContain('could not read this pane');
+    expect(unreachable).toContain('could not reach the box');
     expect(
       new Set([gone, unmeasured, unreachable]).size,
       'the drawer narrowed three conditions into fewer words',
@@ -1854,5 +1854,46 @@ describe('the reader sizes its own buffer from the pane it measured', () => {
     await waitFor(() => expect(m.h.write).toHaveBeenCalled());
 
     expect(m.h.panes, 'absence was read as a measurement').toEqual([undefined]);
+  });
+});
+
+describe('a failed read says why, in a sentence', () => {
+  it('the three failures are three sentences, and none of them is a wire token', () => {
+    // The reader is not a protocol. `gone`, `unmeasured` and `unreachable` were
+    // rendered raw, so the layer that exists to explain a missing history said
+    // the least explanatory thing it had.
+    expect(historyFailureSentence('gone')).toBe('this session is gone — there is no pane to read');
+    expect(historyFailureSentence('unmeasured', 'no server running on /tmp/tmux-1000/default'))
+      .toBe('could not read this pane — no server running on /tmp/tmux-1000/default');
+    expect(historyFailureSentence('unreachable')).toBe('could not reach the box to read this pane');
+    // And the two MEASURED reasons a read can succeed with nothing in it keep
+    // the sentences they already had.
+    expect(historyFailureSentence('nothing has scrolled off this pane yet'))
+      .toBe('nothing has scrolled off this pane yet');
+  });
+
+  it('an unmeasured failure with no detail still reads as a sentence', () => {
+    expect(historyFailureSentence('unmeasured')).toBe('could not read this pane');
+  });
+
+  it("a 502's detail reaches the glass", async () => {
+    vi.stubGlobal('fetch', jsonFetch(502, {
+      ok: false, error: 'unmeasured', detail: 'active row did not match the six-field shape: junk',
+    }));
+    const m = mountDrawer();
+    act(() => { m.t.wheel(-120); });
+
+    await screen.findByText(
+      /could not read this pane — active row did not match the six-field shape: junk/);
+  });
+
+  it('a 404 says the session is gone, not the word `gone`', async () => {
+    vi.stubGlobal('fetch', jsonFetch(404, { ok: false, error: 'gone' }));
+    const m = mountDrawer();
+    act(() => { m.t.wheel(-120); });
+
+    await screen.findByText(/this session is gone — there is no pane to read/);
+    expect(screen.queryByText(/no history · gone$/), 'the raw wire token is still on the glass')
+      .toBeNull();
   });
 });
