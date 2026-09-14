@@ -17,13 +17,25 @@ const READY = '? for shortcuts\n❯ ';
 const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ ';
 
 describe('_inject_spawn_effort stands down on an armed auto-continue (D-2229)', () => {
-  it('types nothing into a session waiting out a limit', () => {
-    h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: ARMED });
+  // THE STATUS IS PART OF THE CLAIM NOW, not incidental. The function used to
+  // `return 0` from all four of its exits, so "typed" and "stood down" were
+  // indistinguishable to a caller; `CCRC_SESSION_EFFORT` gave that difference
+  // a consumer, because the marker recording "this session has its level" may
+  // only be written on the exit that actually sent the keystrokes. Stamping on
+  // a guard's exit would record a lie on precisely the panes that hit one — a
+  // pane waiting out a limit, or one restored with a draft in the box — and
+  // those are revivals, the case the marker exists to get right. So both cases
+  // below assert the status as well as the effect: without it, a change that
+  // re-flattened the exits would leave this file green.
+  it('types nothing into a session waiting out a limit, and reports that it typed nothing', () => {
+    const out = h.sh(`${STUBS} _inject_spawn_effort cc-test; echo "rc=$?"`, { PANE_TEXT: ARMED });
     expect(sendKeys()).toEqual([]);
+    expect(out).toContain('rc=1');
   });
-  it('control: a ready pane gets /effort', () => {
-    h.sh(`${STUBS} _inject_spawn_effort cc-test`, { PANE_TEXT: READY });
+  it('control: a ready pane gets /effort, and reports that it typed', () => {
+    const out = h.sh(`${STUBS} _inject_spawn_effort cc-test; echo "rc=$?"`, { PANE_TEXT: READY });
     expect(sendKeys().some((k) => k.includes('-l /effort'))).toBe(true);
+    expect(out).toContain('rc=0');
   });
 });
 
