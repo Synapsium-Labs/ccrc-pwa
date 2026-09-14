@@ -1448,6 +1448,32 @@ git commit -m "docs(research): slice 1 gate — a swap measured carrying every r
 
 Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`) and defined in the same act. A session that cannot reach the allocator writes `D-TBD-<slug>` and reports it (worker clause 11). Task 7's lever ruling is the first entry this plan expects.
 
+- **D-2808 (2026-09-14)** — **The effort lever: `--effort <level>` on the spawn argv; the session-only keystroke
+  for live changes.** Measured on Claude Code 2.1.270 (research note §6/§6.1 ruling 1): a plain `/effort <level>`
+  PERSISTS as `modelSettings.<model-id>.effortLevel` in the config dir (`/effort auto` deletes it); the session-only
+  form is keystroke-drivable (bare `/effort`, ←/→, `s`) but does NOT survive `--resume` — which is what a rescue swap
+  does; `--effort <level>` on the argv is session-scoped, writes nothing, overrides both pins, covers `ultracode`, and
+  is re-applied on every relaunch; an effort change mid-session re-writes the Opus 5 cache prefix (cc 35 → 8109) but
+  not Fable 5.1's. The plan's branch table had Lever A/A′/B; the measurement picks Lever B for the record at spawn and
+  Lever A (session-only) for a live change in slice 5. Task 8 composes `--effort` from the record on both spawn lines
+  and `_inject_spawn_effort` types nothing when the record carries an effort; a record-less session keeps today's
+  plain `/effort ultracode` because `ultracode` was measured NOT to persist (see D-2810).
+- **D-2809 (2026-09-14)** — **`--settings` honours both `enableWorkflows` and `ultracode`.** Arm 3 (§6.1 ruling 2):
+  both keys take effect at launch, an unknown key is not fatal, and `--settings` never writes the settings file —
+  contradicting ccd's own `SPAWN_EFFORT` comment that ultracode has no settings key. Task 8 composes
+  `--settings '{"enableWorkflows":true,"ultracode":true}'` for `effort: ultracode` and
+  `--settings '{"enableWorkflows":true}'` for `workflow: on` with another effort.
+- **D-2810 (2026-09-14)** — **The pinned lanes: four config dirs pin a per-model effort, not two; ccd's settle is
+  not the writer; no operator edit.** The census (read-only) found FOUR dirs with `modelSettings.<id>.effortLevel`
+  (three on Fable 5.1, one on Opus 5), not the spec's two. The fix round measured the candidate writer: `/effort
+  ultracode` on a fresh dir leaves settings.json byte-identical ("this session only"), while `/effort high` writes the
+  per-model pin — so `_inject_spawn_effort`'s plain `ultracode` keystroke does not pollute lane settings and non-
+  ultracode levels must go through the argv or the session-only keys. On a pinned dir the keystroke takes and a
+  `--resume` reverts to the pin; `--effort` overrides it. The spec's consequent ("remove the pins") is not entered.
+- **D-2811 (2026-09-14)** — **The `/model` lever, recorded for slice 4.** `/model <alias>` persists top-level `model`
+  (`/model default` deletes it); the session-only form is drivable (bare `/model`, ↓, `s`) with the trap that ←/→
+  inside the model picker moves EFFORT; `--model` on the argv stays the relaunch lever (Task 6).
+
 ## Self-review against the spec
 
 - §5.1 seven fields, closed vocabularies, three conditions, byte-length note: Task 2 (reader), Task 4 (writer refuses before writing), Task 8 (nothing unrecognised reaches a keystroke), Task 6 (nothing unrecognised reaches an argv). `subagent` from the projected spelling: Task 1.
