@@ -3925,10 +3925,17 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
   it('THE PARAMETERIZED WAIT: the final transaction waits COMPACT_LOCK_WAIT, and still lands', async () => {
     const { tree, transcript } = cycle({ serve: true });
     // Hold the mutex for 3 s — longer than COMPACT_LOCK_WAIT_SERVE (2 s) and
-    // shorter than COMPACT_LOCK_WAIT (5 s). The settlement acquisition waits
-    // its own bound first, then the final transaction waits again; both use
-    // the 5 s bound, so the line still lands. Passing the 2 s human-facing
-    // bound at either call site instead loses the record.
+    // shorter than COMPACT_LOCK_WAIT (5 s) — from BEFORE PostCompact starts.
+    // WHICH ACQUIRE THIS REACHES, measured rather than assumed: the SETTLEMENT
+    // one, at the top of `_hook_compact_post`. It runs first and outlasts the
+    // holder, so by the time the final transaction reacquires the lock is
+    // uncontended — and substituting `COMPACT_LOCK_WAIT_SERVE` at the
+    // final-transaction call site alone leaves this test GREEN, while the same
+    // substitution at the settlement acquire reds it. The sentence here used to
+    // say the 2 s bound "at either call site" loses the record, which that pair
+    // of mutants measures as false. The final transaction's own call site is
+    // pinned by its own fixture below, where the holder is started INSIDE the
+    // measure window.
     fs.closeSync(fs.openSync(lockFile(), 'a'));
     const holder = spawn('bash', ['-c',
       'exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 3', '_', lockFile()]);
@@ -3969,6 +3976,122 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(reg().filter((n) => n.includes('compactpost')), 'only the verified claim went').toEqual([]);
   });
 
+
+  it('THE PARAMETERIZED WAIT, at the FINAL TRANSACTION\'s own call site: only it contends, and the line still lands', async () => {
+    // WHY A SECOND FIXTURE. The test above holds the lock before PostCompact
+    // starts, so the SETTLEMENT acquire absorbs the whole contention window and
+    // the final transaction reacquires an UNCONTENDED lock — measured: passing
+    // `COMPACT_LOCK_WAIT_SERVE` at the final-transaction acquire alone leaves
+    // that test green, while the same substitution at the settlement acquire
+    // reds it. So the row §5 states — "hold the lock 3 s while ONLY the final
+    // transaction waits on it" — was unreached, and its call site's positional
+    // argument unverified.
+    //
+    // The window this uses is the arm's own: `_hook_compact_post` RELEASES the
+    // lock across `measure` and reacquires after it. So the holder is started
+    // by the `measure` invocation itself — `node`, stubbed to spawn a 3 s
+    // holder, wait for it to report held, and then exec the real binary.
+    const { tree, transcript } = cycle({ serve: true });
+    const flag = path.join(home, 'held-flag');
+    fs.closeSync(fs.openSync(lockFile(), 'a'));
+    stub('node', [
+      'case "$*" in',
+      '  *measure*)',
+      `    ${sh(realTool('bash'))} -c 'exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held > "$2"; exec sleep 3' \\`,
+      `      _ ${sh(lockFile())} ${sh(flag)} >/dev/null 2>&1 &`,
+      '    i=0',
+      `    while [ ! -s ${sh(flag)} ] && [ "$i" -lt 200 ]; do i=$((i+1)); sleep 0.05; done`,
+      '    ;;',
+      'esac',
+      `exec ${sh(realTool('node'))} "$@"`,
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(flag), 'the holder really took the lock inside the measure window').toBe(true);
+    expect(journal(), 'exactly one journal line still lands — the 5 s bound reached this acquire')
+      .toHaveLength(1);
+  }, 60_000);
+
+  /** §4: "if restore cannot prove same inode or collides, retain claim as exact
+   *  stale residue and never overwrite occupant." Both halves in one fixture,
+   *  because the difference between them is the whole contract: a restore that
+   *  LANDS consumes the claim, and one that CANNOT must not. Before this, the
+   *  entire failed-`touch` branch had no behaviour fixture at all — replacing
+   *  the no-clobber restore with a bare `rm -f "$claim"`, which destroys the
+   *  compaction's only verified copy, left the suite fully green. */
+  it('A FAILED CLAIM TOUCH restores canonical by no-clobber link — same bytes, same mtime, same INODE', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const before = fs.readFileSync(setFile());
+    const st = fs.statSync(setFile(), { bigint: true });
+    stub('touch', 'exit 1');
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'canonical is back').toBe(true);
+    expect(fs.readFileSync(setFile()), 'byte-identical').toEqual(before);
+    const after = fs.statSync(setFile(), { bigint: true });
+    // THE INODE is what makes this a restore rather than a rewrite: the claim
+    // and canonical are one inode, and `link` is the only way back to that.
+    expect(after.ino, 'the same inode, not a copy').toBe(st.ino);
+    expect(after.mtimeNs, 'and the mtime the failed touch never changed').toBe(st.mtimeNs);
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is consumed by a proved restore').toEqual([]);
+    expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
+  });
+
+  it('…but a COLLIDING restore never overwrites the occupant, and RETAINS the claim as exact residue', () => {
+    const { tree, transcript } = cycle({ serve: true });
+    const STRANGER = '{"v":1,"nonce":"compact-9-9-9-9","note":"a stranger already owns this name"}\n';
+    // The stub fails on exactly the claim AND re-occupies the canonical
+    // pathname while it does — which is the only moment the collision can
+    // happen: canonical has just been unlinked and the restore is the next act.
+    stub('touch', [
+      'case "$1" in',
+      `  *demo-quiet-basin.compactpost.*) ${sh(realTool('cat'))} > ${sh(setFile())} <<'XEOF'`,
+      STRANGER.trimEnd(),
+      'XEOF',
+      '    exit 1 ;;',
+      'esac',
+      `exec ${sh(realTool('touch'))} "$@"`,
+    ].join('\n'));
+    expect(runFull(postCompact(tree, transcript, SUMMARY))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.readFileSync(setFile(), 'utf8'), 'the occupant is untouched — never overwritten').toBe(STRANGER);
+    // THE CLAIM SURVIVES. It holds the only verified copy of this compaction's
+    // set, and the restore could not place it; discarding it here is the exact
+    // data loss §4's row forbids.
+    expect(reg().filter((n) => n.includes('compactpost')), 'the claim is RETAINED as exact stale residue').toHaveLength(1);
+    expect(fs.existsSync(journalFile()), 'and nothing was committed').toBe(false);
+  });
+
+  /** `minimalPath` was widened to carry `flock`, `mktemp` and `touch` because
+   *  each is as load-bearing as `link` now — but only `flock` was ever made
+   *  absent, so deleting either of PostCompact's two guards changed no test's
+   *  result. ONE `it` PER BINARY, and that is forced twice over: a single leg
+   *  omitting both cannot say which guard carried it, and `minimalPath` builds
+   *  one `binmin` directory per fixture HOME, so calling it twice in one test
+   *  throws EEXIST before the second run starts. */
+  for (const missing of ['touch', 'mktemp'] as const) {
+    it(`PostCompact is INERT with no \`${missing}\` — nothing claimed, nothing staged, nothing said`, () => {
+      const { tree, transcript } = cycle({ serve: true });
+      const bytes = fs.readFileSync(setFile());
+      const r = runFull(postCompact(tree, transcript, SUMMARY), { PATH: minimalPath([missing]) });
+      expect(r, 'the arm says nothing at all').toEqual({ stdout: '', stderr: '' });
+      expect(fs.existsSync(journalFile()), 'no record').toBe(false);
+      expect(fs.readFileSync(setFile()), 'canonical is byte-identical').toEqual(bytes);
+      expect(reg().filter((n) => n.includes('compactpost')), 'no claim').toEqual([]);
+      expect(reg().filter((n) => n.includes('compactions-snapshot')), 'no snapshot').toEqual([]);
+      // …and the hookstate stamp still lands: the ARM is inert, not the hook.
+      expect(readState().state, 'the state write is not gated on the card').toBe('done');
+    }, 60_000);
+  }
+
+  it('the acquire is INERT with no `link` — the lock-open alias is how it opens canonical safely', () => {
+    // `_hook_lock_acquire`'s own `command -v link` guard, which no fixture
+    // reached either. Without it the arm would fall through to a direct open of
+    // the canonical lock pathname — the create-capable open §3.4 forbids.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['link']) });
+    expect(r).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'nothing was published').toBe(false);
+    expect(readState().state).toBe('working');
+  });
   it('NO UNLOCKED CLEANUP: a helper that says nothing usable leaves the claim and the marker as residue', () => {
     const { tree, transcript } = cycle({ serve: true });
     // The helper answers garbage, so the shape gate refuses and no record is
@@ -3997,7 +4120,15 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     expect(post).toContain('$JOURNAL_RECORD_PRED_DEFS JOURNAL_RECORD_PRED');
     expect(post).toContain('$JOURNAL_RECORD_PRED_DEFS $JOURNAL_STAGE_PRED');
     // NO `printf >>` PATH EXISTS to canonical: the only way in is the stage
-    // rename, under the retained FD and the validated lock.
+    // rename, under the retained FD and the validated lock. The positive clause
+    // is the load-bearing one — deleting the rename reds it however the
+    // replacement is spelled. The negative below sees only the LITERAL
+    // `"$journal"`; an append through a second name (`j="$journal"; … >> "$j"`)
+    // is caught by the canonical-write scan's variable trace instead, which has
+    // its own control in that describe. §5's row names a partial-failure
+    // fixture as the observable, and that fixture is unbuildable here:
+    // measured, `printf` is a bash BUILTIN, so a `printf` stub first on PATH
+    // never runs and `type -t printf` still answers `builtin`.
     expect(post).toContain('mv -f "$stage" "$journal"');
     expect(post, 'canonical is never appended to directly').not.toMatch(/>>\s*"\$journal"/);
   });
@@ -4308,6 +4439,18 @@ describe('the compaction card — every canonical write is on the list (spec §5
           const body = f.code.slice(a, b);
           for (const k of canonPos.get(name) ?? []) {
             for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)="\\$\\{?${k}\\}?"`, 'g'))) {
+              const s = canonVars.get(vkey(f.label, name))!;
+              if (!s.has(m[1]!)) { s.add(m[1]!); changed = true; }
+            }
+          }
+          // LOCAL TO LOCAL, the third hop and the one the positional trace
+          // cannot make: `j="$journal"` inside the SAME body. Without it a
+          // write spelled through a second name — `printf … >> "$j"` — resolved
+          // to nothing and the scan produced no site for it at all, which is
+          // the residual §5 gap round 15 measured. It rides the same fixpoint,
+          // so a chain of aliases converges rather than needing a pass count.
+          for (const v of [...(canonVars.get(vkey(f.label, name)) ?? [])]) {
+            for (const m of body.matchAll(new RegExp(`([A-Za-z_][A-Za-z0-9_]*)="\\$\\{?${v}\\}?"`, 'g'))) {
               const s = canonVars.get(vkey(f.label, name))!;
               if (!s.has(m[1]!)) { s.add(m[1]!); changed = true; }
             }
@@ -4628,6 +4771,31 @@ _hook_compact_rollback_set() {
     expect(entryOf(extra[0]!), 'and on no entry').toEqual([]);
   });
 
+
+  it('CONTROL: an append spelled through ANOTHER variable is still a canonical write, resolved by the trace', () => {
+    // §5's `printf >>` row names a partial-failure fixture as its observable —
+    // "the write interrupted between the first and last byte of the appended
+    // record LOSES the old bytes". MEASURED: that fixture is unbuildable
+    // through this suite's stub mechanism, because `printf` is a bash BUILTIN:
+    // with a `printf` stub first on PATH, `type -t printf` still answers
+    // `builtin` and the stub never runs. So the mechanism is this scan, and the
+    // gap the reviewer named — `j="$journal"; printf … >> "$j"` evading the
+    // narrow `not.toMatch(/>>\s*"\$journal"/)` clause in the PostCompact
+    // describe — is closed HERE, by the same variable trace the `mv` sites use.
+    const [hook, ccd] = bashCorpus() as [readonly [string, string], readonly [string, string]];
+    const mutated = hook[1].replace(
+      '  mv -f "$stage" "$journal" 2>/dev/null ||',
+      '  j="$journal"; { printf \'%s\\n\' "$rec" >> "$j"; } 2>/dev/null ||');
+    expect(mutated, 'the mutation applied').not.toBe(hook[1]);
+    const sites = scan([['hook', mutated], ccd]);
+    const appends = sites.filter((s) => s.cmd === '>' && s.text.includes('>> "$j"'));
+    expect(appends, 'the redirection clause resolves `$j` through `journal`').toHaveLength(1);
+    expect(entryOf(appends[0]!), 'and it is on no allow-list entry').toEqual([]);
+    // …and entry 14 loses its site with it, so the EQUALITY reds from both
+    // directions at once — which is what makes the scan, not the narrow clause,
+    // the thing that carries this row.
+    expect(sites.filter((s) => entryOf(s).includes(14)), 'entry 14 has no site left').toEqual([]);
+  });
   it('CONTROL: deleting any ONE entry reds, and entry 2 is the measured absence this tree carries', () => {
     // "Delete any one of the entries ⇒ reds" is a property of the LIST, not of
     // the source, so it is measured here against the real found set rather than
