@@ -159,4 +159,33 @@ describe('the sweep unit is budgeted from the first measured passes (routing sli
     expect(prose, 'the timer no longer states that the seven-day gate is what the cadence serves')
       .toMatch(/seven-day/i);
   });
+
+  it('both units name the plan text they supersede (Task 8 fix round 1, finding #1)', () => {
+    // R13 moved three values the PLAN mandates, and the plan file is the
+    // controller's to edit, not a task's — so the task that re-budgets cannot
+    // correct Task 7's unit block, its interface line or D-2792's aside in the
+    // same act. What it can do is stop the divergence being SILENT. Without
+    // this, the next reader of the plan sees 30min/2G/900 as the intent and the
+    // shipped unit as unexplained drift, and the only record of a deliberate,
+    // deployed change lives in a wave report under a gitignored path. CLAUDE.md
+    // settles where that record belongs: "anchors in plans are snapshots —
+    // trust shipped source's own comments over a plan document."
+    for (const name of ['ccd-usage-sweep.service', 'ccd-usage-sweep.timer'] as const) {
+      const prose = unit(name);
+      expect(prose, `${name} no longer says it supersedes the plan's Task 7 unit block`)
+        .toContain('SUPERSEDES THE PLAN');
+      expect(prose, `${name} no longer names the plan file whose text it supersedes`)
+        .toContain('docs/superpowers/plans/2026-09-14-routing-slice0-measurement.md');
+      expect(prose, `${name} no longer names the ruling that moved the value`)
+        .toContain('R13');
+    }
+    // The values the plan still states, quoted in the tree that moved them, so
+    // a reader coming the other way can match them without opening the plan.
+    expect(unit('ccd-usage-sweep.service'),
+      'the service no longer quotes the budget the plan still mandates')
+      .toMatch(/TimeoutStartSec=900[\s\S]{0,80}MemoryMax=2G/);
+    expect(unit('ccd-usage-sweep.timer'),
+      'the timer no longer quotes the cadence the plan still mandates')
+      .toContain('OnUnitActiveSec=30min');
+  });
 });

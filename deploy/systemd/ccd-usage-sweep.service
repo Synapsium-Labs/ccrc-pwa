@@ -22,5 +22,13 @@ ExecStart=%h/.local/bin/ccd-usage-sweep
 # multiple. The fix when it runs out is NOT another gigabyte: it is making the
 # scanner incremental, so a pass costs the delta rather than the whole corpus
 # (a later slice's change). Until then the honest budget is what a pass costs.
+# SUPERSEDES THE PLAN. Task 7 of the routing slice-0 plan
+# (docs/superpowers/plans/2026-09-14-routing-slice0-measurement.md) writes this
+# unit with TimeoutStartSec=900 and MemoryMax=2G, and its timer's cadence as
+# OnUnitActiveSec=30min. Those are the intent recorded BEFORE the
+# first pass was measured; ruling R13 (2026-09-14) replaced them with the four
+# passes above. Said here because the plan is a snapshot and this file is what
+# runs: a reader who finds the two disagreeing must not have to guess which way
+# the change went, or read the shipped budget as drift.
 TimeoutStartSec=1800
 MemoryMax=3G
