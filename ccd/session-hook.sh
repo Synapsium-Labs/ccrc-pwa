@@ -817,8 +817,6 @@ _hook_family_sweepable() {   # <suffix after the literal `.<id>.` strip> -> 0 if
     # THE PERMANENT LOCK, first and by name: it deliberately outlives the row,
     # spans generations and safe slug reuse, and no compliant path sweeps it.
     compactions.lock) return 1 ;;
-    # The final served marker is NOT here either: only PostCompact removes it,
-    # under its own validated final lock, after it has been read.
     compactset.*.stage|compactcard.*.stage) return 0 ;;
     compactset.*.stage.part|compactcard.*.stage.part) return 0 ;;
     compactset.*.hook-write.tmp|compactcard.*.hook-write.tmp) return 0 ;;
@@ -826,6 +824,15 @@ _hook_family_sweepable() {   # <suffix after the literal `.<id>.` strip> -> 0 if
     compactpost.*.claim) return 0 ;;
     compactions.lock-init.*|compactions.lock-open.*) return 0 ;;
     compactserved-source.*) return 0 ;;
+    # THE FINAL SERVED MARKER, and its cell says both things at once: PostCompact
+    # removes it under its own validated final lock after it has been READ, and a
+    # later locked AGE sweep reclaims one whose PostCompact never came — a missing
+    # helper, a timed-out one, a refused shape gate. Without this arm the only
+    # thing that ever reclaimed such a marker was `_reg_purge`, i.e. row
+    # destruction, so every compaction that failed to settle left one permanent
+    # file on a live row. The two patterns are disjoint: `compactserved.` cannot
+    # match `compactserved-source.`, the character after the stem differing.
+    compactserved.*) return 0 ;;
     generation-init.*|generation-read.*) return 0 ;;
     compactions-stage.*.tmp|compactions-snapshot.*.tmp) return 0 ;;
     # ── THE TRANSITION ALLOWANCE, exactly two legacy grammars ────────────
@@ -1547,9 +1554,14 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   # pair or a body-less nonce restores the card (spec's "the card stays")
   # through the same regular-placeholder-then-no-clobber-`link` idiom
   # `_hook_compact_rollback_card` already uses; only a matching, non-empty
-  # pair keeps the claim consumed. Dot-prefixed, pid-scoped, `compact`-tagged
-  # so an orphaned claim (this process killed mid-read) is swept by
-  # PreCompact's existing `.$id.*compact*.tmp` glob.
+  # pair keeps the claim consumed. Dot-prefixed, pid-scoped and named to the
+  # §3.4 target grammar, so an orphaned claim (this process killed mid-read) is
+  # reclaimed, AGED and under a held lock, by `_hook_family_sweepable`'s
+  # `compactcard.*.session-claim.tmp` arm. This sentence used to say such a
+  # claim is swept by PreCompact's existing `.$id.*compact*.tmp` glob; that
+  # glob went with the rest of the pre-D-2605 sweep, which matched by
+  # coincidence rather than by family — and the very next paragraph, announcing
+  # the migration to this name, already contradicted it.
   # MIGRATED TO THE §3.4 TARGET GRAMMAR (D-2605). The shipped shape was
   # `.<id>.<pid>.compactcard-claim.tmp`, a name matched by neither PreCompact's
   # exact-family sweep nor `_reg_purge`'s exact cleanup, so a SessionStart
@@ -1615,6 +1627,13 @@ _hook_compact_mark_served() {
   # already a safe path component; an unsafe or empty one forms NO marker path
   # at all and the compaction simply reads `served:false`.
   [[ -n "$COMPACT_SERVE_NONCE" ]] || return 0
+  # THE SECOND VALIDATION §3.3 step 5 NAMES — "before unlock and only after
+  # successful output, revalidate environment generation and publish the exact
+  # nonce marker". The arm held the lock from the claim through the print, so
+  # the window this closes is narrow, but it is the one arm whose specified
+  # DOUBLE validation was absent: a marker is a durable fact about a row, and
+  # the row this pane was authorized for is the only row it may write one for.
+  _hook_generation_ok || return 0
   marker="$REG/.$id.compactserved.$COMPACT_SERVE_NONCE"
   command -v mktemp >/dev/null 2>&1 || return 0
   src=$( umask 077; mktemp "$REG/.$id.compactserved-source.$COMPACT_SERVE_NONCE.XXXXXX" 2>/dev/null ) || return 0

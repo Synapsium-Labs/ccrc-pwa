@@ -2450,6 +2450,14 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
       '.demo-quiet-basin.compactions.lock-init.AbCdEf',
       '.demo-quiet-basin.compactions.lock-open.999.1.2',
       '.demo-quiet-basin.compactserved-source.compact-1-999-1-2.AbCdEf',
+      // THE FINAL SERVED MARKER, moved here from `kept` (D-2605 fix round 1).
+      // §3.4's inventory cell says BOTH things — "PostCompact only under
+      // validated final lock; age under later lock" — and the second half was
+      // unbuilt, so a compaction whose PostCompact never came (a missing or
+      // timed-out helper, a refused shape gate) left one permanent file on a
+      // live row, reclaimed only by row destruction. The young control below
+      // is what keeps this from reaching a marker a settlement may still read.
+      '.demo-quiet-basin.compactserved.compact-1-999-1-2',
       '.demo-quiet-basin.generation-init.AbCdEf',
       '.demo-quiet-basin.generation-read.999.1.2',
       '.demo-quiet-basin.compactions-stage.999.1.2.tmp',
@@ -2464,9 +2472,6 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
     const kept = [
       // PERMANENT: it spans row generations and safe slug reuse by design.
       '.demo-quiet-basin.compactions.lock',
-      // The final marker is PostCompact's to remove, under its own validated
-      // final lock, and only after it has been read.
-      '.demo-quiet-basin.compactserved.compact-1-999-1-2',
       // Another id's residue is not ours, and the literal `.<id>.` strip is
       // what keeps a NESTED id out rather than a substring match.
       '.demo-quiet-basin-x.compactset.999.compact-1-999-1-2.stage',
@@ -2475,14 +2480,19 @@ describe('the compaction card — which context is compacting (spec §3.0)', () 
       // ALONE, which is the direction a sweep must fail in.
       '.demo-quiet-basin.something-nobody-declared',
     ];
-    const young = '.demo-quiet-basin.compactset.4242.compact-9-4242-1-2.stage';
-    for (const n of [...swept, ...kept, young]) fs.writeFileSync(at(n), 'x');
+    // THE YOUNG CONTROLS, in both directions: a stage a helper may still be
+    // writing, and a marker whose own PostCompact may still be coming. Age is
+    // the whole gate, and the second one is what shows the new
+    // `compactserved.*` arm did not simply start deleting live markers.
+    const young = ['.demo-quiet-basin.compactset.4242.compact-9-4242-1-2.stage',
+      '.demo-quiet-basin.compactserved.compact-9-4242-1-2'];
+    for (const n of [...swept, ...kept, ...young]) fs.writeFileSync(at(n), 'x');
     const old = Math.floor(Date.now() / 1000) - 1200 - 60;
     for (const n of [...swept, ...kept]) fs.utimesSync(at(n), old, old);
     run(preCompact(tree, transcript, 'auto'));
     for (const n of swept) expect(fs.existsSync(at(n)), `aged exact family swept: ${n}`).toBe(false);
     for (const n of kept) expect(fs.existsSync(at(n)), `NOT ours to sweep: ${n}`).toBe(true);
-    expect(fs.existsSync(at(young)), 'a young stage may belong to a helper in flight').toBe(true);
+    for (const n of young) expect(fs.existsSync(at(n)), `young, so not yet anyone's to reclaim: ${n}`).toBe(true);
   });
 
   it('a served session (empty transcript_path) and an unreadable path write no set', () => {
@@ -3466,6 +3476,27 @@ describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', 
     expect(block, 'and both are named as what this replaces').toContain('read back from hookstate');
   });
 
+
+  it('no LIVE comment still claims PreCompact sweeps a `.$id.*compact*.tmp` glob', () => {
+    const src = hook();
+    // The plan's Task 9 comment scope named two further broad-sweep sentences
+    // as this task's own. One went with the rollback functions; this one
+    // survived, in SessionStart's claim-naming block, asserting a sweep this
+    // task deleted — while the very next paragraph in the same block announced
+    // the migration that made it false.
+    expect(liveClaims(src, 'existing `.$id.*compact*.tmp` glob'), 'no LIVE copy survives').toEqual([]);
+    // NON-VACUITY, the same shape the neighbouring tests use: the phrase really
+    // IS still in the file, as quoted history inside a retracting block, so the
+    // emptiness above is the retraction rule working rather than the needle
+    // matching nothing at all.
+    expect(src, 'the retracted sentence is kept as history').toContain('existing `.$id.*compact*.tmp` glob');
+    // AND THE MECHANISM THAT REPLACED IT, named where the claim is made.
+    const i = src.indexOf('claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"');
+    expect(i, 'the claim this block is about').toBeGreaterThan(-1);
+    const block = src.slice(src.lastIndexOf('# ATOMIC CLAIM', i), i);
+    expect(block).toContain('_hook_family_sweepable');
+    expect(block).toContain('compactcard.*.session-claim.tmp');
+  });
   it('COMPACT_CARD_MAX_AGE is split BY ARTIFACT: an aged card is removed unread, an aged set is still claimed', () => {
     const src = hook();
     const i = src.indexOf('COMPACT_CARD_MAX_AGE=');
@@ -3997,6 +4028,45 @@ describe('the compaction card — the row generation authorizes every arm (spec 
     expect(runFull(postCompact(tree, transcript, SUMMARY), env)).toEqual({ stdout: '', stderr: '' });
   };
 
+  it('the MARKER publication revalidates the generation — a row re-authorized between the print and the mark mints nothing', () => {
+    // §3.3 step 5: "Before unlock and only after successful output, REVALIDATE
+    // environment generation and publish the exact nonce marker." The serve arm
+    // holds the stable lock from the claim through the print, so the window is
+    // narrow — which is exactly why the omission survived review: no behaviour
+    // could reach it without something running INSIDE the section. The
+    // emitter's own `jq` is that something, and it is the last fork before the
+    // marker. A marker is a durable fact about a row, and this pane may write
+    // one only for the row it was authorized for.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // The stub fires on the ONE invocation that carries `--arg c` — the emit —
+    // and then execs the real binary, so the card is still rendered and still
+    // printed; only the authorization underneath it changes.
+    const OTHER = '0189abcd-1234-5678-9abc-0123456789ff';
+    expect(OTHER, 'the fixture really changes it').not.toBe(GENERATION);
+    stub('jq', [
+      `case "$*" in *"--arg c "*) printf %s ${sh(OTHER)} > ${sh(genFile())} ;; esac`,
+      `exec ${sh(realTool('jq'))} "$@"`,
+    ].join('\n'));
+    const r = runFull(compactStart(tree, transcript));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'the card still reached the model — the PRINT is not what this gates').not.toBe('');
+    expect(fs.readFileSync(genFile(), 'utf8'), 'and the row really was re-authorized').toBe(OTHER);
+    expect(reg().filter((n) => n.includes('compactserved')),
+      'no marker, and no source residue either').toEqual([]);
+  });
+
+  it('CONTROL: the same serve with the generation left alone DOES publish its marker', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const r = runFull(compactStart(tree, transcript));
+    expect(r.stdout, 'the same card').not.toBe('');
+    expect(reg().filter((n) => n.startsWith('.demo-quiet-basin.compactserved.')),
+      'so the absence above is the generation and not the fixture').toHaveLength(1);
+  });
+
   it('with the pane\'s generation matching the row\'s, all three arms run', () => {
     allThree();
     expect(published().length, 'the lifecycle published').toBeGreaterThan(0);
@@ -4286,7 +4356,21 @@ describe('the compaction card — every canonical write is on the list (spec §5
       }
       return out;
     };
+    /** THE ONE HELD SECTION THIS MODEL CANNOT SEE, named rather than left to
+     *  read as an unlocked canonical write. `_hook_compact_card` does NOT
+     *  release on the serving path: it retains the descriptor in
+     *  `COMPACT_SERVE_FD` and returns, `_hook_compact_serve_end` is its single
+     *  release site, and the marker publication sits between the print and that
+     *  release. So `_hook_compact_mark_served` runs inside a section whose
+     *  acquire is in one function and whose release is in a third — which
+     *  `lockStmts`'s per-function acquire/release walk has no model for — and
+     *  whose only call site is at TOP LEVEL, where `callSites` does not look at
+     *  all, so the inherit clause answers false on `cs.length > 0` without ever
+     *  measuring a lock. All three facts are re-measured by the test below, so
+     *  this is an exception with a measurement under it and not an assertion. */
+    const RETAINED_SERVE = vkey('hook', '_hook_compact_mark_served');
     const held = (label: string, fn: string, off: number, seen: Set<string> = new Set()): boolean => {
+      if (vkey(label, fn) === RETAINED_SERVE) return true;
       const d = bodyOf(label, fn);
       if (!d) return false;
       const before = lockStmts(d.body).filter((s) => s.off < off);
@@ -4422,6 +4506,30 @@ describe('the compaction card — every canonical write is on the list (spec §5
       'every canonical write happens under a held lock').toEqual([]);
   });
 
+
+  it('the RETAINED SERVE LOCK is real: the arm keeps its descriptor past the return, and exactly one site releases it', () => {
+    // The measurement `held`'s one named exception rests on. Each clause is
+    // independent, and deleting any of them would make the exception an
+    // assertion about a lock nobody holds.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    expect(src, 'the serving path retains rather than releases')
+      .toContain('if [ -n "$CARD_COMPACT" ]; then COMPACT_SERVE_FD="$lockfd"; return 0; fi');
+    expect([...src.matchAll(/_hook_lock_release "\$COMPACT_SERVE_FD"/g)],
+      'and there is exactly ONE release site for it').toHaveLength(1);
+    // …with the marker publication BETWEEN the print and that release, which is
+    // what puts `_hook_compact_mark_served` inside the section.
+    const mark = src.indexOf('_hook_compact_mark_served || true');
+    const end = src.indexOf('_hook_compact_serve_end || true');
+    expect(mark, 'the marker is published at top level').toBeGreaterThan(-1);
+    expect(end, 'and the release follows it').toBeGreaterThan(mark);
+    // AND THE CALL SITE REALLY IS TOP LEVEL — the reason `callSites` cannot see
+    // it. No function body in the file names it.
+    const inFns = bashCorpus().flatMap(([label, code]) =>
+      fnsOf(code).filter(({ a, b }) => code.slice(a, b).includes('_hook_compact_mark_served'))
+        .map(({ name }) => `${label}:${name}`))
+      .filter((n) => !n.endsWith(':_hook_compact_mark_served'));
+    expect(inFns, 'no function calls it; only the SessionStart arm does').toEqual([]);
+  });
   it('the helper writes NO canonical pathname — excluded by the FILTER, not by an entry', () => {
     // Option A's load-bearing property: no canonical pathname reaches the
     // helper's argv, so its two surviving `writeAtomic` primitives are not
@@ -4999,8 +5107,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 11 ("Final D-2605 documentation and committed-byte audit") is where they
     // are re-measured. Measured with THIS audit, run unchanged against both
     // trees: 41 failing citations at the commit this task started from
-    // (8e457995c23b) and 206 here. The difference is this task's own runtime
-    // edits, not a change in the rule.
+    // (8e457995c23b) and 200 here. The difference is this task's own runtime
+    // edits, not a change in the rule. (Fix round 1 LOWERED it by six — five
+    // in `ccd/ccd` and one in `ccd/session-hook.sh` — because its edits shifted
+    // those files' lines back under six anchors that had drifted past them.
+    // Re-measured against the tree, never adjusted to keep a number green.)
     //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
@@ -5009,8 +5120,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 133,
-      'ccd/session-hook.sh': 43,
+      'ccd/ccd': 128,
+      'ccd/session-hook.sh': 42,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
       'server/test/ccd-ws-reap.test.ts': 7,
