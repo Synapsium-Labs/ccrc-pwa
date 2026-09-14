@@ -2666,11 +2666,16 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(false);
   });
 
-  it('the file header declares the one wait it allows — the R2 amendment', () => {
-    const head = fs.readFileSync(HOOK, 'utf8').split('\n').slice(0, 16).join('\n');
+  it('the file header declares the TWO waits it allows — the R2 amendment, and D-2605\'s lock', () => {
+    // THE SLICE GREW WITH THE HEADER: D-2605 added a SECOND declared exception
+    // (the bounded stable-lock acquisition), and a 16-line window no longer
+    // reaches the end of the amendment this row is asserting.
+    const head = fs.readFileSync(HOOK, 'utf8').split('\n').slice(0, 24).join('\n');
     expect(head).toContain('COMPACT_HELPER_TIMEOUT');
     expect(head).toContain('locally resolved');
     expect(head).toContain('`timeout`/`gtimeout` deadline');
+    expect(head).toContain('COMPACT_LOCK_WAIT');
+    expect(head, 'and it says a miss publishes nothing').toContain('publishes nothing');
   });
 });
 
@@ -3297,5 +3302,147 @@ describe('the compaction card — PreCompact source order (spec §3.1)', () => {
     expect(cardMvs, 'exactly one card-stage rename').toHaveLength(1);
     expect(setMvs, 'exactly two set-stage renames — the rc 0 arm and the rc 3 arm').toHaveLength(2);
     for (const s of setMvs) expect(cardMvs[0], 'card before set, every time').toBeLessThan(s);
+  });
+});
+
+// ── D-2605: the comment corrections, pinned where the claim is falsifiable ─
+// Each of these was a shipped sentence this task makes untrue, and each stayed
+// green under every existing suite — a comment that goes on giving the OLD
+// reason is a lie no behaviour test can catch, which is the whole reason these
+// are asserted rather than merely edited.
+describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', () => {
+  const hook = (): string => fs.readFileSync(HOOK, 'utf8');
+  const ccd = (): string => fs.readFileSync(CCD, 'utf8');
+
+  /** Every comment BLOCK (a run of consecutive `#` lines) that carries
+   *  `needle` and is NOT marked as a retraction.
+   *
+   *  The allow-list is ONE rule, stated as a mechanism: a block is exempt iff
+   *  it carries a retraction marker from this exact list. A correction has to
+   *  QUOTE the sentence it retracts or the record of the correction is
+   *  unreadable — and a scan that reds on that record teaches the next round
+   *  to delete it, which is how the false sentences this task fixes survived
+   *  as long as they did. */
+  const RETRACTION = /\breplaces\b|\bsuperseded\b|\bno longer\b|\bforbids\b|\bmeasurably false\b|\bused to\b/i;
+  const liveClaims = (src: string, needle: string): string[] => {
+    const blocks: string[] = [];
+    let cur: string[] = [];
+    for (const line of src.split('\n')) {
+      if (/^\s*#/.test(line)) { cur.push(line); continue; }
+      if (cur.length) { blocks.push(cur.join('\n')); cur = []; }
+    }
+    if (cur.length) blocks.push(cur.join('\n'));
+    return blocks.filter((b) => b.includes(needle) && !RETRACTION.test(b));
+  };
+
+  it('the file\'s two statements of its own lock-free contract are SCOPED to the hot path, and name the stable lock', () => {
+    const src = hook();
+    // TWO SITES, both of which asserted "no locks" flatly before this task
+    // introduced a real `flock`: the header, and the emitter's restatement of
+    // the standing contract. Neither may go on saying it unqualified.
+    const header = src.split('\n').slice(0, 24).join('\n');
+    expect(header).toContain('on the HOT PATH, no locks and no waiting');
+    expect(header, 'the header names the new exception by its constant').toContain('COMPACT_LOCK_WAIT');
+    expect(header).toContain('COMPACT_LOCK_WAIT_SERVE');
+    const restated = src.slice(src.indexOf('# event, never both.'));
+    expect(restated.slice(0, 600)).toContain('on the hot\n# path no locks and no waiting');
+    // and NEITHER may carry the flat form any more
+    const comments = src.split('\n').filter((l) => /^\s*#/.test(l)).join('\n');
+    expect(comments, 'the unqualified claim is gone from every comment')
+      .not.toContain('no network, no locks, no waiting');
+  });
+
+  it('the constants block describes the EXACT-family sweep, and names BOTH halves of the widened slug pair', () => {
+    const src = hook();
+    const block = src.slice(src.indexOf('# ── THE COMPACTION CARD'), src.indexOf('COMPACT_CARD_OFF='));
+    // The sweep it describes is the one that ships. The pre-D-2605 sentence
+    // rested on `.compact*.tmp`, which is the glob this task deletes.
+    expect(block).toContain('_hook_family_sweepable');
+    expect(block, 'and it says what that replaced').toContain('.compact*.tmp');
+    expect(block).toContain('by coincidence rather than');
+    // BOTH NAMES, because round 9's own closure rules that every reason
+    // `_ws_slug_free` can refuse is a reason `_ws_slug_residue` can name — so a
+    // comment naming only one of the pair re-creates the half-widening defect
+    // in prose. Deleting either name from this block reds.
+    expect(block).toContain('_ws_slug_free');
+    expect(block).toContain('_ws_slug_residue');
+  });
+
+  it('the single-definition sentence is TRUE: the four ROOTS are TypeScript, and a second bash corpus covers ccd/', () => {
+    const src = hook();
+    // The sentence this replaces — "`single-definition.test.ts` does not scan
+    // `ccd/` at all" — is measurably false against the shipped test, and told
+    // the next reader no mechanism existed where one does.
+    // LIVE CLAIMS ONLY, through the retraction rule above.
+    expect(liveClaims(src, 'does not scan `ccd/` at all'), 'no LIVE copy survives').toEqual([]);
+    // NON-VACUITY: the phrase really IS still in the file, as quoted history,
+    // so the emptiness above is the allow-list working rather than the scan
+    // finding nothing at all.
+    expect(src, 'the retracted sentence is kept as history').toContain('does not scan `ccd/` at all');
+    expect(src).toContain('bashRoots');
+    // AND THE MEASUREMENT THE SENTENCE NOW RESTS ON, re-derived here rather
+    // than quoted: the bash corpus really does carry both files by name.
+    const sd = fs.readFileSync(path.resolve(__dirname, 'single-definition.test.ts'), 'utf8');
+    expect(sd).toContain('bashRoots');
+    expect(sd).toContain('ccd/session-hook.sh');
+    expect(sd).toContain('ccd/ccd');
+  });
+
+  it('COMPACT_SHAPE_PRED\'s comment names what the constant is FOR, and no longer asserts two forbidden behaviours', () => {
+    const src = hook();
+    const i = src.indexOf('COMPACT_SHAPE_PRED=');
+    const block = src.slice(src.lastIndexOf('# ONE SPELLING', i), i);
+    expect(block).toContain('jq -ce -s');
+    expect(block).toContain('JOURNAL_RECORD_PRED');
+    // The two D-2605 forbids: the hook adding `n`, and a hookstate read-back.
+    expect(block).toContain('no hookstate compaction cache and no persisted');
+    // Same rule: the two forbidden behaviours are NAMED here, inside a block
+    // that retracts them, and must exist nowhere as a live claim.
+    expect(liveClaims(hook(), 'the hook adds `n`')).toEqual([]);
+    expect(liveClaims(hook(), 'read back from hookstate')).toEqual([]);
+    expect(block, 'and both are named as what this replaces').toContain('read back from hookstate');
+  });
+
+  it('COMPACT_CARD_MAX_AGE is split BY ARTIFACT: an aged card is removed unread, an aged set is still claimed', () => {
+    const src = hook();
+    const i = src.indexOf('COMPACT_CARD_MAX_AGE=');
+    const block = src.slice(src.lastIndexOf('# THE IN-FLIGHT WINDOW', i), i);
+    expect(block).toContain('An aged\n# CARD belongs to no compaction');
+    expect(block).toContain('removed UNREAD');
+    expect(block).toContain('An aged\n# canonical SET is NOT removed unread');
+    expect(block).toContain('provenance\n# eligibility');
+  });
+
+  it('ccd\'s authdead sentence gives BOTH reasons the marker is invisible, not the dot-skip alone', () => {
+    const src = ccd();
+    const block = src.slice(src.indexOf('# DOTLESS AND PER-ACCOUNT'), src.indexOf('# NOT `-disabled`.'));
+    expect(block).toContain('second pass over the dot-LEADING');
+    expect(block).toContain('not because of the dot-skip alone');
+    // THE THIRD COPY of the same sentence, in the test that pins the marker.
+    // Its assertions stay GREEN after the widening (the marker is dotless AND
+    // matches no private family), so nothing reds and the comment would simply
+    // have become a lie — the `correcting-the-instance-is-not-correcting-the-claim`
+    // shape, which is why all three copies are asserted here in one place.
+    const ad = fs.readFileSync(path.resolve(__dirname, 'ccd-authdead.test.ts'), 'utf8');
+    expect(ad).toContain('dot-LEADING pass over the private compaction families');
+  });
+
+  it('_reg_purge\'s "nothing here can gate the purge" is restated WITHOUT overstating the change', () => {
+    const src = ccd();
+    const i = src.indexOf("  # `_lc_done` returns 0 on every path");
+    expect(i, 'the sentence is still there to be restated').toBeGreaterThan(0);
+    const block = src.slice(i, src.indexOf('_lc_done purge', i));
+    // What stays true: the emit carries no condition and precedes the loop.
+    expect(block).toContain('still carries no condition');
+    expect(block).toContain('still precedes the unlink loop');
+    // What changed: the gate moved one level up, to the lock.
+    expect(block).toContain('under the row\'s stable compaction lock');
+    // And the distinction round 10 (B-4) found conflated: a lock miss and a
+    // REMOVAL failure are different conditions, and only the first can suppress
+    // the fact — writing "emits no purge-done" for a removal failure is the
+    // falsified round-5 phrasing, and an implementer obeying it would gate the
+    // emit on the loop, which is the mutant `ccd-lifecycle-purge.test.ts` reds.
+    expect(block).toContain('REMOVAL failure is a different condition');
+    expect(block).toContain('already journaled');
   });
 });

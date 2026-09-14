@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=22d99ed051214a014d4eb1fa6fc39096372fee6e8177c89912d73c6c20d7c576
+# ccrc:generated 1 sha256=aed40c179032a732eb060abbdcd63ffc129dd4844a506f4982e6400e8abecd03
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1126,10 +1126,15 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # one would be a new dependency class); CLEARED by that probe on a 403, by a
 # successful spawn (`_spawn_settle`), and by an operator `rm`.
 #
-# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob:
-# `_reg_purge`, `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*`
-# and skip any suffix containing a dot, so `$REG/claude-authdead` is invisible
-# to all three even when a session id spells it exactly.
+# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob —
+# and since D-2605 that takes TWO clauses rather than one. `_reg_purge`,
+# `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*` and skip any
+# suffix containing a dot; `_ws_slug_free` and `_ws_slug_residue` ALSO take a
+# second pass over the dot-LEADING `.<id>.` private compaction families, so for
+# those two the dot-skip is no longer the whole reason. `$REG/claude-authdead`
+# is invisible to all three because it is DOTLESS (nothing follows an id to
+# match `"$REG/$id".*`) AND because it matches no `.<id>.`-prefixed private
+# family — not because of the dot-skip alone.
 #
 # NOT `-disabled`. That name is OPERATOR intent, has no writer in this tree, and
 # both its conjuncts in `_account_ok` are things a human did. This one is a
@@ -1824,7 +1829,14 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # even for a row that has nothing left, where the id alone is the record. No
   # `verb` either: this function cannot see its caller, and guessing one would
   # be the fabricated fact the design exists to refuse.
-  # `_lc_done` returns 0 on every path, so nothing here can gate the purge.
+  # `_lc_done` returns 0 on every path, and this emit still carries no condition
+  # of its own and still precedes the unlink loop — so nothing HERE gates the
+  # purge. What gates it now sits one level up: since D-2605 the whole function
+  # runs under the row's stable compaction lock, so a lock miss yields no purge,
+  # no purge-done fact, and an `_lc_fail` from the post-action callers. A
+  # REMOVAL failure is a different condition and reaches nothing above: the
+  # unlink loop runs strictly after this emit, so by the time any `rm -f` can
+  # fail the fact is already journaled.
   _lc_done purge "$1" "" \
     meas.project        "$(_reg_get "$1" project)" \
     meas.workspace      "$(_reg_get "$1" workspace)" \

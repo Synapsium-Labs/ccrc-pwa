@@ -3,10 +3,17 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network, no locks, no waiting — except the compaction helper's one
-# hookstate-first, COMPACT_HELPER_TIMEOUT-bounded, locally resolved
-# `timeout`/`gtimeout` deadline. A hook that can slow or break a session is
-# worse than no hook. Consumed read-only by the ccrc server via the agent
+# all, no network — and on the HOT PATH, no locks and no waiting. TWO declared
+# exceptions, both OFF the hot path and both in the compaction arms alone:
+# the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
+# locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
+# permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
+# (COMPACT_LOCK_WAIT_SERVE on compact SessionStart, the one acquisition a human
+# is waiting on) and never held across a fork the arm does not reap. A miss
+# publishes nothing; there is no unlocked fallback. Every OTHER event — every
+# PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
+# still takes no lock and waits on nothing. A hook that can slow or break a
+# session is worse than no hook. Consumed read-only by the ccrc server via the agent
 # (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet
 # sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
@@ -67,9 +74,11 @@ _hook_timeout() {
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
-# file's standing contract (exit 0 on every path, no network, no locks, no
-# waiting) is unchanged except the declared, hookstate-first bounded compaction
-# helper wait. Every read below is a local file or a git ref.
+# file's standing contract (exit 0 on every path, no network, and on the hot
+# path no locks and no waiting) is unchanged except the two declared
+# compaction-arm exceptions the header states — the hookstate-first bounded
+# helper wait, and D-2605's bounded stable-lock acquisition. Every read below
+# is a local file or a git ref.
 _hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or nothing at all
   local j="" text=""
   # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
@@ -1367,10 +1376,17 @@ CARD_MAX_CHARS=2400
 # PostCompact consumes it), `.compactcard` (PreCompact writes it when the tree
 # has a graph the gate would trust; SessionStart(compact) serves it ONCE and
 # deletes it), `.compactions` (the per-session journal PostCompact appends,
-# never read here). The same dot-free shape is what `_ws_slug_free` scans, so
-# every arm removes what it will not serve — an aged card, an aged set — and
-# PreCompact sweeps this id's stale `.compact*.tmp` temps, which lead with a
-# dot and are therefore invisible to `_reg_purge`.
+# never read here). That dot-free shape is what `_ws_slug_free`'s FIRST pass
+# scans and what `_ws_slug_residue` names — the two are widened together, and a
+# comment naming only one of the pair re-creates the half-widening defect in
+# prose — but since D-2605 neither stops there: both take a SECOND pass over
+# the dot-LEADING `.<id>.…` private families, which the `"$REG/$id".*` glob
+# (id, then a dot) is structurally blind to. So every arm removes what it will
+# not serve — an aged card, an aged set — and PreCompact sweeps this id's aged
+# private residue by EXACT FAMILY (`_hook_family_sweepable`), never by the
+# `.compact*.tmp` glob it used to use, which matched by coincidence rather than
+# by grammar. Those names lead with a dot and are therefore invisible to
+# `_reg_purge`'s own dot-free loop, which is why somebody here must reap them.
 # The kill-switch is the same shape as GRAPH_GATE_OFF and CCRC_CARD_OFF: a file
 # the operator touches by hand, honoured by all three arms.
 COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
@@ -1384,10 +1400,14 @@ COMPACT_CARD_MAX_CHARS=4000
 # `session-hook.test.ts` holds it under the harness's 10,000-char spill
 # (2.1.266 spills SessionStart context to disk above `Pdr=1e4`).
 CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))
-# THE IN-FLIGHT WINDOW. A card or a set older than this belongs to no
-# compaction that can still arrive and is removed unread; an unconsumed set
-# YOUNGER than this at PreCompact means another compaction of this session is
-# in flight (spec §3.0, overlap). Argued from the longest compaction measured
+# THE IN-FLIGHT WINDOW, WHICH DECIDES A DIFFERENT THING PER ARTIFACT. An aged
+# CARD belongs to no compaction that can still arrive and is removed UNREAD
+# (a dot-free registry file that outlives its use would hold the slug). An aged
+# canonical SET is NOT removed unread: PreCompact publishes over it and
+# PostCompact still claims and measures it — age decides only its provenance
+# eligibility, never whether it is read. An unconsumed set YOUNGER than this at
+# PreCompact means another compaction of this session is in flight (spec §3.0,
+# overlap). Argued from the longest compaction measured
 # on this fleet — 826 s, gpt lane, 2026-09-08 — times 1.45.
 COMPACT_CARD_MAX_AGE=1200
 # LIVENESS (spec §3.0). A transcript written inside this window is a live
@@ -1424,18 +1444,44 @@ COMPACT_WORKSET_MAX=12
 # hot path and both lose a durable artifact on a miss, so they share one
 # bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
 # acquisitions, which carry a twinned literal of the same value.
+#
+# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `openclaw`, load ~5.8,
+# fixture HOME — never the live one). What a waiter can be blocked behind is
+# ONE HELD SECTION, so each section is timed at its own acquire and release
+# rather than the arm being timed end to end, n=30 per section:
+#
+#   PreCompact section 1 (overlap + exact sweep + initial publish)
+#                                  p50 22.12 ms   p95 27.59 ms   max 28.75 ms
+#   PreCompact section 2 (reconfirm + the two renames)
+#                                  p50  8.39 ms   p95 11.02 ms   max 12.57 ms
+#   compact SessionStart (retained, whole body incl. the marker)
+#                                  p50 24.98 ms   p95 31.75 ms   max 32.59 ms
+#
+# THE DERIVATION: the bound stands at 5 s only if it is at least 8x the worst
+# measured p95. Worst p95 = 31.75 ms, so the floor this rule sets is 254 ms;
+# 5 s is 158x it, and COMPACT_LOCK_WAIT_SERVE's 2 s is 63x. The headroom is
+# deliberate and is not slack to be trimmed: only a SAME-ROW sibling contends
+# (one registry row is one session's contexts), and the cost of a miss is a
+# lost durable artifact, so the bound is set to make a miss mean "something is
+# genuinely wedged" rather than "the box was busy".
 COMPACT_LOCK_WAIT=5
 # COMPACT_LOCK_WAIT_SERVE is compact SessionStart's ALONE — the one
 # acquisition a human is waiting on, at the top of a resumed session. A miss
 # there costs one unserved card and nothing durable, so it gives up sooner
-# than every other arm rather than making the session wait.
+# than every other arm rather than making the session wait. Measured above:
+# 2 s is 63x the worst held-section p95, so an ordinary uncontended serve
+# never approaches it and a miss here really is contention.
 COMPACT_LOCK_WAIT_SERVE=2
-# ONE SPELLING of the shape a `compaction` object must have to reach
-# `--argjson` (spec §3.4, "shape gates, both directions"): the helper's stdout
-# passes it before the hook adds `n`, and the value read back from hookstate
-# passes it again before it is re-emitted. Anything else degrades to `null`
-# AND THE WRITE PROCEEDS — a hook that writes nothing is the worst shape this
-# file can fail in (header). Concatenated into two jq programs; never re-spelled.
+# ONE SPELLING of the shape a `compaction` object must have (spec §3.4, "shape
+# gates, both directions"). WHAT IT IS FOR, restated against the shipped code:
+# it is a CHEAP SHAPE SANITY GATE on the helper's raw stdout — `jq -ce -s`,
+# exactly one document — applied BEFORE the strictly stronger
+# `JOURNAL_RECORD_PRED` validates the merged record. It is not a persistence
+# mechanism and not a read-back: the sentences this replaces said the hook adds
+# `n` to the object and that a value is read back from hookstate, and D-2605
+# forbids BOTH — there is no hookstate compaction cache and no persisted
+# ordinal, a reader derives ordinal from committed physical JSONL position.
+# Never re-spelled.
 COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|type)=="number" and (.at|type)=="number" and (.trigger=="auto" or .trigger=="manual") and (.steered|type)=="boolean" and (.served|type)=="boolean" and ((.filesChars|type)=="number" or .filesChars==null) and ((.cited|type)=="number" or .cited==null) and ((.setSize|type)=="number" or .setSize==null) and (.scope=="main" or .scope=="subagent" or .scope=="ambiguous" or .scope==null))'
 # BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
 # in a prompt, so it is gated on a SHAPE rather than clipped to a length: a
@@ -1462,10 +1508,17 @@ COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|typ
 # interpolate a bracket-class variable the way `case` can: this constant, the
 # session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
 # file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
-# `_hook_hold_card`. And `single-definition.test.ts` does not scan `ccd/` at
-# all — its four roots are the TypeScript packages, as this branch's own README
-# addition says. Keeping the three in step is a reading discipline, not a
-# mechanism; if you widen one, widen the other two by hand.
+# `_hook_hold_card`. And `single-definition.test.ts`'s four `ROOTS` are the
+# TypeScript packages, so they do not cover `ccd/` — BUT A SECOND BASH CORPUS
+# DOES: `bashRoots` is `[<repo>/ccd, <repo>/deploy]`, `BASH` is every bash file
+# under them plus `install.sh`, `holdersOf` filters that corpus on non-comment
+# lines, and this file and `ccd/ccd` are pinned as members BY NAME. (The
+# sentence this replaces said the test "does not scan `ccd/` at all", which is
+# measurably false against the shipped test and told the next reader no
+# mechanism existed where one does.) Keeping the three `CCRC_PROJ_CLASS`
+# spellings in step is therefore a reading discipline only because nobody has
+# written that rule — not because no mechanism could express it; if you widen
+# one, widen the other two by hand.
 CCRC_PROJ_CLASS='A-Za-z0-9._-'
 CCRC_PROJ_MAX=64
 CCRC_ID_MAX=128
