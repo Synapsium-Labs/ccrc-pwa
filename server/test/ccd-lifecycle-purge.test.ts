@@ -406,6 +406,99 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
     expect(genAt, 'and it comes AFTER the archived/reaping tail').toBeGreaterThan(tailAt);
   });
 
+  // ── The arity source pin the plan named and nobody built (r3 B-M1) ─────
+  // Plan Task 9's modify scope says verbatim: "every `_lc_refuse` call site
+  // passes exactly four positionals, every `_lc_refuse_return` call site
+  // exactly five, and the two name sets are disjoint". No test scanned either.
+  // The gap is PROSPECTIVE rather than live — today's `_lc_refuse_return` call
+  // sites are all driven by behaviour fixtures — and that is exactly what a
+  // source pin is for: a second `_lc_refuse_return` added later with four
+  // positionals shifts `detail` into `token` and journals a refusal with a
+  // wrong token, at a site no fixture drives.
+  //
+  // THE TWO NAME SETS ARE DISJOINT is a real hazard and not a formality:
+  // `_lc_refuse` is a PREFIX of `_lc_refuse_return`, so a scan that matched the
+  // shorter name first would harvest every longer call as a short one and then
+  // "prove" the arity it had just mis-parsed.
+  const lcCalls = (name: string): Array<{ line: number; args: string[] }> => {
+    const src = readFileSync(CCD, 'utf8').split('\n');
+    const out: Array<{ line: number; args: string[] }> = [];
+    for (let i = 0; i < src.length; i++) {
+      const raw = src[i]!;
+      if (raw.trimStart().startsWith('#')) continue;
+      // The call must be a WORD: preceded by start/whitespace/`(`/`;`/`|`/`&`,
+      // and followed by whitespace — which is what keeps `_lc_refuse` from
+      // matching the head of `_lc_refuse_return`.
+      const re = new RegExp(`(?:^|[\\s(;|&])${name}\\s`);
+      const m = re.exec(raw);
+      if (!m) continue;
+      // JOIN CONTINUATIONS: these statements wrap, and half the arguments live
+      // on the lines after the one carrying the name.
+      let stmt = raw.slice(m.index + m[0].length - 1);
+      let j = i;
+      while (src[j]!.trimEnd().endsWith('\\')) {
+        stmt = `${stmt.trimEnd().replace(/\\$/, '')} ${src[j + 1]!.trim()}`;
+        j++;
+      }
+      out.push({ line: i + 1, args: splitArgs(stmt) });
+    }
+    return out;
+  };
+  /** Whitespace-separated arguments, respecting double quotes and `$( )`. */
+  const splitArgs = (text: string): string[] => {
+    const args: string[] = [];
+    let cur = ''; let q = false; let depth = 0;
+    for (let i = 0; i < text.length; i++) {
+      const c = text[i]!;
+      if (c === '\\' && i + 1 < text.length) { cur += c + text[i + 1]!; i++; continue; }
+      if (c === '"') { q = !q; cur += c; continue; }
+      if (!q && c === '(') depth++;
+      if (!q && c === ')') depth--;
+      if (!q && depth === 0 && (c === ';' || c === '|' || c === '&')) break;
+      if (!q && depth === 0 && /\s/.test(c)) { if (cur !== '') { args.push(cur); cur = ''; } continue; }
+      cur += c;
+    }
+    if (cur !== '') args.push(cur);
+    return args;
+  };
+  /** A `k v` KEY: a bare word, or a whole array expansion of them. */
+  const isKey = (a: string): boolean =>
+    /^[A-Za-z][A-Za-z0-9._-]*$/.test(a) || /^"\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]\}"$/.test(a);
+  /** A DETAIL: always a quoted string, never a bare key. */
+  const isDetail = (a: string): boolean => a.startsWith('"') && !isKey(a);
+
+  it('ARITY, AT THE SOURCE: every `_lc_refuse` passes four positionals and every `_lc_refuse_return` five', () => {
+    const shorts = lcCalls('_lc_refuse');
+    const longs = lcCalls('_lc_refuse_return');
+    // NON-VACUITY, three clauses. An empty harvest satisfies every `for` below
+    // silently, and a harvest that had swallowed the long calls into the short
+    // set would too.
+    expect(shorts.length, 'the short form is called').toBeGreaterThan(10);
+    expect(longs.length, 'and so is the long one').toBeGreaterThan(0);
+    const shortLines = new Set(shorts.map((c) => c.line));
+    expect(longs.filter((c) => shortLines.has(c.line)),
+      'the two name sets are DISJOINT — a prefix match would put every long call in both').toEqual([]);
+    // AND THE SET REALLY CONTAINS THE CALLER THIS SUITE DRIVES: `_ws_gc_prune_row`'s
+    // dead-reg arm, which is the only function in the tree that uses the long form.
+    expect(longs.some((c) => c.args.includes('purge-refused')),
+      'the dead-reg arm`s contention refusal is in the long set').toBe(true);
+
+    for (const c of shorts) {
+      expect(c.args.length, `ccd:${c.line}: _lc_refuse takes at least its four positionals`).toBeGreaterThanOrEqual(4);
+      expect(isDetail(c.args[3]!), `ccd:${c.line}: the 4th positional must be the quoted DETAIL, got ${c.args[3]}`).toBe(true);
+      if (c.args.length > 4) {
+        expect(isKey(c.args[4]!), `ccd:${c.line}: the 5th argument must begin the k/v pairs, got ${c.args[4]}`).toBe(true);
+      }
+    }
+    for (const c of longs) {
+      expect(c.args.length, `ccd:${c.line}: _lc_refuse_return takes at least its five positionals`).toBeGreaterThanOrEqual(5);
+      expect(isDetail(c.args[4]!), `ccd:${c.line}: the 5th positional must be the quoted DETAIL, got ${c.args[4]}`).toBe(true);
+      if (c.args.length > 5) {
+        expect(isKey(c.args[5]!), `ccd:${c.line}: the 6th argument must begin the k/v pairs, got ${c.args[5]}`).toBe(true);
+      }
+    }
+  });
+
   it('the purge takes the row mutex, and the acquisition is the ONE statement before the unconditional emit', () => {
     const src = readFileSync(CCD, 'utf8');
     const from = src.indexOf('_reg_purge() {');
