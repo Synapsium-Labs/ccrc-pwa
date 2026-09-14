@@ -5558,7 +5558,8 @@ export type LcRefusalToken =
   | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
   | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
   | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
-  | 'purge-incomplete';        // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
+  | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
+  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -5606,6 +5607,19 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
   // `detail` names the pathname; this sentence must not pretend to know it.
   'purge-incomplete':
     'The registry row was removed, but something beside it would not delete and is still on disk. The verb itself finished — re-running it will not clear the leftover; the journal entry names what is still there.',
+  // D-2605 fix round 3, and it is the THIRD sentence for a reason the first two
+  // make: `_reg_purge` answers 1 for a contended lock and 2 for a box that
+  // cannot take that lock at all, and until now both wore this map's
+  // `purge-refused` word — which told an operator on a flock-less box to wait
+  // for a compaction that is not running, on a row nothing will ever clear.
+  // MEASURED: `_compact_lock_acquire` returns 2 from `command -v` on ANY of
+  // `flock`, `mktemp` or `link` before it touches the lock file, so the
+  // pathname that sentence blames does not even exist there. This sentence
+  // names the cause instead, and its remedy is the PATH — never a wait. The
+  // journal row's `detail` carries the per-verb remedy; this one must not,
+  // because one map entry serves four callers.
+  'purge-mechanism-absent':
+    'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

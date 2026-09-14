@@ -1280,13 +1280,16 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
   const LEGS = [
     { verb: 'ws-rm', act: 'destroy', id: 'demo-still-river', slug: ['demo', 'still-river'] as const,
       plant: (): void => { wsRow(); },
-      run: (): void => { h.sh(`${NOFLOCK} ${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`); } },
+      // THE SHIM IS A PARAMETER (r3 A-I3). Mechanism absence and contention are
+      // two different conditions with two different refusals, so the same leg
+      // has to be runnable with the `command -v flock` shim and without it.
+      run: (shim: string): void => { h.sh(`${shim} ${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`); } },
     { verb: 'forget', act: 'forget', id: 'claude-corp-demo', slug: null,
       plant: (): void => { wrapperRow(); },
-      run: (): void => { h.sh(`${NOFLOCK} ${FORGET_STUB} ( cmd_forget claude-corp-demo ) 2>/dev/null || true`); } },
+      run: (shim: string): void => { h.sh(`${shim} ${FORGET_STUB} ( cmd_forget claude-corp-demo ) 2>/dev/null || true`); } },
     { verb: 'ws-gc --prune', act: 'destroy', id: 'demo-quiet-basin', slug: ['demo', 'quiet-basin'] as const,
       plant: (): void => { deadRow(); },
-      run: (): void => { h.sh(`${NOFLOCK} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`); } },
+      run: (shim: string): void => { h.sh(`${shim} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`); } },
   ] as const;
 
   it('(c) ws-rm, forget and ws-gc --prune COMPLETE on a generation-ABSENT row', () => {
@@ -1298,7 +1301,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       leg.plant();
       expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${leg.id}.generation`)),
         `${leg.verb}: the row carries NO generation — that is the fixture`).toBe(false);
-      leg.run();
+      leg.run(NOFLOCK);
       expect(purges(), `${leg.verb}: exactly one purge-done, so the purge really ran`).toBe(1);
       expect(h.reg(leg.id, 'uuid'), `${leg.verb}: and the row is gone`).toBeNull();
       // (f) the slug answers consistently with that.
@@ -1308,23 +1311,71 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     }
   }, 120_000);
 
-  it('(d1) ws-rm and forget REFUSE on a generation-PRESENT row, with ONE named _lc_fail and no purge-done', () => {
+  // ── (d1), SPLIT IN TWO (r3 A-I3) ───────────────────────────────────────
+  // `_reg_purge` has answered 1 (contention) and 2 (mechanism absent) apart
+  // since D-2782, and all four callers folded them into one `elif (( _x != 0 ))`
+  // — so this leg, which drives the MECHANISM-ABSENT condition, used to assert
+  // `purge-refused` and thereby PINNED the conflation as expected. MEASURED on
+  // the shipped tree before the split: a NOFLOCK box with a live generation
+  // journaled "…compactions.lock was unavailable … re-run once the compaction
+  // settles", and both clauses are false there — `_compact_lock_acquire`
+  // returns 2 from `command -v` (`ccd/ccd:1812-1814`) before it touches the
+  // lock file, so that pathname need not exist, and no compaction runs or can.
+  // The two conditions are now asserted side by side, because the property
+  // that matters is not what either says but that they DIFFER.
+  const purgeRefusal = (leg: typeof LEGS[number]): { token: string; detail: string } => {
+    const fails = eventsOf(h.home, leg.act).filter((e) => e['outcome'] === 'failed');
+    expect(fails, `${leg.verb}: exactly one failure`).toHaveLength(1);
+    expect(purges(), `${leg.verb}: and NO purge-done`).toBe(0);
+    expect(h.reg(leg.id, 'uuid'), `${leg.verb}: the row still stands`).not.toBeNull();
+    // (f) and the slug says so.
+    if (leg.slug) {
+      expect(h.sh(`_ws_slug_free ${leg.slug[0]} ${leg.slug[1]}; echo "free=$?"`)).toContain('free=1');
+    }
+    return { token: String(fails[0]!['refusal'] ?? ''), detail: String(fails[0]!['detail'] ?? '') };
+  };
+
+  it('(d1) ws-rm and forget REFUSE on a generation-PRESENT row — and MECHANISM ABSENCE is a different refusal from CONTENTION', async () => {
     for (const leg of LEGS.filter((l) => l.verb !== 'ws-gc --prune')) {
+      // (d1a) MECHANISM ABSENT. The shim makes `command -v flock` fail, which
+      // is the condition `_reg_purge` answers 2 for.
       h = makeCcdHarness('ccrc-lc-purge-');
       leg.plant();
       plantGeneration(leg.id);
-      leg.run();
-      const fails = eventsOf(h.home, leg.act).filter((e) => e['outcome'] === 'failed');
-      expect(fails, `${leg.verb}: exactly one failure`).toHaveLength(1);
-      expect(fails[0]!['refusal']).toBe('purge-refused');
-      expect(purges(), `${leg.verb}: and NO purge-done`).toBe(0);
-      expect(h.reg(leg.id, 'uuid'), `${leg.verb}: the row still stands`).not.toBeNull();
-      // (f) and the slug says so.
-      if (leg.slug) {
-        expect(h.sh(`_ws_slug_free ${leg.slug[0]} ${leg.slug[1]}; echo "free=$?"`)).toContain('free=1');
-      }
+      leg.run(NOFLOCK);
+      const absent = purgeRefusal(leg);
+      expect(absent.token, `${leg.verb}: mechanism absence has its own token`).toBe('purge-mechanism-absent');
+      // NEITHER OF STATUS 1's TWO FALSE CLAUSES. Asserted as absences because
+      // that is exactly what the conflation put here, verbatim.
+      expect(absent.detail, `${leg.verb}: it does not blame a lock file that was never consulted`)
+        .not.toContain('was unavailable');
+      expect(absent.detail, `${leg.verb}: and it does not prescribe waiting for a compaction that cannot run`)
+        .not.toContain('once the compaction settles');
+      // AND IT NAMES THE CAUSE AND THE PATH REMEDY, which is the whole point of
+      // a distinct token: an operator who reads this knows what to change.
+      expect(absent.detail, `${leg.verb}: names the mechanism`).toContain('MECHANISM is absent');
+      expect(absent.detail, `${leg.verb}: names the remedy`).toContain('PATH');
+
+      // (d1b) CONTENTION, the condition status 1 is FOR: a real `flock` and a
+      // real holder, same row shape, same generation.
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      const release = await hold(leg.id, 8);
+      let held: { token: string; detail: string };
+      try {
+        leg.run('');
+        held = purgeRefusal(leg);
+      } finally { release(); }
+      expect(held.token, `${leg.verb}: contention keeps the sentence it was written for`).toBe('purge-refused');
+      expect(held.detail, `${leg.verb}: and that one DOES blame the lock`).toContain('was unavailable');
+      expect(held.detail).toContain('once the compaction settles');
+
+      // THE PROPERTY, stated as itself: two conditions, two records.
+      expect(held.token, `${leg.verb}: two conditions may not share one token`).not.toBe(absent.token);
+      expect(held.detail, `${leg.verb}: nor one sentence`).not.toBe(absent.detail);
     }
-  }, 120_000);
+  }, 180_000);
 
   it('(d2) ws-gc --prune on the SAME row DECLINES — positively, and the false success negatively', () => {
     // THE SHIPPED STATUS-BLIND ARM PASSES A BARE "emits neither `_lc_fail` nor

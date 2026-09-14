@@ -1226,8 +1226,12 @@ at `:11668` as its FIRST destructive act (measured: `_lc_tx`, `_lc_intent destro
 `_lc_done destroy`), so it is the pre-action caller and DECLINES — which, because that measured sequence
 ignores `_reg_purge`'s status, Task 9 must BUILD: branch on the status and emit `_gc_declined` in place of
 the unconditional `_lc_done destroy` (`:11669`) and `_gc_reclaimed` (`:11670`), or the arm answers a refusal
-with a false success. And `_ws_reap_locked` is unreachable here, since `cmd_ws_reap` dies at
-`:10202-10204` first. **That refusal adds nothing irreversible** — it is the caller's own prior work that was irreversible, and
+with a false success. And `_ws_reap_locked` cannot be the FLOCK-absence caller, since `cmd_ws_reap` dies at its own
+`command -v flock` gate first. **It is not unreachable for this condition, which this paragraph asserted for
+one round (r3 A-I3).** MEASURED on a generation-present row: `_reg_purge` answers 2 whenever ANY of `flock`,
+`mktemp` or `link` is unresolvable, because `_compact_lock_acquire` gates all three, while `cmd_ws_reap`'s gate
+names `flock` alone — so a box carrying `flock` and missing `mktemp` or `link` reaches `_ws_reap_tail` with
+status 2, and that caller carries the distinct refusal like the other three. **That refusal adds nothing irreversible** — it is the caller's own prior work that was irreversible, and
 `_lc_fail` already names exactly that — **but recovery is not one sentence for both verbs (round 14, B-I5),
 and on darwin the difference decides whether the row can be cleared at all.**
 
