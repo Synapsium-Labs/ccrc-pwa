@@ -1587,6 +1587,31 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     expect(h.reg(leg.id, 'uuid'), `${leg.verb}: the row still stands`).not.toBeNull();
     return { token: String(terminal[0]!['refusal'] ?? ''), detail: String(terminal[0]!['detail'] ?? '') };
   };
+  /** THE SURVIVING-STATE CLAUSE IS THE VERB'S, AND IT IS A CLAIM (r7 R6-I2).
+   *  `_compact_lock_why_remedy`'s SECOND argument selects it: `ws-gc --prune`
+   *  declines before anything irreversible (`_lc_refuse_return`, never
+   *  `_lc_fail`), so "the registry row is untouched" is the true residue
+   *  there, while the other three have already torn the workspace down and own
+   *  "$REG/$id.* and $REG/$id.generation still stand" instead. The helper's own
+   *  docstring calls that "a different claim, not a style choice", and nothing
+   *  measured it: swapping the gc caller's verb argument left this file and
+   *  `ccd-ws-gc` GREEN 123/123 while the declining sweep journaled the
+   *  torn-down residue and prescribed the DESTRUCTIVE `ccd ws-rm`. Asserted in
+   *  BOTH directions on every tokened leg, because a verb swap satisfies the
+   *  positive form of whichever verb it swapped TO. */
+  const expectSurvivingState = (leg: typeof LEGS[number], detail: string): void => {
+    if (leg.verb === 'ws-gc --prune') {
+      expect(detail, `${leg.verb}: it declined before anything irreversible, so the row is untouched`)
+        .toContain('the registry row is untouched');
+      expect(detail, `${leg.verb}: and it must not claim the torn-down verbs' residue`)
+        .not.toContain('still stand');
+    } else {
+      expect(detail, `${leg.verb}: the workspace is already gone, so the registry residue is what stands`)
+        .toContain('.generation still stand');
+      expect(detail, `${leg.verb}: and it must not claim the declining sweep's residue`)
+        .not.toContain('the registry row is untouched');
+    }
+  };
   const holdViaAcquire = async (id: string): Promise<() => void> => {
     const child = spawn('bash', ['-c',
       `source "${CCD}"; _compact_lock_acquire ${id} 5 || { echo "ACQRC=$?"; exit 1; }; echo held; exec sleep 20`],
@@ -1635,6 +1660,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // exactly what the conflation put here, verbatim.
       expect(vanished.detail, `${leg.verb}: it no longer prescribes a wait that cannot end`)
         .not.toContain('once the compaction settles');
+      expectSurvivingState(leg, vanished.detail);
     }
   }, 180_000);
 
@@ -1674,6 +1700,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
         .not.toContain('once the compaction settles');
       expect(r.detail, `${leg.verb}: and the pathname is occupied, not unlinked`)
         .not.toContain('canonical-vanished');
+      expectSurvivingState(leg, r.detail);
     }
   }, 120_000);
 
@@ -1723,6 +1750,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
         .not.toContain('once the compaction settles');
       expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
         .not.toContain('canonical-vanished');
+      expectSurvivingState(leg, r.detail);
     }
   }, 120_000);
 
@@ -1768,10 +1796,101 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // it is exactly what an empty WHY produced here before r6 R5-M1.
       expect(r.detail, `${leg.verb}: no wait ends this, so no wait is prescribed`)
         .not.toContain('once the compaction settles');
+      expectSurvivingState(leg, r.detail);
     }
   }, 120_000);
 
-  it('(d1e) EVERY token the acquire can set is keyed to its own remedy in the shared helper, and all four durable callers consult it (r6 R5-M3)', () => {
+  it('(d1d) a PUBLISH THAT NEVER HAPPENED is not an occupied pathname — there is nothing to remove (r7 R6-I1)', () => {
+    // THE RE-TEST IS A DISJUNCTION, and before this round both halves set
+    // `lock-path-occupied`: a stranger holding the pathname (the leg above)
+    // and a `link` that answered non-zero with NOTHING published (this leg).
+    // `link "$src" "$lock" 2>/dev/null || true` swallows every errno — ENOSPC,
+    // EDQUOT, EROFS, ENOENT on a `$REG` renamed between the mint and the
+    // publish — and `command -v link` at the top of the acquire has already
+    // ruled out the binary being absent, so this is the only way that branch
+    // is reached with an EMPTY pathname. The remedy the old token rendered
+    // there was false in every clause and unperformable in its last: there is
+    // no object to remove by hand. THE SHIM IS A FUNCTION for the same reason
+    // `MKTEMP_FAIL` above is one — `command -v link` must still resolve, or
+    // the acquire answers 2 and the leg measures mechanism absence instead.
+    const LINK_FAIL = 'link() { return 1; };';
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      expect(fs.existsSync(lockOf(leg.id)),
+        `${leg.verb}: no lock exists yet — the publish is the statement this leg breaks`).toBe(false);
+      const probe = h.sh(`${LINK_FAIL} command -v link >/dev/null && echo CV=ok; `
+        + `_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(probe, `${leg.verb}: the shim still RESOLVES, so status 2 was never reachable`).toContain('CV=ok');
+      expect(probe, `${leg.verb}: and the acquire refuses with status 1, not 2`).toContain('RC=1');
+      expect(probe, `${leg.verb}: naming the publish that failed, not an occupant that does not exist`)
+        .toContain('WHY=lock-publish-failed');
+      leg.run(LINK_FAIL);
+      const r = purgeTerminal(leg);
+      expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
+      // THE POST-STATE IS THE FINDING: nothing holds the pathname. `lstat`,
+      // not `existsSync`, because a dangling symlink IS an occupant and
+      // `existsSync` answers false for one.
+      expect(fs.lstatSync(lockOf(leg.id), { throwIfNoEntry: false }),
+        `${leg.verb}: nothing was ever published at the lock pathname — no file, no symlink, no directory`)
+        .toBeUndefined();
+      expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-publish-failed');
+      expect(r.detail, `${leg.verb}: and says which act did not happen`).toContain('could not be published as');
+      expect(r.detail, `${leg.verb}: worded to the measurement, never to one cause`)
+        .toContain('any failure of the publish is reported here');
+      expect(r.detail, `${leg.verb}: and a re-run is refused only while that holds`)
+        .toContain('a re-run cannot help while that holds');
+      // THE TWO FALSE CLAUSES THE SPLIT REMOVES, asserted as absences because
+      // they are verbatim what this state journaled before it.
+      expect(r.detail, `${leg.verb}: nothing holds the pathname, so nothing may claim one does`)
+        .not.toContain('holds the lock pathname');
+      expect(r.detail, `${leg.verb}: and no unperformable removal is prescribed`)
+        .not.toContain('remove that object by hand');
+      expect(r.detail, `${leg.verb}: no wait publishes a lock the filesystem refused`)
+        .not.toContain('once the compaction settles');
+      expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
+        .not.toContain('canonical-vanished');
+      expectSurvivingState(leg, r.detail);
+    }
+  }, 120_000);
+
+  it('(d1f) an UNRECOGNISED token renders a NON-EMPTY remedy, and it is the catch-all arm that renders it (r7 R6-I3)', () => {
+    // A DIRECT CALL, because no shipped acquire can emit this token: (d1e)'s
+    // vocabulary loop guarantees an arm per token, so the catch-all's
+    // reachability is a future state rather than a present one. Its
+    // DELETABILITY was the present one — measured at this round's base,
+    // deleting the outer catch-all arm left this file GREEN 54/54, because the
+    // only assertion on it scanned the whole helper body for `*)` and the
+    // NESTED `case "$verb"` default supplies one. With the arm gone, `sentence`
+    // stayed unset under `set -uo pipefail`; the production capture form is
+    // stdout-only and ccd runs without `-e`, so the durable journal line ended
+    // "could not be purged: " and nothing after the colon. This leg asserts
+    // BOTH halves: the answer is non-empty, and it is the catch-all's own
+    // sentence rather than the fail-closed fallback that replaced the crash.
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      const verb = leg.verb === 'ws-gc --prune' ? "'ws-gc --prune'" : leg.verb;
+      const out = h.sh(`COMPACT_LOCK_WHY=a-token-with-no-arm `
+        + `_r=$(_compact_lock_why_remedy ${leg.id} ${verb}); printf 'OUT<<%s>>' "$_r"`);
+      const m = /OUT<<([\s\S]*)>>/.exec(out);
+      expect(m, `${leg.verb}: the helper answered at all`).not.toBeNull();
+      const sentence = m![1]!;
+      expect(sentence.length, `${leg.verb}: and the remedy is not the empty string`).toBeGreaterThan(0);
+      expect(sentence, `${leg.verb}: it names the token the acquire set`).toContain('a-token-with-no-arm');
+      expect(sentence, `${leg.verb}: and it is the catch-all arm that answers, not the fail-closed fallback`)
+        .toContain('the acquire named a condition this caller carries no remedy for');
+      expect(sentence, `${leg.verb}: an unrecognised token is not contention, so no wait is prescribed`)
+        .not.toContain('once the compaction settles');
+      expectSurvivingState(leg, sentence);
+    }
+  }, 120_000);
+
+  it('(d1e) EVERY token the acquire can set is keyed to its own remedy in the shared helper, and all four durable callers consult it WITH THEIR OWN ARGUMENTS (r6 R5-M3, r7 R6-I2/R6-I3/R6-M1)', () => {
+    /** A comment block read as PROSE: the `#` gutters and the ~78-column hard
+     *  wrap are formatting, and a sentence this scan looks for is split across
+     *  lines by both. */
+    const prose = (t: string): string => t.replace(/^[ \t]*#[ \t]?/gm, '').replace(/\s+/g, ' ');
     // THE TOKEN SET IS DERIVED FROM THE ACQUIRE, never listed here. That is the
     // whole guard: a fourth condition given a token and no arm in the helper
     // would otherwise fall through to the contention sentence in silence,
@@ -1786,15 +1905,28 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     // running none of them, which is the one reading that is never right here.
     expect(tokens.length, 'the acquire names conditions at all').toBeGreaterThan(2);
     // THE VOCABULARY IS ITS DISTINCT VALUES, not its assignment SITES.
-    // `lock-path-occupied` is now set at TWO sites (r6 R5-M1: the mint-time
-    // `[ -e "$lock" ]` test and the post-`link` re-test, the SAME condition
-    // observed one instant later) — a deliberate duplication of a token, not
-    // a second condition wearing the first one's name, so the vocabulary
-    // (what the helper below must cover) is strictly smaller than the raw
-    // assignment count.
+    // `lock-path-occupied` is set at TWO sites (r6 R5-M1: the mint-time
+    // `[ -e "$lock" ]` test and the post-`link` re-test's OCCUPIED half, the
+    // SAME condition observed one instant later) — a deliberate duplication of
+    // a token, not a second condition wearing the first one's name, so the
+    // vocabulary (what the helper below must cover) is strictly smaller than
+    // the raw assignment count. It stayed smaller when r7 R6-I1 split the
+    // re-test's OTHER half off as `lock-publish-failed`: that adds one site
+    // AND one value, so the gap is unchanged. MEASURED, not assumed — the
+    // numbers below are derived from this same scan.
     const vocab = [...new Set(tokens)];
     expect(vocab.length, 'lock-path-occupied is minted at two sites, so the vocabulary is smaller than the raw count')
       .toBeLessThan(tokens.length);
+    // AND THE ACQUIRE COUNTS ITSELF, ONCE (r7 R6-M1). The four durable callers
+    // used to restate this census in their own words; every copy went stale
+    // inside the round that changed the acquire, so they now point here and
+    // the number lives in the acquire's own header comment alone. DERIVED from
+    // the scan above rather than transcribed, which is what makes a site added
+    // without touching that comment RED rather than merely wrong.
+    const WORD = ['ZERO', 'ONE', 'TWO', 'THREE', 'FOUR', 'FIVE', 'SIX', 'SEVEN', 'EIGHT', 'NINE'];
+    expect(WORD[tokens.length], 'the census stays inside the spelled range this scan can check').toBeDefined();
+    expect(prose(body), 'the acquire spells its own assignment-site and vocabulary counts')
+      .toContain(`written at ${WORD[tokens.length]} assignment sites over ${WORD[vocab.length]} distinct tokens`);
     // AND THE ACQUIRE IS THE ONLY WRITER, so this census is the whole set: the
     // count is the (raw, un-deduplicated) tokens plus the one clear-on-entry.
     expect((src.match(/COMPACT_LOCK_WHY=/g) ?? []).length,
@@ -1810,18 +1942,90 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(helperBody, `the helper gives ${t} its own remedy rather than the contention sentence`)
         .toContain(`${t})`);
     }
-    expect(helperBody, 'the helper refuses to read an UNRECOGNISED token as ordinary contention')
+    // THE CATCH-ALL, ANCHORED TO THE OUTER CASE AND TO ITS OWN SENTENCE (r7
+    // R6-I3). `toContain('*)')` over the whole helper body was satisfied by
+    // the NESTED `case "$verb"` default inside the empty-WHY arm, so deleting
+    // the OUTER catch-all left this file GREEN 54/54 while deleting the
+    // `canonical-vanished` arm reds it — the scan had stopped measuring what
+    // its own message claimed, and the pre-refactor form (`*) ${v}=` inside
+    // each caller's own case) HAD measured it. The nested case is excised
+    // before the syntax scan, and the arm's own sentence — which no other arm
+    // produces — is asserted beside it, so neither a deletion nor a rewrite
+    // can pass.
+    const caseAt = helperBody.indexOf('case "${COMPACT_LOCK_WHY:-}" in');
+    expect(caseAt, 'the helper keys on the token in one outer case').toBeGreaterThan(-1);
+    const outerCase = helperBody.slice(caseAt, helperBody.lastIndexOf('esac'));
+    const innerAt = outerCase.indexOf('case "$verb" in');
+    expect(innerAt, 'and the empty-WHY arm keys on the verb in a nested one — the `*)` that made the old scan vacuous')
+      .toBeGreaterThan(-1);
+    const outerArms = outerCase.slice(0, innerAt)
+      + outerCase.slice(outerCase.indexOf('esac', innerAt) + 'esac'.length);
+    expect(outerArms, 'the nested case is excised, so what follows scans the OUTER arms alone')
+      .not.toContain('case "$verb" in');
+    expect(outerArms, 'the helper refuses to read an UNRECOGNISED token as ordinary contention')
       .toContain('*)');
+    expect(helperBody, 'and the catch-all arm says so in words no other arm produces')
+      .toContain('the acquire named a condition this caller carries no remedy for');
+    // AND IT FAILS CLOSED (r7 R6-I3). `local … sentence` left the variable
+    // UNSET when no arm assigned it, and ccd's `set -uo pipefail` with no `-e`
+    // turned that into an EMPTY capture in the production `$( )` form rather
+    // than a death — a durable journal line ending "could not be purged: "
+    // with nothing after the colon. SOURCE-SCANNED rather than driven: on a
+    // tree where every token has an arm the fallback is unreachable, and the
+    // only input that reaches it is a DELETED arm, which is a mutation and not
+    // a state the shipped acquire can produce. (d1f) drives the arm that IS
+    // reachable.
+    expect(helperBody, 'the sentence starts empty rather than unset').toContain('sentence=""');
+    expect(helperBody, 'and an empty one is replaced before anything prints it')
+      .toContain('[[ -n "$sentence" ]] || sentence=');
 
-    // AND EVERY DURABLE CALLER ACTUALLY CONSULTS IT — a caller that stopped
-    // calling the helper (inlining its own sentence again) would satisfy
-    // every assertion above and still be the exact defect this round closes.
-    for (const v of ['_rm_why', '_rt_why', '_pr_why', '_fg_why']) {
+    // AND EVERY DURABLE CALLER ACTUALLY CONSULTS IT, WITH ITS OWN ARGUMENTS —
+    // a caller that stopped calling the helper (inlining its own sentence
+    // again) would satisfy every assertion above and still be the exact defect
+    // r6 R5-M3 closed. Pinning only that it is CALLED left both arguments free,
+    // and that hole was MEASURED (r7 R6-I2): swapping the gc caller's
+    // `'ws-gc --prune'` for `ws-rm` left this file and `ccd-ws-gc` GREEN
+    // 123/123 while the declining sweep journaled the torn-down residue and
+    // prescribed the DESTRUCTIVE verb. The verb selects the surviving-state and
+    // re-run clauses; the id expression is the row id in the caller's own
+    // spelling, and the gc sweep is the one that spells it `$project-$slug`.
+    // `expectSurvivingState` is the behaviour half of the same pin — this one
+    // is a scan, and a scan alone is what left the arguments free.
+    const CALLERS = [
+      ['_rm_why', 'ws-rm', '"$id"'],
+      ['_rt_why', 'ws-reap', '"$id"'],
+      ['_pr_why', "'ws-gc --prune'", '"$project-$slug"'],
+      ['_fg_why', 'forget', '"$id"'],
+    ] as const;
+    for (const [v, verb, idExpr] of CALLERS) {
       const at = src.indexOf(`local ${v};`);
       expect(at, `${v} is one of the four durable purge callers`).toBeGreaterThan(-1);
       const line = src.slice(at, src.indexOf('\n', at));
       expect(line, `${v} renders its remedy through the shared helper, not its own case`)
         .toContain('_compact_lock_why_remedy');
+      expect(line, `${v} passes its OWN verb, which selects the surviving-state and re-run clauses`)
+        .toContain(verb);
+      expect(line, `${v} passes the row id in this caller's own spelling`)
+        .toContain(idExpr);
+      expect(line, `${v}'s two arguments, in the order the helper reads them`)
+        .toContain(`_compact_lock_why_remedy ${idExpr} ${verb})`);
+    }
+
+    // AND NO CALLER RESTATES THE CENSUS (r7 R6-M1). All four paragraphs said
+    // "THREE set COMPACT_LOCK_WHY" and called the untokened residue a set of
+    // races at the mint; the acquire's own rewrite in the round that wrote
+    // those words had already made both false — four sites, and an `exec
+    // {fd}<>` permission state the acquire calls a DURABLE member of that
+    // residue. The number now lives in one place and each caller points at it.
+    for (const [v] of CALLERS) {
+      const at = src.indexOf(`local ${v};`);
+      const para = prose(src.slice(src.lastIndexOf('elif ((', at), at));
+      expect(para, `${v}'s paragraph points at the single-source census instead of restating it`)
+        .toContain('that census lives in ONE place, the header comment on _compact_lock_acquire');
+      expect(para, `${v} no longer spells how many sites set the token`)
+        .not.toMatch(/\b(ONE|TWO|THREE|FOUR|FIVE|SIX) set COMPACT_LOCK_WHY/);
+      expect(para, `${v} no longer calls the whole untokened residue a race at the mint`)
+        .not.toContain('mint-time races');
     }
 
     // AND THE HEADING FOLLOWS THE MECHANISM. The enumerating one was the

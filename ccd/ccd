@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=15333aa6caa1cd82015d2d053f69eae8faacc0d3a1832fdf228363f085e9541b
+# ccrc:generated 1 sha256=2018bcfbd35382705e13fa4d375cb5fc813fe35eb75ed2833f591c8a878dd0b0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1809,13 +1809,16 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
   # and two spawn paths would quietly treat it as mechanism absence. Cleared on
   # entry so a stale one is never read as this call's.
   #
-  # AND IT IS A NARROW CLAIM (r5 R4-M3, corrected r6 R5-M1). Status 1 leaves
-  # this function from many distinct states; a token is now set at FOUR of
-  # them — `lock-path-occupied` at TWO separate sites, the mint-time occupied
-  # test just below and the post-`link` re-test near the end of this block,
-  # because both observe the identical condition one instant apart and both
-  # deserve the identical remedy — and every token means one thing to a
-  # caller: THIS acquire measured a state of `$REG` that no amount of waiting
+  # AND IT IS A NARROW CLAIM (r5 R4-M3, corrected r6 R5-M1, r7 R6-I1/R6-M1).
+  # Status 1 leaves this function from many distinct states; COMPACT_LOCK_WHY is
+  # written at FIVE assignment sites over FOUR distinct tokens, and THIS COMMENT
+  # IS THE ONLY PLACE THAT CENSUS IS KEPT — the four durable purge callers point
+  # here instead of restating it, because every caller-side copy of it went
+  # stale the moment a site was added (r7 R6-M1). `lock-path-occupied` owns TWO
+  # of the five: the mint-time occupied test just below and the post-`link`
+  # re-test near the end of this block, which observe the identical condition
+  # one instant apart and deserve the identical remedy. Every token means one
+  # thing to a caller: THIS acquire measured a state of `$REG` that no amount of waiting
   # changes, so "re-run once the compaction settles" is a fabricated remedy
   # there. An EMPTY `WHY` is STILL NOT a proof of ordinary contention: the
   # `{ exec {fd}<>"$al"; }` open further below can fail on an out-of-contract
@@ -1858,14 +1861,34 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
     link "$src" "$lock" 2>/dev/null || true      # EEXIST: validate, never recreate
     rm -f "$src" 2>/dev/null || true
-    # THE SAME CONDITION, ONE INSTANT LATER (r6 R5-M1). A stranger can win the
-    # lock pathname between the `[ -e "$lock" ]` test above and here — mkdir a
-    # directory over it, say — and this re-test is what catches that: without
-    # the token, an EMPTY `WHY` sent all four durable callers to the
-    # contention arm for a pathname nothing here will ever unoccupy, which is
-    # the same false-twice remedy `lock-path-occupied`'s own arm exists to
-    # give instead.
-    [[ -f "$lock" && ! -L "$lock" ]] || { COMPACT_LOCK_WHY=lock-path-occupied; return 1; }
+    # THE SAME CONDITION ONE INSTANT LATER — OR A PUBLISH THAT NEVER HAPPENED
+    # (r6 R5-M1, split r7 R6-I1). This re-test is a DISJUNCTION, and its two
+    # halves are different states owed different remedies, so each now gets its
+    # own token instead of collapsing into one:
+    #   - SOMETHING IS THERE. A stranger can win the lock pathname between the
+    #     `[ -e "$lock" ]` test above and here — mkdir a directory over it, say
+    #     — and this re-test is what catches that: without the token, an EMPTY
+    #     `WHY` sent all four durable callers to the contention arm for a
+    #     pathname nothing here will ever unoccupy, which is the same
+    #     false-twice remedy `lock-path-occupied`'s own arm exists to give
+    #     instead.
+    #   - NOTHING IS THERE. The `link` above swallows EVERY errno behind
+    #     `|| true`, and `command -v link` at the top of this function already
+    #     ruled out the binary being absent — so a publish that failed because
+    #     `$REG` is full, over quota, read-only, or was renamed between the
+    #     `mktemp` and the `link` arrives here with the pathname EMPTY.
+    #     MEASURED on the pre-split form with a `link` shim answering non-zero:
+    #     it answered `lock-path-occupied` on exactly that state, and every
+    #     clause of the remedy that token renders was false — no symlink, no
+    #     directory, no object at all to remove by hand. That state is a
+    #     sibling of `lock-source-refused` three lines up rather than of the
+    #     occupied one, and `lock-publish-failed` is its own token.
+    if [[ ! -f "$lock" || -L "$lock" ]]; then
+      if [ -e "$lock" ] || [ -L "$lock" ]; then COMPACT_LOCK_WHY=lock-path-occupied
+      else COMPACT_LOCK_WHY=lock-publish-failed
+      fi
+      return 1
+    fi
   fi
   while (( tries < 8 )); do
     al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"
@@ -1931,7 +1954,7 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
                                 #     so "the registry row is untouched" is
                                 #     the true fact there instead — a
                                 #     different claim, not a style choice.
-  local id="$1" verb="$2" tail sentence
+  local id="$1" verb="$2" tail sentence=""
   if [[ "$verb" == 'ws-gc --prune' ]]; then
     tail="the registry row is untouched"
   else
@@ -1967,6 +1990,19 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
       else
         sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
       fi ;;
+    lock-publish-failed)
+      # r7 R6-I1: the `link` that publishes the private source AS the lock
+      # swallows every errno, so this is the one refusal that leaves NOTHING at
+      # the lock pathname — which is why it cannot wear `lock-path-occupied`'s
+      # sentence, every clause of which asserts an object is there and asks a
+      # human to remove it. Worded to the MEASUREMENT for the same reason
+      # `lock-source-refused` above is: the guard sees a publish that did not
+      # happen, never the reason it did not.
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but could not be published as $REG/.$id.compactions.lock; the usual causes are $REG being full, over quota, read-only or moved, but any failure of the publish is reported here — a re-run cannot help while that holds; $tail — repair $REG"
+      else
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but could not be published as $REG/.$id.compactions.lock; the usual causes are $REG being full, over quota, read-only or moved, but any failure of the publish is reported here — a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+      fi ;;
     *)
       if [[ "$verb" == 'ws-gc --prune' ]]; then
         sentence="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer; $tail — inspect $REG/.$id.compactions.lock by hand"
@@ -1974,6 +2010,17 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
         sentence="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer. $tail; inspect $REG/.$id.compactions.lock by hand"
       fi ;;
   esac
+  # FAIL CLOSED, NEVER EMPTY (r7 R6-I3). Every arm above assigns `sentence`, so
+  # on a tree where each token has an arm this line is unreachable — which is
+  # exactly why it is here. MEASURED before it existed: delete the catch-all
+  # arm, hand the helper an out-of-vocabulary token, and `sentence` stayed
+  # UNSET; ccd runs `set -uo pipefail` with no `-e`, so the production capture
+  # form (`_rm_why=$(_compact_lock_why_remedy …)`, stdout only) swallowed the
+  # unbound-variable death in the subshell and the durable journal line ended
+  # "could not be purged: " with nothing after the colon. A remedy that says
+  # nothing is worse than one that says it has nothing to say, so this names
+  # the token and the pathname a human can look at instead.
+  [[ -n "$sentence" ]] || sentence="${COMPACT_LOCK_WHY:-(the acquire named no condition)} — ccd carries no remedy text for this condition; inspect $REG/.$id.compactions.lock by hand"
   printf '%s' "$sentence"
 }
 
@@ -5564,17 +5611,18 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
     # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
-    # the default sentence below is written for it. THREE set COMPACT_LOCK_WHY,
-    # which nothing clobbers between `_reg_purge`'s return and here, and each
-    # names a state of `$REG` that no wait changes: `canonical-vanished` (the
-    # permanent lock unlinked out of contract while a live holder still owns
-    # its inode, and this file deliberately never mints a second inode over it,
-    # so the contention sentence would also name a pathname that does not exist
-    # at that instant), `lock-path-occupied` (a symlink, directory or other
-    # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
-    # the private source the lock is minted from). The REST are mint-time races
-    # carrying no token, so an EMPTY WHY is the default rather than a proof of
-    # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # the default sentence below is written for it. WHICH states carry a token,
+    # and what an EMPTY `WHY` does and does not prove, are NOT restated here
+    # (r7 R6-M1): that census lives in ONE place, the header comment on
+    # _compact_lock_acquire, which is the only writer of the variable. The copy
+    # that used to stand here went stale inside a single round — it mis-counted
+    # the assignment sites the acquire had just grown, and called the whole
+    # untokened residue a race at the mint after the acquire had named a
+    # durable member of it — so this caller points instead of repeating, and a
+    # numeral about the code is made in exactly one place. What this caller
+    # needs from the variable is only that nothing clobbers it between
+    # `_reg_purge`'s return and here.
+    # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
     # OWN remedy and gives an unrecognised one the catch-all: a condition
     # named at the acquire must never silently inherit "wait and re-run",
     # which is the defect that let one sentence stand for two conditions.
@@ -11902,17 +11950,18 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
     # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
-    # the default sentence below is written for it. THREE set COMPACT_LOCK_WHY,
-    # which nothing clobbers between `_reg_purge`'s return and here, and each
-    # names a state of `$REG` that no wait changes: `canonical-vanished` (the
-    # permanent lock unlinked out of contract while a live holder still owns
-    # its inode, and this file deliberately never mints a second inode over it,
-    # so the contention sentence would also name a pathname that does not exist
-    # at that instant), `lock-path-occupied` (a symlink, directory or other
-    # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
-    # the private source the lock is minted from). The REST are mint-time races
-    # carrying no token, so an EMPTY WHY is the default rather than a proof of
-    # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # the default sentence below is written for it. WHICH states carry a token,
+    # and what an EMPTY `WHY` does and does not prove, are NOT restated here
+    # (r7 R6-M1): that census lives in ONE place, the header comment on
+    # _compact_lock_acquire, which is the only writer of the variable. The copy
+    # that used to stand here went stale inside a single round — it mis-counted
+    # the assignment sites the acquire had just grown, and called the whole
+    # untokened residue a race at the mint after the acquire had named a
+    # durable member of it — so this caller points instead of repeating, and a
+    # numeral about the code is made in exactly one place. What this caller
+    # needs from the variable is only that nothing clobbers it between
+    # `_reg_purge`'s return and here.
+    # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
     # OWN remedy and gives an unrecognised one the catch-all: a condition
     # named at the acquire must never silently inherit "wait and re-run",
     # which is the defect that let one sentence stand for two conditions.
@@ -12485,17 +12534,18 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
         # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
         # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
-        # the default sentence below is written for it. THREE set COMPACT_LOCK_WHY,
-        # which nothing clobbers between `_reg_purge`'s return and here, and each
-        # names a state of `$REG` that no wait changes: `canonical-vanished` (the
-        # permanent lock unlinked out of contract while a live holder still owns
-        # its inode, and this file deliberately never mints a second inode over it,
-        # so the contention sentence would also name a pathname that does not exist
-        # at that instant), `lock-path-occupied` (a symlink, directory or other
-        # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
-        # the private source the lock is minted from). The REST are mint-time races
-        # carrying no token, so an EMPTY WHY is the default rather than a proof of
-        # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to
+        # the default sentence below is written for it. WHICH states carry a
+        # token, and what an EMPTY `WHY` does and does not prove, are NOT
+        # restated here (r7 R6-M1): that census lives in ONE place, the header
+        # comment on _compact_lock_acquire, which is the only writer of the
+        # variable. The copy that used to stand here went stale inside a single
+        # round — it mis-counted the assignment sites the acquire had just
+        # grown, and called the whole untokened residue a race at the mint
+        # after the acquire had named a durable member of it — so this caller
+        # points instead of repeating, and a numeral about the code is made in
+        # exactly one place. What this caller needs from the variable is only
+        # that nothing clobbers it between `_reg_purge`'s return and here.
+        # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to
         # ITS OWN remedy and gives an unrecognised one the catch-all: a
         # condition named at the acquire must never silently inherit "wait
         # and re-run", which is the defect that let one sentence stand for
@@ -16523,17 +16573,18 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
     # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
     # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
-    # the default sentence below is written for it. THREE set COMPACT_LOCK_WHY,
-    # which nothing clobbers between `_reg_purge`'s return and here, and each
-    # names a state of `$REG` that no wait changes: `canonical-vanished` (the
-    # permanent lock unlinked out of contract while a live holder still owns
-    # its inode, and this file deliberately never mints a second inode over it,
-    # so the contention sentence would also name a pathname that does not exist
-    # at that instant), `lock-path-occupied` (a symlink, directory or other
-    # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
-    # the private source the lock is minted from). The REST are mint-time races
-    # carrying no token, so an EMPTY WHY is the default rather than a proof of
-    # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # the default sentence below is written for it. WHICH states carry a token,
+    # and what an EMPTY `WHY` does and does not prove, are NOT restated here
+    # (r7 R6-M1): that census lives in ONE place, the header comment on
+    # _compact_lock_acquire, which is the only writer of the variable. The copy
+    # that used to stand here went stale inside a single round — it mis-counted
+    # the assignment sites the acquire had just grown, and called the whole
+    # untokened residue a race at the mint after the acquire had named a
+    # durable member of it — so this caller points instead of repeating, and a
+    # numeral about the code is made in exactly one place. What this caller
+    # needs from the variable is only that nothing clobbers it between
+    # `_reg_purge`'s return and here.
+    # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
     # OWN remedy and gives an unrecognised one the catch-all: a condition
     # named at the acquire must never silently inherit "wait and re-run",
     # which is the defect that let one sentence stand for two conditions.

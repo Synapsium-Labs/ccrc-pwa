@@ -7006,6 +7006,34 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //        stale-by-construction debt D-2758 parks in Task 11.
     // So `ccd/ccd` 131 -> 132.
     //
+    // FIX ROUND 7 moves it once more and DOWNWARD, by the same method and the
+    // same instrument: the audit was run unchanged against a `git archive` of
+    // this round's own base (7a3fe087) and of this tip, and the two failure
+    // sets diffed. FOUR repaired, ONE new, net -1 — every one of the five a
+    // line shift in `ccd/ccd` under an anchor ALREADY stale at the base. No
+    // document was edited, no rule changed, no citation was added.
+    //   repaired: spec `:2040`'s `ccd/ccd:11665-11670` and `:11669`, spec
+    //             `:2294`'s `ccd/ccd:10202-10204`, and plan `:3124`'s
+    //             `ccd/ccd:1861`. Coincidences of bytes rather than referents
+    //             — the 11665 range now lands inside `cmd_ws_reap`'s
+    //             child-branch handling on a line carrying the word its clause
+    //             quotes (`unchanged`), while the clause is about the gc
+    //             sweep's declining arm. They are the same class as the
+    //             `:6838` repair round 3 recorded and round 4 lost again.
+    //   new:      spec `:2121`'s `ccd/ccd:1828`, MEASURED to the token. That
+    //             clause cites `_lc_done purge`'s single call site; at the
+    //             base the line was the acquire's own `COMPACT_LOCK_WHY=""`
+    //             clear-on-entry, which satisfied the clause's quoted `""`
+    //             and so passed for a reason having nothing to do with
+    //             `_lc_done purge`. R6-I1/R6-M1 grew the acquire's header, the
+    //             line is now a comment, and the coincidence is gone — which
+    //             exposes a PRE-EXISTING wrong citation rather than creating
+    //             one. It is not repairable as a shift (the old range's bytes
+    //             were never the referent) and re-pointing it is a referent
+    //             correction no finding in this round names, so it is recorded
+    //             here as debt for Task 11 rather than edited.
+    // So `ccd/ccd` 132 -> 131.
+    //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
     // there. RE-MEASURE AND LOWER THE CENSUS; never widen the rule.
@@ -7013,7 +7041,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 132,
+      'ccd/ccd': 131,
       'ccd/session-hook.sh': 43,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
@@ -7025,7 +7053,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
