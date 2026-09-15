@@ -35,7 +35,7 @@ export const WORKER_SKILL_DIR = 'ccrc-worker';
 /**
  * The directory `ccd/install-coordinator-skill.sh` writes, same parent.
  *
- * NOTE the deliberate narrowing (D-1027): that installer names five REQUIRED
+ * NOTE the deliberate narrowing (D-1027): that installer names seven REQUIRED
  * reference files beside `SKILL.md` and refuses the install without them, so
  * "SKILL.md is readable" is WIDER than the installer's own definition of
  * installed — a home whose refs were deleted reads `present` here. The
