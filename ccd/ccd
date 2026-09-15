@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=680e450d98b577dd7c6eff324186d181e23a5d82fc78e6942993a356ed7ed5c0
+# ccrc:generated 1 sha256=928e68207ad100e82567b1255cba74d7d6095dc09a88d1ede1939760e15f4bec
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4726,6 +4726,10 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
   # is no second channel on this seam — stdout carries a wrapper name — so the
   # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  # WITH A CLASS it carries a THIRD meaning — "every in-pool lane measured
+  # unservable for the class" — which `cmd_ws_add`'s reason builder cannot yet
+  # name, because nothing on that path knows the class: slice 4's `ws-add
+  # --route` is what hands it one, and the arm lands with it.
   #
   # WHAT "" NEVER MEANS IS "every in-pool lane is condemned", and that is why
   # `cmd_ws_add`'s reason builder needs no auth-dead arm: this function answers
@@ -4746,10 +4750,7 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
     # — unmeasured never becomes ineligible — and ranks by its own score. `default`
     # (or no class) is today's walk byte for byte. projectHome (server/src/limits.ts)
     # is the twin; projected-home.test.ts drives both over one fixture table.
-    if [[ -n "$cls" && "$cls" != default ]]; then
-      _serviceable "$w" "$cls" >/dev/null
-      [[ $? -eq 1 ]] && continue
-    fi
+    _class_gate "$w" "$cls"; [[ $? -eq 1 ]] && continue
     # THE CONDEMNED TIER, AND THE SPLIT IS THE WHOLE GUARD. An auth-dead lane
     # must not be PREFERRED — it is a measurement that a credential no longer
     # authenticates — but it must stay ELIGIBLE, because that measurement can be
@@ -13104,6 +13105,15 @@ _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
 _class_below() {   # class -> stdout the class one rung DOWN (fable->opus->sonnet->haiku->nothing); nothing for haiku or an unknown word
   # DERIVED from ROUTE_CLASSES (descending), never a fourth spelling of the four names: one rung down is the NEXT word.
   # shared/serviceability.ts's classBelow walks CLASSES (ascending) to the same answers; ccd-serviceable.test.ts pins them.
+  #
+  # THE EMPTY WORD HAS NO RUNG BELOW IT, and the loop below cannot say so on its
+  # own: it seeds `prev=""` and matches on the FIRST word, so `_class_below ""`
+  # printed the TOP rung — the one answer that is a fabricated fact rather than
+  # a missing one (controller ruling S3-R1's sibling, S3-R2). `_swap_target`'s
+  # degrade pass asks this about a class it may not have (`pcls=$(_class_below
+  # "$cls")` with `cls` empty is the no-class walk), so the wrong answer there
+  # would silently apply a class nobody set.
+  [[ -z "${1:-}" ]] && return 0
   local prev="" x
   for x in ${ROUTE_CLASSES% default}; do
     [[ "$prev" == "$1" ]] && { printf '%s' "$x"; return 0; }
@@ -13161,11 +13171,44 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
   return 0
 }
 
-_svc_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured
+_class_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured
   # The shape every decision site needs: `skipped` folds into 0 because a session with no class has nothing to gate on.
+  #
+  # NAMED FOR THE CLASS, NOT FOR `_svc_` (controller ruling S3-R1). It shipped
+  # as `_svc_gate` and cost `macos-platform.test.ts` a name-only exemption in
+  # the guard that holds every `_plat_`/`_svc_` definition inside the platform
+  # sentinels — `_svc_` is that guard's pinned launchd/systemd vocabulary, and a
+  # routing helper borrowing the prefix made a real platform helper's escape one
+  # `Set` entry away from unnoticed. The exemption is gone with the name.
   [[ -z "${2:-}" || "$2" == default ]] && return 0
   _serviceable "$1" "$2" >/dev/null
   case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+
+_route_degrade() {   # id from to why — stamp `degraded=<to>` and say so: one route journal row (actor ccd), one swap.log line
+  # THE ONLY WRITERS OF `degraded` ARE THIS AND `_route_restore` (spec §5.1:
+  # ccd's own stamp; `cmd_route` refuses the field outright). `_swap_target`
+  # writes NOTHING — its answer travels on rc and stdout, because its call site
+  # is a command substitution and a variable set inside one is lost — so the
+  # stamp, the journal row and the log line all happen HERE, at the caller,
+  # after the decision has been received.
+  local id="$1" from="$2" to="$3" why="$4" old
+  old=$(_route_get "$id" degraded)
+  [[ "$old" == "$to" ]] && return 0                          # standing already: nothing to write, nothing to say twice
+  _reg_set "$id" degraded "$to" || return 1
+  _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: ${old:-∅} -> $to"
+  echo "$(date '+%F %T') degrade $id: $from -> $to ($why)" >> "$REG/swap.log"
+}
+
+_route_restore() {   # id from to why — clear `degraded` (the intended class `to` is served again) and say so
+  # The `-e` test first, for the reason `_strand_clear` tests it first: the
+  # steady state of a session that never degraded must write nothing at all,
+  # not a journal row and a log line every five seconds.
+  local id="$1" from="$2" to="$3" why="$4"
+  [[ -e "$REG/$id.degraded" ]] || return 0
+  rm -f -- "$REG/$id.degraded"
+  _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: $from -> ∅"
+  echo "$(date '+%F %T') restore $id: $from -> $to ($why)" >> "$REG/swap.log"
 }
 
 _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
@@ -13326,7 +13369,7 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
-_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule
+_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
   # THREE ANSWERS, NOT TWO (#67 review, S4/S5). `return 0` with empty stdout
   # used to mean BOTH "stay put, everything is fine" and "the crossing record
   # could not be read, so I decline to decide" — and the caller handles those
@@ -13358,6 +13401,13 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
   local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc
+  # THE CLASS DIMENSION (routing spec §5.4). Read PURE — `_route_peek` writes no
+  # note and no floor marker; a decision function that may return before acting
+  # must not leave a trail (slice 1, fix round 2). `default` and no record are
+  # the same thing here: today's walk, byte for byte — every rc-2/3/4 pin in the
+  # pool suites holds by construction because nothing below runs without `cls`.
+  local cls src pass pcls unserv unmeas
+  cls=$(_route_peek "$id" class); [[ "$cls" == default ]] && cls=""
   # ── POOLS (§5.5.3) ───────────────────────────────────────────────────────
   # The project's tag is read ONCE per decision and the WORD is passed down, so
   # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
@@ -13441,8 +13491,22 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # branch. It is kept as the explicit statement of intent beside the gate that
   # DOES decide — the home-recovered arm's own `[[ "$hrc" -eq 0 ]]` — and it is
   # THAT gate the hrc-2 cases pin.
+  #
+  # THE THREE STAY SHORTCUTS ARE GATED ON THE CLASS, and each keeps its own
+  # condition unchanged in front of the gate: a lane is asked whether it can
+  # SERVE the class only once it has already passed every test it passed
+  # before. The gate's three answers are the three answers this whole slice is
+  # about — keep/take (0), measured-unservable (1, fall through to the
+  # candidate loop: the session MUST LEAVE a lane that cannot serve its class),
+  # and UNMEASURED (2, rc 5: nobody decides, and the next tick tries again five
+  # seconds later). With no class `_class_gate` answers 0 for every lane, so
+  # all three lines below are today's lines byte for byte.
   if [[ "$hrc" -eq 0 && "$cur" == "$home" ]]; then
-    [[ -z "$force" ]] && { _avail "$home" && return 0; }                     # home is fine: stay
+    if [[ -z "$force" ]] && _avail "$home"; then                             # home is fine: stay — if it can serve the class
+      _class_gate "$home" "$cls"; src=$?
+      [[ "$src" -eq 0 ]] && return 0
+      [[ "$src" -eq 2 ]] && return 5
+    fi                                                                       # 1: home is at the class's ceiling — must leave; fall through
   else
     # disabled excludes home as a DESTINATION only — it never evacuates a
     # session already sitting on it, which is why the two "stay" branches
@@ -13454,10 +13518,18 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # affinity arm undoing it on the very next recovery.) The CROSSED home is
     # admitted, and only the crossed one: `_crosspool_valid` was asked about
     # `$home` specifically, so a marker written for `wrapper` cannot admit it.
-    [[ "$hrc" -eq 0 ]] \
+    if [[ "$hrc" -eq 0 ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
-      && _avail "$home" && { echo "$home"; return 0; }                       # home recovered: go back
-    [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
+      && _avail "$home"; then
+      _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
+      [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
+      [[ "$src" -eq 2 ]] && return 5
+    fi
+    if [[ -z "$force" ]] && _avail "$cur"; then                              # cur still works, home down: stay put — if it can serve the class
+      _class_gate "$cur" "$cls"; src=$?
+      [[ "$src" -eq 0 ]] && return 0
+      [[ "$src" -eq 2 ]] && return 5
+    fi
   fi
   # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the
   # least-loaded AVAILABLE account.
@@ -13486,153 +13558,197 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # The seam is the three `|| continue` lines immediately below. Being untagged buys a candidate
   # `_pool_ok` and nothing else — §5.7.3 says what that does and does not imply, and warns against
   # the "repair" that would undo it (D-1967).
-  for cand in $(_pool_for "$id"); do
-    [[ "$cand" == "$cur" ]] && continue
-    # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
-    # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
-    # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
-    # number here that had gone stale twice over; that fix was scoped to THIS
-    # region and the file still carries 143 lines of `ccd:NNNN` citations that
-    # nobody has re-measured — D-1957), so a filter placed there
-    # would let an other-pool wrapper land. AUTOMATIC MOVES NEVER CROSS — marker or no marker: the
-    # marker exempts the row from being MOVED, it does not license a new
-    # crossing, so any automatic move lands in pool. This ends a `wrapper`-
-    # recorded (`swap`/`start`) crossing on its own — the move changes `cur`,
-    # and `_crosspool_valid`'s account clause no longer matches it next tick.
-    # It does NOT end a `home`-recorded (`prefer`) crossing: this loop never
-    # touches `.home`, so `cross_home` keeps validating until something else
-    # changes `home`. (`_crosspool_tick` is what then removes an invalid
-    # marker and logs `crosspool-ended`.)
-    # rc 2 IS UNREACHABLE HERE BY CONSTRUCTION, and that is a derivation worth
-    # writing down rather than a guard worth adding (#69 review, S1).
-    # `_pool_ok`'s undecidable arm keys ONLY on `$2`, and `$pps` is read once
-    # per call to this function — so once the `-eq 2` return above has fired,
-    # this loop can only ever see rc 0 or 1. A guard here would be one no case
-    # could red. But it IS the second half of the same fold: delete the return
-    # above and `|| continue` silently skips every candidate, producing rc 1
-    # and the identical fabricated strand. Measured.
-    _pool_ok "$cand" "$pps" || continue
-    _account_ok "$cand" || continue
-    _avail "$cand" || continue
-    # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
-    # round 1 (finding 1), which is the identical magnet Task 6 removed from
-    # `_ws_least_loaded`: an account that never reports scored 0, beat every
-    # account that had honestly said how loaded it was, and — since it never
-    # reports — went on winning every rescue forever.
-    #
-    # 100 rather than skipping the candidate: this loop is the ESCAPE ROUTE,
-    # and a rescue that can only land on measured accounts strands a blocked
-    # session every time the fleet has gone quiet (see the ruling on `_avail`).
-    # Eligibility must survive; only preference changes.
-    #
-    # And unmeasured now has a SECOND source, routine rather than exceptional:
-    # since the provenance fix a candidate whose window has merely ended reads
-    # unmeasured too — EITHER window, since `_limit_score` answers "" unless
-    # both halves are measured. It stays eligible and ranks 100 here, which is
-    # the correct treatment — its old inferred 0 made it the preferred rescue
-    # destination on a fleet where nothing had run on it, which is the magnet
-    # this comment already describes, arriving by a third route. `_avail` above
-    # still admits it, and admits it for a reason that no longer depends on this
-    # function's score: it refuses only a KNOWN half at the ceiling.
-    #
-    # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
-    # — not one. This paragraph used to cite `_avail` alone ("has already
-    # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
-    # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
-    # does not reject on a SCORE any more, it refuses only a KNOWN half at the
-    # ceiling. The derivation that actually holds:
-    #
-    #   1. A candidate reaches the comparison below carrying a NUMBER only if
-    #      `_limit_score` returned one, and it returns one only when BOTH
-    #      halves are measured.
-    #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
-    #
-    # Both halves known and both < 98 makes their max <= 97, so every SCORED
-    # candidate outranks 100 — while 100 is still far below `best_score`'s 999
-    # sentinel, so an unmeasured candidate is picked the moment it is the only
-    # one left.
-    #
-    # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
-    # the split it is eligible and SCORELESS at the same time — one half at 40,
-    # the other's window merely ended: `_avail` admits it (no known half at the
-    # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
-    # tier at 100, NOT in the measured one, and that is correct — one known half
-    # bounds the truth only from below. A reader sent to `_avail` for the <= 97
-    # claim would conclude the opposite.
-    #
-    # Unmeasured candidates tie with each other at 100 and the strict `<` takes
-    # the first in pool order, i.e. roster declaration order, the same
-    # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
-    # this 100, apply INSIDE each bracket separately — the two brackets never
-    # compare scores against each other at all.
-    #
-    # The cost, stated: a fleet whose measured accounts all sit just under the
-    # ceiling now sends a rescue to a busy-but-known account instead of a quiet
-    # unknown one that might have been emptier. That is the same trade
-    # placement already makes, and the alternative is the magnet.
-    sc=$(_limit_score "$cand"); : "${sc:=100}"
-    # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
-    # than at the `_account_ok` line above, which is an unconditional
-    # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
-    # finds no candidate is left wedged on the dead account with no swap.log
-    # line, no swapblocked stamp and no notification — silent in every channel
-    # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
-    # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
-    # preference and must never cost eligibility.
-    #
-    # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
-    # This was `sc=100` — the same number as the `:=100` above — until fix round
-    # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
-    # TELEMETRY, because telemetry is written by a session rendering its
-    # statusline and nothing can run there. So its last sample ages out
-    # (`_limit_field` retracts a window that has ended), `_limit_score` answers
-    # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
-    # entire effect was the few hours in which a condemned lane still carried
-    # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
-    # marked lane earlier in roster order BEAT a healthy quiet one at the strict
-    # `-lt` below — a rescue landing on the account we have measured as dead.
-    # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
-    # tick of wrongness.
-    #
-    # THE FULL ORDER, derived rather than asserted — the derivation above
-    # applies unchanged, and this number extends it by exactly one:
-    #
-    #   measured  <= 97   both halves known (`_limit_score`) and neither at the
-    #                     ceiling (`_avail`) — see the two facts above
-    #   unmeasured   100   eligible, no score: never measured, window ended, or
-    #                     half-measured
-    #   auth-dead    101   eligible, and measured as not authenticating
-    #   sentinel     999   `best_score`'s initial value
-    #
-    # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
-    # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
-    # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
-    # is still far below the 999 sentinel, so a condemned candidate is picked
-    # the moment it is the only one left — eligibility is untouched by this
-    # change, only preference. That is the same rule the `:=100` above obeys and
-    # the reason this line is an assignment and not a `continue`.
-    #
-    # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
-    # walk below now sorts candidates into two: home-able ones compete for
-    # `best`, overflow ones for `obest`, and the brackets are consulted in
-    # that order. `sc=101` is assigned BEFORE the split deliberately, so a
-    # condemned lane ranks last IN ITS OWN bracket rather than being pushed
-    # out of the rotation: a condemned overflow lane still beats no
-    # destination at all, which is the same eligibility-vs-preference rule
-    # the paragraph above derives. The two changes compose because one sets
-    # the score and the other only chooses which bracket reads it.
-    _authdead "$cand" && sc=101
-    if _is_home_able "$cand"; then
-      [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
-    else
-      [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
-    fi
+  # TWO PASSES, ONE BODY. Pass 1 ranks the candidates that can serve the
+  # intended class. If it finds nothing and every refusal was MEASURED
+  # (unserv > 0, unmeas == 0), pass 2 re-ranks one rung DOWN and answers rc 6 —
+  # the caller stamps `degraded` and dispatches. If any refusal was UNMEASURED
+  # and nothing was found, the answer is rc 5: nobody degrades on a fabricated
+  # fact. No class: one pass, byte-identical to today, so `_pool_for`'s single
+  # `cat` per call becomes two only on the degrade pass and only for a session
+  # that HAS a class and found no lane able to serve it.
+  for pass in 1 2; do
+    pcls="$cls"; [[ "$pass" -eq 2 ]] && pcls=$(_class_below "$cls")
+    unserv=0; unmeas=0
+    for cand in $(_pool_for "$id"); do
+      [[ "$cand" == "$cur" ]] && continue
+      # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
+      # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
+      # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
+      # number here that had gone stale twice over; that fix was scoped to THIS
+      # region and the file still carries 143 lines of `ccd:NNNN` citations that
+      # nobody has re-measured — D-1957), so a filter placed there
+      # would let an other-pool wrapper land. AUTOMATIC MOVES NEVER CROSS — marker or no marker: the
+      # marker exempts the row from being MOVED, it does not license a new
+      # crossing, so any automatic move lands in pool. This ends a `wrapper`-
+      # recorded (`swap`/`start`) crossing on its own — the move changes `cur`,
+      # and `_crosspool_valid`'s account clause no longer matches it next tick.
+      # It does NOT end a `home`-recorded (`prefer`) crossing: this loop never
+      # touches `.home`, so `cross_home` keeps validating until something else
+      # changes `home`. (`_crosspool_tick` is what then removes an invalid
+      # marker and logs `crosspool-ended`.)
+      # rc 2 IS UNREACHABLE HERE BY CONSTRUCTION, and that is a derivation worth
+      # writing down rather than a guard worth adding (#69 review, S1).
+      # `_pool_ok`'s undecidable arm keys ONLY on `$2`, and `$pps` is read once
+      # per call to this function — so once the `-eq 2` return above has fired,
+      # this loop can only ever see rc 0 or 1. A guard here would be one no case
+      # could red. But it IS the second half of the same fold: delete the return
+      # above and `|| continue` silently skips every candidate, producing rc 1
+      # and the identical fabricated strand. Measured.
+      _pool_ok "$cand" "$pps" || continue
+      _account_ok "$cand" || continue
+      _avail "$cand" || continue
+      # POOL FIRST, THEN SERVICEABILITY, and after `_avail` for the same reason
+      # `_ws_least_loaded` puts it after `_pool_ok`: serviceability never widens
+      # eligibility, it only narrows it. A candidate `_avail` has already
+      # refused (a KNOWN window at `SWAP_CEILING`) never reaches the class
+      # question at all — which is why one rung always resolves for a fable
+      # session, and why pass 2 re-asking `_serviceable … opus` is a formality
+      # that keeps the two passes one body rather than two.
+      if [[ -n "$pcls" ]]; then
+        _serviceable "$cand" "$pcls" >/dev/null
+        case $? in
+          1) unserv=$((unserv + 1)); continue ;;
+          # UNMEASURED BLOCKS ONLY THE INTENDED CLASS. On pass 1 an unmeasured
+          # lane means nobody can say whether to degrade — rc 5 below. On pass 2
+          # the degrade was ALREADY decided on measured refusals; what remains is
+          # placement at the rung below, where the placement rule holds:
+          # unmeasured never becomes ineligible, it ranks last (sc 100 below).
+          2) [[ "$pass" -eq 1 ]] && { unmeas=$((unmeas + 1)); continue; } ;;
+        esac
+      fi
+      # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
+      # round 1 (finding 1), which is the identical magnet Task 6 removed from
+      # `_ws_least_loaded`: an account that never reports scored 0, beat every
+      # account that had honestly said how loaded it was, and — since it never
+      # reports — went on winning every rescue forever.
+      #
+      # 100 rather than skipping the candidate: this loop is the ESCAPE ROUTE,
+      # and a rescue that can only land on measured accounts strands a blocked
+      # session every time the fleet has gone quiet (see the ruling on `_avail`).
+      # Eligibility must survive; only preference changes.
+      #
+      # And unmeasured now has a SECOND source, routine rather than exceptional:
+      # since the provenance fix a candidate whose window has merely ended reads
+      # unmeasured too — EITHER window, since `_limit_score` answers "" unless
+      # both halves are measured. It stays eligible and ranks 100 here, which is
+      # the correct treatment — its old inferred 0 made it the preferred rescue
+      # destination on a fleet where nothing had run on it, which is the magnet
+      # this comment already describes, arriving by a third route. `_avail` above
+      # still admits it, and admits it for a reason that no longer depends on this
+      # function's score: it refuses only a KNOWN half at the ceiling.
+      #
+      # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
+      # — not one. This paragraph used to cite `_avail` alone ("has already
+      # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
+      # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
+      # does not reject on a SCORE any more, it refuses only a KNOWN half at the
+      # ceiling. The derivation that actually holds:
+      #
+      #   1. A candidate reaches the comparison below carrying a NUMBER only if
+      #      `_limit_score` returned one, and it returns one only when BOTH
+      #      halves are measured.
+      #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
+      #
+      # Both halves known and both < 98 makes their max <= 97, so every SCORED
+      # candidate outranks 100 — while 100 is still far below `best_score`'s 999
+      # sentinel, so an unmeasured candidate is picked the moment it is the only
+      # one left.
+      #
+      # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
+      # the split it is eligible and SCORELESS at the same time — one half at 40,
+      # the other's window merely ended: `_avail` admits it (no known half at the
+      # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
+      # tier at 100, NOT in the measured one, and that is correct — one known half
+      # bounds the truth only from below. A reader sent to `_avail` for the <= 97
+      # claim would conclude the opposite.
+      #
+      # Unmeasured candidates tie with each other at 100 and the strict `<` takes
+      # the first in pool order, i.e. roster declaration order, the same
+      # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
+      # this 100, apply INSIDE each bracket separately — the two brackets never
+      # compare scores against each other at all.
+      #
+      # The cost, stated: a fleet whose measured accounts all sit just under the
+      # ceiling now sends a rescue to a busy-but-known account instead of a quiet
+      # unknown one that might have been emptier. That is the same trade
+      # placement already makes, and the alternative is the magnet.
+      sc=$(_limit_score "$cand"); : "${sc:=100}"
+      # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
+      # than at the `_account_ok` line above, which is an unconditional
+      # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
+      # finds no candidate is left wedged on the dead account with no swap.log
+      # line, no swapblocked stamp and no notification — silent in every channel
+      # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
+      # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
+      # preference and must never cost eligibility.
+      #
+      # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+      # This was `sc=100` — the same number as the `:=100` above — until fix round
+      # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
+      # TELEMETRY, because telemetry is written by a session rendering its
+      # statusline and nothing can run there. So its last sample ages out
+      # (`_limit_field` retracts a window that has ended), `_limit_score` answers
+      # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
+      # entire effect was the few hours in which a condemned lane still carried
+      # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
+      # marked lane earlier in roster order BEAT a healthy quiet one at the strict
+      # `-lt` below — a rescue landing on the account we have measured as dead.
+      # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
+      # tick of wrongness.
+      #
+      # THE FULL ORDER, derived rather than asserted — the derivation above
+      # applies unchanged, and this number extends it by exactly one:
+      #
+      #   measured  <= 97   both halves known (`_limit_score`) and neither at the
+      #                     ceiling (`_avail`) — see the two facts above
+      #   unmeasured   100   eligible, no score: never measured, window ended, or
+      #                     half-measured
+      #   auth-dead    101   eligible, and measured as not authenticating
+      #   sentinel     999   `best_score`'s initial value
+      #
+      # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+      # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
+      # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+      # is still far below the 999 sentinel, so a condemned candidate is picked
+      # the moment it is the only one left — eligibility is untouched by this
+      # change, only preference. That is the same rule the `:=100` above obeys and
+      # the reason this line is an assignment and not a `continue`.
+      #
+      # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
+      # walk below now sorts candidates into two: home-able ones compete for
+      # `best`, overflow ones for `obest`, and the brackets are consulted in
+      # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+      # condemned lane ranks last IN ITS OWN bracket rather than being pushed
+      # out of the rotation: a condemned overflow lane still beats no
+      # destination at all, which is the same eligibility-vs-preference rule
+      # the paragraph above derives. The two changes compose because one sets
+      # the score and the other only chooses which bracket reads it.
+      _authdead "$cand" && sc=101
+      if _is_home_able "$cand"; then
+        [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
+      else
+        [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
+      fi
+    done
+    [[ -n "$best$obest" ]] && break                                              # found at this class
+    [[ -z "$cls" ]] && break                                                     # no class: nothing more to try
+    [[ "$unmeas" -gt 0 ]] && return 5                                            # a lane nobody measured: nobody decides
+    [[ "$unserv" -eq 0 || "$pass" -eq 2 ]] && break                              # nothing to degrade from, or already degraded once
+    [[ -z "$(_class_below "$cls")" ]] && break                                   # haiku has no rung below
   done
   # Keep the function's existing exit-code shape (empty stdout + non-zero exit when nothing
   # qualifies): a `return 0` only on the branch that actually echoes something, so falling off the
   # end with both brackets empty leaves the caller the same "no destination" signal as before.
-  [[ -n "$best" ]] && { echo "$best"; return 0; }
-  [[ -n "$obest" ]] && echo "$obest"
+  #
+  # THE RUNG IS ON THE EXIT CODE, NOT ON STDOUT. `$pass` is 2 only when the loop
+  # ran the degrade pass and found there — every other path breaks at pass 1 —
+  # so rc 6 says "this name is one rung DOWN from the intended class" while the
+  # name itself stays exactly what an rc-0 move would have carried. Nothing is
+  # stamped here: this function writes nothing, and `_auto_swap_check` is what
+  # turns rc 6 into the `degraded` stamp and the journal row.
+  if [[ -n "$best" ]]; then echo "$best"; elif [[ -n "$obest" ]]; then echo "$obest"; else return 1; fi
+  [[ "$pass" -eq 2 ]] && return 6
+  return 0
 }
 
 _pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
@@ -13801,6 +13917,7 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
+    classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
 }
@@ -14130,6 +14247,19 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
   target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  # rc 6 IS A DECISION, handled BEFORE the `-ge 2` undecidable guard (routing
+  # spec §5.4): a destination chosen one rung DOWN because every lane was
+  # measured-unservable at the intended class. Put after that guard it would be
+  # read as a condition nobody could decide, strand the row with the word
+  # `rc6`, and throw away a destination that was measured. The rung is
+  # re-derived here (`_class_below` is deterministic and `_swap_target` writes
+  # nothing), the stamp and the journal row are written by the ONE writer, and
+  # the move proceeds exactly as an rc 0 move would.
+  if [[ "$strc" -eq 6 ]]; then
+    local icls; icls=$(_route_peek "$id" class)
+    _route_degrade "$id" "$icls" "$(_class_below "$icls")" "unservable: $icls at or above the ceiling on every candidate lane"
+    strc=0
+  fi
   if [[ "$strc" -ge 2 ]]; then
     # NOBODY CAN SAY — which is NOT "no destination exists". Stranding here
     # would be a fabricated positive claim (the #67 review's S5); returning
@@ -14183,6 +14313,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
         2) uword=crosspool ;;   # the crossing record, asked about cur and about home
         3) uword=project ;;     # the row's own registry field, re-read at the inner seam
         4) uword=pool ;;        # the pool rule against cur — the tag under `$POOLS_DIR`
+        5) uword=classwindow ;;   # the class window — the sweep's share for fable, the seven-day figure otherwise — on the lanes that could take the session
         *) uword="rc$strc" ;;   # deliberately unreachable: the next code added upstream
       esac
       _tick_undecidable "$id" "$uword"

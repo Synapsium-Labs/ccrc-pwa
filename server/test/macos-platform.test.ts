@@ -68,17 +68,14 @@ describe('the platform block is one definition, spelled in two files', () => {
     expect(ccd).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
   });
 
-  // ROUTING SPEC §5.4's `_svc_gate` (`ccd/ccd`, wrapper class -> keep-or-take
-  // the class) is a coincidental name collision with this file's `_svc_`
-  // vocabulary, not a platform-layer helper: its `svc` abbreviates
-  // "serviceable", not launchd/systemd's "service", and it lives beside
-  // `_serviceable`/`_share_pct`/`_class_below` (the routing clause, ccd/ccd
-  // ~:13135) by design — moving it into the platform block would separate it
-  // from the functions it is the twin of. Named here, the same way
-  // `single-definition.test.ts` names a real exception rather than loosening
-  // the pattern that would let a genuine platform helper slip past this
-  // guard uncaught.
-  const NOT_PLATFORM_SVC = new Set(['_svc_gate']);
+  // NO EXEMPTION SET, and that is the point (controller ruling S3-R1). Routing
+  // slice 3 briefly shipped `_svc_gate` — the serviceability keep-or-take gate
+  // — outside the sentinels, and paid for it with a name-only entry here. An
+  // exemption set is a hole the width of whatever is in it: the guard exists
+  // to make a genuine platform helper appended below the END sentinel a red
+  // suite, and every name it is told to ignore is one that cannot red. The
+  // helper was renamed `_class_gate` instead, which is what it is named for
+  // anyway — the CLASS it gates, not launchd/systemd's "service".
 
   it('holds every _plat_/_svc_ definition INSIDE the sentinels, in both files', () => {
     // The pin above compares only the sliced region, so it is exactly as
@@ -91,7 +88,6 @@ describe('the platform block is one definition, spelled in two files', () => {
       const end = src.indexOf('# ── END PLATFORM LAYER');
       expect(end, `${name}: END sentinel missing`).toBeGreaterThan(start);
       for (const m of src.matchAll(/^(?:_plat_|_svc_)[a-z0-9_]+\(\)/gm)) {
-        if (NOT_PLATFORM_SVC.has(m[0].slice(0, -2))) continue;
         expect(m.index, `${name}: ${m[0]} sits outside the platform-block sentinels`)
           .toBeGreaterThan(start);
         expect(m.index, `${name}: ${m[0]} sits outside the platform-block sentinels`)

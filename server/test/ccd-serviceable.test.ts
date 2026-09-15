@@ -73,6 +73,13 @@ describe('the twinned constants and the ladder', () => {
       expect(h.sh(`_class_below ${c}`)).toBe(classBelow(c) ?? '');
     }
     expect(h.sh('_class_below default')).toBe('');
+    // THE EMPTY WORD, and it is NOT the same shape as `default` (controller
+    // ruling S3-R2): the bash loop seeds `prev=""` and matches on the first
+    // word, so before its guard `_class_below ""` printed the TOP rung — a
+    // fabricated class where the honest answer is "there is no rung". The L0
+    // twin is typed (`ModelClass`) and cannot be asked this, so the pin has to
+    // live on the bash side alone.
+    expect(h.sh("_class_below ''")).toBe('');
   });
 });
 
