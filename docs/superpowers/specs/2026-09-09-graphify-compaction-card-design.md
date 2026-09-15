@@ -31,8 +31,9 @@ and rejected (a helper-held lock — node core has no `flock` binding; a helper 
 critical section across two inodes), and accepting the race outright is forbidden by §3.0's own rule. §3.0's
 ownership paragraph, §3.1's protocol, §3.2's helper contract, §3.4's artifact table and wait constants, and
 §10's residual are rewritten to this ruling. Tasks 5 and 6's already-shipped `slotIsMine`/rollback code is
-superseded, not rewritten, by Task 9 — recorded there and in the D-2605 ledger entry, not pretended away. Plan A is written and Tasks 1–8
-are implemented; Task 9 is not. **Round 8 (2026-09-13) closes the provenance channel round 7's argv change
+superseded, not rewritten, by Task 9 — recorded there and in the D-2605 ledger entry, not pretended away. Plan A is written, and Tasks 1–8
+were the implemented set when round 7 landed; Tasks 9, 10 and 11 followed, and the IMPLEMENTATION STATUS
+paragraph below this block is the current one. **Round 8 (2026-09-13) closes the provenance channel round 7's argv change
 severed, and ten further Important findings from the same two-review round, entirely within this
 already-allocated D-2605 scope — no new deviation number.** Option A's helper lost its only source for
 `parentLive`/`liveAgents` when `--set` left its argv — it used to re-read them off the canonical set — and
@@ -86,6 +87,28 @@ carrying `steered`" and its two-condition `iff`, the hold-section fork enumerati
 `2026-09-02-graphify-read-side-ccrc-level-design.md` (R1, R4, R5), and the gpt-lane wedge plan
 `plans/2026-09-08-gpt-lane-compaction-wedge.md` (PR #70, merged 2026-09-09 10:26 UTC), which fixed the
 *cost* of compaction on that lane and left its *content* untouched. This spec is about the content.
+
+**IMPLEMENTATION STATUS — LANDED (2026-09-15, Plan A Task 11).** Every mechanism this document specifies for
+Plan A is in the tree, and each anchor below was measured there for this paragraph, so the future tense that
+survives in §§2–3.4 and §5 reads as the record of what was built rather than as a promise. **Task 9** shipped
+the hook's stable lock, the row generation, the exact-family lifecycle and the journal transaction:
+`_hook_lock_acquire` opens a private alias named `lock-open` (`ccd/session-hook.sh:1053`) and never the
+canonical pathname, the pre-mutation identity re-check is `_hook_lock_still_canonical` (`:1191`), the record
+predicate is `JOURNAL_RECORD_PRED` with sixteen keys and no persisted ordinal (`:2364`), and the journal
+commits by `mv -f "$stage" "$journal"` under the reacquired lock (`:1767`). `ccd` carries the twinned
+`COMPACT_LOCK_WAIT` and the three-status `_reg_purge` (`ccd/ccd:2238`), and all four of its callers branch on
+that status rather than on a boolean — `_rm_prc` (`ccd/ccd:5667`), `_rt_prc` (`:12013`), `_pr_prc` (`:12595`)
+and `_fg_prc` (`:16642`). §4's mechanism-absent row and §3.4's decline paragraph describe those arms as they
+stood BEFORE that build, and the ledger's D-2782 and D-2793 record the build itself. **Task 10** shipped the
+helper beside the hook through every door the hook goes through: `install_atomic ccd/compact-card.mjs` in the
+agent lane (`deploy/deploy.sh:639`) with the backup clause one door above it (`cp -a
+~/.cc-sessions/compact-card.mjs`, `deploy/deploy.sh:561`), `_inst_atomic` in `ccrc install`
+(`ccd/ccrc:5222`), `_upd_backup_copy` in `ccrc update` (`ccd/ccrc:6538`), and the matching removal line
+`"$reg/compact-card.mjs"` in `ccrc uninstall`'s own list (`ccd/ccrc:7145`). **Task 11** is this documentation
+pass, the Step-1 contract sweep and the committed-byte audit; it builds no mechanism at all and edits no
+`ccd/ccd`. **What is still owed is Plan B and Plan C, and nothing else:** §3.5's steering text and §3.6's wire
+and chip are unbuilt by design, Plan A prints nothing at `PreCompact` or `PostCompact`, no `FleetSession`
+field carries a compaction, and the per-session journal is the only input either plan will have.
 
 The operator's objective, verbatim: **"it's about fidelity and size."**
 
@@ -916,8 +939,10 @@ names, so D-2605's locked exact-ID purge owns every residual family in §3.4 and
 The already-implemented Task 1–8 helper rewrite above does not carry the hook document's ordinary
 `overlap:false`; D-2605 therefore defines absent as legacy ordinary/false. The helper is never invoked for an
 `overlap:true`/ambiguous scope because PreCompact stops before step 8 of §3.1's protocol. The pre-Task-9
-helper code still emits its old direct-to-canonical temporary/rollback basenames; the migration paragraph
-above, not this target-shape prose, governs their transition to the two hook-named stage paths.
+helper code emitted direct-to-canonical temporary and rollback basenames, and the migration paragraph
+above, not this target-shape prose, governed their transition to the two hook-named stage paths. That
+transition has LANDED: the helper writes `o.setStage` (`ccd/compact-card.mjs:487`) and `o.cardStage`
+(`:489`) and holds no rollback function and no canonical writer of any kind.
 
 Exit codes: 0 both stages written (set-stage and card-stage); 3 empty working set (set-stage written with
 `files: []`, no card-stage); 2 usage (which now includes an out-of-vocabulary `--parent-live`/`--live-agents`
@@ -1096,8 +1121,9 @@ purge. `.generation` and any private generation residue block slug reuse (Task 9
 
 #### Exact lifecycle family inventory
 
-This is Task 9's exhaustive **target** compaction-lifecycle pathname inventory, not a claim about the current
-pre-Task-9 implementation. Before either ordinary PreCompact age recovery or `_reg_purge` selects a private
+This is Task 9's exhaustive **target** compaction-lifecycle pathname inventory. When it was written it made no
+claim about the then-current pre-Task-9 implementation; since Task 9 landed it is also what the tree carries.
+Before either ordinary PreCompact age recovery or `_reg_purge` selects a private
 artifact from it, Task 9 migrates every pre-D-2605 hook/helper set/card temporary producer named in the
 transition paragraph below to these target families, and deletes every rollback producer outright (there is
 no target-family successor for a rollback name, because option A gives nothing left to roll back). A checker
