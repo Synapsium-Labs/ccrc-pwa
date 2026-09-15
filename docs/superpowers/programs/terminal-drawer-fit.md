@@ -12,7 +12,7 @@ scrollback it exists to render.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) — **6/6 CI green, MERGEABLE** | **review complete; awaiting a non-author approval** |
+| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) @ `9b472a20`, merged with main | **review complete; awaiting a non-author approval** |
 | 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | planned |
 | 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
 | 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
@@ -72,6 +72,49 @@ refused and reported. That refusal is the protocol working against a bad instruc
   the mock prepended) and the fake is faithful (xterm 6.0.0's `BufferService.scrollLines` is
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
+
+### The merge that four false counts survived — and the guard that caught them (2026-09-15)
+
+Wave 1 sat fourteen hours waiting for an approval, and `main` moved seven commits underneath it. The
+branch acquired a conflict; the interesting part is what the conflict did **not** show.
+
+```
+base fb19772e :  47 + 28 = 75      toBe(75)
+origin/main   :  47 + 29 = 76      toBe(76)   ← #105 added an EXEMPT route
+ws/plain-basin:  48 + 28 = 76      toBe(76)   ← this wave's NON-exempt pane/history route
+merged        :  48 + 29 = 77
+```
+
+Both parents reach 76 by **different arithmetic**. Git sees the identical `75→76` edit on both sides,
+auto-merges the assertion to 76 **with no marker**, and puts the marker on the prose above it — so the
+one line actually false on the merged tree is the one git will not show you.
+
+**Three further counts were falsified with no conflict at all**, because both parents said the same
+number and only the merge made it wrong: `auth-gate.test.ts:778` (73→74 HTTP routes), `:372`
+(76→77 scanned) and `auth/gate.ts:8` (73→74). Nobody found those by reading. **`auth-gate.test.ts`'s
+own D-1223 mechanism found them** — a block that scans this file's prose against counts derived at
+runtime, written two builds ago for an unrelated reason. The coordinator re-proved it by mutation:
+break one count and it reds naming the derived value beside the claimed one.
+
+**The lesson, and it generalises past this repo:** a merge is a tree neither author ran, so a number
+measured correctly on each parent can be false on the merge — and the conflict marker lands where the
+*prose* differs, not where the *assertion* is wrong. Identical edits on both sides are exactly the
+ones git will not flag. The only thing that catches this class is a guard that derives the number
+and checks the prose against it. On this merge, one such guard stood between the tree and four false
+counts.
+
+**Merged, never rebased.** A rebase would have rewritten the twelve cherry-picked commits and
+silently re-authored work belonging to PR #96's author. Verified at the merged tip: 12 commits still
+carry Oleksandr Zakharov as Author and 12 still carry their `cherry picked from commit` lines.
+
+Guards at the merged tip: 7 files / 359 tests green (auth-gate, box-token-census, single-definition,
+deviation-refs, pane-history-route, pty, dtbd). CI five of six green, `test-macos` running.
+
+**The flake surface is wider than CLAUDE.md's five, measured not guessed.** At load 39.8→47.6 on 16
+cores the first full server run failed 7 files (six were 20–30 s *timeouts*, not assertions) and the
+first full pwa run failed 10; all passed in isolation and on re-run. New names for wave 4's list:
+`boot`, `ccd-ws-audit`, `ccd-ws-reap`, `ccrc-account`, `ccrc-doctor`, `ccrc-install-graphify`,
+`ccrc-install`, and pwa's `contrast` — eight, against a documented five.
 
 ### Wave 1: review COMPLETE, 2026-09-14
 
