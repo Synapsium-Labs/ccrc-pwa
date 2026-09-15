@@ -2148,8 +2148,12 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(probe, `${leg.verb}: and the acquire says which refusal it is`).toContain('WHY=lock-path-occupied');
       const tokened = runVerb(leg.snippet);
       expect(tokened.status, `${leg.verb}: a refused acquire is not a success`).not.toBe(0);
-      expect(tokened.stderr, `${leg.verb}: the die names the lock it could not take`)
-        .toContain('compactions.lock');
+      // BY ITS FULL PATHNAME, not merely `compactions.lock`: the id is the
+      // operator's only handle on WHICH row wedged, and this message is the
+      // only place either verb ever prints it. Corrupting the id in either
+      // die string is otherwise invisible.
+      expect(tokened.stderr, `${leg.verb}: the die names the lock it could not take, by its own pathname`)
+        .toContain(lockOf(leg.id));
       expect(tokened.stderr, `${leg.verb}: and the token the acquire measured`)
         .toContain('lock-path-occupied');
       expect(tokened.stderr, `${leg.verb}: and WITHDRAWS the retry it prescribed one clause earlier`)
@@ -2163,6 +2167,8 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       try { contended = runVerb(leg.snippet); } finally { release(); }
       expect(contended.status, `${leg.verb}: a contended acquire is not a success either`).not.toBe(0);
       expect(contended.stderr, `${leg.verb}: and this one DOES prescribe the retry`).toContain('retry');
+      expect(contended.stderr, `${leg.verb}: naming the same pathname it did in the tokened direction`)
+        .toContain(lockOf(leg.id));
       expect(contended.stderr, `${leg.verb}: which it must not then withdraw — a wait ends this one`)
         .not.toContain('EXCEPT that a retry cannot help here');
       expect(contended.stderr, `${leg.verb}: and it names no token, because the acquire measured none`)
