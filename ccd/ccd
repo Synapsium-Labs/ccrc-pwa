@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8cffe6592d0ffb974213b96bef0ba642e59faa04d7484380cc3aa65c0e82285e
+# ccrc:generated 1 sha256=15333aa6caa1cd82015d2d053f69eae8faacc0d3a1832fdf228363f085e9541b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -11863,7 +11863,9 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
   # `_ws_reap_tail` is post-action by construction — the worktree, branch and
   # clips are already gone by the time it runs — so a refusal here is a
   # FAILURE. It is unreachable on a FLOCK-less box, and deliberately so:
-  # `cmd_ws_reap` dies at its own `command -v flock` gate (`ccd/ccd:10732`) and
+  # `cmd_ws_reap` dies at its own `command -v flock` gate (`ccd/ccd:10897`,
+  # re-measured r6 — this citation had already drifted to :10732 before this
+  # round, and this round's own line insertions moved it further) and
   # `_lc_refuse` "EMITS, THEN DIES. Never returns."
   #
   # BUT NOT ON EVERY MECHANISM-ABSENT BOX, and the sentence that stood here

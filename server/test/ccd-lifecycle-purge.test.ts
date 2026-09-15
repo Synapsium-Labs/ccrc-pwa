@@ -1404,7 +1404,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
    *  about — the same reason the `ws-gc --prune` leg above calls
    *  `_ws_gc_prune_row` directly rather than the full `cmd_ws_gc` sweep. Going
    *  a level under `cmd_ws_reap`'s own dispatch also goes under its OWN
-   *  outer `command -v flock` gate (`_ws_reap_locked`, ccd/ccd:10732) — a
+   *  outer `command -v flock` gate (`_ws_reap_locked`) — a
    *  SECOND, unrelated flock check that gates this file's NOFLOCK legs for
    *  nothing (see the comment heading `describe` above), which is why (d1)'s
    *  own filter keeps this leg out below. */
