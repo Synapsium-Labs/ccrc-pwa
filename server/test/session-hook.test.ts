@@ -6895,6 +6895,24 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // Each one points into a file this task rewrote, which is what the TOUCHED
     // assertion below keeps true.
     //
+    // FIX ROUND 4 moves it once more, by the same method and with the same
+    // instrument: the audit was run unchanged against a `git archive` of this
+    // round's own base (3bfd759b) and of this tip, and the two failure sets
+    // diffed. EXACTLY ONE new, none repaired, and it is a line shift under an
+    // anchor that had already drifted — no rule changed and no document gained
+    // a citation.
+    //   new: `ccd/ccd:6838`, shifted off its referent by A-M3's four
+    //        conditional purge remedies. It is the anchor round 3 recorded as
+    //        REPAIRED, and the repair was a COINCIDENCE rather than a referent:
+    //        the clause at spec `:2121` cites `cmd_ws_restore`'s
+    //        `:6780`/`:6838`/`:6844` triple, `:6780` and `:6844` were stale at
+    //        this round's base as well as at its tip (measured, both failure
+    //        sets), and the line that briefly stood at `:6838` was an
+    //        `_lc_done archive` inside `cmd_ws_archive`. All three now read
+    //        alike, which is the honest state of that triple and the
+    //        stale-by-construction debt D-2758 parks in Task 11.
+    // So `ccd/ccd` 131 -> 132.
+    //
     // EXACT, so a NEW stale citation reds and so a REPAIR reds too — with this
     // message — rather than leaving the number stating a debt that is no longer
     // there. RE-MEASURE AND LOWER THE CENSUS; never widen the rule.
@@ -6902,7 +6920,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 131,
+      'ccd/ccd': 132,
       'ccd/session-hook.sh': 43,
       'ccd/compact-card.mjs': 7,
       'server/test/ccd-workspaces.test.ts': 7,
@@ -6914,7 +6932,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(201);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(202);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a

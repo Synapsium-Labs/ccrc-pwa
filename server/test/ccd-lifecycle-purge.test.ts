@@ -1484,6 +1484,86 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     }
   }, 180_000);
 
+  // ── (d1c) CANONICAL VANISHED — status 1's SECOND condition (r4 A-M3) ────
+  // `_compact_lock_acquire` answers 1 for ordinary contention AND for a
+  // permanent lock unlinked out of contract under a live holder, and tells
+  // them apart only in COMPACT_LOCK_WHY. `_reg_purge` collapses both into
+  // status 1, and every caller's detail asserted the contention story — which
+  // in this state names a pathname that does not exist and prescribes a wait
+  // that cannot end, because this file deliberately never mints a second inode
+  // over a live holder and no compliant path recreates the file. (d1b) above
+  // is the CONTROL that keeps the two apart: it drives the same status with
+  // COMPACT_LOCK_WHY empty and asserts the contention sentence survives.
+  /** A holder through the SHIPPED acquire, which is what makes the /proc arm of
+   *  `_compact_lock_vanished` answer: a holder past its acquire has unlinked
+   *  its `lock-open` alias and keeps only a descriptor, so a fixture that opens
+   *  canonical directly (as `holdCompactLock` does) leaves nothing for the walk
+   *  to find and the next acquire MINTS instead of refusing. */
+  /** The terminal fact this leg reads, for all THREE verbs: `ws-rm` and
+   *  `forget` FAIL (the purge follows an irreversible act) while
+   *  `ws-gc --prune` REFUSES (it reaches the purge before anything
+   *  irreversible), so the shared `purgeRefusal` above — which requires a
+   *  `failed` — covers only two of the three and the gc caller is the one
+   *  r3 A-I3 found unpinned. */
+  const purgeTerminal = (leg: typeof LEGS[number]): { token: string; detail: string } => {
+    const terminal = eventsOf(h.home, leg.act)
+      .filter((e) => e['outcome'] === 'failed' || e['outcome'] === 'refused');
+    expect(terminal, `${leg.verb}: exactly one terminal fact`).toHaveLength(1);
+    expect(purges(), `${leg.verb}: and NO purge-done`).toBe(0);
+    expect(h.reg(leg.id, 'uuid'), `${leg.verb}: the row still stands`).not.toBeNull();
+    return { token: String(terminal[0]!['refusal'] ?? ''), detail: String(terminal[0]!['detail'] ?? '') };
+  };
+  const holdViaAcquire = async (id: string): Promise<() => void> => {
+    const child = spawn('bash', ['-c',
+      `source "${CCD}"; _compact_lock_acquire ${id} 5 || { echo "ACQRC=$?"; exit 1; }; echo held; exec sleep 20`],
+      { cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+    let out = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`the holder never acquired: ${out}`)), 10_000);
+      child.stdout.on('data', (d: Buffer) => { out += d.toString(); if (out.includes('held')) { clearTimeout(t); res(); } });
+      child.stderr.on('data', (d: Buffer) => { out += d.toString(); });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
+  };
+
+  it('(d1c) all four purge callers tell CANONICAL-VANISHED from CONTENTION, and neither prescribes the other remedy', async () => {
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      // A REAL HOLDER FIRST, then the out-of-contract unlink. Nothing in this
+      // tree unlinks the permanent lock — `_reg_purge` skips it BY NAME and
+      // `_ws_private_family` excludes it — so this is a stranger, which is the
+      // condition §4 rules on.
+      const release = await holdViaAcquire(leg.id);
+      let vanished: { token: string; detail: string };
+      try {
+        fs.unlinkSync(lockOf(leg.id));
+        // THE PRECONDITION, MEASURED rather than assumed: the acquire really
+        // does answer 1 with this WHY here, so the leg below is driving the
+        // condition it names and not an ordinary contention.
+        const probe = h.sh(`_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+        expect(probe, `${leg.verb}: the fixture is in the canonical-vanished state`).toContain('RC=1');
+        expect(probe, `${leg.verb}: and the acquire says which refusal it is`).toContain('WHY=canonical-vanished');
+        leg.run('');
+        vanished = purgeTerminal(leg);
+      } finally { release(); }
+      // The TOKEN is unchanged — this is still status 1, and a fourth status
+      // with four new caller arms is what `_hook_lock_still_canonical`'s own
+      // note says this level does not have. What changes is the SENTENCE.
+      expect(vanished.token, `${leg.verb}: still status 1`).toBe('purge-refused');
+      expect(vanished.detail, `${leg.verb}: names the condition the acquire measured`).toContain('canonical-vanished');
+      expect(vanished.detail, `${leg.verb}: and says why a re-run cannot help`)
+        .toContain('has been unlinked while a live holder still owns its inode');
+      expect(vanished.detail, `${leg.verb}: and names the remedy that can`).toContain('by hand');
+      // THE FALSE CLAUSE IS GONE, asserted as an absence because that is
+      // exactly what the conflation put here, verbatim.
+      expect(vanished.detail, `${leg.verb}: it no longer prescribes a wait that cannot end`)
+        .not.toContain('once the compaction settles');
+    }
+  }, 180_000);
+
   it('(d3) THE SWEEP REACHES THE NEXT ROW: a declining row does not truncate `ws-gc --prune`', () => {
     // The plan requires the arity pin to ship "with the behaviour control that
     // the `ws-gc --prune` forced-refusal fixture must still reach the NEXT

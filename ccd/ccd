@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=da415bb2aaa630aa189531e48f0648ca64d7527c4ce467a29b80bdf80d716d55
+# ccrc:generated 1 sha256=fb4487639485e4108a88739fba6b73a0efee48c22fb41f8a3c5b3ef58b61071a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5433,8 +5433,21 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     echo "ccd: $id: torn down, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
   elif (( _rm_prc != 0 )); then
+    # STATUS 1 IS TWO CONDITIONS (r4 A-M3). `_compact_lock_acquire` answers 1
+    # for ordinary contention AND for `canonical-vanished` — the permanent lock
+    # unlinked out of contract while a live holder still owns its inode — and
+    # tells them apart only in COMPACT_LOCK_WHY, which nothing clobbers between
+    # `_reg_purge`'s return and here. The contention sentence is FALSE in the
+    # second state twice over: it names a pathname that does not exist at that
+    # instant, and it prescribes a wait that cannot end, because this file
+    # deliberately never mints a second inode over a live holder and no
+    # compliant path recreates the file. That is the same argument
+    # `cmd_ws_add` and `cmd_start` make at their own acquire sites, one level
+    # up; this is it one level down, where the record is DURABLE.
+    local _rm_why="$REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd ws-rm $id\` once the compaction settles"
+    [[ -z "${COMPACT_LOCK_WHY:-}" ]] || _rm_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run"
     _lc_fail destroy "$id" "$lctx" purge-refused \
-      "the workspace was torn down, but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd ws-rm $id\` once the compaction settles" \
+      "the workspace was torn down, but the registry row could not be purged: $_rm_why" \
       verb ws-rm dec.reason "$reason"
     echo "ccd: $id: torn down, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -11746,8 +11759,21 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     echo "ccd: $id: reaped, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
   elif (( _rt_prc != 0 )); then
+    # STATUS 1 IS TWO CONDITIONS (r4 A-M3). `_compact_lock_acquire` answers 1
+    # for ordinary contention AND for `canonical-vanished` — the permanent lock
+    # unlinked out of contract while a live holder still owns its inode — and
+    # tells them apart only in COMPACT_LOCK_WHY, which nothing clobbers between
+    # `_reg_purge`'s return and here. The contention sentence is FALSE in the
+    # second state twice over: it names a pathname that does not exist at that
+    # instant, and it prescribes a wait that cannot end, because this file
+    # deliberately never mints a second inode over a live holder and no
+    # compliant path recreates the file. That is the same argument
+    # `cmd_ws_add` and `cmd_start` make at their own acquire sites, one level
+    # up; this is it one level down, where the record is DURABLE.
+    local _rt_why="$REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run once the compaction settles"
+    [[ -z "${COMPACT_LOCK_WHY:-}" ]] || _rt_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run"
     _lc_fail reap "$id" "$lctx" purge-refused \
-      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run once the compaction settles" \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $_rt_why" \
       verb ws-reap meas.branch "$branch"
     echo "ccd: $id: reaped, registry NOT purged — see the lifecycle journal" >&2
     return 1
@@ -12306,8 +12332,21 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         _gc_declined "dead registry entry $project-$slug — this box cannot take the compaction lock at all (flock, mktemp or link is off the PATH); nothing was removed"
       elif (( _pr_prc != 0 )); then
+        # STATUS 1 IS TWO CONDITIONS (r4 A-M3). `_compact_lock_acquire` answers 1
+        # for ordinary contention AND for `canonical-vanished` — the permanent lock
+        # unlinked out of contract while a live holder still owns its inode — and
+        # tells them apart only in COMPACT_LOCK_WHY, which nothing clobbers between
+        # `_reg_purge`'s return and here. The contention sentence is FALSE in the
+        # second state twice over: it names a pathname that does not exist at that
+        # instant, and it prescribes a wait that cannot end, because this file
+        # deliberately never mints a second inode over a live holder and no
+        # compliant path recreates the file. That is the same argument
+        # `cmd_ws_add` and `cmd_start` make at their own acquire sites, one level
+        # up; this is it one level down, where the record is DURABLE.
+        local _pr_why="$REG/.$project-$slug.compactions.lock was unavailable; the registry row is untouched"
+        [[ -z "${COMPACT_LOCK_WHY:-}" ]] || _pr_why="$COMPACT_LOCK_WHY — $REG/.$project-$slug.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help; the registry row is untouched, and if no holder remains, restore $REG/.$project-$slug.compactions.lock by hand"
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
-          "$REG/.$project-$slug.compactions.lock was unavailable; the registry row is untouched" \
+          "$_pr_why" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
         _gc_declined "dead registry entry $project-$slug — the compaction lock was unavailable; nothing was removed"
       else
@@ -16315,8 +16354,21 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     echo "ccd: $id: unsupervised and killed, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
     return 1
   elif (( _fg_prc != 0 )); then
+    # STATUS 1 IS TWO CONDITIONS (r4 A-M3). `_compact_lock_acquire` answers 1
+    # for ordinary contention AND for `canonical-vanished` — the permanent lock
+    # unlinked out of contract while a live holder still owns its inode — and
+    # tells them apart only in COMPACT_LOCK_WHY, which nothing clobbers between
+    # `_reg_purge`'s return and here. The contention sentence is FALSE in the
+    # second state twice over: it names a pathname that does not exist at that
+    # instant, and it prescribes a wait that cannot end, because this file
+    # deliberately never mints a second inode over a live holder and no
+    # compliant path recreates the file. That is the same argument
+    # `cmd_ws_add` and `cmd_start` make at their own acquire sites, one level
+    # up; this is it one level down, where the record is DURABLE.
+    local _fg_why="$REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd forget $id\` once the compaction settles"
+    [[ -z "${COMPACT_LOCK_WHY:-}" ]] || _fg_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run"
     _lc_fail forget "$id" "$lctx" purge-refused \
-      "the session was unsupervised and its pane killed, but the registry row could not be purged: $REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd forget $id\` once the compaction settles" \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: $_fg_why" \
       verb forget dec.reason "$reason"
     echo "ccd: $id: unsupervised and killed, registry NOT purged — see the lifecycle journal" >&2
     return 1
