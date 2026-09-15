@@ -7007,3 +7007,40 @@ Also told the worker: `origin/main` is `47eff69a`, and the server suite needs sh
 Next expected mail: `wave-done` with the fingerprint object. Then: re-measure (`runs advance`),
 review, merge (hand-written body, says SERVER LANE ONLY), deploy the server lane, close run 47 —
 **the last wave: closing it retires the programme, which is correct this time.**
+
+### 2026-09-15 15:4x UTC — wave-done (mail 1285) re-measured, run 47 at `awaiting-review`, review dispatched
+
+Worker mail 1285 (`status`, `wave-done`): Tasks 1–9 done, PR #114 open at `d06b6103`, fingerprint
+object on its own line — `{branchTip: d06b6103…, prNumber: 114, prPhase: "open", handoffCommit:
+d06b6103…}`.
+
+**Re-measured here before submitting:** `origin/ws/clear-meadow` = local `ws/clear-meadow` =
+`d06b6103`; PR #114 head `d06b6103`, base `main`, six CI legs SUCCESS (`test-macos` included),
+MERGEABLE / BLOCKED on approval; `git diff 47eff69a d06b6103 -- server/src shared agent/src pwa/src
+ccd/ deploy/` is one `deploy.sh` echo plus comment lines in `config.ts` and `deploy.sh` — the "no
+shipped-source change outside comments" claim holds; 6 files, +704/−12 (the sixth is the plan's
+Deviations section). D-2827/2828/2829 defined at plan `:1375`/`:1390`/`:1400` exactly as issued in
+1279 — the deploy consequence inside 2827, the 13-vs-10 surface inside 2828, the actually-reddening
+test named in 2829, the four predicted-output corrections un-numbered beneath.
+
+**Advanced** `dispatched → working` (empty-claim shape) → `awaiting-review` with the worker's
+fingerprint submitted UNCHANGED; the server's re-measurement answered `ok` both times. Items 339–347
+settled `done` (9/9) — ids read from `runs items-list`, never guessed.
+
+**Review in progress:** two Opus reviewers on a detached, disposable worktree at `d06b6103`
+(`scratchpad/review-wave6`; `server/node_modules` linked from the review-runs worktree), package
+`review-wave6-package.md` (1052 lines, base `47eff69a`). Lens A: prose truth — every claim in
+README / CLAUDE.md / `config.ts` / `deploy.sh` and the three D entries read against the source it
+describes, the no-overloaded-null rule applied to sentences. Lens B: pin quality — the 25 assertions
+classified derived-vs-shape, at least six one-change mutations including the D-2827 inverted pin's
+three arms and D-2829's slot test, the deviation entries checked against the diff. Verdicts land in
+`review-wave6-A.md` / `-B.md`.
+
+**Ruling (the worker's one open question):** the plan's checkboxes stay UN-ticked. Waves 1, 3 and 4's
+plans are 0-ticked on this branch, so plans here are historical records, not live trackers; ticking
+one wave's boxes would make the set lie about the others. Costs if wrong: nine checkbox edits.
+
+Next: verdicts → (fix round by `fix-round` mail if needed) → `advance` to `merging` → operator
+approval → squash with the hand-written body (SERVER LANE ONLY) → server-lane deploy → close run 47
+`final:true`, which RETIRES the programme — correct for the last wave. #108 is still open beside it;
+if both merge, one server deploy carries both and #108's agent lane follows.
