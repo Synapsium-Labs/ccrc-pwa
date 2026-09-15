@@ -6925,3 +6925,48 @@ carries clause 12, whose server half must exist); the cap change frees idle slot
 
 Run 47 (wave 6/6) is still `planned`, still `cap-concurrency 7/7` at the last retry — the very block this branch removes.
 Once #108 deploys, the two `bug-fix-waves` runs at `awaiting-review` stop counting and wave 6 can dispatch.
+
+---
+
+## 2026-09-15 14:5x UTC — "why are we stalled?" — three stalls measured, two cleared, one is the operator's
+
+The operator asked. Measured, not recalled:
+
+**1. Run 47 (wave 6/6) was dispatchable and nobody had retried.** The deployed cap is
+`dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')` (`origin/main` `store.ts:2628`), and the
+rows that pinned it at 7/7 yesterday have since closed. At 13:2x UTC the count was **5 of 7** — two
+slots free for hours, run 47 still `planned`, because my last retry was 15:29 UTC yesterday and my
+standing note said "once #108 deploys". The note tied the retry to one event when the condition was a
+number. **Dispatched 13:30 UTC**: `{"ok":true,"sessionId":"ccrc-pwa-clear-meadow","resumed":true,
+"briefQueued":true,"skillState":"present"}`, brief unchanged from `dispatch47.json` (composed
+2026-09-14 11:57). The worker measures `running`, `deliverable: yes`, held on `run:47`. Usage now 6 of 7.
+
+**2. PR #108 was CONFLICTING.** `main` moved under it by two PRs (#105 routing slices 0+1, #112
+D-2765); `git merge-tree` showed ONE conflict, `store.ts`'s L0 import list — `RunSignals` (#105)
+against `RunKind` (this branch). Both kept, everything else auto-merged: **`890cff3e`**. Re-verified on
+the merged tree. The server suite no longer fits one 590 s foreground run on this box, so it went in
+shards whose union is the whole list (1/3, 2/3, 5/6, 6/6): **320 files, 9552 passed, 63 skipped, 2 red**,
+both timing tests. `boot` green in isolation. `session-hook`'s p95 ratio red twice (4.77 under the
+suite, 4.23 alone), then green alone and green at plain `main` as a control; this branch touches
+neither `ccd/session-hook.sh`, its installer, its test nor `ccd/ccd`; box load 22–40 on 16 cores.
+Ruled a load flake; CI is the arbiter. Agent 18 files / 295. PWA 84 / 2493 with two `contrast`
+timeouts under the suite, green in isolation. `tsc --noEmit` clean ×3. `deviation-refs` **31/31 against
+the NEW main** — #105 minted inside my number range and the interleaving is clean. Pushed; GitHub says
+**MERGEABLE, BLOCKED** — the approval only the operator gives.
+
+**3. Run 42 (ccd-queue) waited four days on a ruling that never left this branch** — see the ccd-queue
+ledger's entry of the same hour. Its condition (b), account-pools' slot taken, is now true; its
+condition (a), D-2475 on `main`, had no owner because the correction (`c2921c4c`) lived on
+`ws/amber-summit` and no PR carried it. **PR #113** now does, one file off `origin/main`.
+
+**The operator's part:** approve-and-merge #108 (`--admin`; then close #103), deploy **SERVER FIRST**
+then agent, merge #113. Whether run 42 then takes the seventh slot is surfaced, not taken.
+
+**Ruling:** dispatch run 47 the moment the measured count allowed it, without waiting for #108 — the
+condition was a number, not an event. Costs if wrong: nothing; the dispatch is the wave the programme
+exists to run.
+**Ruling:** merge `main` into `feat/review-runs` and resolve the one-line conflict myself. Costs if
+wrong: one merge commit on a branch that squashes anyway.
+**Ruling:** `session-hook`'s ratio red is load, on three measurements (control at `main` green, second
+isolated run green, branch touches nothing it reads). Costs if wrong: CI reds on a file this branch
+does not change, and says so.

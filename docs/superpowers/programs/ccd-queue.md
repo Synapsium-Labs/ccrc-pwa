@@ -95,3 +95,21 @@ sequence runs would be me creating the cap refusal I complained about two entrie
 **Standing position, so the next reader does not have to re-derive it:** run 42 dispatches when the
 Part D correction is on `main` AND the account-pools wave-5 handoff has taken its slot — in that
 order. The brief and its 25 items are unchanged and still measure inside both ceilings.
+
+## 2026-09-15 14:5x UTC — condition (b) is met; condition (a) goes to main as PR #113
+
+The standing position above had two conditions. **(b) is met**: account-pools' wave 6 (run 47)
+dispatched 13:30 UTC into a freed slot; usage 6 of 7. **(a) was never going to happen by itself** —
+D-2475's correction (`c2921c4c`) sat on `ws/amber-summit`, a ledger branch no PR carries, for four
+days, and the position named the blocker without naming who moves it. Moved: **PR #113**, a fresh
+branch off `origin/main` (`47eff69a`) carrying the plan file alone — 23+/4−, exactly the D-2475 delta
+(headline, D7, D-2376's pointer, the D-2475 entry). `deviation-refs` 31/31 on that branch; CI green;
+MERGEABLE, BLOCKED on approval.
+
+**Run 42 stays `planned` until #113 merges** — a worker cuts from `origin/main`, and dispatching
+before that hands it the twelve-site headline this ledger ruled wrong. Once it merges, the seventh
+slot is a judgment surfaced to the operator, not taken: the fleet would sit at 7/7 until #108's cap
+change (idle states stop counting) deploys, after which the question dissolves.
+
+**Ruling:** carry D-2475 by a one-file PR, not by a PR from the 146-commit ledger branch. Costs if
+wrong: one more docs PR to review.
