@@ -110,9 +110,59 @@ describe('_serviceable over SERVICEABILITY_CASES — four exit codes, and the L0
     const cfg = loadConfig({ CCRC_HOME: h.home });
     const limits = await readLimits(localIO, cfg, t0);
     const shares = await readSharesMeasured(localIO, cfg.registryDir);
-    const v = serviceability(c.cls, { anthropic: c.lane === 'claude', seven: sevenOf(limits[c.lane]), share: shareFor(shares, c.lane) }, t0);
+    // `anthropic` IS READ FROM THE ROSTER, not hand-computed from the lane's
+    // name (Task 3 minor, deferred). This arm was `c.lane === 'claude'` — a
+    // third statement of the fact the fixture header promises nothing here
+    // re-derives, and the one the BASH arm reads from `accounts.sh`'s
+    // `CCRC_ANTHROPIC_BACKEND` projection of the same roster. Both sides now
+    // read `DEFAULT_TEST_ROSTER`'s own `telemetry`, through the two
+    // projections `seedRoster`/`seedAccountsSh` write, so re-tagging `gpt` to
+    // `anthropic` in the roster moves both arms together instead of making
+    // them disagree.
+    const def = cfg.roster.byId.get(c.lane);
+    expect(def, `${c.lane} is not in the seeded roster`).toBeDefined();
+    const v = serviceability(c.cls, { anthropic: def!.telemetry === 'anthropic', seven: sevenOf(limits[c.lane]), share: shareFor(shares, c.lane) }, t0);
     expect(v.kind).toBe(c.expect);
     if ('why' in v) expect(v.why).toBe(c.why);
     if ('figurePct' in v && c.figurePct !== undefined) expect(v.figurePct).toBe(c.figurePct);
+  });
+});
+
+// FINAL REVIEW FINDING 1 — the one condition the shared fixture table cannot
+// express, because every one of its rows reaches a WORKING interpreter.
+// `_share_pct`'s contract is "rc 0 figure | 1 no figure | 2 stale", and
+// `_serviceable`'s fable arm named 1 and 2 alone: any other code fell through
+// to `printf '%s' "$fig"` with `fig` EMPTY, and `[[ "" -ge 40 ]]` is FALSE in
+// bash, so the function returned 0 — SERVABLE, with no figure on stdout — and
+// `_class_gate` answered 0 with it. A python3 that is missing, non-executable
+// or OOM-killed thus switched the Fable ceiling off for every lane at once,
+// invisibly. The failure is planted the way it actually arrives: a shell
+// FUNCTION named `python3`, which bash resolves before PATH, so `_share_pct`
+// runs its real body and loses only the interpreter — never a stub of the
+// function under test.
+describe('_serviceable — an unexpected `_share_pct` exit code is UNMEASURED, never a figureless servable', () => {
+  const seedSweep = (): void => {
+    const sw = path.join(h.home, '.cc-sessions', 'usage', 'sweep');
+    fs.mkdirSync(sw, { recursive: true });
+    const finishedAt = new Date((now() - 1) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    fs.writeFileSync(path.join(sw, 'latest.json'),
+      JSON.stringify({ finishedAt, perAccount: { claude: { fableShare: { estimate: 0.01 } } } }));
+  };
+  // 127 command-not-found, 126 found-but-not-executable, 137 SIGKILL (the OOM
+  // killer), 139 SIGSEGV — the four an interpreter really dies with. The
+  // fixture's own rows keep 1 and 2 honest; these keep the `*` arm honest.
+  it.each([126, 127, 137, 139])('rc %i answers no-figure with rc 2, and the gate answers 2', (rc) => {
+    seedSweep();
+    const out = h.sh(`python3() { return ${rc}; }; _serviceable claude fable; echo "|rc=$?"`);
+    const [word, rcTok] = out.split('|rc=');
+    expect(Number(rcTok), 'unmeasured, not servable').toBe(RC['unmeasured']);
+    expect(word, 'and it names a why-word rather than printing nothing').toBe('no-figure');
+    expect(h.sh(`python3() { return ${rc}; }; _class_gate claude fable; echo $?`)).toBe('2');
+  });
+
+  it('a WORKING interpreter still answers the figure — the negative control for the rows above', () => {
+    seedSweep();
+    expect(h.sh('_serviceable claude fable; echo "|rc=$?"')).toBe('1|rc=0');
+    expect(h.sh('_class_gate claude fable; echo $?')).toBe('0');
   });
 });

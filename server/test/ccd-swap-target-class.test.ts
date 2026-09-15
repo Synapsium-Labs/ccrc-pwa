@@ -83,6 +83,46 @@ const tick = (stderrTo = ''): string =>
   h.sh(stderrTo ? `${BLOCKED} { _auto_swap_check ${ID}; } 2>"$HOME/${stderrTo}"`
                 : `${BLOCKED} _auto_swap_check ${ID}`);
 const swapLog = (): string => fs.readFileSync(path.join(h.home, '.cc-sessions', 'swap.log'), 'utf8');
+/** swap.log as it reads on a tick that may have written nothing at all — the
+ *  deferral cases below, where an absent file IS the expected state and
+ *  `readFileSync`'s ENOENT would be the wrong failure. */
+const swapLogOrEmpty = (): string => {
+  const p = path.join(h.home, '.cc-sessions', 'swap.log');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : '';
+};
+
+// ── The AFFINITY arm of the same tick: a pane at a clean prompt, so
+// `_session_hard_blocked` is false and every gate BELOW the rc-6 decision is
+// live. `ccd-auto-swap-hold.test.ts`'s fixture, with the dispatch sink pointed
+// at swap.log like `BLOCKED`'s — but `_swap_target` and `_avail` are NOT
+// stubbed here, because the rc 6 this arm has to produce is the real
+// function's answer about the real seeded files.
+const QUIET = `
+  tmux() { case "\${1:-}" in
+             capture-pane) printf '%s\\n' "❯ " ;;
+             list-panes)   echo ${PANE_PID} ;;
+           esac; return 0; };
+  _dispatch_swap() { echo "dispatch $1 -> $2" >> "$REG/swap.log"; };
+`;
+const quietTick = (): string => h.sh(`${QUIET} _auto_swap_check ${ID}`);
+/** `status: idle`, touched long before SWAP_CEIL_QUIET — the last two affinity
+ *  gates open. `_cfg_dir claude` is `$HOME/.claude`. */
+const idleStatus = (): void => {
+  const dir = path.join(h.home, '.claude', 'sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `${PANE_PID}.json`), JSON.stringify({ status: 'idle', statusUpdatedAt: 1 }));
+};
+/** The one fleet shape that answers rc 6 on the UNFORCED path: home is
+ *  perfectly healthy (`_avail` passes, so the first stay gate is entered and
+ *  the class IS asked), home is at the Fable share ceiling, and so is every
+ *  candidate — while all four lanes sit far under SWAP_CEILING, so the rung
+ *  below resolves at once. */
+const seedRc6Affinity = (): void => {
+  limits('claude', 10, 10); limits('claude-a', 20, 20); limits('claude-b', 30, 30); limits('claude-d', 40, 40);
+  seedRow('claude', 'fable');
+  sweep({ claude: 0.5, 'claude-a': 0.5, 'claude-b': 0.6, 'claude-d': 0.7 });
+  plantNotify();
+};
 
 describe('no class: byte-identical to today', () => {
   it('a home under the ceiling stays; a blocked home moves to the least-loaded candidate', () => {
@@ -289,5 +329,47 @@ describe('_route_restore — the other writer of `degraded`', () => {
     expect(rows.length).toBe(1);
     expect(String(rows[0]!['detail'])).toBe('degraded: opus -> ∅');
     expect(swapLog()).toMatch(/restore claude-demo: haiku -> fable/);
+  });
+});
+
+// FINAL REVIEW FINDING 4 — THE STAMP BELONGS TO THE MOVE, NOT TO THE DECISION.
+// Every test above drives the rc-6 arm through the HARD-BLOCKED path, where the
+// dispatch is two lines below the decision and nothing can intervene. The
+// unforced path is the common one, and six gates sit between them: the `_avail`
+// re-measurement, the hold file, the mid-turn test, the at-a-prompt test, the
+// `status == idle` test and `SWAP_CEIL_QUIET`. Stamped at the decision, each of
+// those wrote `degraded=opus` and journalled `degraded: ∅ -> opus` for a session
+// that did not move — and the stamp is not cosmetic: the next settle on that
+// same lane, with the sweep pass gone stale, takes the UNMEASURED arm, honours
+// the standing stamp and composes `--model opus`. A real class downgrade
+// produced by a degrade that never happened.
+describe('the rc-6 degrade is stamped at the MOVE, not at the decision', () => {
+  it('the fixture really does reach rc 6 and MOVE on the unforced affinity path (the control)', () => {
+    // Written first and asserted first: without it every negative below is
+    // vacuous — a fixture that never dispatches proves nothing about a gate.
+    seedRc6Affinity(); idleStatus();
+    quietTick();
+    expect(swapLog(), 'the move happened').toContain(`dispatch ${ID} -> claude-a`);
+    expect(h.reg(ID, 'degraded'), 'and the class served was stamped').toBe('opus');
+    expect(String(eventsOf(h.home, 'route')[0]!['detail'])).toBe('degraded: ∅ -> opus');
+  });
+
+  it('a HELD session: rc 6 is decided, the hold declines the move, and NOTHING is stamped', () => {
+    seedRc6Affinity(); idleStatus();
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.hold`), 'program:demo wave:1/1 run:1');
+    quietTick();
+    expect(h.reg(ID, 'degraded'), '`degraded` names the class actually served').toBeNull();
+    expect(eventsOf(h.home, 'route').length, 'no route row for a move that did not happen').toBe(0);
+    expect(swapLogOrEmpty()).not.toMatch(/dispatch |degrade /);
+  });
+
+  it('a session NOT at an idle prompt: same decision, same silence', () => {
+    // A second gate, three lines further down, so the pin is on the RULE and
+    // not on the hold file: no status file at all makes `[[ -f "$sf" ]]` fail.
+    seedRc6Affinity();
+    quietTick();
+    expect(h.reg(ID, 'degraded')).toBeNull();
+    expect(eventsOf(h.home, 'route').length).toBe(0);
+    expect(swapLogOrEmpty()).not.toMatch(/dispatch |degrade /);
   });
 });

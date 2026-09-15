@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=adb8d47d45175ff63facdf95b99910d7da069e9aac0e5f466909a81bdecb95c2
+# ccrc:generated 1 sha256=a239916fc8a25f618fa639df0899d207c8ba3207973e81d17ce39cc618583dee
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4802,17 +4802,41 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # something a human did or must fix before work can land. A health verdict is
   # neither: it is a MEASUREMENT, it can be wrong, and letting it empty this
   # function would let one bad probe run wedge every `ws-add` on the box.
-  # THE SERVICEABILITY FILTER ABOVE IS NOT AN EXCEPTION TO THAT RULE, because
-  # it never turns a health measurement into a refusal: `_serviceable`
-  # returning 2 (unmeasured) does not `continue` — an unmeasured lane stays
-  # eligible and ranks by its own score, exactly like an unmeasured
-  # `_limit_score`. What the filter skips on rc 1 is a lane MEASURED at the
-  # requested CLASS's own share ceiling — a fact about the class, not about
-  # the lane's health — so a class that empties every in-pool lane is not
-  # "no destination", it is "not on this rung"; the caller's remedy is
-  # `classBelow` (degrade a rung and re-ask), never a repaired probe. The
-  # ordinary health tiers below (condemned included) are computed exactly as
-  # before and are untouched by this filter.
+  # THE SERVICEABILITY FILTER ABOVE IS A NARROW, DELIBERATE EXCEPTION TO THAT
+  # RULE FOR THREE OF THE FOUR CLASSES, and the paragraph that stood here said
+  # the opposite of the code (final review finding 2). What holds for all four:
+  # `_serviceable` returning 2 (unmeasured) does not `continue` — an unmeasured
+  # lane stays eligible and ranks by its own score, exactly like an unmeasured
+  # `_limit_score` — so no ABSENCE of a measurement can empty this function.
+  #
+  # `fable` IS the case the old paragraph described, and only it: its rc 1 is
+  # the ROSTER's backend word or the sweep's share estimate against
+  # `FABLE_SHARE_CEILING_PCT`, neither of which is the lane's health, and one
+  # rung down reads a different figure against a different ceiling — so
+  # `_class_below` really is the remedy and an emptied pool really does mean
+  # "not on this rung".
+  #
+  # `opus`/`sonnet`/`haiku` DO NOT WORK THAT WAY. `_serviceable` reads
+  # `_limit_field "$w" seven` against `SWAP_CEILING` for all three — the same
+  # figure and the same ceiling `_avail` tests — so with one of those classes
+  # this function CAN answer "" for a health reason, on the fleet where every
+  # in-pool lane's week is measured at 98 or over. And `_class_below` cannot
+  # relieve it: all three rungs ask the identical question of the identical
+  # figure, so opus, sonnet and haiku answer unservable together. That is a
+  # REFUSAL ON A HEALTH MEASUREMENT, which is exactly what the tiers below
+  # exist to prevent — it is admitted here rather than repaired because it is
+  # what "this session must run at class X" MEANS: a rung the fleet cannot
+  # serve is not a destination, and placing anyway would put the session where
+  # its own routing record says it cannot run. Its blast radius is bounded by
+  # the caller: only a call that PASSES a class reaches it, `default` and the
+  # no-class call skip the filter entirely, and no shipped caller passes a
+  # class until slice 4's `ws-add --route` — which is where the operator-facing
+  # refusal has to be spelled (S3-R3's named obligation on `cmd_ws_add`'s
+  # reason builder). `projected-home.test.ts`'s `sonnet-over-SWAP_CEILING`
+  # case is the pin.
+  #
+  # The ordinary health tiers below (condemned included) are computed exactly
+  # as before and are untouched by this filter.
   # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
   # The server's `projectHome` (server/src/limits.ts) makes both calls the same
   # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
@@ -13159,7 +13183,23 @@ _serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasure
   if [[ "$c" == fable ]]; then
     _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
     fig=$(_share_pct "$w"); rc=$?
-    case "$rc" in 1) printf 'no-figure'; return 2 ;; 2) printf 'stale'; return 2 ;; esac
+    # EVERY NON-ZERO RC IS UNMEASURED, and the `*` arm is the whole fix (final
+    # review finding 1). This named 1 and 2 ALONE, so any other exit code fell
+    # through to the ceiling test below with `fig` EMPTY — and `[[ "" -ge 40 ]]`
+    # is FALSE in bash, so the function answered 0, SERVABLE, with no figure on
+    # stdout. A python3 that is missing, non-executable or OOM-killed (rc 127,
+    # 126, 137; this file's own SWAP_JITTER comment records a box-wide thrash
+    # event) therefore switched the Fable ceiling OFF for every lane on all four
+    # paths at once — the three `_swap_target` stay gates, its candidate loop,
+    # `_ws_least_loaded` and `_spawn_start`'s settle — with no journal row, no
+    # swap.log line and nothing else to see it by. That is the one answer this
+    # clause may never give: a fabricated fact, failing toward the exact edge
+    # the ceiling exists to protect (spec §2: a Fable session over its share
+    # ceiling bills usage credits). `no-figure` rather than a new why-word
+    # because the vocabulary is shared with the L0 twin, which has no
+    # interpreter to lose, and because that is literally what happened —
+    # nobody produced a figure. rc 2 keeps its own word.
+    case "$rc" in 0) ;; 2) printf 'stale'; return 2 ;; *) printf 'no-figure'; return 2 ;; esac
     printf '%s' "$fig"
     [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && return 1
     return 0
@@ -13225,6 +13265,34 @@ _route_restore() {   # id from to why — clear `degraded` (the intended class `
   rm -f -- "$REG/$id.degraded"
   _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: ${old:-∅} -> ∅"
   echo "$(date '+%F %T') restore $id: $from -> $to ($why)" >> "$REG/swap.log"
+}
+
+# THE STAMP BELONGS TO THE MOVE, NOT TO THE DECISION (final review finding 4).
+# `_auto_swap_check` turns `_swap_target`'s rc 6 into a degrade, but EVERY gate
+# that can still decline the move sits below that point — `_avail "$target"`,
+# and on the affinity path the hold file, the mid-turn test, the at-a-prompt
+# test, the `status == idle` test and `SWAP_CEIL_QUIET`. Stamped at the
+# decision, a tick that declined wrote `degraded=<rung>` and journalled
+# "degraded: ∅ -> <rung>" for a session that stayed exactly where it was,
+# contradicting spec §5.1's definition of the field ("the class actually
+# served"). It is not cosmetic: while that stamp stands, a settle on the same
+# lane whose sweep pass has gone stale or absent takes the UNMEASURED arm,
+# honours the standing stamp ("it was measured when written") and composes
+# `--model <rung>` — a real class downgrade produced by a degrade that never
+# happened. The premise the ledger accepted it on ("every rc-6 path measured the
+# session's own lane unable to serve the class") is false in the commonest
+# case: when `_avail "$home"` fails, the first stay gate is never entered and
+# the class of `home` is never asked at all.
+#
+# So the rc-6 arm records the rung in two variables and this runs at each
+# `_dispatch_swap` site, where the move is certain. Ruling S3-R5's "a degrade
+# that cannot write its stamp stands still" is unchanged and now reads more
+# simply: rc 1 here means the caller returns without dispatching.
+_route_degrade_at_move() {   # id from to -> rc 0 if there is nothing to stamp or the stamp landed; rc 1, loudly, if it did not
+  [[ -n "${3:-}" ]] || return 0
+  _route_degrade "$1" "$2" "$3" "unservable: $2 on every candidate lane" && return 0
+  echo "$(date '+%F %T') degrade-unwritable $1: $2 -> $3 (stamp not written; standing still)" >> "$REG/swap.log"
+  return 1
 }
 
 _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
@@ -14287,27 +14355,30 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # read as a condition nobody could decide, strand the row with the word
   # `rc6`, and throw away a destination that was measured. The rung is
   # re-derived here (`_class_below` is deterministic and `_swap_target` writes
-  # nothing), the stamp and the journal row are written by the ONE writer, and
-  # the move proceeds exactly as an rc 0 move would.
+  # nothing), the move then proceeds exactly as an rc 0 move would, and the
+  # stamp and journal row are written by the ONE writer — AT THE DISPATCH, not
+  # here (final review finding 4; `_route_degrade_at_move`'s header carries the
+  # argument). All this arm does is REMEMBER the rung, because between here and
+  # the two `_dispatch_swap` calls sit six gates that can still decline: the
+  # `_avail "$target"` re-measurement, and on the affinity path the hold file,
+  # the mid-turn test, the at-a-prompt test, the `status == idle` test and
+  # `SWAP_CEIL_QUIET`. `dto` empty means there is nothing to stamp, which is
+  # every non-rc-6 tick.
   #
-  # AND THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R5, fix round 1). This
-  # ignored `_route_degrade`'s rc and set `strc=0` regardless, so a registry
-  # write that did not land dispatched the session anyway: it would arrive on a
-  # lane chosen for the rung BELOW while the record still said the intended
-  # class, and `_spawn_start` would compose `--model $icls` on a lane just
-  # measured unable to serve it, with nothing in any channel saying why. On a
-  # failed stamp the honest move is not to move: say so in one swap.log line
-  # and stand still. The next tick re-measures and retries — `_route_degrade`'s
-  # standing-state debounce reads the FIELD, and nothing was written, so it is
-  # unaffected.
+  # AND THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R5, fix round 1), which is
+  # why `_route_degrade_at_move` is a GUARD at each dispatch site rather than a
+  # fire-and-forget call. The rc used to be discarded, so a registry write that
+  # did not land dispatched the session anyway: it would arrive on a lane chosen
+  # for the rung BELOW while the record still said the intended class, and
+  # `_spawn_start` would compose `--model $dfrom` on a lane just measured unable
+  # to serve it, with nothing in any channel saying why. On a failed stamp the
+  # honest move is not to move: say so in one swap.log line and stand still. The
+  # next tick re-measures and retries — `_route_degrade`'s standing-state
+  # debounce reads the FIELD, and nothing was written, so it is unaffected.
+  local dfrom="" dto=""
   if [[ "$strc" -eq 6 ]]; then
-    local icls ibelow; icls=$(_route_peek "$id" class); ibelow=$(_class_below "$icls")
-    if _route_degrade "$id" "$icls" "$ibelow" "unservable: $icls on every candidate lane"; then
-      strc=0
-    else
-      echo "$(date '+%F %T') degrade-unwritable $id: $icls -> $ibelow (stamp not written; standing still)" >> "$REG/swap.log"
-      return 0
-    fi
+    dfrom=$(_route_peek "$id" class); dto=$(_class_below "$dfrom")
+    strc=0
   fi
   if [[ "$strc" -ge 2 ]]; then
     # NOBODY CAN SAY — which is NOT "no destination exists". Stranding here
@@ -14419,6 +14490,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # write while an exclusion is fresh, or fold the two writers into one) is
   # deferred.
   if [[ -n "$hard_blocked" ]]; then
+    # THE DEGRADE STAMP, AT THE MOVE (see `_route_degrade_at_move`). First in
+    # the block, so a stamp that cannot be written costs neither the gpt
+    # exclusion, nor `lastswap`, nor a swap.log line claiming a rescue.
+    _route_degrade_at_move "$id" "$dfrom" "$dto" || return 0
     # _is_valid_wrapper first, so a stale registry `wrapper` — an account since
     # dropped from the roster — cannot name the file this writes.
     # BACKEND, not placement: this row is the Codex lane's only "pool is full"
@@ -14473,6 +14548,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # statusUpdatedAt (ms) ticks on every busy<->idle transition, incl. web/mobile clients.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
   [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 0
+  # AFTER THE LAST GATE THAT CAN DECLINE, for the reason the rescue arm stamps
+  # first in its own block: every `return 0` above this line is a move that did
+  # not happen, and `degraded` names the class actually served.
+  _route_degrade_at_move "$id" "$dfrom" "$dto" || return 0
   _reg_set "$id" lastswap "$now"
   echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
   _dispatch_swap "$id" "$target"
@@ -15427,6 +15506,23 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # declared above, on its own line, so this bare assignment's `$?` is
       # `_serviceable`'s own rc, not `local`'s.
       why=$(_serviceable "$wrapper" "$rclass"); srv=$?
+      # WHAT A DEGRADE BUYS DIFFERS BY CLASS, and only the fable rung changes
+      # ELIGIBILITY (final review finding 2, the settle's half of it).
+      # `fable`'s rc 1 is the share ceiling or the roster's backend word, so
+      # `opus` on that same lane really is servable where fable was not. For
+      # `opus`/`sonnet`/`haiku` the ceiling IS `SWAP_CEILING` on the lane's own
+      # seven-day figure, so every remaining rung asks the identical question
+      # of the identical figure and answers unservable together: the rung drop
+      # lands on a lane that measures exactly as unservable for the new class
+      # as for the old one. Composing it is still right, for a DIFFERENT
+      # reason, and the reason was nowhere in tracked text until this
+      # paragraph: a cheaper class spends the shared weekly window more slowly,
+      # which is the only lever left once the lane itself is already chosen.
+      # A SPEND argument, not an eligibility one —
+      # `ccd-route-degrade.test.ts`'s `class opus … --model sonnet` case is a
+      # rung drop that buys exactly that and nothing else. At `haiku` the
+      # ladder bottoms out (`below` empty), nothing is stamped, and the
+      # intended class is composed unchanged.
       case "$srv" in
         0) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
         1) below=$(_class_below "$rclass")
