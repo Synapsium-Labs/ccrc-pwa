@@ -1533,7 +1533,7 @@ Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`)
   `runHealth`; `FleetSession.usage`'s docstring names the reviver's carried `stale`; `session-hook.sh`'s per-event
   `tmux display-message` is bounded like the statusline's. The sweep's census-on-refusal stays deferred to its own
   task with a reader.
-- **D- (2026-09-15)** — **Task 10 shipped code the brief did not name, because the tip was red.** The
+- **D-2825 (2026-09-15)** — **Task 10 shipped code the brief did not name, because the tip was red.** The
   suites at the tip found two reds: the settle keyed "has an effort field" on `_reg_get`'s exit code, which a
   present-but-unreadable file also returns, so presence is now the filesystem's answer (`[[ -e ]]`, the same
   question `_route_any` asks) and an unreadable effort field journals why the default was suppressed;
@@ -1541,7 +1541,7 @@ Numbers are ISSUED by `POST /api/ledger/deviations` (`ccrc-api ledger allocate`)
   pinned "no call site can see that rc", now enumerates the two sanctioned readers (`_route_get`, `_route_peek`)
   — a property rewrite whose two enumerated lines are byte-identical, so it proves a count, not a location
   (disclosed). Commit 9fbd70a0; three mutations measured.
-- **D- (2026-09-15)** — **The routing check's subagent-key arm is a WARN, not a FAIL.** The live gate found three
+- **D-2826 (2026-09-15)** — **The routing check's subagent-key arm is a WARN, not a FAIL.** The live gate found three
   Anthropic lanes carrying `CLAUDE_CODE_SUBAGENT_MODEL` in settings.json — the operator's own 2026-09-07
   subagent-routing floor, older than the record — and the shipped FAIL aborted `ccrc update` before its supervisor
   sweep (`cmd_doctor` returns 1 on any FAIL; `cmd_install` ends with doctor; update dies on that rc). Ruling
