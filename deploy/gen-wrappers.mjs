@@ -169,9 +169,15 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *
  *  AND ONCE MORE, the account wave: `ccd-account-auth` is the SEVENTH, and
  *  the only one `_inst_bins` places on BOTH platform arms — so on a macOS box
- *  it is the one non-`ccd` toolchain name this scan will actually meet. */
+ *  it is the one non-`ccd` toolchain name this scan will actually meet.
+ *
+ *  Routing slice 0 Task 7: `ccd-usage-sweep` is the EIGHTH, on the sweep's own
+ *  terms again — non-Darwin only, no marker. Its scanner, `ccd-usage-sweep.py`,
+ *  is placed alongside it but carries a dot, which `ID_RE` never matches before
+ *  this Set is even consulted — so it needs no entry here, the same property
+ *  `ccd/ccrc`'s own orphan-scan comment documents for that name. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth']);
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

@@ -1060,7 +1060,25 @@ GRAPH_SEARCH_RE='^[[:space:]]*(cd[[:space:]]+[^;&|]+(&&|;)[[:space:]]*)?([A-Za-z
 
 payload=$(cat 2>/dev/null) || exit 0
 [[ -n "${TMUX_PANE:-}" ]] || exit 0
-tname=$(tmux display-message -p '#S' 2>/dev/null) || exit 0
+# BOUNDED, and for a sharper reason than the statusline's (`ccd/statusline-command.sh`,
+# D-2791): this question is asked once per HOOK EVENT inside every live session on the
+# box, not once per render in one pane. `tmux display-message` talks to the tmux SERVER
+# over its socket, and a server that is SIGSTOPped, swapping, or wedged answers nothing
+# and never returns — so an unbounded call here hangs the hook, and the hook is on the
+# hot path of every tool call in ~20 sessions. The bound is the whole fleet's, not this
+# pane's.
+#
+# THE PLATFORM SPELLING, copied from the statusline fix: bare `timeout` is GNU and a
+# macOS box carries Homebrew's `gtimeout`. NEITHER present means the question is SKIPPED,
+# not asked unbounded — `$tname` stays empty, the guard below exits 0, and the hook
+# writes nothing at all. That is the honest degrade for a file whose header makes exit 0
+# on every path absolute: a hook that cannot bound its own tmux call must not make it.
+hooktmo=""
+for hooktmo_bin in timeout gtimeout; do
+  if command -v "$hooktmo_bin" >/dev/null 2>&1; then hooktmo="$hooktmo_bin"; break; fi
+done
+tname=""
+[[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)
 [[ "$tname" == cc-?* ]] || exit 0
 id="${tname#cc-}"
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0

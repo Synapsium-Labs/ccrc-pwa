@@ -109,7 +109,7 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
     // for, and it carries that key.
     const CALENDAR = new Set(['ccrc-ddns.timer']);
     const timers = ['ccd-account-health.timer', 'ccd-cap-scopes.timer', 'ccd-graph-sweep.timer',
-      'ccd-telemetry-keepalive.timer', 'ccrc-ddns.timer'];
+      'ccd-telemetry-keepalive.timer', 'ccd-usage-sweep.timer', 'ccrc-ddns.timer'];
     for (const name of timers) {
       const anchors = keys(name).filter((l) => /^On(Boot|Active|Startup)Sec=/.test(l));
       if (CALENDAR.has(name)) {

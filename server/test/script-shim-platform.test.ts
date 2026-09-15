@@ -117,6 +117,9 @@ describe('script(1) — the contract `_auth_script_argv` depends on (D-2614, D-2
   // darwin arm swaps shape and the code channel stays where it is. If it
   // fails, the table in the message says what IS accepted, and the fix becomes
   // a decision about which method keeps the channel rather than a swap.
+  // PLATFORM-ONLY: util-linux accepts a FIFO outright (the control below
+  // measures exactly that), so "which shape is accepted" is not a question
+  // GNU has a non-trivial answer to. The contrast lives in the control.
   itDarwin('BSD: some LIVE stdin shape is accepted — that is what decides the fix', () => {
     const { rows, table } = sweep(0);
     const liveOk = rows.filter((r) => LIVE[r.stdin] && r.rc === 0).map((r) => r.stdin);
@@ -129,6 +132,9 @@ describe('script(1) — the contract `_auth_script_argv` depends on (D-2614, D-2
 
   // The control that proved the cause in round 1, kept because it is what says
   // "not a tty requirement" — the sentence the whole fix rests on.
+  // PLATFORM-ONLY: this is the control WITHIN the BSD investigation — it
+  // exists to show BSD wants a tolerable errno rather than a tty. GNU never
+  // refuses in the first place, so the same probe there measures nothing.
   itDarwin('BSD: /dev/null is accepted, so this is not a tty requirement', () => {
     const r = probe({ childExit: 0, stdin: 'devnull' });
     expect(r.rc, `BSD script refused /dev/null.\n  spelling: ${r.spelling}\n  stderr: ${r.stderr}`).toBe(0);
@@ -142,6 +148,10 @@ describe('script(1) — the contract `_auth_script_argv` depends on (D-2614, D-2
   // and `done`. Recorded, not wished for: this asserts that rc DISTINGUISHES a
   // failed child from a good one, the property the helper actually relies on,
   // not any particular convention.
+  // PLATFORM-ONLY: the util-linux side of THIS question is the control
+  // below, which asserts the opposite outcome (rc 0 without --return). The
+  // two are a pair in substance; they are not a `platformContrast` because
+  // BSD needs /dev/null here and util-linux is asked over a FIFO.
   itDarwin('BSD: rc distinguishes a child that failed from one that did not', () => {
     const seven = probe({ childExit: 7, stdin: 'devnull' });
     const zero = probe({ childExit: 0, stdin: 'devnull' });
@@ -155,6 +165,9 @@ describe('script(1) — the contract `_auth_script_argv` depends on (D-2614, D-2
   // ── THE LINUX CONTROL ────────────────────────────────────────────────────
   // The same questions of util-linux, so the difference is measured in one file
   // rather than remembered. MEASURED GREEN on this box 2026-09-12.
+  // PLATFORM-ONLY: this IS the Linux control for the whole file, named for
+  // its userland because the point is that util-linux and BSD disagree. It
+  // answers the darwin cases above rather than pairing with any one.
   itLinux('util-linux: runs the child over a FIFO, and reports rc 0 WITHOUT --return', () => {
     const seven = probe({ childExit: 7, stdin: 'fifo' });
     const zero = probe({ childExit: 0, stdin: 'fifo' });
