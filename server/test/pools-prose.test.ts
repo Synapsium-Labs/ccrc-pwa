@@ -298,3 +298,34 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     }
   });
 });
+
+describe('server/src/config.ts: the roster is SEEDED once per box (D-1687)', () => {
+  /** The docstring, flattened out of its ` * ` prefixes — a hard-wrapped claim
+   *  routinely spans a line break, and a literal containment check would miss
+   *  it: a false GREEN on a negative assertion, which is worse than a false
+   *  red. */
+  const doc = (): string =>
+    flat(passage('config.ts, the loadRoster docstring', read('server/src/config.ts'),
+      'Reads and validates `accountsPath`', 'function loadRoster')
+      .replace(/\n\s*\*\s?/g, ' '));
+
+  it('no longer claims deploy ships the same accounts.json to both boxes', () => {
+    expect(doc()).not.toMatch(/ships? the same `accounts\.json` to both boxes/);
+    // The claim, not just its spelling: no sentence may pair the deploy with
+    // both boxes as if one file reached them.
+    for (const s of sentencesOf(doc())) {
+      if (/\bdeploy\b/.test(s) && /both boxes/.test(s)) {
+        expect(s, `the docstring still describes one file reaching two boxes: "${s.trim()}"`)
+          .toMatch(/seed|never overwrit|hand-owned/i);
+      }
+    }
+  });
+
+  it('names the seed that actually ships it, and deploy.sh still behaves that way', () => {
+    expect(doc()).toMatch(/ship_roster/);
+    const deploy = read('deploy/deploy.sh');
+    // The create-if-missing guard IS the fact the docstring now states.
+    expect(deploy, 'ship_roster no longer seeds create-if-missing — the docstring is false again')
+      .toMatch(/ship_roster\(\) \{[\s\S]{0,400}?\[ -f ~\/\.ccrc\/accounts\.json \]/);
+  });
+});
