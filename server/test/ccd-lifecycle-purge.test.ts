@@ -1279,11 +1279,20 @@ describe('one terminal fact per minted transaction (spec §3.4)', () => {
 // below is the whole ruling in executable form:
 //   (a) `ws-add` REFUSES: row creation is what MINTS the generation, and a row
 //       minted unserialised is the race the lock exists to exclude.
-//   (b) `ws-reap` REFUSES (pinned in `ccd-ws-reap.test.ts`, which also asserts
-//       the purge fact is absent).
-//   (c) `ws-rm`, `forget` and `ws-gc --prune` COMPLETE on a generation-ABSENT
-//       row: absence proves no hook on that row ever received one, so no hook
-//       arm ever ran the lifecycle and there is nothing to race.
+//   (b) The `ws-reap` VERB REFUSES (pinned in `ccd-ws-reap.test.ts`, which
+//       also asserts the purge fact is absent) — through its OWN outer
+//       `command -v flock` gate (`_ws_reap_locked`), before `_reg_purge` ever
+//       runs. `LEGS` below drives `_ws_reap_tail` DIRECTLY, one level under
+//       that gate (r6 R5-M3), which is why its own mechanism-absence story
+//       stays out of (d1): a shim that makes THIS gate's flock absent too
+//       would measure a condition `_ws_reap_tail`'s own status-2 text says is
+//       unreachable by construction, and (b) is where that condition is
+//       already told correctly.
+//   (c) `ws-rm`, `forget`, `ws-gc --prune` and `ws-reap` (the tail function,
+//       not the gated verb) COMPLETE on a generation-ABSENT row: absence
+//       proves no hook on that row ever received one, so no hook arm ever
+//       ran the lifecycle and there is nothing to race — true regardless of
+//       which caller reaches `_reg_purge`.
 //   (d1) `ws-rm` and `forget` REFUSE on a generation-PRESENT row, each with
 //       exactly one named `_lc_fail` and no `_lc_done purge`.
 //   (d2) `ws-gc --prune` on the SAME row DECLINES — asserted POSITIVELY and
@@ -1386,6 +1395,30 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
    *  needs a real worktree. A single fixture for all three would pass leg (c)
    *  for the wrong reason — the verb refusing early, before `_reg_purge` is
    *  ever reached — which is the failure mode §5's own ws-add leg records. */
+  /** ONE MORE SHAPE, `ws-reap`'s (r6 R5-M3) — reused from `ccd-ws-reap.test.ts`
+   *  / `lifecycleHelpers.ts`'s own fixture idiom (a real git repo, a real
+   *  tombstone), but driving `_ws_reap_tail` DIRECTLY at its `clips` resume
+   *  phase rather than the full `cmd_ws_reap` verb. `clips` is the LAST
+   *  resume phase: it skips the children/worktree/branch teardown this
+   *  fixture never built and goes straight to the registry purge this file is
+   *  about — the same reason the `ws-gc --prune` leg above calls
+   *  `_ws_gc_prune_row` directly rather than the full `cmd_ws_gc` sweep. Going
+   *  a level under `cmd_ws_reap`'s own dispatch also goes under its OWN
+   *  outer `command -v flock` gate (`_ws_reap_locked`, ccd/ccd:10732) — a
+   *  SECOND, unrelated flock check that gates this file's NOFLOCK legs for
+   *  nothing (see the comment heading `describe` above), which is why (d1)'s
+   *  own filter keeps this leg out below. */
+  const wsReapRow = (id = 'demo-cinder-vale'): void => {
+    const main = h.makeRepo('demo');
+    h.git(main, 'commit', '--allow-empty', '-m', 'base');
+    const reapedDir = path.join(h.home, '.cc-sessions', '.reaped');
+    fs.mkdirSync(reapedDir, { recursive: true });
+    fs.writeFileSync(path.join(reapedDir, `${id}.json`),
+      JSON.stringify({ branch: 'ws/cinder-vale', registryBranch: 'ws/cinder-vale', children: [], clips: [] }));
+    h.sh(`_reg_set ${id} uuid u; _reg_set ${id} project demo
+      _reg_set ${id} workspace cinder-vale; _reg_set ${id} branch ws/cinder-vale
+      _reg_set ${id} workdir /gone; _reg_set ${id} archived 1`);
+  };
   const LEGS = [
     { verb: 'ws-rm', act: 'destroy', id: 'demo-still-river', slug: ['demo', 'still-river'] as const,
       plant: (): void => { wsRow(); },
@@ -1399,10 +1432,13 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     { verb: 'ws-gc --prune', act: 'destroy', id: 'demo-quiet-basin', slug: ['demo', 'quiet-basin'] as const,
       plant: (): void => { deadRow(); },
       run: (shim: string): void => { h.sh(`${shim} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`); } },
+    { verb: 'ws-reap', act: 'reap', id: 'demo-cinder-vale', slug: null,
+      plant: (): void => { wsReapRow(); },
+      run: (shim: string): void => { h.sh(`${shim} ( _ws_reap_tail demo-cinder-vale clips ) 2>/dev/null || true`); } },
   ] as const;
 
-  it('(c) ws-rm, forget and ws-gc --prune COMPLETE on a generation-ABSENT row', () => {
-    // Each in its own harness: three independent verbs answering the same
+  it('(c) ws-rm, forget, ws-gc --prune and ws-reap COMPLETE on a generation-ABSENT row', () => {
+    // Each in its own harness: four independent callers answering the same
     // question, and sharing one registry would let the first one's purge decide
     // the next one's answer.
     for (const leg of LEGS) {
@@ -1445,7 +1481,14 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
   };
 
   it('(d1) ws-rm and forget REFUSE on a generation-PRESENT row — and MECHANISM ABSENCE is a different refusal from CONTENTION', async () => {
-    for (const leg of LEGS.filter((l) => l.verb !== 'ws-gc --prune')) {
+    // `ws-gc --prune` is excluded (its own leg (d2) below); `ws-reap` is
+    // excluded too (r6 R5-M3) — this leg drives `_ws_reap_tail` a level
+    // UNDER `cmd_ws_reap`'s own outer flock gate, so a NOFLOCK shim here
+    // would measure `_ws_reap_tail`'s status-2 text against a precondition
+    // (flock itself absent) that text is deliberately silent on, because in
+    // production that gate refuses first. `ccd-ws-reap.test.ts` already
+    // pins the real verb's mechanism-absence story correctly.
+    for (const leg of LEGS.filter((l) => l.verb !== 'ws-gc --prune' && l.verb !== 'ws-reap')) {
       // (d1a) MECHANISM ABSENT. The shim makes `command -v flock` fail, which
       // is the condition `_reg_purge` answers 2 for.
       h = makeCcdHarness('ccrc-lc-purge-');
@@ -1509,28 +1552,32 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
   // that cannot end, because this file deliberately never mints a second inode
   // over a live holder and no compliant path recreates the file.
   //
-  // THE CONTROLS, ONE PER LEG (r5 R4-M2). This block runs over all THREE legs,
-  // and the header used to name a single control for all of them: "(d1b) above
-  // … drives the same status with COMPACT_LOCK_WHY empty and asserts the
-  // contention sentence survives". (d1b) lives inside `it('(d1) …')`, whose
-  // loop is `LEGS.filter((l) => l.verb !== 'ws-gc --prune')`, so it is the
-  // control for ws-rm and forget ONLY. The gc leg's control is the DEAD-REG
-  // arm at the top of this file — same verb, same status, COMPACT_LOCK_WHY
-  // empty — which since r5 R4-M2 asserts 'was unavailable' and the ABSENCE of
-  // this token in its own durable detail. Before that it read the token and
-  // the surviving row and nothing about the sentence, and the gap was
-  // MEASURED: the gc caller's override fired unconditionally with this file
-  // still GREEN 50/50.
+  // THE CONTROLS, ONE PER LEG (r5 R4-M2, extended r6 R5-M3). This block runs
+  // over all FOUR legs, and the header used to name a single control for all
+  // of them: "(d1b) above … drives the same status with COMPACT_LOCK_WHY
+  // empty and asserts the contention sentence survives". (d1b) lives inside
+  // `it('(d1) …')`, whose loop is `LEGS.filter((l) => l.verb !== 'ws-gc
+  // --prune' && l.verb !== 'ws-reap')`, so it is the control for ws-rm and
+  // forget ONLY. The gc leg's control is the DEAD-REG arm at the top of this
+  // file — same verb, same status, COMPACT_LOCK_WHY empty — which since r5
+  // R4-M2 asserts 'was unavailable' and the ABSENCE of this token in its own
+  // durable detail. Before that it read the token and the surviving row and
+  // nothing about the sentence, and the gap was MEASURED: the gc caller's
+  // override fired unconditionally with this file still GREEN 50/50. The
+  // ws-reap leg's control lives in `ccd-ws-reap.test.ts`'s own "reaps
+  // everything, then FAILS with purge-refused" test, which asserts the
+  // identical pair through the full `cmd_ws_reap` verb rather than this
+  // file's direct `_ws_reap_tail` call.
   /** A holder through the SHIPPED acquire, which is what makes the /proc arm of
    *  `_compact_lock_vanished` answer: a holder past its acquire has unlinked
    *  its `lock-open` alias and keeps only a descriptor, so a fixture that opens
    *  canonical directly (as `holdCompactLock` does) leaves nothing for the walk
    *  to find and the next acquire MINTS instead of refusing. */
-  /** The terminal fact this leg reads, for all THREE verbs: `ws-rm` and
-   *  `forget` FAIL (the purge follows an irreversible act) while
-   *  `ws-gc --prune` REFUSES (it reaches the purge before anything
+  /** The terminal fact this leg reads, for all FOUR callers: `ws-rm`,
+   *  `forget` and `ws-reap` FAIL (the purge follows an irreversible act)
+   *  while `ws-gc --prune` REFUSES (it reaches the purge before anything
    *  irreversible), so the shared `purgeRefusal` above — which requires a
-   *  `failed` — covers only two of the three and the gc caller is the one
+   *  `failed` — covers only three of the four and the gc caller is the one
    *  r3 A-I3 found unpinned. */
   const purgeTerminal = (leg: typeof LEGS[number]): { token: string; detail: string } => {
     const terminal = eventsOf(h.home, leg.act)
@@ -1658,7 +1705,20 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       const r = purgeTerminal(leg);
       expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
       expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-source-refused');
-      expect(r.detail, `${leg.verb}: and blames the directory that refused the write`).toContain('refused the write');
+      // r6 R5-M2: the OLD sentence asserted the guard's cause absolutely
+      // ("it is $REG itself that refused the write … A re-run cannot help
+      // until that is repaired"), which this round's OWN fixture disproves —
+      // `$REG` here is a healthy, writable directory; only the ONE `mktemp`
+      // call failed. The softened sentence reports the measurement and
+      // offers the cause as the usual one, never the only one, and never
+      // claims a re-run cannot help "until" a repair — only "while" whatever
+      // actually failed still holds.
+      expect(r.detail, `${leg.verb}: names the measurement, not an absolute cause`)
+        .toContain('the usual cause is');
+      expect(r.detail, `${leg.verb}: and the softened remedy clause`)
+        .toContain('a re-run cannot help while that holds');
+      expect(r.detail, `${leg.verb}: never the absolute claim this round removes`)
+        .not.toContain('A re-run cannot help until');
       expect(r.detail, `${leg.verb}: no wait frees a full filesystem`)
         .not.toContain('once the compaction settles');
       expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
@@ -1666,12 +1726,57 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     }
   }, 120_000);
 
-  it('(d1e) EVERY token the acquire can set is keyed to its own remedy at all four durable callers', () => {
+  it('(d1d) a lock pathname occupied ONE INSTANT AFTER THE MINT is the SAME condition, not the empty default (r6 R5-M1)', () => {
+    // MEASURED BY THE REVIEWER: a `mktemp` function shim — the same shape
+    // `MKTEMP_FAIL` above already uses — that lets the mint SUCCEED and then
+    // plants the very directory the mint-time `[ -e "$lock" ]` test already
+    // passed, between that test and the post-`link` re-test a few lines
+    // later. Before this round that re-test answered bare `return 1` with
+    // `COMPACT_LOCK_WHY` left EMPTY, so all four durable callers took the
+    // `'') ;;` arm and journaled the contention sentence for a pathname
+    // nothing in this tree will ever unoccupy — false twice over, and the
+    // acquire's own comment conceded it. `$1` inside the shim is the MINT'S
+    // OWN TEMPLATE ARGUMENT (`"$REG/.$id.compactions.lock-init.XXXXXX"`,
+    // literal `XXXXXX` and all), so stripping the `.lock-init.XXXXXX` suffix
+    // and appending `.lock` names the real lock pathname without the shim
+    // ever being told an id.
+    // `"${1-}"`, NEVER BARE `"$1"` — `cmd_ws_rm`'s own `_plat_mktemp` scratch
+    // call runs this same shimmed `mktemp` with NO ARGUMENTS at all, and ccd
+    // sources under `set -uo pipefail`: a bare `$1` there is an unbound
+    // variable, which killed the scratch read with `scratch-unwritable`
+    // before this line existed (measured).
+    const MKDIR_RACE = 'mktemp() { case "${1-}" in *.compactions.lock-init.*)'
+      + ' command mktemp "$@"; mkdir "${1%.lock-init.XXXXXX}.lock" 2>/dev/null; true ;;'
+      + ' *) command mktemp "$@" ;; esac; };';
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      expect(fs.existsSync(lockOf(leg.id)),
+        `${leg.verb}: no lock exists yet — the shim occupies it INSIDE the mint`).toBe(false);
+      const probe = h.sh(`${MKDIR_RACE} _compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(probe, `${leg.verb}: refused, in the same window the mint-time test just passed`).toContain('RC=1');
+      expect(probe, `${leg.verb}: and the SAME token the mint-time test uses, not an empty WHY`)
+        .toContain('WHY=lock-path-occupied');
+      leg.run(MKDIR_RACE);
+      const r = purgeTerminal(leg);
+      expect(r.token, `${leg.verb}: still status 1, so still the same token`).toBe('purge-refused');
+      expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-path-occupied');
+      expect(r.detail, `${leg.verb}: and the pathname something else is holding`).toContain(`.${leg.id}.compactions.lock`);
+      expect(r.detail, `${leg.verb}: and the act that actually clears it`).toContain('remove that object by hand');
+      // THE FALSE REMEDY THIS ROUND REMOVES, asserted as an absence because
+      // it is exactly what an empty WHY produced here before r6 R5-M1.
+      expect(r.detail, `${leg.verb}: no wait ends this, so no wait is prescribed`)
+        .not.toContain('once the compaction settles');
+    }
+  }, 120_000);
+
+  it('(d1e) EVERY token the acquire can set is keyed to its own remedy in the shared helper, and all four durable callers consult it (r6 R5-M3)', () => {
     // THE TOKEN SET IS DERIVED FROM THE ACQUIRE, never listed here. That is the
-    // whole guard: a fourth condition given a token and no caller arm would
-    // otherwise fall through to the contention sentence in silence, which is
-    // the defect r5 R4-M3 found in the `[[ -z … ]] ||` form this replaced —
-    // one sentence answering for every token there will ever be.
+    // whole guard: a fourth condition given a token and no arm in the helper
+    // would otherwise fall through to the contention sentence in silence,
+    // which is the defect r5 R4-M3 found in the `[[ -z … ]] ||` form this
+    // replaced — one sentence answering for every token there will ever be.
     const src = fs.readFileSync(CCD, 'utf8');
     const from = src.indexOf('_compact_lock_acquire() {');
     expect(from, 'the acquire is in ccd').toBeGreaterThan(-1);
@@ -1680,22 +1785,45 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     // NON-VACUITY: a census that counted zero would satisfy every loop below by
     // running none of them, which is the one reading that is never right here.
     expect(tokens.length, 'the acquire names conditions at all').toBeGreaterThan(2);
-    expect(new Set(tokens).size, 'and no token is minted at two sites').toBe(tokens.length);
+    // THE VOCABULARY IS ITS DISTINCT VALUES, not its assignment SITES.
+    // `lock-path-occupied` is now set at TWO sites (r6 R5-M1: the mint-time
+    // `[ -e "$lock" ]` test and the post-`link` re-test, the SAME condition
+    // observed one instant later) — a deliberate duplication of a token, not
+    // a second condition wearing the first one's name, so the vocabulary
+    // (what the helper below must cover) is strictly smaller than the raw
+    // assignment count.
+    const vocab = [...new Set(tokens)];
+    expect(vocab.length, 'lock-path-occupied is minted at two sites, so the vocabulary is smaller than the raw count')
+      .toBeLessThan(tokens.length);
     // AND THE ACQUIRE IS THE ONLY WRITER, so this census is the whole set: the
-    // count is the tokens plus the one clear-on-entry.
+    // count is the (raw, un-deduplicated) tokens plus the one clear-on-entry.
     expect((src.match(/COMPACT_LOCK_WHY=/g) ?? []).length,
       'COMPACT_LOCK_WHY is written only inside the acquire').toBe(tokens.length + 1);
-    for (const v of ['_rm_why', '_rt_why', '_pr_why', '_fg_why']) {
-      const at = src.indexOf(`local ${v}=`);
-      expect(at, `${v} is one of the four durable purge callers`).toBeGreaterThan(-1);
-      const block = src.slice(at, src.indexOf('esac', at));
-      for (const t of tokens) {
-        expect(block, `${v} gives ${t} its own remedy rather than the contention sentence`)
-          .toContain(`${t}) ${v}=`);
-      }
-      expect(block, `${v} refuses to read an UNRECOGNISED token as ordinary contention`)
-        .toContain(`*) ${v}=`);
+
+    // THE HELPER IS THE ONLY REMEDY RENDERER (r6 R5-M3) — collapsing four
+    // copies (one per durable caller) into one, so a single caller's text
+    // drifting from the others is impossible rather than merely unpinned.
+    const helperFrom = src.indexOf('_compact_lock_why_remedy() {');
+    expect(helperFrom, 'the shared remedy helper exists').toBeGreaterThan(-1);
+    const helperBody = src.slice(helperFrom, src.indexOf('\n}\n', helperFrom));
+    for (const t of vocab) {
+      expect(helperBody, `the helper gives ${t} its own remedy rather than the contention sentence`)
+        .toContain(`${t})`);
     }
+    expect(helperBody, 'the helper refuses to read an UNRECOGNISED token as ordinary contention')
+      .toContain('*)');
+
+    // AND EVERY DURABLE CALLER ACTUALLY CONSULTS IT — a caller that stopped
+    // calling the helper (inlining its own sentence again) would satisfy
+    // every assertion above and still be the exact defect this round closes.
+    for (const v of ['_rm_why', '_rt_why', '_pr_why', '_fg_why']) {
+      const at = src.indexOf(`local ${v};`);
+      expect(at, `${v} is one of the four durable purge callers`).toBeGreaterThan(-1);
+      const line = src.slice(at, src.indexOf('\n', at));
+      expect(line, `${v} renders its remedy through the shared helper, not its own case`)
+        .toContain('_compact_lock_why_remedy');
+    }
+
     // AND THE HEADING FOLLOWS THE MECHANISM. The enumerating one was the
     // finding's first half: it invited the next maintainer to read the
     // else-branch as proven contention.
