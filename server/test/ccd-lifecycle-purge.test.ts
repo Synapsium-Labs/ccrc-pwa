@@ -1591,6 +1591,119 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     }
   }, 180_000);
 
+  // ── (d1d) STATUS 1'S OTHER TOKENED CONDITIONS (r5 R4-M3) ────────────────
+  // r4 A-M3 built the split on the premise that status 1 "is two conditions".
+  // It is not: `_compact_lock_acquire` returns 1 from many distinct states, and
+  // two more of them are states no wait ends — so the contention sentence was
+  // as false there as it was for `canonical-vanished`, and nothing said so.
+  // Both now carry their own COMPACT_LOCK_WHY and their own remedy, and these
+  // two legs drive them through the real verbs. (d1b) stays the CONTROL for
+  // ws-rm and forget and the DEAD-REG arm for ws-gc: both still get
+  // "once the compaction settles", because ordinary contention still ends.
+  it('(d1d) a lock pathname OCCUPIED by a directory is its own condition, with a remedy a re-run cannot be', () => {
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      // NO HOLDER AT ALL, which is the point: a directory at the lock pathname
+      // is not contention. `_compact_lock_acquire`'s `[ -e ]` arm sees the name
+      // occupied, its `[[ -f && ! -L ]]` test refuses, and nothing anywhere in
+      // this tree will ever remove that directory — so "wait" is not a remedy
+      // and "restore the file by hand" names the wrong act.
+      fs.mkdirSync(lockOf(leg.id));
+      // THE PRECONDITION, MEASURED rather than assumed, exactly as (d1c) does.
+      const probe = h.sh(`_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(probe, `${leg.verb}: the fixture is in the occupied-pathname state`).toContain('RC=1');
+      expect(probe, `${leg.verb}: and the acquire says which refusal it is`).toContain('WHY=lock-path-occupied');
+      leg.run('');
+      const r = purgeTerminal(leg);
+      expect(r.token, `${leg.verb}: still status 1, so still the same token`).toBe('purge-refused');
+      expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-path-occupied');
+      expect(r.detail, `${leg.verb}: and the pathname something else is holding`).toContain(`.${leg.id}.compactions.lock`);
+      expect(r.detail, `${leg.verb}: and the act that actually clears it`).toContain('remove that object by hand');
+      // THE TWO FALSE REMEDIES, asserted as absences because both were what
+      // shipped here before this leg existed.
+      expect(r.detail, `${leg.verb}: no wait ends this, so no wait is prescribed`)
+        .not.toContain('once the compaction settles');
+      expect(r.detail, `${leg.verb}: and the pathname is occupied, not unlinked`)
+        .not.toContain('canonical-vanished');
+    }
+  }, 120_000);
+
+  it('(d1d) a mktemp that fails AT RUNTIME is its own condition too — `command -v` had already said yes', () => {
+    // THE SHIM IS A FUNCTION, NOT A PATH STUB, and that is what makes it this
+    // condition rather than the neighbouring one. `_compact_lock_acquire`
+    // answers 2 — mechanism absent — when `command -v mktemp` fails, so the
+    // runtime failure at the mint is reachable ONLY where `mktemp` resolves. A
+    // bash function resolves: `command -v mktemp` prints its name and answers
+    // 0. It then refuses exactly the one call that mints the lock source and
+    // leaves every other `mktemp` in the verb — `_plat_mktemp`'s scratch files,
+    // `_reg_generation_init`'s own source — running for real, so the leg drives
+    // one statement's failure and not a crippled box. The token assertion below
+    // is what separates the two: `purge-mechanism-absent` would mean the shim
+    // shadowed the wrong thing.
+    const MKTEMP_FAIL = 'mktemp() { case "$*" in *compactions.lock-init*) return 1 ;; esac; command mktemp "$@"; };';
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      expect(fs.existsSync(lockOf(leg.id)),
+        `${leg.verb}: the permanent lock has never been minted — that is the fixture`).toBe(false);
+      const probe = h.sh(`${MKTEMP_FAIL} command -v mktemp >/dev/null && echo CV=ok; `
+        + `_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(probe, `${leg.verb}: the shim still RESOLVES, so status 2 was never reachable`).toContain('CV=ok');
+      expect(probe, `${leg.verb}: and the acquire refuses with status 1, not 2`).toContain('RC=1');
+      expect(probe, `${leg.verb}: naming the runtime failure`).toContain('WHY=lock-source-refused');
+      leg.run(MKTEMP_FAIL);
+      const r = purgeTerminal(leg);
+      expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
+      expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-source-refused');
+      expect(r.detail, `${leg.verb}: and blames the directory that refused the write`).toContain('refused the write');
+      expect(r.detail, `${leg.verb}: no wait frees a full filesystem`)
+        .not.toContain('once the compaction settles');
+      expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
+        .not.toContain('canonical-vanished');
+    }
+  }, 120_000);
+
+  it('(d1e) EVERY token the acquire can set is keyed to its own remedy at all four durable callers', () => {
+    // THE TOKEN SET IS DERIVED FROM THE ACQUIRE, never listed here. That is the
+    // whole guard: a fourth condition given a token and no caller arm would
+    // otherwise fall through to the contention sentence in silence, which is
+    // the defect r5 R4-M3 found in the `[[ -z … ]] ||` form this replaced —
+    // one sentence answering for every token there will ever be.
+    const src = fs.readFileSync(CCD, 'utf8');
+    const from = src.indexOf('_compact_lock_acquire() {');
+    expect(from, 'the acquire is in ccd').toBeGreaterThan(-1);
+    const body = src.slice(from, src.indexOf('\n}\n', from));
+    const tokens = [...body.matchAll(/COMPACT_LOCK_WHY=([a-z][a-z-]*)/g)].map((m) => m[1]!);
+    // NON-VACUITY: a census that counted zero would satisfy every loop below by
+    // running none of them, which is the one reading that is never right here.
+    expect(tokens.length, 'the acquire names conditions at all').toBeGreaterThan(2);
+    expect(new Set(tokens).size, 'and no token is minted at two sites').toBe(tokens.length);
+    // AND THE ACQUIRE IS THE ONLY WRITER, so this census is the whole set: the
+    // count is the tokens plus the one clear-on-entry.
+    expect((src.match(/COMPACT_LOCK_WHY=/g) ?? []).length,
+      'COMPACT_LOCK_WHY is written only inside the acquire').toBe(tokens.length + 1);
+    for (const v of ['_rm_why', '_rt_why', '_pr_why', '_fg_why']) {
+      const at = src.indexOf(`local ${v}=`);
+      expect(at, `${v} is one of the four durable purge callers`).toBeGreaterThan(-1);
+      const block = src.slice(at, src.indexOf('esac', at));
+      for (const t of tokens) {
+        expect(block, `${v} gives ${t} its own remedy rather than the contention sentence`)
+          .toContain(`${t}) ${v}=`);
+      }
+      expect(block, `${v} refuses to read an UNRECOGNISED token as ordinary contention`)
+        .toContain(`*) ${v}=`);
+    }
+    // AND THE HEADING FOLLOWS THE MECHANISM. The enumerating one was the
+    // finding's first half: it invited the next maintainer to read the
+    // else-branch as proven contention.
+    expect(src, 'the enumerating heading is gone').not.toContain('STATUS 1 IS TWO CONDITIONS');
+    expect((src.match(/STATUS 1 FOLDS SEVERAL CONDITIONS/g) ?? []).length,
+      'and its replacement heads all four durable callers').toBe(4);
+  });
+
   it('(d3) THE SWEEP REACHES THE NEXT ROW: a declining row does not truncate `ws-gc --prune`', () => {
     // The plan requires the arity pin to ship "with the behaviour control that
     // the `ws-gc --prune` forced-refusal fixture must still reach the NEXT
