@@ -888,8 +888,11 @@ go back" branch — a session never auto-rotates back onto a home that has
 since been disabled. **The two "stay put" branches are unchanged on
 purpose**: disabled excludes a lane as a *destination*; it never evacuates a
 session already sitting there. Manual placement (`ccd start`, `ccd swap`,
-`ccd prefer`) bypasses the gate entirely — naming a wrapper by hand is an
-operator override by construction. One correction to that override: `ccd
+`ccd prefer`) overrides the **disabled** gate — naming a wrapper by hand is an
+operator override by construction — but it is not a blanket override of every
+placement rule, because all three verbs refuse a target whose pool disagrees
+with the project's unless you pass `--cross-pool` (see "Account pools" below).
+One correction to that override: `ccd
 start` no longer **rewrites** an existing row's account. For an id that
 already has a registry entry, the registry's own `wrapper` wins and a
 differing argument is only a warning naming the verb that would actually move
