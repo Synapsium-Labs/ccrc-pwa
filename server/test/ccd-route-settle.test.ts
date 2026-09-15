@@ -66,6 +66,34 @@ describe('_inject_spawn_effort reads the routing record (routing spec 2026-09-14
     settle();
     expect(typed()).toEqual([]);
   });
+  it('...and it SAYS SO: an unreadable effort file suppresses the box default with a journal line, not in silence', () => {
+    // THE HALF `[[ -e ]]` LEFT UNCHANNELLED (Task 10 review, fix round 2,
+    // Finding 2). Presence now comes from the filesystem, so this session gets
+    // no `SPAWN_EFFORT` — but the journaling call that follows reads the field
+    // through `_reg_get`, whose rc folds ABSENT and UNREADABLE together, so it
+    // wrote nothing and the session came up with no effort applied and no
+    // record anywhere of why. The note is its own condition: it names the
+    // FIELD and that it is PRESENT, and — unlike a reject note — no byte count,
+    // because nobody read the bytes.
+    seed();
+    h.sh('_reg_set myid effort high; ln -sf /dev/null "$HOME/.cc-sessions/myid.effort"');
+    settle();
+    const log = h.sh('cat "$HOME/.cc-sessions/swap.log"');
+    expect(log).toMatch(/route-unmeasured myid: field effort is present but could not be read — treated as absent/);
+    expect(log, 'no byte count: nothing was read').not.toMatch(/bytes/);
+    expect(typed(), 'and still not typed — fail-closed is unchanged').toEqual([]);
+  });
+  it('a field that is genuinely ABSENT stays silent — the other half of `_reg_get`\'s folded rc', () => {
+    // THE CONTROL for the case above, and it is not decoration: the same `||`
+    // arm fires for an absent field, which is every field of every pre-slice-1
+    // session. Without the `[[ -e ]]` test inside `_route_unread_note` this
+    // line would land on every read of every one of them. Read directly, since
+    // the settle's own no-record path deliberately reads nothing.
+    seed();
+    h.sh('_reg_set myid class opus; _route_get myid class >/dev/null; _route_get myid effort >/dev/null');
+    expect(h.sh('cat "$HOME/.cc-sessions/swap.log" 2>/dev/null; true'), 'a good value and an absent one are both silent')
+      .not.toMatch(/route-unmeasured|route-reject/);
+  });
   it('class haiku with an effort on disk: types nothing and notes the PAIR', () => {
     seed(); h.sh('_reg_set myid class haiku; _reg_set myid effort high'); settle();
     expect(typed()).toEqual([]);

@@ -6250,19 +6250,42 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const line = lineFor(runDoctor(home).stdout, 'routing');
     expect(line).toMatch(/^PASS routing: 1 Anthropic lane\(s\)/);
   });
-  it('routing: FAILS naming the lane whose settings.json sets CLAUDE_CODE_SUBAGENT_MODEL', () => {
-    const home = routingBox('ccrc-doctor-routing-fail-');
+  it('routing: WARNS — never FAILS — on the lane whose settings.json pins CLAUDE_CODE_SUBAGENT_MODEL (controller ruling S1-R13)', () => {
+    // THE SEVERITY IS THE ASSERTION, and the reason is `ccrc update`. A FAIL
+    // here is not a finding about a misconfigured box: the key predates the
+    // routing record (the fleet's own 2026-09-07 subagent-routing ruling put it
+    // in settings.json on purpose), so an honouring box FAILs by construction —
+    // and `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
+    // `_ccrc_die` BEFORE `_upd_sweep`, half-landing every update on that box.
+    // So: WARN, naming the count, the lanes, and the CONSEQUENCE (the record's
+    // subagent field is overridden there), with a remedy that admits keeping it.
+    const home = routingBox('ccrc-doctor-routing-subagent-warn-');
     writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line).toContain('claude');
+    expect(line, 'the consequence, not just the key')
+      .toContain("the routing record's subagent field is overridden there until the key is removed");
+    expect(out).toContain('remedy: remove the key from those lanes');
+    expect(out, 'the subagent key alone must never read as a FAIL').not.toMatch(/^FAIL routing: /m);
+  });
+  it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL — the arm that stays a FAIL, naming the lane', () => {
+    const home = routingBox('ccrc-doctor-routing-effort-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
     expect(line, out).toMatch(/^FAIL routing: /);
+    expect(line).toContain('CLAUDE_CODE_EFFORT_LEVEL');
     expect(line).toContain('claude');
     expect(out).toContain('remedy: remove the key');
   });
-  it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL too', () => {
-    const home = routingBox('ccrc-doctor-routing-effort-');
-    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_EFFORT_LEVEL: 'high' });
-    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^FAIL routing: /);
+  it('routing: a lane carrying BOTH keys is a FAIL — the effort arm wins, and it is named once', () => {
+    const home = routingBox('ccrc-doctor-routing-bothkeys-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet', CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'routing'), out).toMatch(/^FAIL routing: /);
+    expect(out, 'one lane, one line — not also a WARN about the same lane').not.toMatch(/^WARN routing: /m);
   });
   it('routing: a box with no projection PASSES vacuously and says so — never a SKIP, which the healthy fixture\'s counts forbid', () => {
     const home = healthy('ccrc-doctor-routing-noroster-');

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=439fcb8e4b0edcedad669e2032bfaf3961f9783df49fe6cf9eeea9b54360f5b5
+# ccrc:generated 1 sha256=fbc8ee259f4e8016a4e929f42268b893fa8bd37bca2825308f5aff8d45753c5f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -14342,6 +14342,30 @@ _route_unmeasured_note() {   # id field — journal a field whose VOCABULARY cou
   echo "$(date '+%F %T') route-unmeasured $id: field $f could not be checked — this box's roster projection (\$HOME/.ccrc/accounts.sh) carries no class list for it; treated as absent — re-run ccrc install" >> "$REG/swap.log"
   return 0
 }
+_route_unread_note() {   # id field — journal a field whose FILE is on disk but whose BYTES
+  # could not be read: a symlink to a device (`_reg_get` guards with `-f`), a
+  # directory, a file whose mode denies this uid. NOT `_route_unmeasured_note`'s
+  # condition and not `_route_reject_note`'s — those two both got a VALUE and
+  # then could not judge it, or judged it bad; here nothing was ever read, so
+  # the line names neither bytes nor a count, and says instead that the field is
+  # PRESENT, which is the part an operator needs: `_inject_spawn_effort` asks
+  # the filesystem, so an unreadable `effort` file still suppresses the box
+  # default (`SPAWN_EFFORT`) while contributing no value of its own. Without
+  # this line that suppression had no channel at all — the session simply came
+  # up with no effort applied and nothing anywhere said why (Task 10 review,
+  # fix round 2, Finding 2). Fail-closed is unchanged: the value is still
+  # treated as absent.
+  #
+  # Its OWN floor marker (`routeunread<field>`, dotless so `_reg_purge` reaps it
+  # with the row), for the reason `_route_unmeasured_note` gives about
+  # `routenote<field>`: a field can alternate between these conditions (a chmod,
+  # a re-pointed symlink) and a shared marker would flap on the reason change.
+  local id="$1" f="$2"
+  [[ -e "$REG/$id.$f" ]] || return 0   # genuinely ABSENT is silence, as it always was
+  _route_note_floored "$id" "routeunread$f" && return 0
+  echo "$(date '+%F %T') route-unmeasured $id: field $f is present but could not be read — treated as absent; a box default this field would suppress stays suppressed" >> "$REG/swap.log"
+  return 0
+}
 _route_pair_note() {   # id — the haiku+effort PAIR: both values are valid, the pairing is not
   _route_note_floored "$1" routenotepair && return 0
   echo "$(date '+%F %T') route-refuse $1: class haiku takes no effort level — the effort field is ignored" >> "$REG/swap.log"
@@ -14351,8 +14375,17 @@ _route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
   # Three conditions in, three answers out (silence for a good value): see
   # `_route_valid`'s rc table. The `*)` arm is rc 1 and anything a future arm
   # invents — an unknown rc is a bad value here, which is the fail-closed side.
+  #
+  # `_reg_get`'s OWN failure is a FOURTH condition, and it is two things folded
+  # into one rc: the field is absent, or its file is there and its bytes could
+  # not be read. Absent is silence and always was; present-but-unreadable gets
+  # its own line, because it can change behaviour (an unreadable `effort` file
+  # still suppresses `SPAWN_EFFORT` — `_inject_spawn_effort` asks the
+  # filesystem) with nothing anywhere to say so. `_route_unread_note` is the
+  # one that tells them apart; both still answer nothing, so fail-closed and
+  # every caller's contract are unchanged.
   local id="$1" f="$2" v rc
-  v=$(_reg_get "$id" "$f") || return 0
+  v=$(_reg_get "$id" "$f") || { _route_unread_note "$id" "$f"; return 0; }
   _route_valid "$f" "$v"; rc=$?
   case "$rc" in
     0) printf '%s' "$v" ;;

@@ -1680,6 +1680,17 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     //
     // A new reader therefore reds here, and the remedy is to argue it and add
     // its own case, never to widen the list on its own.
+    //
+    // `_route_get`'s entry RESPELLED (fix round 2, Finding 2), same reader,
+    // same question: its `||` arm now calls `_route_unread_note` before
+    // returning, because `_reg_get`'s rc folds ABSENT and
+    // PRESENT-BUT-UNREADABLE together and only the second can change behaviour
+    // silently (`ccd-route-settle.test.ts`'s `/dev/null`-symlink case pins both
+    // halves: nothing typed, and a `route-unmeasured` line saying why). That
+    // also fixes the weakness this list carried when its two entries were
+    // BYTE-IDENTICAL and could only prove "two such lines exist": they are
+    // distinct now, so each entry names one function's line and a reader moved
+    // between the two would red.
     const src = fs.readFileSync(CCD, 'utf8');
     const lines = src.split('\n')
       .filter((l) => l.includes('_reg_get "') && !l.trim().startsWith('#'));
@@ -1694,8 +1705,9 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
       'a NEW assignment-then-|| branches on `_reg_get`\'s rc: argue why the rc answers that '
       + 'caller\'s question, pin what it does with each answer, and only then name it here')
       .toEqual([
-        'v=$(_reg_get "$id" "$f") || return 0',   // _route_get: absent is silent, not a reject
-        'v=$(_reg_get "$id" "$f") || return 0',   // _route_peek: the same read, pure
+        // _route_get: absent is silent; present-but-unreadable gets a line
+        'v=$(_reg_get "$id" "$f") || { _route_unread_note "$id" "$f"; return 0; }',
+        'v=$(_reg_get "$id" "$f") || return 0',   // _route_peek: the same read, PURE — no note, no marker
       ]);
   });
 });
