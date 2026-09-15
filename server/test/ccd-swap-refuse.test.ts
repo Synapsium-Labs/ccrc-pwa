@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 import { asManagerCalls, itLinux, itDarwin } from './platformFixtures.js';
 
 let h: CcdHarness;
@@ -29,7 +29,7 @@ const UUID_B = '22222222-2222-4222-8222-222222222222';
 const SWAP_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} return 0; };
   sleep() { :; };
   cmd_ensure() { echo "cmd_ensure $*" >> "$HOME/ccd-calls"; return 0; };
 `;
@@ -42,7 +42,7 @@ const SWAP_STUBS = `
 const REAL_ENSURE_STUBS = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in has-session) return 1;; esac; return 0; };
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in has-session) return 1;; esac; return 0; };
   sleep() { :; };
   _spawn() { echo "_spawn $*" >> "$HOME/ccd-calls"; return 0; };
   _spawn_start() { echo "_spawn_start $*" >> "$HOME/ccd-calls"; SPAWN_FROMSWAP=0; };
@@ -53,7 +53,7 @@ const REAL_ENSURE_STUBS = `
  *  gate alone: a hard-blocked pane (matched by the REAL `_pane_hard_blocked`),
  *  a target, headroom, and a dispatch that LOGS instead of running systemd-run. */
 const AUTO_TICK_STUBS = `
-  tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+  tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
   _swap_target() { echo claude-a; }; _avail() { return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
@@ -64,6 +64,7 @@ const AUTO_TICK_STUBS = `
  *  find nothing. */
 const deadRotate = (id: string): string =>
   `tmux() { echo "tmux $*" >> "$HOME/ccd-calls"
+     ${WIDE_PANE}
      case "\${1:-}" in
        kill-session) _reg_set ${id} uuid ${UUID_B} ;;
        has-session)  return 1 ;;
@@ -179,7 +180,7 @@ describe('a swap that cannot carry the conversation', () => {
     const id = seed(UUID_A);
     plantTranscript('.claude', '-x-projects-demo', UUID_A);
     plantNotify();
-    const rotate = `tmux() { [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
+    const rotate = `tmux() { ${WIDE_PANE} [[ "\${1:-}" == kill-session ]] && _reg_set ${id} uuid ${UUID_B};
       echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };`;
     const r = shFail(`${SWAP_STUBS} ${rotate} cmd_swap ${id} claude-a`);
     expect(r.code).not.toBe(0);

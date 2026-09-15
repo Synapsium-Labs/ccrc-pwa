@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-redrive-'); });
@@ -9,7 +9,7 @@ afterEach(() => { h.cleanup(); });
 
 /** tmux, RECORDING: `capture-pane` answers `$PANE_TEXT`, everything else is logged. */
 const STUBS = `sleep() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
   _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
 const sendKeys = (): string[] => h.calls().filter((l) => l.includes('send-keys'));
@@ -165,7 +165,7 @@ describe('_redrive_after_spawn', () => {
     // (one second earlier) cannot see.
     writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
     const RACE_STUBS = `sleep() { :; };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
         case "\${1:-}" in capture-pane)
           n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0); echo $((n+1)) > "$HOME/pane-calls";
           if [[ "$n" -ge 20 ]]; then printf '%s\\n' 'thinking… esc to interrupt'; else printf '%s\\n' "\${PANE_TEXT:-}"; fi ;;

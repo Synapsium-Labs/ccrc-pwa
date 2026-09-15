@@ -14,7 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 
@@ -99,12 +99,12 @@ describe('_pane_hard_blocked', () => {
 // The two classifiers above are pure and correctly wired into ccd's OWN test
 // suite already — but nothing until here drove the functions that actually
 // CONSUME `_pane_login_screen`. A tmux/sleep stub in the ccd-archive idiom
-// (`tmux() { case "$1" in ...; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; }`)
+// (`tmux() { ${WIDE_PANE} case "$1" in ...; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; }`)
 // makes `_accept_first_run_prompts` and `_spawn` run to completion in
 // milliseconds against a fixture pane, with every keystroke ccd would have
 // sent to a real terminal landing in `$HOME/ccd-calls` instead.
 const SPAWN_STUB = `sleep() { :; };
-  tmux() { case "$1" in
+  tmux() { ${WIDE_PANE} case "$1" in
     capture-pane) printf '%s' "$PANE_TEXT" ;;
     *) echo "tmux $*" >> "$HOME/ccd-calls" ;;
   esac; };`;
@@ -159,7 +159,7 @@ describe('_accept_first_run_prompts (wiring, not just the classifier)', () => {
     // correct behavior but not a test worth waiting out).
     const out = h.sh(
       `sleep() { :; };
-       tmux() { case "$1" in
+       tmux() { ${WIDE_PANE} case "$1" in
          capture-pane)
            n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0)
            echo $((n+1)) > "$HOME/pane-calls"
@@ -201,7 +201,7 @@ describe('_accept_first_run_prompts / _answer_two_option_dialog: cursor-line rea
   const acceptGateOnce = (paneText: string): { rc: number; calls: string[] } => {
     const out = h.sh(
       `sleep() { :; };
-       tmux() { case "$1" in
+       tmux() { ${WIDE_PANE} case "$1" in
          capture-pane)
            n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0)
            echo $((n+1)) > "$HOME/pane-calls"
@@ -355,7 +355,7 @@ describe('_auto_swap_check (wiring): lost auth on a session sitting on its HOME 
   // plus a `_dispatch_swap` stub so the rescue's real effect (which id moves
   // to which wrapper) is observable without a real tmux/systemd-run.
   const AUTO_SWAP_STUB = `
-    tmux() { case "$1" in capture-pane) printf '%s' "$PANE_TEXT" ;; esac; };
+    tmux() { ${WIDE_PANE} case "$1" in capture-pane) printf '%s' "$PANE_TEXT" ;; esac; };
     _dispatch_swap() { echo "DISPATCHED $1 $2" >> "$HOME/dispatch-calls"; };
   `;
   const dispatchCalls = (): string[] => {

@@ -10,7 +10,7 @@
 // $HOME/ccd-calls and `capture-pane` answers from $PANE_TEXT. Nothing here
 // reaches a real tmux server, a real unit, or the live HOME.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WS_ADD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-spawn-'); });
@@ -25,6 +25,7 @@ afterEach(() => { h.cleanup(); });
 const TMUX = `sleep() { :; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${WIDE_PANE}
     case "$1" in
       new-session)  [[ "\${SPAWN_MAKES_PANE:-1}" == 1 ]] && : > "$HOME/pane-up" ;;
       kill-session) rm -f "$HOME/pane-up" ;;

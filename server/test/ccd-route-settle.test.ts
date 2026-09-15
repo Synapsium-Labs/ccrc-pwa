@@ -1,6 +1,6 @@
 // server/test/ccd-route-settle.test.ts
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-route-settle-'); });
@@ -8,7 +8,7 @@ afterEach(() => { h.cleanup(); });
 
 /** tmux, RECORDING: `capture-pane` answers `$PANE_TEXT` (the `ccd-redrive.test.ts` stub). */
 const STUBS = `sleep() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
   _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
 const READY = '? for shortcuts\n❯ ';

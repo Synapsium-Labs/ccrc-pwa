@@ -253,6 +253,39 @@ const readLines = (p: string): string[] =>
 /** Every argv the poisoned `gh` at `<home>` saw. */
 export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 'gh-poison'));
 
+/** THE WIDTH QUERY EVERY ccd FIXTURE MUST ANSWER since wave 2, spread as the
+ *  first statement of a bash `tmux()` stub.
+ *
+ *  `_pane_measurable` (`ccd/ccd`) runs
+ *  `tmux list-panes -t <name> -F '#{pane_active} #{pane_width}'` ahead of every
+ *  reader that decides to TYPE on a phrase match, and stands that reader down
+ *  unless the ACTIVE row is at least `READER_MIN_COLS` wide. A stub that
+ *  answers the new format with a pane pid — or with nothing at all — therefore
+ *  measures as UNMEASURABLE, and every case in that fixture exercises the
+ *  stand-down instead of the branch it means to test. Measured when the guard
+ *  landed: 165 cases across 14 files went red that way, none of them about the
+ *  width.
+ *
+ *  Every fixture that spreads this models an ORDINARY, full-width pane, so the
+ *  active row answers 200 columns. A fixture that means to model a NARROW
+ *  drawer answers its own rows instead — `ccd-reader-standdown.test.ts` is the
+ *  one that does, and it defines its own `tmux` rather than using this.
+ *
+ *  `$*`, NEVER `$1`, is the discriminator: `list-panes` is ONE verb carrying
+ *  two formats, and `_auto_compact_check`'s `-F '#{pane_pid}'` must keep the
+ *  answer its fixture already gives it.
+ *
+ *  IT RETURNS, so nothing below it in the stub runs for the width query — and
+ *  that is why WHERE it is spread decides whether the query is LOGGED.
+ *  Measured: 15 of the 50 sites sit after a stub's LEADING
+ *  `echo "tmux $*" >> "$HOME/ccd-calls"`, so those fixtures log it like any
+ *  other call; the other 35 are the stub's first statement, and where such a
+ *  stub records inside a `case` arm instead the width query returns before
+ *  that arm and never reaches `$HOME/ccd-calls`. No assertion in this repo
+ *  turns on either, but a new one that counts calls should know which shape
+ *  its fixture has. */
+export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
+
 export interface CcdHarness {
   home: string;
   sh(snippet: string, env?: NodeJS.ProcessEnv): string;

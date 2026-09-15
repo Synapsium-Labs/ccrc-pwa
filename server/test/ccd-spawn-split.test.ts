@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-split-'); });
@@ -48,6 +48,7 @@ const shStatus = (snippet: string, env: NodeJS.ProcessEnv = {}): { status: numbe
 const TMUX = `sleep() { :; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    ${WIDE_PANE}
     case "$1" in
       new-session)  : > "$HOME/pane-up" ;;
       kill-session) rm -f "$HOME/pane-up" ;;
@@ -68,6 +69,7 @@ const TMUX = `sleep() { :; };
 const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
+      ${WIDE_PANE}
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
         has-session)  [[ -e "$HOME/pane-up" ]] ;;
@@ -326,7 +328,7 @@ describe('the settle bound is wall-clock, and it is per caller', () => {
   it('_accept_first_run_prompts returns 4 once the WALL CLOCK passes the bound', () => {
     const out = h.sh(
       `${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        CCD_SETTLE_BOUND=10 _accept_first_run_prompts cc-test 0; echo "rc=$? t=$_faketime"`);
     expect(out).toMatch(/rc=4/);
     // ~5 iterations of `sleep 2`, not 450: the bound fired, not the counter.
@@ -355,7 +357,7 @@ describe('the settle bound is wall-clock, and it is per caller', () => {
     const expiredAt = (fromswap: string): string => h.sh(
       `SPAWN_SETTLE_S=10
        ${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        _accept_first_run_prompts cc-test ${fromswap}; echo "rc=$? t=$_faketime"`);
     expect(expiredAt('1')).toBe('rc=4 t=10');
     expect(expiredAt('0')).toBe(expiredAt('1'));
@@ -433,7 +435,7 @@ describe('the settle bound is not addressable from argv', () => {
     // that keeps `(( ))` safe for whoever edits this function next.
     const out = h.sh(
       `${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        CCD_SETTLE_BOUND=${PAYLOAD}
        _accept_first_run_prompts cc-test 0; echo "rc=$? t=$_faketime"`);
     expect(pwned()).toBe(false);
@@ -455,7 +457,7 @@ describe('the settle bound is not addressable from argv', () => {
     // cmd_supervise's frame, because the real one blocks on a watch loop.
     const out = h.sh(
       `${FAKE_CLOCK}
-       tmux() { case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
+       tmux() { ${WIDE_PANE} case "$1" in has-session) return 0 ;; capture-pane) printf '' ;; esac; }
        outer() { local CCD_SETTLE_BOUND=30; _accept_first_run_prompts cc-test 0; }
        outer; echo "rc=$? t=$_faketime"`);
     // 30, not SPAWN_SETTLE_S's 240: the caller's frame won.
@@ -496,7 +498,7 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
 
   it('does NOT retry a `new` spawn — there is nothing to fall back to', () => {
     seed('myid');
-    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "$1" in has-session) return 1 ;; esac; };
           _spawn_start myid new`);
     expect(newSessions()).toHaveLength(1);
   });
@@ -506,7 +508,7 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
     // rc 3 is the honest verdict; a loop here would spend the whole window
     // minting panes nobody watches.
     seed('myid');
-    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in has-session) return 1 ;; esac; };
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "$1" in has-session) return 1 ;; esac; };
           _spawn_start myid resume 2>/dev/null`);
     expect(newSessions()).toHaveLength(2);
   });

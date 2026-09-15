@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b7613d9b2b712ec9ece219d0bb283b6de15987bdd88c29ff1bc3d442c331137f
+# ccrc:generated 1 sha256=eead08445935d8dc9011db79ca756d79f635b25fe5f30264f78600918e4a4647
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5203,7 +5203,19 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   _reg_claim "$id"
   _ws_supervise "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 JOINS 3/4/5 HERE, and it is the SAME SENTENCE this `if` already carries
+  # — "the session exists, is claimed, is supervised, and did not confirm its
+  # TUI". rc 6 says the startup gates STOOD DOWN: the pane measured under
+  # READER_MIN_COLS, so no gate was read and no live marker was confirmed. That
+  # is not "the spawn failed" — the pane may well be up — but it is emphatically
+  # not a confirmed one, and OUTSIDE the set it is the exact hazard the block
+  # above `_spawn_start` measures: a code no caller tests, printing a SUCCESS
+  # line over a spawn nothing confirmed. MEASURED before this line existed: in a
+  # fixture whose tmux refuses every verb, `ccd ws-add` answered rc 0 with its
+  # `workspace <id> …` line (`ccdargv-dec-parity.test.ts` caught it); with the
+  # line, rc 6 and no success line. `_spawn_settle`'s own `6)` arm names the
+  # remedy; this rung is what keeps the verb from claiming otherwise.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -7849,7 +7861,8 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
       dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     return "$rc"; }
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 too — argued at `cmd_ws_add`'s copy of this `if`.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     _lc_fail restore "$id" "" spawn-failed \
       "the archive stamps were removed but $id did not settle (spawn rc $rc)" \
       dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
@@ -13661,12 +13674,43 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   [[ -n "$obest" ]] && echo "$obest"
 }
 
-_pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
+_pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READER_MIN_COLS wide, else 1.
+  # THE STAND-DOWN GATE (spec §6.3). Every site below that decides to TYPE on
+  # the strength of a phrase match calls this first. WHAT THE WIDTH BUYS, said
+  # as the constant says it and no wider: READER_MIN_COLS is the width the
+  # CARRIERS THEMSELVES NEED (the widest measures 69 columns under both
+  # wrap-ansi@9 option sets) plus a margin — see `READER_MIN_COLS` above, which
+  # is careful NOT to assert what Claude Code's bundled Ink does. Below that a
+  # carrier cannot sit on one line, and once it is broken `grep` cannot match
+  # across a newline it is never presented (F11) — so a busy pane reads as
+  # SILENCE and the reader fires into a running turn. That is the shape of the
+  # 2026-09-08 five-session incident.
+  #
+  # THE ACTIVE ROW, NOT ROW 0 (F7). `list-panes -t <session>` lists every pane
+  # of the current window while `capture-pane -t <session>` reads the ACTIVE
+  # one, so measuring row 0 on a split window measures a pane the readers never
+  # look at — worse than no guard, because it claims to have measured.
+  #
+  # ONE rc FOR FOUR CONDITIONS, DELIBERATELY, and it is not an overloaded null:
+  # every caller makes exactly ONE decision from this answer — stand down, or
+  # proceed — and "narrow", "tmux would not answer", "no active row" and "the
+  # width is not a number" are the same answer to that question. An unmeasured
+  # pane is not idle.
+  local rows w
+  rows=$(tmux list-panes -t "$(_tmux "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
+  w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")
+  # Regex before the arithmetic test: `$w` is bytes off tmux's stdout.
+  [[ "$w" =~ ^[0-9]+$ ]] || return 1
+  (( w >= READER_MIN_COLS ))
+}
+
+_pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
   # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
   # ANY keystroke cancels. The rescue arm deliberately ignores it (a swap that re-drives beats
   # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
   # injection, and the fallback re-drive — must not.
+  [[ -n "${2:-}" ]] && ! _pane_measurable "$2" && return 0   # unmeasurable -> ARMED: a cancelled continuation cannot be un-cancelled (§6.3)
   grep -qiE "continuing automatically|continuing shortly" <<<"$1"
 }
 
@@ -13709,6 +13753,7 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
   local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
+  _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
   _pane_hard_blocked "$pane" && return 0
   grep -q "esc to interrupt" <<<"$pane" && return 1
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
@@ -13749,6 +13794,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # every five seconds (D-2361).
   local id="$1" t pane now last
   t=$(_tmux "$id")
+  _pane_measurable "$id" || return 0   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   _pane_limit_stale "$pane" || return 0
@@ -13837,6 +13883,9 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
+  # §6.3: a relocation is a restart that re-drives, and the only thing standing
+  # between it and a running turn is the `esc to interrupt` match further down.
+  _pane_measurable "$id" || return 0
   # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
   # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
   # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
@@ -14589,12 +14638,18 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
   # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
   #
-  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
-  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
+  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. Two of the three gates above the pane
+  # read (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
   # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
   # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
   # this session at all" or "this session is over its threshold and we are declining anyway" —
   # the two shapes that were silent, and the second is the one that matters.
+  #
+  # THE THIRD GATE ABOVE THE READ DOES SPEAK, and it is the exception that proves the rule:
+  # `pane-narrow` (§6.3, `_pane_measurable`) is not an ordinary state of a healthy fleet. It says
+  # this function is BLIND to the session for as long as the pane stays under READER_MIN_COLS —
+  # "we cannot see this session at all", the first of the two shapes above, reached one rung
+  # earlier than the read that used to be the first place it could be said.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
   local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t
   now=$(date +%s)
@@ -14631,10 +14686,11 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # The third is `no-ctx-segment`: the pane was read fine and its statusline does not publish the
   # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
   # 3 of 19 panes are in that state, and nothing anywhere said so.
+  _pane_measurable "$id" || { _compact_note "$id" pane-narrow "pane is under ${READER_MIN_COLS} cols; a wrapped phrase reads as idle (§6.3)"; return 0; }
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
   [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
   [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
-  _pane_auto_continue_armed "$pane" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
+  _pane_auto_continue_armed "$pane" "$id" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
   pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
   [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
   # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
@@ -14914,6 +14970,12 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
   bound="${CCD_SETTLE_BOUND:-$SPAWN_SETTLE_S}"
   [[ "$bound" =~ ^[0-9]{1,5}$ ]] || bound=$SPAWN_SETTLE_S
   t0=$(date +%s)
+  # §6.3, ahead of the whole gate loop: every branch below decides on a phrase
+  # match and answers with a keystroke. rc 6 is NEW and its own code — 3/4/5 are
+  # load-bearing at four call sites plus _supervised_start and must not be
+  # renumbered. `${1#cc-}` because this function knows the tmux NAME, and
+  # `_pane_measurable` takes the id `_tmux` built it from.
+  _pane_measurable "${1#cc-}" || return 6
   for i in $(seq 1 "$SPAWN_GATE_TRIES"); do
     (( $(date +%s) - t0 >= bound )) && return 4
     # BEFORE the capture, and this order is the fix: `capture-pane` against a dead session fails into
@@ -15131,7 +15193,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 #   inside a command substitution kills ONLY the subshell, so the fatal
 #   "incomplete registry for '<id>'" arrived at the caller as rc 1. And rc 1 is
 #   in NO caller's failure set: `cmd_ws_add`, `cmd_start` and `cmd_ensure` all
-#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]` (`3 || 4` at the time
+#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]` (`3 || 4` at the time
 #   this was measured; rc 1 is outside the set either way). Every one of them printed its
 #   SUCCESS line and returned 0 over a spawn that never happened — M6's silent
 #   success, one layer below where the wave had just finished closing it.
@@ -15435,6 +15497,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
+    6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns, so the startup gates stood down — close the terminal drawer on this session and retry." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the external backends — gpt/Codex today — which don't take it, so the
@@ -15515,13 +15578,14 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # reject note) — its return value is never typed, so nothing unrecognised
   # reaches a keystroke because nothing recognised does either.
   local t="$1" id="${1#cc-}" level
+  _pane_measurable "${t#cc-}" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
   if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
     return 0
   fi
   level="$SPAWN_EFFORT"
   [[ -n "$level" ]] || return 0
-  if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
+  if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)" "${t#cc-}"; then
     echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 0
   fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
@@ -15655,6 +15719,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
   # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
   local id="$1" t="$2" fromswap="${3:-0}" f i rc pane
+  _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
   f=$(_transcript_path "$id") || return 0
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
@@ -15670,7 +15735,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
-  _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
+  _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
     && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
@@ -16120,7 +16185,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `orphan`, which is the honest answer, not `never-started`.
   _reg_claim "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 too — argued at `cmd_ws_add`'s copy of this `if`.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -16230,7 +16296,8 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   _spawn_start "$id" "$mode" || return $?
   _reg_claim "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 too — argued at `cmd_ws_add`'s copy of this `if`.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi

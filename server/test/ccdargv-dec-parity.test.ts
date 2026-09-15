@@ -154,8 +154,14 @@ const PROBES: Record<string, Probe> = {
     // the control got PAST the slug binding: exactly one registry row, named
     // `<project>-<slug>` with a slug `_ws_slug_valid` would accept. The exit
     // status is NOT the witness — this fixture cannot finish a spawn, so both
-    // arms answer rc 3 with no output at all, which is byte-identical and says
-    // nothing about how far either got.
+    // arms answer the SAME non-zero code with no output at all, which is
+    // byte-identical and says nothing about how far either got. (Measured
+    // 2026-09-15: rc 6. It was rc 3 until `_pane_measurable` landed — the
+    // harness's contained `tmux` refuses every verb, so the width query is
+    // unanswerable and `_accept_first_run_prompts` stands down BEFORE the
+    // `has-session` probe that used to produce the 3. Both codes reach this
+    // file the same way: through `cmd_ws_add`'s failure enumeration, which is
+    // why neither prints a success line.)
     reached: () => {
       const rows = uuidRows();
       expect(rows, 'the control ws-add created no workspace — it refused before the slug bound')

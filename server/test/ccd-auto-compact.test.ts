@@ -36,7 +36,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-auto-compact-'); });
@@ -94,7 +94,7 @@ const sessionJsonNoStamp = (status: string): void => {
  *  name no pane pid. `send-keys` is logged and never sent; `_pane_box_draft` is
  *  stubbed empty except where a case is about the draft gate. */
 const STUBS = `
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in
       capture-pane) printf '%s\\n' "\${PANE_TEXT:-}"; return \${CAPTURE_RC:-0} ;;
       list-panes)   echo "\${PANE_PID_OUT-${PANE_PID}}" ;;
@@ -421,7 +421,7 @@ describe('the capture window is the last 8 pane ROWS, not 8 lines of content', (
   /** tmux, recording, answering `capture-pane` from a real file so blank rows
    *  survive into the pipeline. */
   const FILE_STUBS = `
-    tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
       case "\${1:-}" in
         capture-pane) cat "$HOME/pane-rows.txt" ;;
         list-panes)   echo "${PANE_PID}" ;;
