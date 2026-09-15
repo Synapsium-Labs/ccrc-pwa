@@ -204,19 +204,47 @@ export const sevenOf = (l: AccountLimits | undefined): number | null =>
  * condemned, the first condemned one. `null` stays reserved for the case a
  * human declared — every home-able lane disabled — exactly as ccd's `""` does.
  *
- * Note what is deliberately NOT here: `_ws_least_loaded` applies no `_avail` /
- * SWAP_CEILING filter, so it returns the minimum even when every account is
- * pinned. Mirroring that faithfully is the point — a projection of 99 is
- * precisely the warning the user needs, and inventing "none available" here
- * would describe an outcome ccd never produces.
+ * WITHOUT A CLASS, no `_avail` / SWAP_CEILING filter applies on either side, so
+ * this returns the minimum even when every account is pinned. Mirroring that
+ * faithfully is the point — a projection of 99 is precisely the warning the
+ * user needs, and inventing "none available" here would describe an outcome ccd
+ * never produces. WITH `cls` set to any rung BELOW `fable` it no longer holds,
+ * and the sentence that stood here said it unconditionally (final review
+ * finding 3): `serviceability()` tests every one of those rungs against
+ * `SEVEN_DAY_CEILING_PCT`, which IS ccd's `SWAP_CEILING`, on the lane's own
+ * seven-day figure — the identical test `_avail` makes — so an all-pinned fleet
+ * empties `live` and this returns `null` for a HEALTH reason. `classBelow` does
+ * not relieve it either: every rung below the top one reads the same figure
+ * against the same ceiling, so they answer unservable together. Only `fable`
+ * behaves the way the old paragraph described, because its ceiling is the
+ * sweep's share estimate and its refusal can also be the roster's `backend`
+ * word. ccd's `_ws_least_loaded` carries the same admission in its own header;
+ * the narrowness is the mitigation — no shipped caller passes a class until
+ * slice 4's `ws-add --route`.
  *
  * The honest delta against the bash: the server has no filesystem authority
  * over `~/.local/bin`, so it cannot see a missing wrapper the way
  * `_account_ok`'s `-x` check does — a projection can still name an account
  * whose binary is gone. ccd's refusal at ws-add is the authority; this is a
- * best-effort forecast of it. `null` iff every home-able lane is disabled,
- * mirroring `_ws_least_loaded`'s empty-stdout "" for the same case — nothing is
- * placeable, and inventing a target would lie.
+ * best-effort forecast of it.
+ *
+ * `null` HAS THREE MEANINGS, not two, and the third arrived with the class
+ * positional (final review finding 3; the deferred minor at the `live.length`
+ * guard below). They are: every home-able lane DISABLED; the pool tag
+ * UNDECIDABLE, so nobody may decide; and — only when `cls` is not `default` —
+ * every eligible lane MEASURED UNSERVABLE for that class. `_ws_least_loaded`'s
+ * empty stdout is overloaded in exactly the same three ways and says so in its
+ * own header, so the two sides still agree; what neither side has is a second
+ * channel on this seam, so the CALLER re-reads and names which it was.
+ * `projectPlacement` below is the caller that does this for the wire, and it
+ * tells apart only the FIRST TWO today: it answers `unmeasurable` for the
+ * undecidable tag and `{kind:'none'}` for everything else, and it never passes
+ * a class, so the third meaning cannot reach it yet. WHEN A CALLER FIRST PASSES
+ * ONE — slice 4 — `projectPlacement` needs its own arm in the same commit, the
+ * way ccd's `cmd_ws_add` reason builder does (controller ruling S3-R3's named
+ * obligation, D-2854). That obligation was recorded for the bash side only;
+ * this paragraph is the server side of it, and it is recorded HERE because a
+ * plan document is a snapshot and this seam is not.
  *
  * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
  * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
@@ -249,6 +277,12 @@ export function projectHome(
   const live = cls === 'default' ? eligible : eligible.filter((a) =>
     serviceability(cls, { anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id) }, nowS)
       .kind !== 'unservable');
+  // THE THIRD MEANING OF `null` IS BORN HERE (the docstring's own paragraph, and
+  // the deferred minor that named this line). A class-emptied pool and an
+  // all-disabled pool leave through the same `return`, which is the overloaded
+  // seam ccd's `""` already has — kept identical on purpose rather than split,
+  // because a second value here would make this function disagree with the
+  // authority it forecasts. The caller is where they are told apart.
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
