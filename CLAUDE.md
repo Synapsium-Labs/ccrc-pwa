@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~2485 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~2900 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -148,6 +148,18 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   peer omitting a field, through a SINGLE reader per field. Reading a persisted `FleetSession[]` from an older
   build goes through `reviveFleetSession` (returns a literal, so a new field is a compile error until every path
   computes it). `FLEET_PROTO_MIN` is a dormant kill-switch.
+- **Account pools — both sides optional, `ccd` is the authority.** An account carries an optional `pool`
+  (`accounts.json`, emitted as `_ccrc_pool` into `accounts.sh`, so a cross-box disagreement is visible);
+  a project carries one at `~/.cc-sessions/pools/<project>` — a DOTLESS registry subdirectory, never
+  `$REG/<project>.<x>` (ids are `<wrapper>-<project>`, so a project named `acct-a-demo` would write
+  session `acct-a-demo`'s own field). Serve iff either side is untagged or the names are equal:
+  **untagged = unconstrained, and tagging can only tighten.** `ccd` decides at every placement, tick and
+  manual verb; the server REFUSES (409/503), FORECASTS and composes the wire, and **never places a
+  session or writes the marker**. `_project_pool_state` is ccd's ONLY reader (`server/src/pools.ts` is
+  the server's own) and answers four words — `named <n>`/`untagged`/`unreadable`/`malformed`, always
+  rc 0 — and an undecidable tag never folds into `untagged`. `--cross-pool` is NOT `--force` (transcript
+  loss); `.crosspool`/`.stranded`/`.strandnotify` purge with the row. Fixtures are `pool-a`/`pool-b`; real
+  pool names are operator DATA that NOTHING scans for — `topology-clean` has no pool class — so keep them out by hand.
 
 ## Coordination (Build 7) invariants a coder must NOT break
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather

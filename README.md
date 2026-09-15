@@ -646,8 +646,12 @@ without it neither half of ccrc runs:
 | `~/.ccrc/accounts.sh` | **ccrc** — regenerated and replaced wholesale by every agent deploy | `ccd` on **every invocation**, plus `install-session-hooks.sh` and `install-coordinator-skill.sh` | `ccd` dies (`ccd: no account roster at …`) and both installers `exit 1` |
 
 `accounts.sh` is a pure projection of `accounts.json` — `deploy/gen-accounts.mjs`
-produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_UPSTREAM`,
-`_ccrc_cfg_dir`, `_ccrc_id_wrapper`), and the deploy generates it from the
+produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
+`CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
+`CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool` — the whole emitted surface, because a
+field the projection drops is a field no drift detector can see), and the
+deploy generates it from the
 roster **read back off the box**, never from the local file, so ccd's routing
 can never disagree with what the server serves from that same box's copy.
 Nothing hand-edits it; a torn one would take out every live session at once,
@@ -655,7 +659,7 @@ which is why it lands via the same atomic scp-to-temp + `mv` as `ccd` itself,
 and lands **before** `ccd` and before both installers.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden?, pool?}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -668,7 +672,14 @@ overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
 `telemetry: 'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness; `hidden: true`
-says the entry is roster plumbing rather than one of your accounts.
+declares the entry to be roster PLUMBING rather than one of your accounts — the
+`upstream` entry naming the binary every generated wrapper `exec`s — so no
+surface presents it as an account you hold; and `pool` is an optional pool name
+carrying `id`'s own grammar, which is the account half of the rule "Account
+pools" below states in full. The two keys this section adds are optional, and
+both default to the old behaviour when absent: `hidden` to `false`, `pool` to
+untagged, which means unconstrained. (`hue` is the roster's third optional key —
+left out, `assignHues` picks one.)
 
 Both clauses above were unconditional until account pools shipped, and neither is
 any more (D-1911; the ruled behaviour named below is D-1908, and this file still
@@ -817,6 +828,19 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   is the only signal in the agent-only and single-box cases, where there is no
   server on the other end of a socket to disagree with.
 
+  Digesting the PROJECTION rather than the JSON also decides, per key, whether a
+  cross-box disagreement is visible at all, and the two optional keys fall on
+  opposite sides. `pool` is **inside** the digest: `_ccrc_pool` is emitted for
+  every tagged account, so two boxes whose pools disagree read `divergent` and
+  the banner's existing remedy is the right one. `hidden` is **outside** it:
+  nothing in `accounts.sh` carries that key, so two copies that disagree about
+  `hidden` project byte-identical bash and report `agreed` — the same gap
+  `exec.secretsFile` and a `generated`/`external` `exec.kind` sit in (an
+  `upstream` flip is visible, because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s
+  wrapper check rather than the fingerprint is what catches those. Between the
+  two lanes of one agent-first deploy that changes pools, `divergent` is
+  EXPECTED for the minutes in between, and the deploy says so as it runs.
+
 - **Limit telemetry is roster-driven too**, which is what makes free-form ids
   real rather than half-delivered. `ccd/statusline-command.sh` is a Claude Code
   statusline hook — it is handed a `CLAUDE_CONFIG_DIR` and nothing else — so it
@@ -888,8 +912,11 @@ go back" branch — a session never auto-rotates back onto a home that has
 since been disabled. **The two "stay put" branches are unchanged on
 purpose**: disabled excludes a lane as a *destination*; it never evacuates a
 session already sitting there. Manual placement (`ccd start`, `ccd swap`,
-`ccd prefer`) bypasses the gate entirely — naming a wrapper by hand is an
-operator override by construction. One correction to that override: `ccd
+`ccd prefer`) overrides the **disabled** gate — naming a wrapper by hand is an
+operator override by construction — but it is not a blanket override of every
+placement rule, because all three verbs refuse a target whose pool disagrees
+with the project's unless you pass `--cross-pool` (see "Account pools" below).
+One correction to that override: `ccd
 start` no longer **rewrites** an existing row's account. For an id that
 already has a registry entry, the registry's own `wrapper` wins and a
 differing argument is only a warning naming the verb that would actually move
@@ -940,6 +967,161 @@ distinguishes a logged-in account from a logged-out one on this box, and a
 probe-based check was rejected (spends tokens, races real logins). The
 `-disabled` marker is a *declared* fact the operator sets by hand
 (`touch`/`rm`), not a detected one.
+
+### Account pools: tagging a project to a set of accounts
+
+**The rule, once.** An account carries an optional pool name; a project carries
+an optional pool name; an account may serve a project when either side is
+untagged or the two names are equal. That is the whole policy. An account is
+tagged in `~/.ccrc/accounts.json` (`"pool": "pool-a"`, carrying `id`'s grammar);
+a project is tagged by a one-token file at `~/.cc-sessions/pools/<project>` on
+the fleet host. **Untagged means unconstrained** — every account and every
+project starts untagged, and tagging only ever tightens, so nothing on the box
+behaves differently until you tag something.
+
+**`ccd` decides; the server refuses and forecasts.** Every place ccd chooses an
+account applies the rule: `ws-add`'s placement, the 5 s auto-swap tick, and the
+manual verbs. The server reads the same file through the agent and uses it for
+three things — refusing a swap or a create it can already see is wrong
+(`409 pool-mismatch`, or `503` when the tag cannot be read), forecasting where
+the next workspace would land, and composing the pool state every PWA surface
+renders. It never places a session and it never writes the marker itself — the
+phone's tap runs `ccd project-pool` on the fleet box, and the agent's write root
+is unchanged.
+
+**Tagging.** From the phone: tap a project card and pick a pool. The list is
+derived from the pools your accounts actually carry — inventing a brand-new name
+is a shell act, deliberately, because a pool with no account in it is the
+shortest path to a stranded session. From a shell on the fleet host:
+
+```bash
+ccd project-pool --project demo --pool pool-a   # tag
+ccd project-pool --project demo --clear         # untag; always allowed, even for a deleted project
+echo pool-a > ~/.cc-sessions/pools/demo         # the 2 am idiom; the trailing newline is stripped
+ls ~/.cc-sessions/pools/                        # every tag on the box, in one listing
+```
+
+The file holds one token matching `^[a-z][a-z0-9-]{0,31}$`, and the reader
+answers one of four words — `named <n>` for a usable tag, `untagged` when there
+is no file at all, and `unreadable` or `malformed` for a file nobody can use.
+Anything but that token — two words, an uppercase letter, a directory in its
+place, a file the reader cannot open — is `malformed` or `unreadable`, and
+**neither is ever quietly downgraded to untagged**: on a tag nobody can read,
+nobody decides. Creation refuses naming
+the path, the auto-swapper holds where it is, and the server answers 503. A
+typo strands one project, which is the point of one file per project.
+
+**Why the tag lives there.** `~/.cc-sessions/pools/<project>` is a dotless
+subdirectory of the registry, beside the switches you already touch by hand
+(`<wrapper>-disabled`, `coordinator-paused`). Two other homes were designed in
+full and rejected. Inside the project's own checkout (`<project>/.ccrc/pool`)
+puts policy in the tree every session runs in: one `git clean -fdx` deletes it
+and the project silently reverts to unconstrained, and one `git add -A` commits
+a pool name into a public repository. One JSON document for every project
+(`~/.ccrc/projects.json`) makes a single hand-typed trailing comma unreadable
+for *every* project at once — no placement and no rescue anywhere on the box
+until somebody fixes it. `$REG/<project>.pool` was not an option either: session
+ids are `<wrapper>-<project>`, so tagging a project named `acct-a-demo` would be
+writing session `acct-a-demo`'s own registry field.
+
+**What the tag outlives.** Nothing that cleans up a workspace touches it —
+`ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`/`ws-restore` and `forget` never name
+`pools/` — so a project's tag survives every one of its sessions and workspaces.
+It is operator intent, not session state. `ccrc uninstall` leaves it too, like
+the `-disabled` markers and the rest of the registry's operator switches. And
+like every other marker it is **not backed up**: the backup set is ccd, the
+units, the served dists, coord.db, `~/.ccrc/memory` and the two `~/.cc-sessions`
+scripts — never `~/.cc-sessions` markers. A box rebuilt from a backup comes back
+untagged, which is to say unconstrained, and nothing says which: the PWA shows
+the same `no pool` chip it shows a project that was never tagged.
+
+**Retagging a running project, and when it takes effect.** A retag is not a
+restart. Within one 5 s tick, every session of that project whose *home* account
+is out of pool is re-seeded to an in-pool home (a `rehome` line in `swap.log`
+and a `rehome` act in the lifecycle journal), and every session whose *current*
+account is out of pool becomes a must-leave. When it actually moves is the part
+worth knowing: the move goes through the same two gates every auto-swap does —
+`SWAP_COOLDOWN`, 900 s since that session's last landed swap, and
+`SWAPBLOCK_COOLDOWN`, 1800 s since a refused one — so a session that swapped in
+the last quarter hour keeps running on the wrong-pool account until its gate
+opens, and then goes with an `auto-pool` line. Two sessions do not wait:
+a hard-blocked one takes the rescue arm immediately, and a session under a
+program hold does not move *at all* until it is released — a retag never breaks
+a hold. The visible waiting state is `data-offpool` on the session row: the
+account chip says this session is running in one pool while its project is in
+another, which is exactly true, and reads as "queued", not "stuck". Retagging
+deliberately does not bypass `SWAP_COOLDOWN`; that gate exists to stop a swap
+storm and a retag is not a good reason to reopen one.
+
+**An empty pool strands, loudly.** When a session is hard-blocked and no account
+in its pool can take it, ccd **stays in the pool** and makes the state visible
+rather than crossing out of it: a `stranded` line in `swap.log` naming each
+candidate and the first reason it failed (`pool=…`, `disabled`, `missing`,
+`limit`), a marker on the row, one notify banner (`cc swap STRANDED: …`, floored
+to one per 1800 s so a scrolling limit banner cannot storm it), a stranded cell
+on the session row and an `N stranded` count on the project card. Three
+remedies, all yours: enable a lane in that pool (`rm
+~/.cc-sessions/<wrapper>-disabled`), tag another account into the pool, or untag
+the project (`ccd project-pool --project <p> --clear`). Nothing stamps a
+cooldown, so recovery needs no further action — the first tick on which an
+in-pool account has room rescues the session and writes `unstranded`. This also
+made an **older** silence loud: a hard-blocked session with every account at
+ceiling used to retry every 5 s forever with no marker and no log line, and it
+does not any more, tagged project or not.
+
+**Crossing on purpose: `--cross-pool`, which is not `--force`.** `--force` means
+one thing and still means only that — accept the transcript loss a swap costs. A
+crossing is a different decision, so it takes its own flag on `ccd swap`, `ccd
+start`, `ccd enable` and `ccd prefer`, and the two compose. From the PWA the
+mismatched accounts sit behind a **show other pools** disclosure in the swap
+sheet, and picking one there is what sets the flag; a plain pick posts the body
+it always did, and a mismatch comes back `409` with the sentence naming both
+pools. Every crossing writes a per-session marker, and that marker is what stops
+the pool machinery undoing the crossing on the next tick; `swap --cross-pool`
+also writes a `cross-pool` line to `swap.log`, while `prefer --cross-pool`
+records the crossing in the lifecycle journal and `start --cross-pool` writes the
+marker alone. It is deliberately narrow. `swap --cross-pool` moves the session and
+leaves its home alone, so when home recovers the session returns home exactly as
+it does after any manual swap today — and that return is a move off the crossed
+account, which ends the crossing (`crosspool-ended`). To stay crossed through a
+home recovery, move the home: `ccd prefer --cross-pool`. **Automatic moves never
+cross**, marker or no marker: the candidate loop stays pool-filtered in every
+case.
+
+**Deploy order, and what half-deployed looks like.** Pools touch `ccd/`, so the
+fleet host goes first — `bash deploy/deploy.sh agent <host>`, then `bash
+deploy/deploy.sh`.
+
+| State | What you see |
+|---|---|
+| New server, old `ccd` | Tags display but nothing on the fleet enforces them: the chips dim, the fleet banner says the fleet host's ccd does not honour project pools yet, the tag route answers `501` and so does a cross-pool tap. The server's own refusal still stands — a mismatched swap gets `409`, so this state produces refusals, never wrong placements. |
+| New `ccd`, old server | The fleet enforces everywhere and strands loudly; the PWA has no override yet, so a mismatched swap dies inside ccd and surfaces as a `502` carrying ccd's own sentence. |
+| New `ccd`, old `accounts.sh` | Every account reads untagged — today's behaviour, no noise. |
+| Mid-deploy, one deploy long | New placements and manual verbs bind the rule at once; each running session's auto-swapper is still the pre-deploy code until its unit restarts, and a refusal inside a dispatch from the NEW ccd marks a strand; one dispatched by a still-running pre-deploy supervisor refuses silently until the `claude-session@*` unit sweep restarts it. |
+| The two `accounts.json` copies disagree | `roster: 'divergent'` and the amber banner. ccd obeys the fleet host's copy and the server refuses by its own, so a disagreement is loud in both directions rather than silently permissive. The project tag has one copy and cannot skew at all. |
+
+**Rolling it out.** Nothing changes until something is tagged, and every step is
+reversible by untagging.
+
+1. **Ship the code with nothing tagged.** Agent lane first, then the server. Zero
+   behaviour change: every account untagged, `pools/` absent. Expect
+   `roster: 'divergent'` between the two lanes; it clears on the second deploy.
+2. **Tag accounts.** Edit `~/.ccrc/accounts.json` on both boxes and redeploy both
+   lanes. Still no behaviour change — no project is tagged yet, so the rule
+   permits everything.
+3. **Check the pools exist.** `ccrc doctor`'s `pools` check passes,
+   `GET /api/accounts` shows a `pool` per account, and the pool sheet lists the
+   names you expect.
+4. **Tag projects one at a time**, starting with one whose pool has headroom.
+   Watch `swap.log` for `rehome`, `auto-pool` and `auto-rescue`, and the cards
+   for `N stranded`.
+5. **Expect strands where a pool is thin.** A pool of one or two accounts, both
+   at ceiling, strands its hard-blocked sessions instead of crossing. That is
+   the design working, not a fault; the banner names the three remedies.
+6. **Rollback** is `ccd project-pool --project <p> --clear` — nothing moves,
+   because untagged is unconstrained. For the account side, remove the `pool`
+   keys and redeploy agent-first. The per-session pool fields purge with their
+   registry rows and are harmless if left behind.
 
 ### Login screens get no keystrokes, and lost auth joins the rescue lane
 
@@ -2584,7 +2766,13 @@ confident UI over stale data. A server+PWA-only change has no such constraint.
 unattended, and `ccd caps` has advertised the verb since long before it took
 flags — so a server deployed ahead of its ccd sees the verb gate pass and the
 call fail. One attempt per workspace, absorbed by the lane's retry guard, and
-zero if the agent ships first.
+zero if the agent ships first. Account pools are the same rule with a *visible*
+transient: between the two lanes the two boxes PROJECT different `accounts.sh` —
+the fleet host's is regenerated by the new emitter while this server still runs
+the old one — so `GET /api/fleet/health` reports `roster: 'divergent'` and the
+PWA raises its amber banner until the server lane runs. That is expected, not a fault — the
+agent lane prints the same sentence as it goes — and the second deploy clears
+it.
 
 **Restore** (manual, from the target box — pick the `<ts>` to roll back to):
 
