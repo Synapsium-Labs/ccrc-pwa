@@ -106,8 +106,10 @@ beside it when the programme closes.
   mail, feed and the mail screen. The mechanism is the one the tree already has: resolution at send time,
   and at occupant change the D-1425 act (a fresh delivery row to the heir, the predecessor's row parked)
   generalised by role and funnelled through `bindSession`, the one writer that RE-binds `runs.sessionId`
-  (corrected, D-2753 — the open's own insert writes it first; `bindSession`'s uniqueness claim is about
-  re-binding). Stated
+  (corrected, D-2753 — and corrected again in fix round 6: the second writer is `reconstruct`'s fresh-row
+  `INSERT INTO runs (… sessionId …)`, NOT the open's insert, whose column list carries no `sessionId` at all;
+  the open route binds through `setSession` → `bindSession`'s UPDATE, so `bindSession`'s uniqueness claim is
+  about RE-binding, exactly as its own docstring says). Stated
   honestly in the spec: no route re-binds a live run today, so the worker arm is reached only by the
   store test that drives it — the funnel exists so that the day a recovery re-binds a run, the promise
   holds.
@@ -262,8 +264,11 @@ so **the gate is closed** and **the flip defers** — `HOME_PROJECT_LEGACY_ACCEP
   later wave. The per-run remedy was offered and declined on 2026-09-14: abandoning run 47 and re-opening it with a
   `homeProject` would heal `account-pools` alone at the cost of a `failed` row for a run that did nothing, and the
   legacy event of 11:34:24Z stays written either way — so the write surface is the only fix for all six.
-- **OPEN ITEM (no deviation number) — README states the programme-mail facts twice, 287 lines apart at this
-  wave's tip (the gap drifts with every edit between them; D-2747 carries the measured chain):**
+- **OPEN ITEM (no deviation number) — README states the programme-mail facts twice.** The pair the number
+  measures is the heir sentence "When a run's session is replaced" and the "Programme mail at scale." heading:
+  **287 lines apart at `4172d55a`**, and README is unchanged between them since. Other anchor pairs in these two
+  regions give other numbers (294, 281), so the pair has to be named or the number means nothing; D-2747 carries
+  the measured chain:
   `README.md`'s cross-repo subsection ("Mail finds a role, not a session." / "Finding a programme's traffic.") and
   its "Programme mail at scale." paragraph restate the same heir-inheritance and outstanding-read facts, and this
   fix round's D-2753 (MAJOR 1, MAJOR 3) each had to correct both copies separately — the duplication is why two of

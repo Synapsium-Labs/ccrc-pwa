@@ -78,13 +78,19 @@ describe('README: cross-repo programmes', () => {
         .toContain(field);
       expect(crossSection(), `the cross-repo section does not name ${field}`).toContain(field);
     }
-    // D-2754, fix round 5: both halves below used to be bare `toContain('homeProject')`
-    // — the same call the bug was, relabelled. Measured: `routes.ts` holds 16
-    // occurrences of the token (comments at :257, :266, :328, :1153 and helpers),
-    // so any one of them alibied the destructure; and `crossSection()` names it at
-    // :1496, :1511 and :1576, so rewording the request-contract sentence itself left
-    // the suite green. Each half now pins the ONE construct it claims to.
-    expect(ROUTES, 'the open handler no longer destructures homeProject off the request body')
+    // D-2754, fix rounds 5 and 6: both halves below used to be bare
+    // `toContain('homeProject')` — the same call the bug was, relabelled. `routes.ts`
+    // holds the token many times over (a comment at `:329`, live code at `:1155`, and
+    // helpers), so any one of them alibied the destructure; and `crossSection()` names
+    // it three times over, so rewording the request-contract sentence alone left the
+    // suite green. Round 5's replacement was still file-wide while its message named
+    // the open handler: adding the token to ANOTHER registration's destructure kept it
+    // green. Both halves now pin the one construct they name, and the ROUTES half is
+    // scoped to the `POST /api/runs` handler body before it looks.
+    const openHandler = (): string =>
+      passage('the open route handler', ROUTES,
+        "app.post('/api/runs', async (req, reply) => {", "\n  app.post('/api/runs/:id/dispatch'");
+    expect(openHandler(), 'the open handler no longer destructures homeProject off the request body')
       .toMatch(/const \{[^}]*\bhomeProject\b[^}]*\} = body;/);
     expect(crossSection(), 'the cross-repo section no longer states the request contract — ' +
       'that the canonical open body takes homeProject on every wave')
@@ -298,10 +304,14 @@ describe('README: the run lifecycle and programme mail', () => {
     const sameOpen = same.indexOf('same `sessionId`');
     const sameClose = same.indexOf('`final:false`');
     const sameClosed = same.indexOf('closed row');
-    const sameDispatch = same.lastIndexOf('dispatch');
+    // D-2740, fix round 6: `same.lastIndexOf('dispatch')` was the cross arm's defect
+    // in the other arm — four occurrences of the word here too, so a reword of the
+    // gate sentence left it green. Derived from the gate sentence itself, as the
+    // cross arm now is.
+    const sameDispatch = same.indexOf('Only then dispatch');
     for (const [marker, at] of [
       ['same `sessionId`', sameOpen], ['`final:false`', sameClose],
-      ['closed row', sameClosed], ['dispatch', sameDispatch],
+      ['closed row', sameClosed], ['Only then dispatch', sameDispatch],
     ] as const) {
       expect(at, `same-project ${marker} is absent`).toBeGreaterThan(-1);
     }
