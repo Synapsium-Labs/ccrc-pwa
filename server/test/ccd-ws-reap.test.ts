@@ -2719,6 +2719,19 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
       const failed = reaps.find((e) => e['outcome'] === 'failed')!;
       expect(failed['refusal']).toBe('purge-refused');
       expect(String(failed['detail'])).toContain('still stand');
+      // THE DISCRIMINATORS, so the CONTROL sentence the leg below names is true
+      // (r5 R4-M1). "still stand" is carried by BOTH status-1 sentences, so
+      // asserting it alone pinned nothing about WHICH one shipped: MEASURED in
+      // a throwaway copy, making `ccd/ccd`'s canonical-vanished override fire
+      // unconditionally left this file GREEN 88/88, while an ordinary contended
+      // reap journaled "restore the lock by hand" for a lock that is right
+      // there and "a re-run cannot help" when a re-run is the only thing that
+      // can. Only the contention arm prescribes a wait that ends, and only the
+      // other arm names its own token, so these two tell them apart.
+      expect(String(failed['detail']), 'the CONTENTION sentence: a wait that can end is the remedy')
+        .toContain('once the compaction settles');
+      expect(String(failed['detail']), 'and never the canonical-vanished remedy, which is false on a lock that exists')
+        .not.toContain('canonical-vanished');
       expect(String(failed['tx'] ?? ''), 'a MINTED, non-empty tx').not.toBe('');
 
       // WHAT THE MESSAGE PROMISES IS TRUE: the row and its authorization are
@@ -2739,8 +2752,12 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
     // `_compact_lock_acquire` answers 1 both for the contended lock the leg
     // above holds and for a permanent lock unlinked out of contract under a
     // live holder, and tells them apart only in COMPACT_LOCK_WHY. The leg
-    // above is the CONTROL: same token, same verb, and the contention sentence
-    // survives there unchanged.
+    // above is the CONTROL, and since r5 R4-M1 it ASSERTS the difference
+    // instead of implying it: same token, same verb, and it requires the
+    // contention arm's own clause ("once the compaction settles") together
+    // with the ABSENCE of this leg's token. Before that it asserted only
+    // "still stand", which both sentences carry, so it could not have caught
+    // an override that fired on every refusal.
     //
     // THE HOLDER GOES THROUGH THE SHIPPED ACQUIRE, which is what leaves a
     // descriptor on an unlinked `lock-open` alias for `_compact_lock_vanished`
