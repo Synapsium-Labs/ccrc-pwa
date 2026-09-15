@@ -120,7 +120,20 @@ describe('compact-card.mjs ships', () => {
     // it does not merely leak a file — it makes that sentence false.
     const fn = /_uninst_cc_sessions\(\) \{([\s\S]*?)\n\}/.exec(src);
     expect(fn, 'ccrc still has a _uninst_cc_sessions').toBeTruthy();
-    expect(fn![1], 'ccrc uninstall removes the helper it installs').toContain(`"$reg/${name}"`);
+    const body = fn![1]!;
+    const removal = code(body).find((l) => l.includes(`/${name}"`));
+    expect(removal, 'ccrc uninstall removes the helper it installs').toBeTruthy();
+    // THE WHOLE PATH, DERIVED — not the basename with a literal directory
+    // beside it. MEASURED (r1 A-1): `$reg` was a literal in the expected
+    // string, so moving `COMPACT_HELPER` and all three installer destinations
+    // to `$HOME/.ccrc/` while leaving this rm list alone kept the suite 8/8
+    // GREEN — install set and removal list no longer the same set, which is
+    // the sentence `_uninst_cc_sessions`' own header makes. `$reg` is read out
+    // of the function's own binding, so the two still cannot be edited apart.
+    const reg = /^\s*local reg="([^"]+)"$/m.exec(body);
+    expect(reg, 'and still binds $reg to the directory it sweeps').toBeTruthy();
+    expect(removal!.replace('$reg', reg![1]!),
+      'the path ccrc uninstall removes IS the path the hook resolves').toContain(`"${abs}"`);
   });
 
   it('the release tarball carries it, because the pathspec names a directory', () => {
