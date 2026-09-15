@@ -2104,6 +2104,72 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       .not.toContain('the compaction lock was unavailable');
   }, 120_000);
 
+  it('(d1g) the two DIE sites name the token too, and say so ONLY when the acquire set one (r8 matrix)', async () => {
+    // THE OTHER TWO CONSUMERS OF `COMPACT_LOCK_WHY`. `cmd_ws_add` and
+    // `cmd_start` read the variable DIRECTLY rather than through
+    // `_compact_lock_why_remedy` — their message is transient stderr, not a
+    // durable journal line, so it carries no per-cause remedy — and the clause
+    // that names the token is a `${COMPACT_LOCK_WHY:+ …}` expansion: a
+    // CONDITIONAL, and therefore a claim in TWO directions. Nothing measured
+    // either one. MEASURED in this round's matrix: respelling the variable
+    // inside that expansion at BOTH sites, so the clause can never fire, left
+    // `ccd-lifecycle-purge` GREEN 57/57 — and a search of `server/test/` for
+    // any phrase of the sentence returned ZERO hits. The source scan at
+    // `row creation acquires BEFORE any row field` requires `retry` and the
+    // lock's name; it says nothing about the token or about the withdrawal.
+    //
+    // BOTH DIRECTIONS, PER VERB: a directory at the lock pathname is
+    // `lock-path-occupied`, a state no wait ends, so the retry must be
+    // withdrawn by name; an ordinary HELD lock leaves `COMPACT_LOCK_WHY` empty
+    // and the withdrawal must be absent, because there a retry IS the remedy.
+    const DIE_LEGS = [
+      { verb: 'ws-add', id: 'demo-quiet-basin',
+        snippet: `${WS_ADD} ( CCD_WS_SLUG=quiet-basin cmd_ws_add demo )`,
+        setup: (): void => { h.makeRepo('demo'); } },
+      { verb: 'start', id: 'claude-demo',
+        snippet: `${WS_ADD} _alive() { return 1; }; _have_systemctl() { return 1; }; cmd_start claude demo`,
+        setup: (): void => { fs.mkdirSync(path.join(h.home, 'projects', 'demo'), { recursive: true }); } },
+    ] as const;
+    const runVerb = (snippet: string): { status: number | null; stderr: string } => {
+      const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+        encoding: 'utf8', cwd: h.home, timeout: 60_000,
+        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+      });
+      return { status: r.status, stderr: String(r.stderr ?? '') };
+    };
+    for (const leg of DIE_LEGS) {
+      // (i) A TOKENED CONDITION.
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.setup();
+      fs.mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
+      fs.mkdirSync(lockOf(leg.id));
+      const probe = h.sh(`_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(probe, `${leg.verb}: the fixture is in the occupied-pathname state`).toContain('RC=1');
+      expect(probe, `${leg.verb}: and the acquire says which refusal it is`).toContain('WHY=lock-path-occupied');
+      const tokened = runVerb(leg.snippet);
+      expect(tokened.status, `${leg.verb}: a refused acquire is not a success`).not.toBe(0);
+      expect(tokened.stderr, `${leg.verb}: the die names the lock it could not take`)
+        .toContain('compactions.lock');
+      expect(tokened.stderr, `${leg.verb}: and the token the acquire measured`)
+        .toContain('lock-path-occupied');
+      expect(tokened.stderr, `${leg.verb}: and WITHDRAWS the retry it prescribed one clause earlier`)
+        .toContain('EXCEPT that a retry cannot help here');
+
+      // (ii) THE CONTROL: ordinary contention, where the variable is EMPTY.
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.setup();
+      const release = await hold(leg.id, 25);
+      let contended: { status: number | null; stderr: string };
+      try { contended = runVerb(leg.snippet); } finally { release(); }
+      expect(contended.status, `${leg.verb}: a contended acquire is not a success either`).not.toBe(0);
+      expect(contended.stderr, `${leg.verb}: and this one DOES prescribe the retry`).toContain('retry');
+      expect(contended.stderr, `${leg.verb}: which it must not then withdraw — a wait ends this one`)
+        .not.toContain('EXCEPT that a retry cannot help here');
+      expect(contended.stderr, `${leg.verb}: and it names no token, because the acquire measured none`)
+        .not.toContain('lock-path-occupied');
+    }
+  }, 180_000);
+
   it('(d1e) EVERY token the acquire can set is keyed to its own remedy in the shared helper, and all four durable callers consult it WITH THEIR OWN ARGUMENTS (r6 R5-M3, r7 R6-I2/R6-I3/R6-M1)', () => {
     /** A comment block read as PROSE: the `#` gutters and the ~78-column hard
      *  wrap are formatting, and a sentence this scan looks for is split across
