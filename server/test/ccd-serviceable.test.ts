@@ -31,17 +31,34 @@ beforeEach(() => { h = makeCcdHarness('ccrc-ccd-serviceable-'); seedAccountsSh(h
 afterEach(() => { h.cleanup(); });
 
 const now = (): number => Math.floor(Date.now() / 1000);
-const seedCase = (c: (typeof SERVICEABILITY_CASES)[number]): void => {
+// `t0` is sampled ONCE per case, by the caller, and threaded through every
+// clock read for that case — the seed file, and both L0 `now` arguments —
+// rather than each site resampling its own fresh `now()`. The bash arm still
+// samples wall time independently (`_share_pct`'s python re-reads
+// `time.time()` after a real subprocess spawn), so a shared t0 alone does not
+// bound that arm; `alignToSecondBoundary` below does, by giving the whole
+// spawn path a wide margin before the next whole-second tick.
+const seedCase = (c: (typeof SERVICEABILITY_CASES)[number], t0: number): void => {
   const lim = path.join(h.home, '.cc-limits'); fs.mkdirSync(lim, { recursive: true });
   for (const f of fs.readdirSync(lim)) fs.rmSync(path.join(lim, f));
-  if (c.limits) fs.writeFileSync(path.join(lim, `${c.lane}.json`), c.limits(now()));
+  if (c.limits) fs.writeFileSync(path.join(lim, `${c.lane}.json`), c.limits(t0));
   const sw = path.join(h.home, '.cc-sessions', 'usage', 'sweep'); fs.rmSync(sw, { recursive: true, force: true });
   if (c.sweep) {
     fs.mkdirSync(sw, { recursive: true });
-    const finishedAt = new Date((now() - c.sweep.ageS) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+    const finishedAt = new Date((t0 - c.sweep.ageS) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
     const perAccount = 'estimate' in c.sweep ? { [c.lane]: { fableShare: { estimate: c.sweep.estimate } } } : {};
     fs.writeFileSync(path.join(sw, 'latest.json'), JSON.stringify({ finishedAt, perAccount }));
   }
+};
+// Review finding #1: the "exactly SHARE_FRESH_S is still fresh" row is on a
+// whole-second-boundary edge, so a wall clock that ticks over between seeding
+// and either arm's freshness sample flips it to stale in BOTH languages, with
+// no load involved — pure clock phase. Sourcing `ccd/ccd` in a fixture HOME
+// plus a python3 spawn plus fs writes measures ~50-60ms idle, so aligning to
+// just past a boundary before sampling t0 buys ~800ms of headroom against
+// that path — deterministic rather than probabilistic.
+const alignToSecondBoundary = async (): Promise<void> => {
+  while (Date.now() % 1000 >= 200) await new Promise((r) => setTimeout(r, 5));
 };
 const RC: Record<string, number> = { servable: 0, unservable: 1, unmeasured: 2, skipped: 3 };
 
@@ -67,7 +84,9 @@ describe('_serviceable over SERVICEABILITY_CASES — four exit codes, and the L0
   });
 
   it.each(SERVICEABILITY_CASES.map((c) => [c.name, c] as const))('%s', async (_n, c) => {
-    seedCase(c);
+    await alignToSecondBoundary();
+    const t0 = now();
+    seedCase(c, t0);
     // `|rc=` (not a leading space) as the delimiter: `h.sh` trims the whole
     // captured string, and the `skipped` case is the one row where
     // `_serviceable` prints NOTHING before it — a space-only prefix would sit
@@ -78,11 +97,13 @@ describe('_serviceable over SERVICEABILITY_CASES — four exit codes, and the L0
     expect(Number(rcTok)).toBe(RC[c.expect]);
     if (c.expect === 'servable' || (c.expect === 'unservable' && c.why === 'ceiling')) expect(Number(word)).toBe(c.figurePct);
     if (c.why === 'backend' || c.expect === 'unmeasured') expect(word).toBe(c.why);
-    // the L0 side over the SAME bytes
+    // the L0 side over the SAME bytes, and the SAME instant t0 the seed used —
+    // never a freshly resampled `now()`, which would let this arm disagree
+    // with the seed (and with the bash arm above) about what "now" was.
     const cfg = loadConfig({ CCRC_HOME: h.home });
-    const limits = await readLimits(localIO, cfg, now());
+    const limits = await readLimits(localIO, cfg, t0);
     const shares = await readSharesMeasured(localIO, cfg.registryDir);
-    const v = serviceability(c.cls, { anthropic: c.lane === 'claude', seven: sevenOf(limits[c.lane]), share: shareFor(shares, c.lane) }, now());
+    const v = serviceability(c.cls, { anthropic: c.lane === 'claude', seven: sevenOf(limits[c.lane]), share: shareFor(shares, c.lane) }, t0);
     expect(v.kind).toBe(c.expect);
     if ('why' in v) expect(v.why).toBe(c.why);
     if ('figurePct' in v && c.figurePct !== undefined) expect(v.figurePct).toBe(c.figurePct);

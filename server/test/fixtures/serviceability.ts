@@ -31,6 +31,14 @@ export const SERVICEABILITY_CASES: readonly ServiceabilityCase[] = [
   { name: 'fable AT the ceiling is unservable', cls: 'fable', lane: 'claude', limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.40 }, expect: 'unservable', why: 'ceiling', figurePct: 40 },
   { name: 'fable rounds floor(x*100+0.5): 0.395 is 40, unservable', cls: 'fable', lane: 'claude', limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.395 }, expect: 'unservable', why: 'ceiling', figurePct: 40 },
   { name: 'fable rounds floor(x*100+0.5): 0.394 is 39, servable', cls: 'fable', lane: 'claude', limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.394 }, expect: 'servable', figurePct: 39 },
+  // 0.395's product (38.499999999999996 for 38.5, or 39.5 rounding to 40 either
+  // way) does NOT discriminate floor(x*100+0.5) from Python's round(): 39.5
+  // rounds half-to-even to 40, which coincides with int(39.5+0.5)=40. 0.125 is
+  // exactly representable (12.5 exactly), so round(12.5)=12 (half-to-even, 12
+  // is the even neighbour) while floor(12.5+0.5)=13 — the row global constraint
+  // 10 needs to keep the two-language rounding formula pinned rather than
+  // merely stated in a comment.
+  { name: 'fable rounds half UP, not half-to-even: 0.125 is 13', cls: 'fable', lane: 'claude', limits: fresh(10, 10), sweep: { ageS: 1, estimate: 0.125 }, expect: 'servable', figurePct: 13 },
   { name: 'fable with no sweep file is unmeasured (no-figure)', cls: 'fable', lane: 'claude', limits: fresh(10, 10), expect: 'unmeasured', why: 'no-figure' },
   { name: 'fable with no row for the lane is unmeasured (no-figure)', cls: 'fable', lane: 'claude', limits: fresh(10, 10), sweep: { ageS: 1 }, expect: 'unmeasured', why: 'no-figure' },
   { name: 'fable with a null estimate is unmeasured (no-figure)', cls: 'fable', lane: 'claude', limits: fresh(10, 10), sweep: { ageS: 1, estimate: null }, expect: 'unmeasured', why: 'no-figure' },
