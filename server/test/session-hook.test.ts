@@ -3804,6 +3804,133 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(fs.existsSync(cardFile()), 'an aged card is REMOVED when the proof holds').toBe(false);
   });
 
+  // ── r4 A-M2: the two pairs that shared one proof across a fork ──────────
+  // Each pair had an EXTERNAL BINARY between two mutations, so the second
+  // mutation was taken on a proof one fork old. The injection is the same
+  // device as `strangerFind`, moved onto the binary that actually forks in
+  // each pair — `mv` for PreCompact's stage renames, `rm` for PostCompact's
+  // canonical unlink — and each stub matches only the one invocation it means
+  // to land inside, execing the real tool for every other call the arm makes.
+  /** A `mv` that replaces canonical inside the CARD-STAGE rename's own fork.
+   *  The pattern matches `.<id>.compactcard.<pid>.<nonce>.stage` and nothing
+   *  else this file renames: the initial atomic publication goes through a
+   *  `…hook-write.tmp` name, the set stage through `compactset`, and the serve
+   *  arm's claim through `…session-claim.tmp`. */
+  const strangerMv = (replace: boolean): void => {
+    const real = realTool('mv');
+    stub('mv', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      'case "$*" in',
+      '  *compactcard.*.stage*)',
+      replace
+        ? '    if [ -e "$LOCK" ]; then rm -f "$LOCK";'
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK"; rm -f "$SRC"; fi ;;'
+        : '    : ;;   # the control: same stub, same fork, no replacement',
+      '  *) : ;;',
+      'esac',
+      `exec ${real} "$@"`,
+    ].join('\n'));
+  };
+  /** An `rm` that replaces canonical inside PostCompact's CANONICAL-SET unlink
+   *  own fork. The pattern ends at `/demo-quiet-basin.compactset`, so the stage
+   *  and `.part` removals (which carry a suffix) and every claim, snapshot and
+   *  marker removal run the real `rm` untouched. */
+  const strangerRm = (replace: boolean): void => {
+    const real = realTool('rm');
+    stub('rm', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      'case "$*" in',
+      '  */demo-quiet-basin.compactset)',
+      replace
+        ? '    if [ -e "$LOCK" ]; then '
+          + ` ${real} -f "$LOCK";`
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK";'
+          + ` ${real} -f "$SRC"; fi ;;`
+        : '    : ;;   # the control: same stub, same fork, no replacement',
+      '  *) : ;;',
+      'esac',
+      `exec ${real} "$@"`,
+    ].join('\n'));
+  };
+  /** Every `.<id>.compactpost.<pid>.<r>.<r>.claim` on disk. */
+  const postClaims = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => /^\.demo-quiet-basin\.compactpost\..+\.claim$/.test(n));
+  const journalLines = (): any[] => fs.readFileSync(journalFile(), 'utf8')
+    .split('\n').filter((l) => l.trim() !== '').map((l) => JSON.parse(l));
+
+  it('ITEM 3 BETWEEN THE TWO STAGE RENAMES: the card is published and the SET IS NOT — and the serve arm tolerates that pair (r4 A-M2)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    strangerMv(true);
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    // THE INTERMEDIATE STATE, asserted rather than argued: the card rename
+    // landed before the proof, and the canonical set is step 7's OWN
+    // publication — `files` still null, because the helper's staged set never
+    // replaced it.
+    expect(fs.existsSync(cardFile()), 'the card rename landed before the proof').toBe(true);
+    expect(readSet().files, 'the set is the hook OWN initial publication, not the helper enriched one').toBe(null);
+    expect(readSet().nonce, 'and it carries the same nonce as the card line 1').toBe(readCard().nonce);
+    expect(stages(), 'the refusal dropped this process own stages').toEqual([]);
+    expect(mutexFree(), 'and released the row').toBe(true);
+    // AND THE NEXT ARM TOLERATES IT. This is the measurement the decision to
+    // ADD this re-check rests on: the serve arm inspects card + set, this pair
+    // is matched, and it serves.
+    const r = runFull(compactStart(tree, transcript));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'a card published without its enriched set is still a servable pair').toContain('graphify card —');
+  });
+
+  it('ITEM 3 BETWEEN THE TWO STAGE RENAMES, THE CONTROL: the same stub and the same fork WITHOUT the replacement publish BOTH', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    strangerMv(false);
+    expect(runFull(preCompact(tree, transcript))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(cardFile()), 'the card is published here too').toBe(true);
+    // Without this leg the assertion above is satisfied by a stub that broke
+    // `mv` outright, which is a different test.
+    expect(readSet().files, 'the helper ENRICHED set is published when the proof holds').not.toBe(null);
+  });
+
+  it('ITEM 3 BETWEEN THE CANONICAL UNLINK AND THE CLAIM TOUCH: the settlement refuses and RETAINS the claim — and the next arm tolerates that (r4 A-M2)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    strangerRm(true);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    // THE INTERMEDIATE STATE: canonical unlinked (the `rm` landed before the
+    // proof), the claim RETAINED as the only verified copy of those bytes, and
+    // nothing committed under a lock that stopped naming canonical.
+    expect(fs.existsSync(setFile()), 'the unlink landed before the proof').toBe(false);
+    expect(postClaims(), 'the claim is RETAINED — the refusal discards no verified copy').toHaveLength(1);
+    expect(fs.existsSync(journalFile()), 'and no journal line commits on this path').toBe(false);
+    expect(mutexFree(), 'and the row is released').toBe(true);
+    // AND THE NEXT ARM TOLERATES IT. A later PostCompact finds no canonical
+    // set and takes the absent-set branch, which attributes nothing — the
+    // measurement the decision to ADD this re-check rests on.
+    strangerRm(false);
+    expect(runFull(postCompact(tree, transcript, 'a later summary'))).toEqual({ stdout: '', stderr: '' });
+    const lines = journalLines();
+    expect(lines, 'the absent-set branch commits exactly one line').toHaveLength(1);
+    expect(lines[0].scope, 'a genuinely absent canonical set attributes nothing').toBe(null);
+  });
+
+  it('ITEM 3 BETWEEN THE CANONICAL UNLINK AND THE CLAIM TOUCH, THE CONTROL: the same stub and the same fork WITHOUT the replacement settle and commit', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    strangerRm(false);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'the settlement consumes canonical here too').toBe(false);
+    // Without this leg the assertions above are satisfied by a stub that broke
+    // `rm` outright, which is a different test.
+    expect(postClaims(), 'a COMPLETED settlement consumes its own claim').toEqual([]);
+    const lines = journalLines();
+    expect(lines, 'and commits its one line').toHaveLength(1);
+    expect(lines[0].scope, 'attributed from the claim, not from nothing').not.toBe(null);
+  });
+
   // — and the SOURCE pin for the sites one fixture cannot reach ————————————
   // The fixture above drives ONE site, because a stub can only inject where
   // the section it targets actually forks. The rule item 3 states is about
@@ -3897,27 +4024,66 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // Each entry is the FIRST line of a statement that mutates a canonical
     // pathname while the row's mutex is held. Order matters: the scan walks
     // them in file order and each one bounds the next.
-    const MUTATIONS: Array<[string, string]> = [
-      ['PreCompact: the ambiguous-scope card removal', '[[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"'],
-      ['PreCompact: the exact-family sweep', 'while IFS= read -r cand; do'],
-      ['PreCompact: the canonical set publication', '_hook_write_atomic "$set" "$nonce" "$doc"'],
-      ['PreCompact: the two stage renames', 'if [[ "$ownhead" =~'],
-      ['PostCompact: the canonical unlink and the claim touch', 'if ! rm -f "$set" 2>/dev/null; then'],
-      ['PostCompact: the journal commit', 'mv -f "$stage" "$journal" 2>/dev/null'],
-      ['SessionStart(compact): the aged-card removal', 'rm -f "$f"'],
-      ['SessionStart(compact): the card claim', 'if ! { mv -f "$f" "$claim"; } 2>/dev/null; then'],
+    //
+    // ONE ENTRY PER MUTATION (r4 A-M2). Two entries used to name a PAIR — "the
+    // two stage renames" and "the canonical unlink and the claim touch" — and
+    // a pair sharing one proof is the one thing a scan built on floors cannot
+    // see: the LABEL said two mutations while the MECHANISM required a single
+    // guard, with an external binary (and therefore a fork) standing between
+    // them. Splitting them is what forces a re-check into each gap; the
+    // decision to add those re-checks, and what a refusal between each pair
+    // leaves, is argued at the sites themselves and driven by the two effect
+    // fixtures above, not carried in these labels.
+    //
+    // `pick` names which occurrence of a needle that appears more than once,
+    // and pins the TOTAL beside it, so a new occurrence reds rather than
+    // silently shifting the anchor. `branchOf` says this mutation sits in an
+    // ALTERNATIVE arm of a named earlier entry's branch: neither that entry's
+    // mutation nor any re-check inside its arm ever runs on this path, so the
+    // floor is the floor THAT entry used and not the line before this one.
+    type Mut = { what: string; needle: string; pick?: [number, number]; branchOf?: string };
+    const MUTATIONS: Mut[] = [
+      { what: 'PreCompact: the ambiguous-scope card removal', needle: '[[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"' },
+      { what: 'PreCompact: the exact-family sweep', needle: 'while IFS= read -r cand; do' },
+      { what: 'PreCompact: the canonical set publication', needle: '_hook_write_atomic "$set" "$nonce" "$doc"' },
+      { what: 'PreCompact: the card-stage rename', needle: 'mv -f "$cardstage" "$cardf"' },
+      { what: 'PreCompact: the set-stage rename, rc 0 arm', needle: 'mv -f "$setstage" "$set"', pick: [0, 2] },
+      { what: 'PreCompact: the set-stage rename, rc 3 arm', needle: 'mv -f "$setstage" "$set"', pick: [1, 2],
+        branchOf: 'PreCompact: the card-stage rename' },
+      { what: 'PostCompact: the canonical unlink', needle: 'if ! rm -f "$set" 2>/dev/null; then' },
+      { what: 'PostCompact: the claim touch', needle: 'if ! touch "$claim" 2>/dev/null; then' },
+      { what: 'PostCompact: the journal commit', needle: 'mv -f "$stage" "$journal" 2>/dev/null' },
+      { what: 'SessionStart(compact): the aged-card removal', needle: 'rm -f "$f"' },
+      { what: 'SessionStart(compact): the card claim', needle: 'if ! { mv -f "$f" "$claim"; } 2>/dev/null; then' },
     ];
+    /** The k-th line carrying `needle`, with the total pinned: an anchor that
+     *  gained or lost an occurrence is a moved anchor, not a re-indexed one. */
+    const nthOf = (needle: string, k: number, of: number): number => {
+      const hits = linesOf(needle);
+      expect(hits, `the source anchor moved or changed count: ${needle}`).toHaveLength(of);
+      return hits[k]!;
+    };
+    const floorUsed = new Map<string, number>();
     let prev = 0;
-    for (const [what, needle] of MUTATIONS) {
-      const m = lineOf(needle);
-      expect(m, `${what}: the mutations are scanned in file order`).toBeGreaterThan(prev);
+    for (const e of MUTATIONS) {
+      const m = e.pick ? nthOf(e.needle, e.pick[0], e.pick[1]) : lineOf(e.needle);
+      expect(m, `${e.what}: the mutations are scanned in file order`).toBeGreaterThan(prev);
       // The floor is whichever is nearer: the previous mutation, or this
-      // section's own acquire when this is the section's first.
+      // section's own acquire when this is the section's first — except in an
+      // alternative branch, which inherits its sibling's floor.
       const lastAcquire = Math.max(0, ...acquires.filter((a) => a < m));
-      const floor = Math.max(prev, lastAcquire);
+      let floor: number;
+      if (e.branchOf !== undefined) {
+        const inherited = floorUsed.get(e.branchOf);
+        expect(inherited, `${e.what}: its branch sibling "${e.branchOf}" is listed above it`).toBeGreaterThan(0);
+        floor = inherited!;
+      } else {
+        floor = Math.max(prev, lastAcquire);
+      }
+      floorUsed.set(e.what, floor);
       const between = guards.filter((g) => g > floor && g < m);
       expect(between.length,
-        `${what} (line ${m}) has no identity re-check after line ${floor} — item 3 is unbuilt there`)
+        `${e.what} (line ${m}) has no identity re-check after line ${floor} — item 3 is unbuilt there`)
         .toBeGreaterThan(0);
       prev = m;
     }

@@ -1379,6 +1379,28 @@ _hook_compact_pre() {
     # neither, so the helper's staged `steered:false` is published unchanged.
     if [[ "$helper_rc" == 0 ]]; then
       mv -f "$cardstage" "$cardf" 2>/dev/null || true
+      # ITEM 3, BETWEEN THE TWO RENAMES (r4 A-M2). `mv` is an external binary,
+      # so the card rename above FORKED: the proof at step 12 is no longer this
+      # moment, and the two renames used to share it across that child. Only
+      # the rc 0 arm needs this one — the rc 3 arm below branches away before
+      # the card rename and reaches its own rename with step 12's proof and
+      # nothing forked in between.
+      #
+      # WHAT A REFUSAL HERE LEAVES, and why it is safe to take: the card is
+      # published and the canonical set still holds STEP 7's own publication —
+      # the same nonce, with `files`/`stats` null because the helper's staged
+      # set never replaced it. The serve arm inspects exactly that pair (card
+      # line 1 against the set's head nonce) and serves it; and it is already
+      # today's state whenever the set-stage rename below fails, which that
+      # line's own `|| true` tolerates. So the intermediate state is one the
+      # next arm already handles, and the proof costs it nothing. (Spelled
+      # without the rename's own text: the item-3 source scan anchors on that
+      # statement and counts its occurrences, and a comment quoting it is a
+      # third hit.)
+      if ! _hook_lock_still_canonical "$lockfd"; then
+        rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+        _hook_lock_release "$lockfd"; return 0
+      fi
       mv -f "$setstage" "$set" 2>/dev/null || true
     elif [[ "$helper_rc" == 3 ]]; then
       mv -f "$setstage" "$set" 2>/dev/null || true
@@ -1470,6 +1492,29 @@ _hook_compact_post() {
     if ! rm -f "$set" 2>/dev/null; then
       # Only the VERIFIED claim goes; canonical's bytes and mtime are untouched.
       rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # ITEM 3, BETWEEN THE UNLINK AND THE TOUCH (r4 A-M2). `rm` is an external
+    # binary, so the unlink above FORKED and the proof at the top of this pair
+    # is no longer this moment. The `touch` is not a canonical write — by then
+    # the claim is the only name for those bytes — but it IS read outside this
+    # process: PreCompact's overlap `find` measures `.$id.compactpost.*.claim`
+    # by mtime, so stamping it under a lock that stopped naming canonical
+    # publishes a settlement verdict this process no longer has the right to.
+    #
+    # WHAT A REFUSAL HERE LEAVES, and why it is safe to take: canonical is
+    # unlinked and the claim is RETAINED, untouched, holding the only verified
+    # copy of those bytes at the set's own original mtime. That is exactly the
+    # terminal state the failed-`touch` restore below already leaves whenever
+    # its no-clobber `link` collides or cannot be proved, and the overlap
+    # measurement a sibling takes off the untouched claim is the value it would
+    # have read off canonical itself. A later PostCompact finds no canonical
+    # set and takes the absent-set branch, which attributes nothing; the claim
+    # is a §3.4 target family and an aged sweep under a later held lock
+    # reclaims it. The refusal must NOT attempt the restore below: `link
+    # "$claim" "$set"` is a canonical mutation and this proof has just said
+    # this descriptor may not take one.
+    if ! _hook_lock_still_canonical "$lockfd"; then
       _hook_lock_release "$lockfd"; return 0
     fi
     if ! touch "$claim" 2>/dev/null; then
