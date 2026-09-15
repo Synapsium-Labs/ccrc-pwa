@@ -549,6 +549,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
   },
+  'chat.css .term-histbar-word': {
+    under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
+    why: "the history bar's legend — `reading history…`, and the sentence a failed read says — sits inside .term-histbar (TerminalDrawer.tsx), whose own background is the well lifted 12% toward the ink. It sets no background of its own and its selector names no ancestor, so no route could ground it; the same shape as .code-block-lang on .code-block-bar. Naming --bg-well instead would flatter the ratio by measuring pixels that are not behind it",
+  },
   'fleet.css .proj-archived-body .sess-line:not(.sess-line--active) .sess-label': {
     under: ['var(--bg-surface)'],
     why: 'the past-tense signal for an archived row is an ink STEP on the label, not element opacity (see the note above the rule). Its ground is the project card. :not(.sess-line--active) is load-bearing — the selected row inverts to background: var(--ink-primary), where --ink-secondary reads 1.81 dark / 2.24 light',

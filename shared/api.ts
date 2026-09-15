@@ -6826,3 +6826,99 @@ export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
  *  Policy is REFUSE, never truncate: a trimmed title is a different sentence
  *  in the durable record. */
 export const LEDGER_TITLE_MAX_BYTES = 200;
+
+/** How far above the screen the drawer's history read starts. Stated ONCE,
+ *  here, and echoed back to the client in the response — the PWA never names a
+ *  number of its own, so there is nothing for the two sides to disagree about.
+ *  2000 is tmux's DEFAULT `history-limit`; `ccd/tmux.conf` sets none, so that
+ *  default is what the fleet runs. Asking for more is not an error — tmux
+ *  returns what it has.
+ *
+ *  IT IS A CEILING NOTHING HAS REACHED, and raising it is deliberately not
+ *  this program's move (spec §6.4). Census of 2026-09-14, 31 live panes on this
+ *  box: `history_size` min 0 / median 0 / p90 5 / max 11, with 25 of the 31 at
+ *  zero, every pane at `history-limit 2000`. What ends a pane's history is the
+ *  program inside it — Claude Code emits `ESC[3J` on repaint, which resets
+ *  `history_size` to 0 (measured, 452 -> 0). A raise would cost tmux memory and
+ *  a whole-server stall on every reflow (F10: ~linear in reflowed lines, 455 ms
+ *  narrow / 1230 ms widen at 19951) for a case the census says does not occur.
+ *  The lever, if a later census disagrees, is one `set -g history-limit N` line
+ *  in `ccd/tmux.conf` — read at tmux server start (F2), reaching no pane that
+ *  already exists. */
+export const PANE_HISTORY_LINES = 2000;
+
+/**
+ * ONE MEASUREMENT OF A PANE, and its failures told apart.
+ *
+ * Read with a single `list-panes -t cc-<id> -F '#{pane_active} #{history_size}
+ * #{history_limit} #{pane_width} #{pane_height} #{alternate_on}'` — all six are
+ * per-pane formats (F8) under a verb the agent already grants, so this opens no
+ * new door in the exec surface.
+ *
+ * FOUR ARMS, NOT A NULL. `list-panes -t <session>` lists EVERY pane of the
+ * current window and the ACTIVE one is the pane `capture-pane -t <session>`
+ * reads (F7) — PR #96 took row `[0]` and mismatched on a split window, where
+ * pane 0 held 278 lines of history and pane 1 was the 24-row active one. So
+ * "tmux answered, but no row said it was active" is a real and separate
+ * condition from "tmux refused" and from "the session is gone", and a caller
+ * that shows a different sentence for each must never receive one value for
+ * all three (CLAUDE.md, no overloaded null; `io.ts`'s `readFileMeasured` is the
+ * pattern).
+ *
+ * `alternate` is CONTEXT, neither a permit nor a refusal (spec §7.2): while the
+ * alternate screen is up a resize does not reflow, but the reflow is only
+ * DEFERRED to alt-exit and lands then, at a size that is exactly what the
+ * numbers at attach predict — nothing scrolls into history while a full-screen
+ * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
+ *
+ * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
+ * reader — one reader per field is the wire rule.
+ */
+export type PaneProbe =
+  | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'unreadable'; detail: string }
+  | { ok: false; reason: 'unparseable'; detail: string };
+
+/**
+ * What `GET /api/sessions/:id/pane/history` answers.
+ *
+ * ADDITIVE AND ABSENCE-PERMITTING. `scrollback`, `alternate` and `width` are
+ * present exactly when the pane probe was `ok` and absent exactly when it was
+ * not — and absent is NOT zero. A `scrollback` of 0 is a MEASURED zero ("there
+ * is nothing above this screen"); an absent one is "we could not look", and a
+ * reader that finds it absent must behave exactly as it did before the field
+ * existed. Nothing here bumps `FLEET_PROTO`.
+ *
+ * `error` keeps `unmeasured` as the single wire token for every could-not-look
+ * condition, and `detail` beside it is the CAPTURE's own message — tmux's
+ * stderr, by way of `CaptureHistory`, whose reasons are only `gone` and
+ * `unmeasured`.
+ *
+ * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
+ * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
+ * narrow a distinction it received, but nothing here carries that pair: the
+ * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
+ * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * this reply's status, and a probe that failed while the capture succeeded is a
+ * 200 with the three measured fields simply absent. Absent is the whole of what
+ * the client is told, and it is enough: the drawer's behaviour on a failed probe
+ * is uniform by design.
+ *
+ * An earlier version of this docstring said the opposite — that `unreadable` vs
+ * `unparseable` "rides in `detail`, which is what the drawer renders". It never
+ * did, and could not: `detail` exists only on the `ok:false` arm, which only the
+ * capture produces. The sentence came from spec §5.3 by way of the plan, which
+ * then overrode it in its own must-not-re-decide note; the contradiction landed
+ * here. (Its deviation number is recorded in the commit that corrected this
+ * paragraph, and not inline: this wave's plan is not a file in this tree, so a
+ * D-ref here would name a number no plan HERE defines. That reds
+ * `deviation-refs.test.ts`'s floor-seed assertion — the one comparing
+ * `floorFromScan` over the tracked tree against the high-water DEFINED in this
+ * tree's plans — and not an orphan-ref scan, which that suite does not have.) If a
+ * later wave does want the probe's reason on the wire, that is a deliberate
+ * widening of this type — not something to infer from this paragraph.
+ */
+export type PaneHistoryReply =
+  | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
+  | { ok: false; error: 'gone' | 'unmeasured' | 'bad-session-id'; detail?: string };
