@@ -453,6 +453,36 @@ export function ChatListInner({
   );
 }
 
+/**
+ * What an unmeasured chat item is assumed to be tall, in px.
+ *
+ * WITHOUT this, virtuoso measures the FIRST rendered item and uses it as the
+ * height of every item it has not measured yet — its own docs call that item
+ * the "probe" and warn that "if the first item turns out to be an outlier
+ * (very short or tall), the rest of the rendering will be slower, as multiple
+ * passes of rendering should happen". Here the probe is the WORST possible
+ * choice: `initialTopMostItemIndex` opens the transcript at the end, so the
+ * probe is the newest turn — and a chat item ranges from a ~40px collapsed
+ * tool card to a 1500px turn carrying two markdown tables. Open on a table and
+ * every one of the other items is assumed to be a table: the scrollbar reports
+ * a transcript ten times longer than it is, then collapses as the real (short)
+ * heights arrive, dragging the scroll position with it.
+ *
+ * A STARTING ESTIMATE, not a measured median — jsdom reports no heights (the
+ * reason `ChatListInner` exists), so this number cannot be derived in a test
+ * and has to be checked in a browser. What it must be is CLOSE TO TYPICAL, not
+ * exact: its whole job is to stop one outlier from speaking for 50 items.
+ */
+const DEFAULT_ITEM_HEIGHT = 96;
+
+/** Open at the newest turn. A module constant, not a per-render object: the
+ *  prop is read once, and a fresh identity on every render is a needless
+ *  invitation for the list to re-run its initial positioning. `'LAST'` +
+ *  `align: 'end'` is virtuoso's own way to say "start at the bottom"; the
+ *  number this replaced said "put the last item at the TOP" and then leaned on
+ *  `alignToBottom` to undo it. */
+const OPEN_AT_NEWEST = { index: 'LAST', align: 'end' } as const;
+
 export function ChatList({
   id,
   events,
@@ -493,10 +523,21 @@ export function ChatList({
             </div>
           );
         }}
+        defaultItemHeight={DEFAULT_ITEM_HEIGHT}
+        // Render well beyond the viewport in both directions. Two properties,
+        // because they answer two different failures: the pixel budget covers
+        // ordinary scrolling, and the ITEM-COUNT floor covers the case
+        // virtuoso's own docs single out — "items with dynamic or very tall
+        // content, where the pixel-based `increaseViewportBy` may not be
+        // sufficient to prevent empty areas". A transcript whose items are
+        // markdown tables is exactly that case, and an empty area here is the
+        // whole chat going blank mid-scroll.
+        increaseViewportBy={{ top: 1200, bottom: 1200 }}
+        minOverscanItemCount={{ top: 4, bottom: 4 }}
         // Stick to the bottom while the reader is there; never yank them back.
         followOutput={(isAtBottom) => (isAtBottom ? 'smooth' : false)}
         atBottomStateChange={setAtBottom}
-        initialTopMostItemIndex={Math.max(0, items.length - 1)}
+        initialTopMostItemIndex={OPEN_AT_NEWEST}
         alignToBottom
       />
       {!atBottom && (
