@@ -81,10 +81,18 @@ describe('compact-card.mjs ships', () => {
   });
 
   it('deploy.sh backs it up in the same set as the hook', () => {
-    const src = read('deploy/deploy.sh');
-    expect(src).toContain(`cp -a ~/${helperRel()} ~/ccrc-backups/$TS/${helperName()}`);
-    expect(src, 'the hook is still the neighbour this is "the same set as"')
-      .toContain('cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh');
+    // EXECUTABLE LINES ONLY — this file's own rule, applied where it was
+    // missing. MEASURED (r1 B2): deleting the executable clause and leaving its
+    // exact spelling behind as a comment left this test GREEN while the agent
+    // lane took no backup at all, and a raw `toContain` cannot tell a rollback
+    // note from a rollback. The count is part of the claim: two spellings of
+    // the same backup would mean one of them is not the one that runs.
+    const lines = code(read('deploy/deploy.sh'));
+    const running = (spelling: string): string[] => lines.filter((l) => l.includes(spelling));
+    expect(running(`cp -a ~/${helperRel()} ~/ccrc-backups/$TS/${helperName()}`),
+      'deploy.sh backs the helper up in exactly one line the shell runs').toHaveLength(1);
+    expect(running('cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh'),
+      'the hook is still the neighbour this is "the same set as"').toHaveLength(1);
   });
 
   it('ccrc install places it at 644 before the hook, update backs it up, uninstall removes it', () => {
