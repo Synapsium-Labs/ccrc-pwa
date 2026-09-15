@@ -12,7 +12,7 @@ scrollback it exists to render.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) @ `9b472a20`, merged with main | **review complete; awaiting a non-author approval** |
+| 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7` | **MERGED 2026-09-15** |
 | 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | planned |
 | 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
 | 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
@@ -30,6 +30,12 @@ mail and the coordinator assigns from the block. **Wave 1 owes none as planned**
 earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
 
 Run ids: wave 1 = **51**.
+
+**The spec, the four plans and this ledger merged as [#102](https://github.com/Synapsium-Labs/ccrc-pwa/pull/102)
+→ `7a91bcf1`, 2026-09-15.** That is what retires D-2772's constraint: the plans are on `main`, so a
+worker from wave 2 on CAN carry an inline `D-N` comment in source and have
+`deviation-refs.test.ts` find its definition in the same tree. Wave 1's two numbers that live only
+in commit messages (D-2771, D-2773) stay where they are — reconciling them is wave 4's item.
 
 ## Wave 1 review — what the fan-out found (2026-09-14)
 
@@ -72,6 +78,46 @@ refused and reported. That refusal is the protocol working against a bad instruc
   the mock prepended) and the fake is faithful (xterm 6.0.0's `BufferService.scrollLines` is
   byte-for-byte the fake's clamp). It is complementary, not redundant — deleting
   `smoothScrollDuration: 0` reds the scan and leaves the fake green.
+
+### The squash that dropped a co-author (2026-09-15) — a coordinator defect, not a wave defect
+
+**Wave 1 merged as `6d46bab7` and `main` credits one co-author where it should credit two.**
+
+The mechanism. `gh pr merge --squash --body-file <f>` **REPLACES** GitHub's generated squash body; it
+does not append to it. The generated body is the only thing that aggregates the `Co-authored-by:`
+trailers of the squashed commits. All 35 commits on #106 carried one; my hand-written body carried
+only Claude's. So the trailer for **Oleksandr Zakharov**, author of the twelve salvaged PR #96
+commits, is absent from `main`.
+
+The irony is the point, and it is this programme's own defect class one level up. The whole wave
+protected that authorship on purpose — it is why the worker was sent to MERGE and not rebase (a
+rebase would have rewritten the twelve cherry-picks and silently re-authored them), and why the
+merged tip was verified at 12 commits / 12 cherry-pick lines / authorship intact. The attribution
+then died at the last step, inside the act of being careful about the body. And the body I wrote says
+*"their original authorship intact"* — **a comment asserting what the tree measures false, written by
+the session that spent three fix rounds red-lining exactly that**.
+
+What survives, measured: GitHub retains all 35 of #106's commits and serves them by SHA
+(`1a7e2615` still reads `Oleksandr Zakharov`), so the provenance is recoverable; what is lost is the
+credit in `main`'s own history, and `main` is protected, so no amend reaches it. Recorded as a
+comment on the PR — [#106 comment 5683785506](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106#issuecomment-5683785506).
+**Operator ruling 2026-09-15: the PR comment is the remedy.** A follow-up commit to `main` carrying
+the trailer, or a `.mailmap` entry, were both considered and declined — cosmetic, and they put a
+second claim about authorship in a second place.
+
+**THE RULE, and it now binds every merge this programme makes.** A hand-written squash body is still
+correct — it is what keeps the merge commits on `main` readable. But hand-writing it **takes over
+responsibility for the trailers**, so derive them rather than remembering them:
+
+```bash
+gh api repos/<org>/<repo>/pulls/<N>/commits --paginate -q '.[].commit.message' \
+  | grep -iE '^co-authored-by:' | sort -u
+```
+
+Every line that comes back belongs in the body. Applied to **#102** before merging it: the query
+returned exactly `Co-Authored-By: Claude Opus 5`, the prepared body already carried it, and the
+merge commit `7a91bcf1` was verified to carry it after the fact. Verify AFTER too — the body is only
+a claim until `git log -1 origin/main` is read back.
 
 ### The merge that four false counts survived — and the guard that caught them (2026-09-15)
 
@@ -338,17 +384,18 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
 
 ## Next-wave brief
 
-**Wave 1 is in fix round 1** (mail 1179, nine items, artifact
-`…/scratchpad/wave1-review/fix-round-1.md`). Wave 2 does not open until wave 1's PR #106 merges.
+**Wave 1 is DONE and merged** (`6d46bab7`), and so are the spec and plans (`7a91bcf1`). Both gates
+wave 2 waited on are gone. Wave 1's plan was
+`docs/superpowers/plans/2026-09-14-drawer-wave1-latch-and-reader.md`, all 17 tasks, and it owed no
+deviation numbers as planned (both departures an earlier draft carried were ruled into the spec
+instead — §11 rulings 9 and 10); the nine it ended up owing are D-2766..D-2774, every one a defect in
+the plan this session wrote rather than in the execution.
 
-**Wave 1 was dispatched.** Its plan is `docs/superpowers/plans/2026-09-14-drawer-wave1-latch-and-reader.md`,
-all 17 tasks, and it owes no deviation numbers as planned (both departures an earlier draft carried
-were ruled into the spec instead — §11 rulings 9 and 10).
-
-When wave 1's `wave-done` arrives: re-measure the fingerprint, advance, settle the items read from
-`GET /api/runs/:id/items`, review the handoff commit, then **open wave 2's run BEFORE closing wave
-1's** — wave 2 stays in `ccrc-pwa`, so it reclaims wave 1's `sessionId` and closes wave 1 with
-`final:false`.
+**The remaining sequence, and the order is not negotiable: open wave 2's run BEFORE closing wave
+1's.** Wave 2 stays in `ccrc-pwa`, so `POST /api/runs` names `sessionId: ccrc-pwa-plain-basin` to
+reclaim wave 1's workspace, and wave 1 then closes with `final:false`. Close-first leaves zero open
+runs, the server retires the programme, and every `toId:'coordinator'` mail that carries no `runId`
+stops resolving.
 
 **Operator rulings, 2026-09-15.** (a) The exec-whitelist grant is NOT escalated for separate
 operator sign-off: **the mandatory `opus@xhigh` security lens IS its review**, and the grant is seen
