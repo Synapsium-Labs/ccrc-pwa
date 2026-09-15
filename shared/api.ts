@@ -4505,6 +4505,69 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 // place for the members to be spelled. It shipped in this wave's first draft with
 // zero callers and zero tests, and was deleted in review.
 
+/** Routing spec 2026-09-14 §5.5 — the subject a worker's done-claim mail
+ *  carries (`kind: 'status'`). ONE spelling: `runSignals` (`coord/store.ts`)
+ *  selects on it and the skills quote it. `close.ts`'s `wave-done-rejected`
+ *  is a different subject (the server's answer), deliberately not derived. */
+export const WAVE_DONE_SUBJECT = 'wave-done';
+
+/** The first-run suite word a worker reports (spec §6: "suite green on first
+ *  run" is a QUALITY signal; fix rounds are counted on the spend side). */
+export const SUITE_WORDS = ['green', 'red', 'unrun'] as const;
+export type SuiteWord = (typeof SUITE_WORDS)[number];
+
+/** The failure KIND a worker names when a check failed, so the coordinator can
+ *  choose the escalation rung (spec §3 "Escalation"): `shallow` raises effort,
+ *  `ceiling` raises class, `unclear` defaults to effort-first. */
+export const FAILURE_KINDS = ['shallow', 'ceiling', 'unclear'] as const;
+export type FailureKind = (typeof FAILURE_KINDS)[number];
+
+/** ONE signal line, three answers, never two. `absent` is a worker that sent
+ *  no such line (an older skill, or nothing to say); `unrecognised` is a line
+ *  that WAS sent with a word outside the vocabulary — a mechanism defect to
+ *  surface, which "absent" would hide. */
+export type SignalLine<T extends string> =
+  | { ok: true; value: T }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'unrecognised' };
+
+export interface WaveDoneSignals {
+  suite: SignalLine<SuiteWord>;
+  failure: SignalLine<FailureKind>;
+}
+
+const SIGNAL_LINE = /^(suite|failure): (\S+)$/;
+
+/**
+ * Read the two signal lines off a `wave-done` body (spec §5.5): the FIRST two
+ * lines only, in either order, exact grammar `key: word`. The walk stops at
+ * the first line that is not a signal line, so a `suite:` inside later prose
+ * or JSON is never read as a claim. The first of a repeated key wins.
+ *
+ * Never throws; never reads the envelope — the caller hands it `body`, which
+ * `parseMailEnvelope` returns verbatim below the `--` terminator, or the
+ * `mail.body` column, which is the same bytes.
+ */
+export function parseWaveDoneSignals(body: string): WaveDoneSignals {
+  let suite: SignalLine<SuiteWord> = { ok: false, why: 'absent' };
+  let failure: SignalLine<FailureKind> = { ok: false, why: 'absent' };
+  for (const raw of body.split('\n', 2)) {
+    const m = SIGNAL_LINE.exec(raw.replace(/\r$/, '').trimEnd());
+    if (!m) break;
+    const word = m[2] as string;
+    if (m[1] === 'suite') {
+      if (suite.ok || suite.why !== 'absent') continue;
+      suite = (SUITE_WORDS as readonly string[]).includes(word)
+        ? { ok: true, value: word as SuiteWord } : { ok: false, why: 'unrecognised' };
+    } else {
+      if (failure.ok || failure.why !== 'absent') continue;
+      failure = (FAILURE_KINDS as readonly string[]).includes(word)
+        ? { ok: true, value: word as FailureKind } : { ok: false, why: 'unrecognised' };
+    }
+  }
+  return { suite, failure };
+}
+
 /**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
