@@ -676,9 +676,10 @@ declares the entry to be roster PLUMBING rather than one of your accounts — th
 `upstream` entry naming the binary every generated wrapper `exec`s — so no
 surface presents it as an account you hold; and `pool` is an optional pool name
 carrying `id`'s own grammar, which is the account half of the rule "Account
-pools" below states in full. The last two keys are the optional ones, and both
-default to the old behaviour when absent: `hidden` to `false`, `pool` to
-untagged, which means unconstrained.
+pools" below states in full. The two keys this section adds are optional, and
+both default to the old behaviour when absent: `hidden` to `false`, `pool` to
+untagged, which means unconstrained. (`hue` is the roster's third optional key —
+left out, `assignHues` picks one.)
 
 Both clauses above were unconditional until account pools shipped, and neither is
 any more (D-1911; the ruled behaviour named below is D-1908, and this file still
@@ -834,7 +835,8 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   the banner's existing remedy is the right one. `hidden` is **outside** it:
   nothing in `accounts.sh` carries that key, so two copies that disagree about
   `hidden` project byte-identical bash and report `agreed` — the same gap
-  `exec.kind` and `exec.secretsFile` sit in, and the reason `ccrc doctor`'s
+  `exec.secretsFile` and a `generated`/`external` `exec.kind` sit in (an
+  `upstream` flip is visible, because it moves `CCRC_UPSTREAM`), and the reason `ccrc doctor`'s
   wrapper check rather than the fingerprint is what catches those. Between the
   two lanes of one agent-first deploy that changes pools, `divergent` is
   EXPECTED for the minutes in between, and the deploy says so as it runs.
@@ -980,10 +982,12 @@ behaves differently until you tag something.
 **`ccd` decides; the server refuses and forecasts.** Every place ccd chooses an
 account applies the rule: `ws-add`'s placement, the 5 s auto-swap tick, and the
 manual verbs. The server reads the same file through the agent and uses it for
-exactly two things — refusing a swap or a create it can already see is wrong
-(`409 pool-mismatch`, or `503` when the tag cannot be read), and forecasting
-where the next workspace would land. It never places a session and it never
-writes the marker; the agent's write root is unchanged.
+three things — refusing a swap or a create it can already see is wrong
+(`409 pool-mismatch`, or `503` when the tag cannot be read), forecasting where
+the next workspace would land, and composing the pool state every PWA surface
+renders. It never places a session and it never writes the marker itself — the
+phone's tap runs `ccd project-pool` on the fleet box, and the agent's write root
+is unchanged.
 
 **Tagging.** From the phone: tap a project card and pick a pool. The list is
 derived from the pools your accounts actually carry — inventing a brand-new name
@@ -997,10 +1001,13 @@ echo pool-a > ~/.cc-sessions/pools/demo         # the 2 am idiom; the trailing n
 ls ~/.cc-sessions/pools/                        # every tag on the box, in one listing
 ```
 
-The file holds one token matching `^[a-z][a-z0-9-]{0,31}$`. Anything else — two
-words, an uppercase letter, a directory in its place, a file the reader cannot
-open — is `malformed` or `unreadable`, and **neither is ever quietly downgraded
-to untagged**: on a tag nobody can read, nobody decides. Creation refuses naming
+The file holds one token matching `^[a-z][a-z0-9-]{0,31}$`, and the reader
+answers one of four words — `named <n>` for a usable tag, `untagged` when there
+is no file at all, and `unreadable` or `malformed` for a file nobody can use.
+Anything but that token — two words, an uppercase letter, a directory in its
+place, a file the reader cannot open — is `malformed` or `unreadable`, and
+**neither is ever quietly downgraded to untagged**: on a tag nobody can read,
+nobody decides. Creation refuses naming
 the path, the auto-swapper holds where it is, and the server answers 503. A
 typo strands one project, which is the point of one file per project.
 
@@ -1023,9 +1030,10 @@ writing session `acct-a-demo`'s own registry field.
 It is operator intent, not session state. `ccrc uninstall` leaves it too, like
 the `-disabled` markers and the rest of the registry's operator switches. And
 like every other marker it is **not backed up**: the backup set is ccd, the
-units, the served dists and coord.db, never `~/.cc-sessions` markers. A box
-rebuilt from a backup comes back untagged, which is to say unconstrained — the
-PWA's flag on an untagged project is the signal that it happened.
+units, the served dists, coord.db, `~/.ccrc/memory` and the two `~/.cc-sessions`
+scripts — never `~/.cc-sessions` markers. A box rebuilt from a backup comes back
+untagged, which is to say unconstrained, and nothing says which: the PWA shows
+the same `no pool` chip it shows a project that was never tagged.
 
 **Retagging a running project, and when it takes effect.** A retag is not a
 restart. Within one 5 s tick, every session of that project whose *home* account
@@ -1068,9 +1076,11 @@ start`, `ccd enable` and `ccd prefer`, and the two compose. From the PWA the
 mismatched accounts sit behind a **show other pools** disclosure in the swap
 sheet, and picking one there is what sets the flag; a plain pick posts the body
 it always did, and a mismatch comes back `409` with the sentence naming both
-pools. Every crossing writes a `cross-pool` line and a per-session marker, and
-that marker is what stops the pool machinery undoing the crossing on the next
-tick. It is deliberately narrow. `swap --cross-pool` moves the session and
+pools. Every crossing writes a per-session marker, and that marker is what stops
+the pool machinery undoing the crossing on the next tick; `swap --cross-pool`
+also writes a `cross-pool` line to `swap.log`, while `prefer --cross-pool`
+records the crossing in the lifecycle journal and `start --cross-pool` writes the
+marker alone. It is deliberately narrow. `swap --cross-pool` moves the session and
 leaves its home alone, so when home recovers the session returns home exactly as
 it does after any manual swap today — and that return is a move off the crossed
 account, which ends the crossing (`crosspool-ended`). To stay crossed through a
@@ -1087,7 +1097,7 @@ deploy/deploy.sh`.
 | New server, old `ccd` | Tags display but nothing on the fleet enforces them: the chips dim, the fleet banner says the fleet host's ccd does not honour project pools yet, the tag route answers `501` and so does a cross-pool tap. The server's own refusal still stands — a mismatched swap gets `409`, so this state produces refusals, never wrong placements. |
 | New `ccd`, old server | The fleet enforces everywhere and strands loudly; the PWA has no override yet, so a mismatched swap dies inside ccd and surfaces as a `502` carrying ccd's own sentence. |
 | New `ccd`, old `accounts.sh` | Every account reads untagged — today's behaviour, no noise. |
-| Mid-deploy, one deploy long | New placements and manual verbs bind the rule at once; each running session's auto-swapper is still the pre-deploy code until its unit restarts, and a refusal inside a dispatched swap marks a strand rather than failing silently. |
+| Mid-deploy, one deploy long | New placements and manual verbs bind the rule at once; each running session's auto-swapper is still the pre-deploy code until its unit restarts, and a refusal inside a dispatch from the NEW ccd marks a strand; one dispatched by a still-running pre-deploy supervisor refuses silently until the `claude-session@*` unit sweep restarts it. |
 | The two `accounts.json` copies disagree | `roster: 'divergent'` and the amber banner. ccd obeys the fleet host's copy and the server refuses by its own, so a disagreement is loud in both directions rather than silently permissive. The project tag has one copy and cannot skew at all. |
 
 **Rolling it out.** Nothing changes until something is tagged, and every step is
@@ -2757,9 +2767,10 @@ unattended, and `ccd caps` has advertised the verb since long before it took
 flags — so a server deployed ahead of its ccd sees the verb gate pass and the
 call fail. One attempt per workspace, absorbed by the lane's retry guard, and
 zero if the agent ships first. Account pools are the same rule with a *visible*
-transient: between the two lanes the boxes' rosters differ, so
-`GET /api/fleet/health` reports `roster: 'divergent'` and the PWA raises its
-amber banner until the server lane runs. That is expected, not a fault — the
+transient: between the two lanes the two boxes PROJECT different `accounts.sh` —
+the fleet host's is regenerated by the new emitter while this server still runs
+the old one — so `GET /api/fleet/health` reports `roster: 'divergent'` and the
+PWA raises its amber banner until the server lane runs. That is expected, not a fault — the
 agent lane prints the same sentence as it goes — and the second deploy clears
 it.
 
