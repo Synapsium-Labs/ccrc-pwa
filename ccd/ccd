@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=88c7e29f8cebac28579917ccf9849b415c814828983d7c0203b13201c362c435
+# ccrc:generated 1 sha256=9988674e11764404e9b5a9f84127fd35de76506e0933090259ca42db51ede55c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1809,15 +1809,22 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
   # and two spawn paths would quietly treat it as mechanism absence. Cleared on
   # entry so a stale one is never read as this call's.
   #
-  # AND IT IS A NARROW CLAIM (r5 R4-M3). Status 1 leaves this function from many
-  # distinct states; a token is set at three of them, and every token means one
-  # thing to a caller: THIS acquire measured a state of `$REG` that no amount of
-  # waiting changes, so "re-run once the compaction settles" is a fabricated
-  # remedy there. An EMPTY `WHY` is NOT a proof of ordinary contention — it
-  # folds the `flock -w` timeout below together with the mint-time races,
-  # including the post-`link` re-test, which is the same occupied pathname
-  # `lock-path-occupied` names, observed one instant later. Callers key on the
-  # VALUE, and an unrecognised one is not contention either.
+  # AND IT IS A NARROW CLAIM (r5 R4-M3, corrected r6 R5-M1). Status 1 leaves
+  # this function from many distinct states; a token is now set at FOUR of
+  # them — `lock-path-occupied` at TWO separate sites, the mint-time occupied
+  # test just below and the post-`link` re-test near the end of this block,
+  # because both observe the identical condition one instant apart and both
+  # deserve the identical remedy — and every token means one thing to a
+  # caller: THIS acquire measured a state of `$REG` that no amount of waiting
+  # changes, so "re-run once the compaction settles" is a fabricated remedy
+  # there. An EMPTY `WHY` is STILL NOT a proof of ordinary contention: the
+  # `{ exec {fd}<>"$al"; }` open further below can fail on an out-of-contract
+  # MODE this user cannot open (not only the `flock -w` timeout this empty
+  # default is actually written for), and that residue is KNOWN to contain a
+  # durable state — a lock inode this user has no permission to open never
+  # becomes openable by waiting — not merely folded in as an unlikely race
+  # alongside the timeout. Callers key on the VALUE, and an unrecognised one
+  # is not contention either.
   COMPACT_LOCK_WHY=""
   command -v flock  >/dev/null 2>&1 || return 2
   command -v mktemp >/dev/null 2>&1 || return 2
@@ -1836,16 +1843,29 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     return 1
   else
     # A RUNTIME FAILURE, NOT MECHANISM ABSENCE. `command -v mktemp` succeeded
-    # above, so status 2 was already ruled out; `mktemp` answering non-zero HERE
-    # means it could not create a file in `$REG` itself — full, read-only, or
-    # not a directory this user may write in. A wait frees no space and grants
-    # no write bit, so this one carries a token too.
+    # above, so status 2 was already ruled out. `mktemp` answering non-zero
+    # HERE means it could not create the private source it mints the lock
+    # from in `$REG` — the USUAL cause is `$REG` being full, read-only or not
+    # writable by this user, but this reports ANY failure of that one
+    # command, not only that cause: a failed fork (`RLIMIT_NPROC`, pid
+    # exhaustion on a box that runs ~20 live sessions) or fd exhaustion
+    # answers the identical non-zero and is not a property of `$REG` at all —
+    # folded in here because the acquire cannot tell them apart, not because
+    # they share a remedy (r6 R5-M2). A wait frees neither, so this one
+    # carries a token too.
     src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) \
       || { COMPACT_LOCK_WHY=lock-source-refused; return 1; }
     [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
     link "$src" "$lock" 2>/dev/null || true      # EEXIST: validate, never recreate
     rm -f "$src" 2>/dev/null || true
-    [[ -f "$lock" && ! -L "$lock" ]] || return 1
+    # THE SAME CONDITION, ONE INSTANT LATER (r6 R5-M1). A stranger can win the
+    # lock pathname between the `[ -e "$lock" ]` test above and here — mkdir a
+    # directory over it, say — and this re-test is what catches that: without
+    # the token, an EMPTY `WHY` sent all four durable callers to the
+    # contention arm for a pathname nothing here will ever unoccupy, which is
+    # the same false-twice remedy `lock-path-occupied`'s own arm exists to
+    # give instead.
+    [[ -f "$lock" && ! -L "$lock" ]] || { COMPACT_LOCK_WHY=lock-path-occupied; return 1; }
   fi
   while (( tries < 8 )); do
     al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"
@@ -1876,6 +1896,85 @@ _compact_lock_release() {   # <fd>
   [[ -n "$fd" ]] || return 0
   { exec {fd}>&-; } 2>/dev/null || true
   return 0
+}
+
+_compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
+                                # purge caller journals for the CURRENT
+                                # COMPACT_LOCK_WHY (r6 R5-M3). ONE renderer
+                                # consulted by all four durable callers
+                                # (`ws-rm`, `ws-reap`, `ws-gc --prune`,
+                                # `forget`) instead of four copies, so a
+                                # single caller's text drifting from the
+                                # others is impossible rather than merely
+                                # unpinned — the reviewer's own named
+                                # alternative to a fifth `LEGS` fixture.
+                                #
+                                # `<id>` IS THE ROW ID, spelled however the
+                                # caller already spells it: `ws-gc --prune`
+                                # passes `$project-$slug`, the other three
+                                # pass the literal `$id`. `<verb>` selects only
+                                # the SHAPE of the two clauses that are
+                                # caller-specific rather than token-specific:
+                                #   - the RE-RUN clause, empty `WHY` only:
+                                #     `ws-gc --prune` sweeps many rows and
+                                #     names none in a re-run command; `ws-reap`
+                                #     names none either (nothing about a
+                                #     completed reap is re-run); `ws-rm` and
+                                #     `forget` each name themselves and `$id`.
+                                #   - the SURVIVING-STATE clause, every token:
+                                #     `ws-rm`/`forget`/`ws-reap` have already
+                                #     torn the workspace down, so "$REG/$id.*
+                                #     and $REG/$id.generation still stand" is
+                                #     the true residue; `ws-gc --prune`
+                                #     DECLINES before anything irreversible
+                                #     (`_lc_refuse_return`, never `_lc_fail`),
+                                #     so "the registry row is untouched" is
+                                #     the true fact there instead — a
+                                #     different claim, not a style choice.
+  local id="$1" verb="$2" tail sentence
+  if [[ "$verb" == 'ws-gc --prune' ]]; then
+    tail="the registry row is untouched"
+  else
+    tail="$REG/$id.* and $REG/$id.generation still stand"
+  fi
+  case "${COMPACT_LOCK_WHY:-}" in
+    '')
+      case "$verb" in
+        'ws-gc --prune') sentence="$REG/.$id.compactions.lock was unavailable; $tail" ;;
+        ws-reap) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run once the compaction settles" ;;
+        *) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run ccd $verb $id once the compaction settles" ;;
+      esac ;;
+    canonical-vanished)
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help; $tail, and if no holder remains, restore $REG/.$id.compactions.lock by hand"
+      else
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $tail; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run"
+      fi ;;
+    lock-path-occupied)
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help; $tail, and the remedy is to confirm no holder remains and then remove that object by hand"
+      else
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $tail; confirm no holder remains, then remove that object by hand and re-run"
+      fi ;;
+    lock-source-refused)
+      # r6 R5-M2: the guard cannot distinguish `$REG` itself refusing the
+      # write from a failed fork or fd exhaustion elsewhere on the box, so
+      # this reports the MEASUREMENT and offers the cause as the usual one,
+      # never the only one, and never claims a re-run cannot help "until" a
+      # repair — only "while" whatever actually failed still holds.
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds; $tail — repair $REG"
+      else
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+      fi ;;
+    *)
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer; $tail — inspect $REG/.$id.compactions.lock by hand"
+      else
+        sentence="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer. $tail; inspect $REG/.$id.compactions.lock by hand"
+      fi ;;
+  esac
+  printf '%s' "$sentence"
 }
 
 # ── ROW GENERATION: immutable authorization (D-2605, spec §3.4) ──────────
@@ -5475,20 +5574,15 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
     # the private source the lock is minted from). The REST are mint-time races
     # carrying no token, so an EMPTY WHY is the default rather than a proof of
-    # contention. The `case` keys each token to ITS OWN remedy and gives an
-    # unrecognised one the catch-all: a condition named at the acquire must
-    # never silently inherit "wait and re-run", which is the defect that let one
-    # sentence stand for two conditions. That is the same argument `cmd_ws_add`
-    # and `cmd_start` make at their own acquire sites, one level up; this is it
-    # one level down, where the record is DURABLE.
-    local _rm_why="$REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd ws-rm $id\` once the compaction settles"
-    case "${COMPACT_LOCK_WHY:-}" in
-      '') ;;
-      canonical-vanished) _rm_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run" ;;
-      lock-path-occupied) _rm_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; confirm no holder remains, then remove that object by hand and re-run" ;;
-      lock-source-refused) _rm_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from, so it is $REG itself that refused the write: full, read-only, or not a directory this user may write in. A re-run cannot help until that is repaired. $REG/$id.* and $REG/$id.generation still stand; repair $REG, then re-run" ;;
-      *) _rm_why="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer. $REG/$id.* and $REG/$id.generation still stand; inspect $REG/.$id.compactions.lock by hand" ;;
-    esac
+    # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # OWN remedy and gives an unrecognised one the catch-all: a condition
+    # named at the acquire must never silently inherit "wait and re-run",
+    # which is the defect that let one sentence stand for two conditions.
+    # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
+    # acquire sites, one level up; this is it one level down, where the
+    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # consult, so this caller's text cannot drift from theirs.
+    local _rm_why; _rm_why=$(_compact_lock_why_remedy "$id" ws-rm)
     _lc_fail destroy "$id" "$lctx" purge-refused \
       "the workspace was torn down, but the registry row could not be purged: $_rm_why" \
       verb ws-rm dec.reason "$reason"
@@ -11816,20 +11910,15 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
     # the private source the lock is minted from). The REST are mint-time races
     # carrying no token, so an EMPTY WHY is the default rather than a proof of
-    # contention. The `case` keys each token to ITS OWN remedy and gives an
-    # unrecognised one the catch-all: a condition named at the acquire must
-    # never silently inherit "wait and re-run", which is the defect that let one
-    # sentence stand for two conditions. That is the same argument `cmd_ws_add`
-    # and `cmd_start` make at their own acquire sites, one level up; this is it
-    # one level down, where the record is DURABLE.
-    local _rt_why="$REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run once the compaction settles"
-    case "${COMPACT_LOCK_WHY:-}" in
-      '') ;;
-      canonical-vanished) _rt_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run" ;;
-      lock-path-occupied) _rt_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; confirm no holder remains, then remove that object by hand and re-run" ;;
-      lock-source-refused) _rt_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from, so it is $REG itself that refused the write: full, read-only, or not a directory this user may write in. A re-run cannot help until that is repaired. $REG/$id.* and $REG/$id.generation still stand; repair $REG, then re-run" ;;
-      *) _rt_why="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer. $REG/$id.* and $REG/$id.generation still stand; inspect $REG/.$id.compactions.lock by hand" ;;
-    esac
+    # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # OWN remedy and gives an unrecognised one the catch-all: a condition
+    # named at the acquire must never silently inherit "wait and re-run",
+    # which is the defect that let one sentence stand for two conditions.
+    # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
+    # acquire sites, one level up; this is it one level down, where the
+    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # consult, so this caller's text cannot drift from theirs.
+    local _rt_why; _rt_why=$(_compact_lock_why_remedy "$id" ws-reap)
     _lc_fail reap "$id" "$lctx" purge-refused \
       "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $_rt_why" \
       verb ws-reap meas.branch "$branch"
@@ -12404,20 +12493,21 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
         # the private source the lock is minted from). The REST are mint-time races
         # carrying no token, so an EMPTY WHY is the default rather than a proof of
-        # contention. The `case` keys each token to ITS OWN remedy and gives an
-        # unrecognised one the catch-all: a condition named at the acquire must
-        # never silently inherit "wait and re-run", which is the defect that let one
-        # sentence stand for two conditions. That is the same argument `cmd_ws_add`
-        # and `cmd_start` make at their own acquire sites, one level up; this is it
-        # one level down, where the record is DURABLE.
-        local _pr_why="$REG/.$project-$slug.compactions.lock was unavailable; the registry row is untouched"
-        case "${COMPACT_LOCK_WHY:-}" in
-          '') ;;
-          canonical-vanished) _pr_why="$COMPACT_LOCK_WHY — $REG/.$project-$slug.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help; the registry row is untouched, and if no holder remains, restore $REG/.$project-$slug.compactions.lock by hand" ;;
-          lock-path-occupied) _pr_why="$COMPACT_LOCK_WHY — $REG/.$project-$slug.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help; the registry row is untouched, and the remedy is to confirm no holder remains and then remove that object by hand" ;;
-          lock-source-refused) _pr_why="$COMPACT_LOCK_WHY — $REG/.$project-$slug.compactions.lock does not exist and ccd could not create the private source it mints the lock from, so it is $REG itself that refused the write: full, read-only, or not a directory this user may write in; the registry row is untouched, and a re-run cannot help until $REG is repaired" ;;
-          *) _pr_why="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer; the registry row is untouched — inspect $REG/.$project-$slug.compactions.lock by hand" ;;
-        esac
+        # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to
+        # ITS OWN remedy and gives an unrecognised one the catch-all: a
+        # condition named at the acquire must never silently inherit "wait
+        # and re-run", which is the defect that let one sentence stand for
+        # two conditions. That is the same argument `cmd_ws_add` and
+        # `cmd_start` make at their own acquire sites, one level up; this is
+        # it one level down, where the record is DURABLE — and it is the ONE
+        # renderer all four durable callers consult, so this caller's text
+        # cannot drift from theirs. `<id>` is `$project-$slug` here, this
+        # caller's own spelling of the row id, and `<verb>` selects both the
+        # RE-RUN clause (this sweep never re-runs against one row) and the
+        # surviving-state clause: this arm DECLINES before anything
+        # irreversible, so "the registry row is untouched" is the true
+        # residue, not "$REG/$id.* … still stand".
+        local _pr_why; _pr_why=$(_compact_lock_why_remedy "$project-$slug" 'ws-gc --prune')
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
           "$_pr_why" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
@@ -16441,20 +16531,15 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     # object holds the lock pathname) and `lock-source-refused` (`$REG` would not take
     # the private source the lock is minted from). The REST are mint-time races
     # carrying no token, so an EMPTY WHY is the default rather than a proof of
-    # contention. The `case` keys each token to ITS OWN remedy and gives an
-    # unrecognised one the catch-all: a condition named at the acquire must
-    # never silently inherit "wait and re-run", which is the defect that let one
-    # sentence stand for two conditions. That is the same argument `cmd_ws_add`
-    # and `cmd_start` make at their own acquire sites, one level up; this is it
-    # one level down, where the record is DURABLE.
-    local _fg_why="$REG/.$id.compactions.lock was unavailable. $REG/$id.* and $REG/$id.generation still stand; re-run \`ccd forget $id\` once the compaction settles"
-    case "${COMPACT_LOCK_WHY:-}" in
-      '') ;;
-      canonical-vanished) _fg_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run" ;;
-      lock-path-occupied) _fg_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $REG/$id.* and $REG/$id.generation still stand; confirm no holder remains, then remove that object by hand and re-run" ;;
-      lock-source-refused) _fg_why="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from, so it is $REG itself that refused the write: full, read-only, or not a directory this user may write in. A re-run cannot help until that is repaired. $REG/$id.* and $REG/$id.generation still stand; repair $REG, then re-run" ;;
-      *) _fg_why="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer. $REG/$id.* and $REG/$id.generation still stand; inspect $REG/.$id.compactions.lock by hand" ;;
-    esac
+    # contention. `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # OWN remedy and gives an unrecognised one the catch-all: a condition
+    # named at the acquire must never silently inherit "wait and re-run",
+    # which is the defect that let one sentence stand for two conditions.
+    # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
+    # acquire sites, one level up; this is it one level down, where the
+    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # consult, so this caller's text cannot drift from theirs.
+    local _fg_why; _fg_why=$(_compact_lock_why_remedy "$id" forget)
     _lc_fail forget "$id" "$lctx" purge-refused \
       "the session was unsupervised and its pane killed, but the registry row could not be purged: $_fg_why" \
       verb forget dec.reason "$reason"
