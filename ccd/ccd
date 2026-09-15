@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=024b9c477df0ae51068650f30e90b0415a55fb20a237b9d5b196753f0b99eee1
+# ccrc:generated 1 sha256=1769b7edbb11f4001583281fd2e725c21589c4730e88e932a450f89442bea46b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2041,7 +2041,19 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
   # "could not be purged: " with nothing after the colon. A remedy that says
   # nothing is worse than one that says it has nothing to say, so this names
   # the token and the pathname a human can look at instead.
-  [[ -n "$sentence" ]] || sentence="${COMPACT_LOCK_WHY:-(the acquire named no condition)} — ccd carries no remedy text for this condition; inspect $REG/.$id.compactions.lock by hand"
+  #
+  # AND IT CARRIES THE RESIDUE, because the residue is not a remedy (r8 R8-M2).
+  # This line said what ccd does not know and stopped there, dropping the one
+  # clause every other arm carries — what SURVIVED the act this sentence
+  # follows. `$tail` is computed above the `case`, before any token is read, so
+  # it is true for every token there will ever be and for this line by
+  # construction: `ws-gc --prune` declined before anything irreversible and its
+  # row is untouched; the other three have already torn the workspace down and
+  # own the registry residue instead. Having no remedy to give is no reason to
+  # withhold a fact the caller measured. A SINGLE form is still right here
+  # because this line prescribes no re-run — that is the clause the verb
+  # selects, and it is the one thing this condition genuinely cannot supply.
+  [[ -n "$sentence" ]] || sentence="${COMPACT_LOCK_WHY:-(the acquire named no condition)} — ccd carries no remedy text for this condition; $tail — inspect $REG/.$id.compactions.lock by hand"
   printf '%s' "$sentence"
 }
 

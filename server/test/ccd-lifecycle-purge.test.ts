@@ -1972,6 +1972,56 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(sentence, `${leg.verb}: an unrecognised token is not contention, so no wait is prescribed`)
         .not.toContain('once the compaction settles');
       expectSurvivingState(leg, sentence);
+
+      // AND THE FAIL-CLOSED FALLBACK, DRIVEN FOR REAL (r8 R8-M2). On a tree
+      // where every token has an arm the fallback is unreachable, so r7 pinned
+      // it by SOURCE SCAN alone and its content — as opposed to its existence —
+      // was measured by nothing: it dropped the surviving-state clause every
+      // other arm carries and no leg could see that. The only input that
+      // reaches it is a DELETED arm, so this applies the m5 mutant shape to a
+      // COPY OF THE FUNCTION'S OWN TEXT and sources that copy over the
+      // definition ccd already installed. Nothing in the worktree is touched:
+      // the excision happens in a string and lands in the FIXTURE HOME, and
+      // the next leg re-reads `ccd` from disk.
+      const helperSrc = fs.readFileSync(CCD, 'utf8');
+      const hFrom = helperSrc.indexOf('_compact_lock_why_remedy() {');
+      expect(hFrom, `${leg.verb}: the helper is in ccd`).toBeGreaterThan(-1);
+      const helperText = helperSrc.slice(hFrom, helperSrc.indexOf('\n}\n', hFrom) + 3);
+      // THE OUTER CATCH-ALL ONLY. `\n    *)\n` is the outer arm's own label on
+      // its own line at four columns; the NESTED `case "$verb"` default is
+      // `        *) sentence=…` at eight columns with its body on the same
+      // line, so this cannot take the wrong one — and the assertion below
+      // proves the excision hit, rather than trusting the offsets.
+      const armFrom = helperText.indexOf('\n    *)\n');
+      const armTo = helperText.indexOf('\n  esac', armFrom);
+      expect(armFrom, `${leg.verb}: the outer catch-all arm is where the excision starts`).toBeGreaterThan(-1);
+      expect(armTo, `${leg.verb}: and the outer esac is where it ends`).toBeGreaterThan(armFrom);
+      const m5 = helperText.slice(0, armFrom) + helperText.slice(armTo);
+      expect(m5, `${leg.verb}: the catch-all really is gone from the copy`)
+        .not.toContain('the acquire named a condition this caller carries no remedy for');
+      const m5Path = path.join(h.home, 'm5-helper.sh');
+      fs.writeFileSync(m5Path, m5);
+      const out5 = h.sh(`. ${m5Path}; COMPACT_LOCK_WHY=a-token-with-no-arm `
+        + `_r=$(_compact_lock_why_remedy ${leg.id} ${verb}); printf 'OUT<<%s>>' "$_r"`);
+      const m5m = /OUT<<([\s\S]*)>>/.exec(out5);
+      expect(m5m, `${leg.verb}: the helper answered at all with the catch-all excised`).not.toBeNull();
+      const fallback = m5m![1]!;
+      // THE WHOLE POINT OF THE LINE: `sentence` stayed UNSET before it existed,
+      // and ccd's `set -uo pipefail` with no `-e` turned that into an EMPTY
+      // capture in the production `$( )` form rather than a death.
+      expect(fallback.length, `${leg.verb}: the fallback answers, so no journal line ends at its colon`)
+        .toBeGreaterThan(0);
+      expect(fallback, `${leg.verb}: it names the token the acquire set`).toContain('a-token-with-no-arm');
+      expect(fallback, `${leg.verb}: and it is the FALLBACK answering, not the arm this leg excised`)
+        .toContain('ccd carries no remedy text for this condition');
+      expect(fallback, `${leg.verb}: the catch-all is gone, so its sentence cannot be what answered`)
+        .not.toContain('the acquire named a condition this caller carries no remedy for');
+      // AND IT CARRIES THE RESIDUE (r8 R8-M2). Having no remedy is no reason to
+      // withhold a fact the caller measured, and `$tail` is true for every
+      // token by construction.
+      expectSurvivingState(leg, fallback);
+      expect(fallback, `${leg.verb}: it prescribes no re-run — that is the one clause this condition cannot supply`)
+        .not.toContain('re-run');
     }
   }, 120_000);
 
@@ -2067,6 +2117,18 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     expect(helperBody, 'the sentence starts empty rather than unset').toContain('sentence=""');
     expect(helperBody, 'and an empty one is replaced before anything prints it')
       .toContain('[[ -n "$sentence" ]] || sentence=');
+    // AND THE REPLACEMENT CARRIES THE RESIDUE (r8 R8-M2). It named the token
+    // and the pathname and stopped, dropping the surviving-state clause every
+    // other arm carries — a durable record that told an operator nothing about
+    // what survived the act it followed. `$tail` is computed above the `case`
+    // and is true for every token by construction, so this costs nothing and
+    // cannot go stale. The behaviour half is (d1f) below, which drives this
+    // line for real; this scan is what makes the clause's ABSENCE red even on
+    // a day the fallback is unreachable.
+    const failClosed = helperBody.slice(helperBody.indexOf('[[ -n "$sentence" ]] || sentence='));
+    expect(failClosed.slice(0, failClosed.indexOf('\n')),
+      'the fail-closed sentence carries the verb-selected residue, like every arm above it')
+      .toContain('$tail');
 
     // AND EVERY DURABLE CALLER ACTUALLY CONSULTS IT, WITH ITS OWN ARGUMENTS —
     // a caller that stopped calling the helper (inlining its own sentence
