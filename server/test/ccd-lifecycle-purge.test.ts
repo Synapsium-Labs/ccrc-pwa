@@ -16,7 +16,8 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { CCD, makeCcdHarness, ghContainedEnv, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
-import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock } from './lifecycleHelpers.js';
+import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock,
+  expectContentionClauses } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-lc-purge-'); });
@@ -751,6 +752,14 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
         .toContain('was unavailable');
       expect(String(terminal[0]!['detail']), 'and never the canonical-vanished remedy, which is false on a lock that exists')
         .not.toContain('canonical-vanished');
+      // AND ITS RE-RUN CLAUSE IS THIS VERB'S (r8 R8-I1). The sentence above is
+      // selected by a NESTED `case "$verb"` nothing measured: renaming this
+      // caller's own label left this file and `ccd-ws-gc` GREEN 125/125 while
+      // the declining sweep prescribed `re-run ccd ws-gc --prune <id>`, a
+      // command `cmd_ws_gc` reads as a FLEET-WIDE prune because it inspects
+      // `${1:-}` and nothing else. This leg is the gc verb's only
+      // ordinary-contention leg, so it is where that clause gets measured.
+      expectContentionClauses('ws-gc --prune', id, String(terminal[0]!['detail']));
 
       expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.uuid`)), 'the row still stands').toBe(true);
     } finally { release(); }
@@ -1536,6 +1545,14 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(held.token, `${leg.verb}: contention keeps the sentence it was written for`).toBe('purge-refused');
       expect(held.detail, `${leg.verb}: and that one DOES blame the lock`).toContain('was unavailable');
       expect(held.detail).toContain('once the compaction settles');
+      // AND THE RE-RUN CLAUSE IS THE VERB'S (r8 R8-I1). `once the compaction
+      // settles` is carried by all three empty-`WHY` shapes, so asserting it
+      // alone pinned nothing about WHICH one shipped — the same gap r5 R4-M1
+      // closed on the tokened arms. These two legs own the `ws-rm` and
+      // `forget` labels of the nested `case "$verb"`; the gc label is measured
+      // by the dead-reg control above and the reap label by
+      // `ccd-ws-reap.test.ts`'s own contention leg.
+      expectContentionClauses(leg.verb, leg.id, held.detail);
 
       // THE PROPERTY, stated as itself: two conditions, two records.
       expect(held.token, `${leg.verb}: two conditions may not share one token`).not.toBe(absent.token);

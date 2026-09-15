@@ -5,7 +5,8 @@ import path from 'node:path';
 import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
-import { eventsOf, refusalsOf, holdCompactLock, compactLockPath } from './lifecycleHelpers.js';
+import { eventsOf, refusalsOf, holdCompactLock, compactLockPath,
+  expectContentionClauses } from './lifecycleHelpers.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
@@ -2732,6 +2733,19 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
         .toContain('once the compaction settles');
       expect(String(failed['detail']), 'and never the canonical-vanished remedy, which is false on a lock that exists')
         .not.toContain('canonical-vanished');
+      // AND THE RE-RUN CLAUSE IS THIS VERB'S (r8 R8-I1). `once the compaction
+      // settles` is carried by all three shapes of the empty-`WHY` sentence,
+      // so the assertion above pinned nothing about WHICH one a reap gets. The
+      // clause is selected by a NESTED `case "$verb"` inside
+      // `_compact_lock_why_remedy`, and its `ws-reap)` label was measured by
+      // nothing: renaming it left this file and `ccd-lifecycle-purge` GREEN
+      // 144/144 while the reap fell through to the catch-all and told an
+      // operator to `re-run ccd ws-reap <id>` — a re-run of a reap that had
+      // already completed, the exact claim the helper's own docstring says
+      // this arm exists to avoid. This is the ONLY leg in the tree that drives
+      // the reap verb's ordinary-contention sentence, so it is where that
+      // label gets measured.
+      expectContentionClauses('ws-reap', 'demo-quiet-basin', String(failed['detail']));
       expect(String(failed['tx'] ?? ''), 'a MINTED, non-empty tx').not.toBe('');
 
       // WHAT THE MESSAGE PROMISES IS TRUE: the row and its authorization are

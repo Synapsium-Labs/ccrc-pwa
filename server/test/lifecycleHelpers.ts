@@ -9,6 +9,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { expect } from 'vitest';
 import {
   LC_DIR_NAME, LC_GEN_PREFIX, LC_GEN_SUFFIX, compareGenerations, looksLikeGenerationFile,
   parseLifecycleGeneration,
@@ -96,4 +97,52 @@ export const holdCompactLock = async (home: string, id: string, secs: number): P
     child.on('error', (e) => { clearTimeout(t); rej(e); });
   });
   return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
+};
+
+/** THE CONTENTION ARM'S RE-RUN CLAUSE IS THE VERB'S, AND IT IS A CLAIM
+ *  (r8 R8-I1) — `expectSurvivingState`'s twin for the OTHER half of the verb
+ *  dispatch. `_compact_lock_why_remedy`'s EMPTY-`WHY` arm is the most-travelled
+ *  path of the four durable purge callers, reached by no token at all, and it
+ *  selects its RE-RUN clause from a NESTED `case "$verb"` whose two
+ *  verb-specific labels nothing measured. MEASURED at this round's base:
+ *  renaming `'ws-gc --prune')` left `ccd-lifecycle-purge` + `ccd-ws-gc` GREEN
+ *  125/125 while the declining sweep's DURABLE detail prescribed
+ *  `re-run ccd ws-gc --prune <id>` — and `cmd_ws_gc` inspects `${1:-}` ONLY, so
+ *  that command silently discards the id and runs a FLEET-WIDE prune sweep;
+ *  renaming `ws-reap)` left `ccd-lifecycle-purge` + `ccd-ws-reap` GREEN 144/144
+ *  while a reap that had already completed was told to re-run itself, the exact
+ *  claim the helper's own docstring says that arm exists to avoid.
+ *
+ *  IT LIVES HERE, BESIDE `holdCompactLock`, for that function's own reason: two
+ *  test files assert this dispatch — `ccd-lifecycle-purge.test.ts` on three
+ *  verbs and `ccd-ws-reap.test.ts` on the fourth through the real verb — and a
+ *  second copy of the clause set is the drift `single-definition.test.ts`
+ *  exists to refuse.
+ *
+ *  ASSERTED IN BOTH DIRECTIONS, because a renamed label does not delete a
+ *  sentence: it falls through to the inner `*)` default, which satisfies the
+ *  POSITIVE form of whichever arm it landed in. Only the absences separate
+ *  them. */
+export const expectContentionClauses = (verb: string, id: string, detail: string): void => {
+  // THE ARM ITSELF, FIRST: every empty-`WHY` sentence opens by blaming the lock
+  // it waited on, so this separates the contention arm from a tokened one and
+  // from the fail-closed fallback before the clause assertions below run.
+  expect(detail, `${verb}: the contention sentence names the lock it waited on`)
+    .toContain('was unavailable');
+  if (verb === 'ws-gc --prune') {
+    expect(detail, `${verb}: the sweep declines before anything irreversible`)
+      .toContain('the registry row is untouched');
+    expect(detail, `${verb}: a sweep has no single row to wait for, so it prescribes no wait`)
+      .not.toContain('once the compaction settles');
+    expect(detail, `${verb}: and no command — ccd ws-gc --prune <id> discards the id and sweeps the whole fleet`)
+      .not.toContain('re-run');
+  } else if (verb === 'ws-reap') {
+    expect(detail, `${verb}: the wait IS the remedy here, and it ends`)
+      .toContain('re-run once the compaction settles');
+    expect(detail, `${verb}: but nothing about a completed reap is re-run, so no command is named`)
+      .not.toContain('re-run ccd');
+  } else {
+    expect(detail, `${verb}: this verb names itself and its own row in the command it prescribes`)
+      .toContain(`re-run ccd ${verb} ${id} once the compaction settles`);
+  }
 };
