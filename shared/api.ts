@@ -6929,14 +6929,22 @@ export type PaneHistoryReply =
  * lane holds — a narrow pane is UNMEASURED, not idle.
  *
  * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
- * line at the terminal width before tmux ever stores the row, so the derivation
- * runs `wrap-ansi` (Ink's wrapper, `hard: false`) over Claude Code's known
- * status-line carriers at every width in 40–220 and asks at which widths a
- * phrase is still on ONE line. Measured 2026-09-14: the widest carrier
+ * line at the terminal width before tmux ever stores the row. This tree cannot
+ * measure which wrap call Claude Code's bundled Ink major actually makes, so
+ * the derivation runs `wrap-ansi@9` (the exact major matters — see below)
+ * TWICE over Claude Code's known status-line carriers at every width in
+ * 40–220, once as `{ hard: false }` and once as `{ trim: false, hard: true }`
+ * (Ink `<Text>`'s documented default for `wrap="wrap"`), and asks at which
+ * widths a phrase is still on ONE line. Measured 2026-09-14: both option sets
+ * agree on every carrier, so the floor below does not depend on which one
+ * Claude Code's Ink uses. The widest carrier
  * (`✳ Procrastinating… (2h 14m 52s · ↑ 128.4k tokens · esc to interrupt)`)
- * needs 69 columns, and the widest `· <segment>` in the sample is 37 — so 120
- * carries room for one whole extra segment (69 + 37 = 106) and still leaves a
- * 171-column desktop client measurable while every phone is below it.
+ * needs 69 columns under both, and the widest `· <segment>` in the sample is
+ * 37 — so 120 carries room for one whole extra segment (69 + 37 = 106) and
+ * still leaves a 171-column desktop client measurable while every phone is
+ * below it. The major version is load-bearing: under `wrap-ansi@10` the same
+ * carriers measure 68 and 55 instead of 69 and 56 (ambiguous-width handling of
+ * `✳` moved), so a derivation that does not pin the major is not reproducible.
  *
  * `ccd/ccd` carries the same number as a bash global, because bash cannot
  * import this file; `server/test/reader-min-cols.test.ts` holds the two equal.

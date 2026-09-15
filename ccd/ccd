@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a4a5f9113d592ed5e332a0e9cafa18be2b2525f5c640345978a86c1df8e9b151
+# ccrc:generated 1 sha256=f50b9e31a4d521cd418eeb37f99717d98aaaf590084cfa3c2a3d81ded910deaf
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1024,10 +1024,17 @@ STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Cl
 # and a wrapped phrase reads as SILENCE to grep, which is the 2026-09-08
 # five-session incident's shape.
 #
-# DERIVED with `wrap-ansi` (Ink's own wrapper, hard:false) over Claude Code's
-# known status-line carriers at widths 40-220: the widest carrier needs 69
-# columns and the widest "· <segment>" is 37, so 120 leaves room for one more
-# segment and still keeps a 171-column desktop measurable.
+# DERIVED with `wrap-ansi@9` over Claude Code's known status-line carriers at
+# widths 40-220, run TWICE — once as hard:false and once as trim:false,
+# hard:true (Ink <Text>'s documented default for wrap="wrap", which this tree
+# cannot itself confirm Claude Code's bundled Ink major calls) — because both
+# option sets agree on every carrier, so the floor below does not depend on
+# which one Claude Code's Ink actually uses. Under both, the widest carrier
+# needs 69 columns and the widest "· <segment>" is 37, so 120 leaves room for
+# one more segment and still keeps a 171-column desktop measurable. The major
+# version is load-bearing: wrap-ansi@10 measures 68 and 55 instead of 69 and
+# 56 on the same carriers (ambiguous-width handling of the leading `✳` glyph
+# moved), so a comment naming bare "wrap-ansi" is not reproducible.
 #
 # THE SECOND COPY of `shared/api.ts`'s READER_MIN_COLS, by construction — bash
 # cannot import TypeScript. `server/test/reader-min-cols.test.ts` holds them
