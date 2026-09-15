@@ -7044,3 +7044,52 @@ Next: verdicts → (fix round by `fix-round` mail if needed) → `advance` to `m
 approval → squash with the hand-written body (SERVER LANE ONLY) → server-lane deploy → close run 47
 `final:true`, which RETIRES the programme — correct for the last wave. #108 is still open beside it;
 if both merge, one server deploy carries both and #108's agent lane follows.
+
+### 2026-09-15 15:5x UTC — review of `d06b6103`: two lenses, one Critical, fix round 1 (mail 1286)
+
+**Lens A — prose truth (Opus): REQUEST CHANGES, 1 Critical / 5 Important / 7 Minor.** Every finding a
+single-clause rewording; I re-measured all seven load-bearing ones at `d06b6103` before ruling and none
+was refuted. **C1:** CLAUDE.md:161-162 attributes "real pool names appear in no shipped file" to
+`(topology-clean)`, whose FORBIDDEN table has seven classes and **zero `pool` hits** — a guard named that
+does not exist, in the file's own idiom for "a red suite holds this". **I1:** README says the server uses
+the pool read for "exactly two things"; `server.ts:1048` (`poolsWire` on the fleet frame), `:1944`,
+`:2077` and `watch.ts`'s push make display a third. **I2:** "every crossing writes a `cross-pool` line" —
+`ccd/ccd:17667` is the only swap.log writer and sits in `cmd_swap`; `_crosspool_mark` has three call sites
+(start/swap/prefer). **I3:** the skew table's mid-deploy row says a dispatched swap's refusal "marks a
+strand"; `ccd/ccd:17479` gates the mark on `CCD_SWAP_AUTO==1`, set only by the NEW `_dispatch_swap`, and
+the code's own comment says a pre-deploy supervisor's dispatch refuses silently. **I4:** "the last two keys
+are the optional ones" — `hue` is optional too (`roster.ts:816`). **I5:** the new `deploy.sh` comment/echo
+say the two lanes' GENERATED files are compared and the server lane "ships the same roster";
+`ship_roster` (`:470`) seeds only when absent — this PR's own `config.ts` edit says so — and
+`server.ts:1056` computes `ownRosterFp` in memory at boot. Minors M1–M7 (rosters vs projections; the
+`upstream` exec.kind flip IS in the digest; the backup set omits `~/.ccrc/memory` and the two scripts;
+"ONLY reader" is true of ccd only; "untagged" overloads never-tagged/lost-in-restore; the bullet ate the
+blank line before `## Coordination`; two base-relative arrows in the plan).
+
+**Lens B — pin quality (Opus, 23 one-change mutations, 12 red / 11 green): APPROVE WITH FIXES, 4
+Important / 9 Minor.** Ten greens are findings. **I1:** the wave's centrepiece claim — who decides, who
+writes the marker — is pinned as the free-floating substrings `never places` / `never writes the marker`;
+inverting the README sentence AND the CLAUDE.md bullet both stayed 25/25. **I2:** a whole-file
+`not.toMatch(/pools/)` on the 11,800-line `ccd/ccrc` with a message blaming the uninstaller — a comment
+above `cmd_doctor` reds it, and rollout step 3 promises a doctor `pools` check. **I3:** the
+no-overloaded-null fold is one spelling ("treated as untagged" reds, "falls back to untagged" passes); the
+presence loop is satisfied by `unreadable` three paragraphs away; "four words" is three literals grounded
+in the reader's existence. **I4:** the marker's HOME is a section-wide `toContain`; rewriting the RULE
+sentence to `$REG/<project>.pool` — the rejected home — stayed green because a bash fence still carries
+the true path. The two derived pins (ACCOUNT_KEYS set-equality; the generator projection) are sound; all
+three D entries check out, D-2829 reproduced to the number ("expected 17 to be ≤ 12"; ledger-instruction
+4/4). Minors M-1..M-9 (cooldown figure matched by bare substring; projection pin one-way; `placementSection`
+over-spans 3×; window tight/loose; 409 a literal; "never writes" scans one module; marker regex
+keyword-presence; README size figure unpinned; assertion #25 duplicates four groundings).
+
+**Rulings.** All MUST items and every minor fold into ONE round. M-4 (window both too tight and too
+loose): no HTML comment in README — a comment is a request; widen the regexes toward the claim and make
+each per-sentence assertion's MESSAGE name the constraint; the tight direction is the accepted cost of a
+per-sentence rule. Costs if wrong: an editor re-joins a sentence. **Budget:** the CLAUDE.md bullet is at
+exactly 12 non-empty lines against a budget of 12; C1 and M4 must land without a 13th, and the worker
+must not raise the budget silently — report it and I rule. Costs if wrong: one more round.
+
+**Mechanism (D-2824):** `advance 47 → working` (send-back, empty-claim shape, `ok`), then `status` mail
+**1286**, subject `fix-round`, body 8084 bytes of 8192, first line the lens-A report path, both reports
+as artifacts. Review worktree `scratchpad/review-wave6` restored clean at `d06b6103` by lens B; it will
+be re-pointed at the fix tip for the scoped re-review.
