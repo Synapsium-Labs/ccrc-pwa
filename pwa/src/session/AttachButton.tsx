@@ -1,10 +1,11 @@
 // AttachButton — the composer's "+" picker: a stateless trigger backed by a
-// hidden <input type="file" accept="image/*" multiple>. It only hands back
-// whatever the user picked; the downscale/upload/preview pipeline that used
-// to live here now lives in useStagedImages, shared with paste and
-// drag-and-drop so all three doors hand the whole batch to `add()` at once.
+// hidden <input type="file" multiple>. It only hands back whatever the user
+// picked; the downscale/upload/preview pipeline that used to live here now
+// lives in useStagedImages, shared with paste and drag-and-drop so all three
+// doors hand the whole batch to `add()` at once.
 import { useRef } from 'react';
 import type { ChangeEvent, ReactNode } from 'react';
+import { ATTACH_ACCEPT } from './useAttachImage';
 import './chat.css';
 
 export interface AttachButtonProps {
@@ -29,12 +30,14 @@ export function AttachButton({ onPick, disabled = false }: AttachButtonProps): R
       {/* No `capture` attribute: it forces the camera, and the main lane here
           is picking existing screenshots from the gallery — the picker still
           offers the camera on phones. `multiple` lets one pick cover several
-          images up to the tray's own cap. */}
+          files up to the tray's own cap. `accept` is DERIVED (ATTACH_ACCEPT):
+          a bare `image/*` here is what greyed every document out in the OS
+          picker while the drop and paste doors said nothing at all. */}
       <input
         ref={input}
         className="attach-input"
         type="file"
-        accept="image/*"
+        accept={ATTACH_ACCEPT}
         multiple
         tabIndex={-1}
         aria-hidden="true"
@@ -43,7 +46,7 @@ export function AttachButton({ onPick, disabled = false }: AttachButtonProps): R
       <button
         type="button"
         className="attach-btn"
-        aria-label="Attach an image"
+        aria-label="Attach a file"
         disabled={disabled}
         onClick={() => input.current?.click()}
       >
