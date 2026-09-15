@@ -57,6 +57,13 @@ export interface LeastLoadedCase {
    *  can carry its own malformed content; omitted/empty means no lane gets a
    *  malformed marker. */
   authDeadMalformed?: Record<string, string>;
+  /** Routing slice 3. The class the placement is for; absent means `default`
+   *  (the clause is skipped — every pre-slice-3 case stays byte-identical). */
+  cls?: 'fable' | 'opus' | 'sonnet' | 'haiku';
+  /** The sweep's latest pass, seeded at `<HOME>/.cc-sessions/usage/sweep/latest.json`
+   *  by the runner: per-account Fable share ESTIMATES (fractions) and the pass
+   *  age in seconds. Absent means no file — `unmeasured` for fable on both sides. */
+  sweep?: { ageS: number; estimates: Record<string, number | null> };
   /** `null` iff every home-able lane is disabled — nothing is placeable, and
    *  both sides must say so in their own idiom (see the runner). */
   expect: { wrapper: string; score: number } | null;
@@ -321,6 +328,51 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: null,
       why: 'the pool has exactly one member and it is declared off: nothing is placeable '
         + 'and both sides must admit it rather than cross (ruling 6)',
+    },
+    {
+      name: 'fable-under-ceiling-everywhere-ranks-as-untagged',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.1, 'claude-a': 0.2, 'claude-b': 0.3 } },
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'every lane reads well under the Fable ceiling, so the clause filters '
+        + 'nothing out and the cheapest lane wins exactly as it would untagged',
+    },
+    {
+      name: 'fable-at-ceiling-is-skipped-even-when-emptiest',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.1, 'claude-a': 0.40, 'claude-b': 0.3 } },
+      expect: { wrapper: 'claude-b', score: 30 },
+      why: 'claude-a is cheapest but AT the Fable share ceiling: placement refuses it '
+        + 'before scoring and hands the workspace to the next cheapest lane',
+    },
+    {
+      name: 'fable-unmeasured-stays-eligible-and-ranks-by-its-own-score',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.1, 'claude-b': 0.3 } },   // claude-a has no row
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'a lane the sweep never saw is UNMEASURED, not unservable — unmeasured never '
+        + 'degrades eligibility, so claude-a stays in and wins on its own limits score',
+    },
+    {
+      name: 'fable-stale-pass-is-unmeasured-not-a-refusal',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 28_801, estimates: { claude: 0.9, 'claude-a': 0.9, 'claude-b': 0.9 } },
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'a pass older than SHARE_FRESH_S measures nothing for placement: every lane '
+        + 'reads unmeasured despite the stale 0.9 estimates, and eligibility is untouched',
+    },
+    {
+      name: 'fable-at-ceiling-on-every-lane-places-nothing',
+      // Every HOME-ABLE lane in DEFAULT_TEST_ROSTER, including claude-d: an
+      // earlier version of this case named only three accounts, which left
+      // claude-d unmeasured and therefore eligible — winning the very fallback
+      // this case exists to rule out. All four must read at or over the
+      // ceiling for `null` to be the honest answer (task-2 deviation).
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30), 'claude-d': fresh(85, 45) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.5, 'claude-a': 0.6, 'claude-b': 0.7, 'claude-d': 0.8 } },
+      expect: null,
+      why: 'every lane is measured AT or over the Fable ceiling: the clause empties '
+        + 'eligibility entirely and both sides must admit nothing is placeable',
     },
   ];
 }

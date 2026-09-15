@@ -14,10 +14,11 @@ import fs from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { readLimits, projectHome, projectPlacement, type AccountLimits } from '../src/limits.js';
+import { readSharesMeasured } from '../src/shares.js';
 import { poolFor, readProjectPools, POOLS_DIR_NAME } from '../src/pools.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
-import { leastLoadedCases } from './fixtures/leastLoaded.js';
+import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
 import { CCD, seedAccountsSh } from './ccdWsHelpers.js';
@@ -127,6 +128,22 @@ const seedPoolTag = (project: string, tag: string): void => {
   fs.writeFileSync(path.join(dir, project), tag);
 };
 
+/** The sweep's own report, `<HOME>/.cc-sessions/usage/sweep/latest.json` —
+ *  the server's `readSharesMeasured` and (Task 4) ccd's bash reader both read
+ *  it from there. Absent `sweep` means no file at all (removed, not written
+ *  empty), which both sides must read as unmeasured. */
+const seedSweep = (s: LeastLoadedCase['sweep']): void => {
+  const dir = path.join(home, '.cc-sessions', 'usage', 'sweep');
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (!s) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const finishedAt = new Date((now() - s.ageS) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({
+    finishedAt,
+    perAccount: Object.fromEntries(Object.entries(s.estimates).map(([a, e]) => [a, { fableShare: { estimate: e } }])),
+  }));
+};
+
 describe('projectHome agrees with ccd _ws_least_loaded', () => {
   it.each(leastLoadedCases(now()).map((c) => [c.name, c] as const))(
     '%s',
@@ -142,6 +159,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
       seedAuthDeadMalformed(c.authDeadMalformed ?? {});
+      seedSweep(c.sweep);
       if (c.project?.tag != null) seedPoolTag(c.project.name, c.project.tag);
       const cfg = loadConfig({ CCRC_HOME: home });
       // The tag reaches the TS side through the real reader, not a literal —
@@ -151,7 +169,10 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);
-      const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), pool);
+      const projected = projectHome(
+        cfg.roster, await readLimits(localIO, cfg), pool,
+        c.cls ?? 'default', await readSharesMeasured(localIO, cfg.registryDir), now(),
+      );
       // The bash positional stays OPTIONAL: a case with no `project` calls
       // `_ws_least_loaded` with no argument, exactly as every pre-pool case
       // always has.
@@ -163,17 +184,22 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
         // this is the split expectation the runner promises: two assertions,
         // one per side, neither weakened.
         expect(projected, c.why).toBeNull();
-        expect(bashPick(), `ccd disagrees: ${c.why}`).toBe('');
+        // The class cases run TS-only in this task — Task 4 gives
+        // `_ws_least_loaded` its class argument and drops this guard.
+        if (!c.cls) expect(bashPick(), `ccd disagrees: ${c.why}`).toBe('');
         return;
       }
 
       // 1. The prediction is right in its own terms.
       expect(projected, c.why).toEqual(c.expect);
       // 2. …and bash, the authority, picks the same account.
-      expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
       // 3. …and scores it the same, so the headroom the user reads is the
       //    headroom the account really has.
-      expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
+      // Both TS-only for the class cases in this task — see the guard above.
+      if (!c.cls) {
+        expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
+        expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
+      }
     },
   );
 });

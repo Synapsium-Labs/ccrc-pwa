@@ -5,6 +5,9 @@ import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import { serviceability, type ShareReading } from '../../shared/serviceability.js';
+import type { ModelClass } from '../../shared/models.js';
+import { shareFor, type SharesRead } from './shares.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -125,6 +128,13 @@ const authDeadMarkerOk = (raw: string): boolean => {
  *  rollover.ts): this and ccd's `_limit_score` are one predicate in two
  *  languages, and the only way to stop them drifting is to assert both against
  *  the same rows. Production callers reach it through `projectHome`. */
+/** The seven-day figure the serviceability clause reads — MEASURED or null,
+ *  the `measured()` rule's seven-day half: a rolled-over window is null, not
+ *  its inferred 0. ccd's `_limit_field w seven` is the twin (it retracts on
+ *  rollover the same way). */
+export const sevenOf = (l: AccountLimits | undefined): number | null =>
+  (!l || l.seven === null || l.sevenRolledOver ? null : l.seven);
+
 export const measured = (l: AccountLimits | undefined): number | null => {
   if (!l) return null;
   // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The rule below
@@ -224,8 +234,21 @@ export const measured = (l: AccountLimits | undefined): number | null => {
  */
 export function projectHome(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
+  nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectedHome | null {
-  const live = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
+  const eligible = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
+  // POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), and the clause is a
+  // FILTER on eligibility exactly as `_pool_ok` is: a lane measured at the
+  // class's ceiling drops out here, before scoring and before the condemned
+  // tier; an UNMEASURED lane stays — unmeasured never becomes ineligible, the
+  // rule the three unknown-handling sites share — and ranks by its own score.
+  // `default` skips the clause, so every caller that passes no class gets the
+  // pre-slice-3 answer byte for byte. ccd's `_ws_least_loaded project [class]`
+  // is the twin; `projected-home.test.ts` drives both over one fixture table.
+  const live = cls === 'default' ? eligible : eligible.filter((a) =>
+    serviceability(cls, { anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id) }, nowS)
+      .kind !== 'unservable');
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
