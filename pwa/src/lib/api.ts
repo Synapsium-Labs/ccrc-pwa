@@ -51,7 +51,25 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
 };
 
-export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+/**
+ * `verify-failed` has TWO outcomes and one code, so the sentence cannot come
+ * from the code alone. The server sets `submittable` when the box row it read
+ * back is a paste chip — Claude Code's own rendering of a large burst it holds
+ * in full — which means the opposite of the table's entry: the session DID take
+ * the text, it just showed a chip instead of the characters, and the `Send it`
+ * button beside this sentence presses the one Enter that sends it.
+ *
+ * Telling the operator "never echoed it back" next to a button that sends it is
+ * the contradiction this exists to remove. The flag is the discriminator here
+ * for the same reason it is one in `ChatList`'s gate: the code is shared, the
+ * proof is not.
+ */
+const VERIFY_FAILED_COLLAPSED = 'Typed it, and the session folded it into a paste chip instead of showing it.';
+
+export const sendErrorText = (code: string, submittable?: boolean): string =>
+  (code === 'verify-failed' && submittable === true)
+    ? VERIFY_FAILED_COLLAPSED
+    : (SEND_ERROR_TEXT[code] ?? code);
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
