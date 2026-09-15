@@ -93,6 +93,11 @@ export const TREE_FILES = [
   // role-gated, per `_inst_units`/`_inst_enable`. NB fixture INPUT only — the
   // assertions that make this land are in the two suites, not here.
   'ccd/ccd-telemetry-keepalive',
+  // The compaction card's helper (compaction-card spec §2). `_inst_files`
+  // places it beside the hook and BEFORE it, so the tree has to carry it or
+  // `_inst_atomic` dies naming the missing source and every describe here goes
+  // red for a fixture reason.
+  'ccd/compact-card.mjs',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',

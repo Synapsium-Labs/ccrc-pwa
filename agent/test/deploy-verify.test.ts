@@ -493,7 +493,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const dest of [
       '.local/bin/ccd', '.cc-sessions/notify.sh',
       '.cc-sessions/session-hook.sh', '.cc-sessions/install-session-hooks.sh',
-      '.ccrc/accounts.sh', '.local/bin/ccrc',
+      '.ccrc/accounts.sh', '.local/bin/ccrc', '.cc-sessions/compact-card.mjs',
     ]) {
       const escaped = dest.replace(/[./]/g, '\\$&');
       const direct = new RegExp(
@@ -504,6 +504,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const call of [
       'install_atomic ccd/ccd .local/bin/ccd',
       'install_atomic deploy/notify.sh .cc-sessions/notify.sh',
+      'install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs',
       'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
       'install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh',
       'install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh',

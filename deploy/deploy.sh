@@ -558,6 +558,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.local/bin/ccd ] || cp -a ~/.local/bin/ccd ~/ccrc-backups/$TS/ccd; } \
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
+    && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
     && { [ ! -f ~/.config/systemd/user/claude-session@.service ] || cp -a ~/.config/systemd/user/claude-session@.service ~/ccrc-backups/$TS/claude-session@.service; }"
   # `--exclude 'ccrc-mail.token'`: the token lives at `deploy/ccrc-mail.token`
@@ -623,6 +624,19 @@ if [ "$TARGET" = "agent" ]; then
   # above for what changes the day that stops being true).
   install_atomic ccd/ccrc-api .local/bin/ccrc-api 755
   install_atomic deploy/notify.sh .cc-sessions/notify.sh 755
+  # The compaction card's helper (compaction-card spec §2): plain node, no npm,
+  # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
+  # 644 — `node` runs it; nothing executes it directly.
+  #
+  # BEFORE the hook, not after. The hook's guard for this file is SILENT and
+  # total, so the window between the two installs decides which way a partial
+  # deploy fails: helper-then-hook leaves a file no old hook calls, hook-then-
+  # helper leaves every live session on the box compacting with no set, no card
+  # and no journal line, and saying nothing about it. This comment deliberately
+  # does NOT spell the install line itself — the ship test locates that call by
+  # scanning for it, and a comment carrying the same spelling shadows the real
+  # invocation, the trap this file's other notes record springing twice.
+  install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs 644
   # session-hook.sh + its installer ship every deploy too — the installer is
   # idempotent (it backs up settings.json itself before touching it) and
   # safe to re-run against homes it already converged.
