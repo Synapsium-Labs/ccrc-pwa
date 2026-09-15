@@ -27,8 +27,16 @@ const code = (src: string): string[] =>
 
 /** `COMPACT_HELPER` as the hook spells it: `$HOME/…`. */
 const helperAbs = (): string => {
-  const m = /^COMPACT_HELPER="([^"]+)"$/m.exec(read('ccd/session-hook.sh'));
-  expect(m, 'the hook still assigns COMPACT_HELPER exactly once, at top level').toBeTruthy();
+  // COUNT THEM, then take the one. `exec` returns the FIRST match and bash runs
+  // the LAST top-level assignment, so the two disagree the moment there are
+  // two — and the message here used to claim a count the assertion never made.
+  // MEASURED (r1 first-run B2): a second top-level `COMPACT_HELPER=` line left
+  // this file 8/8 GREEN with every destination below derived from the dead
+  // first assignment, i.e. from a path the hook no longer resolves.
+  const all = read('ccd/session-hook.sh').match(/^COMPACT_HELPER=.*$/gm) ?? [];
+  expect(all, 'the hook assigns COMPACT_HELPER exactly once, at top level').toHaveLength(1);
+  const m = /^COMPACT_HELPER="([^"]+)"$/.exec(all[0]!);
+  expect(m, 'and assigns it one double-quoted path, nothing else').toBeTruthy();
   return m![1]!;
 };
 /** The same path as `install_atomic` spells a destination: HOME-relative. */
