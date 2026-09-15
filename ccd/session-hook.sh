@@ -1945,8 +1945,14 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   # 2 above validated it before step 3 claims.
   claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"
   ( set -C; : > "$claim" ) 2>/dev/null || return 0
-  # ITEM 3 again: `find` and the nonce read sit between the proof above and
-  # this one, and this is where canonical actually moves.
+  # ITEM 3, AND ON THIS PATH IT IS THE FIRST ONE. The sentence here used to read
+  # "`find` and the nonce read sit between the proof above and this one" — and
+  # r4 A-M2 made that false in the same commit that moved the proof: the only
+  # proof above now sits INSIDE the aged branch, which returns, so nothing on
+  # the serving path runs it. What stands between the section's acquire and
+  # this line is the age `find`'s fork, the set's head read and the placeholder
+  # subshell; this is where canonical actually moves, so this is where it is
+  # proved.
   #
   # AND THE REFUSAL TAKES ITS OWN PLACEHOLDER WITH IT (r4 A-M1). The line above
   # creates `$claim`; a bare `return 0` here left a zero-byte file behind, and
