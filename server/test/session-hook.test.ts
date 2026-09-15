@@ -6720,6 +6720,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
   const SUPERSEDED = /supersed|formerly|used to |previously |the old |deleted by|stale|pre-merge|before the merge|no longer|falsif|round \d+ (said|read|claimed|wrote|stated)|this replaces|shifted|corrected|was the wrong|moved →|→ *`?:/i;
   /** A sentence end, a semicolon, or a table-cell pipe. */
   const SENT = /(?<![A-Z0-9])\.\s+(?=[A-Z*`(\[—])|;\s+|\|/g;
+  /** QUOTED SPANS: backticks, curly quotes, and straight double quotes of four
+   *  characters or more — the corpus quotes shipped sentences that way as often
+   *  as it backticks tokens. ONE copy, read by both passes below. */
+  const QUOTED = /`([^`]+)`|“([^”]+)”|"([^"]{4,})"/g;
+  /** The head of a task section's file list, which the second pass scopes to. */
+  const FILES_HEAD = '**Files:**';
 
   type Resolve = (rel: string) => string[] | null;
   const srcCache = new Map<string, string[] | null>();
@@ -6783,6 +6789,46 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     return out;
   };
 
+  /** One `file:N[-M]` reference, with the CLAUSE it sits in and that clause's
+   *  quoted tokens. EXTRACTION ONLY — which references are exempt, and on what
+   *  ground, is the caller's question, and the two passes below answer it
+   *  differently. Shared so that the second pass cannot drift from the first on
+   *  what a reference IS while deliberately differing on what excuses one. */
+  type Ref = { file: string; n1: number; n2: number; clause: string; toks: string[] };
+  const refsOf = (p: string): Ref[] => {
+    const spans: Array<{ a: number; b: number; tok: string }> = [];
+    for (const m of p.matchAll(QUOTED)) {
+      const tok = m[1] ?? m[2] ?? m[3] ?? '';
+      // A bare `:N` or `file:N` is a REFERENCE, never a quotation of the
+      // cited line — counting it would make every reference self-anchoring.
+      if (tok === '' || new RegExp('^:?\\d+(?:[-–]\\d+)?$').test(tok)
+        || new RegExp('^\\S*:\\d+[-–,\\d]*$').test(tok)) continue;
+      spans.push({ a: m.index!, b: m.index! + m[0].length, tok });
+    }
+    const bounds = [0, ...[...p.matchAll(SENT)].map((m) => m.index! + m[0].length), p.length];
+    const out: Ref[] = [];
+    let last: string | null = null; let lastCs = -1;
+    for (const m of p.matchAll(REF_RE)) {
+      const n1 = Number(m[2]); const n2 = m[3] ? Number(m[3]) : n1;
+      const cs = Math.max(...bounds.filter((b) => b <= m.index!), 0);
+      const ce = Math.min(...bounds.filter((b) => b >= m.index! + m[0].length), p.length);
+      let file: string | null = m[1] ?? null;
+      if (file === null) {
+        // INHERITANCE IS CLAUSE-SCOPED. A bare `:N` takes the file named
+        // before it in the SAME clause; across a sentence boundary the
+        // last-named file is a different subject, and inheriting it invents
+        // a citation the document never wrote. Measured over this corpus,
+        // paragraph-wide inheritance mis-attributed 23 references — every
+        // one of them to a file whose length the range does not even reach.
+        file = lastCs === cs ? last : null;
+        if (file === null || m.index === 0 || p[m.index! - 1] !== '`') continue;
+      } else { last = file; lastCs = cs; }
+      out.push({ file, n1, n2, clause: p.slice(cs, ce),
+        toks: spans.filter((s) => s.a >= cs && s.b <= ce).map((s) => s.tok) });
+    }
+    return out;
+  };
+
   type Audit = {
     resolved: number; history: number; unanchored: number; checked: number;
     failures: Array<{ doc: string; line: number; file: string; from: number; to: number; clause: string }>;
@@ -6800,39 +6846,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         }
       }
       for (const { line: pstart, text: p } of paragraphs(text)) {
-        // QUOTED SPANS: backticks, curly quotes, and straight double quotes of
-        // four characters or more — the corpus quotes shipped sentences that
-        // way as often as it backticks tokens.
-        const spans: Array<{ a: number; b: number; tok: string }> = [];
-        for (const m of p.matchAll(/`([^`]+)`|“([^”]+)”|"([^"]{4,})"/g)) {
-          const tok = m[1] ?? m[2] ?? m[3] ?? '';
-          // A bare `:N` or `file:N` is a REFERENCE, never a quotation of the
-          // cited line — counting it would make every reference self-anchoring.
-          if (tok === '' || new RegExp('^:?\\d+(?:[-–]\\d+)?$').test(tok)
-            || new RegExp('^\\S*:\\d+[-–,\\d]*$').test(tok)) continue;
-          spans.push({ a: m.index!, b: m.index! + m[0].length, tok });
-        }
-        const bounds = [0, ...[...p.matchAll(SENT)].map((m) => m.index! + m[0].length), p.length];
-        let last: string | null = null; let lastCs = -1;
-        for (const m of p.matchAll(REF_RE)) {
-          const n1 = Number(m[2]); const n2 = m[3] ? Number(m[3]) : n1;
-          const cs = Math.max(...bounds.filter((b) => b <= m.index!), 0);
-          const ce = Math.min(...bounds.filter((b) => b >= m.index! + m[0].length), p.length);
-          let file: string | null = m[1] ?? null;
-          if (file === null) {
-            // INHERITANCE IS CLAUSE-SCOPED. A bare `:N` takes the file named
-            // before it in the SAME clause; across a sentence boundary the
-            // last-named file is a different subject, and inheriting it invents
-            // a citation the document never wrote. Measured over this corpus,
-            // paragraph-wide inheritance mis-attributed 23 references — every
-            // one of them to a file whose length the range does not even reach.
-            file = lastCs === cs ? last : null;
-            if (file === null || m.index === 0 || p[m.index! - 1] !== '`') continue;
-          } else { last = file; lastCs = cs; }
+        for (const { file, n1, n2, clause, toks } of refsOf(p)) {
           const lines = resolve(file);
           if (lines === null) continue;           // not a tracked source file
           r.resolved++;
-          const clause = p.slice(cs, ce);
           if ((ledgerStart !== null && pstart >= ledgerStart && pstart < ledgerEnd) || SUPERSEDED.test(clause)) {
             r.history++; continue;
           }
@@ -6844,7 +6861,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
             r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2, clause: norm(clause).trim().slice(0, 160) });
             continue;
           }
-          const toks = spans.filter((s) => s.a >= cs && s.b <= ce).map((s) => s.tok);
           if (!toks.length) { r.unanchored++; continue; }   // the rule does not apply
           r.checked++;
           if (toks.some((t) => occurs(t, cited))) continue;
@@ -6863,6 +6879,42 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     }
     return r;
   };
+
+  /** THE SECOND PASS, and why there are two (D-2849). A `**Files:**` list is a
+   *  LOCATION INDEX — where a task's work lands — never a quotation of history
+   *  and never an argument about one, so NONE of the audit's exemptions can be
+   *  right for a reference inside one: not the ledger arm, not the SUPERSEDED
+   *  retraction marker, and not sub-rule A, whose function-body fallback
+   *  anchors a citation on a body the task is about to lengthen. Measured, the
+   *  audit above exempts FIVE references in these paragraphs, two of them the
+   *  ones D-2849 recorded as surviving, so no ratchet built on it can ever
+   *  surface them. Same extraction (`refsOf`), same PREMISE — a clause that
+   *  quotes nothing states nothing to check — and no exemptions at all. */
+  type FilesAudit = {
+    paragraphs: number; resolved: number; unanchored: number; checked: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number }>;
+  };
+  const filesAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): FilesAudit => {
+    const r: FilesAudit = { paragraphs: 0, resolved: 0, unanchored: 0, checked: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        if (!p.startsWith(FILES_HEAD)) continue;
+        r.paragraphs++;
+        for (const { file, n1, n2, toks } of refsOf(p)) {
+          const lines = resolve(file);
+          if (lines === null) continue;
+          r.resolved++;
+          if (!toks.length) { r.unanchored++; continue; }
+          r.checked++;
+          if (toks.some((t) => occurs(t, lines.slice(n1 - 1, n2).join('\n')))) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2 });
+        }
+      }
+    }
+    return r;
+  };
+  const refKey = (f: { file: string; from: number; to: number }): string =>
+    `${f.file}:${f.from}${f.to !== f.from ? `-${f.to}` : ''}`;
 
   const realCorpus = (): Array<readonly [string, string]> =>
     CORPUS.map(([l, f]) => [l, fs.readFileSync(f, 'utf8')] as const);
@@ -7081,9 +7133,23 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //   `ccd/ccrc:6531` -> `:6537` (+6 — the five-line comment and the
     //     `_inst_atomic` above it in `_inst_files`), sha256 100a047a… on both
     //     sides; clause: "the `_upd_backup_copy` list beside …".
-    // The other three references in that same paragraph — `deploy/deploy.sh:560`
-    // (the insertion lands AFTER it), `ccd/ccrc:5217` and `ccd/ccrc:7129-7130`
-    // — still pass, measured by the audit itself rather than reasoned about.
+    // THE OTHER THREE DO NOT SURVIVE — two of them are INVISIBLE, which the
+    // sentence this replaces reported as "still pass, measured by the audit
+    // itself": audit-true, and it read as accuracy (r1 B1). Only
+    // `deploy/deploy.sh:560` really survives, the backup clause landing AFTER
+    // it. `ccd/ccrc:5217` and `ccd/ccrc:7129-7130` are as stale as the two
+    // above, proven the same way — sha256 of the cited line at the base
+    // against the same line at this tip: `:5217` -> `:5223` (+6, c412b7f0…,
+    // the `_inst_atomic "$tree/ccd/session-hook.sh" …` line Step 4 inserts
+    // above) and `:7129-7130` -> `:7136-7137` (+7, 251e2386…,
+    // `_uninst_cc_sessions`' "install set, exactly" header). THIS audit cannot
+    // see either, for two different reasons, both measured by an instrumented
+    // trace of it: the first passes through sub-rule A (`_inst_files`' body
+    // still contains 5217), the second never reaches sub-rule A at all — its
+    // clause contains "falsifies", SUPERSEDED matches `falsif`, and the
+    // reference is classed as quoted history before the token step. So the map
+    // below measures WHAT THIS AUDIT CATCHES, not Task 10's citation debt, and
+    // the second pass at the end of this file is what measures the debt.
     //
     // THEY ARE RECORDED RATHER THAN REPAIRED BECAUSE THE REPAIR IS OUT OF
     // REACH, not because it was skipped: both citations live inside Task 10's
@@ -7125,5 +7191,83 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'ccd/ccrc', 'deploy/deploy.sh'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
+  });
+
+  it('CONTROL: the **Files:** pass takes neither exemption, and looks only at **Files:** lists', () => {
+    // FIXTURE DOC against the FIXTURE SOURCES above, so this control cannot
+    // rot when a real file's lines move — the failure the whole guard is about.
+    const doc = [
+      '**Files:**',
+      '- Modify: `ccd/fx.sh` — the write (`printf "%s" "$a"` at `ccd/fx.sh:3`).',
+      '',
+      '**Files:**',
+      '- Modify: `ccd/fx.sh` — `_fx_helper`\'s early return (`ccd/fx.sh:4`).',
+      '',
+      '**Files:**',
+      '- Modify: `ccd/fx.sh` — an addition here falsifies the `printf "%s" "$a"` header (`ccd/fx.sh:5`).',
+      '',
+      'Prose, not a file list: the write is `printf "%s" "$a"` (`ccd/fx.sh:7`).',
+    ].join('\n');
+    const r = filesAudit([['fx', doc]], FX);
+    expect(r.paragraphs, 'the three **Files:** paragraphs, and only those').toBe(3);
+    // The anchored one passes on merit; the sub-rule-A one and the "falsifies"
+    // one red, because neither exemption exists here; the prose paragraph is
+    // out of scope even though its reference is broken.
+    expect(r.failures.map(refKey), 'the exemption-free set').toEqual(['ccd/fx.sh:4', 'ccd/fx.sh:5']);
+    // THE CONTROL IN THE OTHER DIRECTION, on the SAME text: the audit exempts
+    // both of those — sub-rule A for the first, the retraction marker for the
+    // second — and reds only the prose reference this pass never looks at. So
+    // the two passes differ exactly where the argument says they differ.
+    expect(audit([['fx', doc]], FX).failures.map(refKey),
+      'the audit exempts both, and reds the one out of this pass\'s scope').toEqual(['ccd/fx.sh:7']);
+  });
+
+  it('THE **Files:** LISTS ARE LOCATION INDEXES — the exact stale set, exemption-free (D-2849)', () => {
+    const r = filesAudit(realCorpus());
+    // NON-VACUITY: the lists are still there, and the rule reaches most of what
+    // they cite. Lower bounds — the documents grow; a grammar that BROKE would
+    // fall below these rather than merely differ from them.
+    expect(r.paragraphs, '**Files:** paragraphs read').toBeGreaterThanOrEqual(11);
+    expect(r.checked, 'references in them the rule applies to').toBeGreaterThanOrEqual(20);
+    // THE RATCHET, EXACT and in document order, and it is NOT the census above:
+    // a **Files:** entry names where work lands, so a reference in one that no
+    // longer reaches what its clause quotes is a wrong index, whatever marker
+    // the sentence around it carries. RE-MEASURE AND LOWER IT; never widen the
+    // rule, and never "repair" a reference inside a frozen section.
+    const set = r.failures.map(refKey);
+    expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
+      .toEqual([
+        // Task 9's own list: stale by construction, the debt D-2758 parks in
+        // Task 11, and eleven of these are already inside the 206 above.
+        'ccd/session-hook.sh:744',
+        'ccd/compact-card.mjs:433-560',
+        'ccd/compact-card.mjs:726-728',
+        'ccd/compact-card.mjs:726',
+        'ccd/ccd:2756-2785',
+        'ccd/ccd:2782',
+        'ccd/ccd:2766',
+        'ccd/ccd:2784',
+        'ccd/ccd:4355-4357',
+        'ccd/session-hook.sh:1098',
+        'ccd/session-hook.sh:1175-1177',
+        // Task 10's list: FOUR of its five references, not the two D-2849
+        // first recorded. `deploy/deploy.sh:560` is the one real survivor.
+        'deploy/deploy.sh:629',
+        'ccd/ccrc:5217',
+        'ccd/ccrc:6531',
+        'ccd/ccrc:7129-7130',
+      ]);
+    // D-2849's OWN FOUR, named rather than counted, so that a set that keeps
+    // its length while losing one of them still reds.
+    const D2849 = ['deploy/deploy.sh:629', 'ccd/ccrc:5217', 'ccd/ccrc:6531', 'ccd/ccrc:7129-7130'];
+    expect(D2849.filter((k) => set.includes(k)),
+      'the four references Task 10\'s own **Files:** paragraph falsifies (D-2849)').toEqual(D2849);
+    // AND THE REACH THIS PASS ADDS, which is the whole reason it exists: the
+    // references the census NEVER reports, at any line, because an exemption
+    // swallows them. Two are D-2849's; the third answers the open question
+    // about whether the retraction marker hides anything ELSE — it does.
+    const census = new Set(audit(realCorpus()).failures.map(refKey));
+    expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
+      .toEqual(['ccd/session-hook.sh:1098', 'ccd/ccrc:5217', 'ccd/ccrc:7129-7130']);
   });
 });
