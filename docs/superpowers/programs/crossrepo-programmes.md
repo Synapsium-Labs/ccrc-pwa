@@ -105,7 +105,9 @@ beside it when the programme closes.
   "undelivered": a delivered-but-unacked row is outstanding too), a programme filter on
   mail, feed and the mail screen. The mechanism is the one the tree already has: resolution at send time,
   and at occupant change the D-1425 act (a fresh delivery row to the heir, the predecessor's row parked)
-  generalised by role and funnelled through `bindSession`, the one writer of `runs.sessionId`. Stated
+  generalised by role and funnelled through `bindSession`, the one writer that RE-binds `runs.sessionId`
+  (corrected, D-2753 — the open's own insert writes it first; `bindSession`'s uniqueness claim is about
+  re-binding). Stated
   honestly in the spec: no route re-binds a live run today, so the worker arm is reached only by the
   store test that drives it — the funnel exists so that the day a recovery re-binds a run, the promise
   holds.
@@ -260,7 +262,8 @@ so **the gate is closed** and **the flip defers** — `HOME_PROJECT_LEGACY_ACCEP
   later wave. The per-run remedy was offered and declined on 2026-09-14: abandoning run 47 and re-opening it with a
   `homeProject` would heal `account-pools` alone at the cost of a `failed` row for a run that did nothing, and the
   legacy event of 11:34:24Z stays written either way — so the write surface is the only fix for all six.
-- **OPEN ITEM (no deviation number) — README states the programme-mail facts twice, 280 lines apart:**
+- **OPEN ITEM (no deviation number) — README states the programme-mail facts twice, 287 lines apart at this
+  wave's tip (the gap drifts with every edit between them; D-2747 carries the measured chain):**
   `README.md`'s cross-repo subsection ("Mail finds a role, not a session." / "Finding a programme's traffic.") and
   its "Programme mail at scale." paragraph restate the same heir-inheritance and outstanding-read facts, and this
   fix round's D-2753 (MAJOR 1, MAJOR 3) each had to correct both copies separately — the duplication is why two of
@@ -282,7 +285,7 @@ the flip's own PR and goes green in that same PR when the constant moves, then h
 shut thereafter; it does not make the deferral visible on `main`. The deferral's visibility comes
 from this ledger's `## Measurements` block and the wave-3 row, not from a red suite.
 
-Two test forms are pre-approved (coordinator ruling, mail 1100) so the flip wave does not re-derive
+Two test forms are pre-approved (coordinator ruling, mail 1111) so the flip wave does not re-derive
 them: the run-count assertion is `okRuns(w.coord.runs({ includeClosed: true })).length` (D-2743), and
 the required-`homeProject` refusal body assertion is the `toEqual` carrying
 `detail: 'homeProject is required'` (D-2744). D-2070 — whether the flip commit rides this wave's own

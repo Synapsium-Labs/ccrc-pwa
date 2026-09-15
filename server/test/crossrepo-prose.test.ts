@@ -78,10 +78,17 @@ describe('README: cross-repo programmes', () => {
         .toContain(field);
       expect(crossSection(), `the cross-repo section does not name ${field}`).toContain(field);
     }
-    expect(ROUTES, 'homeProject is not read off the open request body — this assertion is over nothing')
-      .toContain('homeProject');
-    expect(crossSection(), 'the cross-repo section does not name homeProject as a request field')
-      .toContain('homeProject');
+    // D-2754, fix round 5: both halves below used to be bare `toContain('homeProject')`
+    // — the same call the bug was, relabelled. Measured: `routes.ts` holds 16
+    // occurrences of the token (comments at :257, :266, :328, :1153 and helpers),
+    // so any one of them alibied the destructure; and `crossSection()` names it at
+    // :1496, :1511 and :1576, so rewording the request-contract sentence itself left
+    // the suite green. Each half now pins the ONE construct it claims to.
+    expect(ROUTES, 'the open handler no longer destructures homeProject off the request body')
+      .toMatch(/const \{[^}]*\bhomeProject\b[^}]*\} = body;/);
+    expect(crossSection(), 'the cross-repo section no longer states the request contract — ' +
+      'that the canonical open body takes homeProject on every wave')
+      .toMatch(/body takes `homeProject` on every wave/);
   });
 
   it('pins the mandatory plan read and the dependency-gated producer proof', () => {
@@ -345,7 +352,7 @@ describe('README: the run lifecycle and programme mail', () => {
       ["without the producer's sessionId", crossOpen], ['`final:true`', crossClose],
       ['`released:true`', crossRelease], ['closed row', crossClosed],
       ['If the consumer depends', crossDependency], ['independently prove', crossMerge],
-      ['dispatch', crossDispatch],
+      ['Only then dispatch', crossDispatch],
     ] as const) {
       expect(at, `cross-project ${marker} is absent`).toBeGreaterThan(-1);
     }
