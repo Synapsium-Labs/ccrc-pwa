@@ -6970,3 +6970,40 @@ wrong: one merge commit on a branch that squashes anyway.
 **Ruling:** `session-hook`'s ratio red is load, on three measurements (control at `main` green, second
 isolated run green, branch touches nothing it reads). Costs if wrong: CI reds on a file this branch
 does not change, and says so.
+
+### 2026-09-15 14:4x UTC — wave 6's first mail: Tasks 1–8 done, three numbers asked for and issued
+
+Worker mail 1274 (`finding`, run 47, artifact `wave6-deviations.md`): Tasks 1–8 committed on
+`ws/clear-meadow`, the Task 9 gate running, three departures needing numbers. Each re-measured here
+before ruling — the worker's write-up gave its measurements so they could be refused, and none was.
+
+**Minted D-2827, D-2828, D-2829** (one call, floor now 2830; a first call was refused `oversize` on a
+title over 200 bytes and minted nothing). Mailed as 1279 (`answer`, run 47).
+
+- **D-2827 — Task 6 makes NO `ccd/ccd` edit.** The plan's premise (the `_ws_least_loaded` comment
+  claims "no telemetry field at all") was already discharged by D-2596: measured at `origin/main`
+  `47eff69a`, `ccd/ccd:4579` opens "CLOSED, by the account wave (D-2596 …)", `:4761` is
+  `_account_measured "$w" || continue`, the helper at `:1550`; `git diff --stat origin/main
+  ws/clear-meadow -- ccd/` is empty. Writing the plan's prescribed text would have regressed a true
+  comment into a false one. The pin is inverted to hold the closure and forbid re-asserting the stale
+  claim as live. **Consequence: this wave ships on the SERVER LANE ONLY** — Task 9 Step 6's
+  agent-then-server prescription is superseded for run 47; nothing in the diff runs on the fleet host.
+- **D-2828 — Task 2 applied the plan's intent over its literal text.** Brace list is exactly
+  `ACCOUNT_KEYS` (the `?` markers broke the derivation), optionality moved to prose, and the
+  overflow-lane paragraph that landed after the plan was cut is kept whole. The emitted surface is 13
+  names, not the plan's 10 — the derivation absorbed the routing wave's three; recorded inside the entry
+  as evidence, no separate number.
+- **D-2829 — Task 8 Step 5 named the wrong enforcing mechanism.** `ledger-instruction` PASSES with
+  the bullet in the forbidden slot (its terminator is distinctive, the passage extends); what reds is
+  `pools-prose`'s own length check, 17 lines against 12. The placement rule stands.
+
+**Ruling:** the smaller predicted-output corrections (Task 1's mutant reds 1 not 2; Task 4's first
+red names 501 not 409; Task 5's grep 30 not 20; every citation shifted) get NO numbers — one
+un-numbered "Predicted outputs, corrected" note under the three entries. They change no work and no
+conclusion, unlike wave 5's inert/backwards/crash-first mutants which did. Costs if wrong: a later
+reader mints one then.
+
+Also told the worker: `origin/main` is `47eff69a`, and the server suite needs sharding on this box.
+Next expected mail: `wave-done` with the fingerprint object. Then: re-measure (`runs advance`),
+review, merge (hand-written body, says SERVER LANE ONLY), deploy the server lane, close run 47 —
+**the last wave: closing it retires the programme, which is correct this time.**
