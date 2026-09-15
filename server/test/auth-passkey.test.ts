@@ -2288,7 +2288,8 @@ describe('GET /api/runs takes EITHER credential, and never neither', () => {
     // against consumers OUTSIDE `server/`. A route's "who calls this" is not a
     // fact the server package can see about itself, so this reads the skills.
     const root = path.resolve(here, '..', '..', 'ccd');
-    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill')];
+    const corpora = [path.join(root, 'coordinator-skill'), path.join(root, 'worker-skill'),
+      path.join(root, 'reviewer-skill')];
     const files: string[] = [];
     const walk = (dir: string): void => {
       for (const e of readdirSync(dir)) {

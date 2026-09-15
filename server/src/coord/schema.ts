@@ -867,6 +867,35 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN homeProject TEXT;
   ALTER TABLE feed_events ADD COLUMN runId INTEGER;
   `,
+
+  // ── 11: user_version 10 -> 11 ─────────────────────────────────────────────
+  // Review runs (design 2026-09-14 §5.1): a reviewer is a RUN of a new KIND,
+  // reusing dispatch, mail, hold, slot and close rather than inventing a
+  // lighter carrier. MIGRATIONS[0..9] ARE FROZEN, for the reason every entry
+  // above states: db.ts's loop runs `for (v = current; v < COORD_SCHEMA_VERSION;
+  // v++)`, so an amendment to an applied entry never runs again.
+  //
+  // `runs.kind` — 'work' | 'review'. NOT NULL DEFAULT 'work' on purpose, and
+  // this is the ONE column in this file whose default is an assertion rather
+  // than an overloaded null: every row that exists today IS a work run, with
+  // no change of meaning, and a NULL here would say "kind unknown" about rows
+  // whose kind is perfectly known. The revive path (`hydrateRun`) reads an
+  // out-of-vocabulary token as `'unknown'`, the `RunState` idiom (D-2795).
+  //
+  // `runs.reviews` — the work run this review run reads; NULL on a work run.
+  // Set at open, never updated. NULLABLE, NO DEFAULT: NULL means "this run
+  // reviews nothing" — true of every work run — never "the reviewed run could
+  // not be read". `REFERENCES runs(id)` with a NULL default is the one shape
+  // SQLite's ALTER TABLE ADD COLUMN accepts for a foreign key.
+  //
+  // The index serves `reviewInFlightFor` — "is a non-terminal review run
+  // already naming this work run" — which `POST /api/runs` asks on every
+  // review open and `POST /api/runs/:id/advance` on every send-back.
+  `
+  ALTER TABLE runs ADD COLUMN kind TEXT NOT NULL DEFAULT 'work';
+  ALTER TABLE runs ADD COLUMN reviews INTEGER REFERENCES runs(id);
+  CREATE INDEX runs_by_reviews ON runs(reviews);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

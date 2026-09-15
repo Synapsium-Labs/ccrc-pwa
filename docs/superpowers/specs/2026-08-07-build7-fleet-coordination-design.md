@@ -211,10 +211,12 @@ an account without the skill).
   Convention, plus a mechanical speed bump, named as exactly that.
 - **Wave lifecycle** automates Build 2.5's six manual steps: coordinator
   opens the run (ledger commit + hold), dispatches, watches mail + pr-state,
-  re-measures the done fingerprint, reviews the handoff commit, updates the
-  hold reason, dispatches wave N+1 fresh into the same workspace, releases on
-  final merge. **The brief's content stays discipline** — the skill carries
-  the template, the quality gate stays ordinary review of the handoff commit.
+  re-measures the done fingerprint, **dispatches a review run and rules on
+  its report** (design 2026-09-14), updates the hold reason, dispatches wave
+  N+1 fresh into the same workspace, releases on final merge. **The brief's
+  content stays discipline** — the skill carries the template, the quality
+  gate stays ordinary review of the handoff commit — run by a dispatched
+  reviewer in its own worktree, ruled on by the coordinator.
 - The operator observes and interrupts at every point: the run board, the
   mail feed, push events, the pause file, and the ordinary ability to just
   talk to any session.
