@@ -23,6 +23,13 @@ const img = (over: Partial<StagedImage> = {}): StagedImage => ({
   previewUrl: 'blob:mock/1', state: 'staged', width: 2788, height: 442, ...over,
 });
 
+/** A staged DOCUMENT: no previewUrl (the hook mints none) and no dimensions.
+ *  The absent URL is the whole signal — there is nothing to draw. */
+const docChip = (over: Partial<StagedImage> = {}): StagedImage => ({
+  key: 'k2', file: new File(['# hi'], 'design-notes.md', { type: '' }),
+  state: 'staged', ...over,
+});
+
 describe('AttachTray', () => {
   it('renders nothing when there is nothing attached', () => {
     const { container } = render(<AttachTray images={[]} onRemove={vi.fn()} onRetry={vi.fn()} />);
@@ -144,5 +151,44 @@ describe('AttachTray', () => {
     // hit-area it exists to set must still be set.
     const scoped = ruleIn(css, `.attach-chip[data-state='failed'] .attach-remove::after`);
     expect(declValue(scoped, 'inset')).not.toBeNull();
+  });
+
+  // — Documents. An <img> pointed at a .md would render as a broken-image box
+  //   and, worse, hit the same onError fallback the bubble uses for a clip
+  //   DELETED off disk — so a perfectly good file would read as "gone". —
+
+  it('draws a document as its extension and its name, never as an image', () => {
+    const { container } = render(<AttachTray images={[docChip()]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.querySelector('img')).toBeNull();
+    expect(screen.getByText('MD')).toBeInTheDocument();
+    // The name, because for a document it is the only thing that says which of
+    // four staged files this one is.
+    expect(screen.getByText('design-notes.md')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Remove design-notes.md' })).toBeInTheDocument();
+  });
+
+  it('says a document is uploading in the same place an image does', () => {
+    render(<AttachTray images={[docChip({ state: 'uploading' })]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByText('uploading…')).toBeInTheDocument();
+    expect(screen.queryByText('design-notes.md')).not.toBeInTheDocument();
+  });
+
+  // The strip can only show the name truncated (72px of chip), so the full one
+  // has to survive somewhere a long name is still recoverable.
+  it('carries a document\'s full name on the chip, without displacing a failure reason', () => {
+    const { container, rerender } = render(
+      <AttachTray images={[docChip()]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.querySelector('.attach-chip')).toHaveAttribute('title', 'design-notes.md');
+
+    rerender(<AttachTray images={[docChip({ state: 'failed', error: 'That file is too large — 12 MB is the limit.' })]}
+                         onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(container.querySelector('.attach-chip'))
+      .toHaveAttribute('title', 'That file is too large — 12 MB is the limit.');
+  });
+
+  it('still keeps an image chip an image', () => {
+    render(<AttachTray images={[img()]} onRemove={vi.fn()} onRetry={vi.fn()} />);
+    expect(screen.getByAltText('shot.png')).toBeInTheDocument();
+    expect(screen.queryByText('PNG')).not.toBeInTheDocument();
   });
 });
