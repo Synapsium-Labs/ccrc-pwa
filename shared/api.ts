@@ -5016,7 +5016,15 @@ export interface RunSummary {
  *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
- *  before. */
+ *  before.
+ *
+ *  `waveDoneMails` counts the `status`/`wave-done` mails the run's OWN worker
+ *  (`runs.sessionId`, never `claimedBy`) has sent on this run, and `signals`
+ *  is `parseWaveDoneSignals` over the LAST of them — the re-sent claim after a
+ *  rejection supersedes the refused one — or null when there are none, which
+ *  is a fourth condition beside the three each line carries (routing spec
+ *  §5.5, slice 2). Read at signal time from the mail row; nothing is written
+ *  at ingress, so the mail table stays the one record. */
 export interface RunSignals {
   readonly runId: number;
   readonly dispatchedAt: number | null;
@@ -5029,6 +5037,8 @@ export interface RunSignals {
   readonly activeMs: number | null;
   readonly closeRefusals: number;
   readonly firstSubmission: boolean | null;
+  readonly waveDoneMails: number;
+  readonly signals: WaveDoneSignals | null;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the

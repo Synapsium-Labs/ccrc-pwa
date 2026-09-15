@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { DONE_AUTHORITY_CODES } from '../../shared/api.js';
+import { DONE_AUTHORITY_CODES, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -85,7 +85,7 @@ describe('CoordStore.runSignals', () => {
     expect(coord.runSignals(id)).toEqual({
       runId: id, dispatchedAt: 1_000_000, closedAt: 1_600_000, finalState: 'done',
       wallMs: 600_000, holdMs: 30_000, swaps: 1, excludedUnmeasured: true, activeMs: 570_000,
-      closeRefusals: 0, firstSubmission: true,
+      closeRefusals: 0, firstSubmission: true, waveDoneMails: 0, signals: null,
     });
   });
 
@@ -168,5 +168,62 @@ describe('CoordStore.runSignals', () => {
     const coord = open(); const id = seedRun(coord);
     coord.advance(id, 'failed', 'operator');
     expect(coord.runSignals(id)).toMatchObject({ finalState: 'failed', firstSubmission: null, wallMs: expect.any(Number) });
+  });
+});
+
+/** A `wave-done` from `fromId` on `runId`, through the store's own ingress
+ *  writer (`insertMail`, the row `POST /api/mail` inserts). */
+const waveDone = (coord: CoordStore, runId: number, fromId: string, body: string): void => {
+  coord.insertMail({ fromId, fromUuid: 'u', toId: 'ccrc-pwa-coord', runId, kind: 'status',
+    subject: WAVE_DONE_SUBJECT, body, artifacts: [] });
+};
+
+describe('CoordStore.runSignals — the worker\'s wave-done signal lines (routing slice 2)', () => {
+  it('no wave-done yet: zero mails and signals null — a fourth condition, not an absent line', () => {
+    const coord = open(); const id = seedRun(coord);
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
+
+  it('reads the two lines off the worker\'s wave-done, on an OPEN run too', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', 'suite: green\nfailure: shallow\n{"branchTip":"a"}');
+    expect(coord.runSignals(id)).toMatchObject({
+      waveDoneMails: 1,
+      signals: { suite: { ok: true, value: 'green' }, failure: { ok: true, value: 'shallow' } },
+    });
+  });
+
+  it('a wave-done with no lines is ABSENT on both, distinct from null', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', '{"branchTip":"a"}');
+    expect(coord.runSignals(id)).toMatchObject({
+      waveDoneMails: 1, signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } },
+    });
+  });
+
+  it('the LAST wave-done wins — a re-sent claim after a rejection supersedes', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', 'suite: red\n{}');
+    waveDone(coord, id, 'demo-worker', 'suite: green\n{}');
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 2, signals: { suite: { ok: true, value: 'green' } } });
+  });
+
+  it('only the run\'s OWN worker counts: another session\'s wave-done, a status mail with another subject, and a wave-done on another run are ignored', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'someone-else', 'suite: green\n{}');
+    coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: id, kind: 'status',
+      subject: 'progress', body: 'suite: green', artifacts: [] });
+    const other = seedRun(coord);
+    waveDone(coord, other, 'demo-worker', 'suite: green\n{}');
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
+
+  it('a run with no worker (sessionId null) reads nothing — never another session\'s mail', () => {
+    const coord = open();
+    const opened = coord.openRun({ program: 'p2', title: 'p2', project: 'demo', wave: 1, waveOf: null, claimedBy: 'ccrc-pwa-coord' });
+    if (!('id' in opened)) throw new Error('refused');
+    coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: opened.id, kind: 'status',
+      subject: WAVE_DONE_SUBJECT, body: 'suite: green', artifacts: [] });
+    expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
   });
 });
