@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1769b7edbb11f4001583281fd2e725c21589c4730e88e932a450f89442bea46b
+# ccrc:generated 1 sha256=74e9b1ba0c74080479039b02dec583ba97a428d467a9e924359daadea6bdc81c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2055,6 +2055,53 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
   # selects, and it is the one thing this condition genuinely cannot supply.
   [[ -n "$sentence" ]] || sentence="${COMPACT_LOCK_WHY:-(the acquire named no condition)} — ccd carries no remedy text for this condition; $tail — inspect $REG/.$id.compactions.lock by hand"
   printf '%s' "$sentence"
+}
+
+_compact_lock_why_short() {   # -> the SHORT clause the `ws-gc --prune` sweep's
+                              # STDOUT TALLY names for the CURRENT
+                              # COMPACT_LOCK_WHY (r8 R8-M3).
+                              #
+                              # THE SWEEP REPORT AND THE DURABLE RECORD DID NOT
+                              # AGREE. One line after `_pr_why` renders the
+                              # token-specific remedy into the journal, the
+                              # status-1 arm told the human reading the report
+                              # "the compaction lock was unavailable" — the
+                              # CONTENTION story — unconditionally, i.e. for
+                              # `canonical-vanished`, `lock-path-occupied`,
+                              # `lock-source-refused` and `lock-publish-failed`
+                              # alike: the four conditions the durable record
+                              # beside it explicitly refuses to call contention.
+                              # The shape was already available — the status-2
+                              # sibling distinguishes its own cause in the same
+                              # report — and the sweep is the surface an
+                              # operator actually watches.
+                              #
+                              # KEYED ON THE SAME TOKENS AS THE REMEDY HELPER,
+                              # and `(d1e)` derives the vocabulary from the
+                              # acquire and requires an arm here for every one
+                              # of it, exactly as it does there — so the two
+                              # renderers cannot drift and a fifth condition
+                              # cannot gain a remedy while keeping the
+                              # contention tally.
+                              #
+                              # NO ARGUMENTS AND NO INTERMEDIATE VARIABLE. The
+                              # short form carries nothing caller-specific: the
+                              # row id is already in the tally line the caller
+                              # builds, and the re-run and surviving-state
+                              # clauses the verb selects belong to the DURABLE
+                              # sentence, not to a one-line report row. And
+                              # every arm is its own `printf`, so there is no
+                              # `sentence` to leave unset and no fail-closed
+                              # line to add: the `*)` arm IS the guard the
+                              # remedy helper needs one for.
+  case "${COMPACT_LOCK_WHY:-}" in
+    '')                  printf '%s' "the compaction lock was unavailable" ;;
+    canonical-vanished)  printf '%s' "$COMPACT_LOCK_WHY — the compaction lock was unlinked under a live holder" ;;
+    lock-path-occupied)  printf '%s' "$COMPACT_LOCK_WHY — something that is not a regular file holds the compaction lock pathname" ;;
+    lock-source-refused) printf '%s' "$COMPACT_LOCK_WHY — ccd could not create the private source it mints the compaction lock from" ;;
+    lock-publish-failed) printf '%s' "$COMPACT_LOCK_WHY — the compaction lock was never published" ;;
+    *)                   printf '%s' "$COMPACT_LOCK_WHY — a condition this sweep carries no short form for" ;;
+  esac
 }
 
 # ── ROW GENERATION: immutable authorization (D-2605, spec §3.4) ──────────
@@ -12596,7 +12643,16 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
         _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
           "$_pr_why" \
           verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
-        _gc_declined "dead registry entry $project-$slug — the compaction lock was unavailable; nothing was removed"
+        # AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME THING THE JOURNAL DOES
+        # (r8 R8-M3). This line said "the compaction lock was unavailable"
+        # unconditionally — the contention story — one line after `_pr_why`
+        # rendered a durable remedy that, for four of the five tokens,
+        # explicitly refuses to call the condition contention. The short form
+        # is a SECOND RENDERER keyed on the same tokens rather than a second
+        # copy of the sentence, so the tally and the journal cannot drift; the
+        # status-2 sibling above already distinguishes its own cause here.
+        local _pr_short; _pr_short=$(_compact_lock_why_short)
+        _gc_declined "dead registry entry $project-$slug — $_pr_short; nothing was removed"
       else
         _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
         _gc_reclaimed "dead registry entry $project-$slug"

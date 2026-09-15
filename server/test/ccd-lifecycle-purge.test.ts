@@ -685,6 +685,28 @@ describe('the stable lock refuses a LATER canonical disappearance (spec §4, §5
 const lockOf = (id: string): string => compactLockPath(h.home, id);
 const hold = (id: string, secs: number): Promise<() => void> => holdCompactLock(h.home, id, secs);
 
+/** THE SWEEP'S REPORT ROW IS A SECOND CLAIM, AND IT DISAGREED WITH THE FIRST
+ *  (r8 R8-M3). `_ws_gc_prune_row`'s status-1 arm emits `_gc_declined "… the
+ *  compaction lock was unavailable; nothing was removed"` ONE LINE under the
+ *  `_pr_why` that renders the token-specific durable remedy — so the human
+ *  reading the sweep report was told the CONTENTION story for
+ *  `canonical-vanished`, `lock-path-occupied`, `lock-source-refused` and
+ *  `lock-publish-failed` alike: the four conditions the journal line beside it
+ *  explicitly refuses to call contention. The tally now goes through
+ *  `_compact_lock_why_short`, a second renderer keyed on the SAME tokens
+ *  ((d1e) requires an arm in both for every token the acquire can set), and
+ *  these are the legs that measure it. The `''` arm — the one condition that
+ *  really is contention — keeps the old words, and the dead-reg control at the
+ *  top of this file is where THAT is asserted. */
+const expectGcShortForm = (out: string, token: string, clause: string): void => {
+  const row = out.split('\n').find((l) => l.includes('declined') && l.includes('nothing was removed'));
+  expect(row, `${token}: the sweep printed its declined row`).toBeDefined();
+  expect(row!, `${token}: the tally names the condition the acquire measured`).toContain(token);
+  expect(row!, `${token}: and says which one it is, in its own words`).toContain(clause);
+  expect(row!, `${token}: and never the contention story the journal beside it refuses`)
+    .not.toContain('the compaction lock was unavailable');
+};
+
 /** A real worktree on a real branch, so `git worktree remove` and
  *  `git branch -d` both answer for real rather than through a stub. Module
  *  scope: the one-terminal-fact guard and the mechanism-absence matrix both
@@ -723,6 +745,14 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
       const out = h.sh(`_ws_gc_prune_row dead-reg demo quiet-basin /nowhere 0; echo "DECLINED=$GC_DECLINED RECLAIMED=$GC_RECLAIMED"`);
       expect(out, 'a declined row naming the id').toContain('declined');
       expect(out).toContain('demo-quiet-basin');
+      // AND THE TALLY'S OWN CLAUSE (r8 R8-M3). This leg is the CONTROL for the
+      // short-form renderer the tokened legs below measure: ordinary
+      // contention is the ONE condition for which "the compaction lock was
+      // unavailable" is true, and it is the `''` arm of
+      // `_compact_lock_why_short`. `hold` is `holdCompactLock`, which opens
+      // canonical directly and holds it, so COMPACT_LOCK_WHY is empty here.
+      expect(out, 'the contention tally keeps the words it was written for')
+        .toContain('the compaction lock was unavailable');
       expect(out, 'and NOT a reclaimed row').toContain('DECLINED=1 RECLAIMED=0');
 
       const intents = eventsOf(h.home, 'destroy').filter((e) => e['outcome'] === 'intent');
@@ -1434,16 +1464,22 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // THE SHIM IS A PARAMETER (r3 A-I3). Mechanism absence and contention are
       // two different conditions with two different refusals, so the same leg
       // has to be runnable with the `command -v flock` shim and without it.
-      run: (shim: string): void => { h.sh(`${shim} ${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`); } },
+      //
+      // AND IT RETURNS WHAT THE VERB PRINTED (r8 R8-M3). The `ws-gc --prune`
+      // leg's REPORT ROW is a second operator-facing claim beside the durable
+      // journal detail, and it said "the compaction lock was unavailable" for
+      // every status-1 token; the legs below now read it, so `run` hands its
+      // stdout back instead of discarding it.
+      run: (shim: string): string => h.sh(`${shim} ${RM_STUB} ( cmd_ws_rm demo-still-river ) 2>/dev/null || true`) },
     { verb: 'forget', act: 'forget', id: 'claude-corp-demo', slug: null,
       plant: (): void => { wrapperRow(); },
-      run: (shim: string): void => { h.sh(`${shim} ${FORGET_STUB} ( cmd_forget claude-corp-demo ) 2>/dev/null || true`); } },
+      run: (shim: string): string => h.sh(`${shim} ${FORGET_STUB} ( cmd_forget claude-corp-demo ) 2>/dev/null || true`) },
     { verb: 'ws-gc --prune', act: 'destroy', id: 'demo-quiet-basin', slug: ['demo', 'quiet-basin'] as const,
       plant: (): void => { deadRow(); },
-      run: (shim: string): void => { h.sh(`${shim} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`); } },
+      run: (shim: string): string => h.sh(`${shim} _ws_gc_prune_row dead-reg demo quiet-basin /gone 0`) },
     { verb: 'ws-reap', act: 'reap', id: 'demo-cinder-vale', slug: null,
       plant: (): void => { wsReapRow(); },
-      run: (shim: string): void => { h.sh(`${shim} ( _ws_reap_tail demo-cinder-vale clips ) 2>/dev/null || true`); } },
+      run: (shim: string): string => h.sh(`${shim} ( _ws_reap_tail demo-cinder-vale clips ) 2>/dev/null || true`) },
   ] as const;
 
   it('(c) ws-rm, forget, ws-gc --prune and ws-reap COMPLETE on a generation-ABSENT row', () => {
@@ -1654,6 +1690,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       // condition §4 rules on.
       const release = await holdViaAcquire(leg.id);
       let vanished: { token: string; detail: string };
+      let out = '';
       try {
         fs.unlinkSync(lockOf(leg.id));
         // THE PRECONDITION, MEASURED rather than assumed: the acquire really
@@ -1662,7 +1699,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
         const probe = h.sh(`_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
         expect(probe, `${leg.verb}: the fixture is in the canonical-vanished state`).toContain('RC=1');
         expect(probe, `${leg.verb}: and the acquire says which refusal it is`).toContain('WHY=canonical-vanished');
-        leg.run('');
+        out = leg.run('');
         vanished = purgeTerminal(leg);
       } finally { release(); }
       // The TOKEN is unchanged — this is still status 1, and a fourth status
@@ -1678,6 +1715,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(vanished.detail, `${leg.verb}: it no longer prescribes a wait that cannot end`)
         .not.toContain('once the compaction settles');
       expectSurvivingState(leg, vanished.detail);
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      if (leg.verb === 'ws-gc --prune') {
+        expectGcShortForm(out, 'canonical-vanished', 'was unlinked under a live holder');
+      }
     }
   }, 180_000);
 
@@ -1705,7 +1746,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       const probe = h.sh(`_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
       expect(probe, `${leg.verb}: the fixture is in the occupied-pathname state`).toContain('RC=1');
       expect(probe, `${leg.verb}: and the acquire says which refusal it is`).toContain('WHY=lock-path-occupied');
-      leg.run('');
+      const out = leg.run('');
       const r = purgeTerminal(leg);
       expect(r.token, `${leg.verb}: still status 1, so still the same token`).toBe('purge-refused');
       expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-path-occupied');
@@ -1718,6 +1759,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(r.detail, `${leg.verb}: and the pathname is occupied, not unlinked`)
         .not.toContain('canonical-vanished');
       expectSurvivingState(leg, r.detail);
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      if (leg.verb === 'ws-gc --prune') {
+        expectGcShortForm(out, 'lock-path-occupied', 'holds the compaction lock pathname');
+      }
     }
   }, 120_000);
 
@@ -1745,7 +1790,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(probe, `${leg.verb}: the shim still RESOLVES, so status 2 was never reachable`).toContain('CV=ok');
       expect(probe, `${leg.verb}: and the acquire refuses with status 1, not 2`).toContain('RC=1');
       expect(probe, `${leg.verb}: naming the runtime failure`).toContain('WHY=lock-source-refused');
-      leg.run(MKTEMP_FAIL);
+      const out = leg.run(MKTEMP_FAIL);
       const r = purgeTerminal(leg);
       expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
       expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-source-refused');
@@ -1768,6 +1813,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
         .not.toContain('canonical-vanished');
       expectSurvivingState(leg, r.detail);
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      if (leg.verb === 'ws-gc --prune') {
+        expectGcShortForm(out, 'lock-source-refused', 'could not create the private source');
+      }
     }
   }, 120_000);
 
@@ -1803,7 +1852,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(probe, `${leg.verb}: refused, in the same window the mint-time test just passed`).toContain('RC=1');
       expect(probe, `${leg.verb}: and the SAME token the mint-time test uses, not an empty WHY`)
         .toContain('WHY=lock-path-occupied');
-      leg.run(MKDIR_RACE);
+      const out = leg.run(MKDIR_RACE);
       const r = purgeTerminal(leg);
       expect(r.token, `${leg.verb}: still status 1, so still the same token`).toBe('purge-refused');
       expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-path-occupied');
@@ -1814,6 +1863,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(r.detail, `${leg.verb}: no wait ends this, so no wait is prescribed`)
         .not.toContain('once the compaction settles');
       expectSurvivingState(leg, r.detail);
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      if (leg.verb === 'ws-gc --prune') {
+        expectGcShortForm(out, 'lock-path-occupied', 'holds the compaction lock pathname');
+      }
     }
   }, 120_000);
 
@@ -1843,7 +1896,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(probe, `${leg.verb}: and the acquire refuses with status 1, not 2`).toContain('RC=1');
       expect(probe, `${leg.verb}: naming the publish that failed, not an occupant that does not exist`)
         .toContain('WHY=lock-publish-failed');
-      leg.run(LINK_FAIL);
+      const out = leg.run(LINK_FAIL);
       const r = purgeTerminal(leg);
       expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
       // THE POST-STATE IS THE FINDING: nothing holds the pathname. `lstat`,
@@ -1878,6 +1931,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
         .not.toContain('canonical-vanished');
       expectSurvivingState(leg, r.detail);
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      if (leg.verb === 'ws-gc --prune') {
+        expectGcShortForm(out, 'lock-publish-failed', 'was never published');
+      }
     }
   }, 120_000);
 
@@ -1914,7 +1971,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(probe, `${leg.verb}: and the acquire refuses with status 1, not 2`).toContain('RC=1');
       expect(probe, `${leg.verb}: the SAME token a publish that never happened gets — the guard reads the pathname, not the act`)
         .toContain('WHY=lock-publish-failed');
-      leg.run(LINK_UNLINKED);
+      const out = leg.run(LINK_UNLINKED);
       const r = purgeTerminal(leg);
       expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
       // THE POST-STATE IS WHAT THE TOKEN IS ABOUT: nothing at the pathname.
@@ -1941,6 +1998,10 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(r.detail, `${leg.verb}: no wait republishes a lock a stranger removed`)
         .not.toContain('once the compaction settles');
       expectSurvivingState(leg, r.detail);
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      if (leg.verb === 'ws-gc --prune') {
+        expectGcShortForm(out, 'lock-publish-failed', 'was never published');
+      }
     }
   }, 120_000);
 
@@ -2023,6 +2084,24 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(fallback, `${leg.verb}: it prescribes no re-run — that is the one clause this condition cannot supply`)
         .not.toContain('re-run');
     }
+
+    // AND THE SHORT FORM'S OWN CATCH-ALL (r8 R8-M3). The sweep's stdout tally
+    // is rendered by a SECOND renderer keyed on the same tokens, and an
+    // unrecognised one must not fall out of it as an empty clause — the report
+    // row would read "dead registry entry demo-quiet-basin — ; nothing was
+    // removed", which is the tally's version of the empty durable sentence the
+    // fallback above exists for. ONE direct call answers for every caller: the
+    // short form takes no arguments, because nothing in it is caller-specific.
+    const shortOut = h.sh(`COMPACT_LOCK_WHY=a-token-with-no-arm `
+      + `_s=$(_compact_lock_why_short); printf 'OUT<<%s>>' "$_s"`);
+    const sm = /OUT<<([\s\S]*)>>/.exec(shortOut);
+    expect(sm, 'the short form answered at all').not.toBeNull();
+    expect(sm![1]!.length, 'and the clause is not the empty string').toBeGreaterThan(0);
+    expect(sm![1]!, 'it names the token the acquire set').toContain('a-token-with-no-arm');
+    expect(sm![1]!, 'and says it carries no short form for it')
+      .toContain('no short form for');
+    expect(sm![1]!, 'rather than calling an unrecognised condition contention')
+      .not.toContain('the compaction lock was unavailable');
   }, 120_000);
 
   it('(d1e) EVERY token the acquire can set is keyed to its own remedy in the shared helper, and all four durable callers consult it WITH THEIR OWN ARGUMENTS (r6 R5-M3, r7 R6-I2/R6-I3/R6-M1)', () => {
@@ -2129,6 +2208,39 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     expect(failClosed.slice(0, failClosed.indexOf('\n')),
       'the fail-closed sentence carries the verb-selected residue, like every arm above it')
       .toContain('$tail');
+
+    // AND THE SWEEP'S STDOUT TALLY IS RENDERED BY A SECOND RENDERER KEYED ON
+    // THE SAME VOCABULARY (r8 R8-M3). `_ws_gc_prune_row`'s status-1 arm
+    // printed "the compaction lock was unavailable" unconditionally, ONE LINE
+    // under the `_pr_why` that renders the token-specific durable remedy — so
+    // the report a human watches told the CONTENTION story for the four
+    // conditions the journal line beside it refuses to call contention. The
+    // fix is a second RENDERER, not a second copy of the sentence: this loop
+    // is the same one that requires an arm in the remedy helper, run over the
+    // same DERIVED vocabulary, so a fifth condition cannot gain a remedy while
+    // keeping the contention tally.
+    const shortFrom = src.indexOf('_compact_lock_why_short() {');
+    expect(shortFrom, 'the sweep tally has its own renderer').toBeGreaterThan(-1);
+    const shortBody = src.slice(shortFrom, src.indexOf('\n}\n', shortFrom));
+    for (const t of vocab) {
+      expect(shortBody, `the tally gives ${t} its own clause rather than the contention one`)
+        .toContain(`${t})`);
+    }
+    expect(shortBody, 'and an unrecognised token gets a clause too, rather than an empty one')
+      .toContain('*)');
+    expect(src, 'the unconditional contention tally is gone from the sweep')
+      .not.toContain('the compaction lock was unavailable; nothing was removed');
+    // AND THE SWEEP CONSULTS IT rather than carrying its own string — the
+    // caller-side half of the same pin, and the exact shape r6 R5-M3 closed
+    // for the durable sentence one line above it.
+    const shortAt = src.indexOf('local _pr_short;');
+    expect(shortAt, 'the gc sweep renders its tally through the shared short form').toBeGreaterThan(-1);
+    expect(src.slice(shortAt, src.indexOf('\n', shortAt)), 'and it is the short form it calls')
+      .toContain('_compact_lock_why_short');
+    const tallyAt = src.indexOf('_gc_declined "dead registry entry', shortAt);
+    expect(tallyAt, 'the declined row follows it').toBeGreaterThan(shortAt);
+    expect(src.slice(tallyAt, src.indexOf('\n', tallyAt)), 'and the row interpolates what it rendered')
+      .toContain('$_pr_short');
 
     // AND EVERY DURABLE CALLER ACTUALLY CONSULTS IT, WITH ITS OWN ARGUMENTS —
     // a caller that stopped calling the helper (inlining its own sentence
