@@ -329,3 +329,52 @@ describe('server/src/config.ts: the roster is SEEDED once per box (D-1687)', () 
       .toMatch(/ship_roster\(\) \{[\s\S]{0,400}?\[ -f ~\/\.ccrc\/accounts\.json \]/);
   });
 });
+
+// D-1688 AS FOUND, NOT AS PLANNED. The plan's Task 6 rewrote this comment to say
+// the telemetry gap was still open and only its stated CAUSE was wrong ("what is
+// missing is the CONSUMER — this loop never reads it"). Between the plan (at
+// 2b15144e) and this wave, the account wave CLOSED the gap: `_ws_least_loaded`
+// now calls `_account_measured` (ccd/ccd), and the comment was rewritten in the
+// same change to record it, citing D-2596. So the finding is discharged and
+// writing the plan's prescribed text would REGRESS an accurate comment into a
+// false one. The pin is therefore inverted: it holds the CLOSURE rather than the
+// gap, and it holds the correction against being re-asserted as a live claim.
+describe('ccd: accounts.sh carries telemetry and the consumer LANDED (D-1688)', () => {
+  const header = (): string =>
+    flat(passage('ccd, the _ws_least_loaded header comment', ccd(),
+      '_ws_least_loaded() {', 'local best=""').replace(/^\s*#\s?/gm, ''));
+  const body = (): string =>
+    passage('ccd, the _ws_least_loaded body', ccd(), 'local best="" bs=1000', '\n}', 80);
+
+  it('never asserts, as a LIVE claim, that the generated file carries no telemetry', () => {
+    // The false sentence is allowed to survive as a QUOTE of what this comment
+    // used to say — that is how the correction explains itself. What is
+    // forbidden is asserting it. Any sentence carrying the old wording must
+    // also carry the marker that makes it historical.
+    for (const s of sentencesOf(header())) {
+      if (/no telemetry field at all|nothing to consult/.test(s)) {
+        expect(s, `the stale telemetry claim is being asserted again, not quoted: "${s.trim()}"`)
+          .toMatch(/used to|has been false|no longer|stale|earlier version/i);
+      }
+    }
+  });
+
+  it('names the array that carries it, and the generator still emits that array', () => {
+    expect(header(), 'the comment does not name the array bash can actually read')
+      .toMatch(/CCRC_MEASURED/);
+    expect(emittedNames(), 'the generator stopped emitting CCRC_MEASURED — rewrite this comment again')
+      .toContain('CCRC_MEASURED');
+  });
+
+  it('the gap the comment declares CLOSED is still closed — this loop consumes the roster answer', () => {
+    // Two-sided, the same way the plan's version was, but pointing the other
+    // way. The comment now says the consumer LANDED. If a future change removes
+    // it, this reds — and it should: the comment would then be describing a
+    // closure that has reopened, which is exactly how it went wrong the first
+    // time. Rewrite the comment in the same commit that reopens it.
+    expect(body(), 'the loop no longer consults the roster on telemetry — the comment above it is stale again')
+      .toMatch(/_account_measured/);
+    expect(ccd(), 'ccd has no _account_measured — the comment names a helper that is gone')
+      .toMatch(/_account_measured\(\) \{/);
+  });
+});
