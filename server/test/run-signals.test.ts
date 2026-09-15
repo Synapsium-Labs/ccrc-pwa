@@ -208,11 +208,19 @@ describe('CoordStore.runSignals — the worker\'s wave-done signal lines (routin
     expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 2, signals: { suite: { ok: true, value: 'green' } } });
   });
 
-  it('only the run\'s OWN worker counts: another session\'s wave-done, a status mail with another subject, and a wave-done on another run are ignored', () => {
+  it('only the run\'s OWN worker counts: another session\'s wave-done, a status mail with another subject, an answer mail carrying the wave-done subject, and a wave-done on another run are all ignored', () => {
     const coord = open(); const id = seedRun(coord);
     waveDone(coord, id, 'someone-else', 'suite: green\n{}');
     coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: id, kind: 'status',
       subject: 'progress', body: 'suite: green', artifacts: [] });
+    // The run's OWN worker, the right subject, the wrong KIND (review M2): the
+    // `kind = 'status'` predicate is the one this case leaves unmeasured
+    // otherwise — deleting it from the filter stays green on every other row
+    // here, because they all differ from the run's worker in `fromId`, in
+    // `subject` or in `runId` as well. A done-claim is a `status` mail; an
+    // `answer` that happens to quote the subject is a reply, not a claim.
+    coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: id, kind: 'answer',
+      subject: WAVE_DONE_SUBJECT, body: 'suite: green\n{}', artifacts: [] });
     const other = seedRun(coord);
     waveDone(coord, other, 'demo-worker', 'suite: green\n{}');
     expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 0, signals: null });
@@ -227,14 +235,17 @@ describe('CoordStore.runSignals — the worker\'s wave-done signal lines (routin
     expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
   });
 
-  // S2-R1 (controller ruling, fix round 1): `bindSession` has exactly two
-  // callers — `markDispatched` (a first bind, or the same session on a
-  // resume, never a change of occupant) and `setSession`, reached only from
-  // the open route's `openRun` dup arm, which keys on `state = 'planned'`. So
-  // a change of occupant can only happen on a run that was NEVER dispatched —
-  // a predecessor's wave-done on such a run is not a done-claim for
-  // dispatched work. The filter stays `fromId = runs.sessionId` (the CURRENT
-  // occupant); it does not widen to the session lineage.
+  // S2-R1 (controller ruling, fix round 1): `bindSession` is reached from
+  // `markDispatched` (a first bind, or the same session on a resume, never a
+  // change of occupant) and from `setSession`, which itself has two callers —
+  // `dispatch.ts`'s fresh-spawn arm, which FIRST-binds the session it just
+  // spawned onto a run that had none, and the open route's `openRun` dup arm,
+  // which keys on `state = 'planned'`. So the only caller that can CHANGE the
+  // occupant is the open route, and a change of occupant can therefore only
+  // happen on a run that was NEVER dispatched — a predecessor's wave-done on
+  // such a run is not a done-claim for dispatched work. The filter stays
+  // `fromId = runs.sessionId` (the CURRENT occupant); it does not widen to the
+  // session lineage.
   it('a re-bound run reads only its CURRENT worker: a predecessor\'s wave-done on a planned run is not a claim for dispatched work (S2-R1)', () => {
     const coord = open();
     const opened = coord.openRun({ program: 'p3', title: 'p3', project: 'demo', wave: 1, waveOf: null, claimedBy: 'ccrc-pwa-coord' });

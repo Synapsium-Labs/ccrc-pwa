@@ -681,10 +681,10 @@ winner. A `null` in `meas` means it was not measured, never that it was empty.
 worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says
 so rather than guessing), and the closes this run was REFUSED. It takes a session cookie or the box
 token, so it reads cookieless from the fleet host the same way `GET /api/runs` does. Since routing
-slice 2 it also answers `waveDoneMails` (the worker's `wave-done` mails on this run) and `signals`
-— the two signal lines off the LAST of them, or `null` when there are none (§4 above).
-`error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt; `error:'bad-request'` (400)
-means the id is not an integer.
+slice 2 it also answers `waveDoneMails` (how many `wave-done` mails the worker sent on this run)
+and `signals` — the two signal lines off the LAST of them, or `null` when there are none (§4
+above). `error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt;
+`error:'bad-request'` (400) means the id is not an integer.
 
 It writes nothing — the refused-close count it reports is the row `POST /api/runs/:id/close` already
 recorded when it refused you, not a new judgement about the worker. And nothing it reports licenses

@@ -1456,7 +1456,7 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     // The fourth ungated door (D-1123), and the same accounting D16 gave the third:
     // the EXEMPT entry above only PERMITS the omission; this is what FORBIDS the
     // mention. Wider than the `resume.md` harvest below, which reads one reference
-    // file — a door named in `SKILL.md`, or in any of the other four references,
+    // file — a door named in `SKILL.md`, or in any of the other six references,
     // passes that and fails here.
     expect(allSkillText).not.toContain('/api/runs/:id/reclaim');
   });

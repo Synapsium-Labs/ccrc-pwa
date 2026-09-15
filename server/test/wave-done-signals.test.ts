@@ -60,6 +60,13 @@ describe('parseWaveDoneSignals', () => {
   it('a third line is never a signal line, and the first of a repeated key wins', () => {
     expect(parseWaveDoneSignals('suite: green\nsuite: red\nfailure: ceiling'))
       .toEqual({ suite: { ok: true, value: 'green' }, failure: absent });
+    // The first wins EVEN WHEN IT IS UNRECOGNISED (review M1). The guard is
+    // `suite.ok || suite.why !== 'absent'`, not `suite.ok`: a typo on the first
+    // line is a mechanism defect the coordinator must see, and a well-spelled
+    // repeat below it would otherwise overwrite the defect with a value. The
+    // `suite.ok`-only mutant passes the case above and reds here.
+    expect(parseWaveDoneSignals('suite: passed\nsuite: green'))
+      .toEqual({ suite: unrec, failure: absent });
   });
 
   it('the grammar is exact: one space after the colon, nothing after the word', () => {
