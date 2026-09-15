@@ -237,7 +237,7 @@ gh() {
   esac
   return 0
 };
-timeout() { printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
+timeout() { case "$1" in -*) return 125 ;; esac; printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
 `;
 
 describe('the project sweep fetches the rollup it reads, not the ninety-nine it drops', () => {

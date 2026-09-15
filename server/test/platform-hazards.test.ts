@@ -191,14 +191,32 @@ describe('the deadline shim, asked directly (D-2661)', () => {
   // IT PINS TODAY'S BEHAVIOUR ON PURPOSE. When D-2764 lands, this case goes
   // RED — which is the mechanism that forces whoever fixes it to come here and
   // invert it, rather than leaving a stale assertion behind.
-  it('the deadline does NOT escalate to KILL — on BOTH platforms (D-2764, booked)', () => {
-    const r = bash(shim('2', 'trap "" TERM; sleep 30'), 8_000);
+  it('the deadline ESCALATES to KILL — on BOTH platforms (D-2764, fixed)', () => {
+    // THIS CASE WAS THE PIN ON THE DEFECT, and it is inverted rather than
+    // deleted because that is what its old form asked for. It used to assert
+    // `r.cut === true`: `_auth_timeout 2 'trap "" TERM; sleep 30'` never
+    // returned at all and the harness cut it at 8 s, on BOTH platforms.
+    // D-2764's fix passes `-k <grace>` once the binary is PROVED to understand
+    // it, so the same call now ends at `secs + grace` and reports 124 — the
+    // code every call site already branches on.
+    //
+    // The bound is 20 s against a 5-second expectation because this file's own
+    // header says the macOS runner is ~2x variable; a cap close to the answer
+    // would flap in both directions and report nothing either way.
+    const r = bash(shim('2', 'trap "" TERM; sleep 30'), 20_000);
     expect(
       r.cut,
-      'the shim ENDED a TERM-ignoring child. If D-2764 has been fixed, invert this case;\n'
-      + 'if it has not, the shim changed underneath us and that is worth knowing.\n'
+      'the shim did NOT end a TERM-ignoring child — D-2764 is back.\n'
       + `  elapsed: ${r.ms}ms  picked: ${field(r.stdout, 'PICKED')}  rc: ${field(r.stdout, 'RC')}`,
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      field(r.stdout, 'RC'),
+      `the child was ended but not as a timeout. picked=${field(r.stdout, 'PICKED')} elapsed=${field(r.stdout, 'ELAPSED')}s`,
+    ).toBe('124');
+    expect(
+      Number(field(r.stdout, 'ELAPSED')),
+      `the deadline was reported ${field(r.stdout, 'ELAPSED')}s in, which is not a bound on a 2-second deadline`,
+    ).toBeLessThanOrEqual(10);
   });
 
   // PLATFORM-ONLY: the Linux answer to this one is already measured and is not

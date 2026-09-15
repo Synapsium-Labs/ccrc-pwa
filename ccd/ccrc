@@ -410,15 +410,126 @@ _plat_cgroup() {
 # fired and the sleeper that lost and was reaped, which is the bug that makes
 # a hand-rolled timeout report success on expiry.
 _plat_timeout() {   # <seconds> <cmd> [args...]
-  local bin
+  local secs="$1" bin rc=0 t0 el grace dl stamp pid watcher
+  # THE GRACE BETWEEN THE DEADLINE'S TERM AND THE KILL THAT ENFORCES IT, and
+  # both clamps are MEASURED rather than chosen. `-k 0` does not mean "kill at
+  # once": GNU accepts it and then never escalates at all - measured, a
+  # one-second deadline with `-k 0` sat through a TERM-ignoring child's full
+  # five seconds and still answered 124 - so a caller reaching for "no grace"
+  # would turn the whole bound off with no error. A value that is not a whole
+  # number is worse: GNU exits 125 in five milliseconds WITHOUT RUNNING THE
+  # COMMAND, and one bad environment variable would then read, at these call
+  # sites simultaneously, as a wedged tmux, an unwalkable reap scan and a gh
+  # that needs re-authenticating. The ceiling is `ccd-account-auth`'s own pump
+  # backstop (`CCRC_AUTH_PUMP_GRACE`, 10s): this escalation must finish INSIDE
+  # it, or that last resort becomes the first one. `10#` because a value like
+  # `08` is not octal here, and a bare `$(( 08 ))` writes a bash error to the
+  # stderr this call's caller may be capturing.
+  grace="${CCD_TIMEOUT_KILL_AFTER:-3}"
+  case "$grace" in ''|*[!0-9]*) grace=3 ;; esac
+  grace=$(( 10#$grace ))
+  [ "$grace" -lt 2 ] && grace=2
+  [ "$grace" -gt 8 ] && grace=8
+  # WHEN OUR OWN ESCALATION CAN HAVE LANDED - and nothing else is claimed. The
+  # binary sends TERM at the deadline and waits the WHOLE grace before the
+  # KILL, so an escalated run cannot return before `secs + grace`, and an outer
+  # signal that beat the escalation cannot return after it. A deadline this
+  # shim cannot read as whole seconds (empty, suffixed, or so long the
+  # arithmetic would wrap) leaves `dl` empty, and then no `-k` is passed and no
+  # code is reinterpreted: that call degrades to exactly today's behaviour
+  # rather than to a guess.
+  dl=''
+  case "${secs%%[.,]*}" in
+    ''|*[!0-9]*|??????????*) : ;;
+    *) dl=$(( 10#${secs%%[.,]*} + grace )) ;;
+  esac
+  t0=$SECONDS
   for bin in timeout gtimeout; do
-    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+    command -v "$bin" >/dev/null 2>&1 || continue
+    # `-k` IS PROVED, NEVER ASSUMED, AND THE PROOF IS THE CHILD'S OWN BYTES.
+    # An unknown flag measured rc 125 on GNU, rc 1 on busybox and rc 127 with
+    # no `printf` to run - and rc 1 lands on NO branch at any of the twenty
+    # call sites, so there it would read as an ordinary command failure.
+    # Asking "did this exit 0" would therefore believe a parser that swallowed
+    # the flag; asking "did the COMMAND run" cannot, because only a parser that
+    # consumed `-k`, consumed its argument and then exec'd the command can
+    # print these bytes. Measured: GNU 9.4 and busybox 1.36.1 both answer
+    # `ccd-k-ok`; a wrapper that rejects the flag with rc 1 answers nothing and
+    # is refused, and the argv it logged shows no `-k` ever reached it.
+    # The probe runs `printf`, never a caller's command, and that is what makes
+    # a probe possible here at all: the commands below include `gh pr create`
+    # and a billed `claude -p` turn, so "pass `-k`, and retry without it on an
+    # ambiguous code" is not available at any price.
+    if [ -z "${_CCD_TIMEOUT_K:-}" ]; then
+      if [ "$("$bin" -k 1 1 printf ccd-k-ok 2>/dev/null)" = ccd-k-ok ]; then
+        _CCD_TIMEOUT_K=yes
+      else
+        _CCD_TIMEOUT_K=no
+      fi
+    fi
+    # `2>&6 6<&-` ON THE COMMAND AND `6>&2 2>/dev/null` ON THE GROUP, and it is
+    # the difference between a reason and a corrupted one. When the KILL lands,
+    # the binary reports it by re-raising SIGKILL on ITSELF, so THIS shell
+    # prints its own job-status line - `<file>: line N: <pid> Killed ...`.
+    # MEASURED: at a call carrying its own redirections that line lands in the
+    # caller's stderr file, which `_ws_nested_checkouts` and
+    # `_ws_sensitive_inside` read back as `$err`; and at `ccd-account-auth`'s
+    # backgrounded `2>&1` it lands in `$AUTH_RUN/out`, the FIFO `_auth_pump`
+    # parses line by line. Command substitutions are immune (measured clean in
+    # all three shapes), which is why nobody had seen it: until this change the
+    # line needed an OUTER signal to appear at all. Handing the child the
+    # ORIGINAL stderr on fd 6 and silencing this shell's own keeps every byte
+    # the child wrote and drops the line about the shell's job - measured both
+    # ways. `6<&-` closes fd 6 IN THE CHILD, so nothing inherits a descriptor
+    # it was not handed; fd 6 is free, the only numbered descriptors these
+    # files use being 3, 4, 7, 8 and 9.
+    if [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ]; then
+      { "$bin" -k "$grace" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    else
+      { "$bin" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    fi
+    el=$(( SECONDS - t0 ))
+    # 137 BECOMES 124 ONLY ON PROOF, AND 137 IS NOT THE PROOF. coreutils'
+    # `timeout.c` relabels any status to 124 once its deadline has fired, with
+    # ONE deliberate exception - `sig == SIGKILL && kill_after`, commented
+    # "Allow users to distinguish if command was forcibly killed" - and that
+    # exception is the whole reason a 137 appears here. No call site can act on
+    # the distinction it exposes, while 137 ALREADY has a meaning in this tree
+    # ("an outer kill landed", `_lc_obs` says so in as many words), so
+    # propagating it would give one number two meanings. The CLOCK separates
+    # them, and only it can: our escalation cannot land before `secs + grace`,
+    # an outer kill that beat it cannot land after. MEASURED, the real binary
+    # SIGKILLed at t=3s of a two-second deadline with a three-second grace: rc
+    # stays 137 and the orphaned child ran to completion - the honest answer,
+    # because our deadline never got to enforce anything. `$SECONDS` is whole
+    # seconds (the declared bash floor is 4.4 and `EPOCHREALTIME` is 5.0), so
+    # the boundary is soft by up to one second in the direction of claiming an
+    # outer kill that landed in the last second before our own; both codes
+    # refuse at every call site, so that is a label, not a decision.
+    if [ "$rc" = 137 ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ] \
+       && [ "$el" -ge "$dl" ]; then
+      rc=124
+    fi
+    return "$rc"
   done
-  local secs="$1"; shift
-  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  shift
+  # THE PURE-BASH ARM DOES NOT ESCALATE, AND THAT IS A RULING, NOT AN OVERSIGHT
+  # (D-2764). The only escalation available here is a watcher subshell issuing
+  # `kill -KILL "$pid"`, and bash reaps background children ASYNCHRONOUSLY -
+  # measured: a child is unwaitable two seconds after it exits with no `wait`
+  # ever run - so a sibling watcher genuinely can signal a RECYCLED pid. On
+  # this fleet that pid could be a `ccd supervise`, a `claude-session@*` child
+  # or tmux, all three of which CLAUDE.md's SAFETY section forbids touching,
+  # and `ccrc-account.test.ts` deliberately contains PATH to force this arm on
+  # whatever box runs the suite - including the fleet box. A stamp handshake
+  # narrows that window but cannot be made to go red under mutation, which is
+  # an argument rather than a mechanism. So this arm keeps today's single TERM
+  # and reports what it always did; `ccd-plat-timeout.test.ts` text-scans all
+  # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
+  stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
   "$@" &
-  local pid=$! rc=0 watcher
+  pid=$!
   # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
   # with no coreutils — it returns INSTANTLY, and without this guard the

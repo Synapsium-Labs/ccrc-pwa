@@ -515,7 +515,7 @@ describe('refusals are answers', () => {
     const { wt, main } = ready(['build/']);
     fs.mkdirSync(path.join(wt, 'build'), { recursive: true });
     fs.writeFileSync(path.join(wt, 'build', 'out.o'), 'ordinary rubbish\n');
-    const SLOW = `timeout() { [[ "$*" == *" find "* ]] && return 124; `
+    const SLOW = `timeout() { case "$1" in -*) return 125 ;; esac; [[ "$*" == *" find "* ]] && return 124; `
       + `printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };`;
     const r = h.run(`${GH_STUB} ${SLOW} ${ARCH} cmd_ws_reap --expect ${'0'.repeat(64)} --session demo-quiet-basin`);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
