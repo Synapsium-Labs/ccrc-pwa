@@ -20,7 +20,7 @@ import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { FAILURE_KINDS, MAIL_MAX_ATTEMPTS, SUITE_WORDS, type PrPhase } from '../../shared/api.js';
+import { FAILURE_KINDS, MAIL_MAX_ATTEMPTS, SUITE_WORDS, WAVE_DONE_SUBJECT, type PrPhase } from '../../shared/api.js';
 import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
 
@@ -594,5 +594,25 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
     const section = skill.slice(skill.indexOf('## Reporting a wave-done'));
     expect(section).toMatch(/```\nsuite: (green|red|unrun)\nfailure: (shallow|ceiling|unclear)\n\{"branchTip"/);
     expect(section).toContain('one space');
+  });
+
+  it('states the SUBJECT as the exact byte string the signals read selects on, and sends that same string', () => {
+    // Review #1. `runSignals` (`server/src/coord/store.ts`) filters
+    // `... AND subject = ?` bound to `WAVE_DONE_SUBJECT` — an EQUALITY, not a
+    // prefix. So `wave-done (wave 3)` is not a variant spelling that still
+    // matches: it answers `waveDoneMails: 0, signals: null`, the FOURTH
+    // condition, which the `RunSignals` docstring defines as "no wave-done has
+    // arrived" and the coordinator reads as a wave that reported nothing. That
+    // is exactly the mechanism-defect-as-silence collapse the three answers per
+    // signal line exist to prevent, one level up, where no vocabulary covers
+    // it. Nothing in the contract governs the subject — clause 15 governs the
+    // BODY — so the prose sentence and the worked JSON ARE the contract, and
+    // both are derived from L0 here rather than matched as a literal: a change
+    // to `WAVE_DONE_SUBJECT`, to the sentence, or to the example reds this.
+    const section = skill.slice(skill.indexOf('## Reporting a wave-done'));
+    expect(section, 'the wave-done section no longer states the exact subject')
+      .toContain(`The subject is exactly \`${WAVE_DONE_SUBJECT}\``);
+    expect(skill, 'the worked mail-send JSON no longer carries the exact wave-done subject')
+      .toContain(`"subject":"${WAVE_DONE_SUBJECT}"`);
   });
 });

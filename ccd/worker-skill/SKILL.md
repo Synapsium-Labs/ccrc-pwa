@@ -209,7 +209,8 @@ an explicit path and not by name.
   call wrong are `bad-kind` (wrong shape, wrong `kind`, or a relative
   `artifacts` path) and `stale-uuid` (you cached the uuid — clause 1).
 - `kind` is one of `finding`, `question`, `answer`, `status`, `artifact`.
-  `wave-done` is a `status` mail whose subject says so.
+  `wave-done` is a `status` mail whose subject is that same string, exactly
+  (below).
 
 **Reading mail is three calls, not one.** What lands in your pane is a one-line
 nudge, never the message: list with `GET /api/mail?to=<your id>`, then per row
@@ -218,6 +219,12 @@ as `:id` for `GET /api/mail/:id` (the body) and `POST /api/mail/:id/ack`
 (body `{"fromId":…,"fromUuid":…}`). Ack before you act on it (clause 3).
 
 ## Reporting a wave-done
+
+**The subject is exactly `wave-done`** — that byte string alone, with no wave
+number, no slug and no parenthetical. The server selects this run's done-claims
+on that exact subject, so a decorated one is not a variant spelling it will
+still find: it is invisible, and the run reads as a wave whose worker reported
+nothing at all.
 
 Your `wave-done` mail carries a fingerprint the coordinator submits **exactly
 as you wrote it**. It does not rebuild it, and it must not: half from your mail
