@@ -216,3 +216,85 @@ describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
       .not.toMatch(/pools/);
   });
 });
+
+describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.11, §15)', () => {
+  /** Both gate figures, read off ccd rather than remembered — the bash-floor
+   *  idiom in `ccrc-update.test.ts`: a bumped constant must move the prose. */
+  const cooldowns = (): { swap: string; block: string } => {
+    const s = /^SWAP_COOLDOWN=(\d+)/m.exec(ccd());
+    const b = /^SWAPBLOCK_COOLDOWN=(\d+)/m.exec(ccd());
+    expect(s, 'ccd no longer spells SWAP_COOLDOWN — this derivation is over nothing').not.toBeNull();
+    expect(b, 'ccd no longer spells SWAPBLOCK_COOLDOWN — this derivation is over nothing').not.toBeNull();
+    return { swap: s![1]!, block: b![1]! };
+  };
+
+  it('states the two gates a retag waits on, with the numbers ccd actually enforces', () => {
+    const s = flat(poolsSection());
+    const { swap, block } = cooldowns();
+    expect(s, `the timing paragraph does not state the ${swap}s swap cooldown`).toContain(swap);
+    expect(s, `the timing paragraph does not state the ${block}s refusal cooldown`).toContain(block);
+    expect(s).toContain('SWAP_COOLDOWN');
+    expect(s).toContain('SWAPBLOCK_COOLDOWN');
+    // The three exceptions to "it waits", each named.
+    expect(s, 'hard-blocked sessions do not wait; the paragraph must say so').toMatch(/hard-blocked/);
+    expect(s, 'a hold defers a retag; the paragraph must say so').toMatch(/held|hold/);
+    expect(s, 'the visible waiting state is the one an operator can act on').toContain('data-offpool');
+    // Grounded in the PWA cell that renders it.
+    expect(read('pwa/src/fleet/SessionLine.tsx'),
+      'the PWA no longer marks an off-pool row — the README describes a cell that is gone')
+      .toContain('data-offpool');
+  });
+
+  it('describes the strand with the vocabulary ccd actually writes, and three remedies', () => {
+    const s = flat(poolsSection());
+    expect(s).toContain('cc swap STRANDED');
+    expect(s).toContain('stranded');
+    expect(s).toContain('unstranded');
+    // The three remedies of ruling 6, each identifiable.
+    expect(s, 'remedy 1 (enable a lane) is missing').toMatch(/-disabled/);
+    expect(s, 'remedy 2 (tag another account into the pool) is missing')
+      .toMatch(/tag another account/i);
+    expect(s, 'remedy 3 (untag the project) is missing').toMatch(/--clear|untag the project/);
+    // Grounded: the marker, the clear and the banner text all exist.
+    expect(ccd()).toMatch(/_strand_mark/);
+    expect(ccd()).toMatch(/_strand_clear/);
+    expect(ccd(), 'the notify banner text changed — the README quotes a sentence nobody sends')
+      .toContain('cc swap STRANDED: ');
+  });
+
+  it('keeps --cross-pool and --force distinct, and states which one sticks', () => {
+    const s = flat(poolsSection());
+    expect(s).toContain('--cross-pool');
+    expect(s).toContain('--force');
+    for (const sentence of sentencesOf(s)) {
+      if (/--force/.test(sentence)) {
+        expect(sentence, `--force is described as a pool override: "${sentence.trim()}"`)
+          .not.toMatch(/cross(es|ing)? (a )?pool/i);
+      }
+    }
+    expect(s, 'the swap/prefer split (spec §14 O1) is the thing operators get wrong')
+      .toMatch(/prefer --cross-pool/);
+    expect(s, 'automatic moves never cross — the sentence that keeps ruling 8 honest')
+      .toMatch(/never cross/i);
+    // Grounded: the marker and its end-of-life log verb.
+    expect(ccd()).toMatch(/crosspool/);
+    expect(ccd(), 'the crossing no longer ends with a logged reason').toMatch(/crosspool-ended/);
+  });
+
+  it('names the skew states an operator can see, and the six rollout steps', () => {
+    const s = flat(poolsSection());
+    for (const code of ['409', '501', '502', '503']) {
+      expect(s, `the skew table never mentions ${code}`).toContain(code);
+    }
+    expect(s, 'the transient the two lanes produce is the one that gets reported as a fault')
+      .toContain('divergent');
+    expect(s, 'the agent lane goes first — the ordering rule this whole feature rides on')
+      .toMatch(/deploy\.sh agent/);
+    // Six steps, numbered — over the RAW slice, because this one is anchored to
+    // the start of a line and flattening would destroy the anchor.
+    const raw = poolsSection();
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      expect(raw, `rollout step ${n} is missing`).toMatch(new RegExp(`^${n}\\. `, 'm'));
+    }
+  });
+});

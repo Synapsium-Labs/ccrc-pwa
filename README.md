@@ -1027,6 +1027,92 @@ units, the served dists and coord.db, never `~/.cc-sessions` markers. A box
 rebuilt from a backup comes back untagged, which is to say unconstrained — the
 PWA's flag on an untagged project is the signal that it happened.
 
+**Retagging a running project, and when it takes effect.** A retag is not a
+restart. Within one 5 s tick, every session of that project whose *home* account
+is out of pool is re-seeded to an in-pool home (a `rehome` line in `swap.log`
+and a `rehome` act in the lifecycle journal), and every session whose *current*
+account is out of pool becomes a must-leave. When it actually moves is the part
+worth knowing: the move goes through the same two gates every auto-swap does —
+`SWAP_COOLDOWN`, 900 s since that session's last landed swap, and
+`SWAPBLOCK_COOLDOWN`, 1800 s since a refused one — so a session that swapped in
+the last quarter hour keeps running on the wrong-pool account until its gate
+opens, and then goes with an `auto-pool` line. Two sessions do not wait:
+a hard-blocked one takes the rescue arm immediately, and a session under a
+program hold does not move *at all* until it is released — a retag never breaks
+a hold. The visible waiting state is `data-offpool` on the session row: the
+account chip says this session is running in one pool while its project is in
+another, which is exactly true, and reads as "queued", not "stuck". Retagging
+deliberately does not bypass `SWAP_COOLDOWN`; that gate exists to stop a swap
+storm and a retag is not a good reason to reopen one.
+
+**An empty pool strands, loudly.** When a session is hard-blocked and no account
+in its pool can take it, ccd **stays in the pool** and makes the state visible
+rather than crossing out of it: a `stranded` line in `swap.log` naming each
+candidate and the first reason it failed (`pool=…`, `disabled`, `missing`,
+`limit`), a marker on the row, one notify banner (`cc swap STRANDED: …`, floored
+to one per 1800 s so a scrolling limit banner cannot storm it), a stranded cell
+on the session row and an `N stranded` count on the project card. Three
+remedies, all yours: enable a lane in that pool (`rm
+~/.cc-sessions/<wrapper>-disabled`), tag another account into the pool, or untag
+the project (`ccd project-pool --project <p> --clear`). Nothing stamps a
+cooldown, so recovery needs no further action — the first tick on which an
+in-pool account has room rescues the session and writes `unstranded`. This also
+made an **older** silence loud: a hard-blocked session with every account at
+ceiling used to retry every 5 s forever with no marker and no log line, and it
+does not any more, tagged project or not.
+
+**Crossing on purpose: `--cross-pool`, which is not `--force`.** `--force` means
+one thing and still means only that — accept the transcript loss a swap costs. A
+crossing is a different decision, so it takes its own flag on `ccd swap`, `ccd
+start`, `ccd enable` and `ccd prefer`, and the two compose. From the PWA the
+mismatched accounts sit behind a **show other pools** disclosure in the swap
+sheet, and picking one there is what sets the flag; a plain pick posts the body
+it always did, and a mismatch comes back `409` with the sentence naming both
+pools. Every crossing writes a `cross-pool` line and a per-session marker, and
+that marker is what stops the pool machinery undoing the crossing on the next
+tick. It is deliberately narrow. `swap --cross-pool` moves the session and
+leaves its home alone, so when home recovers the session returns home exactly as
+it does after any manual swap today — and that return is a move off the crossed
+account, which ends the crossing (`crosspool-ended`). To stay crossed through a
+home recovery, move the home: `ccd prefer --cross-pool`. **Automatic moves never
+cross**, marker or no marker: the candidate loop stays pool-filtered in every
+case.
+
+**Deploy order, and what half-deployed looks like.** Pools touch `ccd/`, so the
+fleet host goes first — `bash deploy/deploy.sh agent <host>`, then `bash
+deploy/deploy.sh`.
+
+| State | What you see |
+|---|---|
+| New server, old `ccd` | Tags display but nothing on the fleet enforces them: the chips dim, the fleet banner says the fleet host's ccd does not honour project pools yet, the tag route answers `501` and so does a cross-pool tap. The server's own refusal still stands — a mismatched swap gets `409`, so this state produces refusals, never wrong placements. |
+| New `ccd`, old server | The fleet enforces everywhere and strands loudly; the PWA has no override yet, so a mismatched swap dies inside ccd and surfaces as a `502` carrying ccd's own sentence. |
+| New `ccd`, old `accounts.sh` | Every account reads untagged — today's behaviour, no noise. |
+| Mid-deploy, one deploy long | New placements and manual verbs bind the rule at once; each running session's auto-swapper is still the pre-deploy code until its unit restarts, and a refusal inside a dispatched swap marks a strand rather than failing silently. |
+| The two `accounts.json` copies disagree | `roster: 'divergent'` and the amber banner. ccd obeys the fleet host's copy and the server refuses by its own, so a disagreement is loud in both directions rather than silently permissive. The project tag has one copy and cannot skew at all. |
+
+**Rolling it out.** Nothing changes until something is tagged, and every step is
+reversible by untagging.
+
+1. **Ship the code with nothing tagged.** Agent lane first, then the server. Zero
+   behaviour change: every account untagged, `pools/` absent. Expect
+   `roster: 'divergent'` between the two lanes; it clears on the second deploy.
+2. **Tag accounts.** Edit `~/.ccrc/accounts.json` on both boxes and redeploy both
+   lanes. Still no behaviour change — no project is tagged yet, so the rule
+   permits everything.
+3. **Check the pools exist.** `ccrc doctor`'s `pools` check passes,
+   `GET /api/accounts` shows a `pool` per account, and the pool sheet lists the
+   names you expect.
+4. **Tag projects one at a time**, starting with one whose pool has headroom.
+   Watch `swap.log` for `rehome`, `auto-pool` and `auto-rescue`, and the cards
+   for `N stranded`.
+5. **Expect strands where a pool is thin.** A pool of one or two accounts, both
+   at ceiling, strands its hard-blocked sessions instead of crossing. That is
+   the design working, not a fault; the banner names the three remedies.
+6. **Rollback** is `ccd project-pool --project <p> --clear` — nothing moves,
+   because untagged is unconstrained. For the account side, remove the `pool`
+   keys and redeploy agent-first. The per-session pool fields purge with their
+   registry rows and are harmless if left behind.
+
 ### Login screens get no keystrokes, and lost auth joins the rescue lane
 
 A session spawned onto a broken account used to spin its full ~15-minute
