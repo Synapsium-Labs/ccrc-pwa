@@ -5024,7 +5024,15 @@ export interface RunSummary {
  *  rejection supersedes the refused one — or null when there are none, which
  *  is a fourth condition beside the three each line carries (routing spec
  *  §5.5, slice 2). Read at signal time from the mail row; nothing is written
- *  at ingress, so the mail table stays the one record. */
+ *  at ingress, so the mail table stays the one record.
+ *
+ *  This read keys on the run's CURRENT `sessionId`, on purpose. A rebind (the
+ *  open route's `session-rebound` event, reachable only for a still-`planned`
+ *  run through `openRun`'s dup arm) leaves a predecessor's mail unread: that
+ *  session was never dispatched the wave, so its wave-done is not a
+ *  done-claim for dispatched work. A route that rebinds a DISPATCHED run
+ *  would have to widen this read to the session lineage — none does today
+ *  (S2-R1). */
 export interface RunSignals {
   readonly runId: number;
   readonly dispatchedAt: number | null;

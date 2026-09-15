@@ -226,4 +226,23 @@ describe('CoordStore.runSignals — the worker\'s wave-done signal lines (routin
       subject: WAVE_DONE_SUBJECT, body: 'suite: green', artifacts: [] });
     expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
   });
+
+  // S2-R1 (controller ruling, fix round 1): `bindSession` has exactly two
+  // callers — `markDispatched` (a first bind, or the same session on a
+  // resume, never a change of occupant) and `setSession`, reached only from
+  // the open route's `openRun` dup arm, which keys on `state = 'planned'`. So
+  // a change of occupant can only happen on a run that was NEVER dispatched —
+  // a predecessor's wave-done on such a run is not a done-claim for
+  // dispatched work. The filter stays `fromId = runs.sessionId` (the CURRENT
+  // occupant); it does not widen to the session lineage.
+  it('a re-bound run reads only its CURRENT worker: a predecessor\'s wave-done on a planned run is not a claim for dispatched work (S2-R1)', () => {
+    const coord = open();
+    const opened = coord.openRun({ program: 'p3', title: 'p3', project: 'demo', wave: 1, waveOf: null, claimedBy: 'ccrc-pwa-coord' });
+    if (!('id' in opened)) throw new Error('refused');
+    coord.setSession(opened.id, 'demo-pred');
+    waveDone(coord, opened.id, 'demo-pred', 'suite: green\n{}');
+    const rebind = coord.setSession(opened.id, 'demo-heir');
+    expect(rebind.rebound).toBe(true);
+    expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
 });
