@@ -13,7 +13,7 @@ scrollback it exists to render.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7` | **MERGED 2026-09-15** |
-| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | planned |
+| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | **dispatched 2026-09-15** (run 62, 6 items) |
 | 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
 | 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
 
@@ -29,7 +29,7 @@ never calls the allocator mid-wave (coordinator clause 10); it names the departu
 mail and the coordinator assigns from the block. **Wave 1 owes none as planned** — both departures an
 earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
 
-Run ids: wave 1 = **51**.
+Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62**.
 
 **The spec, the four plans and this ledger merged as [#102](https://github.com/Synapsium-Labs/ccrc-pwa/pull/102)
 → `7a91bcf1`, 2026-09-15.** That is what retires D-2772's constraint: the plans are on `main`, so a
