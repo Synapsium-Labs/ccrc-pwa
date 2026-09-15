@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7eae1fb33c26d1a6a90e5516ed8354324953dbc827a9431632c8e1166212804c
+# ccrc:generated 1 sha256=b7613d9b2b712ec9ece219d0bb283b6de15987bdd88c29ff1bc3d442c331137f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6530,15 +6530,49 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   #     deterministic, keystroke-stable, and self-healing when that client
   #     leaves. NEVER `latest` — F4 measured a keystroke-driven reflow flip at
   #     +6 MB tmux RSS per flip, never returned, shedding 50 history lines per
-  #     flip from about the seventeenth.
-  #   • canonical — `resize-window -x 220 -y 50` restores the grid `_spawn_start`
-  #     spawns with AND re-latches `manual`, which IS the pinned state §3 wants.
+  #     flip from about the seventeenth. THAT IS THIS VERB'S RULE, NOT THIS
+  #     FILE'S, and the two read as one without this clause: `_spawn_start`
+  #     sets `window-size latest` on every session it creates (the only other
+  #     `window-size` write in this file — measured), and the server's
+  #     `resize-window` pin then overrides it. What is refused here is reaching
+  #     back for `latest` when UN-pinning a window that was pinned.
+  #   • canonical — `resize-window -x 220 -y 50` restores the 220x50 grid
+  #     `_spawn_start` creates with (`_tmux_new_session … -x 220 -y 50`) and
+  #     latches `window-size manual` (F3), which IS the pinned state §3 wants.
+  #     THAT LATCH IS THE SERVER'S PIN, NOT SPAWN'S STATE, and this comment said
+  #     otherwise until fix round 1: `_spawn_start` follows its 220x50 create
+  #     with `set-option … window-size latest`, so what this arm restores is the
+  #     state `exec.ts`'s `resize-window` leaves, not the state a fresh session
+  #     is in. The 220x50 half was always true; the `manual` half was not.
   #     The server does NOT depend on this arm: its own pin is the already-granted
   #     `tmux resize-window`, which works against an agent of any age. This arm is
   #     for an operator on the box and for ccd's own use.
   #
-  # SCOPED TO `-t cc-<id>`, NEVER GLOBAL. `set-option` with no `-t` writes the
-  # SERVER-WIDE default and re-sizes every live session on this box at once.
+  # EXACT-MATCH TARGETS (`=`), NEVER A BARE `cc-<id>`, AND NEVER GLOBAL. Two
+  # separate hazards, and the first one convicted the first version of this verb
+  # (D-2780). Both measured on tmux 3.4 over a PRIVATE `-L` socket carrying
+  # `cc-demo-quiet-basin` and `cc-other-session`:
+  #   • `-t` IS AN fnmatch PATTERN resolved to a unique match, not a session
+  #     name. `has-session -t cc-demo` -> rc 0; `set-option -t cc-demo
+  #     window-size smallest` -> rc 0 and `cc-demo-quiet-basin` takes it;
+  #     `resize-window -t cc-demo -x 200 -y 40` -> rc 0 and that real session
+  #     becomes 200x40; `-t 'cc-oth*'` -> rc 0 and `cc-other-session` takes it.
+  #     On this box that is `cc-seven-ccrc` landing on `cc-seven-ccrc-pwa` among
+  #     ~20 live sessions. So the liveness refusal below CANNOT FIRE for a
+  #     well-formed id that is a unique prefix of a live session, and the verb
+  #     would mutate a window nobody named. The id class does not help: the
+  #     hazard is built from the characters it already admits.
+  #   • `set-option` with no `-t` AT ALL writes the SERVER-WIDE default and
+  #     re-sizes every live session on this box at once.
+  # `=` is tmux's exact-match prefix and closes the first: `=cc-demo` -> rc 1
+  # `can't find session`, `=cc-demo-quiet-basin` -> rc 0, `=cc-oth*:` -> rc 1
+  # `no such window`. The TRAILING `:` is the window target the two mutating
+  # commands take — measured against an EXISTING session, `set-option -t
+  # '=cc-demo-quiet-basin'` fails `no such window` while the colon form
+  # succeeds. `resize-window` accepts both forms; it is spelled with the colon
+  # anyway so the two mutating arms carry ONE target form between them rather
+  # than two that must be remembered apart. `has-session` takes a SESSION
+  # target, so it gets `=$t` with no colon.
   #
   # `aggressive-resize` is deliberately left alone — measured a no-op for a
   # one-window session, which every cc-* session is.
@@ -6550,6 +6584,14 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   # rostered id comes from, and it is the class `cmd_account_pane` validates
   # against for this same reason. NOT the looser `^[A-Za-z0-9._-]+$` most
   # workspace verbs use: this one is reached from a route the PWA hits.
+  #
+  # WHAT IT EXCLUDES IS A TMUX TARGET ALPHABET, not just a shell one, and no
+  # part of this verb passes through a shell. Measured on the same private
+  # socket: `*` and `?` are fnmatch (`-t 'cc-oth*'` and `-t 'cc-oth?r-session'`
+  # both rc 0), `:` is session:window (`-t cc-other-session:0` rc 0), `.` is
+  # window.pane, and `=`/`$`/`@`/`%` are the exact-match and session/window/pane
+  # id sigils (`-t '$0'` rc 0). An allow-list refuses them wherever they appear,
+  # which is stronger than the positions each is actually special in.
   [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $id"
   # The vocabulary check runs BEFORE tmux is touched at all, so an unknown mode
   # runs nothing — and it is its OWN sentence, not the usage line: the caller
@@ -6559,16 +6601,16 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
     *) die "bad mode: $mode (want smallest|canonical)" ;;
   esac
   t=$(_tmux "$id")
-  tmux has-session -t "$t" 2>/dev/null || die "no such session: $t"
+  tmux has-session -t "=$t" 2>/dev/null || die "no such session: $t"
   # `set -uo pipefail` with NO `-e`: an unguarded failure would fall straight
   # through to the echo and report a size change that did not happen. Wave 3's
   # `sizer.unpin` keys on this exit code to tell 'ok' from 'failed'.
   if [[ "$mode" == smallest ]]; then
-    tmux set-option -t "$t" window-size smallest \
+    tmux set-option -t "=$t:" window-size smallest \
       || die "could not un-pin $t — the window is STILL at its pinned size"
     echo "smallest"
   else
-    tmux resize-window -t "$t" -x 220 -y 50 \
+    tmux resize-window -t "=$t:" -x 220 -y 50 \
       || die "could not pin $t — the window is NOT at the canonical grid"
     echo "canonical"
   fi
