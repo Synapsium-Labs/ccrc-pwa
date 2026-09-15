@@ -3854,6 +3854,32 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
       `exec ${real} "$@"`,
     ].join('\n'));
   };
+  /** A `touch` that FAILS on PostCompact's claim — the failed-`touch` restore
+   *  path — and, when `replace`, swaps canonical inside its OWN fork first.
+   *  Only the claim pathname is touched by this hook (`ccd/session-hook.sh` has
+   *  exactly one `touch` call site), but the `case` keeps every other argument
+   *  on the real binary so a future one is not silently broken by this fixture.
+   *  `command -v touch` is gated earlier in the same body, and a stub on PATH
+   *  satisfies it — so this drives the RUNTIME failure, not the absence. */
+  const strangerTouch = (replace: boolean): void => {
+    const realRm = realTool('rm');
+    const realTouch = realTool('touch');
+    stub('touch', [
+      'LOCK="$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock"',
+      'case "$*" in',
+      '  *compactpost.*.claim)',
+      replace
+        ? '    if [ -e "$LOCK" ]; then '
+          + ` ${realRm} -f "$LOCK";`
+          + ' SRC=$(mktemp "$HOME/.cc-sessions/.stranger.XXXXXX");'
+          + ' link "$SRC" "$LOCK";'
+          + ` ${realRm} -f "$SRC"; fi`
+        : '    :   # the control: same stub, same fork, no replacement',
+      '    exit 1 ;;',
+      `  *) exec ${realTouch} "$@" ;;`,
+      'esac',
+    ].join('\n'));
+  };
   /** Every `.<id>.compactpost.<pid>.<r>.<r>.claim` on disk. */
   const postClaims = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
     .filter((n) => /^\.demo-quiet-basin\.compactpost\..+\.claim$/.test(n));
@@ -3929,6 +3955,47 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     const lines = journalLines();
     expect(lines, 'and commits its one line').toHaveLength(1);
     expect(lines[0].scope, 'attributed from the claim, not from nothing').not.toBe(null);
+  });
+
+  it('ITEM 3 AT THE FAILED-TOUCH RESTORE: a replacement inside `touch`\'s fork refuses, and canonical is NOT republished (r5 R4-M4)', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    // THE ONE STUB DOES BOTH HALVES OF THE RACE. `touch` fails, which is what
+    // sends this arm into the restore at all; and it replaces the row lock
+    // inside its own fork, which is the state the restore must not write
+    // through. Without the re-check this process republishes canonical with no
+    // mutex and then, on a successful `-ef`, unlinks the claim that holds the
+    // only verified copy of those bytes.
+    strangerTouch(true);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    expect(fs.existsSync(setFile()), 'canonical is NOT restored under a lock that stopped naming it').toBe(false);
+    expect(postClaims(), 'and the claim is RETAINED — the only verified copy survives').toHaveLength(1);
+    expect(fs.existsSync(journalFile()), 'nothing is committed on this path').toBe(false);
+    expect(mutexFree(), 'and the row is released').toBe(true);
+    // AND THE NEXT ARM TOLERATES IT, exactly as it does for the refusal one
+    // statement earlier: a later PostCompact finds no canonical set, takes the
+    // absent-set branch and attributes nothing.
+    strangerTouch(false);
+    expect(runFull(postCompact(tree, transcript, 'a later summary'))).toEqual({ stdout: '', stderr: '' });
+    const lines = journalLines();
+    expect(lines, 'the absent-set branch commits exactly one line').toHaveLength(1);
+    expect(lines[0].scope, 'a genuinely absent canonical set attributes nothing').toBe(null);
+  });
+
+  it('ITEM 3 AT THE FAILED-TOUCH RESTORE, THE CONTROL: the same stub and the same failing `touch` WITHOUT the replacement DO restore canonical', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    strangerTouch(false);
+    expect(runFull(postCompact(tree, transcript, 'a summary'))).toEqual({ stdout: '', stderr: '' });
+    // Without this leg the assertions above are satisfied by a stub that merely
+    // broke the settlement outright, which is a different test: here the
+    // `touch` fails just the same, the proof HOLDS, and the restore runs.
+    expect(fs.existsSync(setFile()), 'the restore republished canonical').toBe(true);
+    expect(postClaims(), 'and a proved restore consumes its own claim').toEqual([]);
+    expect(fs.existsSync(journalFile()), 'a failed settlement still commits nothing').toBe(false);
+    expect(mutexFree(), 'and the row is released here too').toBe(true);
   });
 
   // — and the SOURCE pin for the sites one fixture cannot reach ————————————
@@ -4035,6 +4102,27 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // leaves, is argued at the sites themselves and driven by the two effect
     // fixtures above, not carried in these labels.
     //
+    // THREE MORE ON THE FAR SIDE OF A FORK (r5 R4-M4). The split above stated
+    // the rule as ONE ENTRY PER MUTATION and this list then disagreed with it:
+    // the failed-`touch` restore, and the crossed-nonce and body-less card
+    // restores, each WRITE a canonical pathname under the row mutex and each
+    // sits after an external binary (`touch` at the first, `mv` at the other
+    // two), and none of the three was here. MEASURED before the re-checks were
+    // inserted: adding these entries alone reds with "(line 1525) has no
+    // identity re-check after line 1520" and "(line 1979) has no identity
+    // re-check after line 1969". The concrete state the first one allowed: a
+    // stranger replaces the lock inside `touch`'s fork, the `touch` fails, and
+    // this process republishes canonical with no mutex and then discards the
+    // claim holding the only verified copy.
+    //
+    // THE BODY-LESS ENTRY TAKES NO `branchOf`, deliberately, even though it is
+    // an alternative arm of the crossed-nonce one. `branchOf` LOWERS a floor,
+    // and `between` does not exclude guards that live inside the sibling's arm
+    // — so inheriting here would let the crossed-nonce proof, which returns
+    // before this path is ever reached, satisfy this entry. The default floor
+    // (the previous mutation) is higher and strictly stronger, and it is
+    // satisfied by this arm's OWN proof.
+    //
     // `pick` names which occurrence of a needle that appears more than once,
     // and pins the TOTAL beside it, so a new occurrence reds rather than
     // silently shifting the anchor. `branchOf` says this mutation sits in an
@@ -4052,9 +4140,14 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
         branchOf: 'PreCompact: the card-stage rename' },
       { what: 'PostCompact: the canonical unlink', needle: 'if ! rm -f "$set" 2>/dev/null; then' },
       { what: 'PostCompact: the claim touch', needle: 'if ! touch "$claim" 2>/dev/null; then' },
+      { what: 'PostCompact: the failed-touch restore link', needle: 'if link "$claim" "$set" 2>/dev/null' },
       { what: 'PostCompact: the journal commit', needle: 'mv -f "$stage" "$journal" 2>/dev/null' },
       { what: 'SessionStart(compact): the aged-card removal', needle: 'rm -f "$f"' },
       { what: 'SessionStart(compact): the card claim', needle: 'if ! { mv -f "$f" "$claim"; } 2>/dev/null; then' },
+      { what: 'SessionStart(compact): the crossed-nonce card restore',
+        needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [0, 2] },
+      { what: 'SessionStart(compact): the body-less card restore',
+        needle: '{ link "$claim" "$f"; } 2>/dev/null || true', pick: [1, 2] },
     ];
     /** The k-th line carrying `needle`, with the total pinned: an anchor that
      *  gained or lost an occurrence is a moved anchor, not a re-indexed one. */

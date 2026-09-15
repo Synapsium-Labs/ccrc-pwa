@@ -1518,6 +1518,26 @@ _hook_compact_post() {
       _hook_lock_release "$lockfd"; return 0
     fi
     if ! touch "$claim" 2>/dev/null; then
+      # ITEM 3, AND THE `touch` ABOVE IS THE FORK (r5 R4-M4). The restore below
+      # WRITES a canonical pathname — the block before the `touch` already calls
+      # `link "$claim" "$set"` a canonical mutation — and `touch` is an external
+      # binary, so the proof taken two statements up is no longer this moment.
+      # Without this one a stranger that replaced the lock inside that fork
+      # would see this process publish canonical with no row mutex and then, on
+      # a successful `-ef`, unlink the claim holding the only verified copy of
+      # those bytes: the exact state the proof above the `touch` was added to
+      # forbid, reachable one `touch` later.
+      #
+      # ON A FAILED PROOF THERE IS NO RESTORE AND NO REMOVAL, which is not a new
+      # terminal state: it is the one this arm already reaches whenever the
+      # no-clobber `link` collides or cannot be proved — canonical unlinked, the
+      # claim RETAINED untouched at the set's own original mtime, no journal
+      # line, the row released. A later PostCompact finds no canonical set and
+      # takes the absent-set branch, which attributes nothing, and the claim is
+      # a §3.4 target family an aged sweep under a later held lock reclaims.
+      if ! _hook_lock_still_canonical "$lockfd"; then
+        _hook_lock_release "$lockfd"; return 0
+      fi
       # RESTORE canonical only by no-clobber `link`, and only onto an absent
       # pathname. If the restore collides, fails, or cannot be proved, the
       # occupant is never overwritten and the only verified copy of these bytes
@@ -1973,6 +1993,16 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$claim"
   line1="${raw%%$'\n'*}"
   if [[ "$line1" != "$nonce" ]]; then
+    # ITEM 3, AND THE `mv` ABOVE IS THE FORK (r5 R4-M4). This restore WRITES a
+    # canonical pathname, and `mv` is an external binary, so the proof taken
+    # before the claim is no longer this moment. ON A FAILED PROOF, NO RESTORE
+    # AND NO REMOVAL: the claim is RETAINED, holding the only copy of the card's
+    # bytes — removing it here would discard them under a lock that stopped
+    # naming canonical — and the caller releases, as it does on every other
+    # refusal in this body. The claim is a `compactcard.*` private family, so an
+    # aged sweep under a later held lock reclaims it, bounded by
+    # COMPACT_CARD_MAX_AGE: a delay rather than a wedge.
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
     # POSIX `link source target` creates exactly target or fails EEXIST —
     # unlike `ln`, a directory at target cannot receive a child named after
     # the source.
@@ -1982,6 +2012,12 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   fi
   body="${raw#*$'\n'}"
   if [[ "$body" == "$raw" ]]; then                    # a nonce with no text after it
+    # ITEM 3, ITS OWN, NOT THE TWIN'S (r5 R4-M4). This is the same restore in a
+    # different arm, and the crossed-nonce arm above RETURNS — so its proof never
+    # runs on this path and cannot stand in for this one. Same fork (`mv`), same
+    # disposition on a failed proof: no restore, no removal, claim RETAINED, the
+    # caller releases.
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
     { link "$claim" "$f"; } 2>/dev/null || true
     { rm -f "$claim"; } 2>/dev/null || true
     return 0
