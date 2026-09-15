@@ -134,6 +134,19 @@ describe('ccd-account-auth — the platform shim it had to carry', () => {
     expect(body(helper, '_auth_timeout')).toBe(body(ccd, '_plat_timeout'));
   });
 
+  it('and so does ccrc\'s copy — the THIRD one, which is pinned only by region (D-2764)', () => {
+    // `macos-platform.test.ts:54` already holds this, but it holds it by
+    // SLICING the platform block out of both files and comparing the slices —
+    // so it protects this shim only for as long as the shim stays between the
+    // block's sentinels. This assertion names the function instead, and
+    // therefore survives someone moving it out. It is deliberately redundant:
+    // D-2764's own census called this copy "pinned by nothing" because a grep
+    // for `_plat_timeout` across `server/test` finds no name-based pin, and a
+    // guard nobody can find is one somebody edits around.
+    const ccrc = fs.readFileSync(path.join(CCD_ROOT, 'ccrc'), 'utf8');
+    expect(body(ccrc, '_plat_timeout')).toBe(body(ccd, '_plat_timeout'));
+  });
+
   it('spells no GNU-only command — it is in macos-platform\'s derived corpus from today', () => {
     // Restated here so the reason lands beside the code rather than only in a
     // corpus derivation two files away. Seven of the ten patterns

@@ -19864,7 +19864,19 @@ stays as a backstop rather than as the mechanism. The platform fact is pinned so
 grep changes, instead of leaving the remedy silently over-applied.
 
 
-### D-2764 — the deadline shim never escalates to KILL, so a TERM-ignoring child outlives it FOREVER — on every platform. BOOKED, NOT FIXED
+### D-2764 — the deadline shim never escalates to KILL, so a TERM-ignoring child outlives it FOREVER — on every platform. FIXED
+
+> **CLOSED, and the one-flag remedy this entry proposed was wrong.** The sentence below — "the remedy is
+> known and one flag wide" — is the part that did not survive. `timeout -k` returns **137, not 124**
+> (measured, GNU 9.4), and 137 already means "an outer kill landed" at `ccd:2923`. Propagating it would
+> give one number two meanings: at `ccrc:7875` a `-k` escalation would land in the `rc -gt 128` set and
+> BOTH append "something killed the child" — a fact about the box, not the account — AND miss the
+> `--timed-out true` verdict the arm below it exists to produce.
+>
+> The shipped fix NORMALISES inside the shim instead: **124 iff its own deadline elapsed**, otherwise
+> the command's own status. No call site changes; the signature does not change. The discriminator is
+> the clock against **`secs + grace`, not `secs`** — see D-2836, which is the reason that distinction
+> exists and is not a refinement.
 
 `_plat_timeout` (and `_auth_timeout`, pinned byte-for-byte to it) runs `timeout`/`gtimeout` with no
 `-k`. Those send SIGTERM at the deadline and **never** escalate. A child that ignores or blocks TERM is
@@ -19975,3 +19987,113 @@ symmetry that is not there, which is its own kind of lie. What the guard refuses
 single-platform claim. MUTATION-MEASURED: a bare `itDarwin('BSD: a mutant claim with no control at all')`
 reds it and its removal greens it again; the scan blanks comments first, because on its first run it
 reported its own prose quoting the case that taught it.
+
+### D-2836 — an outer SIGKILL inside the grace window returns 137 with the child ORPHANED, so the escalation threshold is `secs + grace`, not `secs`
+
+The obvious discriminator between "my deadline escalated" (137) and "something else killed this" (137) is
+elapsed time against the deadline. Three independent designs and this session's own reasoning all reached
+that shape, and all four were **wrong in the same place**.
+
+MEASURED, GNU 9.4, deadline 2s, grace 3s, an outer `kill -9` on the **`timeout` process itself** at t=3s —
+after the deadline fired, before the escalation could:
+
+    wait reports              rc 137 at 3s
+    elapsed >= secs           TRUE  (3 >= 2)
+    the child                 SURVIVED and ran to completion 12s later
+
+So `elapsed >= secs` claims that call was bounded while an orphan is still running — a lie, and precisely
+the condition `ccd:1983`'s wedge guard and `ccrc:7875`'s verdict arm would act on.
+
+The binary sends TERM at the deadline and waits the **whole** grace before the KILL. Therefore an escalated
+run cannot return **before** `secs + grace`, and an outer signal that beat the escalation cannot return
+**after** it. Thresholding at `secs + grace` is the only form that excludes the orphan window.
+
+MUTATION-MEASURED: changing `+ grace` to `+ 0` in all three copies reds exactly one case — the orphan
+control — and nothing else. One test, because it is one narrow claim.
+
+### D-2837 — the escalation makes THIS shell print a job-status line, and at two shapes it lands in a stream the tree parses
+
+When the KILL lands, the binary reports it by re-raising SIGKILL on itself, so the calling shell prints
+`<file>: line N: <pid> Killed ...`. Until this change that line needed an **outer** signal to appear at
+all, which is why nobody had seen it.
+
+MEASURED in five shapes. Command substitutions are clean in all three of theirs. Two are not:
+
+* a direct call carrying its own `>O 2>E` (`ccd:8593`, `ccd:8857`) puts the line in the caller's `$err`,
+  which `_ws_nested_checkouts` and `_ws_sensitive_inside` read back and report;
+* `ccd-account-auth`'s backgrounded `2>&1` puts it in `$AUTH_RUN/out` — **the FIFO `_auth_pump` parses
+  line by line**.
+
+Remedy: hand the child the original stderr on fd 6 (`2>&6 6<&-`) and silence this shell's own
+(`6>&2 2>/dev/null`). `6<&-` closes fd 6 in the child — measured, child fds are `0 1 2 3` with it and
+`0 1 2 3 6` without. This is a **second, pre-existing defect riding in on the first**: it is not caused by
+D-2764's fix, only made routine by it.
+
+### D-2838 — `ccd/ccrc`'s copy of the shim IS pinned, by region; "pinned by nothing" was false
+
+Three designs and two of three review lenses reported that the third copy at `ccd/ccrc:412` is unguarded.
+All of them grepped `server/test/*.ts` for `_plat_timeout` and found no name-based pin.
+
+The pin is by **region**: `macos-platform.test.ts:54` asserts `platformBlock(ccd) === platformBlock(ccrc)`,
+slicing between `# ── THE PLATFORM LAYER` and `# ── END PLATFORM LAYER` — `ccd/ccd:11–894` and
+`ccd/ccrc:70–953` — and both shims sit inside. Measured by replaying that helper's own slice logic: the
+blocks are identical at 48 867 bytes, and mutating **only** ccrc's shim body makes them differ.
+
+The lesson is the reportable part: **a guard nobody can find by name is one somebody edits around.** So a
+deliberately redundant name-based assertion now lives in `ccd-account-auth.test.ts` beside the
+`_auth_timeout` pin — it survives the shim being moved out of the region, which the region pin does not.
+
+### D-2839 — the pure-bash fallback arm does NOT escalate, and that is a ruling with a mechanism
+
+The only escalation available in the fallback is a watcher subshell issuing `kill -KILL "$pid"`.
+
+MEASURED: bash reaps a backgrounded child **asynchronously** — the pid is gone from `/proc` before any
+`wait` runs, while `wait` still returns the saved status correctly. So the pid is genuinely recyclable and
+a sibling watcher can signal an unrelated process. On this fleet that could be a `ccd supervise`, a
+`claude-session@*` child or tmux — the three things CLAUDE.md's SAFETY section forbids touching. And
+`ccrc-account.test.ts` deliberately contains PATH to force this arm on whatever box runs the suite,
+**including the fleet box**, so "it never runs here" is false.
+
+A stamp handshake narrows the window but cannot be made to go red under mutation, which makes it an
+argument rather than a mechanism. So this arm keeps its single TERM. The consequence, stated plainly:
+**on a box with no coreutils `timeout`, D-2764 is not fixed.** Both macOS CI legs `brew install coreutils`,
+so both take the binary arm.
+
+MUTATION-MEASURED: `ccd-plat-timeout.test.ts` text-scans all three copies for `kill -9`/`kill -KILL`;
+adding one to the fallback reds it.
+
+### D-2840 — busybox `timeout` is two defects, and only one of them is D-2764
+
+MEASURED on BusyBox v1.36.1:
+
+    busybox timeout 1 <ignores TERM>     rc 0   after 4s   -- a blown deadline reported as SUCCESS
+    busybox timeout 1 <honours TERM>     rc 143 at 1s      -- plain expiry, not GNU's 124 convention
+
+The first this change fixes (→ 124 at `secs + grace`), because `-k` is supported and proved. **The second
+is out of scope and stays open:** on such a box every `rc == 124` branch in the tree is dead *today*,
+before any escalation change. Fixing it needs either a clock rule at `>= secs`, which `$SECONDS`
+truncation cannot make deterministic, or a per-binary convention probe — and the only cheap one costs
+**1.008 s on busybox** (`timeout 0.05 sleep 5` → GNU 124 in 57 ms, busybox 143 in 1.008 s, because busybox
+floors sub-second durations), paid inside every command substitution.
+
+`ccd/ccd-telemetry-keepalive:229-241` already records both behaviours, scoped as a porting concern. That
+scoping is correct for this fleet (GNU everywhere) and this entry does not widen it — it records that the
+shim, unlike that file, now has a measured answer for one of the two.
+
+### D-2841 — "the escalation cannot reach a `script(1)` pty grandchild" was asserted, not measured — and on Linux it is false
+
+D-2764's booking carried this as a reason the auth methods gain nothing from escalation. It was reported as
+a general fact.
+
+MEASURED on Linux (util-linux `script`): `timeout -k 2 2 script -qfc '<child ignoring TERM, 12s>' /dev/null`
+→ **rc 137 at 4s, and the grandchild did NOT survive.** `script` prints `Session terminated, killing
+shell...` — it handles the signal and ends its own child. So on this platform the escalation reaches it.
+
+The macOS answer is **unmeasured**, and this entry does not guess it: BSD `script` takes different flags and
+was reported to place the command in its own process group. Per D-2765's own rule — a platform claim owes
+the other platform an answer — the honest record is one measured arm and one open one, not a general claim
+in either direction.
+
+What this changes: the auth sites are **not** excluded from the fix on this ground. They are inside it, and
+`ccd-account-auth:759/:792/:823`'s `rc == 124 || AUTH_EXPIRED` arm reaches `_auth_state expired` at the
+deadline for the first time.
