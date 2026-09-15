@@ -1367,3 +1367,59 @@ is never a ledger number.
   `CCRC_MEASURED` has been emitted since 2026-08-13, so the comment's cause was false while its gap (no
   consumer in `_ws_least_loaded`) is real. Rewritten, and pinned two-sided so the comment reds again the
   day the consumer lands without it. (spec §12 P-5)
+
+**Found during execution, allocated in one call on 2026-09-15** (floor moved to 2830). These three were
+measured against this tree at `origin/main` 47eff69a, not against the plan's base `2b15144e`, and each was
+re-measured by the coordinator before it was ruled on.
+
+- **D-2827** (Task 6) — **the finding D-1688 names was already discharged, in the opposite direction, so
+  this wave makes NO `ccd/ccd` edit.** The plan's Task 6 asserts that the comment's stated CAUSE was false
+  while its GAP was real ("what is missing is the CONSUMER — this loop never reads it"). Both halves are
+  now false: `ccd/ccd:4579` opens the paragraph "CLOSED, by the account wave (D-2596 …)", names
+  `CCRC_MEASURED` and keeps the old wording only as an explicit quotation of what it used to say; and the
+  gap is closed, not miscaused — `ccd/ccd:4761` is `_account_measured "$w" || continue`, the helper
+  defined at `ccd/ccd:1550`, with the measured tier collected into `firstm`. Writing the prescribed text
+  would have REGRESSED an accurate comment into a false one, asserting a gap that has closed — the same
+  defect D-1688 exists to remove, pointed the other way. The pin in `pools-prose.test.ts` is INVERTED
+  instead: it holds the CLOSURE (the body must still consume the roster's answer) and forbids re-asserting
+  the stale claim as LIVE, while still allowing it to survive as a quotation, which is how the correction
+  explains itself. Green on arrival, so all three assertions were mutated red and restored.
+  **DEPLOY CONSEQUENCE, and it supersedes Task 9 Step 6 for run 47:** this wave touches no file under
+  `ccd/` (`git diff --stat origin/main ws/clear-meadow -- ccd/` is empty), so it is **NOT agent-first**.
+  It ships on the **SERVER LANE ONLY** — nothing in the diff runs on the fleet host.
+- **D-2828** (Task 2) — the plan's prescribed replacement text was applied as INTENT, not as a literal,
+  because the passage moved twice between `2b15144e` and execution. The account-entry sentence already
+  named `hidden?, pool?`, and those `?` markers are exactly what broke the derivation (`hidden?` is not
+  the key `hidden`), so the brace list is now EXACTLY `ACCOUNT_KEYS` and optionality moved into the prose
+  after it. The plan's literal text would also have DELETED the overflow-lane paragraph (`homeAble: false`
+  as a LAST RESORT, the per-lane brake, the return-home-if-still-servable clause) that landed after the
+  plan was cut; it is kept whole and the edit worked around it. Recorded inside this entry as evidence the
+  derivation does its job rather than as a separate finding: the emitted surface is **13** names, not the
+  10 the plan enumerated — the routing wave added `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES` and
+  `CCRC_CODEX_BACKEND` — and the pin absorbed all three with no decision required.
+- **D-2829** (Task 8) — **Step 5 names the wrong enforcing mechanism.** It states, as the reason the
+  bullet's placement is non-negotiable, that a bullet inserted between the Deviation-ledger and
+  Wire-discipline bullets reds `ledger-instruction` with "the closing anchor is gone" or a passage-length
+  failure. Measured: `ledger-instruction` **PASSES** with the bullet in that slot. Its terminator
+  `'\n- **Wire discipline'` is DISTINCTIVE, so a bullet inserted ahead of it EXTENDS that passage instead
+  of truncating it, and every one of its assertions still holds. What actually reds is
+  **`pools-prose.test.ts`'s own length check** — the bullet's slice runs to
+  `'\n## Coordination (Build 7) invariants'`, so a misplaced bullet swallows the entire Wire-discipline
+  bullet and measures 17 non-empty lines against a budget of 12. The placement rule STANDS and the bullet
+  sits in the correct slot; only the named mechanism was wrong, and it is recorded because the next person
+  to move a CLAUDE.md bullet will read that Step 5 sentence and trust it.
+
+**Predicted outputs, corrected — no numbers** (coordinator ruling on 1274: these change no work and no
+conclusion, so they are recorded here rather than allocated).
+
+- Task 1 Step 5 predicts 2 red for its single mutant; measured **1**. Swapping only the opening phrase
+  leaves `--cross-pool` inside the same sentence, so test 2 still passes. All three rows of §11 row 52
+  were measured instead — 1 red, 3 red, 1 red.
+- Task 4 Step 2 predicts the skew test first fails naming `409`; it named **501**, because
+  `409 pool-mismatch` was already in the section from Task 3.
+- Task 5 Step 5 measured 20 `accounts.json` hits at `2b15144e`; there are now **30**. The conclusion is
+  unchanged — only `config.ts` carried the claim, and `fleetstate.ts:76-90` and
+  `shared/agent-protocol.ts:36-44` already stated the true version.
+- Every line citation in the File-structure table has shifted (README 806-808 → 890-892; `config.ts`
+  197-201 → 197-208; `ccd/ccd` 3546-3551 → 4579+; README 2088-2097 → 2578-2589). Everything was located
+  by content, never by line number.
