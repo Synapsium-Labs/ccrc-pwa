@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, chmodSync, symlinkSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 
 // DERIVED FROM `ccdWsHelpers`'s CCD, NOT SPELLED AGAIN. `single-definition.test.ts`
 // allows exactly one file in the test corpus to name the path to the `ccd` script,
@@ -29,14 +29,29 @@ interface Run { home: string; rc: string; ms: number; out: string; err: string }
 function drive(file: string, name: string, script: string, pathPrefix?: string): Run {
   const home = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-'));
   writeFileSync(path.join(home, 'shim.sh'), body(file, name));
+  // THE POISONED `gh` SURVIVES THE PATH THESE CASES BUILD. Several of them hand
+  // the shim a PATH holding nothing but a planted `timeout`, which is the whole
+  // point — that is how the fallback arm and the hostile-binary arm are reached.
+  // A bare `export PATH=<prefix>` would also displace the harness's `gh`, and
+  // containment here is not a formality: the host token carries repo WRITE scope.
+  // `harnessBin` holds `gh` and no deadline binary, so appending it cannot change
+  // which `timeout` any of these cases resolves.
+  // `{ systemd: true, tmux: true }` even though these cases source the shim
+  // function alone and never run `ccd`. The opt-out that exists is reserved for
+  // the negative control that PROVES the opt-in is real; borrowing it here to
+  // save two poisons nobody touches would spend a narrow exemption on
+  // convenience. Asking for containment this file does not need costs nothing
+  // and keeps the scan's claim — "every ccd bash call site" — free of a special
+  // case a later reader has to re-derive.
+  const env = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
   const prog = [
     'set -uo pipefail',
-    pathPrefix ? `export PATH=${JSON.stringify(pathPrefix)}` : '',
+    pathPrefix ? `export PATH=${JSON.stringify(`${pathPrefix}:${harnessBin(home)}`)}` : '',
     `. ${JSON.stringify(path.join(home, 'shim.sh'))}`,
     script.replace(/@SHIM@/g, name).replace(/@HOME@/g, home),
   ].filter(Boolean).join('\n');
   const t0 = Date.now();
-  const r = spawnSync('bash', ['-c', prog], { encoding: 'utf8', timeout: 40_000 });
+  const r = spawnSync('bash', ['-c', prog], { encoding: 'utf8', timeout: 40_000, env });
   return { home, rc: (r.stdout ?? '').trim(), ms: Date.now() - t0, out: r.stdout ?? '', err: r.stderr ?? '' };
 }
 
@@ -113,7 +128,11 @@ describe('D-2764', () => {
     expect(r.ms, 'the shim believed a binary that never ran the command').toBeGreaterThan(500);
   });
   it('busybox: a blown deadline is no longer reported as SUCCESS', () => {
-    const bb = spawnSync('bash', ['-c', 'command -v busybox'], { encoding: 'utf8' }).stdout.trim();
+    // Looked up on the filesystem rather than through `command -v` in a spawned
+    // bash: a bash call site in a `ccd*` test file owes the whole containment
+    // ceremony (`ccd-workspaces.test.ts`'s scan), and a probe that only wants to
+    // know whether a binary exists should not be the thing that owes it.
+    const bb = ['/usr/bin/busybox', '/bin/busybox', '/usr/local/bin/busybox'].find((p) => existsSync(p));
     if (!bb) return;
     const bin = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-bb-'));
     symlinkSync(bb, path.join(bin, 'timeout'));
