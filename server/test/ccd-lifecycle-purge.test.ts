@@ -1853,9 +1853,18 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
         `${leg.verb}: nothing was ever published at the lock pathname — no file, no symlink, no directory`)
         .toBeUndefined();
       expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-publish-failed');
-      expect(r.detail, `${leg.verb}: and says which act did not happen`).toContain('could not be published as');
-      expect(r.detail, `${leg.verb}: worded to the measurement, never to one cause`)
-        .toContain('any failure of the publish is reported here');
+      // WORDING-NEUTRAL BY CONSTRUCTION (r8 R8-M1). This leg is the CONTROL for
+      // the sibling below, which drives the OTHER route to this token — a
+      // publish that succeeded and was unlinked an instant later — and reds
+      // when the arm is reverted to the act-wording. A control that reds with
+      // it proves nothing, so every clause asserted here is one BOTH wordings
+      // carry: the mint that did happen, the usual causes, and the softened
+      // re-run clause. The act-wording's own phrase is asserted as an ABSENCE
+      // in the sibling, never as a presence here.
+      expect(r.detail, `${leg.verb}: names the act that DID happen`)
+        .toContain('the private lock source was minted');
+      expect(r.detail, `${leg.verb}: offers the cause as the usual one, never the only one`)
+        .toContain('over quota, read-only or moved');
       expect(r.detail, `${leg.verb}: and a re-run is refused only while that holds`)
         .toContain('a re-run cannot help while that holds');
       // THE TWO FALSE CLAUSES THE SPLIT REMOVES, asserted as absences because
@@ -1868,6 +1877,69 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
         .not.toContain('once the compaction settles');
       expect(r.detail, `${leg.verb}: and nothing has been unlinked here`)
         .not.toContain('canonical-vanished');
+      expectSurvivingState(leg, r.detail);
+    }
+  }, 120_000);
+
+  it('(d1d) a publish that SUCCEEDED and was unlinked one instant later is the SAME token, and the sentence says so (r8 R8-M1)', () => {
+    // THE SECOND ROUTE TO `lock-publish-failed`, and the one the r7 wording got
+    // wrong. The post-`link` re-test reaches this token whenever the pathname
+    // is EMPTY — and a `link` that SUCCEEDED and was then unlinked by a
+    // stranger in the window between the publish and the re-test leaves it
+    // empty too. The sentence that shipped for one round asserted an ACT the
+    // guard never observes ("could not be published as …; the usual causes are
+    // $REG being full …; repair $REG"), and every clause of it is false in this
+    // state: the publish HAPPENED, `$REG` is a healthy writable directory, and
+    // the repair it prescribes is unperformable. The reworded arm reports the
+    // STATE the guard measured and names this route in words, which is the same
+    // correction r6 R5-M2 made to `lock-source-refused` one arm up.
+    //
+    // THE SHIM PUBLISHES FOR REAL AND THEN REMOVES WHAT IT PUBLISHED, and it is
+    // SCOPED to the lock pathname: `command link "$@"` runs for every other
+    // caller — the acquire's own `lock-open` alias a few lines later included —
+    // so this breaks ONE statement's post-state rather than crippling the verb,
+    // exactly as `MKTEMP_FAIL` above does at the mint. `"${2-}"`, never a bare
+    // `$2`, for `MKDIR_RACE`'s reason: ccd sources under `set -uo pipefail`.
+    const LINK_UNLINKED = 'link() { command link "$@"; local r=$?;'
+      + ' case "${2-}" in *.compactions.lock) rm -f "$2" 2>/dev/null ;; esac; return $r; };';
+    for (const leg of LEGS) {
+      h = makeCcdHarness('ccrc-lc-purge-');
+      leg.plant();
+      plantGeneration(leg.id);
+      expect(fs.existsSync(lockOf(leg.id)),
+        `${leg.verb}: no lock exists yet — the shim unlinks the one the mint publishes`).toBe(false);
+      const probe = h.sh(`${LINK_UNLINKED} command -v link >/dev/null && echo CV=ok; `
+        + `_compact_lock_acquire ${leg.id} 1; echo "RC=$? WHY=$COMPACT_LOCK_WHY"`);
+      expect(probe, `${leg.verb}: the shim still RESOLVES, so status 2 was never reachable`).toContain('CV=ok');
+      expect(probe, `${leg.verb}: and the acquire refuses with status 1, not 2`).toContain('RC=1');
+      expect(probe, `${leg.verb}: the SAME token a publish that never happened gets — the guard reads the pathname, not the act`)
+        .toContain('WHY=lock-publish-failed');
+      leg.run(LINK_UNLINKED);
+      const r = purgeTerminal(leg);
+      expect(r.token, `${leg.verb}: status 1, which is NOT mechanism absence`).toBe('purge-refused');
+      // THE POST-STATE IS WHAT THE TOKEN IS ABOUT: nothing at the pathname.
+      // `lstat`, not `existsSync`, because a dangling symlink IS an occupant.
+      expect(fs.lstatSync(lockOf(leg.id), { throwIfNoEntry: false }),
+        `${leg.verb}: nothing stands at the lock pathname — which is all the guard measured`)
+        .toBeUndefined();
+      expect(r.detail, `${leg.verb}: names the condition the acquire measured`).toContain('lock-publish-failed');
+      // THE ACT-WORDING, ASSERTED AS AN ABSENCE, because it is verbatim what
+      // this state journaled for one round and it is false in every clause.
+      expect(r.detail, `${leg.verb}: the publish HAPPENED here, so nothing may say it could not`)
+        .not.toContain('could not be published as');
+      expect(r.detail, `${leg.verb}: what the guard measured is the empty pathname`)
+        .toContain('nothing stands at');
+      expect(r.detail, `${leg.verb}: worded to the state, so any route to it is reported here`)
+        .toContain('any state that leaves the lock unpublished is reported here');
+      expect(r.detail, `${leg.verb}: and THIS route is named, not left to the $REG cause list`)
+        .toContain('including one removed the instant after it was created');
+      // AND THE THREE REMEDIES THAT ARE FALSE HERE, each asserted away.
+      expect(r.detail, `${leg.verb}: nothing holds the pathname, so nothing may claim one does`)
+        .not.toContain('holds the lock pathname');
+      expect(r.detail, `${leg.verb}: and no unperformable removal is prescribed`)
+        .not.toContain('remove that object by hand');
+      expect(r.detail, `${leg.verb}: no wait republishes a lock a stranger removed`)
+        .not.toContain('once the compaction settles');
       expectSurvivingState(leg, r.detail);
     }
   }, 120_000);

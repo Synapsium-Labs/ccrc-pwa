@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2018bcfbd35382705e13fa4d375cb5fc813fe35eb75ed2833f591c8a878dd0b0
+# ccrc:generated 1 sha256=024b9c477df0ae51068650f30e90b0415a55fb20a237b9d5b196753f0b99eee1
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1883,6 +1883,15 @@ _compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 m
     #     directory, no object at all to remove by hand. That state is a
     #     sibling of `lock-source-refused` three lines up rather than of the
     #     occupied one, and `lock-publish-failed` is its own token.
+    #
+    #     AND THE CAUSE LIST ABOVE IS NOT THE WHOLE ROUTE (r8 R8-M1). An EMPTY
+    #     pathname is also what a `link` that SUCCEEDED looks like after a
+    #     stranger unlinks the lock in the instant between the `link` and this
+    #     re-test — MEASURED with a shim that publishes for real and then
+    #     removes what it published: the same `lock-publish-failed`, with a
+    #     healthy `$REG` and no failure of anything. This guard measures a
+    #     STATE, never an act, so the token's remedy is worded to the state and
+    #     enumerates the `$REG` causes as the usual ones alone.
     if [[ ! -f "$lock" || -L "$lock" ]]; then
       if [ -e "$lock" ] || [ -L "$lock" ]; then COMPACT_LOCK_WHY=lock-path-occupied
       else COMPACT_LOCK_WHY=lock-publish-failed
@@ -1995,13 +2004,25 @@ _compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
       # swallows every errno, so this is the one refusal that leaves NOTHING at
       # the lock pathname — which is why it cannot wear `lock-path-occupied`'s
       # sentence, every clause of which asserts an object is there and asks a
-      # human to remove it. Worded to the MEASUREMENT for the same reason
-      # `lock-source-refused` above is: the guard sees a publish that did not
-      # happen, never the reason it did not.
+      # human to remove it.
+      #
+      # AND IT NAMES THE STATE, NOT AN ACT (r8 R8-M1, finishing what r7 began).
+      # The wording this replaces said the publish "could not be published",
+      # which is an ACT this guard never observes: the re-test reaches this
+      # token whenever the pathname is EMPTY, and a `link` that SUCCEEDED and
+      # was unlinked by a stranger one instant later arrives here too —
+      # MEASURED through the real harness with a `link` shim that publishes for
+      # real and then removes what it published, which answers exactly this
+      # token. Every clause of the act-wording is false in that state: the
+      # publish happened, `$REG` is healthy, and "repair $REG" is unperformable.
+      # So this says what the guard saw — nothing at the pathname — offers the
+      # `$REG` causes as the usual ones rather than the only ones, and names the
+      # second route explicitly, for the same reason `lock-source-refused`
+      # above reports its measurement instead of its likeliest cause.
       if [[ "$verb" == 'ws-gc --prune' ]]; then
-        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but could not be published as $REG/.$id.compactions.lock; the usual causes are $REG being full, over quota, read-only or moved, but any failure of the publish is reported here — a re-run cannot help while that holds; $tail — repair $REG"
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds; $tail — repair $REG"
       else
-        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but could not be published as $REG/.$id.compactions.lock; the usual causes are $REG being full, over quota, read-only or moved, but any failure of the publish is reported here — a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
       fi ;;
     *)
       if [[ "$verb" == 'ws-gc --prune' ]]; then
