@@ -1,11 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
-import { eventsOf, refusalsOf, holdCompactLock } from './lifecycleHelpers.js';
+import { eventsOf, refusalsOf, holdCompactLock, compactLockPath } from './lifecycleHelpers.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
@@ -2732,6 +2732,58 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
       expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
       expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
     } finally { release(); }
+  }, 60000);
+
+  it('and on a CANONICAL-VANISHED row the SAME token carries a different sentence — no wait is prescribed (r4 A-M3)', async () => {
+    // STATUS 1'S SECOND CONDITION, at the fourth purge caller.
+    // `_compact_lock_acquire` answers 1 both for the contended lock the leg
+    // above holds and for a permanent lock unlinked out of contract under a
+    // live holder, and tells them apart only in COMPACT_LOCK_WHY. The leg
+    // above is the CONTROL: same token, same verb, and the contention sentence
+    // survives there unchanged.
+    //
+    // THE HOLDER GOES THROUGH THE SHIPPED ACQUIRE, which is what leaves a
+    // descriptor on an unlinked `lock-open` alias for `_compact_lock_vanished`
+    // /proc arm to find. `holdCompactLock` opens canonical directly, so after
+    // the unlink there would be nothing to find and the next acquire would
+    // MINT instead of refusing — a fixture that silently tests the leg above.
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    const child = spawn('bash', ['-c',
+      `source "${CCD}"; _compact_lock_acquire demo-quiet-basin 5 || { echo "ACQRC=$?"; exit 1; }; echo held; exec sleep 60`],
+      { cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+    let hout = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`the holder never acquired: ${hout}`)), 10_000);
+      child.stdout.on('data', (d: Buffer) => { hout += d.toString(); if (hout.includes('held')) { clearTimeout(t); res(); } });
+      child.stderr.on('data', (d: Buffer) => { hout += d.toString(); });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    try {
+      // THE OUT-OF-CONTRACT ACT. Nothing in this tree unlinks the permanent
+      // lock — `_reg_purge` skips it BY NAME and `_ws_private_family` excludes
+      // it — so this is a stranger, which is the condition §4 rules on.
+      fs.unlinkSync(compactLockPath(h.home, 'demo-quiet-basin'));
+      const r = reap(tok);
+      expect(r.code, 'a reap whose purge was refused is not a success').not.toBe(0);
+      const reaps = eventsOf(h.home, 'reap');
+      const failed = reaps.find((e) => e['outcome'] === 'failed');
+      expect(failed, 'the tail closed its transaction with a FAILURE').toBeTruthy();
+      expect(failed!['refusal'], 'still status 1 — the token does not change').toBe('purge-refused');
+      const detail = String(failed!['detail'] ?? '');
+      expect(detail, 'names the condition the acquire measured').toContain('canonical-vanished');
+      expect(detail, 'and says why a re-run cannot help')
+        .toContain('has been unlinked while a live holder still owns its inode');
+      expect(detail, 'and names the remedy that can').toContain('by hand');
+      // THE FALSE CLAUSE IS GONE, asserted as an absence because that is
+      // exactly what the conflation put here, verbatim.
+      expect(detail, 'no wait is prescribed for a compaction that can never settle')
+        .not.toContain('once the compaction settles');
+      // AND THE REAP ITSELF RAN, so this is the tail and not an early refusal.
+      expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
+      expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
+      expect(h.reg('demo-quiet-basin', 'uuid'), 'and the registry row still stands').not.toBeNull();
+    } finally { try { child.kill('SIGKILL'); } catch { /* gone */ } }
   }, 60000);
 
   it('and on a box whose MECHANISM is absent it fails with the OTHER token — reachable through mktemp, which ws-reap does not gate', () => {
