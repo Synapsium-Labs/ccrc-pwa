@@ -646,8 +646,12 @@ without it neither half of ccrc runs:
 | `~/.ccrc/accounts.sh` | **ccrc** — regenerated and replaced wholesale by every agent deploy | `ccd` on **every invocation**, plus `install-session-hooks.sh` and `install-coordinator-skill.sh` | `ccd` dies (`ccd: no account roster at …`) and both installers `exit 1` |
 
 `accounts.sh` is a pure projection of `accounts.json` — `deploy/gen-accounts.mjs`
-produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_UPSTREAM`,
-`_ccrc_cfg_dir`, `_ccrc_id_wrapper`), and the deploy generates it from the
+produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
+`CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
+`CCRC_UPSTREAM`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool` — the whole emitted surface, because a
+field the projection drops is a field no drift detector can see), and the
+deploy generates it from the
 roster **read back off the box**, never from the local file, so ccd's routing
 can never disagree with what the server serves from that same box's copy.
 Nothing hand-edits it; a torn one would take out every live session at once,
@@ -655,7 +659,7 @@ which is why it lands via the same atomic scp-to-temp + `mv` as `ccd` itself,
 and lands **before** `ccd` and before both installers.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden?, pool?}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -668,7 +672,13 @@ overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
 `telemetry: 'none'` says the account will never report rate limits,
 so its permanent unknown is not read as permanent emptiness; `hidden: true`
-says the entry is roster plumbing rather than one of your accounts.
+declares the entry to be roster PLUMBING rather than one of your accounts — the
+`upstream` entry naming the binary every generated wrapper `exec`s — so no
+surface presents it as an account you hold; and `pool` is an optional pool name
+carrying `id`'s own grammar, which is the account half of the rule "Account
+pools" below states in full. The last two keys are the optional ones, and both
+default to the old behaviour when absent: `hidden` to `false`, `pool` to
+untagged, which means unconstrained.
 
 Both clauses above were unconditional until account pools shipped, and neither is
 any more (D-1911; the ruled behaviour named below is D-1908, and this file still
@@ -816,6 +826,18 @@ ccrc wrappers                        # the other direction: roster → ~/.local/
   `roster fingerprint on <box>: <sha256>`, which is the same value — that line
   is the only signal in the agent-only and single-box cases, where there is no
   server on the other end of a socket to disagree with.
+
+  Digesting the PROJECTION rather than the JSON also decides, per key, whether a
+  cross-box disagreement is visible at all, and the two optional keys fall on
+  opposite sides. `pool` is **inside** the digest: `_ccrc_pool` is emitted for
+  every tagged account, so two boxes whose pools disagree read `divergent` and
+  the banner's existing remedy is the right one. `hidden` is **outside** it:
+  nothing in `accounts.sh` carries that key, so two copies that disagree about
+  `hidden` project byte-identical bash and report `agreed` — the same gap
+  `exec.kind` and `exec.secretsFile` sit in, and the reason `ccrc doctor`'s
+  wrapper check rather than the fingerprint is what catches those. Between the
+  two lanes of one agent-first deploy that changes pools, `divergent` is
+  EXPECTED for the minutes in between, and the deploy says so as it runs.
 
 - **Limit telemetry is roster-driven too**, which is what makes free-form ids
   real rather than half-delivered. `ccd/statusline-command.sh` is a Claude Code

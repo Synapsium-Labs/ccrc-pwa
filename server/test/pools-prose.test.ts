@@ -88,3 +88,62 @@ describe('README: manual placement is not a blanket override (spec §11 row 52)'
       .toMatch(/pool-mismatch: /);
   });
 });
+
+/** Every symbol the generator actually writes into `accounts.sh`, read off its
+ *  own template rather than listed here — the same derivation discipline the
+ *  roster itself is under (`single-definition.test.ts`). */
+const emittedNames = (): string[] => {
+  const gen = read('shared/generate.mjs');
+  const names = [
+    ...[...gen.matchAll(/^(CCRC_[A-Z_]+)=/gm)].map((m) => m[1]!),
+    ...[...gen.matchAll(/^(_ccrc_[a-z_]+)\(\) \{/gm)].map((m) => m[1]!),
+  ];
+  expect(names.length, 'the accounts.sh template moved — this derivation is over nothing')
+    .toBeGreaterThan(6);
+  return names;
+};
+
+describe('README: the roster-side account facts (D-1686)', () => {
+  const entrySentence = (): string =>
+    flat(passage('README, the account-entry sentence', readme(),
+      'An account entry is', '**Getting the file onto a box.**'));
+
+  it('names EXACTLY the keys parseRoster accepts — derived from ACCOUNT_KEYS, not remembered', () => {
+    const m = /const ACCOUNT_KEYS: ReadonlySet<string> = new Set\(\s*\[([^\]]*)\]/
+      .exec(read('shared/roster.ts'));
+    expect(m, 'the ACCOUNT_KEYS literal moved — this derivation is over nothing').not.toBeNull();
+    const keys = [...m![1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+    expect(keys.length, 'the ACCOUNT_KEYS literal came out empty').toBeGreaterThan(5);
+    // The brace group, not the paragraph: `toContain('id')` would be satisfied
+    // by the word "considered", so a per-word scan here proves almost nothing.
+    const g = /An account entry is `\{([^}]*)\}`/.exec(entrySentence());
+    expect(g, "the account-entry sentence no longer opens with a `{…}` key list").not.toBeNull();
+    const listed = g![1]!.split(/,\s*/).map((k) => k.trim()).filter(Boolean);
+    expect([...listed].sort(),
+      'the README key list and ACCOUNT_KEYS disagree — one of them grew and the other did not')
+      .toEqual([...keys].sort());
+  });
+
+  it('names every symbol the generator emits into accounts.sh', () => {
+    const p = flat(passage('README, the projection paragraph', readme(),
+      '`accounts.sh` is a pure projection', 'Nothing hand-edits it'));
+    for (const n of emittedNames()) {
+      expect(p, `the projection paragraph never names \`${n}\``).toContain(n);
+    }
+  });
+
+  it('states which side of the roster digest each optional key falls on', () => {
+    const p = flat(passage('README, the two-boxes bullet', readme(),
+      'It compares the **projections**', '- **Limit telemetry is roster-driven too**'));
+    expect(p, 'the digest paragraph does not say where `pool` falls').toMatch(/`pool`/);
+    expect(p, 'the digest paragraph does not say where `hidden` falls').toMatch(/`hidden`/);
+    // Grounded, both ways round: the generator emits pools and emits nothing
+    // named for `hidden` — which is the entire content of the claim.
+    expect(emittedNames().filter((n) => /pool/i.test(n)),
+      'accounts.sh carries no pool emission — the README claim that pools are inside the digest is false')
+      .not.toEqual([]);
+    expect(emittedNames().filter((n) => /hidden/i.test(n)),
+      'accounts.sh now carries hidden — the README claim that it is outside the digest is false')
+      .toEqual([]);
+  });
+});
