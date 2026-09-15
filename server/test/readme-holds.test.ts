@@ -44,6 +44,15 @@ const holdsSection = (): string => {
   return readme.slice(start, end === -1 ? undefined : end);
 };
 
+// D-2745: this passage (the run-lifecycle list, steps 1-6) is pinned TWICE,
+// by two suites in two files with different slicers, and neither is
+// discoverable from the other. This file's own `lifecycleSection()` above
+// ('**Run lifecycle**' → '**The mail bus and its token.**', then this
+// describe's own '\n6. ' sub-slice on the crossing) pins the
+// operator-visible SENTENCES as literals. `server/test/crossrepo-prose.test.ts`'s
+// `lifecyclePassage()` ('**Run lifecycle**' → '\n**The mail bus') pins the
+// MECHANISM names (response fields, refusal codes, evidence tokens) over the
+// same region. An edit to this passage must be run against BOTH files.
 describe('README: run lifecycle ordering (D-2680)', () => {
   it('opens wave N+1 before it closes wave N, so the programme never retires between calls', () => {
     const section = lifecycleSection();
