@@ -6928,7 +6928,7 @@ Once #108 deploys, the two `bug-fix-waves` runs at `awaiting-review` stop counti
 
 ---
 
-## 2026-09-15 14:5x UTC — "why are we stalled?" — three stalls measured, two cleared, one is the operator's
+## 2026-09-15 14:2x UTC — "why are we stalled?" — three stalls measured, two cleared, one is the operator's
 
 The operator asked. Measured, not recalled:
 

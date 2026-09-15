@@ -96,7 +96,7 @@ sequence runs would be me creating the cap refusal I complained about two entrie
 Part D correction is on `main` AND the account-pools wave-5 handoff has taken its slot — in that
 order. The brief and its 25 items are unchanged and still measure inside both ceilings.
 
-## 2026-09-15 14:5x UTC — condition (b) is met; condition (a) goes to main as PR #113
+## 2026-09-15 14:2x UTC — condition (b) is met; condition (a) goes to main as PR #113
 
 The standing position above had two conditions. **(b) is met**: account-pools' wave 6 (run 47)
 dispatched 13:30 UTC into a freed slot; usage 6 of 7. **(a) was never going to happen by itself** —
