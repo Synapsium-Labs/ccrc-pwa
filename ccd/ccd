@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5407f6c13cc5a8dc9b61dc8f2e01d8c7c3fd91978906c826c25e7e44abcf8c0f
+# ccrc:generated 1 sha256=680e450d98b577dd7c6eff324186d181e23a5d82fc78e6942993a356ed7ed5c0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4699,10 +4699,17 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # home-able account also wins every tie. The server's `projectHome` ranks
   # ties by the same declaration order.
   #
-  # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
-  # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
-  # `untagged` by its own first guard, `_pool_ok` returns 0 for `untagged`, and
-  # every pre-existing caller — the parity harness included — is byte-identical.
+  # THE OPTIONAL POSITIONALS ARE THE PROJECT, THEN THE CLASS (account pools,
+  # spec §5.5.2; the class positional is routing slice 3, spec §5.4), and the
+  # zero-arg AND one-arg calls both keep today's meaning EXACTLY:
+  # `_project_pool_state ""` answers `untagged` by its own first guard,
+  # `_pool_ok` returns 0 for `untagged`, and every pre-existing caller — the
+  # parity harness included — is byte-identical. The class positional
+  # defaults to `""` (`local cls="${2:-}"` below); an absent class or an
+  # explicit `default` are the SAME no-op — the serviceability filter later
+  # in this function never runs — so every caller in this slice, which never
+  # passes a class, walks the identical bytes it walked before this second
+  # positional existed.
   #
   # THE STATE IS READ ONCE, before the loop, and the WORD is passed to each
   # candidate: a loop over five accounts costs one `cat`, not five.
@@ -4794,6 +4801,17 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # something a human did or must fix before work can land. A health verdict is
   # neither: it is a MEASUREMENT, it can be wrong, and letting it empty this
   # function would let one bad probe run wedge every `ws-add` on the box.
+  # THE SERVICEABILITY FILTER ABOVE IS NOT AN EXCEPTION TO THAT RULE, because
+  # it never turns a health measurement into a refusal: `_serviceable`
+  # returning 2 (unmeasured) does not `continue` — an unmeasured lane stays
+  # eligible and ranks by its own score, exactly like an unmeasured
+  # `_limit_score`. What the filter skips on rc 1 is a lane MEASURED at the
+  # requested CLASS's own share ceiling — a fact about the class, not about
+  # the lane's health — so a class that empties every in-pool lane is not
+  # "no destination", it is "not on this rung"; the caller's remedy is
+  # `classBelow` (degrade a rung and re-ask), never a repaired probe. The
+  # ordinary health tiers below (condemned included) are computed exactly as
+  # before and are untouched by this filter.
   # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
   # The server's `projectHome` (server/src/limits.ts) makes both calls the same
   # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
