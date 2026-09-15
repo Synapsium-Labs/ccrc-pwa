@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8a8467059c832dd020632fa2e962654eb3d6029852f1a4efec9d3f7a05fe42c5
+# ccrc:generated 1 sha256=5407f6c13cc5a8dc9b61dc8f2e01d8c7c3fd91978906c826c25e7e44abcf8c0f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4557,7 +4557,7 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
-_ws_least_loaded() {   # [project] -> the home-able account with the most headroom, or "" if none is placeable
+_ws_least_loaded() {   # [project] [class] -> the home-able account with the most headroom, or "" if none is placeable
   # UNKNOWN IS NOT ZERO. This used to read `[[ -z "$sc" ]] && sc=0`, so an
   # account _limit_score knows nothing about — no ~/.cc-limits/<w>.json at all —
   # scored 0 and beat every account that had honestly reported its pressure.
@@ -4726,12 +4726,23 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # does carry are things a human declared or must repair; a health verdict is a
   # measurement that can be wrong.
   local pps; pps=$(_project_pool_state "${1-}")
+  local cls="${2:-}"
   local best="" bs=1000 first="" firstm="" condemned="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
     # AFTER `_account_ok`, BEFORE EITHER FALLBACK: both must land on an IN-POOL
     # account, never on a cheaper-looking lane in another pool.
     _pool_ok "$w" "$pps" || continue
+    # POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), as a FILTER on
+    # eligibility like _pool_ok: a lane measured at the class's ceiling drops out
+    # here, before the condemned tier and before scoring; an UNMEASURED lane stays
+    # — unmeasured never becomes ineligible — and ranks by its own score. `default`
+    # (or no class) is today's walk byte for byte. projectHome (server/src/limits.ts)
+    # is the twin; projected-home.test.ts drives both over one fixture table.
+    if [[ -n "$cls" && "$cls" != default ]]; then
+      _serviceable "$w" "$cls" >/dev/null
+      [[ $? -eq 1 ]] && continue
+    fi
     # THE CONDEMNED TIER, AND THE SPLIT IS THE WHOLE GUARD. An auth-dead lane
     # must not be PREFERRED — it is a measurement that a credential no longer
     # authenticates — but it must stay ELIGIBLE, because that measurement can be

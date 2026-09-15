@@ -175,8 +175,13 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       );
       // The bash positional stays OPTIONAL: a case with no `project` calls
       // `_ws_least_loaded` with no argument, exactly as every pre-pool case
-      // always has.
-      const bashPick = (): string => sh(`_ws_least_loaded ${c.project?.name ?? ''}`);
+      // always has. `JSON.stringify` on the (possibly empty) project name is
+      // the shell-quoting that keeps an absent project as its OWN positional
+      // rather than collapsing into the class argument that follows it — an
+      // unquoted empty interpolation vanishes under bash word-splitting and
+      // would shift `$2` (the class) into `$1` (the project).
+      const bashPick = (): string =>
+        sh(`_ws_least_loaded ${JSON.stringify(c.project?.name ?? '')} ${c.cls ?? ''}`);
 
       if (c.expect === null) {
         // Nothing is placeable. The fixture can't express one shared "empty"
@@ -184,9 +189,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
         // this is the split expectation the runner promises: two assertions,
         // one per side, neither weakened.
         expect(projected, c.why).toBeNull();
-        // The class cases run TS-only in this task — Task 4 gives
-        // `_ws_least_loaded` its class argument and drops this guard.
-        if (!c.cls) expect(bashPick(), `ccd disagrees: ${c.why}`).toBe('');
+        expect(bashPick(), `ccd disagrees: ${c.why}`).toBe('');
         return;
       }
 
@@ -195,11 +198,8 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // 2. …and bash, the authority, picks the same account.
       // 3. …and scores it the same, so the headroom the user reads is the
       //    headroom the account really has.
-      // Both TS-only for the class cases in this task — see the guard above.
-      if (!c.cls) {
-        expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
-        expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
-      }
+      expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
+      expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
     },
   );
 });
