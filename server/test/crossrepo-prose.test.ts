@@ -82,7 +82,7 @@ describe('README: cross-repo programmes', () => {
     // `toContain('homeProject')` — the same call the bug was, relabelled. `routes.ts`
     // holds the token many times over (a comment at `:329`, live code at `:1155`, and
     // helpers), so any one of them alibied the destructure; and `crossSection()` names
-    // it three times over, so rewording the request-contract sentence alone left the
+    // it three further times, so rewording the request-contract sentence alone left the
     // suite green. Round 5's replacement was still file-wide while its message named
     // the open handler: adding the token to ANOTHER registration's destructure kept it
     // green. Both halves now pin the one construct they name, and the ROUTES half is
@@ -304,10 +304,10 @@ describe('README: the run lifecycle and programme mail', () => {
     const sameOpen = same.indexOf('same `sessionId`');
     const sameClose = same.indexOf('`final:false`');
     const sameClosed = same.indexOf('closed row');
-    // D-2740, fix round 6: `same.lastIndexOf('dispatch')` was the cross arm's defect
-    // in the other arm — four occurrences of the word here too, so a reword of the
-    // gate sentence left it green. Derived from the gate sentence itself, as the
-    // cross arm now is.
+    // D-2740, fix round 6: `same.lastIndexOf('dispatch')` pinned the WORD, not the
+    // gate — this arm holds `dispatch` exactly once, inside the gate sentence, so a
+    // reword that kept the word left it green. Derived from the gate sentence itself,
+    // as the cross arm now is.
     const sameDispatch = same.indexOf('Only then dispatch');
     for (const [marker, at] of [
       ['same `sessionId`', sameOpen], ['`final:false`', sameClose],

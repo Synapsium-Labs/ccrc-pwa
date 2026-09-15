@@ -109,10 +109,11 @@ beside it when the programme closes.
   (corrected, D-2753 — and corrected again in fix round 6: the second writer is `reconstruct`'s fresh-row
   `INSERT INTO runs (… sessionId …)`, NOT the open's insert, whose column list carries no `sessionId` at all;
   the open route binds through `setSession` → `bindSession`'s UPDATE, so `bindSession`'s uniqueness claim is
-  about RE-binding, exactly as its own docstring says). Stated
-  honestly in the spec: no route re-binds a live run today, so the worker arm is reached only by the
-  store test that drives it — the funnel exists so that the day a recovery re-binds a run, the promise
-  holds.
+  about RE-binding, exactly as its own docstring says). The spec's "no route re-binds a live run today" is
+  superseded by that same docstring ("MEASURED, NOT ASSUMED: a route DOES re-bind a live run today"): the open
+  route re-binds through `setSession` whenever the request names a `sessionId` and its hold succeeded, so the
+  worker arm is reached by a live path and not only by the store test — the funnel exists so that the day a
+  recovery re-binds a run, the promise holds.
 - **Dogfood pair (2026-09-08, operator):** custom-tools ↔ data-internal, the pair that was live traffic
   in August; not intake ↔ data-internal, whose dependency is still future.
 - **Two corrections from the plan's pre-read, folded into the spec before the plans were written:**
