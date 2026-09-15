@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6a674d4e421bca6cee4209f3d057bbb5e83fd906d620c8f0887e37920545099e
+# ccrc:generated 1 sha256=adb8d47d45175ff63facdf95b99910d7da069e9aac0e5f466909a81bdecb95c2
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -14302,7 +14302,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # unaffected.
   if [[ "$strc" -eq 6 ]]; then
     local icls ibelow; icls=$(_route_peek "$id" class); ibelow=$(_class_below "$icls")
-    if _route_degrade "$id" "$icls" "$ibelow" "unservable: $icls at or above the ceiling on every candidate lane"; then
+    if _route_degrade "$id" "$icls" "$ibelow" "unservable: $icls on every candidate lane"; then
       strc=0
     else
       echo "$(date '+%F %T') degrade-unwritable $id: $icls -> $ibelow (stamp not written; standing still)" >> "$REG/swap.log"
@@ -15402,16 +15402,48 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # the intended class) and write nothing — nobody degrades on a fabricated
     # fact. `_route_degrade`/`_route_restore` are the only writers and write
     # once: a second settle on the same lane says nothing twice.
-    local rdeg="" below srv
+    local rdeg="" below srv why
     if [[ -n "$rclass" && "$rclass" != default ]]; then
       rdeg=$(_route_get "$id" degraded)
-      _serviceable "$wrapper" "$rclass" >/dev/null; srv=$?
+      # A STANDING STAMP IS STALE THE MOMENT THE INTENDED CLASS MOVES (ruling
+      # S3-R7). `cmd_route` refuses to write `degraded` directly, but nothing
+      # clears it when an operator reroutes `class`, so a stamp measured
+      # against the OLD intended class can outlive it: after fable->degraded
+      # opus->reroute to `class haiku`, the next settle on an UNMEASURED lane
+      # would otherwise compose `--model opus` — a rung ABOVE the class just
+      # asked for, from a measurement about a class nobody intends anymore.
+      # The check is against the record's own shape (a stamp that is not one
+      # rung below the CURRENT `rclass` cannot have been measured for it), not
+      # a guess, so it is itself a measurement rather than a fabricated fact.
+      if [[ -n "$rdeg" && "$rdeg" != "$(_class_below "$rclass")" ]]; then
+        _route_restore "$id" "$rdeg" "$rclass" "stale: the intended class is now $rclass"
+        rdeg=""
+      fi
+      # THE WORD, NOT JUST THE RC (ruling S3-R6). `_serviceable`'s rc 1 has TWO
+      # causes — the figure at the ceiling, or `backend` (fable on a
+      # non-Anthropic lane) — and its stdout already names which; discarding it
+      # would let a `class fable` session on a codex lane journal a permanent
+      # route row asserting a ceiling figure nobody read. `local why` is
+      # declared above, on its own line, so this bare assignment's `$?` is
+      # `_serviceable`'s own rc, not `local`'s.
+      why=$(_serviceable "$wrapper" "$rclass"); srv=$?
       case "$srv" in
         0) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
         1) below=$(_class_below "$rclass")
            if [[ -n "$below" ]]; then
-             _route_degrade "$id" "$rclass" "$below" "unservable: $rclass at or above the ceiling on $wrapper at settle"
-             rdeg="$below"
+             # THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R7, mirroring
+             # `_auto_swap_check`'s rc-6 arm). Unlike a tick, a settle cannot
+             # stand still — it must compose SOMETHING for the spawn about to
+             # happen — so on an unwritable stamp it composes the INTENDED
+             # class (the record, unable to say otherwise, is the arbiter) and
+             # says so in one swap.log line; the next settle re-measures and
+             # retries.
+             if _route_degrade "$id" "$rclass" "$below" "unservable ($why): $rclass on $wrapper at settle"; then
+               rdeg="$below"
+             else
+               echo "$(date '+%F %T') degrade-unwritable $id: $rclass -> $below at settle on $wrapper (stamp not written; composing $rclass)" >> "$REG/swap.log"
+               rdeg=""
+             fi
            fi ;;
       esac
       [[ -n "$rdeg" ]] && rclass="$rdeg"

@@ -11,7 +11,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
-import { eventsOf } from './lifecycleHelpers.js';
+import { eventsOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-route-degrade-'); });
@@ -61,6 +61,13 @@ const sweep = (estimates: Record<string, number | null>, ageS = 1): void => {
   fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({ finishedAt,
     perAccount: Object.fromEntries(Object.entries(estimates).map(([a, e]) => [a, { fableShare: { estimate: e } }])) }));
 };
+const swapLog = (): string => fs.readFileSync(path.join(h.home, '.cc-sessions', 'swap.log'), 'utf8');
+// `makeCcdHarness` stubs the roster's home-able ids only (`ccd-auto-swap-pool.test.ts`'s
+// `install()`, copied): `gpt` (the roster's non-Anthropic, non-home-able lane) needs its own
+// binary planted before a case can spawn on it.
+const install = (w: string): void => {
+  fs.writeFileSync(path.join(h.home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
+};
 
 describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragraph, §5.1 degraded)', () => {
   const expectModel = (line: string, model: string | null): void => {
@@ -75,6 +82,43 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
     expect(h.reg('myid', 'degraded')).toBe('opus');
     const rows = eventsOf(h.home, 'route'); expect(rows).toHaveLength(1);
     expect(String(rows[0]!['detail'])).toBe('degraded: ∅ -> opus');
+    expect(decOf(rows[0]!)).toMatchObject({ actor: 'ccd' });
+  });
+
+  it('class fable on a NON-Anthropic wrapper: unservable by BACKEND, not by a fabricated ceiling — --model opus, degraded=opus, dec.reason names backend', () => {
+    // Ruling S3-R6: `_serviceable`'s rc 1 has two causes and the settle used to
+    // discard which one — a `class fable` session on a codex lane journalled a
+    // permanent route row asserting a ceiling figure nobody read. `gpt` is the
+    // test roster's non-Anthropic lane (`DEFAULT_TEST_ROSTER`, telemetry: 'none'),
+    // not home-able, so it needs its own binary installed.
+    install('gpt');
+    seed('myid', 'gpt'); h.sh('_reg_set myid class fable');
+    const [p] = spawnBoth('myid');
+    expectModel(p, 'opus');
+    expect(h.reg('myid', 'degraded')).toBe('opus');
+    const rows = eventsOf(h.home, 'route'); expect(rows).toHaveLength(1);
+    const reason = String(decOf(rows[0]!)['reason']);
+    expect(reason).toContain('backend');
+    expect(reason).not.toContain('ceiling');
+  });
+
+  it('a degrade stamp that cannot be WRITTEN at settle: composes the INTENDED class, no stamp, no route row, one swap.log line', () => {
+    // Ruling S3-R7. `_route_degrade` returns 1 when its `_reg_set` fails
+    // (before the journal row and the swap.log line), and the settle used to
+    // set `rdeg="$below"` unconditionally — the spawn composed `--model opus`
+    // with no stamp, no row and no log line. The failure is planted the way
+    // `_reg_set` can actually fail (`ccd-swap-target-class.test.ts`'s
+    // degrade-unwritable case): a DIRECTORY at the field's own path, so
+    // `_reg_get`'s `-f` guard reads the standing value as absent too.
+    seed('myid'); h.sh('_reg_set myid class fable'); sweep({ claude: 0.5 });
+    const stamp = path.join(h.home, '.cc-sessions', 'myid.degraded');
+    fs.mkdirSync(stamp);
+    const [p] = spawnBoth('myid');
+    expectModel(p, 'fable');
+    expect(fs.statSync(stamp).isDirectory(), 'nothing was written over the unwritable field').toBe(true);
+    expect(eventsOf(h.home, 'route')).toHaveLength(0);
+    expect(swapLog()).toContain(
+      'degrade-unwritable myid: fable -> opus at settle on claude (stamp not written; composing fable)');
   });
 
   it('a standing degraded=opus on a lane that can serve fable again: --model fable, the stamp cleared, a restore row', () => {
@@ -100,6 +144,22 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
     expect(h.reg('myid', 'degraded')).toBeNull();
   });
 
+  it('a standing degraded=opus STALE against a NEW intended class (rerouted to haiku), lane UNMEASURED: the stamp is cleared, --model haiku, a restore row whose reason starts stale:', () => {
+    // Ruling S3-R7. Nothing clears `degraded` when `class` changes (`cmd_route`
+    // refuses the field), so a stamp measured for the OLD intended class
+    // (fable -> opus) can outlive a reroute to `class haiku` — one rung ABOVE
+    // haiku, from a measurement about a class nobody intends anymore. No
+    // limits/sweep file: the lane is UNMEASURED at haiku, so absent the stale
+    // check this settle would compose the stale `opus` stamp unchanged.
+    seed('myid'); h.sh('_reg_set myid class haiku; _reg_set myid degraded opus');
+    const [p] = spawnBoth('myid');
+    expectModel(p, 'haiku');
+    expect(h.reg('myid', 'degraded')).toBeNull();
+    const rows = eventsOf(h.home, 'route'); expect(rows).toHaveLength(1);
+    expect(String(rows[0]!['detail'])).toBe('degraded: opus -> ∅');
+    expect(String(decOf(rows[0]!)['reason'])).toMatch(/^stale:/);
+  });
+
   it('class opus on a lane whose seven-day figure is at the ceiling: --model sonnet, degraded=sonnet', () => {
     seed('myid'); h.sh('_reg_set myid class opus'); limits('claude', 10, 98);
     const [p] = spawnBoth('myid');
@@ -110,6 +170,7 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
     seed('myid'); h.sh('_reg_set myid class sonnet; _reg_set myid effort high'); limits('claude', 10, 98);
     const [p] = spawnBoth('myid');
     expectModel(p, 'haiku'); expect(p).not.toContain('--effort');
+    expect(swapLog()).toContain('class haiku takes no effort level — the effort field is ignored');
   });
 
   it('the same stamp twice writes one row: a second settle on the same unservable lane is silent', () => {
@@ -119,10 +180,22 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
     expect(eventsOf(h.home, 'route')).toHaveLength(1);
   });
 
-  it('class default and no record: byte-identical to today, nothing read, nothing stamped', () => {
+  it('no record at all: byte-identical to today, nothing read, nothing stamped', () => {
     seed('myid'); sweep({ claude: 0.9 }); limits('claude', 99, 99);
     const [p, r] = spawnBoth('myid');
     expect(p).toBe(today(`--resume '${UUID}'`)); expect(r).toBe(today(`--session-id '${UUID}'`));
     expect(h.reg('myid', 'degraded')).toBeNull();
+  });
+
+  it('class default, explicitly recorded: the same rc-3 short-circuit, byte-identical to today', () => {
+    // `_route_any` sees a routing field (the `class` file itself exists, unlike
+    // the "no record at all" case above, which has none), so this exercises the
+    // OTHER half of `_serviceable`'s rc-3 skip: a real record whose value is
+    // literally `default`, not the absence of a record.
+    seed('myid'); h.sh('_reg_set myid class default'); sweep({ claude: 0.9 }); limits('claude', 99, 99);
+    const [p, r] = spawnBoth('myid');
+    expect(p).toBe(today(`--resume '${UUID}'`)); expect(r).toBe(today(`--session-id '${UUID}'`));
+    expect(h.reg('myid', 'degraded')).toBeNull();
+    expect(eventsOf(h.home, 'route')).toHaveLength(0);
   });
 });
