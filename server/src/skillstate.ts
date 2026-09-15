@@ -40,7 +40,7 @@ export const WORKER_SKILL_DIR = 'ccrc-worker';
  * "SKILL.md is readable" is WIDER than the installer's own definition of
  * installed — a home whose refs were deleted reads `present` here. The
  * narrower read is chosen on cost (each ref would be another agent round trip
- * per home in remote fleet mode, five on top of two) and because the
+ * per home in remote fleet mode, seven on top of two) and because the
  * ref-level verdict belongs to the doctor lane, not this one. `skillPath`
  * takes the dir as a parameter precisely so a caller that needs the wider
  * answer can have it without a second join.
