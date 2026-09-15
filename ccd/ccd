@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fbc8ee259f4e8016a4e929f42268b893fa8bd37bca2825308f5aff8d45753c5f
+# ccrc:generated 1 sha256=8a8467059c832dd020632fa2e962654eb3d6029852f1a4efec9d3f7a05fe42c5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -900,6 +900,11 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+FABLE_SHARE_CEILING_PCT=40      # routing spec §5.4: the Fable share (percent of PRICED weekly usage, the sweep's
+                                # estimate — a proxy) at which a lane stops taking Fable-class sessions. The TWIN of
+                                # shared/serviceability.ts's FABLE_SHARE_CEILING_PCT; ccd-serviceable.test.ts pins
+                                # them equal. 40 until the operator sets it from measured share.
+SHARE_FRESH_S=28800             # a sweep pass older than this (two 4-hourly passes) measures nothing: unmeasured. Twin.
 SWAP_JITTER=120                 # max seconds of random delay before a dispatched swap actually runs.
                                 # The supervise tick evaluates EVERY session in one pass, so a
                                 # fleet-wide condition (a limit window rolling over, a spend cap
@@ -13066,6 +13071,73 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
   printf '%s' "$val"
 }
 _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
+
+_class_below() {   # class -> stdout the class one rung DOWN (fable->opus->sonnet->haiku->nothing); nothing for haiku or an unknown word
+  # DERIVED from ROUTE_CLASSES (descending), never a fourth spelling of the four names: one rung down is the NEXT word.
+  # shared/serviceability.ts's classBelow walks CLASSES (ascending) to the same answers; ccd-serviceable.test.ts pins them.
+  local prev="" x
+  for x in ${ROUTE_CLASSES% default}; do
+    [[ "$prev" == "$1" ]] && { printf '%s' "$x"; return 0; }
+    prev="$x"
+  done
+  return 0
+}
+
+_share_pct() {   # wrapper -> stdout the sweep's Fable share for that account as an INTEGER percent; rc 0 figure | 1 no figure | 2 stale
+  # The sweep (ccd-usage-sweep) writes $REG/usage/sweep/latest.json: `perAccount.<id>.fableShare.estimate` is a FRACTION of
+  # the account's PRICED weekly usage (or null), `finishedAt` is %Y-%m-%dT%H:%M:%SZ. Nested JSON, so python3 (ccd's
+  # existing JSON tool, forty-one sites) rather than the flat-file grep `_limit_json_num` uses. floor(x*100+0.5), NOT
+  # Python's round(): that is banker's rounding and the TypeScript twin (server/src/shares.ts) would disagree at .5.
+  local f="$REG/usage/sweep/latest.json"
+  [[ -r "$f" ]] || return 1
+  LC_ALL=C.UTF-8 python3 - "$f" "$1" "$SHARE_FRESH_S" <<'PY'
+import calendar, json, sys, time
+f, acct, fresh = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    d = json.load(open(f))
+    at = calendar.timegm(time.strptime(d["finishedAt"], "%Y-%m-%dT%H:%M:%SZ"))
+    est = d["perAccount"][acct]["fableShare"]["estimate"]
+except Exception:
+    sys.exit(1)
+if not isinstance(est, (int, float)) or isinstance(est, bool):
+    sys.exit(1)
+if int(time.time()) - at > fresh:
+    sys.exit(2)
+print(int(est * 100 + 0.5))
+PY
+}
+
+_serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasured | 3 skipped (class default/empty); stdout: the figure (0, or 1 at the ceiling), `backend` (1, fable on a non-Anthropic lane), `no-figure`/`stale` (2)
+  # Routing spec §5.4, the bash twin of shared/serviceability.ts's serviceability(); one fixture table drives both
+  # (server/test/fixtures/serviceability.ts). THREE ANSWERS, NEVER TWO: an absent file, an absent row, a null estimate
+  # and a stale pass are all `unmeasured` — never servable (a fabricated fact) and never unservable (a fabricated
+  # refusal). `fable` on a lane whose backend is not Anthropic is unservable by the ROSTER's own word, before any
+  # figure is read — a codex lane's share estimate is 0 and reading that as "servable" would place Fable where there
+  # is none. Other classes read the lane's seven-day figure through _limit_field, which already retracts a rolled-over
+  # window, against SWAP_CEILING — the same test _avail makes, so a candidate _avail admits is servable for them.
+  local w="$1" c="${2:-}" fig rc
+  [[ -z "$c" || "$c" == default ]] && return 3
+  if [[ "$c" == fable ]]; then
+    _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
+    fig=$(_share_pct "$w"); rc=$?
+    case "$rc" in 1) printf 'no-figure'; return 2 ;; 2) printf 'stale'; return 2 ;; esac
+    printf '%s' "$fig"
+    [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && return 1
+    return 0
+  fi
+  fig=$(_limit_field "$w" seven)
+  [[ -z "$fig" ]] && { printf 'no-figure'; return 2; }
+  printf '%s' "$fig"
+  [[ "$fig" -ge "$SWAP_CEILING" ]] && return 1
+  return 0
+}
+
+_svc_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured
+  # The shape every decision site needs: `skipped` folds into 0 because a session with no class has nothing to gate on.
+  [[ -z "${2:-}" || "$2" == default ]] && return 0
+  _serviceable "$1" "$2" >/dev/null
+  case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
 
 _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
   # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
