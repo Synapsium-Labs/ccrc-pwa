@@ -3719,6 +3719,58 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(readSet().nonce, 'a real one').toMatch(/^compact-/);
   });
 
+  // ── r4 A-M1: the refusal at the card claim owns its own placeholder ─────
+  // SAME DEVICE, DIFFERENT SITE. Compact SessionStart's retained-lock body
+  // forks exactly one child between its acquire and the claim — the age `find`
+  // — so a `find` stub lands the replacement in the window the code itself
+  // opens, and the proof that refuses is the one guarding `mv -f "$f"
+  // "$claim"`, AFTER the no-clobber placeholder has already been created. That
+  // refusal used to return without removing it, and the leaked zero-byte file
+  // is not inert: it matches `_ws_private_family`'s `compactcard.*` arm, which
+  // is what `_ws_slug_free` reads.
+  /** A young, well-formed card+set pair, exactly as PreCompact leaves them —
+   *  planted rather than run, because this leg's subject is the SessionStart
+   *  body and a real PreCompact would fork `find` of its own and spend the
+   *  stub's one replacement before this arm ever started. */
+  const plantServablePair = (): string => {
+    const nonce = `compact-${Date.now()}-4242-31-7`;
+    fs.writeFileSync(setFile(), `${JSON.stringify({ v: 1, at: Date.now(), nonce, scope: 'main',
+      overlap: false, agent: null, transcript: '/t.jsonl', parentLive: null, liveAgents: 0,
+      cwd: null, built: null, fresh: null, steered: false, files: null, stats: null })}\n`);
+    fs.writeFileSync(cardFile(), `${nonce}\ngraphify card — a young servable pair\n`);
+    return nonce;
+  };
+  /** Every `.<id>.compactcard.<pid>.<nonce>.session-claim.tmp` on disk — the
+   *  §3.4 target family the placeholder is named into. */
+  const claimResidue = (): string[] => fs.readdirSync(path.join(home, '.cc-sessions'))
+    .filter((n) => /^\.demo-quiet-basin\.compactcard\..+\.session-claim\.tmp$/.test(n));
+
+  it('ITEM 3 AT THE CARD CLAIM: the refusal removes the placeholder it just created (r4 A-M1)', () => {
+    const tree = cardTree();
+    plantServablePair();
+    strangerFind(true);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'the arm refused, so nothing is served').not.toContain('graphify card —');
+    // THE FINDING ITSELF. Without the `rm` this is one zero-byte file, and it
+    // reads the slug NOT FREE until an aged sweep reclaims it.
+    expect(claimResidue(), 'the refusal took its own placeholder with it').toEqual([]);
+    expect(fs.existsSync(cardFile()), 'and canonical never moved — the claim lost its `mv`').toBe(true);
+  });
+
+  it('ITEM 3 AT THE CARD CLAIM, THE CONTROL: the same stub and the same fork WITHOUT the replacement serve, and leave nothing either', () => {
+    const tree = cardTree();
+    plantServablePair();
+    strangerFind(false);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    // Without this leg the assertions above are satisfied by a stub that broke
+    // `find` outright, which is a different test.
+    expect(r.stdout, 'the ordinary path still serves the card').toContain('graphify card —');
+    expect(claimResidue(), 'a consumed claim leaves no residue on the serving path either').toEqual([]);
+    expect(fs.existsSync(cardFile()), 'and the card is consumed').toBe(false);
+  });
+
   // — and the SOURCE pin for the sites one fixture cannot reach ————————————
   // The fixture above drives ONE site, because a stub can only inject where
   // the section it targets actually forks. The rule item 3 states is about

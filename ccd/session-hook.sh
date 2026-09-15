@@ -1886,7 +1886,19 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   ( set -C; : > "$claim" ) 2>/dev/null || return 0
   # ITEM 3 again: `find` and the nonce read sit between the proof above and
   # this one, and this is where canonical actually moves.
-  _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+  #
+  # AND THE REFUSAL TAKES ITS OWN PLACEHOLDER WITH IT (r4 A-M1). The line above
+  # creates `$claim`; a bare `return 0` here left a zero-byte file behind, and
+  # it is not inert residue: the name matches `_ws_private_family`'s
+  # `compactcard.*` arm, so `_ws_slug_free` reads the slug NOT FREE and
+  # `ccd ws-add` refuses to re-hand it until an aged sweep under a later lock
+  # reclaims it (bounded by COMPACT_CARD_MAX_AGE, so a delay rather than a
+  # wedge). This was the ONE refusal past the placeholder that left its own
+  # artifact: the losing `mv`, the crossed nonce and the body-less card below
+  # all remove it already, and §3.4's table gives this family
+  # "restore/remove under retained stable lock" as its cleanup — and the lock
+  # IS still held here.
+  _hook_lock_still_canonical "$HOOK_LOCK_FD" || { { rm -f "$claim"; } 2>/dev/null || true; return 0; }
   if ! { mv -f "$f" "$claim"; } 2>/dev/null; then
     { rm -f "$claim"; } 2>/dev/null || true
     return 0
