@@ -2756,7 +2756,12 @@ confident UI over stale data. A server+PWA-only change has no such constraint.
 unattended, and `ccd caps` has advertised the verb since long before it took
 flags — so a server deployed ahead of its ccd sees the verb gate pass and the
 call fail. One attempt per workspace, absorbed by the lane's retry guard, and
-zero if the agent ships first.
+zero if the agent ships first. Account pools are the same rule with a *visible*
+transient: between the two lanes the boxes' rosters differ, so
+`GET /api/fleet/health` reports `roster: 'divergent'` and the PWA raises its
+amber banner until the server lane runs. That is expected, not a fault — the
+agent lane prints the same sentence as it goes — and the second deploy clears
+it.
 
 **Restore** (manual, from the target box — pick the `<ts>` to roll back to):
 

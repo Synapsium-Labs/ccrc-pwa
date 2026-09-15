@@ -505,6 +505,11 @@ if [ "$TARGET" = "agent" ]; then
   node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$ACCOUNTS_SH" \
     || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); refusing to ship a ccd that cannot read it" >&2; exit 1; }
   echo "roster fingerprint on $BOX: $(roster_fp "$ACCOUNTS_SH")"
+  # The banner this lane is about to raise, said out loud so it is not reported
+  # as a fault. `rosterAgreement` compares the two boxes' GENERATED accounts.sh,
+  # so any roster change — an account, a pool — makes the two disagree from the
+  # moment this lane lands until the server lane ships the same roster.
+  echo "  until the server lane runs with this roster, /api/fleet/health reports roster: divergent and the PWA shows the amber banner — expected between the two lanes; 'bash deploy/deploy.sh' clears it"
   # ── THE SECOND SEED-ONCE FACT, AND WHY IT HAS TO BE HERE ─────────────────
   # `~/.ccrc/remote-control` is what the ccd installed further down asks, on
   # EVERY spawn, to decide whether a session comes up with `--remote-control`

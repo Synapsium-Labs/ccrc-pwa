@@ -378,3 +378,25 @@ describe('ccd: accounts.sh carries telemetry and the consumer LANDED (D-1688)', 
       .toMatch(/_account_measured\(\) \{/);
   });
 });
+
+describe('deploy.sh + README: the divergent banner between the two lanes is EXPECTED', () => {
+  it('the agent lane prints the note beside the fingerprint it explains', () => {
+    const lane = passage('deploy.sh, the agent lane roster block', read('deploy/deploy.sh'),
+      'if [ "$TARGET" = "agent" ]; then', 'THE SECOND SEED-ONCE FACT');
+    expect(lane, 'the fingerprint line moved out of the agent lane').toMatch(/roster fingerprint on \$BOX/);
+    expect(lane, 'the agent lane never mentions the divergence its own run produces')
+      .toMatch(/divergent/);
+    // It names the remedy — the OTHER lane — so the note is actionable rather
+    // than merely reassuring.
+    expect(lane, 'the note does not name the second lane that clears it')
+      .toMatch(/deploy\/deploy\.sh/);
+  });
+
+  it('README says the same thing where it states the ordering rule', () => {
+    const p = passage('README, the deploy ordering paragraph', readme(),
+      '**Ordering between the two targets.**', '**Restore** (manual, from the target box');
+    expect(p, 'the ordering paragraph does not mention pools').toMatch(/pool/i);
+    expect(p, 'the ordering paragraph does not name the transient the two lanes produce')
+      .toMatch(/divergent/);
+  });
+});
