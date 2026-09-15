@@ -3273,58 +3273,230 @@ git commit -m "feat(hook): close compaction ownership, generation and journal fe
 
 ### Task 10: Ship the helper beside the hook — every door the hook goes through (spec §2 Runtime, §5 Installer)
 
+**AMENDED from the completed preflight at Task 9's final tip `99017a13`.** This section was frozen
+byte-for-byte through every D-2605 documentation round so that no correction writer could touch it;
+the freeze is lifted for this one edit and closes again with the new byte count and SHA recorded in Task 11's
+audit. Every constraint the frozen text carried is kept except the three the measurements below overturned,
+and those three are D-2845, D-2846 and D-2847 in `## Deviations found`.
+
+**What Task 9 left to ship.** Measured, not remembered — `git diff --name-only 8e457995..99017a13`, non-test
+and non-doc: `ccd/ccd`, `ccd/compact-card.d.mts`, `ccd/compact-card.mjs`, `ccd/session-hook.sh`,
+`shared/api.ts`, `server/src/coord/journalparse.ts`. Of those six exactly ONE has no door on any lane:
+`ccd/compact-card.mjs`. `ccd/ccd` and `ccd/session-hook.sh` already ride the agent lane and `ccrc install`
+unchanged; `ccd/compact-card.d.mts` is a declaration file that must NOT ship; `shared/api.ts` and
+`server/src/coord/journalparse.ts` are the server lane's, and the paragraph after **Interfaces** is the
+measurement that says the agent lane may go first anyway.
+
 **Files:**
-- Modify: `deploy/deploy.sh` (the backup line list and the agent-lane `install_atomic` block), `ccd/ccrc` (`_inst_files`, its summary `echo`, the `_upd_backup_copy` list)
-- Modify: `server/test/installTreeFixture.ts` (`TREE_FILES` — the fixture tree `ccrc install` is run against; `_inst_atomic` DIES on a source the tree does not carry, so without this entry every `ccrc-install*.test.ts` run is red)
-- Modify: `server/test/ccrc-install.test.ts` (the modes `cases` array and the idempotence `targets` list)
-- Create: `server/test/compact-card-ship.test.ts`
+- Modify: `deploy/deploy.sh` — the agent lane's pre-install backup chain (one clause beside the hook's at
+  `deploy/deploy.sh:560`, `cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh`), and one
+  `install_atomic` call in the agent branch, placed immediately BEFORE
+  `install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755` (`deploy/deploy.sh:629`).
+- Modify: `ccd/ccrc` — `_inst_files` (one `_inst_atomic`, before
+  `_inst_atomic "$tree/ccd/session-hook.sh" "$HOME/.cc-sessions/session-hook.sh" 755` at `ccd/ccrc:5217`) and
+  its summary `echo`; the `_upd_backup_copy` list beside
+  `_upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh` (`ccd/ccrc:6531`); and
+  `_uninst_cc_sessions`' `rm -f` list, whose own header states that the list IS `_inst_files` +
+  `_inst_skills`' "install set, exactly" (`ccd/ccrc:7129-7130`) — so an addition to `_inst_files` with no
+  removal beside it does not merely leak a file, it falsifies a shipped sentence (D-2845).
+- Modify: `server/test/installTreeFixture.ts` (`TREE_FILES` — the fixture tree `ccrc install` is run against;
+  `_inst_atomic` DIES on a source the tree does not carry, so without this entry every `ccrc-install*.test.ts`
+  run is red for a fixture reason rather than a real one).
+- Modify: `server/test/ccrc-install.test.ts` (the modes `cases` array and the idempotence `targets` list).
+- Modify: `server/test/ccrc-uninstall.test.ts` (`plantInstalledBox`'s `~/.cc-sessions` plant, and the removal
+  list of `~/.cc-sessions: ccrc's own artifacts go file-by-file`).
+- Modify: `agent/test/deploy-verify.test.ts` (the direct-scp ban set and the `install_atomic` call set).
+- Create: `server/test/compact-card-ship.test.ts`.
+- NOT modified, each for a measurement rather than a preference (D-2846):
+  - `deploy/build-release.sh` and `server/test/build-release.test.ts`. The release tarball's pathspec names a
+    DIRECTORY — `install.sh shared ccd deploy` (`deploy/build-release.sh:103-104`) — so the helper rides it the
+    day it is committed, with no edit here. Step 1 pins that pathspec rather than trusting it, and the failure
+    mode if it were ever narrowed is LOUD, not silent: `_inst_atomic` dies naming the missing source.
+  - `ccd/compact-card.d.mts`. Hand-written "types for the vitest import of compact-card.mjs"
+    (`ccd/compact-card.d.mts:1-2`) — nothing at run time opens it, `node` does not read it, and installing it
+    would put an unrunnable artifact into `~/.cc-sessions` that `_uninst_cc_sessions` would then have to carry.
+    Step 1 asserts that NO installer line on either door mentions it.
+  - `ccd/ccd`. Task 9's 1,162 added lines ride the agent lane's existing
+    `install_atomic ccd/ccd .local/bin/ccd 755` and `ccrc install`'s existing `_inst_atomic` of the same file.
+    No new line, and the deploy's build stamp is unchanged.
+  - `server/src/coord/*` and `shared/api.ts`. Server lane; see below.
+  - Any `CLAUDE.md` at any level, and `graphify update` on either lane. ccrc writes only ccrc-owned artifacts —
+    the session hook, this helper, the skills, the hookstate and the venv — and that ruling is not relaxed by a
+    task whose whole subject is installers.
 
 **Interfaces:**
-- Produces: `~/.cc-sessions/compact-card.mjs` at mode 0644 on every box the hook reaches — `deploy.sh`'s agent lane, `ccrc install`, `ccrc update` (with a backup in the same set as the hook's).
+- Consumes: `COMPACT_HELPER`, the hook's own single assignment
+  (`ccd/session-hook.sh:2231`, `COMPACT_HELPER="$HOME/.cc-sessions/compact-card.mjs"`). It is the ONE source
+  of truth for where the helper lives; every destination below is derived from it by the test rather than
+  restated, so a hook that moves the helper and an installer that does not is red in both directions.
+- Consumes: the hook's two guards for it, each an `[ -f "$COMPACT_HELPER" ]` test whose failure returns zero
+  in silence — PreCompact's at `ccd/session-hook.sh:1301` guards the `card` call, PostCompact's at
+  `ccd/session-hook.sh:1448` guards both `measure` calls. They are silent and TOTAL: on a box the hook reaches
+  and the helper does not, every compaction publishes no set, serves no card and journals no measurement, and
+  nothing anywhere says so. That silence is the whole reason this task exists as a task.
+- Produces: `~/.cc-sessions/compact-card.mjs` at mode 0644 on every box the hook reaches — `deploy.sh`'s agent
+  lane, `ccrc install`, `ccrc update` (with a backup in the same set as the hook's), and removed by
+  `ccrc uninstall` in the same file-by-file sweep that removes the hook.
+
+**Which lane ships what, and why AGENT-FIRST is safe here.** Measured on `99017a13`.
+
+- `ccd/compact-card.mjs`, `ccd/session-hook.sh` and `ccd/ccd` are AGENT-lane artifacts: they land on the fleet
+  host, through `install_atomic` from `deploy.sh agent <host>` or through `_inst_atomic` from `ccrc install`
+  run on that box. `server/src/coord/journalparse.ts` is SERVER-lane source and reaches no fleet host at all —
+  the agent lane's rsync source list is `agent shared deploy ccd` and carries no `server` directory.
+  `shared/api.ts` is rsynced by BOTH lanes (both lists carry `shared`) and is compiled into `server/dist` on
+  the server and into `agent/dist` on the fleet host, where nothing imports it: `agent/src` imports only
+  `shared/agent-protocol.js`, `shared/buildinfo.js` and `shared/mark.mjs`.
+- So an agent-first deploy of this branch puts a `ccd` that emits Task 9's two additions in front of a server
+  that has not been updated yet. Both additions are tolerated, measured by reading the readers:
+  - **The `unremoved` key.** `reviveMeas` builds a literal from the keys it names and performs no
+    unknown-key check; the file's own docstring states the invariant — any key a future ccd emits that is not
+    one of the modelled set "still never reaches `meas` — it is still recoverable only from `raw`, verbatim".
+    An older server therefore stores the row whole and simply does not surface that one field. Additive,
+    absence-permits, one reader per field.
+  - **The three new `LcRefusalToken` members.** The journal parser reads the token as an unconstrained string
+    (`server/src/coord/journalparse.ts:283`, `refusal: s(o, 'refusal')`), the column is a bare `TEXT` with no
+    CHECK, and the vocabulary is consulted only at render, through
+    `shared/api.ts:5644` — `return isLcRefusalToken(token) ? LC_REFUSAL_WORD[token] : null;` — whose `null` the
+    console already composes as "render the token as itself". An older console shows
+    `purge-incomplete` instead of its sentence: degraded, never lost, and that fallback is a designed
+    condition in the renderer rather than an accident.
+- **Therefore the agent lane may ship first and must**, which is the rule for anything touching `ccd/` or
+  `session-hook.sh` anyway. The server lane's final gate is unchanged: `/health` reporting the shipped sha.
+- **Task 10 performs NO deployment.** It makes deployment correct and testable. The act itself is the
+  operator's, after merge, and is what the `## Deploy` section below describes.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```ts
 // server/test/compact-card-ship.test.ts
 // The compaction card's helper reaches a box the same way the hook does, and
-// this file is why that stays true: the hook's PreCompact guard (`[ -f
-// "$COMPACT_HELPER" ]`) fails SILENTLY, so a helper shipped through one door
-// and not the other is a fleet where half the boxes never write a card and
-// nothing says so.
+// this file is why that stays true. The hook's two guards for it —
+// `[ -f "$COMPACT_HELPER" ] || return 0`, once in PreCompact and once in
+// PostCompact — are silent and total, so a helper shipped through one door and
+// not another is a fleet of boxes that publish no set, serve no card and
+// journal no measurement, with nothing anywhere saying so.
+//
+// THE PATH IS DERIVED FROM THE HOOK, NEVER RESTATED. Every destination below is
+// built from `COMPACT_HELPER`'s own assignment in `ccd/session-hook.sh`, so the
+// divergence class this file exists for — the hook looking in one place and an
+// installer writing to another — reds in BOTH directions, rather than only when
+// someone remembers to edit three literals in step.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import fs from 'node:fs';
 import path from 'node:path';
 
-const deploy = (): string => readFileSync(path.resolve(__dirname, '../../deploy/deploy.sh'), 'utf8');
-const ccrc = (): string => readFileSync(path.resolve(__dirname, '../../ccd/ccrc'), 'utf8');
+const REPO = path.join(import.meta.dirname, '..', '..');
+const read = (rel: string): string => fs.readFileSync(path.join(REPO, rel), 'utf8');
+
+/** Executable lines only. `deploy.sh` and `ccrc` both discuss their own helpers
+ *  by name in prose, and a scrape that counted comments would "prove" an
+ *  ordering the shell never runs — `ccrc-api-ship.test.ts`'s rule, and its
+ *  reason, applied to two files. */
 const code = (src: string): string[] =>
   src.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
 
+/** `COMPACT_HELPER` as the hook spells it: `$HOME/…`. */
+const helperAbs = (): string => {
+  const m = /^COMPACT_HELPER="([^"]+)"$/m.exec(read('ccd/session-hook.sh'));
+  expect(m, 'the hook still assigns COMPACT_HELPER exactly once, at top level').toBeTruthy();
+  return m![1]!;
+};
+/** The same path as `install_atomic` spells a destination: HOME-relative. */
+const helperRel = (): string => {
+  const abs = helperAbs();
+  expect(abs.startsWith('$HOME/'), `COMPACT_HELPER is not under $HOME: ${abs}`).toBe(true);
+  return abs.slice('$HOME/'.length);
+};
+const helperName = (): string => path.posix.basename(helperAbs());
+
 describe('compact-card.mjs ships', () => {
-  it('deploy.sh installs it through install_atomic, at 644, beside the hook', () => {
-    const lines = code(deploy());
-    const line = lines.filter((l) => l.startsWith('install_atomic ccd/compact-card.mjs'));
+  it('deploy.sh installs it through install_atomic, at 644, where the hook looks for it', () => {
+    const line = code(read('deploy/deploy.sh'))
+      .filter((l) => l.startsWith('install_atomic ccd/compact-card.mjs'));
     expect(line, 'deploy.sh installs ccd/compact-card.mjs exactly once').toHaveLength(1);
-    expect(line[0]).toBe('install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs 644');
-    const hook = lines.findIndex((l) => l.startsWith('install_atomic ccd/session-hook.sh '));
+    expect(line[0]).toBe(`install_atomic ccd/compact-card.mjs ${helperRel()} 644`);
+  });
+
+  it('it is never scp\'d straight to its final name', () => {
+    // deploy-verify's own idiom, and its reason: bash executes a script lazily
+    // from a saved byte offset, and `node` reads this one at whatever moment a
+    // compaction starts. Both `"$BOX":dest` and `"$BOX:dest"` are banned, so a
+    // call site "fixed" by switching quote style cannot sail through.
+    const escaped = helperRel().replace(/[./]/g, '\\$&');
+    const direct = new RegExp(
+      `"\\$\\{SCP\\[@\\]\\}"\\s+\\S+\\s+("\\$BOX":|"\\$BOX:)${escaped}"?(?!\\.incoming)(\\s|$)`, 'm');
+    expect(direct.test(read('deploy/deploy.sh')),
+      'the helper is copied to its live name in place — the hazard install_atomic exists for').toBe(false);
+  });
+
+  it('it ships in the AGENT lane, before the hook that calls it', () => {
+    const src = read('deploy/deploy.sh');
+    const agentStart = src.indexOf('if [ "$TARGET" = "agent" ]');
+    const agentEnd = src.indexOf('\nelse', agentStart);
+    expect(agentStart, 'deploy.sh still has an agent branch').toBeGreaterThan(-1);
+    expect(agentEnd, 'and it still ends at a top-level else').toBeGreaterThan(agentStart);
+    const at = src.indexOf('install_atomic ccd/compact-card.mjs ');
+    expect(at, 'the helper installs in the agent lane, not the server lane')
+      .toBeGreaterThan(agentStart);
+    expect(at, 'the helper installs in the agent lane, not the server lane').toBeLessThan(agentEnd);
+    const lines = code(src);
     const helper = lines.findIndex((l) => l.startsWith('install_atomic ccd/compact-card.mjs '));
-    expect(Math.abs(helper - hook), 'the helper installs beside the hook — the same lane, the same event order').toBeLessThanOrEqual(2);
+    const hook = lines.findIndex((l) => l.startsWith('install_atomic ccd/session-hook.sh '));
+    expect(hook, 'deploy.sh still installs the hook').toBeGreaterThan(-1);
+    expect(helper, 'the helper lands BEFORE the hook that calls it: the reverse order opens a window '
+      + 'in which every live session on the box compacts against a helper that is not there yet, and '
+      + 'the hook is silent about it').toBeLessThan(hook);
+    expect(Math.abs(hook - helper),
+      'the helper installs beside the hook — same lane, same event order').toBeLessThanOrEqual(2);
   });
 
   it('deploy.sh backs it up in the same set as the hook', () => {
-    const src = deploy();
-    expect(src).toContain('cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs');
-    expect(src).toContain('cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh');
+    const src = read('deploy/deploy.sh');
+    expect(src).toContain(`cp -a ~/${helperRel()} ~/ccrc-backups/$TS/${helperName()}`);
+    expect(src, 'the hook is still the neighbour this is "the same set as"')
+      .toContain('cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh');
   });
 
-  it('ccrc install stages it through _inst_atomic at 644, and ccrc update backs it up', () => {
-    const lines = code(ccrc());
-    expect(lines).toContain('_inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644');
-    expect(lines).toContain('_upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs');
+  it('ccrc install places it at 644 before the hook, update backs it up, uninstall removes it', () => {
+    const src = read('ccd/ccrc');
+    const lines = code(src);
+    const abs = helperAbs();
+    const name = helperName();
+    expect(lines).toContain(`_inst_atomic "$tree/ccd/${name}" "${abs}" 644`);
+    const helper = lines.indexOf(`_inst_atomic "$tree/ccd/${name}" "${abs}" 644`);
+    const hook = lines.findIndex((l) => l.startsWith('_inst_atomic "$tree/ccd/session-hook.sh"'));
+    expect(hook, 'ccrc install still places the hook').toBeGreaterThan(-1);
+    expect(helper, 'ccrc install places the helper before the hook, for deploy.sh\'s reason')
+      .toBeLessThan(hook);
+    expect(lines).toContain(`_upd_backup_copy "${abs}" ${name}`);
+    // `_uninst_cc_sessions`' own header says its list IS `_inst_files` +
+    // `_inst_skills`' install set, exactly. An installer with no removal beside
+    // it does not merely leak a file — it makes that sentence false.
+    const fn = /_uninst_cc_sessions\(\) \{([\s\S]*?)\n\}/.exec(src);
+    expect(fn, 'ccrc still has a _uninst_cc_sessions').toBeTruthy();
+    expect(fn![1], 'ccrc uninstall removes the helper it installs').toContain(`"$reg/${name}"`);
+  });
+
+  it('the release tarball carries it, because the pathspec names a directory', () => {
+    // `git archive … ccd` is why `build-release.sh` needs no edit for this
+    // file. Pinned rather than trusted: narrowing that pathspec to a file list
+    // would leave a tarball whose `ccrc install` dies on a missing source.
+    expect(code(read('deploy/build-release.sh'))).toContain('install.sh shared ccd deploy \\');
+  });
+
+  it('the helper\'s TYPES never reach a box', () => {
+    // `compact-card.d.mts` exists for the vitest import; `node` never reads it
+    // and no box has a use for it, so it must not join the install set that
+    // `_uninst_cc_sessions` has to mirror.
+    for (const rel of ['deploy/deploy.sh', 'ccd/ccrc']) {
+      expect(code(read(rel)).filter((l) => l.includes('compact-card.d.mts')),
+        `${rel} ships the helper's declaration file to a box`).toEqual([]);
+    }
   });
 
   it('imports node:* only — the shared/mark.mjs class, never bundled, never npm', () => {
-    const src = readFileSync(path.resolve(__dirname, '../../ccd/compact-card.mjs'), 'utf8');
+    const src = read('ccd/compact-card.mjs');
     const imports = [...src.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
     expect(imports.length).toBeGreaterThan(0);
     for (const i of imports) expect(i, `${i} is not a node:* module`).toMatch(/^node:/);
@@ -3332,67 +3504,113 @@ describe('compact-card.mjs ships', () => {
 });
 ```
 
-In `server/test/installTreeFixture.ts`, in `TREE_FILES`, directly after the line `  'ccd/session-hook.sh',` add:
+In `server/test/installTreeFixture.ts`, in `TREE_FILES`, directly BEFORE the line `  'ccd/session-hook.sh',`
+add:
 
 ```ts
+  // The compaction card's helper (compaction-card spec §2). `_inst_files`
+  // places it beside the hook and BEFORE it, so the tree has to carry it or
+  // `_inst_atomic` dies naming the missing source and every describe here goes
+  // red for a fixture reason.
   'ccd/compact-card.mjs',
 ```
 
-In `server/test/ccrc-install.test.ts`, in the `cases` array of `the session hooks, notify and the tmux/statusline config land at their modes`, add after the `notify.sh` row:
+In `server/test/ccrc-install.test.ts`, in the `cases` array of `the session hooks, notify and the
+tmux/statusline config land at their modes`, add before the `session-hook.sh` row:
 
 ```ts
-      // The compaction card's helper (compaction-card spec §2): 0644, a
-      // script `node` runs, never executed directly.
+      // The compaction card's helper (compaction-card spec §2): 0644, a script
+      // `node` runs under the hook's `timeout`, never executed directly.
       [join(home, '.cc-sessions', 'compact-card.mjs'), placed(home, 'ccd', 'compact-card.mjs'), 0o644],
 ```
 
-and in the `targets` list of `a second run rewrites none of them, and leaves no temp file behind`, after the `notify.sh` entry:
+and in the `targets` list of `a second run rewrites none of them, and leaves no temp file behind`, before the
+`session-hook.sh` entry:
 
 ```ts
       join(home, '.cc-sessions', 'compact-card.mjs'),
 ```
 
+In `server/test/ccrc-uninstall.test.ts`, in `plantInstalledBox`, beside the other `~/.cc-sessions` artifacts:
+
+```ts
+  // The compaction card's helper (compaction-card spec §2): `_inst_files`
+  // places it, so `_uninst_cc_sessions` is the sweep that must remove it.
+  writeFileSync(join(reg, 'compact-card.mjs'), '// fixture helper\n', { mode: 0o644 });
+```
+
+and add `'compact-card.mjs'` to the removal list of `~/.cc-sessions: ccrc's own artifacts go file-by-file;
+registry rows and operator switches stay`:
+
+```ts
+    for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
+      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-graphify-skill.sh',
+      'coordinator-skill', 'worker-skill']) {
+```
+
+In `agent/test/deploy-verify.test.ts`, in the test that bans a direct `scp` to a live name and then requires
+each atomic install, add `'.cc-sessions/compact-card.mjs'` to the first list and this line to the second:
+
+```ts
+      'install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs',
+```
+
 - [ ] **Step 2: Run and watch them fail**
 
-Run: `cd server && ./node_modules/.bin/vitest run test/compact-card-ship.test.ts test/ccrc-install.test.ts`
-Expected: FAIL — the ship test finds no `install_atomic ccd/compact-card.mjs` line; in the install test the new `cases` row reports `was never installed` (the fixture tree now carries the file, so `ccrc install` runs; `_inst_files` does not place it yet).
+Run, from inside each package, in the foreground:
 
-- [ ] **Step 3: deploy.sh**
+```bash
+cd server && ./node_modules/.bin/vitest run test/compact-card-ship.test.ts test/ccrc-install.test.ts test/ccrc-uninstall.test.ts
+cd agent  && ./node_modules/.bin/vitest run test/deploy-verify.test.ts
+```
 
-In `deploy/deploy.sh`, in the backup command (the `"${SSH[@]}" "$BOX" "mkdir -p ~/ccrc-backups/$TS …` chain), after the `session-hook.sh` clause add:
+Expected: FAIL, and for the stated reasons — the ship test finds no `install_atomic ccd/compact-card.mjs`
+line at all; the install test's new `cases` row reports `was never installed` (the fixture tree now carries
+the file, so `ccrc install` runs and `_inst_atomic` does not die — it simply never places it); the uninstall
+test reports `compact-card.mjs survived`; deploy-verify reports the missing atomic install call. A run that
+fails with `the shipped tree has no …/ccd/compact-card.mjs` instead means the `TREE_FILES` entry was missed.
+
+- [ ] **Step 3: `deploy/deploy.sh`**
+
+In the agent lane's pre-install backup chain, after the `session-hook.sh` clause, add:
 
 ```bash
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } \
 ```
 
-In the agent lane, directly after `install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755`, add:
+In the agent lane, directly BEFORE `install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh 755`,
+add:
 
 ```bash
-  # The compaction card's helper (compaction-card spec §2): plain node, no
-  # npm, read by the hook's PreCompact and PostCompact arms through `_hook_timeout`.
-  # 644 — `node` runs it; nothing executes it directly. Same lane, same
-  # atomic install as the hook: the hook's guard for it is SILENT, so a box
-  # reached by the hook and not the helper would simply never write a card.
+  # The compaction card's helper (compaction-card spec §2): plain node, no npm,
+  # read by the hook's PreCompact and PostCompact arms under `_hook_timeout`.
+  # 644 — `node` runs it; nothing executes it directly.
+  #
+  # BEFORE the hook, not after. The hook's guard for this file is SILENT and
+  # total, so the window between the two installs decides which way a partial
+  # deploy fails: helper-then-hook leaves a file no old hook calls, hook-then-
+  # helper leaves every live session on the box compacting with no set, no card
+  # and no journal line, and saying nothing about it. This comment deliberately
+  # does NOT spell the install line itself — the ship test locates that call by
+  # scanning for it, and a comment carrying the same spelling shadows the real
+  # invocation, the trap this file's other notes record springing twice.
   install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs 644
 ```
 
-- [ ] **Step 4: ccd/ccrc**
+- [ ] **Step 4: `ccd/ccrc`**
 
-In `_inst_files`, directly after the `_inst_atomic "$tree/ccd/session-hook.sh" …` line, add:
+In `_inst_files`, directly BEFORE the `_inst_atomic "$tree/ccd/session-hook.sh" …` line, add:
 
 ```bash
   # The compaction card's helper, 0644 (compaction-card spec §2): a script
-  # `node` runs under the hook's `timeout`, never executed directly.
+  # `node` runs under the hook's `timeout`, never executed directly. Before the
+  # hook for the reason deploy.sh's agent lane states at its own copy — the
+  # hook's guard for it is silent, so only this order makes a half-finished
+  # converge fail in the harmless direction.
   _inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644
 ```
 
-In the `_upd_backup_copy` list, directly after `_upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh`, add:
-
-```bash
-  _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
-```
-
-And replace `_inst_files`'s summary line
+Replace `_inst_files`' summary line
 
 ```bash
   echo "install: files: session hooks, notify.sh, tmux.conf and the statusline in place"
@@ -3404,23 +3622,65 @@ with
   echo "install: files: session hooks, the compaction-card helper, notify.sh, tmux.conf and the statusline in place"
 ```
 
+In the `_upd_backup_copy` list, directly after
+`_upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh`, add:
+
+```bash
+  _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
+```
+
+In `_uninst_cc_sessions`, add the helper to the `rm -f` list — the list its own header calls `_inst_files` +
+`_inst_skills`' install set, exactly:
+
+```bash
+  rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
+    "$reg/compact-card.mjs" \
+    "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    "$reg/install-graphify-skill.sh" \
+    || _ccrc_die "removing ccrc's files under $reg failed"
+```
+
 - [ ] **Step 5: Run and watch them pass**
 
-Run: `cd server && ./node_modules/.bin/vitest run test/compact-card-ship.test.ts test/ccrc-install.test.ts test/ccrc-install-graphify.test.ts test/ccrc-api-ship.test.ts test/deploy-coordinates.test.ts`
-Expected: PASS — the ccrc-api adjacency pin still holds (the helper line sits after the hook line, not between `ccd` and `ccrc-api`), and the graphify install suite, which shares the fixture tree, is green.
+```bash
+cd server && ./node_modules/.bin/vitest run test/compact-card-ship.test.ts test/ccrc-install.test.ts test/ccrc-install-graphify.test.ts test/ccrc-update.test.ts test/ccrc-uninstall.test.ts test/ccrc-api-ship.test.ts test/build-release.test.ts test/deploy-coordinates.test.ts test/single-definition.test.ts
+cd agent  && ./node_modules/.bin/vitest run test/deploy-verify.test.ts
+```
+
+Expected: PASS throughout. Three of those suites are in the list as CONTROLS rather than as subjects: the
+`ccrc-api` adjacency pin still holds (the helper sits before the hook, nowhere near `ccd` and `ccrc-api`), the
+graphify install suite shares the fixture tree and must stay green, and `single-definition.test.ts` is what
+would object if the helper's pathname had been enumerated a second time instead of derived.
 
 - [ ] **Step 6: Mutation checks**
 
-1. Delete the `install_atomic ccd/compact-card.mjs` line → `deploy.sh installs it` goes red.
-2. Change `644` to `755` on the ccrc line → `ccrc install stages it` goes red, and the `cases` row reads the wrong mode.
-3. Delete the `_upd_backup_copy` line → `ccrc update backs it up` goes red.
-4. Delete the `TREE_FILES` entry → every `ccrc-install*.test.ts` describe goes red with `the shipped tree has no ccd/compact-card.mjs`.
+One mutation each, applied to a copy of the tree and reverted, with the whole ship suite run for each:
+
+1. Delete the `install_atomic ccd/compact-card.mjs` line → `deploy.sh installs it through install_atomic`
+   reds on `toHaveLength(1)`.
+2. Replace that line with a direct `"${SCP[@]}" ccd/compact-card.mjs "$BOX":.cc-sessions/compact-card.mjs` →
+   both `installs it through install_atomic` and `it is never scp'd straight to its final name` red. (The
+   second alone is the one that catches a deploy which still "ships" the file.)
+3. Move the `install_atomic` line out of the agent branch into the server branch → `it ships in the AGENT
+   lane` reds on the `agentEnd` bound.
+4. Swap the helper and hook install lines so the helper installs after → the same test reds on the
+   `toBeLessThan(hook)` assertion, with the window it names in the message.
+5. Change `COMPACT_HELPER` in `ccd/session-hook.sh` to any other path → four tests red at once (the deploy
+   install line, the direct-scp ban, the backup clause and the whole `ccrc` install/update/uninstall test),
+   because every destination is derived from that one assignment rather than restated.
+6. Change `644` to `755` on the `ccrc` line → `ccrc install places it at 644` reds, and the `cases` row in
+   `ccrc-install.test.ts` reports the wrong mode.
+7. Delete the `_upd_backup_copy` line → the same test reds.
+8. Delete the `"$reg/compact-card.mjs"` entry → the ship test's uninstall assertion AND
+   `ccrc-uninstall.test.ts`'s `compact-card.mjs survived` both red.
+9. Delete the `TREE_FILES` entry → every `ccrc-install*.test.ts` describe reds with `the shipped tree has no
+   …/ccd/compact-card.mjs`.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add deploy/deploy.sh ccd/ccrc server/test/installTreeFixture.ts server/test/ccrc-install.test.ts server/test/compact-card-ship.test.ts
-git commit -m "feat(deploy): ship compact-card.mjs beside the hook on every door — deploy.sh's agent lane, ccrc install, ccrc update's backup"
+git add deploy/deploy.sh ccd/ccrc server/test/installTreeFixture.ts server/test/ccrc-install.test.ts server/test/ccrc-uninstall.test.ts agent/test/deploy-verify.test.ts server/test/compact-card-ship.test.ts
+git commit -m "feat(deploy): ship compact-card.mjs beside the hook on every door — deploy.sh's agent lane, ccrc install, ccrc update's backup, ccrc uninstall's sweep"
 ```
 
 ---
@@ -3434,7 +3694,7 @@ git commit -m "feat(deploy): ship compact-card.mjs beside the hook on every door
 
 - [ ] **Step 1: Audit final contract and preserve frozen task bytes**
 
-Sweep operative spec/plan/Task 9/Task 11 text for direct canonical lock `<>`, touch-before-unlink, pre-lock compact SessionStart inspection, unlocked final cleanup, successful source leaks, conflicting families, unsafe generation reads/repair, ignored purge status, recursive retained FD, Task 11 ccd ownership, stale wire/hookstate/persisted-`n` claims. Preserve Task 8 final citation/fence prose byte-for-byte and preserve Task 10 byte-for-byte. Under the committed physical-line extractor, Task 10 must be exactly **7,810 bytes**, SHA-256 **`e7d246d721e30605cf95eae203bcc40384f0978f29f6222f0491cd0d78195088`**; the superseded 7,804-byte/`199586...` slice dropped its retained terminal separator.
+Sweep operative spec/plan/Task 9/Task 11 text for direct canonical lock `<>`, touch-before-unlink, pre-lock compact SessionStart inspection, unlocked final cleanup, successful source leaks, conflicting families, unsafe generation reads/repair, ignored purge status, recursive retained FD, Task 11 ccd ownership, stale wire/hookstate/persisted-`n` claims. Preserve Task 8 final citation/fence prose byte-for-byte and preserve Task 10 byte-for-byte. Under the committed physical-line extractor, Task 10 must be exactly **24,688 bytes**, SHA-256 **`46535cdd524041584201abc0e8ac690df9cf1930d7398cefc3194a495de5dc7d`**; the superseded 7,804-byte/`199586...` slice dropped its retained terminal separator.
 
 **Bound the final task's extraction explicitly (round 6, M7).** Task 11 is the LAST `### Task N` heading in this file, so a next-task-only stop condition never fires for it and the extractor runs to EOF — swallowing `## Deploy`, the entire `## Deviations found` ledger (43+ entries as of this round), and `## Self-review` into its own brief. Handing an executing agent a brief that defines dozens of D-numbers is the documented setup for that agent minting one itself (see the a-constraint-naming-the-allocator-invites-a-mint lesson). The extractor below now also stops before any `## `-level heading (exactly two `#` then whitespace — distinct from a three-`#` `### Task` heading, so no task boundary is affected), which bounds Task 11's brief to its own body.
 
@@ -3580,6 +3840,9 @@ Task 9's fix round 1 (2026-09-14, two independent Opus reviews of the runtime an
 - **D-2793 — the stable-lock acquire REFUSES a later canonical disappearance instead of minting a second inode under a live holder, and the refusal is a `WHY` rather than a third status.** §4 ("a later canonical disappearance/replacement refuses, never recreates it"), §5's mutation row and §3.4's named fixture all required this and NONE of it was built: `_hook_lock_acquire` called `_hook_lock_init` unconditionally and `_compact_lock_acquire` inlined the same mint-on-absence branch. MEASURED with two real processes on a fixture `$REG`, driving ccd's own acquire: holder acquires canonical inode 167576, a stranger unlinks canonical, a second acquirer answers `RC=0` and canonical is back at inode 167577 — two processes each holding `flock` on a different inode of one pathname, the exact hazard `ccd/session-hook.sh`'s header says the link-based design removes. **The review's prescribed mechanism — "refuse if an exact-family alias is observable in `$REG`" — cannot see the scenario its own prescribed fixture builds,** and that is measured too: with a real process holding the lock, `$REG` lists exactly `.<id>.compactions.lock` and ZERO `lock-open` aliases, because the acquire unlinks its alias the instant the FD is held, deliberately and by its own comment. What the holder keeps is a DESCRIPTOR, and Linux names it — `/proc/<pid>/fd/<n>` reads back the alias pathname with ` (deleted)` after it, and nothing after the holder is killed. So the gate is built with BOTH arms: (a) the alias on disk, which catches an acquisition in flight, and (b) the `/proc` descriptor, which catches a holder past its acquire. Arm (b) is gated on `$REG/<id>.generation` — the same witness `_reg_purge`'s fail-open rests on — and is ONE `find … -lname … -print -quit`, because a `readlink` per descriptor was MEASURED at 7.8–8.4 s on this box (517 processes, 2662 `/proc/<pid>/fd` entries), longer than `COMPACT_LOCK_WAIT` itself and a 6x slowdown of the whole suite, against 0.16 s for the single `find`. The refusal returns the ordinary rc 1 and names itself in `HOOK_LOCK_WHY` / `COMPACT_LOCK_WHY` as `canonical-vanished`: a third numeric status was MEASURED to be silently mis-disposed — all six hook acquire sites read the acquire as a boolean, and `cmd_start` and `_spawn_start` fall through an unrecognised code into a silent continue, so rc 3 would have made two spawn paths treat a live-holder race as mechanism absence — while `cmd_ws_add`'s `|| die` form is itself source-pinned. `cmd_ws_add` and `cmd_start` append a conditional remedy clause when the `WHY` is set, because "retry" is the wrong remedy for a lock file nothing will recreate. RESIDUALS, stated in §3.4 rather than implied: a live holder on a row with NO generation (whose only in-design instance is row creation itself, which owns the slug exclusively for that window), and a box without `/proc` or without `find`'s `-lname`/`-quit`, where the acquire answers "first-ever mint" exactly as it did before. **APPENDED 2026-09-14 (r3 A-M1): "all six hook acquire sites" is this entry's HISTORY — there are FIVE, and the argument is unaffected.** Measured by exact census at this tip: `_hook_lock_acquire "` has five call sites in `ccd/session-hook.sh` (PreCompact's acquire and reacquire, PostCompact's settlement and final transaction, compact SessionStart), which is exactly what §3.1/§3.3/§3.4 specify, and all five do read the acquire as a boolean. `_compact_lock_acquire "` has five call sites in `ccd/ccd` — `_reg_purge`, `cmd_ws_add`, `cmd_start` and `_spawn_start` TWICE — so the fall-through pair is two FUNCTIONS across THREE sites, not "two of ccd's five". Both numerals are now read out of the prose by a scan in `server/test/session-hook.test.ts` and compared against the counted sites, in the hook's comment and in the spec sentence alike, so adding or removing an acquire without updating the prose reds.
 - **D-2801 — exact purge covers the two transition legacy grammars, and its arms are anchored on a decimal pid so they cannot reach a nested id.** `_ws_private_family` matched only target-family suffixes — every arm requires the family word first — so neither `<pid>.<id>.compactset.tmp` nor `<pid>.compactcard-claim.tmp` matched. `_hook_family_sweepable` carries both, but that sweep runs only from a LIVE row's PreCompact: a row upgraded across this deploy carrying legacy residue and then purged by `ws-rm`, `forget` or `ws-gc --prune` kept it FOR EVER, because no PreCompact will ever run for a destroyed row. Both grammars are added. The asymmetry this creates with `_ws_slug_free`, which shares the predicate, is DELIBERATE and not to be split away: the property that predicate establishes is that a partially-purged id is never reused as a clean one, and legacy residue is residue. **The arms are anchored on a DECIMAL PID, where the hook's sweep still uses a bare `*`** — measured while writing the fixture, the bare form made `_reg_purge demo-quiet-basin` delete `.demo-quiet-basin.x-y.999.compactcard-claim.tmp`, a DOTTED NESTED id's legacy residue, reintroducing through the transition allowance the exact cross-id hazard the dot-free pass's `*.*` skip exists to prevent. A legacy name's first component is the writer's pid and a nested id's is the rest of its id. The claim grammar is pinned exactly — decimal head, then the grammar and nothing else, and the first attempt at that exactness ("no more than two components") was itself wrong, because the grammar carries a dot and it rejected the real `999.compactcard-claim.tmp`. The set grammar carries the id in the middle and cannot be pinned that way, so one contrived collision remains — an id whose own trailing component is all digits, e.g. project `demo-quiet-basin.99` slug `9` — and it is stated rather than hidden. **APPENDED 2026-09-14 (r3 A-I2): "where the hook's sweep still uses a bare `*`" is this entry's HISTORY, not the shipped state — the hook's sweep is anchored too.** The clause above admitted the asymmetry without disposing of it, and a reviewer measured what it cost: driving the shipped `_hook_family_sweepable` through the sweep's own find→strip→match loop, one ordinary PreCompact for `demo-quiet-basin` deleted the neighbour id `demo-quiet-basin.x-y`'s `.demo-quiet-basin.x-y.999.compactcard-claim.tmp` and `.demo-quiet-basin.x-y.777.demo-quiet-basin.x-y.compactset.tmp`, while correctly keeping that neighbour's target-family `compactpost` claim — every target arm names its family word first, so only the two bare-`*` arms leaked. Both now carry the identical anchor `_ws_private_family` does: for the claim grammar `${1#*.}` must be `compactcard-claim.tmp` and `${1%%.*}` decimal, for the set grammar `${1%%.*}` decimal, with the same disclosure of the same one residual collision. Pinned by the neighbour-id leg added to `server/test/session-hook.test.ts`'s `sweeps this id's AGED EXACT FAMILIES` fixture, which reds when either arm is reverted to the bare `*`.
 - **D-2802 — §5's "(round 7) stage completeness under a killed helper" row ships as a SOURCE pin, because the prescribed EFFECT fixture is unbuildable.** The row prescribes "kill the helper mid-write (SIGKILL between its `.part` write and rename); assert no stage file exists, only a `.part`, and the hook publishes nothing". MEASURED with `strace -f -e trace=write` over a `writeFileSync` of 4 KiB, 64 KiB, 256 KiB and 1 MiB: **exactly ONE `write(2)` at every size**, so there is no inter-write window for a SIGKILL to land in at any payload this helper produces — the partial state the fixture is supposed to observe cannot exist. What ships instead is a source pin over `writeAtomic`'s body (`server/test/compact-card.test.ts`, "A STAGE EXISTS IFF IT IS COMPLETE"), and it is MUTATION-EFFECTIVE in its own right: replacing ``const tmp = `${target}.part` `` with `const tmp = target` reds exactly that one test (1 failed | 50 passed). The same mutant leaves the whole of `session-hook` GREEN (260/260), which is the measurement that says no behaviour fixture in the tree carries this property and the source pin is not redundant. Recorded here in the same shape as its two siblings from fix round 1 — D-2761 (the `touch`/`mktemp` dependency guards) and D-2762 (`printf >>`) — which is the record-keeping this substitution was missing: `SIGKILL`, `writeAtomic` and "stage completeness" appeared nowhere in this ledger, and "A STAGE EXISTS IFF" appeared in no document. **APPENDED 2026-09-14 (r3 B-M4): this entry OVERSTATES what is unbuildable, and the row's EFFECT fixture exists.** The row prescribes the kill window as "SIGKILL between its `.part` write and rename", and that fixture is in the tree and green — `server/test/session-hook.test.ts`, "STAGE COMPLETENESS: a helper killed between its `.part` write and its rename publishes nothing", landed in round 1 at `14fd00de`, BEFORE the record above said it was impossible. What is genuinely unbuildable is only the NARROWER intra-`writeFileSync` truncation the `strace` measurement rules out, and the source pin covers that residual. The hazard this correction closes is the one the round's own lessons name: a later round reading D-2802 as authoritative deletes the effect fixture as testing an unobservable state, and the ledger says nothing was lost. Both the record and the `compact-card.test.ts` comment now name the fixture by file and title, and the naming is a MECHANISM — `compact-card.test.ts`'s stage-completeness `it` asserts that title string is still present in `session-hook.test.ts`, so deleting the fixture reds the very test whose comment claimed none could exist.
+- **D-2845 — the frozen Task 10 opened a third door and left the fourth shut: an installer with no removal beside it, which falsifies a shipped sentence rather than merely leaking a file.** The spec names ONE door for the helper (§2: installed beside the hook by `deploy.sh`'s agent lane), and the frozen Task 10 correctly widened that to `ccrc install` and `ccrc update`'s backup — but not to `ccrc uninstall`. MEASURED at `99017a13`: `_uninst_cc_sessions`' own header states that its `rm -f` list IS `_inst_files` + `_inst_skills`' "install set, exactly" (`ccd/ccrc:7129-7130`), and `server/test/ccrc-uninstall.test.ts`'s `~/.cc-sessions: ccrc's own artifacts go file-by-file` asserts that list by name, so an `_inst_files` addition with no matching removal leaves a claim in shipped source that the shipped source contradicts — and leaves the helper behind on a box an operator believes is off ccrc, in the one directory whose header forbids a directory sweep as the remedy. The amendment adds `"$reg/compact-card.mjs"` to that list, plants the file in `plantInstalledBox`, adds it to the suite's removal list, and pins the symmetry a second way in `server/test/compact-card-ship.test.ts`: the same test that asserts the install asserts the removal, out of the SAME derived pathname, so the two cannot be edited apart. Recorded because "the installer is the task" is the reading that produced the gap, and the next widening of an install set will have the same shape.
+- **D-2846 — the shipped set is the helper ALONE, and three files the preflight brief put in scope need no edit; each reason is a measurement.** The brief's `Modify:` list named `server/test/build-release.test.ts`, and its "what the amendment must state" asked for `compact-card.d.mts` "if it ships". MEASURED at `99017a13`: (a) `deploy/build-release.sh`'s pathspec is `install.sh shared ccd deploy` (`deploy/build-release.sh:103-104`) — a DIRECTORY, so the helper rides the release tarball the day it is committed and neither the script nor its suite needs a line, and if that pathspec were ever narrowed the failure is LOUD, because `_inst_atomic` dies naming the missing source rather than installing nothing; (b) `ccd/compact-card.d.mts` is "types for the vitest import of compact-card.mjs" (`ccd/compact-card.d.mts:1-2`), read by nothing at run time, so shipping it would place an unrunnable artifact in `~/.cc-sessions` that D-2845's removal list would then have to carry — it must NOT ship, and the amendment asserts that no installer line on either door mentions it; (c) `ccd/ccd`, whose 1,162 Task 9 lines are the largest single change in the set, already has a door on both lanes and needs no new line at all. What was actually missing from every door was one file. Recorded so the next reader of the preflight does not re-derive a scope three files wider than the work.
+- **D-2847 — the helper installs BEFORE the hook, not after, because the hook's guard for it is silent and the install order is therefore a choice of which way a partial deploy fails.** The frozen Task 10 placed the `install_atomic` "directly after `install_atomic ccd/session-hook.sh …`" and the `_inst_atomic` likewise. MEASURED at `99017a13`, the hook guards the helper at exactly two sites — `[ -f "$COMPACT_HELPER" ] || return 0` in PreCompact (`ccd/session-hook.sh:1301`, covering the `card` call) and in PostCompact (`ccd/session-hook.sh:1448`, covering both `measure` calls) — and both are silent and total. So hook-then-helper leaves a window, one scp-plus-ssh round trip wide on a box carrying ~20 live sessions, in which every compaction publishes no set, serves no card and journals no line, and says nothing; helper-then-hook leaves a window in which a file sits on disk that the old hook never calls. Neither is an error and only one is observable, which is what decides it. Both doors are reordered, the deploy comment says why at its own copy and `ccrc`'s cites it, and the order is a MECHANISM rather than a note: `server/test/compact-card-ship.test.ts` asserts the helper's index is less than the hook's on both lanes, so swapping the two lines reds with the window named in the failure message. The adjacency bound the frozen version relied on (`≤ 2` executable lines, `ccrc-api-ship.test.ts`'s idiom) is kept unchanged and is satisfied either way, which is exactly why it could not have caught this on its own.
 ## Self-review (writing-plans checklist, corrected after Task 6 execution and fix-round review)
 
 - **Spec coverage.** §3.0 → Task 2 (rule/canonical overlap) plus Task 9 (young-claim overlap and normalization); §3.1 → Tasks 2, 6 and 9; §3.2 → Tasks 3, 4, 5; §3.3 → Task 7 plus Task 9's marker-only amendment; §3.4 → Tasks 8 and 9 (sole sink, claim-first ownership, exact-one gate, stable-lock transaction); §5 Hook rows → Tasks 2, 6, 7, 9; §5 Helper → Tasks 3, 4, 5, 8; §5 Installer → Task 10 unchanged; §6 R2 → Tasks 6 and 9 (8-second helper deadline, plus round 7's two stable-lock waits — `COMPACT_LOCK_WAIT_SERVE` at 2 s for compact SessionStart alone, `COMPACT_LOCK_WAIT` at 5 s for every other acquisition); §6 registry/lifecycle runtime coupling → Task 9 only; Task 11 audits the final documentation and committed bytes without runtime work; §7 deploy → the Deploy section. Not in this plan, by the spec's own split: §3.5 (Plan C), §3.6 and the Wire rows (Plan B). **Correction (Task 7 fix round, I2):** §5's `ceilings drift` row (`HARNESS_CONTEXT_SPILL_CHARS`, spec §2 constants table) named no owning task anywhere in this plan before the fix round — confirmed absent by scanning every task and this file. Task 7 owns it now, since Task 7 introduced the second ceiling (`COMPACT_CARD_MAX_CHARS`) the row compares against the first; the pin reads both ceilings from the hook's own source rather than hand-copying their values. The neighbouring `total clip raised` row is also corrected there: its promised runtime red cannot occur (the value is provably unreachable, see the deviation below), restated as a source-level pin on the derivation.
