@@ -7250,8 +7250,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:4355-4357',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
-        // Task 10's list: FOUR of its five references, not the two D-2849
-        // first recorded. `deploy/deploy.sh:560` is the one real survivor.
+        // Task 10's list: FOUR of the five its two `- Modify:` bullets carry,
+        // not the two D-2849 first recorded. The PARAGRAPH is longer than those
+        // two bullets and resolves SEVEN references in all (measured, Task 11):
+        // the two in its `- NOT modified` sub-list pass on merit, so three of
+        // the seven survive and `deploy/deploy.sh:560` is the only survivor
+        // among the five the `- Modify:` bullets carry.
         'deploy/deploy.sh:629',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
