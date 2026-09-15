@@ -22,9 +22,11 @@ import {
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   isPositiveDecimalSafeInteger,
+  parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
   RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
+  WAVE_DONE_SUBJECT,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
@@ -2170,11 +2172,20 @@ export class CoordStore {
       if (unstamped > 0) excludedUnmeasured = true;
     }
     if (swaps > 0) excludedUnmeasured = true;
+    // The worker's own done-claims, in order. `fromId = runs.sessionId` is the
+    // filter, not `toId`: the coordinator role resolves per run, and any
+    // session on the box can name a runId (attribution, not authentication).
+    const waveDone = run.sessionId === null ? [] : this.db.prepare(
+      "SELECT body FROM mail WHERE runId = ? AND fromId = ? AND kind = 'status' AND subject = ? ORDER BY id",
+    ).all(runId, run.sessionId, WAVE_DONE_SUBJECT) as { body: string }[];
+    const last = waveDone[waveDone.length - 1];
     return {
       runId, dispatchedAt, closedAt, finalState, wallMs, holdMs, swaps, excludedUnmeasured,
       activeMs: wallMs === null ? null : Math.max(0, wallMs - holdMs),
       closeRefusals,
       firstSubmission: finalState === 'done' ? closeRefusals === 0 : null,
+      waveDoneMails: waveDone.length,
+      signals: last === undefined ? null : parseWaveDoneSignals(last.body),
     };
   }
 

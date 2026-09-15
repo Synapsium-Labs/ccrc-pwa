@@ -4505,6 +4505,69 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 // place for the members to be spelled. It shipped in this wave's first draft with
 // zero callers and zero tests, and was deleted in review.
 
+/** Routing spec 2026-09-14 §5.5 — the subject a worker's done-claim mail
+ *  carries (`kind: 'status'`). ONE spelling: `runSignals` (`coord/store.ts`)
+ *  selects on it and the skills quote it. `close.ts`'s `wave-done-rejected`
+ *  is a different subject (the server's answer), deliberately not derived. */
+export const WAVE_DONE_SUBJECT = 'wave-done';
+
+/** The first-run suite word a worker reports (spec §6: "suite green on first
+ *  run" is a QUALITY signal; fix rounds are counted on the spend side). */
+export const SUITE_WORDS = ['green', 'red', 'unrun'] as const;
+export type SuiteWord = (typeof SUITE_WORDS)[number];
+
+/** The failure KIND a worker names when a check failed, so the coordinator can
+ *  choose the escalation rung (spec §3 "Escalation"): `shallow` raises effort,
+ *  `ceiling` raises class, `unclear` defaults to effort-first. */
+export const FAILURE_KINDS = ['shallow', 'ceiling', 'unclear'] as const;
+export type FailureKind = (typeof FAILURE_KINDS)[number];
+
+/** ONE signal line, three answers, never two. `absent` is a worker that sent
+ *  no such line (an older skill, or nothing to say); `unrecognised` is a line
+ *  that WAS sent with a word outside the vocabulary — a mechanism defect to
+ *  surface, which "absent" would hide. */
+export type SignalLine<T extends string> =
+  | { ok: true; value: T }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'unrecognised' };
+
+export interface WaveDoneSignals {
+  suite: SignalLine<SuiteWord>;
+  failure: SignalLine<FailureKind>;
+}
+
+const SIGNAL_LINE = /^(suite|failure): (\S+)$/;
+
+/**
+ * Read the two signal lines off a `wave-done` body (spec §5.5): the FIRST two
+ * lines only, in either order, exact grammar `key: word`. The walk stops at
+ * the first line that is not a signal line, so a `suite:` inside later prose
+ * or JSON is never read as a claim. The first of a repeated key wins.
+ *
+ * Never throws; never reads the envelope — the caller hands it `body`, which
+ * `parseMailEnvelope` returns verbatim below the `--` terminator, or the
+ * `mail.body` column, which is the same bytes.
+ */
+export function parseWaveDoneSignals(body: string): WaveDoneSignals {
+  let suite: SignalLine<SuiteWord> = { ok: false, why: 'absent' };
+  let failure: SignalLine<FailureKind> = { ok: false, why: 'absent' };
+  for (const raw of body.split('\n', 2)) {
+    const m = SIGNAL_LINE.exec(raw.replace(/\r$/, '').trimEnd());
+    if (!m) break;
+    const word = m[2] as string;
+    if (m[1] === 'suite') {
+      if (suite.ok || suite.why !== 'absent') continue;
+      suite = (SUITE_WORDS as readonly string[]).includes(word)
+        ? { ok: true, value: word as SuiteWord } : { ok: false, why: 'unrecognised' };
+    } else {
+      if (failure.ok || failure.why !== 'absent') continue;
+      failure = (FAILURE_KINDS as readonly string[]).includes(word)
+        ? { ok: true, value: word as FailureKind } : { ok: false, why: 'unrecognised' };
+    }
+  }
+  return { suite, failure };
+}
+
 /**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
@@ -4953,7 +5016,23 @@ export interface RunSummary {
  *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
- *  before. */
+ *  before.
+ *
+ *  `waveDoneMails` counts the `status`/`wave-done` mails the run's OWN worker
+ *  (`runs.sessionId`, never `claimedBy`) has sent on this run, and `signals`
+ *  is `parseWaveDoneSignals` over the LAST of them — the re-sent claim after a
+ *  rejection supersedes the refused one — or null when there are none, which
+ *  is a fourth condition beside the three each line carries (routing spec
+ *  §5.5, slice 2). Read at signal time from the mail row; nothing is written
+ *  at ingress, so the mail table stays the one record.
+ *
+ *  This read keys on the run's CURRENT `sessionId`, on purpose. A rebind (the
+ *  open route's `session-rebound` event, reachable only for a still-`planned`
+ *  run through `openRun`'s dup arm) leaves a predecessor's mail unread: that
+ *  session was never dispatched the wave, so its wave-done is not a
+ *  done-claim for dispatched work. A route that rebinds a DISPATCHED run
+ *  would have to widen this read to the session lineage — none does today
+ *  (S2-R1). */
 export interface RunSignals {
   readonly runId: number;
   readonly dispatchedAt: number | null;
@@ -4966,6 +5045,8 @@ export interface RunSignals {
   readonly activeMs: number | null;
   readonly closeRefusals: number;
   readonly firstSubmission: boolean | null;
+  readonly waveDoneMails: number;
+  readonly signals: WaveDoneSignals | null;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the

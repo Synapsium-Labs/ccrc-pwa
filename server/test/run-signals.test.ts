@@ -2,7 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { DONE_AUTHORITY_CODES } from '../../shared/api.js';
+import { DONE_AUTHORITY_CODES, WAVE_DONE_SUBJECT } from '../../shared/api.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -85,7 +85,7 @@ describe('CoordStore.runSignals', () => {
     expect(coord.runSignals(id)).toEqual({
       runId: id, dispatchedAt: 1_000_000, closedAt: 1_600_000, finalState: 'done',
       wallMs: 600_000, holdMs: 30_000, swaps: 1, excludedUnmeasured: true, activeMs: 570_000,
-      closeRefusals: 0, firstSubmission: true,
+      closeRefusals: 0, firstSubmission: true, waveDoneMails: 0, signals: null,
     });
   });
 
@@ -168,5 +168,92 @@ describe('CoordStore.runSignals', () => {
     const coord = open(); const id = seedRun(coord);
     coord.advance(id, 'failed', 'operator');
     expect(coord.runSignals(id)).toMatchObject({ finalState: 'failed', firstSubmission: null, wallMs: expect.any(Number) });
+  });
+});
+
+/** A `wave-done` from `fromId` on `runId`, through the store's own ingress
+ *  writer (`insertMail`, the row `POST /api/mail` inserts). */
+const waveDone = (coord: CoordStore, runId: number, fromId: string, body: string): void => {
+  coord.insertMail({ fromId, fromUuid: 'u', toId: 'ccrc-pwa-coord', runId, kind: 'status',
+    subject: WAVE_DONE_SUBJECT, body, artifacts: [] });
+};
+
+describe('CoordStore.runSignals — the worker\'s wave-done signal lines (routing slice 2)', () => {
+  it('no wave-done yet: zero mails and signals null — a fourth condition, not an absent line', () => {
+    const coord = open(); const id = seedRun(coord);
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
+
+  it('reads the two lines off the worker\'s wave-done, on an OPEN run too', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', 'suite: green\nfailure: shallow\n{"branchTip":"a"}');
+    expect(coord.runSignals(id)).toMatchObject({
+      waveDoneMails: 1,
+      signals: { suite: { ok: true, value: 'green' }, failure: { ok: true, value: 'shallow' } },
+    });
+  });
+
+  it('a wave-done with no lines is ABSENT on both, distinct from null', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', '{"branchTip":"a"}');
+    expect(coord.runSignals(id)).toMatchObject({
+      waveDoneMails: 1, signals: { suite: { ok: false, why: 'absent' }, failure: { ok: false, why: 'absent' } },
+    });
+  });
+
+  it('the LAST wave-done wins — a re-sent claim after a rejection supersedes', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'demo-worker', 'suite: red\n{}');
+    waveDone(coord, id, 'demo-worker', 'suite: green\n{}');
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 2, signals: { suite: { ok: true, value: 'green' } } });
+  });
+
+  it('only the run\'s OWN worker counts: another session\'s wave-done, a status mail with another subject, an answer mail carrying the wave-done subject, and a wave-done on another run are all ignored', () => {
+    const coord = open(); const id = seedRun(coord);
+    waveDone(coord, id, 'someone-else', 'suite: green\n{}');
+    coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: id, kind: 'status',
+      subject: 'progress', body: 'suite: green', artifacts: [] });
+    // The run's OWN worker, the right subject, the wrong KIND (review M2): the
+    // `kind = 'status'` predicate is the one this case leaves unmeasured
+    // otherwise — deleting it from the filter stays green on every other row
+    // here, because they all differ from the run's worker in `fromId`, in
+    // `subject` or in `runId` as well. A done-claim is a `status` mail; an
+    // `answer` that happens to quote the subject is a reply, not a claim.
+    coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: id, kind: 'answer',
+      subject: WAVE_DONE_SUBJECT, body: 'suite: green\n{}', artifacts: [] });
+    const other = seedRun(coord);
+    waveDone(coord, other, 'demo-worker', 'suite: green\n{}');
+    expect(coord.runSignals(id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
+
+  it('a run with no worker (sessionId null) reads nothing — never another session\'s mail', () => {
+    const coord = open();
+    const opened = coord.openRun({ program: 'p2', title: 'p2', project: 'demo', wave: 1, waveOf: null, claimedBy: 'ccrc-pwa-coord' });
+    if (!('id' in opened)) throw new Error('refused');
+    coord.insertMail({ fromId: 'demo-worker', fromUuid: 'u', toId: 'ccrc-pwa-coord', runId: opened.id, kind: 'status',
+      subject: WAVE_DONE_SUBJECT, body: 'suite: green', artifacts: [] });
+    expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
+  });
+
+  // S2-R1 (controller ruling, fix round 1): `bindSession` is reached from
+  // `markDispatched` (a first bind, or the same session on a resume, never a
+  // change of occupant) and from `setSession`, which itself has two callers —
+  // `dispatch.ts`'s fresh-spawn arm, which FIRST-binds the session it just
+  // spawned onto a run that had none, and the open route's `openRun` dup arm,
+  // which keys on `state = 'planned'`. So the only caller that can CHANGE the
+  // occupant is the open route, and a change of occupant can therefore only
+  // happen on a run that was NEVER dispatched — a predecessor's wave-done on
+  // such a run is not a done-claim for dispatched work. The filter stays
+  // `fromId = runs.sessionId` (the CURRENT occupant); it does not widen to the
+  // session lineage.
+  it('a re-bound run reads only its CURRENT worker: a predecessor\'s wave-done on a planned run is not a claim for dispatched work (S2-R1)', () => {
+    const coord = open();
+    const opened = coord.openRun({ program: 'p3', title: 'p3', project: 'demo', wave: 1, waveOf: null, claimedBy: 'ccrc-pwa-coord' });
+    if (!('id' in opened)) throw new Error('refused');
+    coord.setSession(opened.id, 'demo-pred');
+    waveDone(coord, opened.id, 'demo-pred', 'suite: green\n{}');
+    const rebind = coord.setSession(opened.id, 'demo-heir');
+    expect(rebind.rebound).toBe(true);
+    expect(coord.runSignals(opened.id)).toMatchObject({ waveDoneMails: 0, signals: null });
   });
 });

@@ -1355,7 +1355,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **Both skills ship to every rostered account's config dir.** The
 coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, fifteen clauses pinned by
 `server/test/worker-skill.test.ts`), which carries no `references/` of its own
 and points at the coordinator's — so it must land *beside* it, never instead of
 it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
@@ -1545,10 +1545,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eleven
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its thirteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), fifteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1566,6 +1566,20 @@ release first, and reap consent stays the PWA's own ceremony either way.
 Nothing server-side makes reap mechanically impossible for a process with a
 shell — see "The honest boundary" below for what a contract does and does not
 buy.
+
+**Routing (routing slice 2).** Clause 12 makes every brief name the wave's shape and the routing
+`ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
+the coordinator revise routing only on a wave's evidence, recorded in the ledger. Clause 13 routes
+every handoff review through the held-out panel in `references/review-panel.md` — three Opus lenses,
+a Sonnet refute pass per finding, model and effort literal in the script — so the quality gate does
+not move when a worker's class or effort does. Both references are in `install-coordinator-skill.sh`'s
+`REQUIRED_REFS` and pinned by `server/test/routing-references.test.ts`.
+
+The worker's half: clause 14 routes its own subagents by task shape from the same matrix, class
+named on every call and effort on every Workflow call, Fable never a fan-out worker; clause 15 opens
+every wave-done body with `suite: green|red|unrun` and, on a failed check, `failure:
+shallow|ceiling|unclear`, which `GET /api/runs/:id/signals` reads off the mail row as `signals` —
+three answers per line (a value, absent, unrecognised) and `null` when no wave-done has arrived.
 
 **Run lifecycle**, three HTTP routes driving six steps, one run row per wave
 (D-56, corrected — the version below was checked line-by-line against
@@ -1800,7 +1814,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
   does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries thirteen clauses, pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries fifteen clauses (thirteen at R2; routing slice 2 added 14 and 15), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
