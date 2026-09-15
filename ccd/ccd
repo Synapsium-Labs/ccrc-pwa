@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=78ce0d4a44eef9fba452e9090280bbf2f8d88ec27d7b64f32c0eb6304e122a2c
+# ccrc:generated 1 sha256=fbc8ee259f4e8016a4e929f42268b893fa8bd37bca2825308f5aff8d45753c5f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -986,9 +986,16 @@ SUBSTRATE_PROBE_DEADLINE_S=8    # bound on ONE has-session probe. Healthy answer
                                 # an unbounded probe turns a wedge into a silent supervisor hang.
 SUBSTRATE_BACKOFF_S=30          # unknown-tick interval once the fault is established
 SUBSTRATE_BACKOFF_AFTER=3       # consecutive unknowns before backing off 5s -> 30s
-SPAWN_EFFORT="ultracode"        # /effort sent to every freshly spawned session ("" disables).
-                                # ultracode is session-only by design (no settings.json key),
-                                # so injecting it at spawn is the only way to default it.
+SPAWN_EFFORT="ultracode"        # /effort sent at settle to a session with NO routing record
+                                # ("" disables) — a pre-slice-1 session, exactly today's
+                                # behaviour. A session WITH a record never gets this keystroke:
+                                # its own effort field rides `--effort`/`--settings` on the
+                                # spawn argv instead (`_spawn_start`, routing spec §5.2).
+                                # ultracode DOES have `--settings` keys (measured Claude Code
+                                # 2.1.270, D-2809) — the old premise here (no settings.json key)
+                                # was wrong; `/effort ultracode` was measured NOT to persist a
+                                # per-model pin either (D-2810). Never the effort-override env
+                                # variable (the one `_check_routing` refuses).
 # D-2227 — CLAUDE CODE'S OWN INTERRUPTED-TURN RESUME, SWITCHED ON FOR EVERY SPAWN.
 # On `--resume`, Claude Code classifies a tail whose last turn died in an API
 # error (a limit banner) as an interrupted turn, writes a META user prompt
@@ -1067,6 +1074,25 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
                                 # on no wire. It is a post-mortem breadcrumb standing beside
                                 # swap.log's floored line, nothing more. If it is ever promoted to a
                                 # wire field it needs a reader and the additive-only contract first.
+# ── The routing record (routing spec 2026-09-14 §5.1) ───────────────────────
+# Seven ordinary registry fields per session, written by `cmd_route` and by ccd
+# itself (`degraded`, `inert`), read ONLY through `_route_get` below. The fields
+# are a byte channel into an argv and a pane — any session on the box can write
+# them (one UNIX user; attribution, not authentication) — so every value is
+# validated BY SHAPE at the read, against these closed vocabularies, and the
+# failure direction is stated: an unrecognised value behaves as ABSENT and
+# leaves a `swap.log` note naming the field and the byte COUNT, never the bytes.
+# `subagent` has no list here on purpose: it is validated against
+# `CCRC_SUBAGENT_CLASSES`, the roster projection of `shared/models.mjs`'s
+# `SUBAGENT_CLASSES`, so this file never holds a third spelling of that list.
+# `inert` is a comma list of FIELD NAMES a lane could not apply (`effort`,
+# `workflow`), never a value.
+ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
+ROUTE_CLASSES="fable opus sonnet haiku default"
+ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
+ROUTE_WORKFLOWS="on off"
+ROUTE_INERTABLE="effort workflow"
+ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse notes for one id+field
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -2049,8 +2075,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 138
-# invocations across 114 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 142
+# invocations across 118 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -2209,6 +2235,17 @@ _reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
     meas.project "$(_reg_get "$1" project)"
   _reg_set "$1" started 1
 }
+_usage_purge() {   # id — the usage sidecar (routing spec 2026-09-14 §6) is keyed by
+  # the ccd id, so a REUSED id must never inherit a dead session's reading. Exact
+  # names, never a glob: `_reg_purge's own unanchored-glob hazard (an id that is
+  # a prefix of another) applies to this directory too. Always 0 — a purge that
+  # cannot remove a sidecar is not a reason to stop purging the row.
+  rm -f -- "$REG/usage/$1.json" 2>/dev/null
+  rm -f -- "$REG/usage/.$1."*.tmp 2>/dev/null
+  [[ -d "$REG/usage/$1.agents" ]] && rm -rf -- "$REG/usage/$1.agents" 2>/dev/null
+  return 0
+}
+
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # final-review-destructive finding F3. The THREE call sites that used to spell
   # this `rm -f "$REG/$id".*` directly were an unanchored glob: `$id.*`
@@ -2349,6 +2386,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # explicitly here rather than exempted from the loop's filter, so the
   # nested-id guard stays a single, simple rule.
   rm -f "$REG/$id.hookstate.json"
+  _usage_purge "$id"
   rm -f "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the
@@ -2611,7 +2649,7 @@ _LC_OBS=""
 # `badact` field, which is what makes the equality hold by construction rather
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
-          hold purge reap rehome release rename restore spawn start stop
+          hold purge reap rehome release rename restore route spawn start stop
           supervise swap unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
@@ -6008,6 +6046,7 @@ pr-open
 pr-state
 prefer
 project-pool
+route
 start
 stop
 supervise
@@ -6127,6 +6166,11 @@ EOF
   # so `project-pool`'s presence in `ccdVerbs` IS the evidence. Same
   # argument, same polarity, as `actor-flags-v1` above.
   echo pools-v1
+  # route-v1 — this ccd implements `ccd route --session <id> --set <field>=<value>`
+  # and reads the routing record at every settle (routing spec 2026-09-14
+  # §5.3). A server that sees this token may write routing fields through the
+  # verb; a server that does not sees no route verb and passes nothing.
+  echo route-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -6529,6 +6573,92 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
   # a JSON string literal is produced by the one encoder, not by a printf whose
   # safety is an argument in a comment.
   printf '{"pane":%s,"method":%s}\n' "$(_json_str "$pane")" "$(_json_str "$method")"
+}
+
+cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
+  # Routing spec 2026-09-14 §5.3. WRITES THE RECORD, NEVER A KEYSTROKE: this
+  # slice has no --apply (slice 4 adds it for the server's picker path only),
+  # so a coordinator running this against a worker types nothing into that
+  # worker's pane — ccd applies the fields at the next settle. Every value is
+  # validated BEFORE anything is written, so a bad call is a `die` the caller
+  # sees and an unchanged record, never a silently-absent field. The PREVIOUS
+  # value is read VALIDATED: an unrecognised one is rendered as a byte count in
+  # the log and the journal, never its bytes — the file is writable by any
+  # session on the box and a multi-line value would forge log lines.
+  local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--actor <text>] [--reason <text>]"
+  local id="" actor="" reason="" kv f v cls eff old raw rc
+  local -a sets=()
+  while (( $# )); do
+    case "$1" in
+      --session) [[ $# -ge 2 ]] || die "$usage"; id="$2"; shift 2 ;;
+      --set)     [[ $# -ge 2 ]] || die "$usage"; sets+=("$2"); shift 2 ;;
+      --actor)   [[ $# -ge 2 ]] || die "$usage"; actor="$2"; shift 2 ;;
+      --reason)  [[ $# -ge 2 ]] || die "$usage"; reason="$2"; shift 2 ;;
+      *)         die "$usage" ;;
+    esac
+  done
+  # --actor and --reason are free-form caller text that reaches swap.log
+  # verbatim (the journal arm is safe — `_lc_json` JSON-encodes); refuse any
+  # control character in either so a newline can never forge a second
+  # `route …` line (controller ruling S1-R4). Dies before anything is written.
+  case "$actor$reason" in
+    *[[:cntrl:]]*) die "route: --actor/--reason must not contain control characters" ;;
+  esac
+  [[ -n "$id" && ${#sets[@]} -gt 0 ]] || die "$usage"
+  [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
+  [[ -f "$REG/$id.uuid" ]] || die "no such session: $id"
+  for kv in "${sets[@]}"; do
+    [[ "$kv" == *=* ]] || die "bad --set '$kv' (want <field>=<value>)"
+    f="${kv%%=*}"; v="${kv#*=}"
+    _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
+    [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
+    # answers 2 when the field's vocabulary itself could not be read — today
+    # only `subagent`, whose list is PROJECTED into `$HOME/.ccrc/accounts.sh`
+    # by `ccrc install` — and that is not the caller's value being wrong, it is
+    # this box not being able to say. Both refuse (fail closed); they name
+    # different remedies, and folding them into "bad value" told an operator
+    # with a perfectly good `haiku` to go and fix `haiku`. The `*)` arm takes
+    # rc 1 and any rc a future vocabulary arm invents — unknown is bad value,
+    # the fail-closed side.
+    _route_valid "$f" "$v"; rc=$?
+    case "$rc" in
+      0) ;;
+      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary" ;;
+    esac
+  done
+  # Haiku takes no effort level: the PAIR is refused whether it arrives in one
+  # call or across two (the record on disk is half of the pair).
+  # `_route_peek`, not `_route_get`: this read only DECIDES, and the decision it
+  # may reach is a `die` that writes nothing at all. Reading through `_route_get`
+  # left a `route-reject` line and a floor marker behind on a refused call that
+  # changed nothing — and, worse, burned the field's note floor so the NEXT real
+  # spawn stayed silent about the same bad value (fix round 2, minor M2).
+  cls=$(_route_peek "$id" class); eff=$(_route_peek "$id" effort)
+  for kv in "${sets[@]}"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    [[ "$f" == class ]] && cls="$v"
+    [[ "$f" == effort ]] && eff="$v"
+  done
+  # `auto` types nothing (spec §5.1: it is the ABSENT-equivalent), so
+  # haiku+auto is not the refused pair — only haiku+a LEVEL is (controller
+  # ruling S1-R5).
+  [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class"
+  for kv in "${sets[@]}"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    # NO `|| raw=""`: `_reg_get` prints nothing on every failing arm, so the
+    # fallback assigned what the capture had already produced while making this
+    # line read as though it branched on an exit code it never used
+    # (`ccd-crosspool.test.ts` enumerates the two sites that really do).
+    raw=$(_reg_get "$id" "$f" 2>/dev/null)
+    old=$(_route_get "$id" "$f")
+    if [[ -n "$raw" && -z "$old" ]]; then old="<$(_route_bytes "$raw") bytes, unrecognised>"; fi
+    _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
+    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
+    echo "set $id $f=$v"
+  done
 }
 
 cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
@@ -14116,6 +14246,185 @@ _pane_ctx_pct() {   # pane text -> context % from the "▓ ctx <bar> NN%" status
 # one point. The slug is what a future reader greps for; the detail is what tells them how bad it
 # was. Where two conditions need different remedies they get different SLUGS, not one slug with
 # two details — the field is what a reader has once the log line is floored away.
+_route_word_in() {   # word list — 0 iff word is one of the space-separated list
+  local w="$1" x
+  for x in $2; do [[ "$x" == "$w" ]] && return 0; done
+  return 1
+}
+_route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a session with
+  # no field at all is a pre-slice-1 session and gets today's behaviour).
+  local f
+  for f in "${ROUTE_FIELDS[@]}"; do [[ -e "$REG/$1.$f" ]] && return 0; done
+  return 1
+}
+_route_valid() {   # field value — THREE answers, because two of them are two different
+  # facts and used to collapse into one (fix round 2, Finding 1):
+  #   0  the value IS in the field's closed vocabulary
+  #   1  the value is NOT in it — bad input, the caller's to refuse
+  #   2  THE VOCABULARY ITSELF WAS UNAVAILABLE, so this call measured nothing
+  #      about the value at all
+  # Only `subagent` can answer 2, and only because its vocabulary is the one
+  # that is not spelled in this file: it is `shared/models.mjs`'s
+  # `SUBAGENT_CLASSES` PROJECTED into `$HOME/.ccrc/accounts.sh` as
+  # `CCRC_SUBAGENT_CLASSES` (routing slice 1, Task 1), and a projection written
+  # before that line carries no such array — a hand-installed ccd, an adopt, or
+  # a half-finished deploy (the agent lane installs both in one run).
+  #
+  # BOTH 1 AND 2 FAIL CLOSED — neither an unrecognised value nor an unchecked
+  # one reaches an argv or a keystroke — but they are not the same fact and
+  # their remedies are different sentences (fix the value vs. re-run `ccrc
+  # install`). So no caller here may narrow the distinction it received:
+  # `cmd_route` dies with a different message for each, and `_route_get`
+  # journals `route-unmeasured` rather than calling a legal `haiku` garbage.
+  local f="$1" v="$2" x
+  case "$f" in
+    class)    _route_word_in "$v" "$ROUTE_CLASSES" ;;
+    effort)   _route_word_in "$v" "$ROUTE_EFFORTS" ;;
+    subagent) declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 || return 2
+              _route_word_in "$v" "${CCRC_SUBAGENT_CLASSES[*]}" ;;
+    workflow) _route_word_in "$v" "$ROUTE_WORKFLOWS" ;;
+    compact)  [[ "$v" =~ ^[0-9]{2,3}$ ]] && (( 10#$v >= 10 && 10#$v <= 100 )) ;;
+    # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
+    # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
+    # rather than typed a second time three lines below the first (controller
+    # ruling S1-R3). A SUFFIX strip, so `default` has to stay last in
+    # `ROUTE_CLASSES`; it is, and this is the only reader that depends on it.
+    degraded) _route_word_in "$v" "${ROUTE_CLASSES% default}" ;;
+    inert)    [[ "$v" =~ ^[a-z]+(,[a-z]+)*$ ]] || return 1
+              for x in ${v//,/ }; do _route_word_in "$x" "$ROUTE_INERTABLE" || return 1; done ;;
+    *)        return 1 ;;
+  esac
+}
+_route_note_floored() {   # id marker — 0 iff a note under this marker was written inside the floor
+  local id="$1" m="$2" now nts
+  now=$(date +%s)
+  nts=$(_reg_get "$id" "$m" 2>/dev/null)
+  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$ROUTE_NOTE_FLOOR" ]] && return 0
+  _reg_set "$id" "$m" "$now"
+  return 1
+}
+_route_bytes() {   # value -> its length in BYTES (controller ruling S1-R2).
+  # `${#v}` counts CHARACTERS, and under this box's UTF-8 locale those are not
+  # the same number: `gémini` is 6 characters and 7 bytes. Every rendering of a
+  # rejected value in this file calls the number BYTES — the log line, the
+  # `route` journal row and `cmd_route`'s own refusal — so bytes is what they
+  # must each get.
+  #
+  # `LC_ALL=C` is LOCAL to this function, deliberately, and not hoisted into the
+  # callers: `cmd_route`'s `[[:cntrl:]]` guard and its `[[ =~ ]]` id check are
+  # locale-sensitive too, and a C locale there would quietly change WHICH bytes
+  # they refuse. Bash re-reads the locale on the assignment itself, including a
+  # `local` one, and restores it on return.
+  local LC_ALL=C
+  printf '%s' "${#1}"
+}
+_route_reject_note() {   # id field len — journal an unrecognised value: the FIELD and the
+  # byte COUNT, never the bytes (they are the untrusted input). Floored PER FIELD
+  # through `routenote<field>` (a dotless suffix, so `_reg_purge` reaps it): two
+  # invalid fields read alternately each get their own line per window, which
+  # a single shared marker would flap on (the `_compact_note` reason-change
+  # shape ccd measured and removed).
+  local id="$1" f="$2" len="$3"
+  _route_note_floored "$id" "routenote$f" && return 0
+  echo "$(date '+%F %T') route-reject $id: field $f holds an unrecognised value ($len bytes) — treated as absent" >> "$REG/swap.log"
+  return 0
+}
+_route_unmeasured_note() {   # id field — journal a field whose VOCABULARY could not be
+  # read. NOT the same line as `_route_reject_note`'s and deliberately so: the
+  # value was never measured, so this note names neither its bytes NOR their
+  # count — a byte count is a claim about a value somebody looked at. Its own
+  # floor marker (`routeunmeas<field>`, dotless so `_reg_purge` reaps it with
+  # the row) rather than `routenote<field>`'s, because the two conditions can
+  # alternate for one field across an install and a shared marker is exactly
+  # the reason-flap shape `_compact_note` measured and removed.
+  local id="$1" f="$2"
+  _route_note_floored "$id" "routeunmeas$f" && return 0
+  echo "$(date '+%F %T') route-unmeasured $id: field $f could not be checked — this box's roster projection (\$HOME/.ccrc/accounts.sh) carries no class list for it; treated as absent — re-run ccrc install" >> "$REG/swap.log"
+  return 0
+}
+_route_unread_note() {   # id field — journal a field whose FILE is on disk but whose BYTES
+  # could not be read: a symlink to a device (`_reg_get` guards with `-f`), a
+  # directory, a file whose mode denies this uid. NOT `_route_unmeasured_note`'s
+  # condition and not `_route_reject_note`'s — those two both got a VALUE and
+  # then could not judge it, or judged it bad; here nothing was ever read, so
+  # the line names neither bytes nor a count, and says instead that the field is
+  # PRESENT, which is the part an operator needs: `_inject_spawn_effort` asks
+  # the filesystem, so an unreadable `effort` file still suppresses the box
+  # default (`SPAWN_EFFORT`) while contributing no value of its own. Without
+  # this line that suppression had no channel at all — the session simply came
+  # up with no effort applied and nothing anywhere said why (Task 10 review,
+  # fix round 2, Finding 2). Fail-closed is unchanged: the value is still
+  # treated as absent.
+  #
+  # Its OWN floor marker (`routeunread<field>`, dotless so `_reg_purge` reaps it
+  # with the row), for the reason `_route_unmeasured_note` gives about
+  # `routenote<field>`: a field can alternate between these conditions (a chmod,
+  # a re-pointed symlink) and a shared marker would flap on the reason change.
+  local id="$1" f="$2"
+  [[ -e "$REG/$id.$f" ]] || return 0   # genuinely ABSENT is silence, as it always was
+  _route_note_floored "$id" "routeunread$f" && return 0
+  echo "$(date '+%F %T') route-unmeasured $id: field $f is present but could not be read — treated as absent; a box default this field would suppress stays suppressed" >> "$REG/swap.log"
+  return 0
+}
+_route_pair_note() {   # id — the haiku+effort PAIR: both values are valid, the pairing is not
+  _route_note_floored "$1" routenotepair && return 0
+  echo "$(date '+%F %T') route-refuse $1: class haiku takes no effort level — the effort field is ignored" >> "$REG/swap.log"
+  return 0
+}
+_route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
+  # Three conditions in, three answers out (silence for a good value): see
+  # `_route_valid`'s rc table. The `*)` arm is rc 1 and anything a future arm
+  # invents — an unknown rc is a bad value here, which is the fail-closed side.
+  #
+  # `_reg_get`'s OWN failure is a FOURTH condition, and it is two things folded
+  # into one rc: the field is absent, or its file is there and its bytes could
+  # not be read. Absent is silence and always was; present-but-unreadable gets
+  # its own line, because it can change behaviour (an unreadable `effort` file
+  # still suppresses `SPAWN_EFFORT` — `_inject_spawn_effort` asks the
+  # filesystem) with nothing anywhere to say so. `_route_unread_note` is the
+  # one that tells them apart; both still answer nothing, so fail-closed and
+  # every caller's contract are unchanged.
+  local id="$1" f="$2" v rc
+  v=$(_reg_get "$id" "$f") || { _route_unread_note "$id" "$f"; return 0; }
+  _route_valid "$f" "$v"; rc=$?
+  case "$rc" in
+    0) printf '%s' "$v" ;;
+    2) _route_unmeasured_note "$id" "$f" ;;
+    *) _route_reject_note "$id" "$f" "$(_route_bytes "$v")" ;;
+  esac
+  return 0
+}
+_route_peek() {   # id field -> stdout the VALIDATED value, or nothing. PURE: no journal
+  # line, no floor marker, no registry write of any kind. For a caller that
+  # reads a field only to DECIDE, and may `die` before it writes anything —
+  # `cmd_route`'s haiku+effort pair check, where `_route_get` used to leave a
+  # note and a floor marker behind on a call that then refused and changed
+  # nothing (fix round 2, minor M2). `_route_get` stays what every APPLY path
+  # uses: a value a real spawn actually dropped is what the journal is for.
+  # Both conditions `_route_valid` refuses are silent here — this read makes no
+  # claim about which it saw, and the caller's own `die` is not reached from
+  # here anyway.
+  local id="$1" f="$2" v
+  v=$(_reg_get "$id" "$f") || return 0
+  _route_valid "$f" "$v" && printf '%s' "$v"
+  return 0
+}
+_route_effort_for() {   # id class -> stdout the effort to apply. Haiku 4.5 takes no effort
+  # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
+  # refused here with its own note and nothing is typed. `auto` is spec
+  # §5.1's ABSENT-equivalent — haiku+auto types nothing and notes nothing,
+  # same as haiku+absent; only haiku+a LEVEL is the refused pair (controller
+  # ruling S1-R5, matched by `cmd_route`'s own pair check above).
+  local id="$1" cls="$2" e
+  e=$(_route_get "$id" effort)
+  if [[ "$cls" == haiku && "$e" == auto ]]; then
+    e=""
+  elif [[ "$cls" == haiku && -n "$e" ]]; then
+    _route_pair_note "$id"; e=""
+  fi
+  printf '%s' "$e"
+  return 0
+}
 _compact_note() {   # id reason [detail] — record why the compactor declined this tick.
   local id="$1" reason="$2" detail="${3:-}" rec prev nts now
   now=$(date +%s)
@@ -14786,6 +15095,92 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # which only ever names a Claude Code JSONL) fails closed there regardless —
   # so gating this line would buy nothing and cost a second home-ability check.
   resenv=$(_resume_env)
+  # THE ROUTING RECORD (routing spec 2026-09-14 §5.2, §5.4 last paragraph):
+  # `--model` from `class`, and the subagent floor into the SAME `env` line
+  # `_resume_env` composes. Computed ONCE, here, above BOTH spawn lines —
+  # exactly as `$rcflag` is, and for the same reason: the retry may not spawn a
+  # differently-shaped pane than the attempt it replaces. EMPTY when the
+  # session has no record, so a pre-slice-1 session's argv is byte-identical
+  # to today's (`ccd-spawn-split.test.ts` pins that string;
+  # `ccd-route-spawn.test.ts` pins this one). `default` passes no flag — the
+  # lane's settings.json decides. Effort IS an argv matter here (Task 8,
+  # controller ruling S1-R8/D-2809): a recorded non-auto effort rides
+  # `--effort`, and `--settings` carries the measured ultracode/enableWorkflows
+  # keys, both composed below on the Anthropic arm. The settle's keystroke
+  # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
+  # session with nothing composed here.
+  local routeflags="" routeenv="" rclass rsub rwf reff inert=""
+  if _route_any "$id"; then
+    rclass=$(_route_get "$id" class); reff=$(_route_effort_for "$id" "$rclass")
+    rsub=$(_route_get "$id" subagent); rwf=$(_route_get "$id" workflow)
+    [[ "$reff" == ultracode ]] && rwf=on
+    # `--model` IS COMPOSED ON EVERY BACKEND, and the reason it is not gated to
+    # Anthropic lanes is that the record has no way to say otherwise: `inert` is
+    # a list of FIELD NAMES drawn from `ROUTE_INERTABLE` (`effort workflow`) and
+    # its vocabulary has no word for `class`, so gating the flag here would make
+    # a non-Anthropic session's model silently unset with no channel saying so —
+    # the overloaded silence the inert stamp below exists to remove.
+    #
+    # WHAT IS UNMEASURED IS WHAT THE ALIAS MEANS THERE (controller ruling
+    # S1-R10). Spec §5.2 says a class alias "maps onto the lane's tiers through
+    # its materialiser"; nobody has run it. The slice 4 plan opens with the
+    # headless probe that settles it — `--model opus` on a gpt lane against that
+    # lane's materialised default, reading `modelUsage` back — and it runs
+    # BEFORE any writer in this tree targets such a lane. Until then a class on a
+    # non-Anthropic lane is composed on a claim, not on a measurement, and this
+    # comment is where that is said.
+    [[ -n "$rclass" && "$rclass" != default ]] && routeflags="--model $rclass"
+    # BACKEND, not placement: the subagent env is Claude Code's own; on another
+    # backend the lane's settings.json materialiser owns the subagent (spec
+    # §5.2 "Non-Anthropic lanes"), the settle's keystroke is gated to Anthropic
+    # lanes (`_spawn_settle`), and workflows have no switch — so on such a lane
+    # `effort` and `workflow` are stamped INERT by field name, and the record
+    # says what was not applied rather than pretending.
+    if _is_anthropic_backend "$wrapper"; then
+      [[ -n "$rsub" ]] && routeenv="CLAUDE_CODE_SUBAGENT_MODEL=$rsub"
+      # `--settings` BEFORE `--effort` in `routeflags` — deliberately, not
+      # alphabetical: `ccd-route-spawn.test.ts`'s ruled-form test asserts
+      # `--model X --settings Y --` as one contiguous substring, so a flag
+      # between `--model` and `--settings` would break it (measured against
+      # the test, not chosen first). `auto` composes NEITHER — the lane
+      # decides — and is the one word `_route_effort_for` can hand back
+      # un-transformed for a non-haiku class (Task 7's --settings ruling,
+      # controller ruling S1-R8).
+      if [[ "$rwf" == on ]]; then
+        if [[ "$reff" == ultracode ]]; then
+          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true,\"ultracode\":true}'"
+        else
+          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true}'"
+        fi
+      fi
+      [[ -n "$reff" && "$reff" != auto ]] && routeflags="${routeflags:+$routeflags }--effort $reff"
+      # `workflow=off` COMPOSES NOTHING AND SAYS SO (controller ruling S1-R12).
+      # Absence composes nothing here too, so an `off` that composed nothing
+      # would leave the record claiming a state it never set — the spawn would
+      # be byte-identical to one that never named `workflow` at all, and the
+      # lane's own settings.json would still decide. `{"enableWorkflows":false}`
+      # is UNMEASURED (Task 7 measured the true key, not the false one), so it
+      # is not composed on a guess; the honest channel is the one Task 6 already
+      # built for fields that were not applied, and `inert` is by FIELD NAME, so
+      # `workflow` is exactly the word for it. Slice 4 measures the false key and
+      # clears this stamp. NOT for ultracode: `$rwf` was forced to `on` above,
+      # so an ultracode record never reaches this line with `off`.
+      [[ "$rwf" == off ]] && inert="workflow"
+    else
+      # WHAT IS STAMPED INERT HERE IS `$reff` — the effort AFTER
+      # `_route_effort_for`'s haiku filtering, which is the decision and not an
+      # oversight. A haiku+effort PAIR was never going to apply on ANY backend,
+      # so it is refused with its own note rather than reported as a thing this
+      # lane failed to apply; `$reff` is already empty by then and no stamp is
+      # written. `auto` means the lane decides on its own — S1-R6 — so it is
+      # excluded here exactly as `--effort` above excludes it.
+      [[ -n "$reff" && "$reff" != auto ]] && inert="effort"
+      [[ "$rwf" == on ]] && inert="${inert:+$inert,}workflow"
+    fi
+    if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi
+  fi
+  resenv="$resenv${routeenv:+ $routeenv}"
+  local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
@@ -14793,7 +15188,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -14828,13 +15223,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     sleep "$SPAWN_RESUME_SETTLE_S"
     if ! tmux has-session -t "$tname" 2>/dev/null; then
       echo "ccd: $id: --resume '$uuid' left no session; retrying once with --session-id" >&2
-      # `$rcflag`, the SAME value the primary line above used — computed once,
-      # before either spawn, so the retry cannot spawn a differently-shaped
+      # `$launchflags`, the SAME value the primary line above used — computed
+      # once, before either spawn (it carries `$rcflag` plus the routing
+      # record's `--model`), so the retry cannot spawn a differently-shaped
       # pane than the attempt it is replacing. (This is the copy that gets
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $rcflag --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -14958,21 +15354,58 @@ _spawn() {   # id mode(new|resume) — the composition, so cmd_swap and friends 
   _spawn_settle "$1" "$SPAWN_FROMSWAP"
 }
 
-_inject_spawn_effort() {   # tmuxname — apply SPAWN_EFFORT once the TUI is up.
-  [[ -n "$SPAWN_EFFORT" ]] || return 0
-  local t="$1"
+_inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the TUI is up.
+  # The id is the tmux name with `cc-` stripped (`_tmux`), so the signature the
+  # settle calls with stays (`ccd-backend-vs-placement.test.ts` pins the call).
+  # THE EFFORT FIELD DECIDES (routing spec 2026-09-14 §5.2, controller rulings
+  # S1-R8 and S1-R11): a session whose record carries an `effort` file — ANY
+  # value, including `auto` and including bytes no vocabulary admits — never
+  # gets this keystroke, because that level was already applied on the spawn
+  # argv (`_spawn_start`'s `--effort`/`--settings`) or was `auto`, which means
+  # the lane decides. A session with no `effort` file gets `SPAWN_EFFORT`,
+  # exactly as before, WHATEVER ELSE the record holds.
+  #
+  # THE FIELD, NOT `_route_any` — the distinction is the whole of S1-R11.
+  # `_route_any` is true for all seven files, two of which (`degraded`, `inert`)
+  # ccd writes ITSELF: slice 3's degradation stamp alone would then have read as
+  # "the record carried an effort" and silently switched off the box default on
+  # a session whose operator never chose an effort at all. So this asks about
+  # ONE file — and it asks the FILESYSTEM, with the same `[[ -e ]]` test
+  # `_route_any` uses, so an EMPTY `effort` file still counts as present: a
+  # field somebody wrote is a field somebody meant.
+  #
+  # NOT `if _reg_get "$id" effort`, which is what stood here and is the reason
+  # `ccd-crosspool.test.ts`'s "no call site can see that rc" case redded at the
+  # tip. That case exists to hand the duty to the first caller that branches on
+  # `_reg_get`'s exit code, and the duty is real: `_reg_get` guards with `-f`,
+  # so a field that is a symlink to `/dev/null` — the one input that suite
+  # measures as having MOVED — answered rc 1 with the file plainly there, and
+  # this branch then typed `SPAWN_EFFORT` over a session whose operator had
+  # chosen an effort. Presence is not a read's exit code.
+  #
+  # `_route_effort_for` is still called on the record path for its JOURNALING
+  # side effect only (the haiku+effort refusal note and the unrecognised-value
+  # reject note) — its return value is never typed, so nothing unrecognised
+  # reaches a keystroke because nothing recognised does either.
+  local t="$1" id="${1#cc-}" level
+  if [[ -e "$REG/$id.effort" ]]; then
+    _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
+    return 0
+  fi
+  level="$SPAWN_EFFORT"
+  [[ -n "$level" ]] || return 0
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
-    echo "ccd: auto-continue armed, skipped /effort $SPAWN_EFFORT (D-2229)" >&2; return 0
+    echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 0
   fi
   # Only type into an EMPTY input box — a restored draft would swallow the slash
   # command. `-e` for the same reason the auto-compact guard passes it: without
   # the escape codes a dim ghost-suggestion reads as a draft and /effort is
   # skipped on every fresh session that shows one.
   if _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)"; then
-    echo "ccd: input box not empty, skipped /effort $SPAWN_EFFORT" >&2; return 0
+    echo "ccd: input box not empty, skipped /effort $level" >&2; return 0
   fi
   sleep 1
-  tmux send-keys -t "$t" -l "/effort $SPAWN_EFFORT"; sleep 1; tmux send-keys -t "$t" Enter
+  tmux send-keys -t "$t" -l "/effort $level"; sleep 1; tmux send-keys -t "$t" Enter
   # Sessions with cached history confirm the switch ("full history gets re-read") — accept.
   sleep 2
   if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
@@ -17633,9 +18066,10 @@ case "${1:-}" in
   coord-pause) shift; cmd_coord_pause "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
+  route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|account-pane|project-pool|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

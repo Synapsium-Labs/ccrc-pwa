@@ -6224,15 +6224,128 @@ describeLinux('ccrc doctor: scopes', () => {
   });
 });
 
-describe('ccrc doctor: accounts', () => {
-  /** A lane whose config dir carries a settings.json env block — the shape an
-   *  api-key lane is provisioned with, API key field deliberately empty. */
-  function writeSettingsEnv(home: string, suffix: string, env: Record<string, string>): void {
-    const d = join(home, suffix);
-    mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
-  }
+/** A lane whose config dir carries a settings.json env block — the shape an
+ *  api-key lane is provisioned with, API key field deliberately empty. */
+function writeSettingsEnv(home: string, suffix: string, env: Record<string, string>): void {
+  const d = join(home, suffix);
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
+}
 
+describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
+  const ROUTING_ROSTER = { version: 1, accounts: [
+    { id: 'claude', label: 'team·max', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'gpt', label: 'gpt', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
+  ] };
+  const routingBox = (prefix: string): string => {
+    const home = healthy(prefix);
+    seedAccountsSh(home, ROUTING_ROSTER);
+    return home;
+  };
+
+  it('routing: PASSES when no Anthropic lane\'s settings.json names a routing env key', () => {
+    const home = routingBox('ccrc-doctor-routing-pass-');
+    writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+    writeSettingsEnv(home, '.gpt-cfg', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });   // a non-Anthropic lane is not this check's subject
+    const line = lineFor(runDoctor(home).stdout, 'routing');
+    expect(line).toMatch(/^PASS routing: 1 Anthropic lane\(s\)/);
+  });
+  it('routing: WARNS — never FAILS — on the lane whose settings.json pins CLAUDE_CODE_SUBAGENT_MODEL (controller ruling S1-R13)', () => {
+    // THE SEVERITY IS THE ASSERTION, and the reason is `ccrc update`. A FAIL
+    // here is not a finding about a misconfigured box: the key predates the
+    // routing record (the fleet's own 2026-09-07 subagent-routing ruling put it
+    // in settings.json on purpose), so an honouring box FAILs by construction —
+    // and `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
+    // `_ccrc_die` BEFORE `_upd_sweep`, half-landing every update on that box.
+    // So: WARN, naming the count, the lanes, and the CONSEQUENCE (the record's
+    // subagent field is overridden there), with a remedy that admits keeping it.
+    const home = routingBox('ccrc-doctor-routing-subagent-warn-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line).toContain('claude');
+    expect(line, 'the consequence, not just the key')
+      .toContain("the routing record's subagent field is overridden there until the key is removed");
+    expect(out).toContain('remedy: remove the key from those lanes');
+    expect(out, 'the subagent key alone must never read as a FAIL').not.toMatch(/^FAIL routing: /m);
+  });
+  it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL — the arm that stays a FAIL, naming the lane', () => {
+    const home = routingBox('ccrc-doctor-routing-effort-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^FAIL routing: /);
+    expect(line).toContain('CLAUDE_CODE_EFFORT_LEVEL');
+    expect(line).toContain('claude');
+    expect(out).toContain('remedy: remove the key');
+  });
+  it('routing: a lane carrying BOTH keys is a FAIL — the effort arm wins, and it is named once', () => {
+    const home = routingBox('ccrc-doctor-routing-bothkeys-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet', CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'routing'), out).toMatch(/^FAIL routing: /);
+    expect(out, 'one lane, one line — not also a WARN about the same lane').not.toMatch(/^WARN routing: /m);
+  });
+  it('routing: a box with no projection PASSES vacuously and says so — never a SKIP, which the healthy fixture\'s counts forbid', () => {
+    const home = healthy('ccrc-doctor-routing-noroster-');
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^PASS routing: 0 Anthropic lane\(s\).*no roster projection/);
+  });
+  it('routing: a roster with only non-Anthropic lanes PASSES vacuously naming the reason', () => {
+    const home = healthy('ccrc-doctor-routing-gptonly-');
+    // parseRoster requires exactly one `exec.kind: 'upstream'` account, so the
+    // single lane here is upstream — that is a launcher-identity question,
+    // orthogonal to `telemetry`, which is what `_check_routing` actually reads.
+    seedAccountsSh(home, { version: 1, accounts: [
+      { ...ROUTING_ROSTER.accounts[1], exec: { kind: 'upstream' } },
+    ] });
+    expect(lineFor(runDoctor(home).stdout, 'routing'))
+      .toMatch(/^PASS routing: 0 Anthropic lane\(s\).*declares no Anthropic-backend/);
+  });
+  it.skipIf(process.getuid?.() === 0)(
+    'routing: WARNS, never silently PASSES, when a lane\'s settings.json exists but cannot be read', () => {
+      const home = routingBox('ccrc-doctor-routing-unreadable-settings-');
+      writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+      const p = join(home, '.claude', 'settings.json');
+      chmodSync(p, 0o000);
+      try {
+        expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
+      } finally {
+        chmodSync(p, 0o600);
+      }
+    });
+  it('routing: WARNS (never a silent vacuous PASS) when accounts.sh fails to source', () => {
+    const home = healthy('ccrc-doctor-routing-corrupt-sh-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'this is not bash (\n');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'routing')).toMatch(/^WARN routing: could not read/);
+    expect(out).toContain('remedy: re-run ccrc install');
+  });
+  it('routing: WARNS when the projection predates CCRC_ANTHROPIC_BACKEND', () => {
+    const home = healthy('ccrc-doctor-routing-stale-projection-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
+  });
+  it('routing: WARNS when the projection predates CCRC_SUBAGENT_CLASSES — the array ccd validates `subagent` against', () => {
+    // The vacuous-green shape S1-R9 removed, ONE ARRAY OVER: `ccrc install`
+    // writes both arrays from one generator, but they shipped in different
+    // releases, so a box installed between them has the backend array and not
+    // this one — and ccd cannot validate a `subagent` field there at all.
+    const home = routingBox('ccrc-doctor-routing-stale-subagent-');
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, readFileSync(sh, 'utf8').split('\n')
+      .filter((l) => !l.startsWith('CCRC_SUBAGENT_CLASSES=')).join('\n'));
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: could not read/);
+    expect(line).toContain('CCRC_SUBAGENT_CLASSES');
+    expect(out).toContain('remedy: re-run ccrc install');
+  });
+});
+
+describe('ccrc doctor: accounts', () => {
   const COMPATIBLE: RosterEntry = {
     id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
     exec: {

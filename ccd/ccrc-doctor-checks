@@ -196,6 +196,7 @@ CCRC_DOCTOR_CHECKS=(
   build
   fleet
   memory
+  routing
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -4314,4 +4315,102 @@ _check_memory() {
     _dr_pass memory "one memory store per project; every agent home converged"
   fi
   return "$rc"
+}
+
+_check_routing() {
+  # Routing spec 2026-09-14 §5.2 / §8: on an Anthropic lane the subagent floor
+  # rides the spawn PROCESS ENV (`CLAUDE_CODE_SUBAGENT_MODEL`, composed by ccd
+  # from the routing record), which a `settings.json` env key would override
+  # silently; and CLAUDE_CODE_EFFORT_LEVEL overrides every effort control and
+  # must appear nowhere. A text scan, like `_check_memory`: presence is the
+  # fact. A box with no projection or no Anthropic lane has nothing that could
+  # contradict the rule and PASSES vacuously, in those words — not a SKIP: the
+  # doctor's own healthy fixture has no projection, and a check that skips
+  # there is a check that cannot be counted.
+  local sh="$HOME/.ccrc/accounts.sh" raw="" eff="" sub="" unread="" a d f line n=0 sn=0 he hs rc
+  if [ ! -r "$sh" ]; then
+    _dr_pass routing "0 Anthropic lane(s): no roster projection at \$HOME/.ccrc/accounts.sh, so no settings.json can override the routing record's spawn env (the wrappers check owns the roster's health)"
+    return 0
+  fi
+  # An unsourceable projection (corrupt file, `.` fails) and a projection that
+  # sources fine but predates one of the routing arrays (`declare -p` fails) are
+  # NOT "the roster declares no Anthropic-backend account" — that PASS is
+  # reserved for an array that IS declared, with zero elements. Folding all
+  # three into one empty `raw` would report green having measured nothing, so
+  # this is its own probe, done first and separately from building `raw`.
+  #
+  # BOTH ARRAYS, not just the backend one (fix round 2, Finding 1b). `ccrc
+  # install` writes `CCRC_ANTHROPIC_BACKEND` and `CCRC_SUBAGENT_CLASSES` from
+  # the same generator in the same file, but they arrived in different
+  # releases — the second is routing slice 1's — so a box last installed
+  # between them has the first and not the second, and ccd cannot validate a
+  # `subagent` routing field there at all (`_route_valid` answers "unmeasured"
+  # and the field fails closed). Probing only the array that predates the
+  # feature is S1-R9's vacuous-green shape one array over: a green line whose
+  # subject was never measured. One `&&`, one remedy, the same sentence.
+  if ! ( . "$sh" 2>/dev/null \
+         && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 \
+         && declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 ); then
+    _dr_warn routing "could not read the roster projection at \$HOME/.ccrc/accounts.sh, or it predates the routing arrays (CCRC_ANTHROPIC_BACKEND, CCRC_SUBAGENT_CLASSES)" \
+      "re-run ccrc install to regenerate it, or check the Anthropic lanes' settings.json by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
+    return 2
+  fi
+  raw="$( . "$sh" 2>/dev/null && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )"
+  if [ -z "$raw" ]; then
+    _dr_pass routing "0 Anthropic lane(s): the roster declares no Anthropic-backend account, so no settings.json can override the routing record's spawn env"
+    return 0
+  fi
+  # TWO KEYS, TWO SEVERITIES (controller ruling S1-R13). The scan used to fold
+  # both names into one `bad` list and one FAIL, and that FAIL is not a finding
+  # about this box's configuration — it is a finding about the fleet's own
+  # earlier mechanism. `CLAUDE_CODE_SUBAGENT_MODEL` in a lane's settings.json
+  # PREDATES the routing record (the 2026-09-07 subagent-routing ruling put it
+  # there deliberately, so subagents would stop inheriting an orchestrator's
+  # model), so a box that honoured that ruling FAILs here BY CONSTRUCTION — and
+  # `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
+  # `_ccrc_die` BEFORE `_upd_sweep`, so the FAIL did not merely print: it
+  # half-landed every `ccrc update` on that box (new executables on disk, live
+  # supervisors still executing the old ccd) until an operator edited three
+  # lane config dirs. Exactly `_check_memory`'s `forked` shape, and it takes the
+  # same answer: WARN, with its own remedy, countable by doctor and unable to
+  # fail `ccrc update`. The two keys are NOT the same kind of finding —
+  # `CLAUDE_CODE_EFFORT_LEVEL` overrides every effort control and has no
+  # sanctioned writer anywhere (spec §5.2, §8), so it stays a FAIL, and the
+  # lists stay separate so each line names only the lanes its own key was
+  # measured on. A lane carrying BOTH is an effort lane: the FAIL wins, and it
+  # is the arm whose remedy the operator must act on.
+  while IFS=$'\t' read -r a d; do
+    [ -n "$a" ] || continue
+    n=$((n + 1)); f="$d/settings.json"
+    [ -e "$f" ] || continue
+    [ -r "$f" ] || { unread="${unread:+$unread }$a"; continue; }
+    he=0; hs=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in *CLAUDE_CODE_EFFORT_LEVEL*) he=1 ;; esac
+      case "$line" in *CLAUDE_CODE_SUBAGENT_MODEL*) hs=1 ;; esac
+      if [ "$he" -eq 1 ] && [ "$hs" -eq 1 ]; then break; fi
+    done < "$f"
+    if [ "$he" -eq 1 ]; then
+      eff="${eff:+$eff }$a"
+    elif [ "$hs" -eq 1 ]; then
+      sub="${sub:+$sub }$a"; sn=$((sn + 1))
+    fi
+  done <<<"$raw"
+  if [ -n "$eff" ]; then
+    _dr_fail routing "an Anthropic lane's settings.json names CLAUDE_CODE_EFFORT_LEVEL, which overrides every effort control — the routing record's effort field included: $eff" \
+      "remove the key from that lane's settings.json — the effort override must not exist; effort is chosen per session by the routing record (ccd route)"
+    return 1
+  fi
+  rc=0
+  if [ -n "$sub" ]; then
+    _dr_warn routing "$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed" \
+      "remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
+    rc=2
+  fi
+  if [ -n "$unread" ]; then
+    _dr_warn routing "could not read settings.json for: $unread" "chmod u+r <home>/settings.json, or check by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
+    rc=2
+  fi
+  [ "$rc" -eq 0 ] || return "$rc"
+  _dr_pass routing "$n Anthropic lane(s): no settings.json overrides the routing record's spawn env"
 }

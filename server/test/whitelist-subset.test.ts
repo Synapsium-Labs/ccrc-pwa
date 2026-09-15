@@ -71,6 +71,10 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // 3 fails outright if nothing builds one of them.
   projectPoolSet: ['demo', 'pool-a'],
   projectPoolClear: ['demo'],
+  // Routing slice 1: the record's one writer besides ccd. The sample carries
+  // a real field=value so layer 2 proves the flagged shape is reachable under
+  // the granted `['route','--session']` prefix.
+  route: ['demo-quiet-basin', 'effort', 'high'],
 };
 
 /**
@@ -368,6 +372,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     coordPause: ['coord-pause', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
+    route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

@@ -19,7 +19,7 @@
 // fix could regress into a different silence.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
 import { parseRoster } from '../../shared/roster.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
@@ -204,5 +204,209 @@ describe('statusline-command.sh reads the roster instead of a hand-written map',
     expect(r.code).toBe(0);
     expect(plain(r.out)).toContain('👤 .unclaimed');
     expect(limitsRow(home, 'unclaimed')).toBeNull();
+  });
+});
+
+/** The payload with the fields the usage sidecar reads. `model.id` beside
+ *  `display_name`: the id is what `familyClassOf` classifies (routing spec §6). */
+function usagePayload(extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    session_id: '11111111-2222-3333-4444-555555555555',
+    model: { id: 'claude-opus-5', display_name: 'Opus 5' },
+    effort: { level: 'high' },
+    workspace: { current_dir: '/nonexistent-for-this-test' },
+    context_window: { used_percentage: 12 },
+    cost: { total_cost_usd: 1.25 },
+    rate_limits: {
+      five_hour: { used_percentage: 41, resets_at: 1_800_000_000 },
+      seven_day: { used_percentage: 63, resets_at: 1_800_600_000 },
+    },
+    ...extra,
+  });
+}
+
+/** A fake tmux on PATH whose `display-message -p '#S'` answers `sessionName`.
+ *  The real hook derives the ccd id from exactly that call, gated on
+ *  `TMUX_PANE` being set. */
+function tmuxSaying(home: string, sessionName: string): string {
+  const bin = path.join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'tmux'),
+    `#!/bin/sh\n[ "$1" = display-message ] && printf '%s\\n' '${sessionName}'\nexit 0\n`, { mode: 0o755 });
+  return bin;
+}
+
+/** A fake tmux that NEVER ANSWERS — the measured failure class this fleet has a
+ *  name for (`_substrate_mark`, `FleetSession.substrate`): a client blocked on a
+ *  tmux server it cannot reach. `exec` so the bound's SIGTERM lands on the sleep
+ *  itself rather than orphaning it behind a shell. */
+function tmuxHanging(home: string): string {
+  const bin = path.join(home, '.local', 'bin');
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(path.join(bin, 'tmux'), '#!/bin/sh\nexec sleep 30\n', { mode: 0o755 });
+  return bin;
+}
+
+/** A PATH with NO `timeout` on it, the macOS shape. Symlinks only the binaries
+ *  this hook actually runs (`jq`, `date`, `mkdir`, `mv`, `rm`, `cat` — the rest
+ *  of its calls are bash builtins) out of the real PATH, so nothing else leaks
+ *  in; `gtimeout` is planted only when asked, which is how a macOS box with
+ *  coreutils differs from one without. Returns the PATH string to use WHOLE —
+ *  appending the ambient PATH would put /usr/bin's `timeout` back and measure
+ *  nothing. */
+function pathWithoutTimeout(home: string, opts: { gtimeout: boolean }): string {
+  const bin = path.join(home, '.fakepath');
+  mkdirSync(bin, { recursive: true });
+  // `bash` and `sleep` are here for the HARNESS, not the hook: vitest spawns
+  // the script as `bash <path>` and resolves that name on this PATH, and the
+  // hanging-tmux fixture is a `sleep` — with either missing the run dies for a
+  // reason that has nothing to do with the bound.
+  for (const cmd of ['bash', 'sleep', 'jq', 'date', 'mkdir', 'mv', 'rm', 'cat']) {
+    const real = spawnSync('bash', ['-c', `command -v ${cmd}`], { encoding: 'utf8' }).stdout.trim();
+    if (real) symlinkSync(real, path.join(bin, cmd));
+  }
+  expect(spawnSync('bash', ['-c', 'command -v timeout'], { encoding: 'utf8', env: { ...process.env, PATH: bin } }).status,
+    'the fixture PATH must not resolve `timeout` — otherwise this test measures the GNU arm again').not.toBe(0);
+  if (opts.gtimeout) {
+    const real = spawnSync('bash', ['-c', 'command -v timeout'], { encoding: 'utf8' }).stdout.trim();
+    writeFileSync(path.join(bin, 'gtimeout'), `#!/bin/sh\nexec ${real} "$@"\n`, { mode: 0o755 });
+  }
+  return bin;
+}
+
+interface UsageRun { out: string; code: number }
+function runUsage(home: string, payload: string, opts: { tmux?: string; tmuxHangs?: boolean; pane?: boolean; cfgDir?: string; basePath?: string } = {}): UsageRun {
+  const env: NodeJS.ProcessEnv = { ...process.env, HOME: home };
+  delete env['CLAUDE_CONFIG_DIR']; delete env['TMUX_PANE'];
+  env['CLAUDE_CONFIG_DIR'] = opts.cfgDir ?? path.join(home, '.zeta');
+  if (opts.pane !== false) env['TMUX_PANE'] = '%3';
+  const rest = opts.basePath ?? env['PATH'] ?? '';
+  if (opts.tmuxHangs === true) env['PATH'] = `${tmuxHanging(home)}:${rest}`;
+  else if (opts.tmux !== undefined) env['PATH'] = `${tmuxSaying(home, opts.tmux)}:${rest}`;
+  else if (opts.basePath !== undefined) env['PATH'] = rest;
+  const r = spawnSync('bash', [SCRIPT], { input: payload, encoding: 'utf8', env });
+  return { out: r.stdout ?? '', code: r.status ?? -1 };
+}
+
+const usageFile = (home: string, rel: string): unknown => {
+  const p = path.join(home, '.cc-sessions', 'usage', rel);
+  return existsSync(p) ? JSON.parse(readFileSync(p, 'utf8')) : null;
+};
+
+describe('statusline-command.sh writes the per-session usage sidecar (routing spec 2026-09-14 §6)', () => {
+  const seedReg = (home: string): void => { mkdirSync(path.join(home, '.cc-sessions'), { recursive: true }); };
+
+  // The sidecar block's own comment promises "must never cost the status bar",
+  // and this hook's tmux call is the first thing in it that CAN: a tmux client
+  // blocks waiting on a server this fleet has measurably lost before, and the
+  // status line is itself a surface the server reads back (`parseStatusline`).
+  // Bounded by `timeout 2`; drop the bound and this render waits out the whole
+  // sleep, which is what the elapsed assertion measures.
+  it('a tmux that never answers costs the render the bound, not the wait — the status line still prints', () => {
+    const home = seed('ccrc-statusline-usage-hang-'); seedReg(home);
+    const t0 = Date.now();
+    const r = runUsage(home, usagePayload(), { tmuxHangs: true });
+    const elapsed = Date.now() - t0;
+    expect(r.code).toBe(0);
+    expect(plain(r.out)).toContain('👤 zeta·one');
+    expect(elapsed).toBeLessThan(15_000);
+    // No ccd id could be derived, so the sidecar is simply not written — the
+    // same silence as a pane outside tmux, never a stall.
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
+  }, 60_000);
+
+  // `timeout` is GNU. macOS ships it only as `gtimeout` (coreutils), and this
+  // file is installed ALONE into ~/.claude with no ccd to source, so it carries
+  // the SELECTION arm of `_plat_timeout` rather than the shim. Bare, the bound
+  // was also a macOS-only outage of the whole sidecar: no `timeout` on PATH
+  // means the substitution never runs tmux at all, so every macOS session went
+  // sidecar-less and silently — the shape `macos-platform.test.ts` refuses in
+  // the source and these two cases measure in the behaviour.
+  it('bounds the tmux call with gtimeout where that is the only spelling on the box, and still writes the sidecar', () => {
+    const home = seed('ccrc-statusline-gtimeout-'); seedReg(home);
+    const base = pathWithoutTimeout(home, { gtimeout: true });
+    const r = runUsage(home, usagePayload(), { tmux: 'cc-demo-bsd-box', basePath: base });
+    expect(r.code).toBe(0);
+    expect(usageFile(home, 'demo-bsd-box.json')).toMatchObject({ model: 'claude-opus-5', account: 'zeta' });
+  }, 60_000);
+
+  it('with neither spelling on the box the render still prints and the call is SKIPPED, never run unbounded', () => {
+    const home = seed('ccrc-statusline-nogtimeout-'); seedReg(home);
+    const base = pathWithoutTimeout(home, { gtimeout: false });
+    // the tmux here HANGS: with no bound available the only safe act is not to
+    // call it, so the render must come back fast and sidecar-less rather than
+    // wait the hang out.
+    const t0 = Date.now();
+    const r = runUsage(home, usagePayload(), { tmuxHangs: true, basePath: base });
+    const elapsed = Date.now() - t0;
+    expect(r.code).toBe(0);
+    expect(plain(r.out)).toContain('👤 zeta·one');
+    expect(elapsed).toBeLessThan(15_000);
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
+  }, 60_000);
+
+  it('writes ~/.cc-sessions/usage/<ccd-id>.json keyed by the tmux name with cc- stripped, carrying ts', () => {
+    const home = seed('ccrc-statusline-usage-'); seedReg(home);
+    const before = Math.floor(Date.now() / 1000);
+    const r = runUsage(home, usagePayload(), { tmux: 'cc-demo-quiet-basin' });
+    expect(r.code).toBe(0);
+    const row = usageFile(home, 'demo-quiet-basin.json') as Record<string, unknown>;
+    expect(row).toEqual({
+      ts: expect.any(Number), uuid: '11111111-2222-3333-4444-555555555555', account: 'zeta',
+      model: 'claude-opus-5', effort: 'high', ctxPct: 12, cost: 1.25, agent: null,
+    });
+    expect(row['ts'] as number).toBeGreaterThanOrEqual(before);
+    expect(row['ts'] as number).toBeLessThanOrEqual(Math.floor(Date.now() / 1000) + 1);
+    // keyed by the ccd id, NEVER the uuid
+    expect(usageFile(home, '11111111-2222-3333-4444-555555555555.json')).toBeNull();
+    // the limits row still lands — the second side-effect did not displace the first
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
+  });
+
+  it('an agent render writes <ccd-id>.agents/<name>.json and leaves the main-loop row untouched', () => {
+    const home = seed('ccrc-statusline-usage-agent-'); seedReg(home);
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'usage', 'demo-a.json'), '{"ts":1,"marker":true}\n');
+    const r = runUsage(home, usagePayload({ agent: { name: 'refute-1' }, model: { id: 'claude-sonnet-5', display_name: 'Sonnet 5' } }),
+      { tmux: 'cc-demo-a' });
+    expect(r.code).toBe(0);
+    expect(usageFile(home, 'demo-a.agents/refute-1.json')).toMatchObject({ agent: 'refute-1', model: 'claude-sonnet-5' });
+    expect(usageFile(home, 'demo-a.json')).toEqual({ ts: 1, marker: true });
+  });
+
+  it('an agent name outside [A-Za-z0-9._-] writes NOTHING — not the agents file and not the main row', () => {
+    const home = seed('ccrc-statusline-usage-badagent-'); seedReg(home);
+    mkdirSync(path.join(home, '.cc-sessions', 'usage'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', 'usage', 'demo-a.json'), '{"ts":1,"marker":true}\n');
+    runUsage(home, usagePayload({ agent: { name: '../escape' } }), { tmux: 'cc-demo-a' });
+    expect(usageFile(home, 'demo-a.json')).toEqual({ ts: 1, marker: true });
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage', 'demo-a.agents'))).toBe(false);
+  });
+
+  it.each([
+    ['no TMUX_PANE', { tmux: 'cc-demo-a', pane: false }],
+    ['a tmux session not named cc-*', { tmux: 'scratch' }],
+    ['a tmux name with a character outside the id alphabet', { tmux: 'cc-demo a' }],
+  ] as const)('%s: no sidecar, and the status line still renders', (_label, opts) => {
+    const home = seed('ccrc-statusline-usage-none-'); seedReg(home);
+    const r = runUsage(home, usagePayload(), opts);
+    expect(r.code).toBe(0);
+    expect(plain(r.out)).toContain('Opus 5');
+    expect(existsSync(path.join(home, '.cc-sessions', 'usage'))).toBe(false);
+  });
+
+  it('no ~/.cc-sessions at all (a box without ccd): no sidecar, no error', () => {
+    const home = seed('ccrc-statusline-usage-noreg-');
+    const r = runUsage(home, usagePayload(), { tmux: 'cc-demo-a' });
+    expect(r.code).toBe(0);
+    expect(existsSync(path.join(home, '.cc-sessions'))).toBe(false);
+  });
+
+  it('a payload with no effort block and no cost writes nulls, not empty strings', () => {
+    const home = seed('ccrc-statusline-usage-nulls-'); seedReg(home);
+    const p = JSON.parse(usagePayload()) as Record<string, unknown>;
+    delete p['effort']; delete p['cost'];
+    runUsage(home, JSON.stringify(p), { tmux: 'cc-demo-a' });
+    expect(usageFile(home, 'demo-a.json')).toMatchObject({ effort: null, cost: null, model: 'claude-opus-5' });
   });
 });

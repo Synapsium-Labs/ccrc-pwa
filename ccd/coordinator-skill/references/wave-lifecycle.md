@@ -644,6 +644,22 @@ Three families sit side by side on every row and they never merge. `obs` is what
 was destroyed. When the first two disagree the census raises it as a divergence; nothing picks a
 winner. A `null` in `meas` means it was not measured, never that it was empty.
 
+## The run's own signals — a measurement, never a dial
+
+`GET /api/runs/:id/signals` — speed and quality signals re-measured off this run's own rows: the
+worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says
+so rather than guessing), and the closes this run was REFUSED. It takes a session cookie or the box
+token, so it reads cookieless from the fleet host the same way `GET /api/runs` does.
+`error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt; `error:'bad-request'` (400)
+means the id is not an integer.
+
+It writes nothing — the refused-close count it reports is the row `POST /api/runs/:id/close` already
+recorded when it refused you, not a new judgement about the worker. And nothing it reports licenses
+a different dispatch: it exists so a wave's speed and cost can be read AFTER the fact (routing spec
+2026-09-14 §6), so read it when the operator asks what a wave cost, not while a wave is running. A
+worker re-cut, re-ordered or leaned on because a counter moved is a wave steered by a number that
+was only ever meant to describe it.
+
 ## Build 9 — peers, claims, deviations (wave 7 surface)
 
 The protocol prose for these routes lands with the build-9 skill wave (coordinator clause 10,
