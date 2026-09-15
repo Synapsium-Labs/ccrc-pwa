@@ -439,7 +439,9 @@ export const ROUTE_CAP = 'route-v1';
  *  so a box that echoes this token has both. That is a contract this wave keeps
  *  rather than a property of the token: the stand-down is written (task 4)
  *  before the ccd that echoes the token is deployed (task 6), so the only way to
- *  meet the token without it is to deploy a ccd built from mid-wave. Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
+ *  meet the token without it is to deploy a ccd built from mid-wave.
+ *
+ *  Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
  *  `echo win-size-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
  *  the other two spellings, and that test's `toContain` assertion is what keeps
  *  THIS one equal to them (`capsupported.test.ts` scans for the "once" half).

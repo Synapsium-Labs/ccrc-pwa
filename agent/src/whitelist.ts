@@ -425,9 +425,18 @@ export const EXEC_WHITELIST = {
     // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
     // then some: `--session` is not a confirmation token, it is half the verb's
     // whole argument surface, and the door it is reached from is as open as
-    // `coord-pause`'s with one more hazard on top — `GET /ws/pty/:id` (wave 3)
-    // carries no box token at all, and its `:id` arrives off a JSON-parsed
-    // websocket frame rather than a path the router validated. A bare `['win-size']`
+    // `coord-pause`'s with one more hazard on top. `GET /ws/pty/:id` (wave 3)
+    // carries no box token at all, as `coord-pause`'s route does not (D-282);
+    // and its `:id` is a PATH PARAM THAT HANDLER VALIDATES NOWHERE — measured
+    // over the whole handler body in `server/src/server.ts`, which destructures
+    // `req.params` and hands the id straight to `resizeWindow` and `spawnPty`,
+    // with no id-class test, no roster lookup and no 400 in it. So ccd's own
+    // `cmd_win_size` gate is the whole of what stands behind this grant, which
+    // is exactly why the grant stops at the flag. (An earlier draft of this
+    // sentence said the id "arrives off a JSON-parsed websocket frame": that is
+    // false — the only frame that handler parses carries `type`/`data`/`cols`/
+    // `rows` and no id — and it understated the hazard. Wave 3's own plan lists
+    // validating `:id` as work it will do, not as something already done.) A bare `['win-size']`
     // would admit every positional form the verb might grow, and is invisible
     // to layer 2 and to layer 3's reachability check in
     // `whitelist-subset.test.ts` — `['win-size']` is a genuine prefix of the

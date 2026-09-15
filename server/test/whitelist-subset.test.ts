@@ -233,8 +233,12 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   // `route`'s reason — and reached from a door as open as any of theirs, with
   // one more hazard on top: `GET /ws/pty/:id` (wave 3) carries no box token at
   // all, as `coord-pause`'s own route does not (D-282), and the `:id` it hands
-  // down arrives off a JSON-parsed websocket frame rather than a path the
-  // router validated. A bare `['win-size']` would
+  // down is a path param THAT HANDLER VALIDATES NOWHERE. Measured over the
+  // handler body in `server/src/server.ts`: it destructures `req.params` and
+  // passes the id straight to `resizeWindow` and `spawnPty`, with no id-class
+  // test, no roster lookup and no 400 in it — so ccd's `cmd_win_size` is the
+  // whole gate behind this grant, and wave 3's plan lists validating `:id` as
+  // work it will do. A bare `['win-size']` would
   // permit `ccd win-size <anything> <anything…>` — every positional form the
   // verb might ever grow — and it would stay green in layer 2 and in layer 3's
   // reachability check, because `['win-size']` is a genuine prefix of the argv

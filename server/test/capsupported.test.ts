@@ -28,8 +28,10 @@ const tsFilesUnder = (dir: string): string[] =>
 /** How many times `server/src` spells a token in SINGLE OR DOUBLE QUOTES — the
  *  way a TypeScript string literal is written, and the way none of this tree's
  *  prose writes one: every prose mention of these tokens is in BACKTICKS
- *  (measured — with backticks in the class, `actor-flags-v1` answers 4 here,
- *  all four of them sentences). Two residuals, disclosed rather than implied: a
+ *  (measured — with backticks in the class `actor-flags-v1` answers 4 here:
+ *  three prose mentions, two in `ccdargv.ts` and one in `coord/dispatch.ts`,
+ *  plus the declaration this scan exists to count). Two residuals, disclosed
+ *  rather than implied: a
  *  token quoted inside a COMMENT still counts (`'stop-surface'` is quoted in
  *  one of `ccdargv.ts`'s own docstrings, so it answers 2), and a copy built by
  *  concatenation is invisible — the standing limit of any text scan, which is
