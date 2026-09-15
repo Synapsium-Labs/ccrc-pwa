@@ -128,13 +128,6 @@ const authDeadMarkerOk = (raw: string): boolean => {
  *  rollover.ts): this and ccd's `_limit_score` are one predicate in two
  *  languages, and the only way to stop them drifting is to assert both against
  *  the same rows. Production callers reach it through `projectHome`. */
-/** The seven-day figure the serviceability clause reads — MEASURED or null,
- *  the `measured()` rule's seven-day half: a rolled-over window is null, not
- *  its inferred 0. ccd's `_limit_field w seven` is the twin (it retracts on
- *  rollover the same way). */
-export const sevenOf = (l: AccountLimits | undefined): number | null =>
-  (!l || l.seven === null || l.sevenRolledOver ? null : l.seven);
-
 export const measured = (l: AccountLimits | undefined): number | null => {
   if (!l) return null;
   // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The rule below
@@ -150,6 +143,13 @@ export const measured = (l: AccountLimits | undefined): number | null => {
     ? null
     : Math.max(l.five, l.seven);
 };
+
+/** The seven-day figure the serviceability clause reads — MEASURED or null,
+ *  the `measured()` rule's seven-day half: a rolled-over window is null, not
+ *  its inferred 0. ccd's `_limit_field w seven` is the twin (it retracts on
+ *  rollover the same way). */
+export const sevenOf = (l: AccountLimits | undefined): number | null =>
+  (!l || l.seven === null || l.sevenRolledOver ? null : l.seven);
 
 /**
  * The account a new workspace would land on, and its pressure score.
