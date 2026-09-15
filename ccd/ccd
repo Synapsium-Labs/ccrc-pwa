@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=928e68207ad100e82567b1255cba74d7d6095dc09a88d1ede1939760e15f4bec
+# ccrc:generated 1 sha256=2b7b9463d58b32c824685720e8e8e9ff1d04cc87a772f846c6e9de72afd97eef
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13185,6 +13185,15 @@ _class_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (s
   case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
 }
 
+# `from` AND `to` NAME THE MOVE, NOT THE FIELD, which is why the two helpers
+# below read the `degraded` stamp at OPPOSITE ends of their own argument lists:
+# `_route_degrade id <intended> <rung-below> why` moves the session DOWN, so the
+# stamp it writes is `to`, while `_route_restore id <degraded> <intended> why`
+# moves it back UP, so the stamp it clears is `from`. Task 6 calls the second as
+# `_route_restore "$id" "$rdeg" "$rclass" "<why>"`, which is that order. NEITHER
+# journals a caller's word: both read the standing value with `_route_get` and
+# journal THAT (ruling S3-R5), because a caller naming the wrong end would
+# otherwise write a false audit row nothing can red.
 _route_degrade() {   # id from to why — stamp `degraded=<to>` and say so: one route journal row (actor ccd), one swap.log line
   # THE ONLY WRITERS OF `degraded` ARE THIS AND `_route_restore` (spec §5.1:
   # ccd's own stamp; `cmd_route` refuses the field outright). `_swap_target`
@@ -13204,10 +13213,17 @@ _route_restore() {   # id from to why — clear `degraded` (the intended class `
   # The `-e` test first, for the reason `_strand_clear` tests it first: the
   # steady state of a session that never degraded must write nothing at all,
   # not a journal row and a log line every five seconds.
-  local id="$1" from="$2" to="$3" why="$4"
+  #
+  # THE JOURNAL ROW IS MEASURED, NOT QUOTED (ruling S3-R5, fix round 1). This
+  # journalled the caller's `$from`, so a caller that named the wrong standing
+  # class wrote a false audit row that nothing in the tree could red — while
+  # its sibling above read the field. Both now read it; `$from`/`$to` reach the
+  # swap.log line only, where they say what the caller MEANT to do.
+  local id="$1" from="$2" to="$3" why="$4" old
   [[ -e "$REG/$id.degraded" ]] || return 0
+  old=$(_route_get "$id" degraded)
   rm -f -- "$REG/$id.degraded"
-  _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: $from -> ∅"
+  _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: ${old:-∅} -> ∅"
   echo "$(date '+%F %T') restore $id: $from -> $to ($why)" >> "$REG/swap.log"
 }
 
@@ -13523,7 +13539,20 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       && _avail "$home"; then
       _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
       [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
-      [[ "$src" -eq 2 ]] && return 5
+      # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling
+      # S3-R4, fix round 1). The arm carries no `[[ -z "$force" ]]` condition
+      # on purpose — a forced call that finds home recovered must go straight
+      # there rather than pick some third lane — and a bare `return 5` here
+      # re-imposed one in the worst direction: with `force` set, `cur != home`
+      # and home passing every other test, ONE unmeasured class figure for HOME
+      # aborted the whole decision, the tick took the `-ge 2` branch and
+      # `_strand_mark` wrote the classwindow sentence over a hard-blocked
+      # session the candidate loop could have rescued — a durable positive
+      # claim, which is the fabrication this rc exists to avoid. So: unmeasured
+      # stands still only when nothing is forcing the move; a forced call falls
+      # through to the must-leave loop, whose OWN pass-1 rc 5 still refuses to
+      # degrade on a wholly unmeasured fleet.
+      [[ "$src" -eq 2 ]] && { [[ -n "$force" ]] || return 5; }
     fi
     if [[ -z "$force" ]] && _avail "$cur"; then                              # cur still works, home down: stay put — if it can serve the class
       _class_gate "$cur" "$cls"; src=$?
@@ -13604,18 +13633,23 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       # question at all — which is why one rung always resolves for a fable
       # session, and why pass 2 re-asking `_serviceable … opus` is a formality
       # that keeps the two passes one body rather than two.
-      if [[ -n "$pcls" ]]; then
-        _serviceable "$cand" "$pcls" >/dev/null
-        case $? in
-          1) unserv=$((unserv + 1)); continue ;;
-          # UNMEASURED BLOCKS ONLY THE INTENDED CLASS. On pass 1 an unmeasured
-          # lane means nobody can say whether to degrade — rc 5 below. On pass 2
-          # the degrade was ALREADY decided on measured refusals; what remains is
-          # placement at the rung below, where the placement rule holds:
-          # unmeasured never becomes ineligible, it ranks last (sc 100 below).
-          2) [[ "$pass" -eq 1 ]] && { unmeas=$((unmeas + 1)); continue; } ;;
-        esac
-      fi
+      # ONE QUESTION, ONE SPELLING (ruling S3-R5, fix round 1). This asked
+      # `_serviceable` behind its own `[[ -n "$pcls" ]]` wrapper while the three
+      # stay gates above and `_ws_least_loaded` asked `_class_gate` — two
+      # spellings of the identical question inside one function, and the wrapper
+      # was a hand-rolled copy of the empty/`default` fold `_class_gate` already
+      # does. Measured behaviourally identical, and now said once: rc 0 is
+      # "servable, or no class to apply" and falls through to the ranking below.
+      _class_gate "$cand" "$pcls"
+      case $? in
+        1) unserv=$((unserv + 1)); continue ;;
+        # UNMEASURED BLOCKS ONLY THE INTENDED CLASS. On pass 1 an unmeasured
+        # lane means nobody can say whether to degrade — rc 5 below. On pass 2
+        # the degrade was ALREADY decided on measured refusals; what remains is
+        # placement at the rung below, where the placement rule holds:
+        # unmeasured never becomes ineligible, it ranks last (sc 100 below).
+        2) [[ "$pass" -eq 1 ]] && { unmeas=$((unmeas + 1)); continue; } ;;
+      esac
       # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
       # round 1 (finding 1), which is the identical magnet Task 6 removed from
       # `_ws_least_loaded`: an account that never reports scored 0, beat every
@@ -14255,10 +14289,25 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # re-derived here (`_class_below` is deterministic and `_swap_target` writes
   # nothing), the stamp and the journal row are written by the ONE writer, and
   # the move proceeds exactly as an rc 0 move would.
+  #
+  # AND THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R5, fix round 1). This
+  # ignored `_route_degrade`'s rc and set `strc=0` regardless, so a registry
+  # write that did not land dispatched the session anyway: it would arrive on a
+  # lane chosen for the rung BELOW while the record still said the intended
+  # class, and `_spawn_start` would compose `--model $icls` on a lane just
+  # measured unable to serve it, with nothing in any channel saying why. On a
+  # failed stamp the honest move is not to move: say so in one swap.log line
+  # and stand still. The next tick re-measures and retries — `_route_degrade`'s
+  # standing-state debounce reads the FIELD, and nothing was written, so it is
+  # unaffected.
   if [[ "$strc" -eq 6 ]]; then
-    local icls; icls=$(_route_peek "$id" class)
-    _route_degrade "$id" "$icls" "$(_class_below "$icls")" "unservable: $icls at or above the ceiling on every candidate lane"
-    strc=0
+    local icls ibelow; icls=$(_route_peek "$id" class); ibelow=$(_class_below "$icls")
+    if _route_degrade "$id" "$icls" "$ibelow" "unservable: $icls at or above the ceiling on every candidate lane"; then
+      strc=0
+    else
+      echo "$(date '+%F %T') degrade-unwritable $id: $icls -> $ibelow (stamp not written; standing still)" >> "$REG/swap.log"
+      return 0
+    fi
   fi
   if [[ "$strc" -ge 2 ]]; then
     # NOBODY CAN SAY — which is NOT "no destination exists". Stranding here
