@@ -400,3 +400,37 @@ describe('deploy.sh + README: the divergent banner between the two lanes is EXPE
       .toMatch(/divergent/);
   });
 });
+
+describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () => {
+  const bullet = (): string =>
+    flat(passage('CLAUDE.md, the account-pools bullet', read('CLAUDE.md'),
+      '- **Account pools', '\n## Coordination (Build 7) invariants'));
+
+  it('states the rule, the authority, and the namespace fact', () => {
+    const b = bullet();
+    expect(b, 'ruling 3 in five words').toMatch(/untagged = unconstrained/i);
+    expect(b, 'tagging only tightens — the other half of ruling 3').toMatch(/only tighten/i);
+    expect(b, 'the marker path a coder must not relocate').toContain('~/.cc-sessions/pools/<project>');
+    expect(b, 'the rejected spelling has to be named to be forbidden').toContain('$REG/<project>');
+    expect(b, 'ccd is the authority; the server refuses and forecasts').toMatch(/never places/i);
+    expect(b, 'the four-word reader is the only reader').toMatch(/_project_pool_state/);
+    expect(b, '--cross-pool is not --force').toContain('--cross-pool');
+    expect(b, 'the three per-id fields purge with the row').toMatch(/purge with the row/i);
+    expect(b, 'fixture pool names, so nobody types a real one').toMatch(/pool-a/);
+  });
+
+  it('is short enough to be the non-obvious rules rather than the README', () => {
+    const raw = passage('CLAUDE.md, the account-pools bullet (raw)', read('CLAUDE.md'),
+      '- **Account pools', '\n## Coordination (Build 7) invariants');
+    expect(raw.split('\n').filter((l) => l.trim() !== '').length,
+      'CLAUDE.md says README is canonical — this bullet is over 12 lines').toBeLessThanOrEqual(12);
+  });
+
+  it('is grounded in the shipped mechanism it describes', () => {
+    expect(ccd(), 'ccd relocated its pools directory').toMatch(/POOLS_DIR="\$REG\/pools"/);
+    expect(ccd(), 'the four-word reader is gone').toMatch(/_project_pool_state\(\)/);
+    expect(read('server/src/pools.ts')).toMatch(/POOLS_DIR_NAME = 'pools'/);
+    expect(read('server/src/pools.ts'), 'the server writes pools now — the bullet is false')
+      .not.toMatch(/writeFile|io\.write/);
+  });
+});
