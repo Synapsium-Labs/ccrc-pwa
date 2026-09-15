@@ -6922,3 +6922,23 @@ export type PaneProbe =
 export type PaneHistoryReply =
   | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
   | { ok: false; error: 'gone' | 'unmeasured' | 'bad-session-id'; detail?: string };
+
+/**
+ * The narrowest pane width at which the fleet's phrase-matching readers may be
+ * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down and the mail
+ * lane holds — a narrow pane is UNMEASURED, not idle.
+ *
+ * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
+ * line at the terminal width before tmux ever stores the row, so the derivation
+ * runs `wrap-ansi` (Ink's wrapper, `hard: false`) over Claude Code's known
+ * status-line carriers at every width in 40–220 and asks at which widths a
+ * phrase is still on ONE line. Measured 2026-09-14: the widest carrier
+ * (`✳ Procrastinating… (2h 14m 52s · ↑ 128.4k tokens · esc to interrupt)`)
+ * needs 69 columns, and the widest `· <segment>` in the sample is 37 — so 120
+ * carries room for one whole extra segment (69 + 37 = 106) and still leaves a
+ * 171-column desktop client measurable while every phone is below it.
+ *
+ * `ccd/ccd` carries the same number as a bash global, because bash cannot
+ * import this file; `server/test/reader-min-cols.test.ts` holds the two equal.
+ */
+export const READER_MIN_COLS = 120;
