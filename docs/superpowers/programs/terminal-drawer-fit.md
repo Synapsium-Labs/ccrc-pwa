@@ -350,6 +350,12 @@ When wave 1's `wave-done` arrives: re-measure the fingerprint, advance, settle t
 1's** — wave 2 stays in `ccrc-pwa`, so it reclaims wave 1's `sessionId` and closes wave 1 with
 `final:false`.
 
+**Operator rulings, 2026-09-15.** (a) The exec-whitelist grant is NOT escalated for separate
+operator sign-off: **the mandatory `opus@xhigh` security lens IS its review**, and the grant is seen
+at PR review like any other change. The lens therefore carries the whole weight — its brief says so
+explicitly. (b) Wave 1's merge goes through the ruleset's admin bypass rather than a non-author
+review; that is the operator's call and this session does not take it.
+
 Wave 2 is the AGENT-FIRST one: it ships to the fleet host before any server that calls it, and its
 first task is the `READER_MIN_COLS` measurement (wrap-ansi over Claude Code's status-line shapes at
 40–220 columns, no live session). Its brief must name the three tasks routed to `opus@high` — the
