@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f50b9e31a4d521cd418eeb37f99717d98aaaf590084cfa3c2a3d81ded910deaf
+# ccrc:generated 1 sha256=7eae1fb33c26d1a6a90e5516ed8354324953dbc827a9431632c8e1166212804c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6086,6 +6086,7 @@ ws-rename
 ws-restore
 ws-rm
 version
+win-size
 ls
 EOF
   # `stop-surface` is a CAPABILITY token, not a dispatchable verb — `ccd
@@ -6193,6 +6194,16 @@ EOF
   # §5.3). A server that sees this token may write routing fields through the
   # verb; a server that does not sees no route verb and passes nothing.
   echo route-v1
+  # The capability token for wave 2 of the terminal-drawer program, and it is
+  # the proof of BOTH halves of that wave rather than of the verb alone: the
+  # `win-size` verb and `_pane_measurable`'s stand-down at every typing site
+  # ship in ONE ccd inode, so a server that sees this token knows the readers on
+  # this box already yield to a narrow pane. The server gates the un-pin on
+  # `capSupported(state,'win-size-v1')` — null → REFUSE — never `verbSupported`,
+  # whose null → PERMIT default is right for verbs that have always existed and
+  # wrong for one that never did. An un-upgraded agent simply leaves the window
+  # pinned: wave 1 behaviour, no fallback path, no second mechanism.
+  echo win-size-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -6508,6 +6519,58 @@ cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
       rm -f -- "$marker" || die "could not clear the pause marker — the fleet is STILL paused"
     fi
     echo "running"
+  fi
+}
+
+cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — pin or un-pin ONE session's window.
+  # THE FLEET-CONTROL VERB the terminal drawer un-pins through (spec §6.1). Two
+  # modes and nothing else:
+  #   • smallest  — `set-option window-size smallest` UN-LATCHES `manual` (F3);
+  #     tmux then sizes the window to the NARROWEST attached client (F5):
+  #     deterministic, keystroke-stable, and self-healing when that client
+  #     leaves. NEVER `latest` — F4 measured a keystroke-driven reflow flip at
+  #     +6 MB tmux RSS per flip, never returned, shedding 50 history lines per
+  #     flip from about the seventeenth.
+  #   • canonical — `resize-window -x 220 -y 50` restores the grid `_spawn_start`
+  #     spawns with AND re-latches `manual`, which IS the pinned state §3 wants.
+  #     The server does NOT depend on this arm: its own pin is the already-granted
+  #     `tmux resize-window`, which works against an agent of any age. This arm is
+  #     for an operator on the box and for ccd's own use.
+  #
+  # SCOPED TO `-t cc-<id>`, NEVER GLOBAL. `set-option` with no `-t` writes the
+  # SERVER-WIDE default and re-sizes every live session on this box at once.
+  #
+  # `aggressive-resize` is deliberately left alone — measured a no-op for a
+  # one-window session, which every cc-* session is.
+  [[ $# -eq 4 && $1 == --session && $3 == --mode ]] \
+    || die "usage: ccd win-size --session <id> --mode smallest|canonical"
+  local id="$2" mode="$4" t
+  # BEFORE ANY TARGET IS BUILT FROM IT. `cc-$id` is handed to tmux, which hands
+  # the target on to its own parser; `shared/roster.ts`'s ID_RE is where every
+  # rostered id comes from, and it is the class `cmd_account_pane` validates
+  # against for this same reason. NOT the looser `^[A-Za-z0-9._-]+$` most
+  # workspace verbs use: this one is reached from a route the PWA hits.
+  [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $id"
+  # The vocabulary check runs BEFORE tmux is touched at all, so an unknown mode
+  # runs nothing — and it is its OWN sentence, not the usage line: the caller
+  # got the shape right and the word wrong.
+  case "$mode" in
+    smallest|canonical) ;;
+    *) die "bad mode: $mode (want smallest|canonical)" ;;
+  esac
+  t=$(_tmux "$id")
+  tmux has-session -t "$t" 2>/dev/null || die "no such session: $t"
+  # `set -uo pipefail` with NO `-e`: an unguarded failure would fall straight
+  # through to the echo and report a size change that did not happen. Wave 3's
+  # `sizer.unpin` keys on this exit code to tell 'ok' from 'failed'.
+  if [[ "$mode" == smallest ]]; then
+    tmux set-option -t "$t" window-size smallest \
+      || die "could not un-pin $t — the window is STILL at its pinned size"
+    echo "smallest"
+  else
+    tmux resize-window -t "$t" -x 220 -y 50 \
+      || die "could not pin $t — the window is NOT at the canonical grid"
+    echo "canonical"
   fi
 }
 
@@ -18086,12 +18149,13 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi
