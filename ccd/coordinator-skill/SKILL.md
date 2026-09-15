@@ -64,7 +64,7 @@ run record and the server's own re-measurement are what settle facts.
 
 ## The contract
 
-These eleven sentences are the boundary between "a coordinator" and "an agent
+These thirteen sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -78,6 +78,8 @@ with a shell on the fleet host". They are not advice.
 9. This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.
 10. This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.
 11. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
+12. Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.
+13. The handoff review invokes the held-out panel in `references/review-panel.md` as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
@@ -256,7 +258,9 @@ not after.
    `ccrc-worker` skill, and that skill IS the protocol** — so your brief carries
    what only this wave knows (the plan file's path, the task range, **the
    execution skill the worker should invoke**, the interfaces earlier waves
-   settled, the deviations already ledgered), not the
+   settled, the deviations already ledgered, **the shape of the wave and the
+   routing** the matrix derives from it (`references/routing-matrix.md`;
+   clause 12), not the
    identity, ack, question and fingerprint rules the worker already has. The
    execution skill is not optional: the worker's clause 6 invokes "the
    execution skill the brief names", so an unnamed one is a clause pointing at
@@ -297,7 +301,9 @@ not after.
    That ordering IS the authorisation: the server's own re-measurement is what
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
-5. **Review the handoff commit** like any other commit, update the ledger,
+5. **Review the handoff commit** through the held-out panel in
+   `references/review-panel.md` (clause 13) and then like any other commit,
+   record the panel's verdict and update the ledger,
    then `POST /api/runs` **for wave N+1 first**. Order matters: closing first,
    even briefly, leaves the program with zero open runs, and the server retires
    a program with none — silently breaking every `toId:'coordinator'` mail

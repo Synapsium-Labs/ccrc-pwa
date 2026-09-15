@@ -228,7 +228,10 @@ of that in a brief buys nothing and spends the one budget a brief is short of
 the plan file's path, the tasks or task range this wave owns, **the execution
 skill the worker should invoke** (`superpowers:executing-plans` or
 `superpowers:subagent-driven-development`), the interfaces earlier waves
-settled, the deviations already ledgered, and whatever your review of the last
+settled, the deviations already ledgered, the shape of the wave and the
+routing the matrix derives from it — class, effort, subagent class, workflow
+mode, and the subagent effort the worker should name on its calls
+(`references/routing-matrix.md`, clause 12) — and whatever your review of the last
 handoff decided.
 
 **Every brief for a wave in ANOTHER project carries three immutable-plan
@@ -448,6 +451,28 @@ produces `pr-unmeasurable` below: "PR #591 is green" is not a `prPhase`, and
 inventing one out of a sentence is the single commonest way a finished wave is
 refused.
 
+**Two signal lines open the body** (routing spec §5.5; worker clause 15), before any prose and
+before the JSON — the first two lines, in either order, grammar exactly `key: word` with one space:
+`suite: green|red|unrun` (the whole suite on its FIRST full run after the wave's implementation
+was complete — red stays red however many fix rounds followed; unrun when no full run happened)
+and, only when a check failed, `failure: shallow|ceiling|unclear` (shallow: tests missed, a plan
+half-followed — raise effort; ceiling: an ambiguity the worker could not resolve, a design flaw,
+a debug that survived two attempts — raise class; unclear: effort-first). A complete body:
+
+```
+suite: red
+failure: ceiling
+{"branchTip":"<40-hex sha>","prNumber":591,"prPhase":"open","handoffCommit":"<the same 40-hex sha>"}
+```
+
+The server reads them from the mail row, never from the envelope: `GET /api/runs/:id/signals`
+answers `signals.suite` and `signals.failure`, each one of THREE answers — a value, `absent`
+(the line was not sent: an older worker, or nothing to say), or `unrecognised` (a line was sent
+with a word outside the vocabulary — a defect in the worker's report, surfaced, never read as
+silence). They are what spec §6's first-run quality signal and clause 12's next-wave routing
+decision read; a wave-done that omits the suite line is accepted by the fingerprint route all the
+same, and shows as `absent`.
+
 - **`{"to":"working"}`** — no re-measurement (this is a status marker, not a
   doneness claim; the fingerprint above only satisfies the shape check and is
   never read). Send it once the worker is genuinely underway, and ALSO to
@@ -544,6 +569,12 @@ Partial success on a ledger write is how tallies drift.
 | `error:'bad-request'` (400) | shape: no `items` array, an empty one, a non-integer id, a `state` outside the vocabulary, or past 32 entries | fix the body; nothing was written |
 
 ## 5 — The boundary: open the next wave's run, THEN close this one
+
+**The handoff review is the held-out panel, first** (clause 13, `references/review-panel.md`):
+three Opus lenses over the wave's commit range, three Sonnet refuters per finding, majority
+deciding, model and effort literal in the script. Confirmed findings go back to the worker as a
+`finding` mail and the run stays where it is; a lens that returned nothing is a review not yet
+done. Only a wave the panel has examined is reviewed "like any other commit" below.
 
 **Order is load-bearing here, and it is the opposite of what you might guess.**
 A program is `active` only while it has at least one open (non-`done`,
@@ -649,7 +680,9 @@ winner. A `null` in `meas` means it was not measured, never that it was empty.
 `GET /api/runs/:id/signals` — speed and quality signals re-measured off this run's own rows: the
 worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says
 so rather than guessing), and the closes this run was REFUSED. It takes a session cookie or the box
-token, so it reads cookieless from the fleet host the same way `GET /api/runs` does.
+token, so it reads cookieless from the fleet host the same way `GET /api/runs` does. Since routing
+slice 2 it also answers `waveDoneMails` (the worker's `wave-done` mails on this run) and `signals`
+— the two signal lines off the LAST of them, or `null` when there are none (§4 above).
 `error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt; `error:'bad-request'` (400)
 means the id is not an integer.
 
