@@ -3771,6 +3771,39 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     expect(fs.existsSync(cardFile()), 'and the card is consumed').toBe(false);
   });
 
+  // ── r4 A-M2: the aged-card removal is proved on the far side of its fork ─
+  // The age `find` is the fork, and the `rm` is the mutation. With the proof
+  // above the find, a replacement landing inside that child deleted the aged
+  // canonical card anyway — the refusal never fired. The leg below drives
+  // exactly that, and its control is the same stub with the replacement
+  // suppressed, which must still remove the card: without the control the
+  // assertion is satisfied by a stub that broke `find` outright, and a broken
+  // `find` also leaves an aged card standing.
+  it('ITEM 3 AT THE AGED-CARD REMOVAL: a replacement inside the age find\'s fork refuses, and the aged card SURVIVES (r4 A-M2)', () => {
+    const tree = cardTree();
+    plantServablePair();
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(cardFile(), old, old);
+    strangerFind(true);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    expect(r.stdout, 'an aged card is never served, refusal or not').not.toContain('graphify card —');
+    expect(fs.existsSync(cardFile()),
+      'the removal is a canonical mutation and the descriptor stopped naming canonical inside the find').toBe(true);
+  });
+
+  it('ITEM 3 AT THE AGED-CARD REMOVAL, THE CONTROL: the same stub and the same fork WITHOUT the replacement still remove it', () => {
+    const tree = cardTree();
+    plantServablePair();
+    const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+    fs.utimesSync(cardFile(), old, old);
+    strangerFind(false);
+    const r = runFull(compactStart(tree, '/t.jsonl'));
+    expect(r.stderr).toBe('');
+    expect(r.stdout).not.toContain('graphify card —');
+    expect(fs.existsSync(cardFile()), 'an aged card is REMOVED when the proof holds').toBe(false);
+  });
+
   // — and the SOURCE pin for the sites one fixture cannot reach ————————————
   // The fixture above drives ONE site, because a stub can only inject where
   // the section it targets actually forks. The rule item 3 states is about
@@ -3871,7 +3904,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
       ['PreCompact: the two stage renames', 'if [[ "$ownhead" =~'],
       ['PostCompact: the canonical unlink and the claim touch', 'if ! rm -f "$set" 2>/dev/null; then'],
       ['PostCompact: the journal commit', 'mv -f "$stage" "$journal" 2>/dev/null'],
-      ['SessionStart(compact): the aged-card removal', '[ -n "$(find "$f" -mmin'],
+      ['SessionStart(compact): the aged-card removal', 'rm -f "$f"'],
       ['SessionStart(compact): the card claim', 'if ! { mv -f "$f" "$claim"; } 2>/dev/null; then'],
     ];
     let prev = 0;

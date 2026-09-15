@@ -1818,12 +1818,28 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   local f="$REG/$id.compactcard" set="$REG/$id.compactset" claim="" head="" nonce="" raw="" line1="" body=""
   [[ -f "$f" && -r "$f" ]] || return 0
   command -v find >/dev/null 2>&1 || return 0
-  # ITEM 3 in the retained-lock body. `HOOK_LOCK_FD` is the descriptor the
-  # caller acquired and still holds; this function has no local for it. On a
-  # failed proof the arm says nothing and the caller releases, which is this
-  # body's own disposition on every other refusal.
-  _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
-  [ -n "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || { rm -f "$f"; return 0; }
+  # ITEM 3 in the retained-lock body, ON THE FAR SIDE OF THE FORK (r4 A-M2).
+  # `HOOK_LOCK_FD` is the descriptor the caller acquired and still holds; this
+  # function has no local for it.
+  #
+  # MEASURE, THEN PROVE, THEN REMOVE. The proof used to sit ABOVE the age
+  # `find`, and `find` forks: the moment it proved was not the moment of the
+  # removal, so a same-UID replacement landing inside that child left the aged
+  # canonical card deleted under a descriptor that no longer named canonical —
+  # the exact window R1 closed everywhere else. PreCompact's structurally
+  # identical pattern already does it this way and says so in its own comment
+  # (the overlap `find`, then a fresh proof, then `rm -f "$cardf"`).
+  #
+  # THE PROOF SITS ON THE REMOVING PATH ONLY, because that is the only path
+  # with a mutation here: the serving path's mutation is the `mv` below, and
+  # that one carries its own proof immediately before it. On a failed proof
+  # the arm says nothing and the caller releases, which is this body's own
+  # disposition on every other refusal.
+  if [ -z "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ]; then
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    rm -f "$f"
+    return 0
+  fi
   # ARGUED, UNPINNABLE (fix-round M3): measured on this box, deleting this
   # guard changes nothing observable — a missing/unreadable `$set` makes the
   # `read < "$set"` below fail its redirection silently (swallowed same as a
