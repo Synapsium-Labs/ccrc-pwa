@@ -34,7 +34,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { itLinux, itDarwin } from './platformFixtures.js';
+import { itLinux, itDarwin, platformContrast } from './platformFixtures.js';
 
 const HELPER = path.resolve(__dirname, '../../ccd/ccd-account-auth');
 const CANARY = 'CANARY_PLATFORM_HAZARD_TOKEN';
@@ -84,16 +84,31 @@ describe('a recursive grep over a tree that contains a FIFO (D-2739)', () => {
   // This PINS the platform fact, so it stays green while the behaviour holds
   // and goes red the day BSD grep changes — at which point the remedy can be
   // revisited rather than silently over-applied.
-  itDarwin('BSD: grep -r BLOCKS on a FIFO with a live writer — D-2739, measured', () => {
-    const r = bash(program(), 10_000);
-    expect(
-      r.cut,
-      'BSD grep -r COMPLETED over a tree containing a live FIFO. That contradicts the 2026-09-14\n'
-      + 'measurement (cut at 20026ms) and means D-2739\'s remedy may no longer be needed.\n'
-      + `  elapsed: ${r.ms}ms  output: ${r.stdout.slice(0, 200)}`,
-    ).toBe(true);
+  // A GENUINE CONTRAST, so it is written as one (D-2765). The two arms assert
+  // OPPOSITE outcomes over an identical tree, which is the whole finding — and
+  // `platformContrast` is the only shape that cannot be written with one of
+  // them missing.
+  platformContrast('a recursive grep over a tree containing a live FIFO', {
+    darwin: ['BSD BLOCKS on it — D-2739, measured', () => {
+      const r = bash(program(), 10_000);
+      expect(
+        r.cut,
+        'BSD grep -r COMPLETED over a tree containing a live FIFO. That contradicts the 2026-09-14\n'
+        + 'measurement (cut at 20026ms) and means D-2739\'s remedy may no longer be needed.\n'
+        + `  elapsed: ${r.ms}ms  output: ${r.stdout.slice(0, 200)}`,
+      ).toBe(true);
+    }],
+    linux: ['GNU skips the device and returns at once', () => {
+      const r = bash(program());
+      expect(r.cut, `GNU grep blocked on a FIFO, which contradicts the measured control. ${r.stdout.slice(0, 200)}`).toBe(false);
+      expect(field(r.stdout, 'HITS'), `GNU grep did not find the plain file. ${r.stdout.slice(0, 200)}`).toBe('1');
+    }],
   });
 
+  // PLATFORM-ONLY: GNU's answer here is not in question — `-r` does not follow
+  // symlinks and `-R` does, which is documented and stable. This case exists
+  // only to rule the symlink OUT as a second cause of D-2739 on BSD, and it
+  // measured negative. A GNU arm would assert a fact nobody doubted.
   itDarwin('BSD: does -r follow a SYMLINK out of the tree? (the second D-2739 candidate)', () => {
     // BSD and GNU have historically disagreed here, and a fixture HOME that
     // symlinks anywhere large would explain a slow walk without any FIFO.
@@ -118,11 +133,6 @@ describe('a recursive grep over a tree that contains a FIFO (D-2739)', () => {
     ).toContain(field(r.stdout, 'FOLLOWED'));
   });
 
-  itLinux('GNU: skips the device and returns at once — the control', () => {
-    const r = bash(program());
-    expect(r.cut, `GNU grep blocked on a FIFO, which contradicts the measured control. ${r.stdout.slice(0, 200)}`).toBe(false);
-    expect(field(r.stdout, 'HITS'), `GNU grep did not find the plain file. ${r.stdout.slice(0, 200)}`).toBe('1');
-  });
 });
 
 // ── D-2661 ────────────────────────────────────────────────────────────────
@@ -141,19 +151,28 @@ describe('the deadline shim, asked directly (D-2661)', () => {
     echo "ELAPSED=$((SECONDS-t0))"
   `;
 
-  itDarwin('BSD: the deadline FIRES on an ordinary sleeper — candidate (a)', () => {
-    const r = bash(shim('2', 'sleep 60'), 30_000);
-    expect(
-      r.cut,
-      `_auth_timeout did not return at all on macOS with a 2s deadline (harness cut at ${r.ms}ms).\n`
-      + `  picked: ${field(r.stdout, 'PICKED')}\n  THIS IS D-2661's candidate (a): the deadline never fires.`,
-    ).toBe(false);
-    expect(
-      field(r.stdout, 'RC'),
-      'the deadline did not report 124 on macOS.\n'
-      + `  picked=${field(r.stdout, 'PICKED')} rc=${field(r.stdout, 'RC')} elapsed=${field(r.stdout, 'ELAPSED')}s\n`
-      + '  If rc is 0 with a low elapsed, the shim returned WITHOUT waiting; if elapsed is ~60, it did not cut.',
-    ).toBe('124');
+  // THE SECOND GENUINE CONTRAST — and the one the D-2765 lesson came from. The
+  // Linux arm is not decoration: it is what distinguishes "BSD's deadline
+  // behaves this way" from "every deadline does".
+  platformContrast('the deadline on an ordinary sleeper', {
+    darwin: ['BSD fires it — D-2661 candidate (a), refuted', () => {
+      const r = bash(shim('2', 'sleep 60'), 30_000);
+      expect(
+        r.cut,
+        `_auth_timeout did not return at all on macOS with a 2s deadline (harness cut at ${r.ms}ms).\n`
+        + `  picked: ${field(r.stdout, 'PICKED')}\n  THIS IS D-2661's candidate (a): the deadline never fires.`,
+      ).toBe(false);
+      expect(
+        field(r.stdout, 'RC'),
+        'the deadline did not report 124 on macOS.\n'
+        + `  picked=${field(r.stdout, 'PICKED')} rc=${field(r.stdout, 'RC')} elapsed=${field(r.stdout, 'ELAPSED')}s`,
+      ).toBe('124');
+    }],
+    linux: ['GNU fires it too, and picks the unprefixed binary', () => {
+      const r = bash(shim('2', 'sleep 60'), 30_000);
+      expect(field(r.stdout, 'RC'), `linux control: ${r.stdout.slice(0, 200)}`).toBe('124');
+      expect(field(r.stdout, 'PICKED'), 'linux should find GNU timeout first').toBe('timeout');
+    }],
   });
 
   // NOT A PLATFORM QUESTION, and calling it one was the error (D-2765). This
@@ -182,6 +201,10 @@ describe('the deadline shim, asked directly (D-2661)', () => {
     ).toBe(true);
   });
 
+  // PLATFORM-ONLY: the Linux answer to this one is already measured and is not
+  // in dispute — EOF arrived in all six configurations tried, including a
+  // setsid'd grandchild confirmed alive. This asks it of the platform where
+  // D-2661 was observed, which is the only place the answer was unknown.
   itDarwin('BSD: after the deadline fires, does the output FIFO reach EOF? — candidate (b)', () => {
     // THE ONE THAT MATTERS. `_auth_pump` leaves only on EOF, and EOF needs every
     // writer of the FIFO to close. On Linux, EOF arrived in all six
@@ -213,9 +236,4 @@ describe('the deadline shim, asked directly (D-2661)', () => {
     ).toBe('eof');
   });
 
-  itLinux('GNU: the same three, as the control this box CAN answer', () => {
-    const plain = bash(shim('2', 'sleep 60'), 30_000);
-    expect(field(plain.stdout, 'RC'), `linux control: ${plain.stdout.slice(0, 200)}`).toBe('124');
-    expect(field(plain.stdout, 'PICKED'), 'linux should find GNU timeout first').toBe('timeout');
-  });
 });

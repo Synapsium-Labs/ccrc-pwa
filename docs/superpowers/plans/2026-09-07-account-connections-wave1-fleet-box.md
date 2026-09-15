@@ -19886,6 +19886,61 @@ status` check. That is deployed code with a wide caller population and an agent-
 in its own change with its own review, not inside a measurement PR. `platform-hazards.test.ts` PINS the
 present behaviour so the fix goes red here and cannot land without someone deliberately inverting it.
 
+**THE ONE-FLAG FIX IS WRONG, and a census plus an adversarial review measured six independent reasons
+(2026-09-14). Recorded here so the next attempt does not rediscover them.**
+
+1. **`timeout -k` returns 137, NOT 124** — measured, GNU 9.4: `timeout -k 2 1 <TERM-ignorer>` → rc 137 at
+   3 s. The bash fallback still returns 124, because `if [ -s "$stamp" ]; then rc=124; fi` overwrites
+   unconditionally. **The two arms would diverge on identical input** — an L3 violation, the fallback
+   narrowing a distinction the binary arm now makes. **16 call sites branch on `rc == 124`; exactly ONE
+   (`ccd:2720`) also handles 137**, and its comment — that 137 means an OUTER kill — becomes false.
+   Worked consequences: `_session_probe` (`ccd:1792`) loses the ABSENT-vs-SILENT distinction
+   `cmd_supervise` exists to read and walks into a blocking `_tmux_new_session`, on the path that owns
+   `claude-session@*`; `_acct_auth_why` prints a fabricated "Look for an OOM kill on this box"; the
+   doctor reports "no tmux server is running", "run gh auth login" against a healthy credential, and
+   "caddy is not serving"; and `ccd-account-auth` collapses `expired` into `failed`, which its own
+   comment says "would tell an operator to retype a code into a process that is gone".
+2. **It would ship GREEN.** Every fixture in the suite honours TERM (`ccrc-account.test.ts:8330` is
+   `exec sleep 30`), so nothing exercises the escalation. A change that breaks 15 call sites behind a
+   green suite is precisely what the mutation-table rule exists to prevent.
+3. **There are THREE copies of the shim, not two.** `ccd/ccrc:412` carries it as well, and
+   `ccrc-doctor-checks` defines none — it is SOURCED by `ccrc`'s `cmd_doctor`, so the doctor's three
+   call sites are served by `ccrc`'s copy. A two-file edit silently leaves the doctor behind.
+4. **`-k` is not safe unconditionally.** The shim binds to whatever answers to `timeout`/`gtimeout` and
+   returns its rc verbatim, with no capability probe and no fallthrough. A `timeout` that does not know
+   `-k` returns an implementation-dependent rc — measured {1, 2, 125, 127} — and **rc 1 lands on no
+   branch at all**, so every lane would read as a failed launcher on every run. busybox is installed on
+   this box and its `timeout` already returns 143 rather than 124. "Try with `-k`, retry without" is
+   unavailable: `gh pr create` and `git fetch` are mutating, so a retry is a second write.
+5. **A pid-reuse race that can reach what the SAFETY rules forbid.** Holding the watcher for `grace` more
+   seconds keeps `$pid` live ACROSS the parent's `wait`, and a reaped pid is immediately reusable. The
+   parent's stand-down was measured at 2.6 ms, so the window is small — but a stray KILL is not
+   survivable the way a stray TERM is, and the reused pid on this box can be a `ccd supervise`, a
+   `claude-session@*` child, or the tmux server. Recommendation: **do not escalate in the fallback arm at
+   all** — it exists for a box with no coreutils, the worst possible place to hand-roll a SIGKILL
+   scheduler. Separately, the `|| exit 0` guard argued at `ccd:359-367` must be repeated on the second
+   sleep, or the grace silently becomes zero and the shim degrades to simultaneous TERM+KILL.
+6. **It should be OPT-IN per call site, because the census inverts the naive policy.** Deadlines span
+   `_LC_OBS_TMUX_DEADLINE_S=2` to `CCRC_AUTH_TIMEOUT=600`, so no single grace fits and a proportional one
+   is worse. Every site where escalation is pure win has ZERO mutation surface (tmux probes, `gh pr
+   list`, `gh auth status`, the two `find` walks). The sites where it costs most are `_auth_login` —
+   whose only post-condition is `[[ -r … ]]`, READABILITY not validity, so a truncated
+   `.credentials.json` passes it and the lane is stamped `done` — and `git fetch` / `remote set-head` on
+   `$PROJECTS_ROOT/$project`, the one canonical checkout every session shares, where git's lockfile
+   rollback is a SIGTERM handler that SIGKILL bypasses, stranding a `*.lock` that blocks the project.
+
+**A limit worth knowing before anyone counts on the fix:** for the two `script(1)`-wrapped auth methods
+the escalation does not reach the process that matters. Measured — `script -qfc` puts the real command in
+a SEPARATE process group, so the KILL reaches `script` and `timeout` and never the pty grandchild. With
+the grandchild trapping SIGHUP as well as TERM it survived, reparented, still running 20 s after
+`timeout` had reported 137. `expired` can therefore be reported over a process that is still alive.
+
+**Shape of a correct change, for whoever takes it:** an opt-in `_plat_timeout --kill-after <grace>` that
+defaults to today's behaviour; `-k` behind a cached capability probe rather than passed blind; no
+escalation in the pure-bash arm; a decision about 137-vs-124 that does not re-collapse `ccd:2720`'s
+outer-kill case; the edit landing in all THREE copies; and a fixture that actually traps TERM, on both
+arms, since nothing in the suite does today.
+
 ### D-2765 — a probe framed a UNIVERSAL defect as a platform one, because only one platform's case was written
 
 The case above was first written as `itDarwin('BSD: it still ends a child that IGNORES SIGTERM')`. It
@@ -19904,3 +19959,19 @@ the other platform's case in the same commit. Where the other platform genuinely
 must say what was actually measured rather than implying a contrast that was never tested. The file's
 own header already required the answer to travel in the assertion message; this extends it — the
 CONTROL has to exist before the message can be trusted to mean what it says.
+
+**CLOSED WITH A MECHANISM, not a rule (2026-09-14).** `platformContrast(subject, { darwin, linux })`
+lives in `platformFixtures.ts` and cannot be written with one arm — TypeScript refuses the missing key —
+and `macos-platform.test.ts` refuses any platform-asserting title that reaches `itDarwin`/`itLinux`
+directly without a `PLATFORM-ONLY:` reason within eight lines above it.
+
+**Note what could NOT have caught the original error, because it shaped the design.** The offending file
+already carried `itLinux` cases, and so did the same `describe` — every coarser scan ("this file tests
+both platforms", "this describe does") passes it. The claim had no control; the FILE did. So the rule is
+per-CLAIM, with two satisfying forms rather than one: a contrast, or a stated reason why no counterpart
+exists. The second escape is deliberate — some cases are genuinely unpairable (an input only one kernel
+produces, a binary only one userland ships) and forcing those into a contrast would manufacture a
+symmetry that is not there, which is its own kind of lie. What the guard refuses is the SILENT
+single-platform claim. MUTATION-MEASURED: a bare `itDarwin('BSD: a mutant claim with no control at all')`
+reds it and its removal greens it again; the scan blanks comments first, because on its first run it
+reported its own prose quoting the case that taught it.
