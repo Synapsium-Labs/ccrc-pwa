@@ -252,6 +252,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
+  'win-size': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -402,6 +403,38 @@ export const EXEC_WHITELIST = {
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
     // makes losing it a boot refusal rather than a widening nobody notices.
     ['ws-rename',  '--session'],
+    // The terminal drawer's un-pin (wave 2, spec §6.1). `tmux set-option` is
+    // NOT granted and must never be: prefix matching leaves every token after
+    // a granted prefix unconstrained, so `['tmux','set-option']` would permit
+    // setting ANY option on ANY target of the shared server — and `set` is that
+    // command's own alias (`tmux list-commands` on tmux 3.4 prints `set-option
+    // (set)` and `set-window-option (setw)`), so the refusal has to be of the
+    // capability rather than of a spelling — `whitelist-subset.test.ts` pins
+    // the granted tmux verbs EXACTLY for that reason. Wrapping the
+    // one option this program needs in a ccd verb keeps the mutation two tokens
+    // wide and puts the validation on the box, where `cmd_win_size` re-states
+    // `shared/roster.ts`'s ID_RE as a bash class and enforces it BEFORE any
+    // target is built — and then anchors that target with tmux's exact-match
+    // `=`, because `-t` is an fnmatch PATTERN and a well-formed id that names
+    // no session would otherwise resolve to a DIFFERENT live one (D-2780).
+    //
+    // This is a FLEET-CONTROL verb, which is why it is outside CLAUDE.md's
+    // "zero new ccd verbs for coordination mutation" — that rule is about the
+    // coord surface (mail, runs, claims), and this touches none of it.
+    //
+    // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
+    // then some: `--session` is not a confirmation token, it is half the verb's
+    // whole argument surface, and the door it is reached from is as open as
+    // `coord-pause`'s with one more hazard on top — `GET /ws/pty/:id` (wave 3)
+    // carries no box token at all, and its `:id` arrives off a JSON-parsed
+    // websocket frame rather than a path the router validated. A bare `['win-size']`
+    // would admit every positional form the verb might grow, and is invisible
+    // to layer 2 and to layer 3's reachability check in
+    // `whitelist-subset.test.ts` — `['win-size']` is a genuine prefix of the
+    // argv the server builds — which is why that file also carries an explicit
+    // `win-size is grantable ONLY with --session` case, and why the enrolment
+    // above exists: one of the two is in a different package from the other.
+    ['win-size',   '--session'],
   ],
 } as const satisfies ExecWhitelist;
 
