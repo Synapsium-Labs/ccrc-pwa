@@ -2140,7 +2140,10 @@ describe('the routing clauses (routing slice 2)', () => {
     expect(c12).toContain('`references/routing-matrix.md`');
     expect(REFERENCE_NAMES).toContain('routing-matrix.md');
     // step 2's list of what a brief carries, in SKILL.md and in the reference
-    expect(flat(skill)).toMatch(/the shape of the wave and the routing[\s\S]{0,200}routing-matrix\.md/);
+    // (anchored on step 2's own opening phrase, not clause 12's — clause 12
+    // also contains "the shape of the wave and the routing" ~170 chars before
+    // its own routing-matrix.md mention, which made that anchor self-satisfied)
+    expect(flat(skill)).toMatch(/what only this wave knows[\s\S]{0,320}routing-matrix\.md/);
     expect(flat(refs('wave-lifecycle.md'))).toMatch(/A brief carries what only THIS wave knows:[\s\S]{0,900}routing-matrix\.md/);
   });
 

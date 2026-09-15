@@ -258,7 +258,7 @@ not after.
    `ccrc-worker` skill, and that skill IS the protocol** — so your brief carries
    what only this wave knows (the plan file's path, the task range, **the
    execution skill the worker should invoke**, the interfaces earlier waves
-   settled, the deviations already ledgered, **the shape of the wave and the
+   settled, the deviations already ledgered), **the shape of the wave and the
    routing** the matrix derives from it (`references/routing-matrix.md`;
    clause 12), not the
    identity, ack, question and fingerprint rules the worker already has. The
