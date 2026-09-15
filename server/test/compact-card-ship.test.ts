@@ -142,8 +142,17 @@ describe('compact-card.mjs ships', () => {
 
   it('imports node:* only — the shared/mark.mjs class, never bundled, never npm', () => {
     const src = read('ccd/compact-card.mjs');
-    const imports = [...src.matchAll(/^import .* from '([^']+)';$/gm)].map((m) => m[1]);
-    expect(imports.length).toBeGreaterThan(0);
+    // THE SPECIFIER, NOT THE LINE IT SITS ON. The scan this replaces required
+    // the whole import on one line, in single quotes, ending in a semicolon,
+    // and MEASURED (r1 first-run B3) a multi-line `from 'npm-path-helper'`
+    // sailed through 8/8 GREEN — the remaining three matches even kept the
+    // non-vacuity guard satisfied. A dependency is a dependency in whatever
+    // shape it is written, so the ban is on the `from '…'` specifier wherever
+    // it occurs, plus the two loads that carry no `from` at all.
+    const imports = [...src.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
+    expect(imports.length, 'the helper still imports something').toBeGreaterThan(0);
     for (const i of imports) expect(i, `${i} is not a node:* module`).toMatch(/^node:/);
+    expect(/\brequire\s*\(/.test(src), 'a CommonJS require() escapes the import scan').toBe(false);
+    expect(/(?<![.\w])import\s*\(/.test(src), 'a dynamic import() escapes the import scan').toBe(false);
   });
 });
