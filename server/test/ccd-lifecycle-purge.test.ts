@@ -735,6 +735,22 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
       // facts, permanently, on every sweep.
       expect(terminal.map((e) => e['outcome'])).toEqual(['refused']);
       expect(terminal[0]!['refusal']).toBe('purge-refused');
+      // AND ITS SENTENCE, which is what makes this leg a CONTROL for the gc arm
+      // of (d1c) below (r5 R4-M2). (d1b) cannot be that control: its loop
+      // filters `ws-gc --prune` OUT, so until now NOTHING in the tree pinned
+      // which status-1 sentence the gc caller emits — it asserted the token and
+      // the surviving row and never the detail. MEASURED in a throwaway copy,
+      // making the gc caller's canonical-vanished override in `ccd/ccd` fire
+      // unconditionally left this whole file GREEN 50/50, while every ordinary
+      // gc decline journaled "has been unlinked while a live holder still owns
+      // its inode … restore … by hand" for a lock that is merely held: false in
+      // both clauses. `hold` is `holdCompactLock`, which opens canonical
+      // directly and holds it, so this is the ORDINARY contention condition and
+      // COMPACT_LOCK_WHY is empty here.
+      expect(String(terminal[0]!['detail']), 'the CONTENTION sentence: the lock was there and busy')
+        .toContain('was unavailable');
+      expect(String(terminal[0]!['detail']), 'and never the canonical-vanished remedy, which is false on a lock that exists')
+        .not.toContain('canonical-vanished');
 
       expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.uuid`)), 'the row still stands').toBe(true);
     } finally { release(); }
@@ -1491,9 +1507,20 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
   // status 1, and every caller's detail asserted the contention story — which
   // in this state names a pathname that does not exist and prescribes a wait
   // that cannot end, because this file deliberately never mints a second inode
-  // over a live holder and no compliant path recreates the file. (d1b) above
-  // is the CONTROL that keeps the two apart: it drives the same status with
-  // COMPACT_LOCK_WHY empty and asserts the contention sentence survives.
+  // over a live holder and no compliant path recreates the file.
+  //
+  // THE CONTROLS, ONE PER LEG (r5 R4-M2). This block runs over all THREE legs,
+  // and the header used to name a single control for all of them: "(d1b) above
+  // … drives the same status with COMPACT_LOCK_WHY empty and asserts the
+  // contention sentence survives". (d1b) lives inside `it('(d1) …')`, whose
+  // loop is `LEGS.filter((l) => l.verb !== 'ws-gc --prune')`, so it is the
+  // control for ws-rm and forget ONLY. The gc leg's control is the DEAD-REG
+  // arm at the top of this file — same verb, same status, COMPACT_LOCK_WHY
+  // empty — which since r5 R4-M2 asserts 'was unavailable' and the ABSENCE of
+  // this token in its own durable detail. Before that it read the token and
+  // the surviving row and nothing about the sentence, and the gap was
+  // MEASURED: the gc caller's override fired unconditionally with this file
+  // still GREEN 50/50.
   /** A holder through the SHIPPED acquire, which is what makes the /proc arm of
    *  `_compact_lock_vanished` answer: a holder past its acquire has unlinked
    *  its `lock-open` alias and keeps only a descriptor, so a fixture that opens
