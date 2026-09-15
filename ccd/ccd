@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2b7b9463d58b32c824685720e8e8e9ff1d04cc87a772f846c6e9de72afd97eef
+# ccrc:generated 1 sha256=6a674d4e421bca6cee4209f3d057bbb5e83fd906d620c8f0887e37920545099e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -15392,7 +15392,31 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # session with nothing composed here.
   local routeflags="" routeenv="" rclass rsub rwf reff inert=""
   if _route_any "$id"; then
-    rclass=$(_route_get "$id" class); reff=$(_route_effort_for "$id" "$rclass")
+    rclass=$(_route_get "$id" class)
+    # THE CLASS SERVED (routing spec §5.4, last paragraph; §5.1 `degraded`). The
+    # intended class stays in `class`; THIS settle re-measures the lane it is
+    # landing on and decides what to compose: servable → clear a standing stamp
+    # (the intended class is restored the moment a lane can serve it); measured
+    # unservable → stamp one rung down and compose that; UNMEASURED → compose
+    # what stands (a standing stamp was measured when written; no stamp means
+    # the intended class) and write nothing — nobody degrades on a fabricated
+    # fact. `_route_degrade`/`_route_restore` are the only writers and write
+    # once: a second settle on the same lane says nothing twice.
+    local rdeg="" below srv
+    if [[ -n "$rclass" && "$rclass" != default ]]; then
+      rdeg=$(_route_get "$id" degraded)
+      _serviceable "$wrapper" "$rclass" >/dev/null; srv=$?
+      case "$srv" in
+        0) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
+        1) below=$(_class_below "$rclass")
+           if [[ -n "$below" ]]; then
+             _route_degrade "$id" "$rclass" "$below" "unservable: $rclass at or above the ceiling on $wrapper at settle"
+             rdeg="$below"
+           fi ;;
+      esac
+      [[ -n "$rdeg" ]] && rclass="$rdeg"
+    fi
+    reff=$(_route_effort_for "$id" "$rclass")   # keyed on the class SERVED: a rung down to haiku takes no effort
     rsub=$(_route_get "$id" subagent); rwf=$(_route_get "$id" workflow)
     [[ "$reff" == ultracode ]] && rwf=on
     # `--model` IS COMPOSED ON EVERY BACKEND, and the reason it is not gated to
