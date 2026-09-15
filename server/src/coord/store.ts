@@ -33,7 +33,7 @@ import {
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
-  type RunHealth, type RunItemTally, type RunKind, type RunState,
+  type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -470,6 +470,13 @@ export type RequeueRole =
  *  syntax error in SQLite, and a helper that silently returned a
  *  matches-nothing fragment would hide the caller's own missing guard. */
 const placeholders = (n: number): string => new Array(n).fill('?').join(',');
+
+/** The three lifecycle acts `runSignals`' window arithmetic reads (§6), spelled
+ *  ONCE: the in-window scan and the unstamped-row count below it ask about the
+ *  same rows from two directions, and a second hand-written act list is how the
+ *  two would come to disagree about what "the window" contained. Bound
+ *  positionally through `placeholders`, never interpolated. */
+const LIFECYCLE_WINDOW_ACTS = ['swap', 'hold', 'release'] as const;
 
 /** The replay-ceiling park's own `lastError`, written by exactly one call
  *  site (`watch.ts`'s `sweepMail`, `store.rejectDelivery(d.id, 'undeliverable',
@@ -2114,6 +2121,108 @@ export class CoordStore {
     ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[];
   }
 
+  /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
+   *  worker is `runs.sessionId` (never `claimedBy`, the coordinator). Holds
+   *  pair `hold done` with the next `release done`; a swap is ONE `done` row
+   *  in ccd's journal (no intent, no landing pair — `ccd/ccd:17166`), so it is
+   *  COUNTED and flagged, never timed. Refused wave-dones are the
+   *  `mail_rejections` rows `closeRun` records with a DONE_AUTHORITY code,
+   *  counted through `doneRejectCount` — the SAME private statement
+   *  `runHealth`'s `doneRejects` rides, so `GET /api/runs` and
+   *  `GET /api/runs/:id/signals` cannot drift apart (R7-3).
+   *
+   *  `excludedUnmeasured` is TRUE UNLESS THE WINDOW WAS SCANNED AND EVERYTHING
+   *  IN IT PAIRED — see the flag's own paragraph below for the three windows
+   *  nobody scans and for the open-run ruling. It is the field that keeps
+   *  `activeMs` honest: a ceiling flagged as one, never a total. */
+  runSignals(runId: number): RunSignals | null {
+    const run = this.db.prepare('SELECT sessionId FROM runs WHERE id = ?').get(runId) as
+      { sessionId: string | null } | undefined;
+    if (!run) return null;
+    const events = this.runEvents(runId);
+    const transition = (to: (s: string) => boolean) => events.find((e) => e.fromState !== e.toState && to(e.toState));
+    const dispatchedAt = transition((s) => s === 'dispatched')?.at ?? null;
+    const final = transition((s) => s === 'done' || s === 'failed');
+    const closedAt = final?.at ?? null;
+    const finalState = final ? (final.toState as 'done' | 'failed') : null;
+    const closeRefusals = this.doneRejectCount([runId]).get(runId)?.count ?? 0;
+    const wallMs = dispatchedAt !== null && closedAt !== null ? closedAt - dispatchedAt : null;
+    let holdMs = 0;
+    let swaps = 0;
+    // TRUE UNTIL THE WINDOW IS ACTUALLY SCANNED (R7-1, D-2785).
+    // `holdMs: 0, swaps: 0, excludedUnmeasured: false` is an affirmative claim
+    // that the lifecycle window WAS read and held nothing — and the three
+    // conditions below reach the `return` without reading a single row: a run
+    // whose `sessionId` is still null, a RECONSTRUCTED run (rebuilt from ccd's
+    // flat files, so it has no `run_events` and therefore no `dispatched`
+    // transition), and every OPEN run. Initialising the flag `false` collapsed
+    // "measured, nothing to exclude" into "never examined", which is the
+    // overloaded-null defect this codebase refuses at a seam, and §6's
+    // arm-attribution is precisely the consumer that would average an
+    // unexamined run into an arm's mean.
+    //
+    // AN OPEN RUN COUNTS AS UNSCANNED — the choice R7-1 left to this fix, made
+    // here and not left implicit. The flag is NOT scoped to closed runs: it
+    // answers one question, "was this window measured", and an open run's
+    // window has no end to scan to, so its `holdMs`/`swaps` zeroes are
+    // initialisers, not readings. A closed-runs-only flag would have made the
+    // zeroes honest only for a reader that ALSO tested `closedAt`, i.e. a
+    // second condition every consumer must remember — the same defect one
+    // field along. `run-signals.test.ts`'s open-run case asserts `true`.
+    let excludedUnmeasured = true;
+    if (run.sessionId !== null && dispatchedAt !== null && closedAt !== null) {
+      excludedUnmeasured = false;
+      const acts = placeholders(LIFECYCLE_WINDOW_ACTS.length);
+      const rows = this.db.prepare(
+        'SELECT at, act FROM lifecycle_events ' +
+        `WHERE sessionId = ? AND outcome = 'done' AND at IS NOT NULL AND at >= ? AND at <= ? AND act IN (${acts}) ` +
+        'ORDER BY at, id',
+      ).all(run.sessionId, dispatchedAt, closedAt, ...LIFECYCLE_WINDOW_ACTS) as { at: number; act: string }[];
+      let holdOpenAt: number | null = null;
+      for (const r of rows) {
+        if (r.act === 'swap') swaps += 1;
+        // A SECOND `hold` WHILE ONE IS OPEN is not a no-op (R7-2): ccd pairs
+        // `hold done` with the next `release done`, so a second open hold means
+        // the journal is telling us something this pairing cannot model — the
+        // first hold's end is unknown, and the second's whole span is
+        // unaccounted. Keeping the first `holdOpenAt` keeps `holdMs` a floor;
+        // the flag is what stops the floor being read as a total. Dropping the
+        // row silently, as this arm did, left `activeMs` looking measured.
+        else if (r.act === 'hold') { if (holdOpenAt === null) holdOpenAt = r.at; else excludedUnmeasured = true; }
+        else if (r.act === 'release') {
+          if (holdOpenAt === null) excludedUnmeasured = true;
+          else { holdMs += r.at - holdOpenAt; holdOpenAt = null; }
+        }
+      }
+      if (holdOpenAt !== null) excludedUnmeasured = true;
+      // ROWS THE WINDOW QUERY COULD NOT SEE (R7-2, the other direction). `at`
+      // is NULL when ccd could not stamp the line (`schema.ts`: "NULL = the
+      // line carried no readable `at`"), and `at IS NOT NULL` above filters
+      // those out — so an unstampable swap inside this window reported
+      // `swaps: 0` and read as measured. COUNTED, never inferred from the
+      // filtered result set, because absence from a filtered set says nothing
+      // about why a row is missing.
+      //
+      // DELIBERATELY UNBOUNDED BY THE WINDOW: a row with no `at` cannot be
+      // placed in time at all, and `ingestedAt` is the SERVER's clock, never
+      // read as an event time (D8). So any unstamped hold/release/swap this
+      // worker session carries makes the window unmeasurable — conservative by
+      // construction, which is the direction R7 chose.
+      const unstamped = (this.db.prepare(
+        'SELECT COUNT(*) AS n FROM lifecycle_events ' +
+        `WHERE sessionId = ? AND outcome = 'done' AND at IS NULL AND act IN (${acts})`,
+      ).get(run.sessionId, ...LIFECYCLE_WINDOW_ACTS) as { n: number }).n;
+      if (unstamped > 0) excludedUnmeasured = true;
+    }
+    if (swaps > 0) excludedUnmeasured = true;
+    return {
+      runId, dispatchedAt, closedAt, finalState, wallMs, holdMs, swaps, excludedUnmeasured,
+      activeMs: wallMs === null ? null : Math.max(0, wallMs - holdMs),
+      closeRefusals,
+      firstSubmission: finalState === 'done' ? closeRefusals === 0 : null,
+    };
+  }
+
   /**
    * The writer `programs.state` had none of, outside `openRun`'s hardcoded
    * `'active'` at first open (fix, found in a later Task 3 review — D-26):
@@ -2303,6 +2412,53 @@ export class CoordStore {
   }
 
   /**
+   * THE ONE COUNT of a run's refused wave-dones — the `mail_rejections` rows
+   * `closeRun` writes through `recordRejection` with a `DONE_AUTHORITY_CODES`
+   * code — and, riding the same statement, the newest one's code.
+   *
+   * Private because it is a measurement two PUBLIC surfaces must agree on, not
+   * a surface of its own: `runHealth`'s `doneRejects`/`lastRejectCode` (what
+   * `GET /api/runs` ships) and `runSignals`' `closeRefusals` (what
+   * `GET /api/runs/:id/signals` ships, and what `firstSubmission` is derived
+   * from). Those were TWO hand-written `SELECT COUNT(*) … code IN (…)`
+   * statements over the same rows (R7-3), which is the shape this file spends
+   * its own doctrine on: a later edit to either predicate — an `outcome`
+   * filter, a deliberate-cancel exclusion of the kind statement (1) already
+   * carries — would have moved one surface and not the other, and
+   * `single-definition.test.ts` cannot see it, because it scans for KNOWN
+   * fragments, not for a second count of one table. `run-signals.test.ts`
+   * holds the two surfaces equal for a run with a refusal, which is the
+   * mechanism this comment would otherwise only be requesting.
+   *
+   * The correlated subquery orders by `at` and then `id`, because
+   * `recordRejection` stamps its own `Date.now()` and a retried close can write
+   * two rows inside one millisecond.
+   *
+   * ONE statement, whatever the row count — `runHealth`'s "at most four
+   * statements TOTAL" budget is stated in terms of this being one of them.
+   * A run with no refusals gets NO entry (the `GROUP BY` emits none); both
+   * callers supply their own zero, as they always did.
+   */
+  private doneRejectCount(runIds: readonly number[]): Map<number, { count: number; lastCode: string | null }> {
+    const out = new Map<number, { count: number; lastCode: string | null }>();
+    // The caller's guard, here: `placeholders(0)` is an empty `IN ()`, a SQLite
+    // syntax error.
+    if (runIds.length === 0) return out;
+    const ph = placeholders(runIds.length);
+    const codes = placeholders(DONE_AUTHORITY_CODES.length);
+    for (const row of this.db.prepare(
+      'SELECT r.runId AS runId, count(*) AS c, ' +
+      '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
+      `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
+      `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
+    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
+      { runId: number; c: number; lastCode: string | null }[]) {
+      out.set(row.runId, { count: row.c, lastCode: row.lastCode });
+    }
+    return out;
+  }
+
+  /**
    * F7: every health fact for a set of runs, in FOUR statements TOTAL — not four
    * per row.
    *
@@ -2368,21 +2524,16 @@ export class CoordStore {
                            mailReplayMax: row.replayMax ?? 0 });
     }
 
-    // (2) done-claim refusals: how many, and the newest one's code. The
-    //     correlated subquery orders by `at` and then `id`, because
-    //     `recordRejection` stamps its own `Date.now()` and a retried close can
-    //     write two rows inside one millisecond.
-    const codes = placeholders(DONE_AUTHORITY_CODES.length);
-    for (const row of this.db.prepare(
-      'SELECT r.runId AS runId, count(*) AS c, ' +
-      '(SELECT x.code FROM mail_rejections x WHERE x.runId = r.runId ' +
-      `AND x.code IN (${codes}) ORDER BY x.at DESC, x.id DESC LIMIT 1) AS lastCode ` +
-      `FROM mail_rejections r WHERE r.runId IN (${ph}) AND r.code IN (${codes}) GROUP BY r.runId`,
-    ).all(...DONE_AUTHORITY_CODES, ...runIds, ...DONE_AUTHORITY_CODES) as unknown as
-      { runId: number; c: number; lastCode: string | null }[]) {
-      const h = out.get(row.runId);
+    // (2) done-claim refusals: how many, and the newest one's code — through
+    //     `doneRejectCount` above, which is where the statement itself lives
+    //     (R7-3). It is STILL ONE statement, so the budget this method's own
+    //     docstring states is unchanged; what moved is the ownership of the
+    //     predicate, because `runSignals` counts the very same rows for
+    //     `closeRefusals` and used to spell its own.
+    for (const [id, rej] of this.doneRejectCount(runIds)) {
+      const h = out.get(id);
       if (h === undefined) continue;
-      out.set(row.runId, { ...h, doneRejects: row.c, lastRejectCode: row.lastCode });
+      out.set(id, { ...h, doneRejects: rej.count, lastRejectCode: rej.lastCode });
     }
 
     // (3) what the last committed dispatch decided, straight off the run row.

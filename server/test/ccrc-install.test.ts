@@ -2311,6 +2311,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // idiom), which is why it is not folded into the `_ccrc_die`-guarded
       // loop above it.
       '--user enable --now ccd-graph-sweep.timer',
+      // Routing slice 0 Task 7: another degrade-rather-than-die enable, on the
+      // graph-sweep's own terms, for the usage-accounting sweep's timer.
+      '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -2733,7 +2736,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // and the three timer-bound ones, macOS is a supported box for it.
         ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-telemetry-keepalive', 'ccrc', 'graphify']);
+           'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3438,6 +3441,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
       '--user enable --now ccd-graph-sweep.timer',
+      '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',

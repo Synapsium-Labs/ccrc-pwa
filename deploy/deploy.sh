@@ -677,6 +677,14 @@ if [ "$TARGET" = "agent" ]; then
   # there is no server-role branch to gate it against the way `ccd/ccrc`'s own
   # `_inst_bins` has to.
   install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755
+  # Routing slice 0 (spec 2026-09-14 §6): the usage accounting sweep and its
+  # scanner, unconditional here exactly as its siblings above. PLACED BELOW THE
+  # NOISE LIST, NOT BESIDE ccd-graph-sweep, for the same D-2600 reason
+  # ccd-account-auth gives above: `graph-noise-ship.test.ts` pins the sweep and
+  # the noise list as neighbours with three code lines of slack, and
+  # `ccrc-models-probe` already spends one of them.
+  install_atomic ccd/ccd-usage-sweep .local/bin/ccd-usage-sweep 755
+  install_atomic ccd/ccd-usage-sweep.py .local/bin/ccd-usage-sweep.py 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -765,7 +773,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer'
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
@@ -868,6 +878,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && systemctl --user enable --now ccd-account-health.timer \
     && systemctl --user enable --now ccd-telemetry-keepalive.timer \
     && systemctl --user enable --now ccrc-models.timer \
+    && systemctl --user enable --now ccd-usage-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

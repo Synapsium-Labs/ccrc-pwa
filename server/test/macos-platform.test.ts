@@ -548,3 +548,75 @@ describe.skipIf(!IS_DARWIN)('the Darwin arms, run for real', () => {
     }
   });
 });
+
+// ── A PLATFORM CLAIM OWES THE OTHER PLATFORM AN ANSWER (D-2765) ───────────
+// A case written as `itDarwin('BSD: it still ends a child that IGNORES
+// SIGTERM')` red on macOS and was reported as a BSD fact. It was UNIVERSAL —
+// Linux behaved identically, and the control that would have said so was never
+// written.
+//
+// WHAT COULD NOT HAVE CAUGHT IT, and this is why the rule is shaped the way it
+// is: the file already carried `itLinux` cases, and so did the same `describe`.
+// Every coarser scan — "this file tests both platforms", "this describe tests
+// both" — passes that case. The claim had no control; the FILE did. So the
+// rule is per-CLAIM and it has exactly two satisfying forms:
+//
+//   • `platformContrast(subject, { darwin: […], linux: […] })`, where the two
+//     arms cannot be separated because TypeScript refuses a missing key; or
+//   • a bare `itDarwin`/`itLinux` carrying `PLATFORM-ONLY:` above it, naming
+//     why the other platform has no counterpart.
+//
+// The second escape is deliberate and is not a weakening. Some platform cases
+// are genuinely unpairable — an input only one kernel can produce, a binary
+// only one userland ships — and forcing those into a contrast would manufacture
+// a symmetry that is not there, which is its own kind of lie. What the rule
+// refuses is the SILENT single-platform claim: the author must either write the
+// other arm or say why there isn't one.
+describe('a platform-asserting test title owes the other platform an answer (D-2765)', () => {
+  const TEST_DIR = path.join(__dirname);
+  // A title that NAMES a userland is making a comparative claim. A title that
+  // merely happens to run on one platform is not, which is why this matches the
+  // name-then-punctuation shape ("BSD:", "GNU —") rather than any mention.
+  const ASSERTS_PLATFORM = /\b(BSD|macOS|darwin|GNU|util-linux|Linux|launchd|systemd)\b\s*[:—-]/i;
+  const CASE = /\b(itDarwin|itLinux|describeDarwin|describeLinux)\(\s*(['"`])([\s\S]*?)\2/g;
+  const MARKER = 'PLATFORM-ONLY:';
+
+  it('every one of them is a platformContrast, or says why it cannot be', () => {
+    const files = readdirSync(TEST_DIR).filter((f) => f.endsWith('.test.ts')).sort();
+    const offenders: string[] = [];
+
+    for (const f of files) {
+      const raw = readFileSync(path.join(TEST_DIR, f), 'utf8');
+      const lines = raw.split('\n');
+      // COMMENTS ARE BLANKED, not searched. This very scan's own prose quotes
+      // the case that taught D-2765, and without this it reports itself —
+      // measured, on the first run. Blanking rather than deleting keeps every
+      // line number pointing where the reader expects.
+      const src = lines
+        .map((l) => (/^\s*(\/\/|\*|\/\*)/.test(l) ? '' : l))
+        .join('\n');
+      for (const m of src.matchAll(CASE)) {
+        const title = m[3]!;
+        if (!ASSERTS_PLATFORM.test(title)) continue;
+        // The marker has to be NEAR the case, not anywhere in the file — a
+        // reason eight lines up is still about this case; one 300 lines up is
+        // about something else.
+        const lineNo = src.slice(0, m.index).split('\n').length;
+        const above = lines.slice(Math.max(0, lineNo - 9), lineNo).join('\n');
+        if (above.includes(MARKER)) continue;
+        offenders.push(`${f}:${lineNo}  ${m[1]}(${JSON.stringify(title.slice(0, 70))})`);
+      }
+    }
+
+    expect(
+      offenders,
+      'These name a platform in their title, so they assert that platform behaves a particular way — and\n'
+      + 'nothing here answers for the other one. That is D-2765: the case that taught this red on macOS and\n'
+      + 'was reported as a BSD fact when Linux did exactly the same thing.\n\n'
+      + 'Either make it a `platformContrast(subject, { darwin: [...], linux: [...] })` from\n'
+      + '`platformFixtures.ts`, which cannot be written with one arm — or, if the other platform genuinely\n'
+      + 'has no counterpart, put a `PLATFORM-ONLY: <why>` comment within 8 lines above it.\n\n'
+      + offenders.join('\n'),
+    ).toEqual([]);
+  });
+});

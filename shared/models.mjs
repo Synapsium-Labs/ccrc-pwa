@@ -440,7 +440,10 @@ export function availableFor(reg, catalogue, anthropic) {
  *  Matched WITH their dashes: `opus` bare would classify `opusml/x`. Plan 2's
  *  `_session_class` implements the same rule in bash and is pinned against
  *  this one by that plan's agreement test. */
-const FAMILY_TOKENS = [
+/** The ONE model-id → class table (routing spec §6: never a second list).
+ *  Exported so the usage sweep's runner can hand it to the python scanner as
+ *  data. */
+export const FAMILY_TOKENS = [
   ['-fable-', 'fable'], ['-opus-', 'opus'], ['-sonnet-', 'sonnet'], ['-haiku-', 'haiku'],
 ];
 

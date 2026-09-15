@@ -173,6 +173,7 @@ export {
   availableFor,
   familyClassOf,
   classOfModel,
+  FAMILY_TOKENS,
   UNAVAILABLE_PREFIX,
   SUBAGENT_CLASSES,
 } from './models.mjs';

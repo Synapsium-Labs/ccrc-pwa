@@ -1995,6 +1995,38 @@ export function registerCoordRoutes(
     return { runs: summaries };
   });
 
+  /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
+   *  gated exactly as `GET /api/runs` above: a session cookie OR the box token
+   *  when auth is armed, because the coordinator skill reads it cookieless
+   *  from the fleet host. Nothing is written here: the refused-close count it
+   *  reports is `closeRun`'s own `recordRejection` row. */
+  app.get('/api/runs/:id/signals', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false, error: 'unauthenticated', verdict: session.verdict,
+            detail: 'GET /api/runs/:id/signals takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    // The shared parser, not `Number(idParam)`: `routes.ts`'s id census
+    // (`routes.test.ts`) requires every `:id` seam in this file to read its id
+    // the one canonical way — ` 1`, `01`, `1e0`, `0x1` and anything past
+    // MAX_SAFE_INTEGER are refused rather than coerced into a row id.
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const signals = deps.coord.runSignals(id);
+    if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    return { ok: true, signals };
+  });
+
   /**
    * `GET /api/runs/:id/items` — the wave's declared ledger, with the item IDs.
    *
@@ -2251,7 +2283,7 @@ export function registerCoordRoutes(
     const recs = await readRegistry(deps.io, deps.cfg);
     const recById = new Map(recs.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord);
+      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -2441,7 +2473,7 @@ export function registerCoordRoutes(
         // rule (no:<reason> -> null, never a silent send) has one spelling.
         const names = await deps.io.readdir(deps.cfg.registryDir);
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord);
+          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {

@@ -1658,14 +1658,39 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     fs.rmSync(f);
   });
 
-  it('no call site can see that rc — which is what licenses the change, not the inputs', () => {
-    // THE MEASURED PROPERTY THAT REPLACES A FALSE ONE (#69 review round 3).
-    // `_reg_get`'s comment argued its own safety from the INPUTS ("rc 1 either
-    // way"), and one of the five named inputs falsifies it. The argument that
-    // actually holds is about the CALLERS, and unlike the other it is
-    // measurable: every invocation is a `$(…)` capture whose status nothing
-    // reads. Pin it here so the first rc-consuming caller reds this case and
-    // inherits the duty, rather than inheriting a sentence.
+  it('the call sites that read that rc are ENUMERATED, and each one is pinned by a case that measures it', () => {
+    // THE MEASURED PROPERTY THAT REPLACES A FALSE ONE (#69 review round 3),
+    // NOW HANDED ON (routing slice 1, Task 10). `_reg_get`'s comment argued its
+    // own safety from the INPUTS ("rc 1 either way"), and one of the five named
+    // inputs falsifies it. The argument that actually holds is about the
+    // CALLERS, and unlike the other it is measurable.
+    //
+    // It used to be measurable as "nobody reads the rc at all". Routing slice 1
+    // ended that: `_route_get` and `_route_peek` both read it, and they are
+    // RIGHT to — the rc is exactly the question they ask ("could this field be
+    // read at all"), and its answer separates an ABSENT field from an empty or
+    // unrecognised one, which is the difference between silence and a
+    // `route-reject` note (`ccd-route-fields.test.ts`'s first two cases pin
+    // both sides). So the property this case pins is no longer "no reader" but
+    // "no UNARGUED reader": the two sanctioned lines are written out here, and
+    // the third rc-consumer this slice first shipped — `_inject_spawn_effort`,
+    // which took the rc for PRESENCE, a question `_reg_get`'s `-f` guard
+    // genuinely cannot answer for a `/dev/null` symlink — redded this case at
+    // the tip and was converted to `[[ -e ]]`, which is where that story ends.
+    //
+    // A new reader therefore reds here, and the remedy is to argue it and add
+    // its own case, never to widen the list on its own.
+    //
+    // `_route_get`'s entry RESPELLED (fix round 2, Finding 2), same reader,
+    // same question: its `||` arm now calls `_route_unread_note` before
+    // returning, because `_reg_get`'s rc folds ABSENT and
+    // PRESENT-BUT-UNREADABLE together and only the second can change behaviour
+    // silently (`ccd-route-settle.test.ts`'s `/dev/null`-symlink case pins both
+    // halves: nothing typed, and a `route-unmeasured` line saying why). That
+    // also fixes the weakness this list carried when its two entries were
+    // BYTE-IDENTICAL and could only prove "two such lines exist": they are
+    // distinct now, so each entry names one function's line and a reader moved
+    // between the two would red.
     const src = fs.readFileSync(CCD, 'utf8');
     const lines = src.split('\n')
       .filter((l) => l.includes('_reg_get "') && !l.trim().startsWith('#'));
@@ -1674,9 +1699,16 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     const outsideCapture = lines.filter((l) => !/\$\(_reg_get "/.test(l));
     expect(outsideCapture, 'an invocation outside a capture COULD branch on the rc')
       .toEqual([]);
-    const rcReaders = lines.filter((l) => /=\$\(_reg_get "[^)]*\)\s*(\|\||&&)/.test(l));
-    expect(rcReaders, 'an assignment followed by || or && branches on the rc')
-      .toEqual([]);
+    const rcReaders = lines.filter((l) => /=\$\(_reg_get "[^)]*\)\s*(\|\||&&)/.test(l))
+      .map((l) => l.trim());
+    expect(rcReaders,
+      'a NEW assignment-then-|| branches on `_reg_get`\'s rc: argue why the rc answers that '
+      + 'caller\'s question, pin what it does with each answer, and only then name it here')
+      .toEqual([
+        // _route_get: absent is silent; present-but-unreadable gets a line
+        'v=$(_reg_get "$id" "$f") || { _route_unread_note "$id" "$f"; return 0; }',
+        'v=$(_reg_get "$id" "$f") || return 0',   // _route_peek: the same read, PURE — no note, no marker
+      ]);
   });
 });
 

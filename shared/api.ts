@@ -343,6 +343,18 @@ export interface FleetSession {
    *  today after a failed spawn yesterday, and showing one as the other would be
    *  an adapter narrowing a distinction it received. */
   readonly spawnState: SpawnVerdict | null;
+  /** The reading from the most recent sweep that could read the sidecar
+   *  (routing spec 2026-09-14 §6). Absent and malformed drop to `null`; an
+   *  UNREADABLE read carries the previous reading forward with its `stale`
+   *  verdict re-derived against the current sweep (see
+   *  `FleetWatcher.sweepUsage`) rather than copied byte-for-byte, since
+   *  `stale` is a verdict computed at read time, not a property of the
+   *  sidecar itself. `reviveFleetSession` is the one reader that cannot do
+   *  that: it has no clock, so it REPUBLISHES whatever `stale` was persisted
+   *  into `state-cache.json` — a verdict measured against the sweep that wrote
+   *  it — and the first tick's `sweepUsage` re-derives it against the current
+   *  one. */
+  readonly usage: SessionUsage | null;
 }
 
 /**
@@ -557,6 +569,26 @@ export interface TaskProgress {
   done: number;
   running: number;
   active: string | null; // activeForm of the first in-progress task, else null
+}
+
+/** What a session was measured running, from its usage sidecar
+ *  (`~/.cc-sessions/usage/<ccd-id>.json`, written by the statusline hook on
+ *  every render — routing spec 2026-09-14 §6). `ts` is the hook's clock in
+ *  epoch SECONDS; `stale` is the server's verdict against `USAGE_FRESH_S`.
+ *  `class` is one of `shared/models.ts`'s `CLASSES` or null, derived from
+ *  `model` by `familyClassOf` on the SERVER and never carried by the hook; it
+ *  is spelled `string` here because this file imports nothing (one pinned
+ *  import line) and a second copy of the class list is what
+ *  `single-definition.test.ts` forbids — a consumer compares by string.
+ *  Additive on the wire: an older server omits the whole field. */
+export interface SessionUsage {
+  readonly ts: number;
+  readonly model: string | null;
+  readonly class: string | null;
+  readonly effort: string | null;
+  readonly ctxPct: number | null;
+  readonly cost: number | null;
+  readonly stale: boolean;
 }
 
 /** Where a workspace's pull request is, as ccrc last managed to find out.
@@ -2478,6 +2510,19 @@ const optUnmeasured = (o: RawObj, k: string): readonly IdentityField[] => {
   return v as IdentityField[];
 };
 
+/** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
+ *  membership is not re-checked here because this file imports no class list. */
+function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
+  const raw = o[key];
+  if (raw === undefined || raw === null) return null;
+  const u = asObj(raw, key);
+  return {
+    ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
+    effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
+    stale: optBool(u, 'stale', false),
+  };
+}
+
 /** One persisted session in today's shape, or null if it cannot be one. */
 export function reviveFleetSession(raw: unknown): FleetSession | null {
   try {
@@ -2624,6 +2669,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // makes a surface ignorable.
       started: optBool(o, 'started', true),
       spawnState: spawnRaw,
+      usage: reviveUsage(o, 'usage'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -4994,6 +5040,49 @@ export interface RunSummary {
   health: RunHealth;
 }
 
+/** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
+ *  run's own events, its refused wave-dones and the WORKER session's lifecycle
+ *  rows. `wallMs` is dispatch → final state on the SERVER's clock. `holdMs` is
+ *  the worker's paired hold→release time inside that window on CCD's clock
+ *  (two NTP-disciplined boxes; the skew is bounded, not zero — a signal, not an
+ *  invoice). `swaps` COUNTS the worker's account swaps in the window and
+ *  nothing more: ccd journals a swap as one `done` row with no landing pair,
+ *  so swap wall time is structurally unmeasurable from the journal today
+ *  (pairing it needs a `swap intent` at `_swap_target` and a landing row — a
+ *  slice-3 change, if the count proves it matters).
+ *
+ *  `excludedUnmeasured` IS THE DEFAULT, not the exception: it is false ONLY for
+ *  a window that was actually scanned end to end with everything in it paired.
+ *  True when `swaps > 0`; when a hold could not be paired (no release, a
+ *  release with no open hold, or a SECOND hold arriving while one is open);
+ *  when the worker session carries a hold/release/swap row ccd could not
+ *  timestamp, which no window query can place in time; AND for every window
+ *  nobody scanned — a run with no `sessionId` yet, a RECONSTRUCTED run (no
+ *  `run_events`, so no `dispatched` transition), and every OPEN run. An open
+ *  run is deliberately in that list: `holdMs: 0, swaps: 0` on a window with no
+ *  end yet are initialisers, not readings, and §6's arm attribution — the
+ *  consumer that must never average an unmeasured run into an arm's mean —
+ *  would otherwise have to test `closedAt` as a second condition to know which
+ *  zeroes it may believe. So `activeMs` (`wallMs - holdMs`) is a ceiling
+ *  whenever this is true, and a total only when it is false. `closeRefusals` is the
+ *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
+ *  run — the rows `closeRun` writes for a refused wave-done — and
+ *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
+ *  before. */
+export interface RunSignals {
+  readonly runId: number;
+  readonly dispatchedAt: number | null;
+  readonly closedAt: number | null;
+  readonly finalState: 'done' | 'failed' | null;
+  readonly wallMs: number | null;
+  readonly holdMs: number;
+  readonly swaps: number;
+  readonly excludedUnmeasured: boolean;
+  readonly activeMs: number | null;
+  readonly closeRefusals: number;
+  readonly firstSubmission: boolean | null;
+}
+
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
  *  console calls the dispatch stalled. Deliberately >= the `ws-add` verb
  *  ceiling (`CCD_VERB_TIMEOUT_MS`, server-side) rather than a copy of it:
@@ -5688,6 +5777,11 @@ export type LifecycleAct =
                     // additive-only — a newer ccd emitting `gc` at an older
                     // server is what absence-permits exists to survive.
   | 'spawn'         // _spawn_settle, CHANGE-ONLY (§2)
+  | 'route'         // a routing field written (routing spec 2026-09-14 §5.3):
+                    // `cmd_route` is the one emitter; dec.actor / dec.reason
+                    // carry who and why, `detail` carries "<field>: <from> ->
+                    // <to>" (no new dec key — the dec vocabulary is pinned at
+                    // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
@@ -5699,7 +5793,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true,
   unknown: true,
 };
