@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a239916fc8a25f618fa639df0899d207c8ba3207973e81d17ce39cc618583dee
+# ccrc:generated 1 sha256=6b1ebf8a9289aa0b6d0dd7ba8ef3295eaee83d740af9cbb9b411ef035e3731e7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1781,12 +1781,15 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 11 of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 12 of
 # them call sites — the other six are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
 # 17/11 after round 3, which rewrapped one prose mention and replaced another
-# with a grep anchor.
+# with a grep anchor, and 18/12 at routing slice 4, whose `_place_for_class`
+# asks the pool rule before it counts a class's unservable lanes — the
+# call-site half moving is the half that means something, and here it means a
+# new decision site consults the rule rather than assuming it.
 # CORRECTED (round 3): the round-2 sentence attributed its new mention to
 # `_swap_target`'s candidate loop, and the line was in `_auto_swap_check` —
 # the candidate-loop paragraph matches this grep zero times. The call-site
@@ -4637,13 +4640,18 @@ _ws_least_loaded() {   # [project] [class] -> the home-able account with the mos
   # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
   # — they were the mechanism of the gap, not a defence against it.)
   #
-  # THE FOUR CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
+  # THE FIVE CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
   # (PR #61, 2026-09-07; the count is corrected at the wave-2b merge, which
-  # added the fourth). Measured, so the number stops drifting: `grep -cE 'for
+  # added the fourth, and at routing slice 4, which added the fifth). Measured,
+  # so the number stops drifting: `grep -cE 'for
   # (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")' ccd/ccd` finds
-  # 5 matching LINES, 4 of them walks — the fifth is prose, `_default_pool`'s
-  # own comment quoting the pattern. The four are `_ws_least_loaded`,
-  # `cmd_ws_add`'s refusal-reason builder, `_swap_target` and `_strand_why`.
+  # 6 matching LINES, 5 of them walks — the sixth is prose, `_default_pool`'s
+  # own comment quoting the pattern. The five are `_ws_least_loaded`,
+  # `cmd_ws_add`'s refusal-reason builder, `_swap_target`, `_strand_why` and
+  # `_place_for_class`. The fifth walks CCRC_HOME_ABLE for the same reason the
+  # builder does — it is COUNTING how many in-pool lanes measured unable to
+  # serve a class, which is a question about placement's own candidate set, and
+  # an overflow lane is not in it.
   # BOTH NUMBERS ARE PINNED — `ccd-auto-swap-pool.test.ts` re-runs this exact
   # pattern and requires both to still be true, the way `_pool_ok`'s own header
   # count is pinned in `ccd-pool-ok.test.ts`. CORRECTED at the fix round after
@@ -4895,7 +4903,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # `--actor` (`run:<id> dispatch`). Same ruling as `cmd_ws_hold`'s at
   # ccd:4801-4807, for the same reason — never put a second string on a verb
   # with nothing to say which one a reader is looking at.
-  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
+  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -4909,12 +4917,18 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      # REPEATABLE, one field per flag — the shape `cmd_route --set` already
+      # has, so a dispatcher composing one argv for both verbs writes the same
+      # pairs. Validated below, before anything on disk is touched.
+      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+                   lc_route+=("$2"); shift 2 ;;
+      --route=*)   lc_route+=("${1#--route=}"); shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -4935,11 +4949,16 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
     _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
   fi
+  # ABOVE THE PROJECT POSITIONAL, AND THAT IS THE POINT — earlier than the disk
+  # floor, the placement read, the lock, the worktree and the row. A bad
+  # `--route` value is an argv a coordinator composed; this verb refuses it with
+  # the box exactly as it found it (spec §5.3).
+  (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
   # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
   # caught it, unedited, which is what that gate is for.
-  local project="${1:?usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]}" slug="${2:-}"
+  local project="${1:?usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
@@ -4959,7 +4978,22 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # all-excluded refusal leave the box exactly as it found it. Pressure alone
   # never refuses (the all-pinned fixture rule stands); only every lane
   # failing _account_ok gets here.
-  local hw; hw=$(_ws_least_loaded "$project")
+  #
+  # PLACEMENT NOW KNOWS THE CLASS (routing spec §5.4). Two callers, told apart by
+  # `strict`: an explicit `--route class=` is a session that MUST run at that
+  # class, so it never falls back; the coordinator row's class is a default
+  # nobody typed, so it does. A DISPATCHED worker (`--no-rc`) that named no class
+  # gets neither — it keeps today's class-blind placement exactly.
+  #
+  # THE CLASS IS DERIVED FROM `ROUTE_COORDINATOR_ROW`, never respelled: the row
+  # is the one place spec §3's default is written down, and a second literal
+  # `fable` here would be a second place to change it.
+  local cls strict=1
+  cls=$(_route_argv_class "${lc_route[@]}")
+  if [[ -z "$cls" ]] && (( ! norc )); then
+    cls="${ROUTE_COORDINATOR_ROW%% *}"; cls="${cls#class=}"; strict=0
+  fi
+  local hw; hw=$(_place_for_class "$project" "$cls" "$strict")
   if [[ -z "$hw" ]]; then
     # TWO EMPTIES, TOLD APART HERE (spec §6). `_ws_least_loaded` answers "" for
     # "every in-pool lane is unusable" AND for "the tag is undecidable", and
@@ -5007,6 +5041,29 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         # (`_ws_least_loaded`'s loop) is the one an unquoted `$2` actually
         # changes, and stays quoted for the reason stated there.
         elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
+        # RC 1 ONLY, and the `$?` test rather than `!` is what makes that true.
+        # `_class_gate` answers 1 for a lane MEASURED unable to serve the class
+        # and 2 for one nobody measured — and an unmeasured lane is PLACEABLE,
+        # so `! _class_gate` would name it as the reason placement failed while
+        # `_ws_least_loaded` was perfectly willing to place there. That is a
+        # fabricated fact in a refusal message, which is exactly what spec §5.4
+        # forbids. With no class this arm cannot fire at all: `_class_gate`
+        # returns 0 for an empty class.
+        #
+        # THE `$?` TEST IS UNREACHABLE-EQUIVALENT TODAY, NOT UNTESTED — the same
+        # standing as the quoting on the `_pool_ok` arm above, and measured the
+        # same way rather than assumed. Rewriting it as `! _class_gate …` leaves
+        # `ccd-place-class.test.ts` 10/10 GREEN, and DELETING the arm reds its
+        # case (e), so the arm is exercised and it is the POLARITY that nothing
+        # can red. The reason is this loop's own `elif` order: a lane reaching
+        # here has already passed `_account_ok` and `_pool_ok`, and
+        # `_ws_least_loaded` applies the class filter after exactly those two —
+        # so a lane answering rc 2 here would have been PLACED and this builder
+        # would never have run. Keep the rc test anyway: it stops being
+        # equivalent the day either walk reorders its predicates, and the
+        # obligation it discharges (D-2854) is about the message, not about
+        # today's reachability.
+        elif _class_gate "$w" "$cls"; [[ $? -eq 1 ]]; then why+=" $w:class=$cls-unservable"
         fi
       done
     fi
@@ -5136,14 +5193,26 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
     # exactly what `cmd_swap`'s guard exists to refuse. Git merged both changes
     # with no conflict; `ccd-pool-ok.test.ts`'s "still places into a tagged
     # project when the pool has an account" is what said so.
-    _ws_least_loaded "$project" || true
+    # THE CLASS RIDES ALONG TOO (routing slice 4), for D-2592's exact reason one
+    # argument further out: the pre-flight above placed by class, and a re-pick
+    # that dropped it would silently overwrite that answer with a class-blind
+    # one — on the very fleet where the class is what made the pre-flight
+    # choose. TWO LINES, because the rung taken is a SECOND fact and a
+    # subshell's variable is lost: the lane, then `PLACE_DEGRADED_TO`. The
+    # parent splits them below.
+    _place_for_class "$project" "$cls" "$strict" || true
+    printf '\n%s' "$PLACE_DEGRADED_TO"
   ) || fresh_rc=$?
+  # `$( )` strips trailing newlines, so a re-pick that took no rung leaves ONE
+  # line and this is a no-op; one that did leaves two and both are read.
+  local fresh_deg=""
+  [[ "$fresh" == *$'\n'* ]] && { fresh_deg="${fresh#*$'\n'}"; fresh="${fresh%%$'\n'*}"; }
   (( fresh_rc != 9 )) \
     || die "$CCRC_ACCOUNTS_SH could not be re-read as an account projection, so this workspace cannot be placed on an account this box can still prove exists — regenerate it: ccrc install. The worktree $wt and the branch $branch EXIST and no registry row names them; adopt them once it is fixed with: ccd start <wrapper> $project $wt"
   # NAMES WHAT IS ALREADY ON DISK. Unlike the pre-flight refusal, this one
   # cannot leave the box as it found it: the worktree and the branch exist.
   [[ -n "$fresh" ]] \
-    || die "no account is available for placement any more — every lane this box knew at startup is now disabled, missing or gone from the roster. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled), then adopt them with: ccd start <wrapper> $project $wt"
+    || die "no account is available for placement any more${cls:+ for class $cls} — every lane this box knew at startup is now disabled, missing or gone from the roster${cls:+, or none of them still measures able to serve $cls and nor does the rung below it}. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled)${cls:+ or re-run without --route class=$cls}, then adopt them with: ccd start <wrapper> $project $wt"
   hw="$fresh"
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
@@ -5155,6 +5224,27 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # reap via _reg_purge's shape match. Absent = follow the box (D-99's
   # fail-safe direction, per session).
   (( norc )) && _reg_set "$id" rc off
+  # ── THE ROUTING RECORD (routing spec §5.3 for the argv, §4 for the default) ──
+  # Here rather than at the pre-flight because every one of these is a WRITE
+  # against `$id`, and `$id` does not exist until the lines above. The argv wins
+  # over the default outright: a dispatcher that named fields has said what this
+  # worker is for, and the coordinator row is what an OPERATOR spawn gets when
+  # nobody said anything. A dispatched worker (`--no-rc`) that named nothing gets
+  # NEITHER — its spawn line stays byte-identical to a pre-slice-1 one.
+  #
+  # THE ACTOR IS THE DECLARED ONE WHEN THERE IS ONE. The dispatch path already
+  # passes `--actor 'run:<id> dispatch'`, which is a truer answer than the verb's
+  # own name; `ws-add` is the fallback for a call that declared nothing.
+  if (( ${#lc_route[@]} )); then
+    _route_argv_write "$id" "${lc_actor:-ws-add}" argv "${lc_route[@]}"
+  elif (( ! norc )); then
+    _route_seed_default "$id" "$hw"
+  fi
+  # AFTER the record, never before it: `degraded` is a statement about a record
+  # that exists, and `_route_degrade` reads the standing stamp to decide whether
+  # it has anything to say. The rung is the one the RE-PICK took — the pick that
+  # actually placed this workspace.
+  [[ -n "$fresh_deg" ]] && _route_degrade "$id" "$cls" "$fresh_deg" "unservable: $cls on every in-pool lane at placement"
 
   # GIVEN BACK HERE, before the setup hook and long before the settle, for the
   # reason cmd_ws_reap states at its own close: `flock` treats two `open()`s of
@@ -6230,6 +6320,12 @@ EOF
   # §5.3). A server that sees this token may write routing fields through the
   # verb; a server that does not sees no route verb and passes nothing.
   echo route-v1
+  # route-argv-v1 — this ccd takes `--route <field>=<value>` on the three verbs
+  # that MINT a session (`ws-add`, `start`, `enable`), validates it before
+  # anything is created, and places by the class it names. A server that sees
+  # this token may compose routing fields onto a dispatch argv; one that does
+  # not passes none and journals that it could not.
+  echo route-argv-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -14678,6 +14774,127 @@ _route_bytes() {   # value -> its length in BYTES (controller ruling S1-R2).
   local LC_ALL=C
   printf '%s' "${#1}"
 }
+# ── `--route` ON THE VERBS THAT MINT A SESSION (routing spec §5.3, §4) ───────
+# `cmd_route` edits a record that already exists; these five helpers are what
+# `ws-add`, `start` and `enable` need to write one AT THE MINT, where a refusal
+# must leave the box exactly as it found it. The validation is `cmd_route`'s own,
+# said a second time rather than shared, for one reason: `cmd_route` reads the
+# STANDING record to refuse the haiku+effort pair across two calls, and there is
+# no standing record here. Every other arm is deliberately identical, and
+# `ccd-route-argv.test.ts` asserts the refusals against `ccd-route-verb.test.ts`'s.
+ROUTE_COORDINATOR_ROW="class=fable effort=ultracode subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
+
+_route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the byte count (never the bytes)
+  # BEFORE ANY SIDE EFFECT. Every caller runs this above its first write — above
+  # the worktree, the branch, the registry row and the pane — so a coordinator
+  # that composed a bad argv gets a refusal and an untouched box, never a
+  # half-made workspace nobody asked for.
+  local kv f v rc cls="" eff=""
+  for kv in "$@"; do
+    [[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"
+    f="${kv%%=*}"; v="${kv#*=}"
+    _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
+    [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # THREE ANSWERS, THREE SENTENCES — `cmd_route`'s rule, and its reasoning
+    # applies here unchanged: an unreadable vocabulary is not the caller's value
+    # being wrong, and folding the two tells an operator with a good `haiku` to
+    # go and fix `haiku`. The `*)` arm is rc 1 and any rc a future vocabulary
+    # arm invents; unknown is bad value, the fail-closed side.
+    _route_valid "$f" "$v"; rc=$?
+    case "$rc" in
+      0) ;;
+      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary; nothing was touched" ;;
+    esac
+    [[ "$f" == class ]] && cls="$v"
+    [[ "$f" == effort ]] && eff="$v"
+  done
+  # `auto` types nothing and is the ABSENT-equivalent (controller ruling S1-R5),
+  # so haiku+auto is not the refused pair — only haiku+a LEVEL is.
+  [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class; nothing was touched"
+  return 0
+}
+
+_route_argv_write() {   # id actor reason k=v... — write validated fields (the row exists), one route row + one log line each
+  # THE PREVIOUS VALUE IS `∅` AND IS NOT READ, unlike `cmd_route`'s: every caller
+  # here has just minted the row, so there is nothing to read and a read would
+  # only invent a second answer for a field that has none.
+  local id="$1" actor="$2" reason="$3" kv f v; shift 3
+  for kv in "$@"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ∅ -> $v"
+    echo "$(date '+%F %T') route $id: $f ∅ -> $v [actor=$actor] ($reason)" >> "$REG/swap.log"
+  done
+}
+
+_route_seed_default() {   # id wrapper — the coordinator row for an OPERATOR spawn that named no field
+  # ON EVERY LANE, INCLUDING A NON-ANTHROPIC ONE (controller ruling R1, on the
+  # slice-4 probe that settled S1-R10). The first cut of this gated the row on
+  # `_is_anthropic_backend` because nobody had run a class alias anywhere else;
+  # the probe then measured `--model <class>` being HONOURED on the codex lane
+  # and resolving through that lane's own `ANTHROPIC_DEFAULT_<CLASS>_MODEL` keys
+  # (research doc §6, row `S1-R10, slice 4`), so the gate would have withheld a
+  # record the lane can in fact apply. What such a lane cannot serve is caught
+  # where it is MEASURED — `_serviceable`'s backend answer at the settle — not
+  # guessed here.
+  #
+  # `_route_any` stays: a session that carries ANY field already has a record,
+  # and this must never overwrite one (spec §5.1).
+  _route_any "$1" && return 0
+  # shellcheck disable=SC2086
+  _route_argv_write "$1" spawn "coordinator row (default)" $ROUTE_COORDINATOR_ROW
+}
+
+_route_argv_class() {   # k=v... -> stdout the class= value among them, or nothing
+  local kv
+  for kv in "$@"; do [[ "$kv" == class=* ]] && { printf '%s' "${kv#class=}"; return 0; }; done
+  return 0
+}
+
+_place_for_class() {   # project class strict -> stdout the lane; PLACE_DEGRADED_TO=<rung> when placed one rung down; "" when nothing places.
+  # THE FIRST PRODUCTION CALLER THAT ASKS PLACEMENT WITH A CLASS. Slice 3 gave
+  # `_ws_least_loaded` the class positional and left every call site passing
+  # none; this is the site, and it adds exactly two things on top of it.
+  #
+  # THE RUNG BELOW, AND ONLY ON A MEASURED EMPTINESS. `_ws_least_loaded`'s ""
+  # carries three meanings (its own header enumerates them) and only one is a
+  # fact about the CLASS: at least one in-pool lane answered `_class_gate` rc 1.
+  # An rc-2 lane is placeable and would have BEEN placed, so if one is present
+  # here it failed an earlier filter — not a statement about the class, and
+  # degrading on it would be a fabricated fact (spec §5.4).
+  #
+  # `strict` IS WHO ASKED. 1 is an explicit `--route class=`: a session that must
+  # run at that class has no business on a rung the fleet cannot serve, so it
+  # refuses rather than lands somewhere its own record forbids. 0 is the
+  # coordinator row's class — nobody typed it — so when no rung places, today's
+  # class-blind rule decides and a gpt-only pool keeps placing operator spawns
+  # exactly where it placed them yesterday.
+  local project="$1" cls="${2:-}" strict="${3:-1}" hw below w unserv=0 pps
+  PLACE_DEGRADED_TO=""
+  hw=$(_ws_least_loaded "$project" "$cls")
+  if [[ -n "$hw" || -z "$cls" || "$cls" == default ]]; then printf '%s' "$hw"; return 0; fi
+  pps=$(_project_pool_state "$project")
+  for w in "${CCRC_HOME_ABLE[@]}"; do
+    _account_ok "$w" && _pool_ok "$w" "$pps" || continue
+    _class_gate "$w" "$cls"; [[ $? -eq 1 ]] && unserv=$((unserv + 1))
+  done
+  if (( unserv > 0 )); then
+    below=$(_class_below "$cls")
+    if [[ -n "$below" ]]; then
+      hw=$(_ws_least_loaded "$project" "$below")
+      [[ -n "$hw" ]] && { PLACE_DEGRADED_TO="$below"; printf '%s' "$hw"; return 0; }
+    fi
+  fi
+  (( strict )) && return 0
+  # CAPTURED, THEN PRINTED WITHOUT A NEWLINE — `_ws_least_loaded` answers with
+  # `echo` and the two arms above answer with `printf '%s'`. One seam, one
+  # shape: a caller that does not wrap this in `$( )` (the `fresh` re-pick in
+  # `cmd_ws_add`, which prints a SECOND line after it) must not be able to tell
+  # which arm answered by the bytes it gets.
+  hw=$(_ws_least_loaded "$project")
+  printf '%s' "$hw"
+}
 _route_reject_note() {   # id field len — journal an unrecognised value: the FIELD and the
   # byte COUNT, never the bytes (they are the untrusted input). Floored PER FIELD
   # through `routenote<field>` (a dotless suffix, so `_reg_purge` reaps it): two
@@ -15554,14 +15771,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # a non-Anthropic session's model silently unset with no channel saying so —
     # the overloaded silence the inert stamp below exists to remove.
     #
-    # WHAT IS UNMEASURED IS WHAT THE ALIAS MEANS THERE (controller ruling
-    # S1-R10). Spec §5.2 says a class alias "maps onto the lane's tiers through
-    # its materialiser"; nobody has run it. The slice 4 plan opens with the
-    # headless probe that settles it — `--model opus` on a gpt lane against that
-    # lane's materialised default, reading `modelUsage` back — and it runs
-    # BEFORE any writer in this tree targets such a lane. Until then a class on a
-    # non-Anthropic lane is composed on a claim, not on a measurement, and this
-    # comment is where that is said.
+    # WHAT THE ALIAS MEANS THERE IS NOW MEASURED (controller ruling S1-R10,
+    # settled by the slice-4 probe: research doc §6, row `S1-R10, slice 4`,
+    # measured 2026-09-15 on Claude Code 2.1.273). On the codex lane `--model
+    # <class>` is HONOURED and resolves through that lane's own
+    # `ANTHROPIC_DEFAULT_<CLASS>_MODEL` keys in its config dir's settings.json —
+    # so the flag names a CLASS and the lane materialises the id, exactly the
+    # shape spec §5.2 assumed. `opus` is the one alias that probe cannot tell
+    # apart from the lane default, by construction: both map to the same id.
     [[ -n "$rclass" && "$rclass" != default ]] && routeflags="--model $rclass"
     # BACKEND, not placement: the subagent env is Claude Code's own; on another
     # backend the lane's settings.json materialiser owns the subagent (spec
@@ -16210,16 +16427,28 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # strips `--surface`: `$# -ge 2` is what distinguishes the creating form from
   # the id form, so a flag left in argv would make `ccd start --cross-pool <id>`
   # read as a creation and mint `--cross-pool-<id>`.
-  local cross="" args=()
+  #
+  # `--route` IS STRIPPED HERE FOR THE SAME REASON, and it takes a VALUE, so the
+  # arity check is not optional: ccd runs under `set -uo pipefail` with no `-e`,
+  # and a `shift 2` past the end of argv shifts nothing (see `cmd_ws_add`'s own
+  # measurement of this shape). Like `--cross-pool` it stays out of the usage
+  # line, which names the two POSITIONAL forms this verb takes.
+  local cross="" args=() route=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cross-pool) cross=1; shift ;;
+      --route)      [[ $# -ge 2 ]] || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
+                    route+=("$2"); shift 2 ;;
+      --route=*)    route+=("${1#--route=}"); shift ;;
       --)           shift; args+=("$@"); break ;;
       *)            args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"    # bash >= 4.4: an empty array here is not an unbound-
                          # variable error under `set -u`, as in cmd_swap.
+  # BEFORE ANY WRITE, and before the two forms diverge: a bad value must leave
+  # the registry exactly as it found it whichever form was typed (spec §5.3).
+  (( ${#route[@]} )) && _route_argv_check "${route[@]}"
   local id wrapper="" project="" workdir=""
   if [[ $# -ge 2 ]]; then
     wrapper="$1"; project="$2"; workdir="${3:-}"
@@ -16361,6 +16590,23 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
+  # ── THE ROUTING RECORD, ON A SESSION BEING MINTED AND NEVER ON A REVIVAL ────
+  # `$regw` empty is this verb's own "this row did not exist" proxy — the same
+  # one the pool policy above uses, with the same caveat stated there. A REVIVAL
+  # must write nothing: the record belongs to the session, `ccd route` is the
+  # verb that edits it, and re-seeding a default over a coordinator's considered
+  # fields at every restart would make the record mean nothing.
+  #
+  # `start` is the actor on both arms, including the one `cmd_enable` reaches:
+  # that verb forwards the pairs here rather than parsing them twice, and its own
+  # `enable` lifecycle row already records that boot-persistence was asked for.
+  if [[ -z "$regw" ]]; then
+    if (( ${#route[@]} )); then
+      _route_argv_write "$id" start argv "${route[@]}"
+    else
+      _route_seed_default "$id" "$wrapper"
+    fi
+  fi
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
   # already pinned home to this wrapper, so the marker's account clause is
   # satisfied by BOTH `wrapper` and `home` from the first tick onward.
@@ -18192,10 +18438,18 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # STRIPPED BEFORE `_id`, and that ordering is the whole point: `_id "$1" "$2"`
   # on an unstripped argv mints `--cross-pool-<wrapper>` and this verb journals
   # `enable` against a session id that does not exist.
-  local cross="" args=()
+  #
+  # `--route` IS FORWARDED, NOT PARSED. This loop strips it only so the arity
+  # rule below counts POSITIONALS, and hands the pairs back to `cmd_start`
+  # unchanged — one parser, one validation, one set of journal rows saying
+  # `start`. A second parse here would be a second vocabulary to keep in step.
+  local cross="" args=() route=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cross-pool) cross=1; shift ;;
+      --route)      [[ $# -ge 2 ]] || die "usage: ccd enable <id> | ccd enable <wrapper> <project> [workdir]"
+                    route+=(--route "$2"); shift 2 ;;
+      --route=*)    route+=("$1"); shift ;;
       --)           shift; args+=("$@"); break ;;
       *)            args+=("$1"); shift ;;
     esac
@@ -18211,7 +18465,7 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
   _lc_done enable "$id" ""
-  cmd_start ${cross:+--cross-pool} "$@" || return $?
+  cmd_start ${cross:+--cross-pool} "${route[@]}" "$@" || return $?
   echo "enabled boot-persistence for $id"
 }
 
