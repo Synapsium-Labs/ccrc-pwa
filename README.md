@@ -966,6 +966,67 @@ probe-based check was rejected (spends tokens, races real logins). The
 `-disabled` marker is a *declared* fact the operator sets by hand
 (`touch`/`rm`), not a detected one.
 
+### Account pools: tagging a project to a set of accounts
+
+**The rule, once.** An account carries an optional pool name; a project carries
+an optional pool name; an account may serve a project when either side is
+untagged or the two names are equal. That is the whole policy. An account is
+tagged in `~/.ccrc/accounts.json` (`"pool": "pool-a"`, carrying `id`'s grammar);
+a project is tagged by a one-token file at `~/.cc-sessions/pools/<project>` on
+the fleet host. **Untagged means unconstrained** — every account and every
+project starts untagged, and tagging only ever tightens, so nothing on the box
+behaves differently until you tag something.
+
+**`ccd` decides; the server refuses and forecasts.** Every place ccd chooses an
+account applies the rule: `ws-add`'s placement, the 5 s auto-swap tick, and the
+manual verbs. The server reads the same file through the agent and uses it for
+exactly two things — refusing a swap or a create it can already see is wrong
+(`409 pool-mismatch`, or `503` when the tag cannot be read), and forecasting
+where the next workspace would land. It never places a session and it never
+writes the marker; the agent's write root is unchanged.
+
+**Tagging.** From the phone: tap a project card and pick a pool. The list is
+derived from the pools your accounts actually carry — inventing a brand-new name
+is a shell act, deliberately, because a pool with no account in it is the
+shortest path to a stranded session. From a shell on the fleet host:
+
+```bash
+ccd project-pool --project demo --pool pool-a   # tag
+ccd project-pool --project demo --clear         # untag; always allowed, even for a deleted project
+echo pool-a > ~/.cc-sessions/pools/demo         # the 2 am idiom; the trailing newline is stripped
+ls ~/.cc-sessions/pools/                        # every tag on the box, in one listing
+```
+
+The file holds one token matching `^[a-z][a-z0-9-]{0,31}$`. Anything else — two
+words, an uppercase letter, a directory in its place, a file the reader cannot
+open — is `malformed` or `unreadable`, and **neither is ever quietly downgraded
+to untagged**: on a tag nobody can read, nobody decides. Creation refuses naming
+the path, the auto-swapper holds where it is, and the server answers 503. A
+typo strands one project, which is the point of one file per project.
+
+**Why the tag lives there.** `~/.cc-sessions/pools/<project>` is a dotless
+subdirectory of the registry, beside the switches you already touch by hand
+(`<wrapper>-disabled`, `coordinator-paused`). Two other homes were designed in
+full and rejected. Inside the project's own checkout (`<project>/.ccrc/pool`)
+puts policy in the tree every session runs in: one `git clean -fdx` deletes it
+and the project silently reverts to unconstrained, and one `git add -A` commits
+a pool name into a public repository. One JSON document for every project
+(`~/.ccrc/projects.json`) makes a single hand-typed trailing comma unreadable
+for *every* project at once — no placement and no rescue anywhere on the box
+until somebody fixes it. `$REG/<project>.pool` was not an option either: session
+ids are `<wrapper>-<project>`, so tagging a project named `acct-a-demo` would be
+writing session `acct-a-demo`'s own registry field.
+
+**What the tag outlives.** Nothing that cleans up a workspace touches it —
+`ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`/`ws-restore` and `forget` never name
+`pools/` — so a project's tag survives every one of its sessions and workspaces.
+It is operator intent, not session state. `ccrc uninstall` leaves it too, like
+the `-disabled` markers and the rest of the registry's operator switches. And
+like every other marker it is **not backed up**: the backup set is ccd, the
+units, the served dists and coord.db, never `~/.cc-sessions` markers. A box
+rebuilt from a backup comes back untagged, which is to say unconstrained — the
+PWA's flag on an untagged project is the signal that it happened.
+
 ### Login screens get no keystrokes, and lost auth joins the rescue lane
 
 A session spawned onto a broken account used to spin its full ~15-minute

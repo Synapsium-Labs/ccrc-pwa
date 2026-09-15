@@ -147,3 +147,72 @@ describe('README: the roster-side account facts (D-1686)', () => {
       .toEqual([]);
   });
 });
+
+/** The raw slice — line-anchored checks need it. Every phrase check below runs
+ *  over `flat(poolsSection())` instead. */
+const poolsSection = (): string =>
+  passage('README, the account-pools section', readme(),
+    '### Account pools: tagging a project to a set of accounts',
+    '\n### Login screens get no keystrokes');
+
+describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
+  it('states the rule and that untagged means unconstrained', () => {
+    const s = flat(poolsSection());
+    expect(s, 'the section never states the rule itself').toMatch(/either side is untagged or/i);
+    expect(s, 'ruling 3 is the one thing every operator must read here').toMatch(/unconstrained/);
+    expect(s).toMatch(/tagging only ever tightens/i);
+  });
+
+  it('names the marker path ccd actually reads, and the verb that writes it', () => {
+    const s = flat(poolsSection());
+    expect(s).toContain('~/.cc-sessions/pools/');
+    expect(s).toContain('ccd project-pool');
+    // Grounded: one bash constant, one server constant, same directory name.
+    expect(ccd(), 'ccd no longer keeps its pools directory where the README says')
+      .toMatch(/POOLS_DIR="\$REG\/pools"/);
+    expect(read('server/src/pools.ts'), 'the server no longer spells the directory once')
+      .toMatch(/POOLS_DIR_NAME = 'pools'/);
+  });
+
+  it('keeps the four reader words distinct — unreadable is never untagged', () => {
+    const s = flat(poolsSection());
+    for (const w of ['untagged', 'malformed', 'unreadable']) {
+      expect(s, `the section never names the \`${w}\` state`).toContain(w);
+    }
+    // The overloaded-null defect, stated as prose can state it: no sentence may
+    // say an unreadable or malformed tag is TREATED as untagged.
+    for (const sentence of sentencesOf(s)) {
+      if (/\b(unreadable|malformed)\b/.test(sentence)) {
+        expect(sentence, `a sentence folds an undecidable tag into untagged: "${sentence.trim()}"`)
+          .not.toMatch(/\b(reads?|treated) as untagged\b/i);
+      }
+    }
+    // Grounded in the reader that produces the four words.
+    expect(ccd(), 'ccd has no four-word pool reader — re-decide this paragraph')
+      .toMatch(/_project_pool_state\(\)/);
+  });
+
+  it('says the server refuses and forecasts but never places or writes', () => {
+    const s = flat(poolsSection());
+    expect(s).toMatch(/never places/);
+    expect(s).toMatch(/never writes the marker/);
+    // Grounded: the server's pools module is a READER. A write appearing here is
+    // the change that makes the sentence false.
+    expect(read('server/src/pools.ts'), 'server/src/pools.ts now writes — the README claim is false')
+      .not.toMatch(/writeFile|io\.write/);
+  });
+
+  it('says the tag outlives every workspace and survives an uninstall', () => {
+    const s = flat(poolsSection());
+    for (const verb of ['ws-rm', 'ws-reap', 'ws-gc', 'forget']) {
+      expect(s, `the section does not name \`${verb}\` among the verbs that leave the tag alone`)
+        .toContain(verb);
+    }
+    expect(s).toContain('ccrc uninstall');
+    expect(s, 'the section does not say the tag is outside the backup set').toMatch(/not backed up/i);
+    // Grounded: the uninstaller does not name `pools` at all, which is exactly
+    // why the tag survives it.
+    expect(read('ccd/ccrc'), 'ccrc now touches pools/ — the README claim that uninstall leaves it is false')
+      .not.toMatch(/pools/);
+  });
+});
