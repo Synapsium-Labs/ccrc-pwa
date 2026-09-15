@@ -81,6 +81,12 @@ describe('compact-card.mjs ships', () => {
     const helper = lines.findIndex((l) => l.startsWith('install_atomic ccd/compact-card.mjs '));
     const hook = lines.findIndex((l) => l.startsWith('install_atomic ccd/session-hook.sh '));
     expect(hook, 'deploy.sh still installs the hook').toBeGreaterThan(-1);
+    // BOTH ends of the window, or the ordering claim is vacuous: `findIndex`
+    // answers -1 for an absent line, and -1 < hook reports the order is right
+    // precisely when there is no helper install to order. MEASURED (r1 B3):
+    // commenting the install line out reds the count and the adjacency bound
+    // and leaves THIS assertion silent — the one that names the window.
+    expect(helper, 'deploy.sh still installs the helper').toBeGreaterThan(-1);
     expect(helper, 'the helper lands BEFORE the hook that calls it: the reverse order opens a window '
       + 'in which every live session on the box compacts against a helper that is not there yet, and '
       + 'the hook is silent about it').toBeLessThan(hook);
@@ -112,6 +118,10 @@ describe('compact-card.mjs ships', () => {
     const helper = lines.indexOf(`_inst_atomic "$tree/ccd/${name}" "${abs}" 644`);
     const hook = lines.findIndex((l) => l.startsWith('_inst_atomic "$tree/ccd/session-hook.sh"'));
     expect(hook, 'ccrc install still places the hook').toBeGreaterThan(-1);
+    // Belt and braces here — the `toContain` above already refuses -1 — and
+    // said anyway, because the two assertions are edited by different hands
+    // and an ordering claim that can pass on an absent line is worth nothing.
+    expect(helper, 'ccrc install still places the helper').toBeGreaterThan(-1);
     expect(helper, 'ccrc install places the helper before the hook, for deploy.sh\'s reason')
       .toBeLessThan(hook);
     expect(lines).toContain(`_upd_backup_copy "${abs}" ${name}`);
