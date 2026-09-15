@@ -1018,7 +1018,14 @@ git commit -m "docs(research): slice 2 gate — the clauses pinned, both referen
 
 ## Deviations found
 
-None at plan time. Numbers are issued by the allocator during execution and defined here in the same act.
+Issued by `POST /api/ledger/deviations` on 2026-09-15 (one block of five, D-2830..D-2834) and defined here in the same act. Every one records a defect in THIS PLAN's text or a ruling the controller made on a plan-mandated finding; the shipped tree is as the entries describe.
+
+- **D-2830 — Task 2, ruling S2-R1: the rebound case pinned, the read unchanged.** The plan's `runSignals` filter (`fromId = runs.sessionId`) hides a predecessor session's wave-done after a rebind (`bindSession`, reached through the open route's `setSession`); the review called the resulting `signals: null` an overloaded null. Measured: the only caller that can CHANGE a run's occupant is the open route, whose rebind is reached only through `openRun`'s dup arm (`state = 'planned'`), so a change of occupant happens only on a never-dispatched run and a predecessor's mail there is not a done-claim for dispatched work. Shipped: the plan's SQL unchanged; one test pinning the rebound case (`run-signals.test.ts`) and a `RunSignals` docstring paragraph naming the assumption and the path that would break it. Commit cdccdacc.
+- **D-2831 — Task 3: the plan's review-panel.md prose contradicted the plan's own test.** Step 4's prescribed heading read "Unverified is never approval." while Step 1's test asserts the literal `unverified, never as approval` (the clause-13 wording). Shipped: the heading kept, the exact phrase placed in the sentence that follows. Commit e24c94f4.
+- **D-2832 — Task 3: the plan named one docstring line; the count appeared twice.** Step 5 said to change `skillstate.ts:38`'s "five" to "seven"; line 43's "five on top of two" carried the same count and was left contradicting it. Shipped in fix round 1: both say seven. Commit 9019dc4a.
+- **D-2833 — Task 4, ruling S2-R2: the plan's clause-12 pin was satisfied by clause 12 itself, and its gloss dropped a parenthesis.** Step 1's `the shape of the wave and the routing[\s\S]{0,200}routing-matrix\.md` matches clause 12's own text, so deleting the step-2 insertion stayed green; Step 3's anchor kept step 2's closing `)` while its "so the sentence reads" gloss dropped it. Shipped in fix round 1: the pin anchors on `what only this wave knows[\s\S]{0,320}routing-matrix\.md` (measured: live match, red on the step-2 mutant) and the `)` is restored. Commit dd697db9.
+- **D-2834 — Task 5: the plan's mandated wave-done sentence collided with the worker test's count harvest.** Step 3 prescribed "the first two lines"; `worker-skill.test.ts` harvests every `<word> lines` over the whole file as a stated clause count and compares it with fifteen, so the verbatim sentence reds the test the same task requires green. Shipped: "the leading pair" — meaning unchanged, no literal or pin altered. Commit 4ab26909.
+
 
 ## Carried to later slices (recorded here so they are not lost)
 
