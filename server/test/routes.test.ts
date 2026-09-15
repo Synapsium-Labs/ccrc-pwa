@@ -207,7 +207,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all thirteen textual resource-id seams on the shared parser', () => {
+  it('keeps all fourteen textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -217,6 +217,7 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/runs/:id/reclaim' },
       { method: 'POST', routePath: '/api/runs/:id/advance' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
+      { method: 'GET', routePath: '/api/runs/:id/signals' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
       { method: 'POST', routePath: '/api/claims/:id/release' },
       { method: 'POST', routePath: '/api/claims/:id/break' },

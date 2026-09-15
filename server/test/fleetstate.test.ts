@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
-import { substrateFault, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, substrateFault, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -17,7 +17,7 @@ const session = (id: string): FleetSession => ({
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null,
+  started: true, spawnState: null, ask: null, usage: null,
 });
 
 describe('fleetstate', () => {
@@ -741,5 +741,17 @@ describe('substrateFault — the ONE tolerant reader both PWA surfaces use (spec
       .toEqual({ at: 0, text: 'kept verbatim' });
     expect(substrateFault({ substrate: { at: 5, text: '' } }))
       .toEqual({ at: 5, text: 'substrate fault (reason unreadable)' });
+  });
+});
+
+describe('reviveFleetSession carries usage (routing slice 0)', () => {
+  it('revives usage when present, tolerates its absence from an older peer, refuses a malformed one', () => {
+    const base = JSON.parse(JSON.stringify(session('demo-a'))) as Record<string, unknown>;
+    delete base['usage'];
+    expect(reviveFleetSession(base)?.usage).toBeNull();
+    const usage = { ts: 1, model: 'claude-sonnet-5', class: 'sonnet', effort: 'medium', ctxPct: null, cost: 0, stale: true };
+    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual(usage);
+    expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
+    expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string
   });
 });

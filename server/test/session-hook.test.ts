@@ -2444,3 +2444,48 @@ describe('memory convergence (spec 2026-09-08 §2)', () => {
     expect(fs.readdirSync(store())).toEqual([]);    // nothing planted INSIDE the store
   });
 });
+
+// ── The tmux question's BOUND (slice-0 carry) ──────────────────────────────
+//
+// `tmux display-message -p '#S'` talks to the tmux SERVER over its socket, and
+// a wedged server (SIGSTOP, a swapping box) answers nothing and never returns.
+// Unbounded, that hangs the HOOK — which runs on the hot path of every tool
+// call in every live session on the box, not once per render in one pane the
+// way `ccd/statusline-command.sh`'s already-bounded copy does (D-2791).
+describe('the tmux session-name read is bounded', () => {
+  /** Mask `timeout`/`gtimeout` from `command -v` WITHOUT touching PATH: PATH is
+   *  how the hook finds `cat`, `jq` and everything else, so removing a
+   *  directory to remove one binary would make the hook exit early for a reason
+   *  that is not the one under test. `BASH_ENV` is sourced by every
+   *  non-interactive bash before the script runs, which is exactly the surface
+   *  the hook resolves its bound through. */
+  const maskTimeout = (): string => {
+    const f = path.join(home, 'mask-timeout.bash');
+    fs.writeFileSync(f,
+      'command() { case "${2:-}" in timeout|gtimeout) return 1 ;; esac; builtin command "$@"; }\n');
+    return f;
+  };
+
+  it('with neither `timeout` nor `gtimeout` on the box the question is SKIPPED, not asked unbounded', () => {
+    // The hook keeps its absolute contract — exit 0, write nothing — rather
+    // than making a call it cannot bound.
+    expect(() => run({ hook_event_name: 'UserPromptSubmit' }, { BASH_ENV: maskTimeout() })).not.toThrow();
+    expect(fs.existsSync(stateFile())).toBe(false);
+    // …and the mask is the ONLY thing stopping it: unmasked, the same payload
+    // writes the state file. Without this control the case above passes for a
+    // hook that is broken outright.
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(readState().state).toBe('working');
+  });
+
+  it('a tmux that never answers costs the hook the bound, not the turn', () => {
+    // Mutation: drop the bound (`tname=$(tmux display-message -p '#S' …)`) and
+    // this waits the stub's full 30 s instead of ~2.
+    fs.writeFileSync(path.join(home, 'bin', 'tmux'), '#!/bin/sh\nsleep 30\n', { mode: 0o755 });
+    const t0 = Date.now();
+    expect(() => run({ hook_event_name: 'UserPromptSubmit' })).not.toThrow();
+    const ms = Date.now() - t0;
+    expect(ms, `the hook took ${ms}ms — the bound did not fire`).toBeLessThan(10_000);
+    expect(fs.existsSync(stateFile())).toBe(false);
+  });
+});

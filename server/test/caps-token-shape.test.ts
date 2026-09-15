@@ -69,12 +69,12 @@ describe('every ccd caps token survives parseCcdCaps', () => {
     expect(dropped, `parseCcdCaps dropped ${dropped.length} of ${toks.length} tokens ccd advertises`).toEqual([]);
   });
 
-  it('keeps the two versioned capability tokens by name', () => {
+  it('keeps the three versioned capability tokens by name', () => {
     // Named explicitly as well as derived: the derived assertion above goes
-    // quiet if cmd_caps is ever restructured, and these two are the ones whose
+    // quiet if cmd_caps is ever restructured, and these are the ones whose
     // loss is invisible at runtime rather than loud.
-    const kept = parseCcdCaps('lifecycle-v1\nactor-flags-v1\nstop-surface\n');
-    expect(kept).toEqual(['lifecycle-v1', 'actor-flags-v1', 'stop-surface']);
+    const kept = parseCcdCaps('lifecycle-v1\nactor-flags-v1\nroute-v1\nstop-surface\n');
+    expect(kept).toEqual(['lifecycle-v1', 'actor-flags-v1', 'route-v1', 'stop-surface']);
   });
 
   it('still rejects the noise the filter exists to drop', () => {

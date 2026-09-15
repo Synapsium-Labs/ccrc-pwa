@@ -133,3 +133,210 @@ describe('the four callers now ask the backend question', () => {
     expect(code.some((l) => l.includes('if _is_home_able "$cand"; then'))).toBe(true);
   });
 });
+
+// ── THE OTHER HALF OF THE SPLIT ────────────────────────────────────────────
+//
+// `_is_anthropic_backend` above keeps Claude-only machinery off a Codex lane.
+// This half is the mirror: it keeps Codex-only PROSE off everything else.
+//
+// `ccd ls` ends in a line per Codex lane reading that lane's usage story in
+// Codex's vocabulary — "Codex weekly cap reached (100%)", a 5h cooldown
+// countdown, the ccgpt-usage JSON shape. Until 2026-09-14 that trailer was a
+// single hardcoded line about `gpt`, which by then was wrong twice over: a
+// second Codex lane (`gpt2`) had existed since 2026-09-10 and had no line at
+// all, and both lanes had become home-able on 2026-09-11, so calling either an
+// "overflow lane" was false.
+//
+// The tempting repairs are both wrong, and `nx` is the fixture that proves it:
+// a lane is NOT Codex because it is non-home-able (cx is home-able), and NOT
+// because it is non-Anthropic (nx is neither Anthropic nor Codex). Only the
+// positive `telemetry === 'codex'` membership can answer.
+describe('_is_codex_backend — and why it is not the complement of the other two', () => {
+  it('names the Codex lane and nothing else', () => {
+    expect(yn('_is_codex_backend', 'cx')).toBe('yes');
+    expect(yn('_is_codex_backend', 'an')).toBe('no');
+  });
+
+  it('says NO for a third-backend lane that is neither Anthropic nor placeable', () => {
+    // THE WHOLE POINT. `nx` satisfies "not Anthropic" and "not home-able", so
+    // either shortcut would hand it Codex's weekly-cap prose — a lane that has
+    // never met Codex, told Codex's story. Both shortcuts are one character
+    // shorter than the real question, which is how they get written.
+    expect(yn('_is_anthropic_backend', 'nx')).toBe('no');
+    expect(yn('_is_home_able', 'nx')).toBe('no');
+    expect(yn('_is_codex_backend', 'nx')).toBe('no');
+  });
+
+  it('matches a lane id EXACTLY — a longer id that starts with one is not it', () => {
+    // `[[ "$w" == "$v" ]]` with an unquoted RHS would glob, and `"$v"*` would
+    // prefix-match: both mutants survived the original suite, because no
+    // fixture had a non-Codex account whose id extends a Codex one. The live
+    // roster is full of that shape (`claude` / `claude-corp` / `claude-dev1`),
+    // so this is one rename away from being real.
+    const prefixy = parseRoster({ version: 1, accounts: [
+      { id: 'an', label: 'AN', configDirSuffix: '.an', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'cx', label: 'CX', configDirSuffix: '.cx', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
+      { id: 'cx-corp', label: 'CXC', configDirSuffix: '.cx-corp', exec: { kind: 'generated' }, homeAble: true, hue: 'green', telemetry: 'anthropic' },
+    ] });
+    const dir = mkTmp('ccd-backend-prefix-');
+    mkdirSync(path.join(dir, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(dir, '.ccrc', 'accounts.sh'), generateAccountsSh(prefixy));
+    const ask = (snippet: string) => execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
+      { cwd: dir, encoding: 'utf8',
+        env: ghContainedEnv(dir, { ...process.env, HOME: dir }, { systemd: true, tmux: true }) }).trim();
+    expect(ask('_is_codex_backend cx && echo yes || echo no')).toBe('yes');
+    expect(ask('_is_codex_backend cx-corp && echo yes || echo no')).toBe('no');
+    // The identical unguarded comparison lives in `_is_anthropic_backend`, so
+    // pin it from the other side in the same fixture.
+    expect(ask('_is_anthropic_backend cx-corp && echo yes || echo no')).toBe('yes');
+    expect(ask('_is_anthropic_backend cx && echo yes || echo no')).toBe('no');
+  });
+
+  it('the generator emits the Codex membership as its own array', () => {
+    expect(sh('echo "${CCRC_CODEX_BACKEND[@]}"')).toBe('cx');
+  });
+
+  it('_codex_lanes enumerates the same membership, in roster order', () => {
+    expect(sh('_codex_lanes')).toBe('cx');
+  });
+
+  it('a roster with NO Codex lane enumerates NOTHING, not one empty line', () => {
+    // `printf '%s\n' "${arr[@]}"` on an empty array prints a blank line, and a
+    // blank line read back as a lane name is a lane called "" — which
+    // `_is_valid_wrapper` would reject, but only by luck. The count guard makes
+    // it produce no output at all, so the trailer is skipped rather than
+    // silently malformed.
+    const none = parseRoster({ version: 1, accounts: [
+      { id: 'up', label: 'UP', configDirSuffix: '.up', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    ] });
+    const dir = mkTmp('ccd-backend-nocodex-');
+    mkdirSync(path.join(dir, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(dir, '.ccrc', 'accounts.sh'), generateAccountsSh(none));
+    const out = execFileSync('bash', ['-c',
+      `source "$HOME/.ccrc/accounts.sh"; source "${CCD}"; _codex_lanes | wc -l`],
+      { cwd: dir, encoding: 'utf8',
+        env: ghContainedEnv(dir, { ...process.env, HOME: dir }, { systemd: true, tmux: true }) }).trim();
+    expect(out).toBe('0');
+  });
+
+  it('falls back to the historical single `gpt` when the roster predates the field', () => {
+    // Same deploy window as `_is_anthropic_backend`'s fallback (a new ccd over
+    // an old accounts.sh), but deliberately a DIFFERENT answer: reusing the
+    // homeAble fallback would claim every placeable lane speaks Codex. Before
+    // this array existed there was exactly one Codex lane and it was spelled
+    // `gpt`, so that is what "behave as this box behaved yesterday" means.
+    //
+    // Its OWN home with the line stripped, for the reason the sibling fallback
+    // test states: ccd sources `$HOME/.ccrc/accounts.sh` itself, so a legacy
+    // file merely sourced alongside is overwritten by the real one — and the
+    // test would pass against the array it meant to remove.
+    const old = mkTmp('ccd-backend-precodex-');
+    mkdirSync(path.join(old, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(old, '.ccrc', 'accounts.sh'), generateAccountsSh(roster)
+      .split('\n').filter((l) => !l.startsWith('CCRC_CODEX_BACKEND=')).join('\n'));
+    const ask = (snippet: string) => execFileSync('bash', ['-c', `source "${CCD}"; ${snippet}`],
+      { cwd: old, encoding: 'utf8',
+        env: ghContainedEnv(old, { ...process.env, HOME: old }, { systemd: true, tmux: true }) }).trim();
+    expect(ask('_codex_lanes')).toBe('gpt');
+    expect(ask('_is_codex_backend gpt && echo yes || echo no')).toBe('yes');
+    // cx IS the Codex lane in this roster, but a pre-field accounts.sh cannot
+    // say so — and inventing the answer is what the fallback must not do.
+    expect(ask('_is_codex_backend cx && echo yes || echo no')).toBe('no');
+    // AND the trailer must not name a lane this roster does not have. The
+    // fallback emits `gpt` unconditionally, so `_is_valid_wrapper "$lane" ||
+    // continue` in cmd_ls is the only thing standing between a pre-field
+    // accounts.sh and a line about an account that does not exist. Deleting
+    // that guard used to leave the suite green: it is unreachable on the
+    // generated path (CCRC_CODEX_BACKEND is a subset of CCRC_ACCOUNTS), so
+    // this fallback is the one place it can be pinned at all.
+    const out = ask('_reg_set s1 uuid u; _reg_set s1 wrapper an; _reg_set s1 workdir /w/s1;'
+      + ' _reg_set s1 started 1; _alive() { return 1; }; cmd_ls');
+    expect(out).toContain('s1');
+    expect(out).not.toContain('codex lane gpt');
+    expect(out).not.toContain('codex lane');
+  });
+});
+
+describe('the `ccd ls` trailer describes every Codex lane, not one by name', () => {
+  /** Two Codex lanes and one Anthropic lane, all placeable — the live fleet's
+   *  shape since 2026-09-11, which the single hardcoded trailer could not
+   *  describe. */
+  const twoLanes = parseRoster({ version: 1, accounts: [
+    { id: 'an', label: 'AN', configDirSuffix: '.an', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'cx', label: 'CX', configDirSuffix: '.cx', exec: { kind: 'external' }, homeAble: true, hue: 'blue', telemetry: 'codex' },
+    { id: 'cx2', label: 'CX2', configDirSuffix: '.cx2', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'codex' },
+  ] });
+
+  /** BOTH wrappers installed, and the two lanes driven into DIFFERENT states.
+   *
+   *  THIS IS WHAT MAKES THE TRAILER PROVE ANYTHING. The first version of this
+   *  fixture installed no wrapper, so both lanes short-circuited on
+   *  `_codex_lane_status`'s FIRST line at "not installed" — which is also what
+   *  a gpt-hardcoded body prints there. Every one of the five `$lane` reads
+   *  below that line went unexercised, and reverting all five to the literal
+   *  `gpt` left the whole suite green. Measured 2026-09-14, by mutation, after
+   *  the change had already merged.
+   *
+   *  So `cx` is kill-switched (reaching `_lane_enabled "$lane"` and the
+   *  `$REG/$lane-disabled` message) and `cx2` is at its weekly cap (reaching
+   *  `_avail "$lane"`, `$LIMITS_DIR/$lane.json` and `_limit_field "$lane"`).
+   *  Neither string is producible by a body that reads `gpt`. */
+  const lsOutput = (): { dir: string; out: string } => {
+    const dir = mkTmp('ccd-ls-trailer-');
+    mkdirSync(path.join(dir, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(dir, '.ccrc', 'accounts.sh'), generateAccountsSh(twoLanes));
+    const bin = path.join(dir, '.local', 'bin');
+    mkdirSync(bin, { recursive: true });
+    for (const w of ['cx', 'cx2']) writeFileSync(path.join(bin, w), '#!/bin/sh\n', { mode: 0o755 });
+    mkdirSync(path.join(dir, '.cc-sessions'), { recursive: true });
+    writeFileSync(path.join(dir, '.cc-sessions', 'cx-disabled'), '');
+    // Reset keys PRESENT but null — ccgpt-usage's real shape for a Codex lane,
+    // and the one that yields a countdown-free string, so this assertion
+    // carries no clock arithmetic and cannot flake.
+    mkdirSync(path.join(dir, '.cc-limits'), { recursive: true });
+    writeFileSync(path.join(dir, '.cc-limits', 'cx2.json'), JSON.stringify({
+      five: null, seven: 100, fiveWindowMinutes: 0,
+      ts: Math.floor(Date.now() / 1000), fiveResetAt: null, sevenResetAt: null,
+    }));
+    // One session on `an`, one on `cx`, two on `cx2` — so a per-lane count that
+    // is really the old single total would be visibly wrong on at least one line.
+    const rows = ['an-p:an', 'cx-p:cx', 'cx2-p:cx2', 'cx2-q:cx2']
+      .map((r) => { const [id, w] = r.split(':');
+        return `_reg_set ${id} uuid u; _reg_set ${id} wrapper ${w}; _reg_set ${id} workdir /w/${id}; _reg_set ${id} started 1`; })
+      .join('; ');
+    const out = execFileSync('bash', ['-c',
+      `source "$HOME/.ccrc/accounts.sh"; source "${CCD}"; ${rows}; _alive() { return 1; }; cmd_ls`],
+      { cwd: dir, encoding: 'utf8',
+        env: ghContainedEnv(dir, { ...process.env, HOME: dir }, { systemd: true, tmux: true }) });
+    return { dir, out };
+  };
+
+  it("prints each Codex lane's OWN state — not one lane's state under both names", () => {
+    // The assertion the parameterisation actually needs: two lanes, two
+    // different statuses, neither of them `gpt`'s. A body that ignores its
+    // argument cannot produce this pair no matter which lane it hardcodes.
+    const { dir, out } = lsOutput();
+    expect(out).toContain(
+      `codex lane cx: DISABLED (kill-switch; rm ${dir}/.cc-sessions/cx-disabled to re-enable)`
+      + '  —  1 session(s) currently on it');
+    expect(out).toContain(
+      'codex lane cx2: Codex weekly cap reached (100%)  —  2 session(s) currently on it');
+  });
+
+  it('counts each lane separately', () => {
+    const { out } = lsOutput();
+    expect(out).toMatch(/codex lane cx: .*—  1 session\(s\)/);
+    expect(out).toMatch(/codex lane cx2: .*—  2 session\(s\)/);
+  });
+
+  it('prints no such line for the Anthropic lane, however many sessions it holds', () => {
+    expect(lsOutput().out).not.toContain('codex lane an');
+  });
+
+  it('no longer calls a placeable lane an overflow lane', () => {
+    // Both Codex lanes above are home-able. The words the trailer used to use
+    // said the opposite, and an operator reading `ccd ls` had no other place to
+    // learn otherwise.
+    expect(lsOutput().out).not.toContain('overflow lane');
+  });
+});

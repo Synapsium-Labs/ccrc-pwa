@@ -196,6 +196,100 @@ jobs:
         working-directory: server
         run: ./node_modules/.bin/vitest run
 
+  # THE PROBE LEG — a platform CONTRACT check that is not hostage to the suite.
+  #
+  # `test-macos` above is a 303-file run, and it has stopped being able to
+  # report: of its three runs on 2026-09-12 one completed at 39 min and TWO
+  # were cut at the 55-minute deadline mid-`Test`, answering nothing. A leg
+  # that cannot finish cannot be iterated against, and D-2614 — a credential
+  # path that fails on macOS and only macOS — can only be settled by asking a
+  # real Mac a question and reading the answer.
+  #
+  # So this job asks exactly one file's worth of questions about what
+  # `script(1)` does on this userland, in about two minutes. It is deliberately
+  # NOT folded into `test-macos`: the whole point is that its answer survives
+  # whatever the big suite does, including being cut. Same reason it is not
+  # required — it reports, it does not gate.
+  #
+  # `--reporter=verbose` because the answer travels in the assertion MESSAGE
+  # (each case carries `script`'s rc and stderr), and the default reporter
+  # elides those for passing cases.
+  probe-macos:
+    runs-on: macos-latest
+    # 25, not 10. The first run was cut at 10 with the auth suite still going,
+    # and the reason is D-2661 rather than the suite being big: several cases
+    # ran to the fixture's 60_000 ms `execFileSync` cap against deadlines of 6
+    # to 25 seconds, because `_plat_timeout`'s deadline intermittently does not
+    # fire on this runner. One of them (`runs the UPSTREAM launcher…`) still
+    # PASSED at 60078 ms, since its assertions read files rather than `rc` — so
+    # the symptom is silent cost, not a red.
+    #
+    # 25 is ~2x the observed worst case with several such stalls, and stays well
+    # under `oss-metadata.test.ts`'s 60-minute ceiling. It is a budget for a
+    # KNOWN defect, not headroom for an unknown one: when D-2661 closes this
+    # should come back down.
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      # The same set as `test-macos`, and for the same reasons — this leg now
+      # runs the auth helper's own suite too, which drives `_plat_timeout`
+      # (whose Darwin fallback is `gtimeout`, from coreutils), plants tmux and
+      # flock stubs, and reads jq.
+      #
+      # An earlier revision of this job installed `bash` alone, reasoning that
+      # `gtimeout`'s absence is what D-2661 suspects and the leg should meet the
+      # userland bare. That conflated two things: the `script(1)` probe never
+      # calls `timeout`, so coreutils cannot colour its measurement, while the
+      # auth suite would have hung for D-2661's reason and reported nothing
+      # about the darwin arm. Measuring the deadline shim bare is a DIFFERENT
+      # probe and needs its own job, not this one's omission.
+      - name: Install system dependencies
+        run: brew install bash tmux flock jq coreutils
+      - name: Install
+        working-directory: server
+        run: npm ci
+      - name: Probe
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts --reporter=verbose
+      # THE TWO PANE-BOUND DESCRIBES ONLY, and the narrowing is the point.
+      #
+      # This step began as the whole `ccd-account-auth.test.ts` file and was cut
+      # at 10 minutes, then again at 25 — not because the file is big (~40s on
+      # linux) but because D-2661 makes individual cases run to the fixture's
+      # 60_000 ms cap instead of their 6-to-25-second deadlines. Most of that
+      # cost is in describes that have nothing to do with D-2614.
+      #
+      # `setup-token` and `openai-login` are the two methods that go through
+      # `script(1)`, so they are the two D-2673 changes the shape of, and they
+      # are the whole question this leg exists to answer. Everything else about
+      # the helper is already answered on linux and by `test-macos` when it
+      # manages to finish.
+      #
+      # Measured on 52934a2e, the run this replaces: `the mint exited 1`
+      # appeared ZERO times, against NINE before the fix, with the setup-token
+      # describe demonstrably reached. That is what says D-2673 works; this
+      # narrowing is what lets a run say it without being cut first.
+      # The spawn must TERMINATE — the D-2734 property, asked on the platform
+      # whose arm it is. These cases force `CCD_OS` themselves, so they are red
+      # on Linux too; running them here checks the real userland agrees.
+      # THE TWO QUESTIONS D-2614's work left open, and neither can be asked on
+      # Linux. Placed FIRST because they are pure measurement: they change no
+      # shipped code, and if a later step reds we still get their answer.
+      - name: Platform hazards — the deadline, and grep over a FIFO (D-2661, D-2739)
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/platform-hazards.test.ts --reporter=verbose
+      - name: The pane-bound spawn terminates (D-2734..D-2737)
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose -t 'spawn has to END'
+      - name: The two pane-bound methods (what D-2673 changes)
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/ccd-account-auth.test.ts --reporter=verbose -t 'setup-token|openai-login'
+
   build-pwa:
     runs-on: ubuntu-latest
     # Under a minute in practice; 15 is headroom for a cold npm cache.

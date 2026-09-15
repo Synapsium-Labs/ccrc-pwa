@@ -338,6 +338,16 @@ describe('ctxPct on the wire (D-2011)', () => {
       localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, sl);
     expect(fleet.find((s) => s.id === 'demo-quiet-mesa')!.ctxPct).toBe(0);
   });
+
+  it('carries the usage sidecar reading onto the session, and null when none was read (routing slice 0)', async () => {
+    const { home, run } = setup();
+    const reading = { ts: 1_800_000_000, model: 'claude-opus-5', class: 'opus' as const, effort: 'high', ctxPct: 12, cost: 1.25, stale: false };
+    const withUsage = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      new Map([['demo-quiet-mesa', reading]]));
+    expect(withUsage.find((s) => s.id === 'demo-quiet-mesa')?.usage).toEqual(reading);
+    const without = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(run), 1784600000);
+    expect(without.find((s) => s.id === 'demo-quiet-mesa')?.usage).toBeNull();
+  });
 });
 
 describe('derived session handles', () => {

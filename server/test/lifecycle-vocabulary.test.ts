@@ -146,7 +146,7 @@ describe('ccd <-> shared: the journal vocabulary', () => {
     // the length assertion measures the mutant TODAY.
     const want = LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN);
     // Two independent claims about `want` itself — expect.soft.
-    expect.soft(want.length, 'guards the guard: an empty want passes everything').toBe(22);
+    expect.soft(want.length, 'guards the guard: an empty want passes everything (23 = 22 + route, routing slice 1)').toBe(23);
     expect.soft(want, 'the filter must exclude the degrade, not merely run').not.toContain(LC_ACT_UNKNOWN);
     const acts = ccdArray('_LC_ACTS');
     if (acts === null) {
