@@ -7068,6 +7068,30 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const r = audit(realCorpus());
     const byFile: Record<string, number> = {};
     for (const f of r.failures) byFile[f.file] = (byFile[f.file] ?? 0) + 1;
+    //
+    // TASK 10 MOVES IT AGAIN, +2, AND BOTH ARE THIS TASK'S OWN LINE SHIFTS —
+    // PROVEN, not assumed, by sha256 of the cited line at the base against the
+    // same line at the tip (D-2849). Task 10 inserts the helper's install
+    // BEFORE the hook's on both doors, so the two lines its own frozen prose
+    // cites move underneath it:
+    //   `deploy/deploy.sh:629` -> `:643` (+14 — one backup clause plus the
+    //     twelve-line comment and the install line), sha256 231a9934… on both
+    //     sides; clause: "Modify: `deploy/deploy.sh` … one `install_atomic`
+    //     call in the agent branch, placed immediately BEFORE …".
+    //   `ccd/ccrc:6531` -> `:6537` (+6 — the five-line comment and the
+    //     `_inst_atomic` above it in `_inst_files`), sha256 100a047a… on both
+    //     sides; clause: "the `_upd_backup_copy` list beside …".
+    // The other three references in that same paragraph — `deploy/deploy.sh:560`
+    // (the insertion lands AFTER it), `ccd/ccrc:5217` and `ccd/ccrc:7129-7130`
+    // — still pass, measured by the audit itself rather than reasoned about.
+    //
+    // THEY ARE RECORDED RATHER THAN REPAIRED BECAUSE THE REPAIR IS OUT OF
+    // REACH, not because it was skipped: both citations live inside Task 10's
+    // plan section, which is frozen byte-for-byte (24,688 B,
+    // 46535cdd524041584201abc0e8ac690df9cf1930d7398cefc3194a495de5dc7d) and
+    // pinned by Task 11's own audit, whose Step 1 instruction is to preserve
+    // it. So the execution of Task 10 and the freeze of Task 10 cannot both be
+    // satisfied, and this map is where that shows.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       'ccd/ccd': 134,
       'ccd/session-hook.sh': 43,
@@ -7075,13 +7099,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'server/test/ccd-workspaces.test.ts': 7,
       'server/test/ccd-ws-reap.test.ts': 7,
       'server/test/compact-card.test.ts': 6,
+      'ccd/ccrc': 1,
+      'deploy/deploy.sh': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(204);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(206);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -7090,7 +7116,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'server/test/ccd-workspaces.test.ts', 'server/test/ccd-ws-reap.test.ts',
       'server/test/compact-card.test.ts', 'server/test/session-hook.test.ts',
       'server/test/ccd-lifecycle-purge.test.ts', 'server/test/ccd-reg-set-atomic.test.ts',
-      'server/test/lifecycleHelpers.ts'];
+      'server/test/lifecycleHelpers.ts',
+      // Task 10's two installer files (D-2849). The claim this list makes is
+      // unchanged — every failing citation points into a file one of these
+      // tasks REWROTE, so the census stays a statement about this work rather
+      // than about the documents' own quality — and these two are named
+      // because Task 10 rewrote them, not to admit a stale reference.
+      'ccd/ccrc', 'deploy/deploy.sh'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
   });
