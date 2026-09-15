@@ -708,6 +708,13 @@ describe('upload route id handling', () => {
     form.append('file', new Blob([new Uint8Array(8)], { type: 'image/png' }), name);
     return form;
   };
+  /** A document part, with the type field set to whatever an OS felt like —
+   *  `''` included, which is what a phone hands over for a .md. */
+  const doc = (name: string, type = '', bytes = 'hello') => {
+    const form = new FormData();
+    form.append('file', new Blob([bytes], { type }), name);
+    return form;
+  };
 
   it('stages a picked image and returns where it landed', async () => {
     const { app } = await makeApp([null]);
@@ -716,8 +723,50 @@ describe('upload route id handling', () => {
     });
     expect(res.statusCode).toBe(200);
     const clip = res.json().clip as { path: string; name: string; bytes: number };
-    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}\.png$/);
+    expect(clip.name).toMatch(/^clip-\d{8}-\d{6}-[0-9a-f]{8}-shot\.png$/);
     expect(clip.path).toContain(`/.cc-clips/${ID}/`);
+  });
+
+  // The whole point of the document half: the path is typed into the session
+  // and Claude Code opens the file itself, so anything `Read` can open belongs
+  // here. The type field is deliberately wrong or blank on these — the
+  // EXTENSION decides, because a phone's idea of a .md's MIME type is not
+  // something the store can be built on.
+  it('stages a document whatever the client called its type', async () => {
+    const { app } = await makeApp([null]);
+    for (const [name, type] of [
+      ['design-notes.md', ''],
+      ['notes.txt', 'application/octet-stream'],
+      ['report.pdf', 'application/pdf'],
+      ['letter.rtf', 'text/rtf'],
+      ['rows.csv', 'text/csv'],
+    ] as const) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name, type),
+      });
+      expect(res.statusCode, name).toBe(200);
+      const clip = res.json().clip as { name: string };
+      // The uploader's own name rides along: four documents in one prompt are
+      // otherwise four paths differing only by a random suffix.
+      expect(clip.name, name).toMatch(
+        new RegExp(`^clip-\\d{8}-\\d{6}-[0-9a-f]{8}-${name.replace('.', '\\.')}$`),
+      );
+    }
+  });
+
+  // Absent by decision, not by oversight: a .docx is a ZIP container `Read`
+  // cannot open, so staging one would put a file in the prompt that reaches
+  // Claude as noise. Widening the list is only ever safe for a format the
+  // reader on the far end already understands.
+  it('refuses what the reader on the far end could not open', async () => {
+    const { app } = await makeApp([null]);
+    for (const name of ['deck.pptx', 'book.xlsx', 'memo.docx', 'bundle.zip', 'run.sh', 'page.html']) {
+      const res = await app.inject({
+        method: 'POST', url: `/api/sessions/${ID}/upload`, payload: doc(name),
+      });
+      expect(res.statusCode, name).toBe(415);
+      expect(res.json().error, name).toBe('unsupported-type');
+    }
   });
 
   // A bare '..' is deliberately absent: the router normalises
@@ -756,6 +805,28 @@ describe('clip route', () => {
     form.append('file', new Blob([CLIP_BYTES], { type: 'image/png' }), name);
     return form;
   };
+
+  // A document is staged for a reader, so what comes back off the wire must be
+  // what went up — and it must come back as something a browser will not decide
+  // for itself is HTML. `nosniff` is the second half of that: `CLIP_MIME` names
+  // no script type, but without the header a browser may promote a text/plain
+  // clip to markup and run it in the app's own origin.
+  it('serves a document with its own type, nosniff, and its bytes untouched', async () => {
+    const { app } = await makeApp([null]);
+    const body = '# heading\n\n<script>alert(1)</script>\n';
+    const form = new FormData();
+    form.append('file', new Blob([body], { type: '' }), 'notes.md');
+    const up = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/upload`, payload: form });
+    expect(up.statusCode).toBe(200);
+    const { name } = up.json().clip as { name: string };
+
+    const res = await app.inject({ method: 'GET', url: `/api/sessions/${ID}/clip/${name}` });
+    expect(res.statusCode).toBe(200);
+    expect(res.headers['content-type']).toContain('text/markdown');
+    expect(res.headers['x-content-type-options']).toBe('nosniff');
+    expect(res.rawPayload.toString('utf8')).toBe(body);
+    await app.close();
+  });
 
   it('serves a staged clip with an immutable cache header, bytes intact on the wire', async () => {
     const { app } = await makeApp([null]);

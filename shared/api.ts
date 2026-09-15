@@ -5095,6 +5095,57 @@ export interface CoordCapsView {
 export interface StagedClip { path: string; name: string; bytes: number }
 
 /**
+ * Every filename extension the clip store admits — ONE definition, because the
+ * list is read in five places that must not drift: the upload gate, the
+ * stored-name rule, the path regex, the picker's `accept`, and the renderer's
+ * thumbnail-or-chip decision.
+ *
+ * The split is not cosmetic. An IMAGE is staged for what it LOOKS like, so the
+ * composer may re-encode it (downscale, JPEG) on the way. A DOCUMENT is staged
+ * for what READS it: the path is typed into the session and Claude Code opens
+ * the file itself, so the bytes must arrive untouched — a canvas pass over a
+ * PDF produces a picture of nothing.
+ *
+ * That same reading is why the document half stops where it does. What is here
+ * is what `Read` can open off a path: plain text in its various dresses, plus
+ * PDF, which it reads natively. `.docx`/`.xlsx`/`.pptx` are deliberately ABSENT
+ * — they are ZIP containers, so admitting one would stage a file that reaches
+ * Claude as binary noise, and converting them is a fleet-box dependency this
+ * tree does not have. Widening this list is safe only for a format `Read`
+ * already understands.
+ */
+export const CLIP_IMAGE_EXTS = ['png', 'jpg', 'jpeg', 'webp'] as const;
+export const CLIP_DOC_EXTS =
+  ['md', 'txt', 'log', 'csv', 'tsv', 'json', 'yaml', 'yml', 'rtf', 'pdf'] as const;
+export const CLIP_EXTS: readonly string[] = [...CLIP_IMAGE_EXTS, ...CLIP_DOC_EXTS];
+
+/** The `png|jpg|…` alternation, for the two regexes that gate clip names and
+ *  paths. Derived, so a new extension never needs a regex edited by hand. */
+export const CLIP_EXT_ALT = CLIP_EXTS.join('|');
+
+/** The lowercase extension of a filename or path; '' when it has none. */
+function extOf(nameOrPath: string): string {
+  const base = nameOrPath.slice(nameOrPath.lastIndexOf('/') + 1);
+  const dot = base.lastIndexOf('.');
+  return dot < 0 ? '' : base.slice(dot + 1).toLowerCase();
+}
+
+/** True when a filename carries an extension the clip store admits. */
+export function hasClipExt(nameOrPath: string): boolean {
+  return CLIP_EXTS.includes(extOf(nameOrPath));
+}
+
+/**
+ * True for a clip a renderer should draw as a picture rather than as a document
+ * chip. Decided on the EXTENSION, never on a MIME type: the stored name is all
+ * a bubble has — it is rebuilt from the prompt text, which carries no types —
+ * and the extension in it is the real one `clipName` wrote.
+ */
+export function isImageClip(nameOrPath: string): boolean {
+  return (CLIP_IMAGE_EXTS as readonly string[]).includes(extOf(nameOrPath));
+}
+
+/**
  * A clip path anywhere in a string: `…/.cc-clips/<session>/clip-<stem>.<ext>`.
  * Matched by SHAPE, never by touching the filesystem, so it works client-side.
  * Exported WITHOUT the `g` flag to avoid stateful `lastIndex` — a g-flagged
@@ -5102,7 +5153,7 @@ export interface StagedClip { path: string; name: string; bytes: number }
  * Internal consumers build their own `new RegExp(CLIP_PATH_RE.source, 'g')`.
  */
 export const CLIP_PATH_RE =
-  /\/[^\s]*\/\.cc-clips\/[^/\s]+\/clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)/;
+  new RegExp(`\\/[^\\s]*\\/\\.cc-clips\\/[^/\\s]+\\/clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})`);
 
 /**
  * Attachment paths first, each on its own line, then the user's text. Paths
