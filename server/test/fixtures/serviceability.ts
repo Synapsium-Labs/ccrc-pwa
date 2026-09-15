@@ -3,9 +3,16 @@
 // ccd's `_serviceable` — the `POOL_RULE_CASES` idiom. Every row is a FILE
 // LAYOUT (a limits row for the lane, a sweep pass) plus a class, so both sides
 // read the same bytes and nothing here re-derives the rule.
+//
+// THE ONE IMPORT IS A TYPE, and it erases at compile time — so this file still
+// re-derives nothing at RUNTIME while a class added to `CLASSES` becomes a
+// compile error here rather than a row nobody wrote (Task 3's carried
+// cannot-verify (c), the sibling of `fixtures/leastLoaded.ts`'s).
+import type { ModelClass } from '../../../shared/models.js';
+
 export interface ServiceabilityCase {
   name: string;
-  cls: 'default' | 'fable' | 'opus' | 'sonnet' | 'haiku';
+  cls: ModelClass | 'default';
   /** The lane under test — `claude` is Anthropic, `gpt` is codex in DEFAULT_TEST_ROSTER. */
   lane: 'claude' | 'gpt';
   /** `~/.cc-limits/<lane>.json` bytes, as a function of now; absent = no file. */

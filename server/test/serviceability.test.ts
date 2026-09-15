@@ -45,6 +45,22 @@ describe('serviceability — five answers', () => {
   it('fable on a lane whose backend is not Anthropic is unservable by BACKEND, before any figure is read', () => {
     expect(serviceability('fable', lane({ anthropic: false, share: { estimatePct: 0, finishedAtS: NOW } }), NOW))
       .toEqual({ kind: 'unservable', why: 'backend' });
+    // PRECEDENCE, MEASURED (Task 1 minor, deferred). The row above supplies a
+    // FRESH reading, so moving the `!lane.anthropic` guard BELOW the
+    // no-figure/stale guards left it green — the reordered function still
+    // reached the backend arm. These three are the only inputs that tell the
+    // orders apart: with NO reading, with a NULL estimate and with a STALE
+    // one, a guard
+    // ordered second answers `unmeasured` while the shipped order answers
+    // `backend`. The roster's word about the lane is a fact that no absent or
+    // aged sweep pass can soften, which is exactly what §5.4 means by deciding
+    // the backend "before any figure is read".
+    expect(serviceability('fable', lane({ anthropic: false, share: null }), NOW))
+      .toEqual({ kind: 'unservable', why: 'backend' });
+    expect(serviceability('fable', lane({ anthropic: false, share: { estimatePct: null, finishedAtS: NOW } }), NOW))
+      .toEqual({ kind: 'unservable', why: 'backend' });
+    expect(serviceability('fable', lane({ anthropic: false, share: { estimatePct: 5, finishedAtS: NOW - SHARE_FRESH_S - 1 } }), NOW))
+      .toEqual({ kind: 'unservable', why: 'backend' });
   });
 
   it.each(['opus', 'sonnet', 'haiku'] as const)('%s: the seven-day figure against SEVEN_DAY_CEILING_PCT; null is unmeasured', (c) => {
