@@ -12,6 +12,13 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 const ID = 'claude2-Proj';
 const CLIP = { path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2.png', name: 'clip-1-a1b2.png', bytes: 9 };
 const shot = (name = 'shot.png') => new File(['tiny'], name, { type: 'image/png' });
+const DOC_CLIP = {
+  path: '/home/u/.cc-clips/claude2-Proj/clip-1-a1b2-notes.md',
+  name: 'clip-1-a1b2-notes.md',
+  bytes: 4,
+};
+/** A picked document: the type is whatever the OS felt like, including nothing. */
+const doc = (name = 'notes.md', type = '') => new File(['# hi'], name, { type });
 
 /** Renders the hook's state as plain text, so assertions read the hook and not
  *  a component's styling choices. `second`, when given, wires up an
@@ -45,6 +52,7 @@ function Harness({
         {s.images.map((i) => (
           <li key={i.key} data-testid={`img-${i.file.name}`}>
             <span data-testid={`state-${i.file.name}`}>{i.state}</span>
+            <span data-testid={`preview-${i.file.name}`}>{i.previewUrl ?? ''}</span>
             <span data-testid={`dims-${i.file.name}`}>
               {i.width && i.height ? `${i.width}×${i.height}` : ''}
             </span>
@@ -142,7 +150,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={five} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByText(/Four images per message/)).toBeInTheDocument();
+    expect(await screen.findByText(/Four attachments per message/)).toBeInTheDocument();
     expect(screen.queryByTestId('img-s4.png')).not.toBeInTheDocument();
   });
 
@@ -203,7 +211,7 @@ describe('useStagedImages', () => {
     render(<><Harness files={[shot()]} /><ToastHost /></>);
     fireEvent.click(screen.getByText('add'));
 
-    expect(await screen.findByRole('alert')).toHaveTextContent(/PNG, JPEG or WebP only/i);
+    expect(await screen.findByRole('alert')).toHaveTextContent(/images, text, PDF and RTF only/i);
   });
 
   // — Object-URL lifetime. `release()` hands the URLs to the PendingSend, which
@@ -245,5 +253,69 @@ describe('useStagedImages', () => {
       expect(screen.getByTestId('state-x.png')).not.toHaveTextContent('uploading');
       expect(screen.getByTestId('state-y.png')).not.toHaveTextContent('uploading');
     });
+  });
+});
+
+// — Documents. The other half of the tray: staged for what READS them, not for
+// what renders them, so they take a lane with no canvas, no decoder and no
+// object URL anywhere on it. —
+
+describe('useStagedImages with a document', () => {
+  it('uploads it byte-identical, never through the downscale', async () => {
+    const upload = vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    const downscale = vi.fn();
+    const file = doc();
+    render(<Harness files={[file]} downscale={downscale} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-notes.md')).toHaveTextContent('staged'));
+    expect(downscale).not.toHaveBeenCalled();
+    // The FILE that was picked, not a re-encode of it: a canvas pass over a
+    // document either throws or uploads a picture of nothing.
+    expect(upload).toHaveBeenCalledWith(ID, file);
+    expect(screen.getByTestId('path-notes.md')).toHaveTextContent(DOC_CLIP.path);
+  });
+
+  // `createImageBitmap` throws on text. Before the document branch it ran on
+  // every upload, so a perfectly good .md landed in `failed` with a decoder
+  // error as its reason — and the chip offered a retry that could never work.
+  it('never asks a decoder to measure it, so it cannot fail as one', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    const bitmap = vi.fn().mockRejectedValue(new Error('unsupported image type'));
+    vi.stubGlobal('createImageBitmap', bitmap);
+    render(<Harness files={[doc('report.pdf', 'application/pdf')]} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-report.pdf')).toHaveTextContent('staged'));
+    expect(bitmap).not.toHaveBeenCalled();
+    expect(screen.getByTestId('error-report.pdf')).toHaveTextContent('');
+    vi.unstubAllGlobals();
+  });
+
+  // There is nothing to preview, so no URL is minted — an object URL nobody
+  // renders is a leak waiting for someone to forget the matching revoke, and
+  // its ABSENCE is what tells the tray and both bubbles to draw a name chip.
+  it('mints no object URL for it, and reports no dimensions', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    vi.mocked(URL.createObjectURL).mockClear();
+    render(<Harness files={[doc()]} />);
+    fireEvent.click(screen.getByText('add'));
+
+    await waitFor(() => expect(screen.getByTestId('state-notes.md')).toHaveTextContent('staged'));
+    expect(URL.createObjectURL).not.toHaveBeenCalled();
+    expect(screen.getByTestId('preview-notes.md')).toHaveTextContent('');
+    expect(screen.getByTestId('dims-notes.md')).toHaveTextContent('');
+  });
+
+  it('removes cleanly although there is no URL to revoke', async () => {
+    vi.spyOn(api, 'upload').mockResolvedValue(DOC_CLIP);
+    vi.mocked(URL.revokeObjectURL).mockClear();
+    render(<Harness files={[doc()]} />);
+    fireEvent.click(screen.getByText('add'));
+    await waitFor(() => expect(screen.getByTestId('state-notes.md')).toHaveTextContent('staged'));
+
+    fireEvent.click(screen.getByText('remove notes.md'));
+    expect(screen.queryByTestId('img-notes.md')).not.toBeInTheDocument();
+    expect(URL.revokeObjectURL).not.toHaveBeenCalled();
   });
 });

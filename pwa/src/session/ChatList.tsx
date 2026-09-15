@@ -9,7 +9,7 @@ import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
-import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
+import { isImageClip, parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
@@ -221,12 +221,20 @@ function WorkingIndicator(): ReactNode {
  *  attach tray already created, so chip → pending never flickers empty
  *  waiting on a server round trip. Falls back to `clipUrl` if a pending ever
  *  arrives without one (e.g. rehydrated across a reload, where blob URLs
- *  don't survive). */
+ *  don't survive).
+ *
+ *  A DOCUMENT has no object URL by construction (the tray mints none) and
+ *  nothing to draw if it did, so it takes the same name chip the confirmed
+ *  bubble gives it — the two must agree, or every send would visibly change
+ *  shape the moment it confirms. */
 function PendingClipThumbs({ id, attachments }: { id: string; attachments: PendingAttachment[] }): ReactNode {
   return (
     <div className="msg-attach" data-count={Math.min(attachments.length, 2)}>
       {attachments.map((a) => {
         const name = a.path.slice(a.path.lastIndexOf('/') + 1);
+        if (!isImageClip(name)) {
+          return <span key={a.path} className="msg-attach-doc">{name}</span>;
+        }
         return (
           <img
             key={a.path}
