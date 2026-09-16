@@ -874,6 +874,33 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     w.stop();
   });
 
+  // Coordinator ruling, fix round 1 (Important 1): a failed read never
+  // overwrites a GOOD repo measurement — `backoffPr`'s own docstring states
+  // the identical principle for `prStates` ("A failed read never overwrites
+  // a good phase — only greys it"). Two ticks, one fixture, same idiom as
+  // "stays silent on an UNKNOWN phase, and speaks the moment the sweep reads
+  // merged" above: the SECOND tick is what proves it, not the first.
+  it('a failed read never downgrades a named repo to unmeasured', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+
+    const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(failure, calls)).runCcd;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    // Proves the SECOND sweep actually ran and actually failed, so the
+    // assertion below is about survival across a failure rather than a
+    // no-op second tick that never reached the runner.
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('unknown'));
+    expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' });
+    w.stop();
+  });
+
   // Mutation-sweep shape, same reasoning as "the swept state reaches the
   // wire, not just currentPrStates()" above: a route-level test that builds
   // its OWN watcher double (as `projects-route-placement.test.ts` does for

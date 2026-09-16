@@ -1778,13 +1778,16 @@ export interface ProjectReadiness extends ReadinessFacts {
  * A reader that folds the first two together has thrown away the difference
  * between "upgrade the server" and "wait two seconds".
  *
- * `pool` and `placement` follow the same absence rule with one fewer rung: the
- * key ABSENT means an older server that does not read project pools, and a
- * reader must render NOTHING for it — never `{state:'untagged'}`, which would
- * flag every project on the box as un-tagged worklist the day before the
- * feature ships (account pools, spec §5.4.5, §5.9). There is no `null` rung:
- * this build measures on every request, and its four states already contain
- * "we could not read it".
+ * `pool`, `placement` and `repo` follow the same absence rule with one fewer
+ * rung: the key ABSENT means an older server that does not read project pools
+ * (`pool`/`placement`) or does not retain the swept repo (`repo`), and a
+ * reader must render NOTHING for it — never `{state:'untagged'}` or
+ * `{state:'unmeasured'}`, either of which would flag every project on the box
+ * as un-tagged/unlabeled the day before the feature ships (account pools,
+ * spec §5.4.5, §5.9; the repo cell, board placement wave 1). There is no
+ * `null` rung for any of the three: this build measures on every request,
+ * and their states already contain "we could not read it" (`unreadable`/
+ * `malformed` for `pool`; `unmeasured` for `repo`).
  */
 export interface ProjectRow {
   name: string;
@@ -1807,6 +1810,27 @@ export interface ProjectRow {
  * The label renders only on `named`. `absent` is deliberately NOT split into
  * "no origin" and "unrecognized remote": a renderer treats them identically and
  * `PrKeycap.tsx`'s no-remote sentence already owns that distinction.
+ *
+ * `absent` IS NOT A CLAIM ABOUT THE PROJECT'S EXISTENCE IN GIT (coordinator
+ * ruling, fix round 1, Important 2) — it means no usable origin was found AT
+ * THE PATH THE SWEEP LOOKED AT (`$PROJECTS_ROOT/$project`, the argument
+ * `_gh_repo_slug` is given). `_gh_repo_slug` (`ccd/ccd`) returns its one
+ * failure for `no-remote` on at least two upstream conditions this type does
+ * not, and must not, distinguish: (1) the path is a git checkout with no
+ * `origin` remote configured, and (2) `git -C "$1"` cannot use the path AT
+ * ALL — missing, not a repository, or unreadable — which is a different fact
+ * than "no repository" and reads identically here on purpose, the same way
+ * "no origin" and "unrecognized remote" already do. A THIRD condition can
+ * reach `absent` from this server's own side rather than `ccd`'s: `listProjects`
+ * (`server/src/lifecycle.ts`) also admits projects discovered only through the
+ * registry, whose `workdir` need not live under `PROJECTS_ROOT` — so the
+ * sweep's fixed `$PROJECTS_ROOT/$project` guess can miss a project's REAL
+ * workdir entirely and measure `absent` for a project that has a perfectly
+ * good repository elsewhere. Fixing that is a `ccd`/registry-path question,
+ * not a wire question, and is out of this wave's scope (agent-first would
+ * change the deploy order); this docstring exists so wave 2's renderer never
+ * spells `absent` as "this project has no repository" — only as "no usable
+ * origin was found at the path the sweep checked".
  */
 export type ProjectRepoWire =
   | { state: 'named'; slug: string }

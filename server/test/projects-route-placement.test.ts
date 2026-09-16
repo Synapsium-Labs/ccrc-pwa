@@ -240,7 +240,13 @@ describe('GET /api/projects — the repo cell', () => {
   });
 
   it('every OTHER PrReason reads unmeasured — derived from PR_REASON_MAP, never hand-listed', () => {
-    for (const reason of PR_REASONS.filter((r) => r !== 'no-remote')) {
+    const otherReasons = PR_REASONS.filter((r) => r !== 'no-remote');
+    // M2 (fix round 1): a derived loop with no floor passes vacuously if
+    // `PR_REASONS` ever shrank to just `['no-remote']` — this ratchet is the
+    // difference between "every other reason" meaning something and meaning
+    // nothing. 11 today (12 total minus `no-remote`); never fewer.
+    expect(otherReasons.length).toBeGreaterThanOrEqual(11);
+    for (const reason of otherReasons) {
       expect(repoCellFor({ reason })).toEqual({ state: 'unmeasured' });
     }
   });

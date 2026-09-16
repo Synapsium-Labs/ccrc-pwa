@@ -12,7 +12,7 @@ import { RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
 describe('the asks table', () => {
-  it('is still present after schema version 10 adds the cross-repo columns', () => {
+  it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
     // Board placement wave 1, Task 1 (a51ed866, unrelated to this file) added

@@ -3224,7 +3224,22 @@ export class FleetWatcher {
           // no `project` field; it speaks for the whole repo precisely because
           // it carries none). The project this failure is ABOUT is the loop's
           // own `project`, already in scope.
-          this.projectRepos.set(project, repoCellFor({ reason: failure.reason }));
+          //
+          // Coordinator ruling, fix round 1 (Important 1): a failed read never
+          // overwrites a GOOD measurement — the same principle `backoffPr`'s
+          // own docstring states two methods below for `prStates`
+          // ("A failed read never overwrites a good phase — only greys it").
+          // `no-remote` is still a real measurement (`repoCellFor`'s one proof
+          // of `absent`) and is written regardless of what is already there —
+          // a project's remote can genuinely be removed between sweeps. Every
+          // OTHER reason resolves to `unmeasured`, which teaches nothing about
+          // the repo itself, so it is dropped whenever a real cell (`named` or
+          // `absent`) already exists: a repo slug is effectively immutable,
+          // and a `gh` timeout says nothing about it either way.
+          const repoNow = repoCellFor({ reason: failure.reason });
+          if (repoNow.state !== 'unmeasured' || !this.projectRepos.has(project)) {
+            this.projectRepos.set(project, repoNow);
+          }
           this.backoffPr(project, now, failure.reason, records);
           continue;
         }
