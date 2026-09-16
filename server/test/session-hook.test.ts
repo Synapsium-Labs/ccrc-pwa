@@ -7159,7 +7159,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // it. So the execution of Task 10 and the freeze of Task 10 cannot both be
     // satisfied, and this map is where that shows.
     //
-    // TASK 11 PAYS THE DEBT DOWN, 206 -> 69, AND EVERY ENTRY IS A
+    // TASK 11 PAYS THE DEBT DOWN, 206 -> 66, AND EVERY ENTRY IS A
     // RE-MEASUREMENT. D-2758 parks this debt here and the task closes what it
     // can. Two methods, in this order, and nothing was moved by any other:
     //   (1) SHIFT PROVEN BY BYTE-EQUALITY. For each reference, the newest
@@ -7182,9 +7182,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // those lines and the clause's token happened to occur in it. A reference
     // pointing at the wrong line is worse than one pointing at a line that
     // moved, so those seven carry their original numbers again and are counted
-    // in the 69 below.
+    // in the 66 below.
     //
-    // WHAT THE 69 ARE, and why none of them is repairable HERE. Two classes,
+    // WHAT THE 66 ARE, and why none of them is repairable HERE. Two classes,
     // and the second is the larger:
     //   HISTORICAL — the clause's subject is the PRE-Task-9 tree. `ccd/ccd`'s
     //     `:11665-11670`/`:11669`/`:11670` (fifteen references) say the ws-gc
@@ -7204,12 +7204,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     made, because the sentences are the spec's own argument and Task 11
     //     owns the spec for landed status only.
     // Both classes are named per reference in Task 11's report.
+    //
+    // FIX ROUND 1 LOWERS IT AGAIN, 69 -> 66, AND ALL THREE ARE REPAIRS THIS
+    // ROUND MADE — measured before and after with a port of the rule below
+    // that reproduces the previous literal exactly. The failure SET moved by
+    // exactly these three and gained nothing:
+    //   `server/test/ccd-ws-reap.test.ts:344` (4 -> 3) and `ccd/ccd:342`
+    //     (38 -> 37) were ONE sentence: the plan's citation-audit narrative
+    //     had `:342` re-anchored to `:344` in its first reference and left at
+    //     `:342` in its second, where the bare number ALSO inherited
+    //     `ccd/ccd` from an intervening `ccd/ccd:11026`. Both now name the
+    //     test file at `:344`, and the it( title is quoted the way the
+    //     source spells it, so each anchors on its own text.
+    //   `ccd/session-hook.sh:1235` (15 -> 14) was a QUOTATIONLESS-class entry
+    //     that turned out to be worse than quotationless: the anchor was
+    //     right and the QUOTATION was the pre-Task-9 `find "$set" -mmin
+    //     "-$mins"`, which Task 9 replaced. Re-quoting it to the shipped
+    //     spelling is the repair the class above says is available whenever
+    //     the sentence is about the LANDED tree, and this one is.
+    // Nothing here widened the rule: refsOf/audit/filesAudit/funcBody/occurs/
+    // paragraphs/SENT/QUOTED/SUPERSEDED and every non-vacuity floor are
+    // byte-unchanged from 36d7dccd. Only the counts moved, and only down.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 38,
-      'ccd/session-hook.sh': 15,
+      'ccd/ccd': 37,
+      'ccd/session-hook.sh': 14,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-workspaces.test.ts': 5,
-      'server/test/ccd-ws-reap.test.ts': 4,
+      'server/test/ccd-ws-reap.test.ts': 3,
       'server/test/compact-card.test.ts': 1,
       'ccd/ccrc': 1,
       'deploy/deploy.sh': 1,
@@ -7219,7 +7240,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(69);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(66);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
