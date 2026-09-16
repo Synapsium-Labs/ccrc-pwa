@@ -554,6 +554,31 @@ export const ROUTE_CAP = 'route-v1';
  *  different parse paths in `ccd/ccd`, landed in separate commits. */
 export const ROUTE_ARGV_CAP = 'route-argv-v1';
 
+/** The `ccd caps` token that says this box takes `--apply` on `ccd route` and
+ *  re-applies a pending routing record from its supervise tick, with the
+ *  SESSION-ONLY keystrokes and the acknowledgement read back before anything is
+ *  recorded applied (routing spec 2026-09-14 §5.3, slice 4). Spelled ONCE in
+ *  `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo route-apply-v1`
+ *  and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are the other two
+ *  spellings, held equal by that test's `toContain` line.
+ *
+ *  It gates ONE decision, distinct from both tokens above: whether the server
+ *  may ask for a LIVE change — `--apply` on an existing session — as opposed to
+ *  writing the record (`ROUTE_CAP`) or composing it onto a spawning argv
+ *  (`ROUTE_ARGV_CAP`). Absent, the flag is OMITTED and journalled, the
+ *  actor-flags-v1 shape: the record still lands and the next settle applies it,
+ *  which is why omission is a DELAY rather than a loss.
+ *
+ *  NO CONSUMER YET, and that is deliberate rather than an oversight: slice 4's
+ *  ccd arm ships the verb and the token, and the server arm that reaches for
+ *  `capSupported(state, ROUTE_APPLY_CAP)` is a later task. The constant exists
+ *  now because the constraint it satisfies is about DRIFT — three spellings
+ *  held equal from the moment the token is advertised, not from the moment the
+ *  server first asks about it. The `toContain` line in `ccd-archive.test.ts` is
+ *  what makes that equality measured; without this constant the token was the
+ *  one entry in that list bound to nothing. */
+export const ROUTE_APPLY_CAP = 'route-apply-v1';
+
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
  * in the same `ccd caps` list `verbSupported` reads, naming a FLAG on an

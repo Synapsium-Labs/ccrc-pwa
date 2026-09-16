@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
-import { ACTOR_FLAGS_CAP, POOLS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -165,6 +165,7 @@ describe('ccd caps', () => {
     expect(KNOWN_CAPABILITY_TOKENS).toContain(POOLS_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_ARGV_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_APPLY_CAP);
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher

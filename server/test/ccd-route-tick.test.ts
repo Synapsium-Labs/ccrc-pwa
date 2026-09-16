@@ -10,9 +10,10 @@
 // the tick is wired into the supervise loop at all, and that the compactor's
 // predicate was EXTRACTED rather than copied.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-route-tick-'); });
@@ -133,5 +134,57 @@ describe('structural: the tick is wired in, and the predicate was EXTRACTED rath
     expect(body.join('\n')).toContain('_idle_for_keystroke "$id"');
     expect(body.filter((l) => l.includes('tmux capture-pane')),
       'the compactor re-grew a capture of its own — the predicate is extracted, not copied').toEqual([]);
+  });
+});
+
+/** `cmd_supervise` as a bounded PROGRAM — `ccd-substrate.test.ts`'s idiom, because the loop
+ *  under test is a `while :` and spawnSync's own timeout is what turns a loop that stops
+ *  exiting into one failed case instead of a hung suite. */
+const runSupervise = (snippet: string): { code: number; stderr: string } => {
+  const r = spawnSync('bash', ['-c', `source "${CCD}"; ${snippet}`], {
+    encoding: 'utf8', cwd: h.home, timeout: 15000,
+    env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }),
+  });
+  return { code: r.status ?? 1, stderr: r.stderr ?? '' };
+};
+
+/** A FAKE CLOCK, because what is under test is ELAPSED REAL TIME and a suite may not spend
+ *  it. `date +%s` answers from a file, `sleep` advances it by the seconds it was asked to
+ *  sleep, and a tick helper advances it by the seconds it pretends to spend typing. */
+const CLOCK = `printf 1000 > "$HOME/now"
+  date() { if [[ "\${1:-}" == +%s ]]; then cat "$HOME/now"; else command date "$@"; fi; }
+  _advance() { printf '%s' "$(( $(cat "$HOME/now") + $1 ))" > "$HOME/now"; }
+  sleep() { _advance "\${1:-0}"; }`;
+
+describe('the supervise heartbeat counts the seconds the applier actually spends', () => {
+  it('four live ticks whose applier spends 20s each stamp TWICE — five assumed seconds a tick stamps not at all', () => {
+    // THE DEFECT THIS PINS. `_route_apply_check` types the slider one key at a time with a
+    // `sleep 1` between keystrokes and then polls `ROUTE_ACK_WAIT` seconds for the
+    // acknowledgement, so a live tick that applies a record costs ~20 real seconds, not the
+    // 5 the loop sleeps. Against `beat=$((beat + tick))` six such ticks are 120-150 REAL
+    // seconds between stamps — at or past `_session_state`'s 120-second freshness window,
+    // so a healthy session reads `unsupervised` on the fleet board while its supervisor is
+    // moving a slider. Measured on the mutant (`beat=$((beat + tick))` restored): ONE stamp,
+    // the entry one, and no loop stamp at all in the 100 fake seconds this run covers.
+    //
+    // The counter answers the PRE-FLIGHT probe first (n=1), so n<=5 is four live ticks.
+    // Each accrues 20 spent + the 5 it is about to sleep = 25, and the beat stamps at 30:
+    // ticks 2 and 4. Entry stamp + 2 = 3.
+    seed(ID);
+    const r = runSupervise(`${CLOCK}
+      systemctl() { :; }; cmd_ensure() { :; }; _sync_uuid() { :; }; _auto_stale_check() { :; }
+      _auto_swap_check() { :; }; _auto_compact_check() { :; }
+      _route_apply_check() { _advance 20; }
+      n=0; _session_probe() { n=$((n+1)); PROBE_DETAIL=""
+        if (( n <= 5 )); then PROBE_VERDICT=live; else PROBE_VERDICT=gone; fi; }
+      _reg_set() { printf '%s' "$3" > "$REG/$1.$2"; echo "stamp $2" >> "$HOME/ccd-calls"; }
+      cmd_supervise ${ID}`);
+    // THAT `_reg_set` REPLACED THE REAL ONE for the run above: a RECORDING stub, the
+    // `stamp <field>` log being the only thing this test reads. It is byte-equivalent to
+    // the shipped writer and NOT mechanism-equivalent (the old truncating redirect, no tmp,
+    // no rename) — the caveat `ccd-session-state.test.ts` states at length beside the same
+    // stub. Any `h.reg(...)` in this case would measure the STUB's bytes; none does.
+    expect(r.stderr).toContain('ended; exiting for systemd restart');   // the loop's own exit, not spawnSync's kill
+    expect(h.calls().filter((l) => l === 'stamp supervised')).toHaveLength(3);
   });
 });
