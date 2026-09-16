@@ -1924,16 +1924,18 @@ widening (a bare substring match instead of an exact `.<id>.` prefix) would rein
 preserves generation until last; safe reuse mints a fresh generation.
 
 **`_ws_slug_residue` is widened IDENTICALLY, in the same task (round 9).** Round 8 widened only
-`_ws_slug_free`, and the two functions are a pair: measured on the shipped tree they carry the same dot-skip
-logic (`ccd/ccd:4629-4640` and `:4665-4674`), and `cmd_ws_add`'s refusal interpolates the second into the
-message the first triggers — `die "slug in use: $slug — $REG/$project-$slug.{$(_ws_slug_residue "$project"
-"$slug")}"` (`ccd/ccd:5078-5079`). Widening one alone makes `_ws_slug_free` refuse on a private-family residue
-that `_ws_slug_residue` structurally cannot see, so the operator receives `slug in use: <slug> —
-$REG/<id>.{}`: a refusal naming no file. That falsifies the shipped contract stated three lines above it
-(`ccd/ccd:4350-4354`: "The refusal NAMES WHAT IT FOUND … The field list is the reclaim instruction: those are
-the files, in `$REG`, and nothing else holds the slug"), which is the whole basis of this section's own "refusing
-to build is the safe direction, it is visible … `rm` on the named files reclaims it" argument
-(`ccd/ccd:3935-3939`), and it silently strands the slug in `_ws_slug_new` (`:3964-3974`) forever. So
+`_ws_slug_free`, and the two functions are a pair: they carry the same dot-skip logic
+(`ccd/ccd:4629-4640` and `:4665-4674`), and `cmd_ws_add`'s refusal interpolates the second into the message
+the first triggers. **Re-quoted to the LANDED template (this round), because the brace form this paragraph
+used to quote is the one the round-10 ruling below deleted:** the shipped refusal is
+`|| die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"` (`ccd/ccd:5078-5079`) — a
+plain list rooted once. The argument is unchanged by the re-quote. Widening one alone makes `_ws_slug_free`
+refuse on a private-family residue that `_ws_slug_residue` structurally cannot see, so the operator receives
+`slug in use: <slug> — in $REG:` with nothing after the colon: a refusal naming no file. That falsifies the
+shipped contract stated six lines above it (`ccd/ccd:5068-5072`: "The refusal NAMES WHAT IT FOUND … those
+are the files, in $REG, and nothing else holds the slug"), which is the whole basis of this section's own
+"Refusing to build is the safe direction, it is visible … `rm` on the named files reclaims it" argument
+(`ccd/ccd:4555-4559`), and it silently strands the slug in `_ws_slug_new` (`:4682-4692`) forever. So
 `_ws_slug_residue` takes the SAME exact `.<id>.`-prefix strip, the SAME family-suffix match and the SAME
 permanent-lock exclusion, emitting the dot-leading private names alongside the dot-free fields: **every reason
 `_ws_slug_free` can refuse is a reason `_ws_slug_residue` can name.**
