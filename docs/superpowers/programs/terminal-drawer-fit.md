@@ -14,8 +14,9 @@ scrollback it exists to render.
 |---|---|---|---|---|
 | 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7` | **MERGED 2026-09-15** |
 | 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | **dispatched 2026-09-15** (run 62, 6 items) |
-| 3 | the deliberate un-pin under a measured fit guard | server | — | planned |
-| 4 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile | docs | — | planned |
+| **3 (NEW)** | **anchored tmux targeting `=cc-<id>:` — all four constructions, plus the ingress predicate** | **AGENT-FIRST** | — | planned (operator ruling 2026-09-16) |
+| 4 | the deliberate un-pin under a measured fit guard (was wave 3) | server | — | planned |
+| 5 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile (was wave 4) | docs | — | planned |
 
 Wave 1 is independently valuable and safe with nothing after it. Wave 3 may merge in any order but
 DOES nothing until wave 2 is on the fleet box: it un-pins only through a verb gated on
@@ -438,6 +439,39 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
   function wholesale would create sessions literally named `=cc-x:` and silently flip a swap
   branch. One function means both "the name" and "the target"; correcting the claim means splitting
   it (`_tmux` = name, `_tmux_t` = anchored target).
+
+  **OPERATOR RULING 2026-09-16: the fix is ONE WAVE, and it is its own wave.** The coordinator's
+  first placement — "wave 3 owns it as its first item" — was impossible on the day it was made:
+  wave 3 declares deploy class `server`, forbids touching `ccd/` or `agent/`, and makes an empty
+  diff there a PASS CONDITION, while two of the four target constructions live behind that wall.
+  The coordinator then proposed to SPLIT the fix across wave 3 and a follow-on, which is fitting the
+  fix to the plan rather than the plan to the fix, and is the drift this bullet's own ruling
+  forbids. The operator refused the split.
+
+  **It does not go into wave 2 either, and the reason is mechanical rather than preferential.**
+  `POST /api/runs/:id/items` settles items BY ID and answers `unknown-item` for an id the run does
+  not carry; there is no add path in the tree. Run 62's ledger is sealed at six items, so a seventh
+  unit of work would leave the board rendering six while seven were done. Wave 2 finishes as
+  dispatched.
+
+  **So: the targeting fix becomes its own AGENT-FIRST wave, inserted as the NEW wave 3.** The
+  un-pin wave becomes wave 4 and the docs pass wave 5; `waveOf` goes to 5. It is inserted BEFORE the
+  un-pin rather than after, because the un-pin wave's Task 5 rewrites `/ws/pty/:id` — the exact
+  route that needs the ingress predicate. Targeting-first means that rewrite inherits a correct
+  route instead of rewriting one that is about to change again.
+
+  **Its scope is the whole claim, in one place:** the spelling `=cc-${id}:` defined ONCE in L0 and
+  derived everywhere; `server/src/exec.ts`'s `target()` (9 call sites) and `server/src/pty.ts`'s
+  `attachPty`; a tmux-target ingress predicate at `/ws/pty/:id`, DISTINCT from `isSafeSessionId`,
+  which is a path-component validator and permits `:`, `*` and `?`; the `_tmux` seam split in
+  `ccd/ccd` (25 uses, 19 of them `-t` targets, the rest NAMES that must not be anchored), and the
+  same split for `cc-auth-$id`; and `agent/src/pty.ts`.
+
+  **The mutation table is the load-bearing part, not an afterthought.** Every one of these suites
+  STUBS the runner — which is precisely why `=cc-${id}` would have shipped green while breaking
+  `capture-pane` and `send-keys` on every session. A guard that reds only on a DELETED anchor proves
+  nothing here. It must red on the WRONG anchor form: `=cc-<id>` without the colon, and the bare
+  form, each measured against real tmux target-kind semantics rather than a stub.
   **Scope of the reversal, stated so it is not over-read:** the live box is armed, so the upgrade is
   authenticated, and no shipped PWA path passes a non-session id — today's blast radius is an
   operator hand-typing a truncated id into the wrong terminal. It becomes an authorization defect
