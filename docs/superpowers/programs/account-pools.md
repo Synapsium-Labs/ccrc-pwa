@@ -7225,3 +7225,46 @@ head" becomes roughly 2793. Re-measure by content, never by adding 33. The size 
 **That is the second time in ONE wave that a merge has moved the numbers under the note whose whole job
 is to be accurate about numbers** — the argument for that note carrying no head-relative figures at all.
 Told the worker to say so in the commit body.
+
+### 2026-09-16 11:2x UTC — round 2's wave-done REFUSED `stale-tip`, and the refusal named a cause it had not measured
+
+Worker mail 1417 (`wave-done`, round 2 at `43b7e931`): all 10 MUSTs fixed, all 10 folds folded, one
+commit, one push, carrying a merge of `origin/main` at `98236c81`.
+
+**`POST /api/runs/47/advance` refused:**
+`{"code":"stale-tip","detail":"ws/clear-meadow is at cc50ef6c…, the claim says 43b7e931… — if the
+worker committed on a DIFFERENT branch than this workspace's own, that is the almost-certain cause…"}`
+
+**The detail's stated cause is NOT the cause, and I measured the real one** rather than forwarding a
+guess — the same guard-names-a-cause-it-cannot-detect class this wave exists to remove, this time in the
+server's own refusal text. `cc50ef6c` is visible in the shared object store: it is
+`Merge remote-tracking branch 'origin/main' into ws/clear-meadow`, it contains `dba672ac`, and
+`origin/ws/clear-meadow` and PR #114 are both still `43b7e931`. So the worker acted on my addendum 1408
+AFTER mailing the fingerprint, and that merge is LOCAL and unpushed. The server re-measures the
+workspace branch's own ref on the fleet box, not origin's. The claim was true when written and stale by
+one commit when it arrived — my fault as much as theirs for mailing 1408 mid-composition.
+
+Mailed back as **1421** with the refusal VERBATIM plus the measured cause, so the worker does not chase
+a feature-branch problem it does not have, and with the three-step remedy: finish 1408's re-measure on
+the MERGED tree, re-run there, push, then take the fingerprint from the PUSHED tip and confirm
+`git rev-parse origin/ws/clear-meadow` equals it before sending.
+
+**Three worker claims I re-measured and CONFIRMED,** recorded so they are not re-litigated:
+- `git diff origin/main...43b7e931 -- ccd/` is **EMPTY** (three-dot). The worker's own correction is
+  right and the two-dot form was the wrong question — main has since gained `ccd/` work of its own.
+  **D-2827 stands: SERVER LANE ONLY.**
+- Six files; exactly **one** non-comment line in shipped source, the `deploy.sh` echo.
+- **`test-macos` is not this wave's.** It fails on main's own last six commits — `dba672ac`,
+  `d6494f1c`, `f6be1fef`, `d8aebba3`, `98236c81`, `af2486b6` — I pulled the job conclusions rather
+  than taking the worker's word. Non-required; #114 is MERGEABLE.
+
+**Ruling: KEEP the P1 pin the worker added beyond brief.** A seam wrong twice in one wave has earned a
+mechanism, and the fact that it reddened the worker's own true sentence first — and that they made it
+clause-scoped rather than deleting it — is the argument for it. Costs if wrong: one clause-scoped guard
+over a sentence that is now correct.
+
+**Round-2 re-review launched** on the substance at `43b7e931` (the merge changes no pin and no prose):
+14 item verifiers (sonnet), three opus lenses — new prose, the HEADER's honesty about its own limits,
+whole-wave consistency — four opus mutation agents in four fresh disposable worktrees (`r2-mut1..4`),
+two refuters per finding, one critic. The mutation briefs hunt **false reds first**: round 2 widened
+four regexes to kill false greens, and widening is how false reds are born.
