@@ -15,6 +15,10 @@ import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
 import type { AskRow, CoordStore } from './coord/store.js';
+// Task 3: the pure board-placement decision (Task 2) — this file supplies its
+// two ports (`stamped`, `coordOf`) from a `coord.db` read, boardPlacement.ts
+// itself imports nothing from here.
+import { boardPlacement } from './coord/placement.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
@@ -179,6 +183,54 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
     console.warn(`ccrc-server: currentAsksFor failed for ${childIds.length} session(s) (${childIds.join(', ')}) — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
     return new Map();
   }
+}
+
+/**
+ * Task 3's own batched, guarded read — the `boardPlacement` port supply,
+ * built ONCE per assembly (never per row, which would be O(rows x hops)
+ * `coord.db` queries). Same guard shape as `readCurrentAsks` right above:
+ * `coord` is absent on a dark box and in every pre-Task-3 test, and
+ * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
+ * race — either way this degrades to "nothing stamped", never throws out of
+ * `assembleFleet`, so a broken coord.db costs every row its placement
+ * (falls back to `ownProject`, per `boardPlacement`'s own total contract)
+ * rather than the whole tick.
+ *
+ * `byProject` : which project coordinates a given project (the transitive
+ *               hops, project-keyed — `coordOf`).
+ * `bySession` : the stamp on a session's OWN newest run (the first hop,
+ *               session-keyed). Runs arrive in `id` order (`coord.runs`'s own
+ *               `ORDER BY r.id`), so a later `set` on the same session
+ *               overwrites an earlier one and "newest wins" holds without a
+ *               sort.
+ *
+ * `includeClosed: true` is deliberate: a placement keyed on open runs alone
+ * would bounce every worker between cards at the close-then-open wave
+ * boundary, one of the four defects this design exists to end.
+ */
+function readCoordPlacements(coord: CoordStore | undefined): {
+  coordOf: (project: string) => string | null;
+  bySession: Map<string, string>;
+} {
+  const byProject = new Map<string, string>();
+  const bySession = new Map<string, string>();
+  if (coord) {
+    try {
+      const read = coord.runs({ includeClosed: true });
+      if (!read.ok) {
+        console.warn(`ccrc-server: coord.runs refused while computing board placement — ${read.detail} — placements degrade to ownProject`);
+      } else {
+        for (const run of read.runs) {
+          if (run.coordProject === null) continue;
+          if (run.sessionId !== null) bySession.set(run.sessionId, run.coordProject);  // newest wins
+          if (!byProject.has(run.project)) byProject.set(run.project, run.coordProject);
+        }
+      }
+    } catch (err) {
+      console.warn(`ccrc-server: coord.runs failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — placements degrade to ownProject`);
+    }
+  }
+  return { coordOf: (project: string): string | null => byProject.get(project) ?? null, bySession };
 }
 
 /**
@@ -407,6 +459,10 @@ export async function assembleFleet(
   // rows carry millisecond timestamps (`settleAsk`'s callers all pass
   // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
   const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  // Task 3: ONE pass over the stamped runs, reused by every row below — see
+  // `readCoordPlacements`'s own docstring for why this is batched rather than
+  // a per-row query.
+  const { coordOf, bySession } = readCoordPlacements(coord);
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
@@ -553,6 +609,13 @@ export async function assembleFleet(
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      // Task 3: which CARD this row renders on. `stamped` is session-keyed
+      // (this session's OWN newest run), `coordOf` is project-keyed (the
+      // transitive hops) — both built ONCE above, outside this per-row map.
+      boardProject: boardPlacement({
+        sessionId: r.id, ownProject: r.project, held: r.held !== null,
+        stamped: bySession.get(r.id) ?? null, coordOf,
+      }),
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
       // AskUserQuestion/permission menu the hook never gets a write for

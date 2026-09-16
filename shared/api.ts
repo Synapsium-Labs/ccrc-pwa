@@ -355,6 +355,16 @@ export interface FleetSession {
    *  it — and the first tick's `sweepUsage` re-derives it against the current
    *  one. */
   readonly usage: SessionUsage | null;
+  /** WHICH CARD this row renders on — a display decision, never an identity.
+   *  `project` above is unchanged and remains the primary key.
+   *
+   *  ADDITIVE; `FLEET_PROTO` is deliberately NOT bumped. `null` means THIS
+   *  SERVER DID NOT DECIDE — an older peer, or a snapshot revived from a build
+   *  predating the field — and the single reader falls back to `project`. Those
+   *  two conditions collapse deliberately: a caller does the identical thing
+   *  with both. What is NOT folded is "placed elsewhere" vs "placed home",
+   *  which a reader gets from `boardProject !== project` and needs no field. */
+  boardProject: string | null;
 }
 
 /**
@@ -2670,6 +2680,11 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       started: optBool(o, 'started', true),
       spawnState: spawnRaw,
       usage: reviveUsage(o, 'usage'),
+      // Absent → null: an older server, or a snapshot from a build predating
+      // this field — the two collapse deliberately (see the field's own
+      // docstring above), since the single reader (`boardProject ?? project`)
+      // does the identical thing with both.
+      boardProject: optStr(o, 'boardProject'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
