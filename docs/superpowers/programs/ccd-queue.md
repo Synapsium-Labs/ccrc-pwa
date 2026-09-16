@@ -113,3 +113,26 @@ change (idle states stop counting) deploys, after which the question dissolves.
 
 **Ruling:** carry D-2475 by a one-file PR, not by a PR from the 146-commit ledger branch. Costs if
 wrong: one more docs PR to review.
+
+## 2026-09-16 10:5x UTC — condition (a) is MET: D-2475 is on `main`
+
+**PR #113 merged as `f6be1fef`** at 10:06:55 UTC. The correction that sat on `ws/amber-summit` for five
+days — Part D's headline no longer quotes a cardinal, D7 takes one mutation row per site the worker's
+own census returns, D-2376 points at D-2475, and D-2475 is defined — is now on the ref a worker cuts
+its workspace from. **Both standing conditions are now satisfied**: (a) here, (b) on the 15th when
+account-pools' wave 6 took its slot.
+
+**Run 42 stays `planned` on capacity alone, and capacity alone.** The fleet reads 7/7, but that is the
+OLD cap formula: #108 (review runs) merged nine minutes before #113 and is **not deployed**, and run 64
+sits at `awaiting-review` still counting. The merged formula treats `awaiting-review` as idle. So the
+real blocker is one server deploy, not a wave.
+
+**Standing position, restated so the next reader does not re-derive it:** dispatch run 42 the moment
+`capsUsage().running` measures below the limit. Nothing else is outstanding — the brief and its 25 items
+are unchanged and still measure inside both ceilings (5362 bytes against 8090; 25 items against 32), and
+the worker will derive Part D's census itself rather than carry a total out of the plan.
+
+**One thing that DOES change for any wave after this one:** `homeProject` becomes required on every
+`POST /api/runs` once programme `home-project-flip` deploys (peer mail 1405). ccd-queue's stored home was
+backfilled to `ccrc-pwa` this morning; run 42 is already open so the flip cannot strand it, but a
+successor wave's open must carry `"homeProject":"ccrc-pwa"` by hand.
