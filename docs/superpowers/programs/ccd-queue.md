@@ -174,3 +174,47 @@ have been journalled as omitted. Brief 6220 bytes against the 8090 ceiling, 25 i
 
 **Costs if wrong:** the wave runs a rung low and a fix round corrects it; the cap refusal, had I
 misread it, would have refused the dispatch outright rather than overcommitting the box.
+
+## 2026-09-16 23:2x UTC — first deviation request of run 42: **D-2925 issued**, four rulings, two anchor corrections
+
+Worker `ccrc-pwa-bright-canyon` mailed a `deviation-request` (1540) within minutes of dispatch: one
+number requested, three plan/tree disagreements needing none, one thing disclosed and not touched.
+It followed the brief's protocol exactly — `D-TBD-<slug>` in the plan, a request mail to me, and an
+explicit refusal to invent a number if none arrives (worker clause 11). Full artifact:
+`bright-canyon/.superpowers/sdd/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage/deviation-request-wave1.md`.
+
+**I verified the finding in their worktree at `f27c8a86` before minting rather than taking it.**
+`/bin/grep -n '\*\.project' ccd/ccd` returns EXACTLY ONE hit — 6906 — so `cmd_project_pool` really is
+the only `.project` consumer that opens by glob; the comment at 6903-6904 really does reason about
+the glob's own literal text on an empty registry, which guards a DIAGNOSTIC and not a type; and the
+plan really is silent, its one `_project_pool_state` mention (line 106) naming it as the pattern to
+TRANSCRIBE rather than as this site.
+
+**D-2925 issued** (`count:1`, floor moved to 2926) — `cmd_project_pool` (`ccd/ccd:6775`) proves a
+project exists through an unguarded `$REG/*.project` glob that `grep` opens BY NAME, so one FIFO or
+symlink-to-`/dev/zero` among the registry rows blocks `ccd project-pool --pool` for ever. D-2376's
+FIRST class, not the second class Part D must not widen into. Fix is the shape Part D already
+transcribes (`_project_pool_state`, `ccd/ccd:1470`): loop the glob, skip anything failing
+`[[ -f && -r ]]`. **The definition text went to the worker verbatim in the same mail as the number**
+(1543) so number and definition land in one commit — an issued number whose definition never commits
+raises this project's floor and buys nothing. Costs if wrong: one helper, one call site, one revert.
+
+**Four rulings.** (1) **D5 is landed and pinned** — approved, and their method is the right one:
+close it by MUTATING the existing guard and measuring the EXISTING pin go red, which is the only
+thing that separates a live pin from a present one. (2) **A4 must mirror into `ccd/ccrc`** — approved
+and folded into the A2/A3 commit; correcting one half of a byte-identical block reds
+`macos-platform.test.ts:51`, so it is not a scope decision. (3) **D-2380's cardinal is short by one**
+— confirmed here, three opens at 4172/4335/4362; its SUBJECT is `_pr_py`'s opens, so this is a stale
+count, not a new subject: correct in place, no number, exactly as D-2475 was. (4) **The "four hold
+readers" comments against six gates** — disclose in prose, do not touch; that is the widening Part D
+forbids.
+
+**Two anchor corrections I measured and they did not.** The D-2370 guard is at **15539**, not 15538
+(15538 is `local f="$1" line state=0`), and there is a **SECOND identical guard at 15565** in the
+same region. I told them to mutate BOTH and report each separately: if 15565 is unpinned that is a
+finding of exactly the class D5 exists to close, and emptying one of two twins is how a half-pinned
+pair reads as fully pinned.
+
+**And one standing instruction, because it has cost this fleet twice today:** cite a `ccd` line with
+its COPY. `ccd/ccd:<n>` is `origin/main`'s; `~/.local/bin/ccd:<n>` is the deployed build, which is
+PR #116's unmerged branch and sits 68 lines lower above `is_ours`.
