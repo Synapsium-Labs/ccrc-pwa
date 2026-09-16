@@ -936,3 +936,23 @@ defined here.
   Finally `ProjectRepoWire` had grown to ~30 lines on a three-member union with the one sentence a wave-2
   renderer needs — `absent` is never "this project has no repository" — buried mid-paragraph. It now
   leads, and the paragraph that argued it follows as the argument for it.
+
+D-2924 issued 2026-09-16 (floor now 2925), the controller's own — and its definition arrived one
+commit LATE, which `deviation-refs.test.ts` caught: `d20f1a8a` wrote the number into the spec while
+no plan defined it, so the guard's high-water sat at 2923 and the tree named 2924. The rule this
+breaks is the one this wave enforced on every task — allocate and DEFINE in the same act — and the
+mechanism caught its author rather than a worker.
+
+- **D-2924 — §4's "stamped at open time" was too narrow, and could not deliver §7's reclaim promise.**
+  §7 states that a reclaim moves every worker of a programme at once, because the programme genuinely
+  has a new coordinator. An open-time-only stamp cannot: `reclaimProgram` (`server/src/coord/store.ts`)
+  rewrote `claimedBy` while `coordProject` kept naming the DISPLACED coordinator, so every worker went
+  on boarding a card whose coordinator was gone until the next wave opened — days, possibly. It also
+  left two columns of one row disagreeing about who the coordinator is, which matters directly now
+  that D-2921 keys the transitive hop on `claimedBy`. The stamp is therefore taken at every point the
+  coordinator is DECIDED — at open and again on reclaim — by the same measured `fieldMeasured` read,
+  with absence leaving it null rather than guessing. This deliberately does NOT reach the
+  dead-coordinator case §7 protects: there nothing decides a new coordinator, so nothing restamps and
+  the placement correctly stays put. Raised by the final fix wave, which restamped on reclaim, noticed
+  the spec still said "at open time", and refused both to edit the spec and to mint itself a number —
+  the right call on both counts.
