@@ -2235,3 +2235,43 @@ describe('the routing clauses (routing slice 2)', () => {
     expect(wl).toContain('unrecognised');
   });
 });
+
+describe('the routing door in the references (routing slice 5, Task 4)', () => {
+  it('the "Reading ccd is fine" paragraph names the door, never the verb, as how this session changes a run\'s routing', () => {
+    // Subject-bound (memory: a-substring-pin-binds-no-subject) — isolate the
+    // paragraph itself rather than grepping the whole file for a bare
+    // /never/ or /route/, so a sentence added anywhere else in SKILL.md
+    // cannot satisfy this pin by accident.
+    const readingCcd = skill.split('\n\n').find((p) => p.startsWith('**Reading ccd is fine.**'));
+    expect(readingCcd, 'the "Reading ccd is fine" paragraph is gone from SKILL.md').toBeDefined();
+    expect(readingCcd).toContain('POST /api/runs/:id/route');
+    expect(readingCcd).toContain('ccrc-api runs route');
+    expect(readingCcd).toMatch(/`ccd route` is never this session's call/);
+  });
+
+  it('does not add the door sentence inside a byte-pinned clause', () => {
+    for (const clause of CONTRACT) expect(clause).not.toContain('ccrc-api runs route');
+  });
+
+  it('wave-lifecycle.md §4 carries the escalation example, the demotion guidance, and never `ccd route`', () => {
+    const wl = refs('wave-lifecycle.md');
+    expect(wl).toContain('"$API" runs route "$run_id" --json -');
+    expect(wl).toMatch(/kind":"<shallow\|ceiling\|unclear>"/);
+    expect(wl).toContain('**Demotion** is your judgement');
+    expect(wl).toMatch(/Never `ccd route` \(clause 1\) and never `--apply`/);
+  });
+
+  it('wave-lifecycle.md\'s signals section names arm, routing, armUnparsed and routingUnparsed', () => {
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf("## The run's own signals");
+    const end = wl.indexOf('## The routing door');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const signalsSection = wl.slice(start, end);
+    for (const field of ['`arm`', '`routing`', '`armUnparsed`', '`routingUnparsed`']) {
+      expect(signalsSection, `the signals section does not name ${field}`).toContain(field);
+    }
+    // §6's reader rule, in one sentence
+    expect(signalsSection).toMatch(/`routing` is non-empty[\s\S]{0,120}mid-flight/);
+  });
+});

@@ -86,7 +86,9 @@ with a shell on the fleet host". They are not advice.
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
 Clause 1 is about *changing* fleet state, and the reason is not that ccd is
 unsafe — it is that an act the server did not record did not happen as far as
-the run board, the caps and the operator are concerned.
+the run board, the caps and the operator are concerned. This session changes a
+run's routing only through `POST /api/runs/:id/route` (`ccrc-api runs route`)
+— `ccd route` is never this session's call.
 
 **`/clear` is dispatch's job, never yours (clause 9).** For wave ≥ 2, `POST
 /api/runs/:id/dispatch` itself resumes the workspace and injects `/clear`

@@ -491,6 +491,22 @@ silence). They are what spec §6's first-run quality signal and clause 13's next
 decision read; a wave-done that omits the suite line is accepted by the fingerprint route all the
 same, and shows as `absent`.
 
+**When a check failed, the failure kind names the rung** (spec §3):
+
+```bash
+printf '{"target":"worker","kind":"<shallow|ceiling|unclear>","why":"<one sentence>"}' | "$API" runs route "$run_id" --json -
+```
+
+— the server computes the rung from the ladders on the session's record, writes it through the
+routing verb with no `--apply` (ccd applies it at the next settle or idle tick), and records a run
+event; `ceiling`/`floor`/`no-record` (409) are answers, not errors — record them in the ledger and
+decide by hand with `{"target":"worker","field":"<field>","value":"<value>","why":"…"}`.
+**Demotion** is your judgement (§3): after three consecutive clean waves of one shape on one
+session, `{"target":"worker","demote":"effort","why":"…"}`; any later failed check reverses it
+before the ladder applies. Never `ccd route` (clause 1) and never `--apply` (clause 12's evidence
+rule and spec §8 row 5). Every call is one run event and one journal row; write the same decision
+in the ledger (clause 12).
+
 - **`{"to":"working"}`** — no re-measurement (this is a status marker, not a
   doneness claim; the fingerprint above only satisfies the shape check and is
   never read). Send it once the worker is genuinely underway, and ALSO to
@@ -721,6 +737,15 @@ a different dispatch: it exists so a wave's speed and cost can be read AFTER the
 2026-09-14 §6), so read it when the operator asks what a wave cost, not while a wave is running. A
 worker re-cut, re-ordered or leaned on because a counter moved is a wave steered by a number that
 was only ever meant to describe it.
+
+Since routing slice 5 it also answers `arm` — the routing fields the dispatcher seeded onto this
+run's FIRST well-formed `arm:` event, or `null` when the dispatch carried no routing at all — and
+`routing`, every routing change since, in order: the door's escalations, demotions, reversals and
+manual overrides that landed on this run after it was dispatched. `armUnparsed` and
+`routingUnparsed` count the rows their own parser could not read, never thrown away silently — a
+malformed record is still a fact worth surfacing. A run whose `routing` is non-empty changed
+routing mid-flight and is read apart from its arm's mean (§6): the arm says what the wave started
+on, `routing` says what moved after.
 
 ## The routing door — escalation, demotion, and manual overrides
 

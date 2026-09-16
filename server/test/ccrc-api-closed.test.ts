@@ -146,6 +146,7 @@ describe('the corpora no longer invoke curl', () => {
       'peers.list',
       'runs.list',
       'runs.open',
+      'runs.route',
       'runs.signals',
     ]);
     expect([...invoked].filter((key) => !declared.has(key)),
