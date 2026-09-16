@@ -7512,7 +7512,7 @@ from this morning. Both went green on the real tree, and I verified #114's updat
 **THE CLOSE THEN REFUSED, AND THE CAUSE IS THAT UPDATE.** Verbatim:
 `error: pr-regressed`, `detail: the claim names PR #114, the branch is bound to #95`.
 
-`ccd`'s `is_ours` (`ccd:4064`) binds a workspace to a PR by exactly one test — the PR's `headRefOid`
+`ccd`'s `is_ours` (`ccd/ccd:3996` on `main` / `~/.local/bin/ccd:4064` as deployed) binds a workspace to a PR by exactly one test — the PR's `headRefOid`
 must be **reachable from the local branch tip**. `update-branch` moved `origin/ws/clear-meadow` to
 `b8d28127`, a merge commit GitHub authored, while the worker's LOCAL branch stayed at `8530fb38`.
 Measured by hand: `merge-base --is-ancestor b8d28127 8530fb38` is NO — #114's head is a DESCENDANT —
@@ -7569,3 +7569,35 @@ named in its own header, five forbidden spellings across seven sites, and an exp
 the semantic claims are not mechanically held. Four fix rounds; 176 single-change mutations across
 them (23, then 128, then a confirming 25); the file ended smaller than when the deletion began.
 D-2827/2828/2829 spent and defined. Merged as `03ecda65`.
+
+## 2026-09-16 23:2x UTC — the last exchange, and a citation that was right twice
+
+The worker confirmed the fast-forward (mail 1538) and verified BOTH of my ancestry claims in their
+own tree before moving the ref rather than taking them — `b8d28127` not an ancestor of `8530fb38`,
+`8530fb38` an ancestor of `b8d28127` — and checked what the ff would bring in first: 14 files,
+577+/78−, all of it #130/#131/#132/#133, with README moving 5+/2− and **zero lines inside their own
+account-pools section**. That is the right order of operations for a ref move somebody else asked for.
+
+**They also corrected themselves, which is the more useful half.** Their finding 1535 attached a TRUE
+observation — the remote branch really was deleted on merge — to the wrong mechanism. `is_ours` never
+reads the remote; the deletion is real and irrelevant. They named it as the same defect class this
+wave spent four rounds removing from prose, committed in the mail diagnosing it.
+
+**Their correction of MY citation is where it gets interesting, because we were both right.** They
+read `is_ours` at `ccd/ccd:3996`; I cited `ccd:4064`. Measured just now: `origin/main`'s `ccd/ccd`
+has it at **3996**, and `~/.local/bin/ccd` — the DEPLOYED executable, built 15:42 from PR #116's
+unmerged branch — has it at **4064**, 68 lines lower because that branch adds code above it. Neither
+of us had named our file. **Ruling: cite a `ccd` line WITH the copy it came from, and when the
+question is "why was I refused", the deployed copy is the one that answers** — it is what the server
+shells out to. The ledger's citation now carries both. Costs if wrong: a reader opens one file and
+finds an unrelated line, which is exactly what their correction was about to cause in the other
+direction.
+
+**Their guard suggestion, recorded for whoever takes the `pr-regressed` finding:** nothing warns at
+`update-branch` time and the cost lands at the close, after the PR has merged and the worker may be
+asleep. The cheap guard is at the close — when the bound PR is OLDER than the one the claim names AND
+the claimed PR's head is a DESCENDANT of the local tip, that is not a stale claim but an unfollowed
+ref move, and the refusal could say so and name the fast-forward. That is a better remedy than
+splitting the code alone, because it turns the refusal into an instruction.
+
+Run 47 was already `done`/`released` when this arrived; nothing further was needed from them.
