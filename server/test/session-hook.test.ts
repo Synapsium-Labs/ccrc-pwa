@@ -2749,17 +2749,49 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     expect(fs.existsSync(cardFile())).toBe(true);
   });
 
-  it('with no timeout or gtimeout on PATH (a BSD userland) the arm is inert past the set — silent on stderr, the state written', () => {
-    // The resolver makes the deadline executable portable while preserving the
-    // failure contract: when neither spelling exists, it returns 127 and the
-    // swallowed helper call leaves the hook-written set in place.
+  it('with no timeout or gtimeout on PATH (a BSD userland) the WHOLE HOOK is inert — no set, no card, no hookstate, silence', () => {
+    // A DESIGN COLLISION, RESOLVED IN THE TMUX BOUND'S FAVOUR (merge fix M1).
+    // This row used to assert that the arm ran and stopped at the helper: the
+    // set written, `state: working`, `_hook_timeout` returning 127 because
+    // neither deadline name resolves, and the swallowed helper call leaving the
+    // hook-owned set standing for PostCompact. That is no longer what this
+    // userland gets. The tmux bound sits ABOVE the event switch: the hook
+    // resolves `timeout`/`gtimeout` into `$hooktmo` BEFORE it reads the event,
+    // and with neither present it does not ask `tmux display-message -p '#S'`
+    // at all — `$tname` stays empty and `[[ "$tname" == cc-?* ]] || exit 0`
+    // ends the run before there is a session id to write anything under.
+    // "A hook that cannot bound its own tmux call must not make it" is the
+    // later and more explicit rule, and it is about the hot path of every tool
+    // call in ~20 live sessions, so it wins over this arm's older degrade.
+    //
+    // WHAT THE OLD ROW PINNED IS NOW UNREACHABLE BY THIS ROUTE, not merely
+    // untested here: `_hook_timeout`'s `return 127` is guarded by the same
+    // `command -v timeout || command -v gtimeout` predicate the bound above
+    // uses, so any box that reaches this arm at all has already resolved one of
+    // them. The 127 CONTRACT still holds for what it can still see (a `node`
+    // that is missing or a helper that refuses — `a failing helper, a missing
+    // helper, and a helper printing garbage each leave the hook's own set`),
+    // and `resolves gtimeout when timeout is absent` still pins the resolver's
+    // macOS arm.
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
+    // `runFull` asserts exit 0 itself — the hook's own header contract, kept on
+    // the path that writes nothing at all.
     const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['timeout']) });
     expect(r).toEqual({ stdout: '', stderr: '' });
-    expect(readSet().files).toBeNull();
-    expect(fs.existsSync(cardFile())).toBe(false);
-    expect(readState().state).toBe('working');
+    expect(fs.existsSync(setFile()), 'no set — the arm was never reached').toBe(false);
+    expect(fs.existsSync(cardFile()), 'and no card').toBe(false);
+    // NEVER WRITTEN, not "unchanged": `beforeEach` plants the generation file
+    // and the tmux stub and nothing else, so this fixture HOME carries no
+    // hookstate before the run and the stronger spelling is the honest one.
+    expect(fs.existsSync(stateFile()), 'and no hookstate — the exit is above every state write').toBe(false);
+    // NON-VACUITY, the shape main's own bound test uses: the SAME payload on
+    // the SAME fixture, with the ordinary PATH (which carries `timeout`),
+    // writes the state and the set. Without this the row passes for a hook
+    // that is broken outright.
+    run(preCompact(tree, transcript));
+    expect(readState().state, 'the control: with a deadline on PATH the hook runs').toBe('working');
+    expect(fs.existsSync(setFile()), 'and the arm publishes its set').toBe(true);
   });
 
   it('a transcript with no tool calls: the set says mined-empty (files []), no card', () => {

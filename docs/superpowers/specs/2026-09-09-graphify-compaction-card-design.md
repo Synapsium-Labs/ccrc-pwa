@@ -607,9 +607,19 @@ fork it does not control.
    HEAD, the same predicate as the search gate, so the card and the gate agree about which trees count — and
    `$HOME/.cc-sessions/compact-card.mjs` is present. Any failure here also releases and returns 0. `node` and
    `timeout` are **not** guarded: a missing one fails the call exactly as a failing helper does (exit 127,
-   swallowed by the call site), and a guard whose removal changes nothing observable is not a guard — on a
-   userland with no `timeout` the helper never runs, the set is CLAIMED AND UNLINKED by PostCompact at
-   settlement, and the journal stays empty. **The argument is self-contained and no longer points at §4
+   swallowed by the call site), and a guard whose removal changes nothing observable is not a guard.
+   **WHAT A USERLAND WITH NEITHER `timeout` NOR `gtimeout` GETS WAS RESTATED BY THE MERGE WITH `origin/main`
+   (merge fix M1, 2026-09-16).** This paragraph used to end "on a userland with no `timeout` the helper never
+   runs, the set is CLAIMED AND UNLINKED by PostCompact at settlement, and the journal stays empty"; that is
+   no longer true, and not because this arm changed. `ccd/session-hook.sh` now resolves the SAME two deadline
+   names ABOVE the event switch, for the bound on its one `tmux display-message -p '#S'` question, and with
+   neither present it does not ask that question at all — `$tname` stays empty and the hook exits 0 before it
+   has a session id, on the rule that a hook which cannot bound its own tmux call must not make it. So that
+   box writes no hookstate, no set, no card and no journal line: the WHOLE hook is inert there, not this arm,
+   and there is no set for PostCompact to claim. `_hook_timeout`'s `return 127` is guarded by the same
+   `command -v timeout || command -v gtimeout` predicate as that bound, so no box can reach this arm and then
+   fail to resolve a deadline; the 127 contract still covers the conditions it can still see — a missing
+   `node`, a helper that refuses — which is what the sentence above is about. **The argument is self-contained and no longer points at §4
    (round 14, A-11 = B-M4):** the §4 row it used to name — "`node` or both deadline names missing (a BSD
    userland); helper missing, refusing, or timing out" — was deleted by D-2605 round 1 and is not among the
    measurement rows round 11's Package C restored, and the nearest survivor ("helper/final lock/generation/

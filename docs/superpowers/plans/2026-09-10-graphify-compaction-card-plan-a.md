@@ -2032,17 +2032,26 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     // stub receives `8 node ...` and the helper creates the card.
   });
 
-  it('with no timeout or gtimeout on PATH (a BSD userland) the arm is inert past the set — silent on stderr, the state written', () => {
-    // `_hook_timeout` tries both supported deadline names. When neither exists,
-    // it returns 127 and the swallowed helper call preserves the hook-owned set;
-    // this row pins the inert outcome the spec's §4 promises.
+  // RESTATED BY MERGE FIX M1 (2026-09-16, merge 6e84524a): the row below used to
+  // assert that the ARM was inert past the set — set written, `state: working`,
+  // `_hook_timeout` returning 127 and its swallowed helper call leaving the
+  // hook-owned set standing. The merged tree resolves `timeout`/`gtimeout`
+  // ABOVE the event switch, for the bound on its one `tmux display-message`
+  // question, and with neither name present it skips that question, leaves
+  // `$tname` empty and exits 0 before any arm — so the WHOLE hook is inert and
+  // there is no set, no card and no hookstate to assert. The row now pins that.
+  it('with no timeout or gtimeout on PATH (a BSD userland) the WHOLE HOOK is inert — no set, no card, no hookstate, silence', () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     const r = runFull(preCompact(tree, transcript), { PATH: minimalPath(['timeout']) });
-    expect(r).toEqual({ stdout: '', stderr: '' });
-    expect(readSet().files).toBeNull();
+    expect(r).toEqual({ stdout: '', stderr: '' });        // exit 0 is `runFull`'s own assertion
+    expect(fs.existsSync(setFile())).toBe(false);
     expect(fs.existsSync(cardFile())).toBe(false);
+    expect(fs.existsSync(stateFile())).toBe(false);
+    // NON-VACUITY: the same payload on the ordinary PATH writes both.
+    run(preCompact(tree, transcript));
     expect(readState().state).toBe('working');
+    expect(fs.existsSync(setFile())).toBe(true);
   });
 
   it('a transcript with no tool calls: the set says mined-empty (files []), no card', () => {
@@ -2108,6 +2117,11 @@ with
   # deadline executable locally as `timeout` then `gtimeout`, and returns 127
   # when neither exists; that failure is swallowed, so the set remains for
   # PostCompact to claim and unlink at settlement, and the journal stays empty.
+  # (MERGE FIX M1, 2026-09-16: the last clause no longer describes the merged
+  # tree. The tmux bound above the event switch resolves the same two names
+  # first, so a box with neither exits 0 before this arm runs and writes no set
+  # at all — this 127 route is reachable only for a failure of `node` or the
+  # helper, never for an absent deadline.)
   # Self-contained: spec §4 carries no node/timeout/helper-absent row (round 14,
   # A-11 = B-M4), so do not point at one.
   [ "$rc" -eq 0 ] && _hook_gate_tree || return 0
@@ -2185,7 +2199,7 @@ Record the p95 elapsed and the peak RSS for each graph in the `COMPACT_HELPER_TI
 2. Replace `--transcript "$CS_TRANSCRIPT"` with `--transcript "$tp"` → `a subagent's card is mined from ITS transcript` goes red (fleet.ts on the card).
 3. Delete `[ "$rc" -eq 0 ] && _hook_gate_tree || return 0` → `a graph further behind HEAD` goes red (a card appears).
 4. Replace `for bin in timeout gtimeout` with `for bin in timeout` → `resolves gtimeout` goes red.
-5. Replace `_hook_timeout`'s final `return 127` with `shift; "$@"` → `with no timeout or gtimeout on PATH` goes red because node runs bare and rewrites the set.
+5. ~~Replace `_hook_timeout`'s final `return 127` with `shift; "$@"` → `with no timeout or gtimeout on PATH` goes red because node runs bare and rewrites the set.~~ **RESTATED by merge fix M1 (2026-09-16).** That route is closed: on a PATH carrying neither name the merged hook exits above the event switch (its tmux bound resolves the same two names first), so the row never reaches `_hook_timeout` and this mutation cannot be what reds it. The row's control is now the bound itself — replace `[[ -n "$hooktmo" ]] && tname=$("$hooktmo" 2 tmux display-message -p '#S' 2>/dev/null)` with an unbounded `tname=$(tmux display-message -p '#S' 2>/dev/null)` and the row reds with `no set — the arm was never reached: expected true to be false`. Measured red on 2026-09-16.
 6. Remove the nonce condition in `_hook_compact_rollback` → `timeout rollback never restores or removes a later nonce owner` goes red because the exact hook document overwrites the later set. Measured red on 2026-09-10.
 7. Move the final PreCompact call before the hookstate rename → `records working hookstate before the bounded helper starts` goes red because the deadline stub refuses to capture its initial document. Measured red on 2026-09-10.
 8. Treat same numeric `at` as ownership in `ownedSlot` → `THE SLOT CHECK` goes red because the older helper overwrites the later nonce owner. Measured red on 2026-09-10.
@@ -3811,7 +3825,7 @@ The second review (2026-09-10, three opus refuters and a scout over the amended 
 
 The execution pass found the following corrections; D-2446–D-2455 were allocated together before these definitions were written:
 
-- **D-2446 — a bare `timeout` conflicts with the shebang portability scanner and independent hook install.** The hook cannot borrow ccd's platform block. Fix: `_hook_timeout` locally resolves `timeout` then `gtimeout`; when neither tool exists it returns 127, which the existing silent call site swallows so the feature remains inert after the hook-owned set writes.
+- **D-2446 — a bare `timeout` conflicts with the shebang portability scanner and independent hook install.** The hook cannot borrow ccd's platform block. Fix: `_hook_timeout` locally resolves `timeout` then `gtimeout`; when neither tool exists it returns 127, which the existing silent call site swallows so the feature remains inert after the hook-owned set writes. **Merge fix M1 (2026-09-16) corrects the last clause, not the fix:** `_hook_timeout` ships exactly as described, but the tree around it moved — `ccd/session-hook.sh` now resolves the same two names above the event switch to bound its one `tmux display-message` question, and a box with neither exits 0 there, before the hook-owned set is written. "Inert after the set writes" was the whole-tree behaviour when this entry was made; the whole-tree behaviour now is that nothing is written at all, and the 127 return is reachable only for a failure the deadline itself does not resolve.
 - **D-2447 — the helper CLI main guard failed under symlink invocation.** Fix: `realpathSync` establishes executable identity.
 - **D-2448 — `readWindow`'s boundary-first chunk ignored the caller cap.** Fix: bound that read by cap minus already-read bytes.
 - **D-2449 — `tokenRegex`'s leading lookbehind is output-neutral but a linear-time cost guard.** The output-only proof caused a reversal; a 64 KiB timing-effect test now pins it.
