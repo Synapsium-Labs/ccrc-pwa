@@ -83,7 +83,7 @@ survives a probe that could not measure.
 
 ### 3. Eligibility is roster-derived, but the token path is a CONVENTION, and that is a seam
 
-`shared/roster.ts:65-68` permits `secretsFile` only on `kind: 'generated'`:
+`ExecSpec` in `shared/roster.ts` permits `secretsFile` only on `kind: 'generated'`:
 
 ```ts
 export type ExecSpec =
@@ -103,7 +103,8 @@ Resolution, from the spec: derive by convention — `.cc-secrets/<id>-oauth.env`
 `telemetry: 'anthropic'` account — **plus a doctor check that reds when an expected file is absent.**
 Absence must be loud. The probe refuses that account rather than skipping it.
 
-`telemetry` is declared per account (`shared/roster.ts:88`, `'anthropic' | 'none'`) and is **not** in
+`telemetry` is declared by `AccountDef.telemetry` in `shared/roster.ts`
+(`'anthropic' | 'none'`) and is **not** in
 the generated bash roster: `_ws_least_loaded`'s own comment (`ccd/ccd:3805-3810`) records that
 `~/.ccrc/accounts.sh` "carries ids, home-ability and the upstream id, and no telemetry field at all
 (`shared/generate.mjs`)". So the probe reads `~/.ccrc/accounts.json` directly.

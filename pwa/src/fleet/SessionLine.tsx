@@ -20,10 +20,12 @@
 import { useId, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import {
-  ctxPressure, graphGateCount, graphReadCount, substrateFault, turnStall, unmeasuredFields,
-  type FleetSession, type RosterWire, type SessionBucket,
+  ASK_OPERATOR_PRINCIPAL,
+  ctxPressure, graphGateCount, graphReadCount, sessionAsk, substrateFault, turnStall,
+  unmeasuredFields,
+  type FleetSession, type ProjectPoolWire, type RosterWire, type SessionBucket,
 } from '../../../shared/api';
-import { accountColorVar, accountLabel } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPool } from '../lib/accounts';
 import { StatusDot } from '../components/StatusDot';
 import { elapsedWords } from '../lib/elapsed';
 import { useNow } from '../lib/useNow';
@@ -83,12 +85,65 @@ function subagentElapsed(startedAt: number): string {
   return h < 24 ? `${h}h` : `${Math.floor(h / 24)}d`;
 }
 
+/**
+ * The ask chip's two lines of text — the cell and its `title` — for one
+ * folded ask.
+ *
+ * WHO RULED IS `answeredBy`, NEVER `parentId` (whole-branch review F1). The
+ * chip was built from `parentId` alone for one wave, on a premise
+ * `shared/api.ts` asserted and Task 12 had already falsified: the operator's
+ * own lock-screen answer settles the same row with
+ * `ASK_OPERATOR_PRINCIPAL`, so an ask the operator answered themselves, from
+ * their own phone, inside the grace window, said "ruled by <parent-session-id>"
+ * — a false attribution on the one surface this lane exists to make honest.
+ *
+ * THREE `answered` sentences, because there are three different facts:
+ *   - the operator's own answer -> "answered by you". The person reading this
+ *     card IS that principal, so the second person is truer here than the
+ *     role word the row stores; and the chip's whole job — "why were you not
+ *     buzzed about this?" — is answered by "because you had already answered
+ *     it", which no third-person spelling says as plainly.
+ *   - a parent's answer -> "ruled by <id>", the design doc's own words (§2.8),
+ *     naming `answeredBy` (which the route guarantees equals `parentId` on
+ *     that path — but it is read from the field that MEANS it).
+ *   - a row that names nobody -> "answered", flat. Reachable: `settleAsk` is
+ *     guarded on both routes precisely because it can throw after the digit
+ *     has landed. Saying less is the honest move; substituting `parentId` is
+ *     the defect above, reintroduced.
+ */
+function askWords(ask: { state: string; parentId: string; answeredBy: string | null }):
+  { label: string; title: string } {
+  if (ask.state === 'held') {
+    return {
+      label: `held — ${ask.parentId} may answer`,
+      title: `${ask.parentId} may answer this question before the operator is notified`,
+    };
+  }
+  if (ask.answeredBy === ASK_OPERATOR_PRINCIPAL) {
+    return {
+      label: 'answered by you',
+      title: 'you answered this question yourself, before its parent pre-empted it',
+    };
+  }
+  if (ask.answeredBy === null) {
+    return {
+      label: 'answered',
+      title: 'this question was answered before the operator was notified; the row names no principal',
+    };
+  }
+  return {
+    label: `ruled by ${ask.answeredBy}`,
+    title: `${ask.answeredBy} answered this question before the operator was notified`,
+  };
+}
+
 export function SessionLine({
   session,
   onOpen,
   selected = false,
   onActions,
   roster = [],
+  projectPool = null,
   onOpenRun = null,
 }: {
   session: FleetSession;
@@ -101,6 +156,11 @@ export function SessionLine({
    *  degrades to `accountLabel`/`accountColorVar`'s own raw-name/neutral-ink
    *  fallback rather than needing a roster it was never given. */
   roster?: readonly RosterWire[];
+  /** This session's PROJECT's pool, derived by `ProjectCard` from its
+   *  authoritative project measurement. `null` — the DEFAULT — is "nobody
+   *  said", and the row then makes no pool claim at all: a line rendered
+   *  standalone, or under an older server, stays byte-identical. */
+  projectPool?: ProjectPoolWire | null;
   /** Task 5: what a tap on the hold reason should do, or `null` for "there is
    *  nowhere to go" — which is the DEFAULT, so every caller that has not been
    *  taught this renders the inert cell that shipped.
@@ -138,6 +198,26 @@ export function SessionLine({
   // untouched, a dead row stays `exited`, and these are cells beside it.
   const qualifier = lifecycleQualifier(session);
 
+  // Task 19: the ask pre-emption lane's chip. Through `sessionAsk`, never
+  // `session.ask` directly — the live `fleet` frame is cast, not revived
+  // (see `sessionAsk`'s own docstring), so a server predating this field
+  // can omit the key at runtime despite the type calling it required.
+  //
+  // Fix round 1 (coordinator review, item 2's own finding): `sessionAsk`
+  // reads the wire HONESTLY — it passes `released`/`stale`/`unknown`
+  // through unchanged, same as `held`/`answered`, because deciding which
+  // states the design doc has words for is not that function's job (its own
+  // docstring, `shared/api.ts`). A THIS-BUILD server never sends those four
+  // (`fleet.ts`'s `fleetAsk` folds them server-side before they ever reach
+  // the wire), but `sessionAsk` exists precisely for a server that is NOT
+  // this build — so trusting "only held/answered ever come back" here would
+  // reintroduce, client-side, exactly the gap `sessionAsk` was written to
+  // close. The fold happens here instead: only `held`/`answered` become a
+  // chip; anything else reads as no ask, the same "no chip" a genuinely
+  // absent `ask` gets.
+  const askRaw = sessionAsk(session);
+  const ask = askRaw !== null && (askRaw.state === 'held' || askRaw.state === 'answered') ? askRaw : null;
+
   // §1.6b. ONE chip, never two — every condition that decides which one, and
   // the §1.7 degrade for a verdict this bundle was compiled without, now live
   // in `spawnWords.ts` (see the note at the top of this file for why they
@@ -166,8 +246,8 @@ export function SessionLine({
   // into a turn that then ran 80.7 minutes with no idle boundary at all.
   // `!session.dialogPending` (Finding 5, fix round): `liveSessionStatus`
   // collapses Claude Code's `waiting` into this row's `busy` status
-  // (server/src/fleet.ts:316-317) while the SAME read sets `dialogPending`
-  // true (fleet.ts:419) — so without this guard a session sitting on a
+  // (server/src/fleet.ts:451-452) while the SAME read sets `dialogPending`
+  // true (fleet.ts:554) — so without this guard a session sitting on a
   // permission prompt for hours at high context reads as wedged. D-2016's
   // own text draws exactly this line: "attention means a human answer
   // unblocks the session, which is false here" — a dialog-pending row is the
@@ -194,6 +274,17 @@ export function SessionLine({
     swapBlocked === null ? null
     : swapReason === null ? 'swap blocked'
     : `swap blocked — ${swapReason}`;
+
+  // The strand (ruling 6). The marker's PRESENCE is the durable fact and must
+  // outlive a reason this build could not read. `at` is deliberately ignored:
+  // the registry's fail-shut arm uses `at: 0` for a real but unreadable marker.
+  const stranded = session.stranded ?? null;
+  const strandReason =
+    typeof stranded?.reason === 'string' && stranded.reason !== '' ? stranded.reason : null;
+  const strandNote =
+    stranded === null ? null
+    : strandReason === null ? 'stranded'
+    : `stranded — ${strandReason}`;
 
   // The supervisor's standing substrate fault (spec §4) — the console cannot
   // currently SEE this session, so every field above may be frozen at its
@@ -281,6 +372,15 @@ export function SessionLine({
   // moved it when `home` crossed the swap threshold. Dead sessions are exempt:
   // nothing is running, so "away" would describe a journey that ended.
   const away = !dead && session.wrapper !== session.home;
+
+  // Both pool names must be measured before the row can claim a mismatch.
+  // Untagged accounts or projects are compatible by policy, not off-pool.
+  const acctPool = accountPool(roster, session.wrapper);
+  const projPoolName = projectPool !== null && projectPool.state === 'tagged' ? projectPool.name : null;
+  const offPoolLabel =
+    !dead && acctPool !== null && projPoolName !== null && acctPool !== projPoolName
+      ? `running on ${accountLabel(roster, session.wrapper)} (pool ${acctPool}), project is pool ${projPoolName}`
+      : null;
 
   return (
     <div className={selected ? 'sess-line sess-line--active' : 'sess-line'} data-state={state}>
@@ -451,6 +551,25 @@ export function SessionLine({
             )
           )}
 
+          {/* Task 19: the ask pre-emption lane's chip (design doc §2.8).
+              Informational only — no action, no navigation, the operator's
+              existing answer path is untouched. Same quiet register as
+              .sess-held next door (mono, truncating, ink-tertiary — joins
+              its shared rule in fleet.css rather than minting a new pair),
+              because it is the same KIND of cell: a short, verbatim fact
+              about who else is involved with this session right now. The
+              full sentence lives in `title`, past the cell's own ellipsis,
+              same contract as .sess-held. */}
+          {ask !== null && (
+            <span
+              className="sess-ask-state"
+              data-ask-state={ask.state}
+              title={askWords(ask).title}
+            >
+              {askWords(ask).label}
+            </span>
+          )}
+
           {/* WHICH KIND of dead, as a cell rather than a bucket (spec §4.4,
               M10). Same quiet register as .sess-held next door — no new ink,
               no new banner: the row already says the session is not running,
@@ -477,6 +596,15 @@ export function SessionLine({
           {swapNote !== null && swapBlocked !== null && (
             <span className="sess-swapblocked" data-swapblocked="true" title={swapReason ?? swapNote}>
               {swapNote}
+            </span>
+          )}
+
+          {/* A strand is a durable marker that no eligible account can take
+              this live session. It stays distinct from swap refusal because
+              their remedies differ, and the reason remains verbatim. */}
+          {!dead && strandNote !== null && (
+            <span className="sess-stranded" data-stranded="true" title={strandReason ?? strandNote}>
+              {strandNote}
             </span>
           )}
 
@@ -589,10 +717,11 @@ export function SessionLine({
             className="sess-acct"
             style={acctStyle}
             data-away={away || undefined}
+            data-offpool={offPoolLabel !== null || undefined}
             aria-label={
-              away
+              offPoolLabel ?? (away
                 ? `running on ${accountLabel(roster, session.wrapper)}, pinned to ${accountLabel(roster, session.home)}`
-                : undefined
+                : undefined)
             }
           >
             {accountLabel(roster, session.wrapper)}
@@ -602,6 +731,7 @@ export function SessionLine({
               </span>
             )}
           </span>
+          {offPoolLabel !== null && <span className="sess-offpool">off-pool</span>}
         </span>
 
         {/* A third line, only while the hook is actually waiting on an answer

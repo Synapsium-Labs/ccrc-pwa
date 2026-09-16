@@ -6,14 +6,15 @@
 // team·alt") and posts api.createSession; success closes the sheet (the
 // new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
 // every choice in place.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
-import { accountLabel } from '../lib/accounts';
+import { accountLabel, accountPool } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
+import { poolSide } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   AccountRow,
@@ -25,6 +26,30 @@ import {
 import { useAccountUsage } from './useProjectedHome';
 import './fleet.css';
 
+function ProjectRowButton({ row, selected, pool, onPick }: {
+  row: ProjectRow;
+  selected: boolean;
+  pool: string | null;
+  onPick: (project: ProjectRow) => void;
+}): ReactNode {
+  const poolLabel = `pool · ${pool ?? ''}`;
+  return (
+    <button
+      type="button"
+      className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
+      onClick={() => onPick(row)}
+    >
+      <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
+      <span className="proj-name">{row.name}</span>
+      {pool !== null && (
+        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
+          {poolLabel}
+        </span>
+      )}
+      <span className="proj-dir">{row.workdir}</span>
+    </button>
+  );
+}
 
 export interface NewSessionSheetProps {
   open: boolean;
@@ -49,7 +74,12 @@ export function NewSessionSheet({
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
   const [project, setProject] = useState<ProjectRow | null>(null);
+  // Classification at the deliberate pick, not at the current render. A later
+  // eligible -> crossing transition must withdraw the selection; a project
+  // picked from the disclosed crossing side remains a deliberate crossing.
+  const selectedCrossingRef = useRef<boolean | null>(null);
   const [query, setQuery] = useState('');
+  const [showOther, setShowOther] = useState(false);
   const [list, setList] = useState<ProjectRow[] | null>(null); // null = loading
   const [listError, setListError] = useState<string | null>(null);
   const [starting, setStarting] = useState(false);
@@ -95,7 +125,9 @@ export function NewSessionSheet({
     if (open) return;
     setWrapper(null);
     setProject(null);
+    selectedCrossingRef.current = null;
     setQuery('');
+    setShowOther(false);
     setStarting(false);
     setSlow(false);
   }, [open]);
@@ -118,8 +150,31 @@ export function NewSessionSheet({
           return (rb ?? -1) - (ra ?? -1);
         });
   const needle = query.trim().toLowerCase();
-  const filtered =
+  const matching =
     needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
+  // At step 2 the account is fixed, so split the projects that account may take.
+  // An absent or undecidable project pool is offered plainly; only a measured
+  // mismatch requires disclosure and an explicit crossing override.
+  const wrapperPool = wrapper === null ? null : accountPool(roster, wrapper);
+  const poolClass = (candidate: ProjectRow) => poolSide(wrapperPool, candidate.pool ?? null);
+  const isCrossing = (candidate: ProjectRow): boolean => poolClass(candidate) === 'crossing';
+  const inPool = matching.filter((candidate) => poolClass(candidate) !== 'crossing');
+  const otherPool = matching.filter((candidate) => poolClass(candidate) === 'crossing');
+  const hasUnknownPool = inPool.some(
+    (candidate) => candidate.pool !== undefined && poolClass(candidate) === 'unknown',
+  );
+
+  useEffect(() => {
+    if (project !== null && selectedCrossingRef.current === false && isCrossing(project)) {
+      setProject(null);
+      selectedCrossingRef.current = null;
+    }
+  }, [project, wrapperPool]);
+
+  const pickProject = (candidate: ProjectRow): void => {
+    selectedCrossingRef.current = isCrossing(candidate);
+    setProject(candidate);
+  };
 
   // THE SAME RULE THE SWAP PICKER ASKS, AND THAT IS A DECISION, NOT A SHARED
   // HELPER'S SIDE EFFECT (D-1978). The two surfaces were re-examined separately, because
@@ -151,7 +206,10 @@ export function NewSessionSheet({
     if (wrapper === null || project === null || starting) return;
     setStarting(true);
     try {
-      await api.createSession({ wrapper, project: project.name, workdir: project.workdir });
+      const body = { wrapper, project: project.name, workdir: project.workdir };
+      await (isCrossing(project)
+        ? api.createSession({ ...body, crossPool: true })
+        : api.createSession(body));
       toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
@@ -180,6 +238,7 @@ export function NewSessionSheet({
                   facts={factsFor(accounts, w)}
                   onPick={setWrapper}
                   roster={roster}
+                  poolChip={accountPool(roster, w)}
                 />
               ))
             ) : (
@@ -195,6 +254,8 @@ export function NewSessionSheet({
             onClick={() => {
               setWrapper(null);
               setProject(null);
+              selectedCrossingRef.current = null;
+              setShowOther(false);
             }}
           >
             <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
@@ -215,24 +276,42 @@ export function NewSessionSheet({
             </p>
           ) : (
             <div className="proj-list">
-              {filtered.map((p) => {
-                const selected = p.workdir === project?.workdir;
-                return (
+              {inPool.map((candidate) => (
+                <ProjectRowButton
+                  key={candidate.workdir}
+                  row={candidate}
+                  selected={candidate.workdir === project?.workdir}
+                  pool={null}
+                  onPick={pickProject}
+                />
+              ))}
+              {hasUnknownPool && (
+                <p className="pool-note">
+                  One or more project pools are not known from here, so pool matching does not hide those projects.
+                </p>
+              )}
+              {otherPool.length > 0 && (
+                <>
                   <button
-                    key={p.workdir}
                     type="button"
-                    className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
-                    onClick={() => setProject(p)}
+                    className="acct-disclosure"
+                    aria-expanded={showOther}
+                    onClick={() => setShowOther((shown) => !shown)}
                   >
-                    <span className="proj-glyph" aria-hidden="true">
-                      {selected ? '❯' : ''}
-                    </span>
-                    <span className="proj-name">{p.name}</span>
-                    <span className="proj-dir">{p.workdir}</span>
+                    show other pools ({otherPool.length})
                   </button>
-                );
-              })}
-              {filtered.length === 0 && (
+                  {showOther && otherPool.map((candidate) => (
+                    <ProjectRowButton
+                      key={candidate.workdir}
+                      row={candidate}
+                      selected={candidate.workdir === project?.workdir}
+                      pool={candidate.pool?.state === 'tagged' ? candidate.pool.name : null}
+                      onPick={pickProject}
+                    />
+                  ))}
+                </>
+              )}
+              {inPool.length === 0 && otherPool.length === 0 && (
                 <p className="proj-none">No project matches "{query}"</p>
               )}
             </div>

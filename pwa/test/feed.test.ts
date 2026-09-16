@@ -1,9 +1,10 @@
 // The durable feed's client half: degrade an unknown kind, never fabricate an
 // event, never silently lose one, and merge two sources by seq.
 //
-// `NotifyEvent` has no `runId` (PR I reconciliation, item 2 — a feed row
-// cannot link back to its run without a second lookup) and its per-field
-// revival already has ONE implementation, `reviveNotifyEvent` (shared/api.ts).
+// `NotifyEvent` now carries `runId` (cross-repo programmes, design 2026-09-08
+// §4 — superseding the earlier "no second lookup" call PR I reconciliation
+// item 2 made) and its per-field revival already has ONE implementation,
+// `reviveNotifyEvent` (shared/api.ts).
 // `reviveNotifyEvents` here is a caller of it, not a second copy — so a field
 // of the wrong type rejects the WHOLE event (that function's own contract),
 // never degrades in place.
@@ -14,7 +15,7 @@ import { FEED_CAP, mergeBySeq, reviveNotifyEvents } from '../src/lib/feed';
 import type { NotifyEvent } from '../../shared/api';
 
 const e = (over: Partial<NotifyEvent> = {}): NotifyEvent => ({
-  seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b', ...over,
+  seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b', runId: null, ...over,
 });
 
 describe('reviveNotifyEvents', () => {
@@ -29,6 +30,36 @@ describe('reviveNotifyEvents', () => {
     const { events, dropped } = reviveNotifyEvents([e({ kind: 'run' })]);
     expect(events).toEqual([e({ kind: 'run' })]);
     expect(dropped).toBe(0);
+  });
+
+  it('revives an event with no `runId` key at all as `runId: null`, dropping nothing (review finding 1)', () => {
+    // The exact shape an older server's frame takes — the field is additive,
+    // so its absence must degrade, never reject the whole event.
+    const raw = { seq: 1, at: 1_000, kind: 'mail', sessionId: 'cc-a', title: 't', body: 'b' };
+    const { events, dropped } = reviveNotifyEvents([raw]);
+    expect(dropped).toBe(0);
+    expect(events[0]!.runId).toBeNull();
+  });
+
+  it('keeps a numeric `runId` exactly as it arrived (review finding 1)', () => {
+    const { events, dropped } = reviveNotifyEvents([e({ runId: 42 })]);
+    expect(dropped).toBe(0);
+    expect(events[0]!.runId).toBe(42);
+  });
+
+  it('folds a non-number `runId` to null — a string or an explicit null is "about no run", never a typed lie', () => {
+    // shared/api.ts's own sentence: "Anything that is not a number — absent,
+    // null, a string — becomes `null`". Only the absent case was measured
+    // (PR #75 review round 1, MUT-4); a `?? null` fold keeps the absent case
+    // green while a wire frame carrying `runId: 'nope'` puts a string into
+    // `NotifyEvent.runId: number | null` and every programme join misses.
+    for (const runId of ['nope', null] as const) {
+      const { events, dropped } = reviveNotifyEvents([
+        { ...e({}), runId } as unknown as Record<string, unknown>,
+      ]);
+      expect(dropped, String(runId)).toBe(0);
+      expect(events[0]!.runId, String(runId)).toBeNull();
+    }
   });
 
   it('lands a kind from a NEWER build on `unknown` rather than typing it as something it is not', () => {

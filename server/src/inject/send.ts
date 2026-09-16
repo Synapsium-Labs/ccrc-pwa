@@ -1,5 +1,5 @@
 import type { Tmux } from '../exec.js';
-import { hasMenu, parseDialog } from '../pane/dialog.js';
+import { autoContinueArmed, hasMenu, parseDialog } from '../pane/dialog.js';
 import type { KeyedQueue } from './queue.js';
 import { composePrompt, MAIL_ENVELOPE_FENCE } from '../../../shared/api.js';
 
@@ -15,7 +15,11 @@ export interface SendDeps {
 export type SendResult =
   | { ok: true }
   | { ok: false;
-      error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored';
+      error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'
+        // D-2368. The pane's own status line says Claude Code will continue on
+        // its own; nothing was pressed. Only reachable when the caller opted
+        // in via `holdIfAutoContinueArmed` — see that option's own docstring.
+        | 'auto-continue-armed';
       draft?: string;
       pane?: string;
       /**
@@ -26,31 +30,40 @@ export type SendResult =
        * on `=== true` degrades to no rescue — today's behaviour, the safe
        * direction.
        *
-       * IT IS NOT A SYNONYM FOR A `code`, and `verify-failed` earns it on
-       * NEITHER path. `draft` carries three different meanings across the
-       * failure arms and only one of them supports the claim above:
+       * IT IS NOT A SYNONYM FOR A `code`. `draft` carries four different
+       * meanings across the failure arms and only two of them support the claim
+       * above:
        *  - OUR OWN ECHOED TEXT — `enter-ignored`. The echo loop proved the box
-       *    holds it; both Enters were swallowed. The one arm that sets this flag.
-       *  - THE OTHER TEXT — `draft-present`, and the ordinary `verify-failed`,
-       *    which reports whatever the box last read.
+       *    holds it; both Enters were swallowed. Earns the flag.
+       *  - OUR OWN MESSAGE, COLLAPSED INTO A PASTE CHIP — the ordinary
+       *    `verify-failed`. Earns the flag; see that arm for the provenance
+       *    argument, and `PASTE_CHIP` for what the widget is doing.
+       *  - THE OTHER TEXT — `draft-present`, and the ordinary `verify-failed`
+       *    when the row is not a chip, which reports whatever the box last read.
        *  - A FAILED CLEAR'S RESIDUE, a fragment of the message — the attachment
        *    path's `verify-failed`. `submitEnter`'s correspondence gate cannot
        *    tell this from the first: the residue IS what the box reads, so it
        *    matches, Enter is pressed, and a truncated prompt is submitted. This
-       *    flag is the discriminator.
+       *    flag is the discriminator, and the attachment path still never sets
+       *    it.
        *
-       * WHY THE ORDINARY `verify-failed` ARM DOES NOT SET IT, even though it is
-       * the arm that deliberately leaves the text in the box. That arm is
-       * reached precisely when `draftOf(pane).startsWith(needle)` was false on
-       * every poll — the server has just proved the box does NOT hold our text.
-       * Three shapes reach it and the claim is false on all three: an EMPTY box
+       * WHAT THE ORDINARY `verify-failed` ARM WITHHOLDS IT FOR, and the
+       * correction that opened the arm up. That arm is reached when
+       * `draftOf(pane).startsWith(needle)` was false on every poll. This
+       * comment used to enumerate three shapes that reach it — an EMPTY box
        * (nothing to send; `submitEnter` answers `nothing-to-submit`), SOMEBODY
        * ELSE'S words (a rescue would submit a human's half-typed sentence), and
-       * a PARTIAL RENDER of our own message — which is a fragment, i.e. exactly
-       * the residue shape above. The one case that would deserve the flag, the
-       * box holding our whole message, is unreachable here by construction: it
-       * would have set `echoed` and never reached the refusal. A gate downstream
-       * cannot repair this; the distinction has to be true where it is made.
+       * a PARTIAL RENDER of our own message, a fragment — and concluded that
+       * "the one case that would deserve the flag, the box holding our whole
+       * message, is unreachable here by construction: it would have set
+       * `echoed`".
+       *
+       * THAT CONCLUSION WAS FALSE, and measured false against a live box
+       * (2026-09-15): a long single-paragraph operator message was collapsed by
+       * the widget into `❯ [Pasted text #1]`, which starts with no needle, so
+       * the arm refused with the text sitting complete in the box and the PWA
+       * offering no button at all. A FOURTH shape reaches it, and it is exactly
+       * the deserving one. The first three still withhold the flag.
        */
       submittable?: boolean };
 
@@ -391,10 +404,22 @@ function matchesOwnDraft(ansiPane: string, parts: readonly string[]): boolean {
  * hand-spelled literal — `single-definition.test.ts`'s own recorded gap,
  * taking the invitation its comment left by name.
  */
-const MAIL_RESIDUE_CHIP = /^\[Pasted text #\d+/;
+/**
+ * Claude Code's input box COLLAPSES a large burst of typed text into a chip —
+ * `[Pasted text #1]`, or `[Pasted text #1 +54 lines]` when the payload carried
+ * newlines. It is the widget's own rendering of text it holds in full, not a
+ * truncation: pressing Enter submits the whole thing.
+ *
+ * Named for the shape rather than for one caller, because it now has two with
+ * opposite questions. `isMailResidue` asks "could a human have written this?"
+ * (no — so the old lane's residue is safe to clear). The echo check asks "is
+ * this our own message, collapsed?" and answers it from PROVENANCE, not from
+ * the string: see the ordinary `verify-failed` arm.
+ */
+const PASTE_CHIP = /^\[Pasted text #\d+/;
 export function isMailResidue(draft: string): boolean {
   if (draft === '') return false;
-  if (MAIL_RESIDUE_CHIP.test(draft)) return true;
+  if (PASTE_CHIP.test(draft)) return true;
   if (draft.startsWith('```') && draft.includes(MAIL_ENVELOPE_FENCE)) return true;
   return false;
 }
@@ -460,13 +485,21 @@ const isStrandedClear = (ansiPane: string): boolean =>
  * event — and a caller with nothing to read passes nothing and gets the
  * ordinary refusal. Same rung as `clearMailResidue`, and both still lose to
  * `resumeIfOwn`.
+ *
+ * `holdIfAutoContinueArmed` (D-2368): a caller that sets this is stating "if
+ * Claude Code's own limit recovery is armed on this pane, refuse rather than
+ * type" — ONLY the mail lane sets it. A human's send from the PWA is exactly
+ * the documented cancel (any keystroke discards the continuation), and
+ * `dispatch.ts`'s `/clear` ends the conversation on purpose, so neither of
+ * those callers may opt in: this defaults OFF, and the ordinary path types
+ * over an armed pane exactly as it always has.
  */
 export function sendPrompt(
   d: SendDeps,
   id: string,
   text: string,
   opts: { replaceDraft?: boolean; attachments?: readonly string[]; resumeIfOwn?: boolean;
-          clearMailResidue?: boolean; ownStrandedClear?: boolean } = {},
+          clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   // Computed up front, from `text`/`attachments` alone — independent of the
@@ -486,13 +519,26 @@ export function sendPrompt(
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return { ok: false, error: 'not-alive' };
 
+    const plain = pane.replace(SGR, '');
+    // D-2368: before the menu check — on an armed screen the limit is the reason
+    // nothing may be typed, whatever else is drawn.
+    //
+    // DECIDED ON THE LAST 8 LINES, matching ccd's own window (`_pane_auto_continue_armed`
+    // is fed `tail -8` at both its call sites, ccd/ccd), not the whole `plain` capture
+    // (final review finding 2, 2026-09-10). `AUTO_CONTINUE_RE`'s phrases ("continuing
+    // automatically", "continuing shortly") are ordinary English a ccrc session routinely
+    // has scrolled into its 220x50 pane — swap.log, this file, an earlier limit episode —
+    // and testing the WHOLE capture against them held mail on a false positive that could
+    // never expire (the sweep's back-off counts no attempt for this error, by design).
+    const armWindow = plain.replace(/\n$/, '').split('\n').slice(-8).join('\n');
+    if (opts.holdIfAutoContinueArmed && autoContinueArmed(armWindow)) return { ok: false, error: 'auto-continue-armed', pane: plain.slice(-PANE_TAIL) };
     // A menu owns the keyboard and there is no input box to type into — the only
     // `❯` on screen is the cursor resting on the selected OPTION. draftOf would
     // read that row ("1. Forward-fill per class ┌────…") as a half-typed draft
     // and report draft-present, and answering "replace" would fire C-u and then
     // type the message as raw keystrokes into a live menu. Refuse instead; the
     // caller's job is to answer the question.
-    if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' };
+    if (hasMenu(plain)) return { ok: false, error: 'dialog-open' };
 
     const draft = draftOf(pane);
     // THE BOX HOLDS ANYTHING — not "the marker row is non-blank". A wedge whose
@@ -714,9 +760,36 @@ export function sendPrompt(
         // The pane tail is a PLAIN capture, taken once, here — it is display
         // for a human, and the escape codes would only make it unreadable.
         after = await d.tmux.capture(id);
+        const lastDraft = draftOf(lastAnsi);
+        // THE FOURTH SHAPE, and the one the flag's own docstring called
+        // unreachable. Claude Code collapses a large typed burst into
+        // `[Pasted text #N]` — the box then holds our WHOLE message and shows a
+        // chip instead of it, so `startsWith(needle)` is false on every poll and
+        // we arrive here having proved the opposite of what is true.
+        //
+        // THE CLAIM IS PROVENANCE, NOT TEXT, which is the distinction this file
+        // already draws for `ownStrandedClear`: no property of the string
+        // `[Pasted text #1]` says it is ours. What says so is the sequence —
+        // the box was proven empty or cleared before the type loop (the
+        // `draft-present` gate above is the only way past it), this call holds
+        // the session's queue slot, and the chip appeared after our own
+        // `sendLiteral`. The window in which a human at the terminal could have
+        // pasted between those two acts is the same window every other check
+        // here already lives with.
+        //
+        // AND THE RESCUE IS ALREADY CORRECT FOR IT. `submitEnter` compares the
+        // box row against `expect` and, after Enter, proves OUR TEXT left using
+        // `draft.slice(0, ECHO_NEEDLE)` — the needle comes from the row it just
+        // read, so a chip verifies as a chip. Nothing downstream needs to learn
+        // about paste chips; this arm only stops withholding the flag.
+        //
+        // It stays a REFUSAL, deliberately: the operator taps Send it. The
+        // machine does not submit a box it could not read, which is the whole
+        // of §4.1's argument and is untouched.
         return {
           ok: false, error: 'verify-failed', pane: (after ?? '').slice(-PANE_TAIL),
-          draft: draftOf(lastAnsi),
+          draft: lastDraft,
+          ...(PASTE_CHIP.test(lastDraft) ? { submittable: true } : {}),
         };
       }
     }

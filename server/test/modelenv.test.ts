@@ -11,6 +11,7 @@ import { mkTmp } from './tmpHelpers.js';
 import {
   MODEL_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, effortFile, mergeSettingsEnv, modelEnvBlock,
 } from '../../shared/modelenv.mjs';
+import { CLASSES, parseRegistry } from '../../shared/models.js';
 import type { Registry } from '../../shared/models.js';
 import { CODEX, SEEDED, UNSEEDED } from './fixtures/modelCases.js';
 
@@ -70,7 +71,7 @@ describe('modelEnvBlock', () => {
       ANTHROPIC_DEFAULT_FABLE_MODEL: 'ccrc-unavailable-fable',
       ANTHROPIC_MODEL: 'gpt-5.6-sol',
       ANTHROPIC_SMALL_FAST_MODEL: 'gpt-5.6-luna',
-      CLAUDE_CODE_SUBAGENT_MODEL: 'gpt-5.6-terra',
+      CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet',
     });
   });
 
@@ -78,31 +79,95 @@ describe('modelEnvBlock', () => {
     // Unset, the alias falls through to Anthropic's own id and the proxied
     // backend answers with an opaque 404 — today's Fable-on-gpt failure. The
     // sentinel makes `/model fable` fail with a name that says what is missing.
-    const only = reg({ classes: { haiku: null, sonnet: null, opus: 'x', fable: null },
-      subagent: 'opus', discovery: ['x'], effort: {} });
-    const b = modelEnvBlock(only, null);
-    expect(b.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ccrc-unavailable-haiku');
-    expect(b.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ccrc-unavailable-sonnet');
-    expect(b.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
-    expect(Object.keys(b)).toHaveLength(7);
+    // Two sub-cases, not one: fix round 1, v2 (2026-09-09) restricts
+    // `subagent` to haiku/sonnet, and each needs its OWN slot non-null to be
+    // a legal choice — so no single registry here can leave both haiku and
+    // sonnet null while still naming a valid subagent, the way the original
+    // one-shot version of this test did with `subagent: 'opus'`.
+    const subagentOnHaiku = reg({ classes: { haiku: 'h', sonnet: null, opus: 'x', fable: null },
+      subagent: 'haiku', discovery: ['x', 'h'], effort: {} });
+    const b1 = modelEnvBlock(subagentOnHaiku, null);
+    expect(b1.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe('ccrc-unavailable-sonnet');
+    expect(b1.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+    expect(Object.keys(b1)).toHaveLength(7);
+
+    const subagentOnSonnet = reg({ classes: { haiku: null, sonnet: 's', opus: 'x', fable: null },
+      subagent: 'sonnet', discovery: ['x', 's'], effort: {} });
+    const b2 = modelEnvBlock(subagentOnSonnet, null);
+    expect(b2.ANTHROPIC_DEFAULT_HAIKU_MODEL).toBe('ccrc-unavailable-haiku');
+    expect(b2.ANTHROPIC_DEFAULT_FABLE_MODEL).toBe('ccrc-unavailable-fable');
+    expect(Object.keys(b2)).toHaveLength(7);
   });
 
-  it('CLAUDE_CODE_SUBAGENT_MODEL is classes[subagent] — the registry\'s explicit choice', () => {
+  it('CLAUDE_CODE_SUBAGENT_MODEL is the alias `subagent` — the registry\'s explicit choice', () => {
     // Round-2 ruling 3: `subagent` is a class name the operator sets, never a
-    // derivation. Pointing it at opus must move the variable, with no other
-    // key changing.
-    const onOpus = reg({ subagent: 'opus' });
-    expect(modelEnvBlock(onOpus, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    // derivation. Pointing it at sonnet must move the variable, with no other
+    // key changing. Measured 2026-09-09 on Claude Code 2.1.267: the value
+    // must be the alias itself, not the id it resolves to — a model id in
+    // this key is silently ignored and the subagent falls back to
+    // ANTHROPIC_SMALL_FAST_MODEL instead. `opus`, not tested here: fix round
+    // 1, v2 (2026-09-09) measured that it and `fable` both run the subagent
+    // on the sonnet slot's model regardless, so `modelEnvBlock` refuses them
+    // (see the REFUSES cases below) rather than writing them.
+    const onSonnet = reg({ subagent: 'sonnet' });
+    expect(modelEnvBlock(onSonnet, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
     const onHaiku = reg({ subagent: 'haiku' });
-    expect(modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-luna');
+    expect(modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
     expect(modelEnvBlock(onHaiku, null).ANTHROPIC_MODEL).toBe('gpt-5.6-sol');
   });
+
+  it('pins the alias form against both the classes[subagent] mutant and a hardcoded alias', () => {
+    // Two mutants this guard must catch: (1) reverting the renderer to
+    // `classes[registry.subagent]` (the old, id-valued code), and (2) a
+    // renderer that writes back some fixed alias regardless of the
+    // registry's own `subagent` field. Two different `subagent` choices,
+    // each checked against both the written value and CLASSES membership,
+    // catch both: mutant 1 would return a model id here, which is never a
+    // member of CLASSES; mutant 2 would return the same alias for both.
+    const onSonnet = reg({ subagent: 'sonnet' });
+    const sonnetValue = modelEnvBlock(onSonnet, null).CLAUDE_CODE_SUBAGENT_MODEL;
+    expect(sonnetValue).toBe('sonnet');
+    expect(CLASSES).toContain(sonnetValue);
+    const onHaiku = reg({ subagent: 'haiku' });
+    const haikuValue = modelEnvBlock(onHaiku, null).CLAUDE_CODE_SUBAGENT_MODEL;
+    expect(haikuValue).toBe('haiku');
+    expect(CLASSES).toContain(haikuValue);
+    expect(haikuValue).not.toBe(sonnetValue);
+  });
+
+  it.each(['opus', 'fable'] as const)(
+    'reads a legacy subagent %s as written (the renderer refuses it)',
+    (cls) => {
+      // Fix round 2A (N1): `subagent: 'opus'`/`'fable'` was legal before the
+      // 2026-09-09 narrowing and is still LEGAL ON DISK — `parseRegistry`
+      // (`shared/models.mjs`) gates `subagent` on `CLASSES` alone, exactly as
+      // before that narrowing, so a registry carrying either value still
+      // PARSES unchanged. Refusing it there would brick every verb on that
+      // lane, including the one that repairs it, the moment this ships (see
+      // `parseRegistry`'s doc comment). It is `modelEnvBlock` — the RENDERER
+      // — that refuses to materialise an env block for it, naming the same
+      // remedy `deploy/models-op.mjs`'s `set-subagent` does.
+      const json = { ...JSON.parse(JSON.stringify(SEEDED)), subagent: cls };
+      // SEEDED's `fable` slot is null — give it a model so this case
+      // exercises ONLY the `SUBAGENT_CLASSES` gate, not the separate
+      // null-slot gate `parseRegistry` runs first (that is its own test).
+      if (cls === 'fable') (json.classes as Record<string, unknown>)['fable'] = 'gpt-6-astra';
+      const parsed = parseRegistry(json);
+      expect(parsed.subagent).toBe(cls);
+      expect(() => modelEnvBlock(parsed, null)).toThrow(ModelEnvInvalid);
+      expect(() => modelEnvBlock(parsed, null)).toThrow(/set-subagent <haiku\|sonnet>/);
+      expect(() => modelEnvBlock(parsed, null)).toThrow(/sonnet slot/);
+    },
+  );
 
   it('REFUSES when subagent names a null slot, rather than writing a sentinel there', () => {
     // §6.1: "refused if that slot is null". A sentinel in this one variable
     // would make every subagent on the lane fail at the provider, one turn at a
-    // time, with nothing having said so at materialise time.
-    const bad = reg({ subagent: 'fable' });
+    // time, with nothing having said so at materialise time. `sonnet`, not
+    // `fable`: fix round 1, v2 (2026-09-09) restricts `subagent` to
+    // haiku/sonnet, so this case has to null one of those two rather than the
+    // class the earlier draft used.
+    const bad = reg({ classes: { ...SEEDED.classes, sonnet: null }, subagent: 'sonnet' });
     expect(() => modelEnvBlock(bad, null)).toThrow(ModelEnvInvalid);
     expect(() => modelEnvBlock(bad, null)).toThrow(/subagent/);
   });
@@ -122,26 +187,40 @@ describe('modelEnvBlock', () => {
     expect(modelEnvBlock(noHaiku, null).ANTHROPIC_SMALL_FAST_MODEL).toBe('s');
   });
 
-  // C1: the ONE case that can tell the sentinel apart from a fall-through to
-  // `fable` — both haiku and sonnet null, with BOTH opus and fable non-null,
-  // so a chain that (wrongly) fell through to fable would read a real model
-  // id rather than failing the same way the all-null case above does. Every
-  // other case in this file that REACHES the SMALL_FAST line leaves
-  // `fable: null` too, which cannot make this distinction (a null fable and a
-  // stopped chain both read the sentinel) — the one case below with fable set
-  // (a fable-only lane) throws from the ANTHROPIC_MODEL primary-null guard
-  // before the SMALL_FAST line is ever evaluated, so it is not a counterexample.
-  it('ANTHROPIC_SMALL_FAST_MODEL stops at the sentinel — the chain never reaches fable (C1)', () => {
+  // C1, narrowed by fix round 1, v2 (2026-09-09): this used to be the ONE
+  // case that could tell the sentinel apart from a fall-through to `fable` —
+  // both haiku and sonnet null, with BOTH opus and fable non-null, subagent
+  // pointed at opus so the registry stayed otherwise legal. That registry no
+  // longer exists: `subagent` now accepts only haiku or sonnet, and both are
+  // null here, so `modelEnvBlock`'s own subagent gate refuses this shape
+  // before ANTHROPIC_SMALL_FAST_MODEL is ever computed — there is no longer a
+  // way to reach the SMALL_FAST line with both haiku and sonnet null, because
+  // a valid subagent now REQUIRES one of the two to be non-null. The
+  // SMALL_FAST chain's own sentinel fallback (`?? sentinel('haiku')`) is
+  // consequently unreachable through any registry this function accepts; the
+  // regression this pinned — a `?? fable` silently added to that chain — can
+  // no longer be exercised through `modelEnvBlock`, only reasoned about from
+  // the source, so this test now pins the refusal instead.
+  it('a lane with both haiku and sonnet null is refused before ANTHROPIC_SMALL_FAST_MODEL is ever computed (C1, narrowed 2026-09-09)', () => {
     const noHaikuNoSonnet = reg({ classes: { haiku: null, sonnet: null, opus: 'o', fable: 'f' },
-      subagent: 'opus', discovery: ['o', 'f'], effort: {} });
-    expect(modelEnvBlock(noHaikuNoSonnet, null).ANTHROPIC_SMALL_FAST_MODEL).toBe('ccrc-unavailable-haiku');
+      subagent: 'sonnet', discovery: ['o', 'f'], effort: {} });
+    expect(() => modelEnvBlock(noHaikuNoSonnet, null)).toThrow(ModelEnvInvalid);
+    expect(() => modelEnvBlock(noHaikuNoSonnet, null)).toThrow(/subagent/);
   });
 
-  it('neither fallback chain ever reaches `fable`, and a fable-only lane is refused', () => {
-    // The two chains are spelled in §6.1 and STOP where they stop, deliberately:
-    // a lane whose only class is Fable would otherwise silently run every
+  it('ANTHROPIC_MODEL never reaches `fable`, and a fable-only lane is refused', () => {
+    // §6.1 spells TWO chains that stop short of `fable`, deliberately: a lane
+    // whose only class is Fable would otherwise silently run every
     // unqualified request — including the small-fast ones — on the most
-    // expensive model it has.
+    // expensive model it has. This case only exercises the ONE chain a
+    // registry can still reach through `modelEnvBlock`, `ANTHROPIC_MODEL`
+    // (opus ?? sonnet ?? haiku): a fable-only registry has no primary class,
+    // so it is refused before `ANTHROPIC_MODEL` is even computed. Fix round
+    // 2A (N4): the sibling case for `ANTHROPIC_SMALL_FAST_MODEL` (haiku ??
+    // sonnet) no longer has a registry that can reach it either — every
+    // shape that used to (haiku and sonnet both null) is refused earlier now,
+    // by the narrowed `subagent` gate — so that chain is pinned in SOURCE
+    // instead, in `single-definition.test.ts`'s "the model files" describe.
     const fableOnly = reg({ classes: { haiku: null, sonnet: null, opus: null, fable: 'f' },
       subagent: 'fable', discovery: ['f'], effort: {} });
     expect(() => modelEnvBlock(fableOnly, null)).toThrow(ModelEnvInvalid);
@@ -169,8 +248,15 @@ describe('modelEnvBlock', () => {
 
   it('is the row\'s OWN context when it is below the client default — a 128k model must compact '
     + 'at 128k, not 200k (§6.1, amended 2026-09-08, Task 16c)', () => {
-    const narrow = reg({ classes: { haiku: null, sonnet: null, opus: 'gpt-5.3-codex-spark', fable: null },
-      subagent: 'opus', discovery: ['gpt-5.3-codex-spark'], effort: {} });
+    // subagent is `sonnet`, not `opus`: fix round 1, v2 (2026-09-09) restricts
+    // `subagent` to haiku/sonnet. `opus` stays the PRIMARY class (ANTHROPIC_MODEL
+    // resolves opus ?? sonnet ?? haiku, so opus still wins the narrow-context
+    // model this case is testing) — sonnet is assigned only so the registry
+    // can legally name a subagent at all.
+    const narrow = reg({
+      classes: { haiku: null, sonnet: 'gpt-5.6-terra', opus: 'gpt-5.3-codex-spark', fable: null },
+      subagent: 'sonnet', discovery: ['gpt-5.3-codex-spark', 'gpt-5.6-terra'], effort: {},
+    });
     const b = modelEnvBlock(narrow, CODEX);
     expect(b.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('128000');
   });

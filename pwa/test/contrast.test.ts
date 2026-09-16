@@ -114,6 +114,265 @@ function runGate(dir: string = ROOT): { status: number | null; stdout: string } 
 }
 
 // ── the live tree ───────────────────────────────────────────────────────────
+// D-2689 freezes identities from this green audit run. A blind spot may disappear,
+// but an added identity must be measured or explicitly registered before it ships.
+const GRANDFATHERED_UNCOVERED = new Set([
+  'primitives.css .dot--busy',
+  'primitives.css .dot--attention',
+  'primitives.css .dot--idle',
+  'primitives.css .dot--dead',
+  'primitives.css .dot--done',
+  'primitives.css .dot--cleanup',
+  'primitives.css .limit-row',
+  'primitives.css .sheet-panel--full .sheet-eyebrow',
+  'primitives.css .sheet-eyebrow',
+  'primitives.css .sheet-title',
+  'primitives.css .qc-consequence',
+  'primitives.css .toast--error::before',
+  'primitives.css .toast-action',
+  'fleet.css .wordmark',
+  'fleet.css .wordmark::before',
+  'fleet.css .fleet-count',
+  'fleet.css .notice-x',
+  'fleet.css .notice-x:active',
+  'fleet.css .status-line--busy',
+  'fleet.css .status-line--idle',
+  'fleet.css .status-line--attention',
+  'fleet.css .status-line--dead',
+  'fleet.css .first-run-mark',
+  'fleet.css .first-run-title',
+  'fleet.css .first-run-copy',
+  'fleet.css .sheet-copy',
+  'fleet.css .acct-gauge',
+  'fleet.css .acct-unknown',
+  'fleet.css .acct-condemned',
+  'fleet.css .acct-none',
+  'fleet.css .acct-chev',
+  'fleet.css .acct-change',
+  'fleet.css .acct-change:active',
+  'fleet.css .proj-glyph',
+  'fleet.css .proj-name',
+  'fleet.css .proj-dir',
+  'fleet.css .proj-none, .proj-error',
+  'fleet.css .proj-error',
+  'fleet.css .accounts-strip-empty',
+  'fleet.css .acct-win',
+  'fleet.css .acct-pct',
+  'fleet.css .acct-reset',
+  'fleet.css .sess-meta',
+  'fleet.css .sess-meta > *:not(:first-child)::before',
+  'fleet.css .sess-state--waiting',
+  'fleet.css .sess-state--working',
+  'fleet.css .sess-state--exited',
+  'fleet.css .sess-subagent-row',
+  'fleet.css .sess-ctxpressure',
+  'fleet.css .sess-ctxpressure[data-wedge]',
+  'fleet.css .sess-warn',
+  'fleet.css .sess-unmeasured',
+  'fleet.css .sess-substrate',
+  'fleet.css .sess-held, .sess-lifecycle, .sess-swapblocked, .sess-ask-state',
+  'fleet.css .sess-acct-away',
+  'fleet.css .sess-ask',
+  'fleet.css .sess-sheet-note',
+  'fleet.css .sess-hold-error',
+  'fleet.css .proj-card-chevron',
+  'fleet.css .proj-card-count',
+  'fleet.css .proj-card-attn',
+  'fleet.css .proj-card-busy',
+  'fleet.css .proj-card-pin[data-mixed]',
+  'fleet.css .proj-nest-bracket',
+  'fleet.css .proj-pending',
+  'fleet.css .proj-pending-glyph',
+  'fleet.css .proj-pending-meta > *:not(:first-child)::before',
+  'fleet.css .proj-pending-program',
+  'fleet.css .proj-pending-elapsed',
+  'fleet.css .proj-archived-toggle',
+  'fleet.css .fleet-archived-row',
+  'fleet.css .archive-total',
+  'fleet.css .archive-row',
+  'fleet.css .archive-project',
+  'fleet.css .archive-size',
+  'fleet.css .archive-empty',
+  'fleet.css .accounts-back',
+  'fleet.css .accounts-back:active',
+  'fleet.css .accounts-title',
+  'fleet.css .accounts-projection',
+  'fleet.css .accounts-disabled-note',
+  'fleet.css .accounts-fresh',
+  'fleet.css .accounts-session',
+  'fleet.css .mail-badge',
+  'fleet.css .mail-badge:active',
+  'fleet.css .mail-badge[data-unread=\'true\']',
+  'fleet.css .accounts-door',
+  'fleet.css .accounts-door:active',
+  'fleet.css .mail-back',
+  'fleet.css .mail-back:active',
+  'fleet.css .mail-title',
+  'fleet.css .mail-note',
+  'fleet.css .mail-dropped',
+  'fleet.css .mail-empty',
+  'fleet.css .fleet-runs-row',
+  'fleet.css .runs-back',
+  'fleet.css .runs-back:active',
+  'fleet.css .runs-title',
+  'fleet.css .runs-empty',
+  'fleet.css .runs-wave',
+  'fleet.css .hotfiles-chevron',
+  'fleet.css .hotfiles-holder',
+  'fleet.css .hotfiles-expiry',
+  'fleet.css .hotfiles-intent',
+  'fleet.css .hotfiles-path',
+  'chat.css .chat-back',
+  'chat.css .chat-back:active',
+  'chat.css .chat-title',
+  'chat.css .chat-crumb-sep',
+  'chat.css .chat-crumb',
+  'chat.css .chat .status-line--busy',
+  'chat.css .chat .status-line--idle',
+  'chat.css .chat .status-line--attention',
+  'chat.css .chat .status-line--dead',
+  'chat.css .metachip--model',
+  'chat.css .metachip--branch',
+  'chat.css .keycap--pr[data-phase=\'unchecked\'] .pr-dot',
+  'chat.css .keycap--pr[data-phase=\'none\'] .pr-dot',
+  'chat.css .keycap--pr[data-phase=\'merged\'] .pr-dot',
+  'chat.css .keycap--pr[data-phase=\'closed\']',
+  'chat.css .keycap--pr[data-phase=\'unknown\'] .pr-dot',
+  'chat.css .keycap--pr[data-checks=\'pass\'] .pr-dot',
+  'chat.css .keycap--pr[data-checks=\'fail\'] .pr-dot',
+  'chat.css .keycap--pr[data-checks=\'pending\'] .pr-dot',
+  'chat.css .pr-lede',
+  'chat.css .pr-facts',
+  'chat.css .pr-warn',
+  'chat.css .pr-check-names',
+  'chat.css .pr-label',
+  'chat.css .pr-title',
+  'chat.css .pr-checkline',
+  'chat.css .pr-note',
+  'chat.css .reap-rows dt',
+  'chat.css .reap-rows dd',
+  'chat.css .reap-note',
+  'chat.css .reap-refusal',
+  'chat.css .reap-sensitive',
+  'chat.css .reap-size',
+  'chat.css .reap-ignored',
+  'chat.css .reap-children-list',
+  'chat.css .menu-item',
+  'chat.css .menu-hint',
+  'chat.css .menu-item--danger .menu-label',
+  'chat.css .task-head',
+  'chat.css .task-mark',
+  'chat.css .task-mark--running',
+  'chat.css .task-chevron',
+  'chat.css .task-summary',
+  'chat.css .task-line',
+  'chat.css .task-glyph',
+  'chat.css .task-row--in_progress .task-glyph',
+  'chat.css .task-row--completed .task-subject',
+  'chat.css .task-row--completed .task-glyph',
+  'chat.css .task-detail',
+  'chat.css .task-fold',
+  'chat.css .task-fold:active',
+  'chat.css .ts-divider',
+  'chat.css .sys-divider--restart',
+  'chat.css .sys-divider--stalled',
+  'chat.css .sys-divider--limit',
+  'chat.css .msg-receipt',
+  'chat.css .msg-receipt--ok b',
+  'chat.css .msg-receipt--failed',
+  'chat.css .pending-error',
+  'chat.css .pending-actions .pending-retry',
+  'chat.css .msg-assist',
+  'chat.css .msg-assist h1, .msg-assist h2, .msg-assist h3, .msg-assist h4',
+  'chat.css .msg-assist h4',
+  'chat.css .msg-assist strong',
+  'chat.css .msg-assist ul, .msg-assist ol',
+  'chat.css .msg-assist li::marker',
+  'chat.css .msg-assist .task-list-item input[type=\'checkbox\']:checked::after',
+  'chat.css .msg-assist .task-list-item:has(input:checked)',
+  'chat.css .msg-assist a',
+  'chat.css .msg-assist .kbd-plus',
+  'chat.css .msg-assist .hljs-comment, .msg-assist .hljs-quote',
+  'chat.css .msg-assist .hljs-keyword, .msg-assist .hljs-selector-tag, .msg-assist .hljs-section, .msg-assist .hljs-literal',
+  'chat.css .msg-assist .hljs-string, .msg-assist .hljs-regexp',
+  'chat.css .msg-assist .hljs-number, .msg-assist .hljs-symbol, .msg-assist .hljs-bullet',
+  'chat.css .msg-assist .hljs-title, .msg-assist .hljs-title.function_, .msg-assist .hljs-function .hljs-title',
+  'chat.css .msg-assist .hljs-type, .msg-assist .hljs-built_in, .msg-assist .hljs-title.class_, .msg-assist .hljs-class .hljs-title',
+  'chat.css .msg-assist .hljs-attr, .msg-assist .hljs-attribute, .msg-assist .hljs-property, .msg-assist .hljs-variable, .msg-assist .hljs-template-variable, .msg-assist .hljs-selector-class, .msg-assist .hljs-selector-id',
+  'chat.css .msg-assist .hljs-tag',
+  'chat.css .msg-assist .hljs-tag .hljs-name, .msg-assist .hljs-name',
+  'chat.css .msg-assist .hljs-meta',
+  'chat.css .msg-assist .hljs-deletion',
+  'chat.css .msg-assist .hljs-addition',
+  'chat.css .msg-assist .hljs-link',
+  'chat.css .compaction-glyph',
+  'chat.css .compaction-hint',
+  'chat.css .compaction-head:hover .compaction-hint',
+  'chat.css .msg-working',
+  'chat.css .msg-working-glyph',
+  'chat.css .tool-name',
+  'chat.css .tool-sum',
+  'chat.css .tool-dur',
+  'chat.css .tool-chev',
+  'chat.css .tool-eyebrow',
+  'chat.css .tool-meta',
+  'chat.css .tool-cut',
+  'chat.css .tool-ask-q',
+  'chat.css .tool-ask-outlabel',
+  'chat.css .ask-state.ask-live',
+  'chat.css .ask-state.ask-unanswered',
+  'chat.css .prompt-glyph',
+  'chat.css .composer-input',
+  'chat.css .composer-input::placeholder',
+  'chat.css .attach-btn',
+  'chat.css .attach-btn:disabled',
+  'chat.css .attach-btn[aria-busy=\'true\']',
+  'chat.css .composer[data-disabled=\'true\'] .prompt-glyph',
+  'chat.css .composer[data-disabled=\'true\'] .composer-input::placeholder',
+  'chat.css .draft-copy',
+  'chat.css .draft-cancel',
+  'chat.css .draft-cancel:active',
+  'chat.css .opt',
+  'chat.css .opt:disabled:not([aria-busy=\'true\']), .opt[aria-disabled=\'true\']',
+  'chat.css .opt:disabled:not([aria-busy=\'true\']) .opt-glyph, .opt:disabled:not([aria-busy=\'true\']) .opt-idx, .opt:disabled:not([aria-busy=\'true\']) .opt-enter, .opt[aria-disabled=\'true\'] .opt-glyph, .opt[aria-disabled=\'true\'] .opt-idx, .opt[aria-disabled=\'true\'] .opt-enter',
+  'chat.css .opt-glyph',
+  'chat.css .opt-idx',
+  'chat.css .opt-desc',
+  'chat.css .opt-preview-toggle',
+  'chat.css .dlg-body',
+  'chat.css .opt-enter',
+  'chat.css .opt-wait',
+  'chat.css .sheet-foot',
+  'chat.css .dlg-details-toggle',
+  'chat.css .dlg-details-toggle:hover',
+  'chat.css .dlg-copy',
+  'chat.css .dlg-later',
+  'chat.css .dlg-later:active',
+  'chat.css .ask-envelope-more-heading',
+  'chat.css .chat-empty-mark',
+  'chat.css .chat-empty-title',
+  'chat.css .chat-empty-copy',
+  'chat.css .term-overlay-word',
+  'chat.css .term-overlay-word--lost',
+  'chat.css .term-retry',
+  'chat.css .slash-name',
+  'chat.css .slash-badge',
+  'chat.css .slash-desc',
+  'chat.css .history-when',
+  'chat.css .history-act',
+  'chat.css .history-verb',
+  'chat.css .history-outcome',
+  'chat.css .history-obs, .history-dec',
+  'chat.css .history-corr',
+  'chat.css .history-refusal',
+  'chat.css .history-row--gap, .history-gap',
+  'chat.css .history-loading, .history-empty, .history-error',
+  'shell.css .shell-accounts .acct-win',
+  'shell.css .shell-accounts .acct-pct',
+  'shell.css .shell-accounts .acct-reset',
+  'shell.css .shell-placeholder-mark',
+  'shell.css .shell-placeholder-copy',
+]);
 const report = audit(ROOT);
 const { DARK, LIGHT } = loadThemes(ROOT);
 const THEMES: readonly (readonly [string, Record<string, string>])[] = [
@@ -886,6 +1145,14 @@ describe('every stylesheet under src/ is audited', () => {
       expect(report.counts.uncovered).toBe(report.uncovered.length);
     });
 
+    it('contains no identities beyond the grandfathered blind spots', () => {
+      // Existing blind spots may disappear, but new colour-bearing rules must be
+      // measured or registered instead of entering the census unnoticed.
+      const additions = report.uncovered.filter((key) => !GRANDFATHERED_UNCOVERED.has(key));
+      expect(additions).toEqual([]);
+      expect(report.uncovered.length).toBeLessThanOrEqual(GRANDFATHERED_UNCOVERED.size);
+    });
+
     it('contains no rule whose ground the selector itself gives away', () => {
       const recoverable = report.uncovered.filter((k) => {
         const rule = rules.find((r) => ruleKey(r) === k);
@@ -1334,6 +1601,81 @@ describe('the three well-trap rules the blocker was found in', () => {
     expect(ratio('var(--ink-secondary)', ['var(--bg-well)'], LIGHT)).toBeCloseTo(2.438, 2);
     expect(contrast(resolveColor('var(--ink-on-well)', LIGHT), resolveColor('var(--bg-well)', LIGHT)))
       .toBeCloseTo(13.978, 2);
+  });
+});
+
+// ── account-pool project-card cells ─────────────────────────────────────────
+describe('the pool chip and stranded count are measured, not left in the blind spot', () => {
+  it.each([
+    ['fleet.css .proj-card-pool', 'var(--ink-tertiary)'],
+    ["fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']", 'var(--status-attention-text)'],
+    ['fleet.css .proj-card-stranded', 'var(--status-attention-text)'],
+  ])('%s is grounded on the project card', (key, ink) => {
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── account-pool picker cells ────────────────────────────────────────────────
+describe('the account-pool picker colours are measured, not left in the blind spot', () => {
+  it.each([
+    ['fleet.css .acct-pool', 'var(--ink-tertiary)'],
+    ['fleet.css .acct-disclosure', 'var(--ink-secondary)'],
+    ['fleet.css .pool-note', 'var(--ink-tertiary)'],
+  ])('%s is grounded on the sheet it sits in', (key, ink) => {
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-sheet)']);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('keeps the selected project-pool registration on its selector\'s declared ground', () => {
+    // A selected project row replaces the sheet ground. Compare the registry
+    // with THIS selector's declaration, not a generic CSS parse, so either side
+    // changing independently fails rather than pricing an obsolete surface.
+    const key = 'fleet.css .proj-row--selected .acct-pool';
+    const selectedRow = rulesOf(ROOT, 'src/fleet/fleet.css')
+      .find((rule) => rule.selector === '.proj-row--selected');
+    expect(selectedRow).toBeDefined();
+    expect(INHERITED_GROUNDS[key]?.under).toEqual([bgOf(selectedRow?.body ?? '')]);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('var(--ink-tertiary)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// ── account-pool session-row cells ──────────────────────────────────────────
+describe('the pool session cells are measured, not left in the blind spot', () => {
+  it.each(['.sess-stranded', '.sess-offpool'])('%s clears both themes on the ordinary row', (selector) => {
+    const key = `fleet.css ${selector}`;
+    expect(INHERITED_GROUNDS[key]?.under).toEqual(['var(--bg-surface)']);
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain('var(--status-attention-text)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+
+  it('pins the selected off-pool cue to the active row achromatic pair', () => {
+    for (const theme of [DARK, LIGHT]) {
+      expect(ratio('var(--edge-strong)', ['var(--ink-primary)'], theme))
+        .toBeGreaterThanOrEqual(4.5);
+    }
   });
 });
 

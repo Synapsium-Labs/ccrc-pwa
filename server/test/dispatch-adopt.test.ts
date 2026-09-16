@@ -34,6 +34,7 @@ import { localIO } from '../src/io.js';
 import { SPAWN_NOT_RECORDED, isSpawnVerdict, type RunSummary } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun, okRuns } from './coordReadHelpers.js';
 
 const PROJECT = 'demo';
 
@@ -158,7 +159,7 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     expect(out).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-quiet-basin' });
     // The run is BOUND, the hold is PLACED, and the event says where this
     // workspace came from — its presence IS the record that it was adopted.
-    expect(h.coord.run(h.runId)?.sessionId).toBe('demo-quiet-basin');
+    expect(okRun(h.coord.run(h.runId))?.sessionId).toBe('demo-quiet-basin');
     expect(h.ccdCalls()).toContainEqual(
       expect.arrayContaining(['ws-hold', '--session', 'demo-quiet-basin']));
     expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('spawn-adopted:expired');
@@ -358,8 +359,8 @@ describe('§1.2 — the OTHER polarity: a ws-add that FAILED CLEANLY inside its 
     const out = await h.dispatch();
     expect(out).toMatchObject({ ok: false, kind: 'fleetFailed' });
     // The run stays PLANNED and is bound to nothing — the operator resolves it.
-    expect(h.coord.run(h.runId)?.state).toBe('planned');
-    expect(h.coord.run(h.runId)?.sessionId).toBeNull();
+    expect(okRun(h.coord.run(h.runId))?.state).toBe('planned');
+    expect(okRun(h.coord.run(h.runId))?.sessionId).toBeNull();
     // And NO hold was placed on a workspace this run does not own.
     expect(h.ccdCalls().some((a) => a[0] === 'ws-hold')).toBe(false);
   });
@@ -420,7 +421,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     // for this run", and it must not be confused with a zero or a default: an
     // open run that nobody has dispatched is the ordinary state of wave N+1.
     const h = await harness({ ccd: { ok: true, stderr: '' } });
-    expect(h.coord.run(h.runId)?.dispatchStartedAt).toBeNull();
+    expect(okRun(h.coord.run(h.runId))?.dispatchStartedAt).toBeNull();
   });
 
   it('is stamped BEFORE the ws-add — visible DURING the window, not after it', async () => {
@@ -433,7 +434,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
       ccd: { ok: true, killed: false, stderr: '' },
       after: [{ id: 'demo-quiet-basin', held: null }],
       onWsAdd: () => {
-        const r = h.coord.run(h.runId)!;
+        const r = okRun(h.coord.run(h.runId))!;
         seen.push({ at: r.dispatchStartedAt, sessionId: r.sessionId });
       },
     });
@@ -452,7 +453,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     });
     expect(await h.dispatch()).toMatchObject({ ok: true });
 
-    const row = h.coord.run(h.runId)!;
+    const row = okRun(h.coord.run(h.runId))!;
     // `state` is what ends the "dispatching" render — NOT a cleared column.
     expect(row.state).toBe('dispatched');
     expect(row.dispatchStartedAt).toBe(NOW);
@@ -471,7 +472,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
       after: [],
     });
     expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed' });
-    const row = h.coord.run(h.runId)!;
+    const row = okRun(h.coord.run(h.runId))!;
     expect(row.state).toBe('planned');
     expect(row.sessionId).toBeNull();
     expect(row.dispatchStartedAt).toBe(NOW);
@@ -485,12 +486,12 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     const cfg: HarnessCfg = {
       ccd: { ok: false, killed: false, signal: null, stderr: 'ccd: no wrapper has capacity' },
       after: [],
-      onWsAdd: () => { seen.push(h.coord.run(h.runId)!.dispatchStartedAt); },
+      onWsAdd: () => { seen.push(okRun(h.coord.run(h.runId))!.dispatchStartedAt); },
     };
     h = await harness(cfg);
 
     expect(await h.dispatch()).toMatchObject({ ok: false, kind: 'fleetFailed' });
-    expect(h.coord.run(h.runId)?.dispatchStartedAt).toBe(NOW);
+    expect(okRun(h.coord.run(h.runId))?.dispatchStartedAt).toBe(NOW);
 
     vi.setSystemTime(NOW + 90_000);
     cfg.ccd = { ok: true, killed: false, stderr: '' };
@@ -500,7 +501,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     // The SECOND attempt saw its own start, not the first one's — "when did the
     // dispatch that is running now begin" is the only question this answers.
     expect(seen).toEqual([NOW, NOW + 90_000]);
-    expect(h.coord.run(h.runId)?.dispatchStartedAt).toBe(NOW + 90_000);
+    expect(okRun(h.coord.run(h.runId))?.dispatchStartedAt).toBe(NOW + 90_000);
   });
 
   it('reaches the WIRE — `toRunSummary` carries it, so the PWA is not left inferring the window', async () => {
@@ -512,8 +513,8 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     await h.dispatch();
     // `toRunSummary` is a spread that strips `prLineage` and nothing else, so
     // this asserts the field is on `RunSummary` rather than server-internal.
-    const wire: RunSummary = toRunSummary(h.coord.run(h.runId)!);
+    const wire: RunSummary = toRunSummary(okRun(h.coord.run(h.runId))!);
     expect(wire.dispatchStartedAt).toBe(NOW);
-    expect(h.coord.runs().map((r) => toRunSummary(r).dispatchStartedAt)).toEqual([NOW]);
+    expect(okRuns(h.coord.runs()).map((r) => toRunSummary(r).dispatchStartedAt)).toEqual([NOW]);
   });
 });

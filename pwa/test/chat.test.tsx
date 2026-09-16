@@ -757,3 +757,111 @@ describe('the truncation cue', () => {
     }
   });
 });
+
+describe('a restart that landed idle reads as a stall, not a conversation (D-2228)', () => {
+  const sys = (uuid: string, text: string, origin?: 'resume-prompt' | 'no-response'): ChatEvent =>
+    ({ kind: 'system', uuid, ts: '2026-09-09T11:25:31.906Z', text, ...(origin ? { origin } : {}) });
+  it('the pair renders as two system lines, the second naming the stall — and no user bubble', () => {
+    const { container } = render(
+      <ChatListInner
+        id="s"
+        events={[sys('m1', 'Continue from where you left off.', 'resume-prompt'), sys('a1', 'No response requested.', 'no-response')]}
+        pending={[]}
+      />,
+    );
+    expect(screen.getByText(/restart · resume prompt/)).toBeTruthy();
+    expect(screen.getByText(/interrupted turn not re-driven/)).toBeTruthy();
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.msg-assist')).toBeNull();
+    expect(container.querySelector('.sys-divider--restart')).not.toBeNull();
+    expect(container.querySelector('.sys-divider--stalled')).not.toBeNull();
+  });
+  it('a plain system line (no origin) still renders its own text', () => {
+    render(<ChatListInner id="s" events={[sys('u3', '/clear')]} pending={[]} />);
+    expect(screen.getByText('/clear')).toBeTruthy();
+  });
+});
+
+describe('a usage limit reads as a harness line, not a reply (D-2366)', () => {
+  const SENTENCE = "You've hit your weekly limit · resets Sep 15, 12am (UTC)";
+  const limit = (resetsAt?: number): ChatEvent =>
+    ({ kind: 'system', uuid: 'b1', ts: '2026-09-10T10:12:21.199Z', text: SENTENCE, origin: 'limit', ...(resetsAt !== undefined ? { resetsAt } : {}) });
+  it('with resetsAt: "usage limit · resets HH:MM…", the sentence as the tooltip, no assistant bubble', () => {
+    const { container } = render(<ChatListInner id="s" events={[limit(1789430400)]} pending={[]} />);
+    const line = container.querySelector('.sys-divider--limit');
+    expect(line).not.toBeNull();
+    expect(line!.textContent).toMatch(/^usage limit · resets \d\d:\d\d/);
+    expect(line!.getAttribute('title')).toBe(SENTENCE);
+    expect(container.querySelector('.msg-assist')).toBeNull();
+  });
+  it('without resetsAt: the sentence itself, still a limit line', () => {
+    const { container } = render(<ChatListInner id="s" events={[limit()]} pending={[]} />);
+    expect(container.querySelector('.sys-divider--limit')!.textContent).toBe(`usage limit · ${SENTENCE}`);
+  });
+});
+
+describe('a system row that carries a BODY folds — it never floods the scroll', () => {
+  const TS = '2026-09-09T11:25:31.906Z';
+  const sysRow = (uuid: string, text: string): ChatEvent => ({ kind: 'system', uuid, ts: TS, text });
+  // The shape the harness injects: a locator line, markdown under it, tens of
+  // KB, hundreds of lines. A centred 11px-mono pill cannot tell that honestly —
+  // `.sys-divider` declares no `white-space`, so it arrives as one run.
+  const BODY = `Base directory for this skill: /home/x/.claude/skills/review-pr\n\n# Review PR\n${'lorem ipsum '.repeat(40)}\nthe last line of the body`;
+
+  it('collapses to a one-line head naming its first line, with the body one tap away', () => {
+    const { container } = render(<ChatListInner id="s" events={[sysRow('y1', BODY)]} pending={[]} />);
+    // not the operator's speech: no bubble, and no receipt claiming delivery
+    expect(container.querySelector('.msg-user')).toBeNull();
+    expect(container.querySelector('.msg-receipt')).toBeNull();
+    expect(container.querySelector('.sys-divider')).toBeNull();
+    expect(container.querySelector('.compaction--sys')).not.toBeNull();
+    const head = screen.getByRole('button', { name: /Base directory for this skill/ });
+    expect(head).toHaveAttribute('aria-expanded', 'false');
+    expect(document.body.textContent ?? '').not.toContain('the last line of the body');
+    fireEvent.click(head);
+    expect(screen.getByRole('button', { name: /Base directory for this skill/ })).toHaveAttribute('aria-expanded', 'true');
+    expect(document.body.textContent ?? '').toContain('the last line of the body');
+  });
+
+  it('opens to the record\'s own text, not to Markdown — a literal asterisk survives', () => {
+    // The parser hands a system row a `text: string` and declares no format for
+    // it. Read as Markdown, `a*b*c` loses both asterisks and a `|` row becomes
+    // a table — the delivery layer inventing a format the parser never sent.
+    render(<ChatListInner id="s" events={[sysRow('y2', 'hook output\na*b*c multiply\n| a | b |')]} pending={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /hook output/ }));
+    const body = document.querySelector('.compaction-raw');
+    expect(body).not.toBeNull();
+    expect(body!.textContent).toContain('a*b*c multiply');
+    expect(body!.textContent).toContain('| a | b |');
+    expect(document.querySelector('.compaction-body table')).toBeNull();
+    expect(document.querySelector('.compaction-raw em')).toBeNull();
+  });
+
+  it('two lines is already a body — the newline is the predicate, not a size', () => {
+    const { container } = render(<ChatListInner id="s" events={[sysRow('y3', 'first line\nsecond line')]} pending={[]} />);
+    expect(container.querySelector('.sys-divider')).toBeNull();
+    expect(screen.getByRole('button', { name: /first line/ })).toHaveAttribute('aria-expanded', 'false');
+  });
+
+  it('a one-line system row is still the pill (unchanged)', () => {
+    const { container } = render(<ChatListInner id="s" events={[sysRow('y4', '/clear')]} pending={[]} />);
+    expect(container.querySelector('.sys-divider')).not.toBeNull();
+    expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  // The refactor that made this fold shared: the /compact card had no test of
+  // its own, so this is the pin that says it did not move.
+  it('the /compact recap still folds with its own label, hint and Markdown body (unchanged)', () => {
+    const recap = 'This session is being continued from a previous conversation that ran out of context.\n\n## Summary\n\nthe things';
+    const { container } = render(
+      <ChatListInner id="s" events={[{ kind: 'user', uuid: 'y5', ts: TS, text: recap }]} pending={[]} />,
+    );
+    expect(container.querySelector('.compaction')).not.toBeNull();
+    expect(container.querySelector('.compaction--sys')).toBeNull();
+    const head = screen.getByRole('button', { name: /Context compacted/ });
+    expect(head.textContent).toContain('show summary');
+    fireEvent.click(head);
+    expect(container.querySelector('.compaction-body.msg-assist')).not.toBeNull();
+    expect(container.querySelector('.compaction-raw')).toBeNull();
+  });
+});

@@ -73,7 +73,7 @@ account home it finds. The server comes up on `127.0.0.1:7788`.
 Then:
 
 ```bash
-ccrc doctor      # 26 checks: binaries, units, roster, hook registration, auth posture
+ccrc doctor      # every check in the table: binaries, units, roster, accounts, credentials, pools, hooks, auth posture
 ccrc status      # what is running, where
 ```
 
@@ -167,9 +167,10 @@ be discovered:
   different keychain — a posture `ccrc install` will not choose for you. For an always-on
   box, stay logged in and turn off sleep.
 - **No memory ceiling.** The per-session and fleet-wide caps are cgroup limits
-  (`MemoryHigh`/`MemoryMax` on the session unit and on `app-claude\x2dsession.slice`), and
-  launchd has no equivalent of any kind. `ccd-cap-scopes` is not installed there either —
-  it caps cgroup scopes, and there are none.
+  (`MemoryHigh`/`MemoryMax` on the session unit, per-pane `MemoryHigh`/`MemoryMax`, and the
+  aggregate `MemoryMax` on `app-claude\x2dsession.slice`), and launchd has no equivalent of
+  any kind. `ccd-cap-scopes` is not installed there either — it caps cgroup scopes, and
+  there are none.
 
 `ccrc doctor` checks all of this and tells you which one is missing, rather than failing
 somewhere further in.
@@ -448,7 +449,8 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
 host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
 fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units — complete before any
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, and `~/.ccrc/memory` — the
+sole live copy of every project's durable memory since `ccrc memory --apply` — complete before any
 install write); re-run the install spine from the verified staged tree (role-aware, atomic,
 seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
 the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
@@ -468,8 +470,11 @@ takes the box off ccrc and leaves reinstall safe: it refuses while live sessions
 unmanaged entries survive byte-identically), marker-verified wrappers only, ccrc's own artifacts
 inside `~/.cc-sessions` file-by-file, `~/ccrc` and the installed executables — and preserves
 `~/.ccrc` whole, the registry rows and operator switches, worktrees and `~/ccrc-backups`, printing
-(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc` and the
-backups — never worktrees, never tmux state.
+(never running) the keep-aside restore commands. `--purge` additionally removes `~/.ccrc`'s config
+(roster, identity, `ccrc.env`, `build.json`, …) and `~/ccrc-backups` — but **preserves
+`~/.ccrc/memory`** (every project's durable memory, the sole live copy since `ccrc memory --apply`;
+a session's prose is not configuration) unless `--purge-memory` is also given, which extends `--purge`
+to remove it too; never worktrees, never tmux state.
 
 ## The session gate: `CCRC_AUTH` (off by default)
 
@@ -533,14 +538,15 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the nineteen machine lanes the
-fleet host reaches (eighteen box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the twenty-four machine lanes the
+fleet host reaches (twenty-three box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
-`/api/lifecycle`, `/api/peers`, `/api/claims`) take a live session cookie **or**
-the token, which is how a coordinator reads its own wave ledger from the fleet
-host), the login and passkey-assertion doors themselves,
+`/api/runs/:id/signals`, `/api/feed`, `/api/lifecycle`, `/api/peers`, `/api/claims`,
+`/api/asks`) take a live session
+cookie **or** the token, which is how a coordinator reads its own wave ledger from
+the fleet host), the login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
@@ -648,8 +654,8 @@ Nothing hand-edits it; a torn one would take out every live session at once,
 which is why it lands via the same atomic scp-to-temp + `mv` as `ccd` itself,
 and lands **before** `ccd` and before both installers.
 
-An account entry is `{id, label, configDirSuffix, exec, homeAble, hue,
-telemetry}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
+hidden?, pool?}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -661,7 +667,8 @@ scored better — for as long as it is installed and not kill-switched.
 overflowed onto it returns home when home has headroom again *and* home is still
 servable for the project's pool;
 `telemetry: 'none'` says the account will never report rate limits,
-so its permanent unknown is not read as permanent emptiness.
+so its permanent unknown is not read as permanent emptiness; `hidden: true`
+says the entry is roster plumbing rather than one of your accounts.
 
 Both clauses above were unconditional until account pools shipped, and neither is
 any more (D-1911; the ruled behaviour named below is D-1908, and this file still
@@ -674,6 +681,54 @@ an account with **no** pool tag is servable for every pool, so an untagged
 overflow lane can be chosen while healthy tagged accounts sit refused. That is
 ruled behaviour, and such a move is deliberately **not** recorded as a pool
 crossing — nothing was overridden, because nothing constrained it.
+
+`exec` says how ccrc reaches the account's binary, and it carries the account's
+connection: `{kind: 'upstream' | 'generated' | 'external', secretsFile?,
+provider?, baseUrl?, models?}`. `secretsFile` is legal on all three kinds — on a
+`generated` account it is the 0600 file ccrc writes and the wrapper sources; on
+the other two it is DECLARATIVE, naming the file somebody else's launcher
+sources so `ccrc doctor` can say whether it exists without ever opening it.
+`provider` is one of `anthropic`, `openrouter`, `compatible`, `openai`
+(`shared/providers.ts`, the only file that enumerates them); it is required on
+`generated` and defaults to `anthropic` with one warning per parse, optional on
+`external` where absent means *undeclared*, and not spelled on `upstream`.
+`baseUrl` is the endpoint the lane talks to — `https:`, or `http:` on
+`127.0.0.1`, `[::1]` or `localhost`, with no `user:password`, no query string
+and no fragment — required when `provider` is `compatible`, which ships no
+default. `models` is the api-key lane's four-alias routing map plus an optional
+`selectable` allowlist, and is legal only where the provider table says a lane
+has one.
+
+**Two validators, one roster, and neither may be laxer.** `shared/roster.ts`'s
+`parseRoster` runs in the server, which refuses to boot on a roster it rejects.
+`shared/roster-json.mjs`'s `rosterFromJson` runs under a bare `node` in the
+deploy path, which cannot import TypeScript — so it re-implements the same
+checks, with ONE exception it now imports instead (`BASE_URL_OK`, from
+`shared/base-url.mjs`, because a stricter endpoint gate on the deploy side
+refuses a roster the server boots on), and its header states the asymmetry the
+rest live by: they may be STRICTER, never laxer. A roster it wrongly rejects
+fails a deploy loudly; a roster it wrongly accepts regenerates a box's
+`accounts.sh` and wrappers and then leaves the server unable to start.
+`server/test/gen-accounts.test.ts` is the mechanism: one direction compares the
+two implementations' generated bash byte for byte, the other asserts that every
+roster `parseRoster` throws on is refused by the CLI too.
+
+#### What the parser and the mirror each check
+
+| field | parser rule | mirror line | `gen-accounts.test.ts` CASES row |
+|---|---|---|---|
+| `hidden` | `non-boolean hidden` — optional, but a present value must be a boolean | `non-boolean hidden` | “a non-boolean hidden” |
+| `exec.secretsFile` | `SECRETS_SAFE_RE`, no leading `/`, no `..`, no trailing `/` — on all three kinds | `SECRETS_SAFE_RE` | “an absolute EXTERNAL secretsFile” |
+| `exec.provider` | `isProviderId`, defaulted to `anthropic` on `generated` | `PROVIDER_IDS` | “an unknown exec.provider on a generated account” |
+| `exec.baseUrl` | `BASE_URL_OK`, and `base-url-required` where the provider ships no default | imported — `BASE_URL_OK` from `./base-url.mjs`, the one rule this file does not re-spell | “an unparseable exec.baseUrl” |
+| `exec.models` | `MODEL_ID_RE` over four required aliases, plus `selectable` containment | `MODEL_ID_RE` | “exec.models missing the subagent alias” |
+
+Each row is resolved against the three files it names by
+`server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
+validator reds this table as well as the suite that owns it — the same treatment
+`readme-holds.test.ts` gives the holds paragraph, and for the reason its header
+records: prose that was true when written is the kind an operator acts on after
+it stops being true.
 
 **Getting the file onto a box.** The deploy seeds it, create-if-missing, on
 both targets:
@@ -924,6 +979,135 @@ session out from under someone mid-login would be wrong; that screen is the
 one case `_accept_first_run_prompts`'s login check owns instead, by warning
 and stopping rather than swapping.
 
+### A restart re-drives the turn it interrupted (D-2226)
+
+A usage-limit rescue is a `ccd swap`: the unit stops, the transcript is carried, the destination
+runs `<wrapper> --resume '<uuid>'`. Claude Code's own recovery for a limit — "Usage limit reached ·
+continuing automatically at HH:MM" — is an in-memory timer and dies with the old process. On the
+resume, Claude Code writes a META "Continue from where you left off." and a synthetic "No response
+requested." and submits the prompt **only** when `CLAUDE_CODE_RESUME_INTERRUPTED_TURN` is set.
+Before 2026-09-09 ccd never set it, so every rescue landed idle until a human typed (spec
+`docs/superpowers/specs/2026-09-09-post-swap-redrive-design.md`, four of four sessions measured).
+
+Now, on every spawn, `_spawn_start` exports that flag plus a ccd-authored `CLAUDE_CODE_RESUME_PROMPT`
+(`RESUME_PROMPT`, telling the model its previous process and every background task it owned are
+gone). Because the flag is a third-party default, `_spawn_settle` **measures** the landing:
+`_transcript_stalled_pair` reads the transcript tail, and if the newest real turn is still that
+unsubmitted pair after `REDRIVE_WAIT_S`, `_redrive_after_spawn` types the prompt itself and writes
+`redrive <id>: …` to `swap.log` (`redrive-skip` when the box holds a draft, the pane is
+hard-blocked, or an auto-continue is armed). Hookstate is not the measurement: `working` proves tool
+calls, not that the re-drive took.
+
+The one thing ccd must never do is cancel Claude Code's armed auto-continue with a keystroke.
+`_pane_auto_continue_armed` ("continuing automatically" / "continuing shortly") gates the compactor
+(`compact-skip <id>: auto-continue`), the `/effort` injection, and the fallback re-drive. The rescue
+arm is deliberately **not** gated: a swap that re-drives beats waiting out the window. On the PWA the
+pair renders as two system lines, the second reading "interrupted turn not re-driven — send a
+message to resume"; the server parser keys on the structural markers — `isMeta` for the prompt
+line, `message.model === '<synthetic>'` for the padding — each narrowed by the exact sentence
+(`RESUME_PROMPT_PREFIX` / `NO_RESPONSE_TEXT`, `shared/api.ts`); ccd's `RESUME_PROMPT` must keep
+starting with that prefix, and nothing scans for it.
+
+### A limit is measured on the transcript, and Claude Code's own recovery is left alone (D-2360–D-2370)
+
+The follow-ups to the restart re-drive, measured on 2026-09-10 after 53 landings
+(`docs/superpowers/specs/2026-09-10-limit-recovery-followups-design.md`):
+
+- **A stale auto-continue gets its Enter.** When Claude Code slept through its own reset
+  (`Your usage limit has reset · press enter to continue`), `_auto_stale_check` presses Enter
+  once per `STALE_PRESS_COOLDOWN` — never with a running turn, never over a non-empty box —
+  and logs `stale-resume` / `stale-skip` in `swap.log`. An armed auto-continue is never
+  touched (D-2229).
+- **The transcript is a second limit detector.** `_transcript_limit_banner` reads the row
+  Claude Code appends on a 429 (`isApiErrorMessage:true`, `error:"rate_limit"`, `resetsAt`).
+  `_session_hard_blocked` always asks the pane first; only its transcript arm stands down for a
+  running turn, a non-empty input box, or a fresh `$REG/<id>.stalepress` stamp inside
+  `STALE_RESUME_GRACE=30` (D-2443). Its positive or negative transcript verdict is cached in
+  `$REG/<id>.tscan` for `TRANSCRIPT_ARM_INTERVAL=30` seconds (D-2444), while the draft guard is
+  still re-measured on every positive verdict. The rescue arm and the strand verdict both use
+  this classifier; a blank pane no longer blinds the rescue, and the `auto-rescue` line says
+  ` via=transcript` when the pane alone would not have fired. The pane regex is deliberately not
+  widened (D-2364).
+- **The banner is a system line in the PWA** — `usage limit · resets HH:MM` in your clock,
+  Claude Code's sentence as the tooltip (`origin: 'limit'`, `resetsAt` in epoch seconds).
+- **The mail nudge holds while an auto-continue is armed.** `sendPrompt` refuses
+  `auto-continue-armed` for the mail lane only; the sweep holds the delivery five minutes
+  without counting an attempt and tells the sender once. Your own send from the PWA is not
+  held: typing is Claude Code's documented cancel and the pane is on your screen.
+- Both transcript readers pair `-f` with `-r` (D-2370, closing D-2347).
+### One memory store per project: `ccrc memory`
+
+**A project's durable memory is per-ACCOUNT, and ccrc exists to move sessions between
+accounts.** Claude Code keeps it at `<config dir>/projects/<slug>/memory` — inside the
+*account's* home, not the project's — so the swap this whole design is bent around carries
+the conversation across and leaves the memory behind. Each home a box carries accumulates its
+own copy of what sessions learned about the same repo, and they drift apart.
+
+The answer is one store per **project**, shared by every home on the box:
+`~/.ccrc/memory/<slug>`, with each home's `projects/<slug>/memory` a symlink into it.
+Nothing has to move on a swap, because nothing was ever the account's to hold.
+
+```bash
+ccrc memory            # the census: one line per (home, project) pair, then a count
+ccrc memory --apply    # the union — the only step in any of this that moves a byte
+```
+
+**The census is read-only.** A pair is a home's `projects/<slug>/memory` that exists at all —
+a project a home has never held is not a pair and is not listed — and it reads either
+`converged` (the link *resolves* to the store and the store is a directory: resolution, never
+the link's spelling) or `forked` (a real directory, or any link that does not resolve to a
+store directory — pointing at another home, dangling, or landing on a plain file).
+**Homes are enumerated from the FILESYSTEM (`~/.claude*/`), never from the roster** — the
+roster describes the accounts ccrc places work on and was never a census of homes, and a box
+can carry config dirs no roster entry names. **Scratch slugs are skipped**, because the harness
+mints one for every throwaway directory a session was started in — four prefixes, because the OS
+scratch root is not spelled alike on the two platforms ccrc ships to: `-tmp*` (Linux `/tmp`),
+`-private-tmp*` and `-var-folders*`/`-private-var-folders*` (macOS `/tmp` resolves through
+`/private`, and `$TMPDIR` is a per-user `/var/folders/<x>/<y>/T`). `/var/tmp` is **not** scratch by
+this rule — POSIX makes it persistent — so a project kept there is censused like any other. The
+summary line names what the rule dropped (`N pairs, M forked, K scratch skipped`), counting only
+slugs that would otherwise have been pairs, so the three numbers reconcile against one unit.
+
+**`--apply` keeps both sides of a conflict rather than choosing one.** A file unique to one
+home is copied across; a byte-identical collision stays one file; a same-named file whose
+content *differs* keeps **both** copies, the incoming one suffixed with the home it came
+from, for a human to reconcile. `MEMORY.md` is the exception — an index of one line per file,
+derived from each file's own `name`/`description` frontmatter where it has one. A file that
+does not (measured: a small minority fleet-wide) is dropped from the index — there is nothing
+to derive a line from — but never silently: the run counts what it dropped and names the
+count and the store in its own `NOTE:` line, the same discipline a suffixed conflict copy
+already gets. It is therefore rebuilt rather than merged. Sub-directories and non-`.md` files
+are not memory files: they are counted, not copied, and the run names how many stayed behind
+and where — a backup path on the plain-directory arm, the resolved source itself on the
+symlink arm, whichever ran. Only a **real directory** is backed up — beside itself as
+`memory.pre-ccrc-<UTC>`, with the path printed on that pair's line; the symlink arms take no
+backup, because a link holds no data. And it **refuses rather than reporting a success it did
+not achieve**: a union that cannot read a source or land a copy stops the *whole run* at that
+pair — the operator sees the failing pair's own diagnostic (or, on the symlink arm, the
+resolved target that could not be read, which names neither home nor project slug), but every
+home not yet processed is simply never reached and never mentioned, converged or not. Only the
+plain-directory arm's own source is guaranteed left exactly where it stood; nothing else is,
+once one pair fails. It also normalises a converged link whose own text is not the store — a
+relative spelling, or a *chain* through another home's link, which would quietly make one
+account's home load-bearing for every other, reintroducing one level up the very failure this
+replaces.
+
+`--apply` is a one-time operator act; two mechanisms keep it honest afterwards. The
+SessionStart hook converges one `(home, project)` pair per start and **never merges data** —
+it acts only where there is nothing to lose (an absent link, or a plain directory that is
+empty, tested by `rmdir`'s own failure so there is no check-then-act window across a live
+fleet), leaving a non-empty directory or a link pointing elsewhere exactly as found.
+`ccrc doctor`'s `memory` check then reports what the hook declined to touch, in three
+conditions it never collapses into one, each its own severity: **forked** pairs are a
+**WARN** (remedy: `ccrc memory --apply`) — a fork is the expected state of every multi-home
+box before its one-time migration, not a misconfiguration, and FAILing it would hard-die
+`ccrc update` before its supervisor sweep ever runs, coercing an unrelated verb into demanding
+that migration; homes the hook **cannot reach at all** are a **FAIL**, because
+`install-session-hooks.sh` builds its default list from the roster (remedy: add the account to
+the roster, or register `session-hook.sh` in that home's `settings.json` by hand) — nothing
+repairs that on its own; and a `settings.json` that exists but **cannot be read** earns its own
+**WARN** and remedy — "I could not measure it" is not "it is definitely not wired".
+
 ## Attention, notifications and answering
 
 - **Unseen watermark** (`pwa/src/lib/seen.ts`): a session is unseen when it
@@ -1023,11 +1207,14 @@ general remote-shell:
   from its own Bash tool gets, among other callers. And `pwa` is not what
   EVERY API-reachable path to a stopped session records — the several OTHER
   routes and lanes that reach `_ws_unsupervise` directly (`ws-rm`, the
-  archive/reap verbs, `forget`, `FleetWatcher.archiveMerged`) pass no
-  surface at all and record `_ws_unsupervise`'s own default, `ccd` — an
-  operator archiving a workspace from the PWA sees "stopped by ccd" on that
-  row, correctly, because ccd itself did the unsupervising there, not the
-  stop route.
+  archive/reap verbs, `forget`) pass no surface at all and record
+  `_ws_unsupervise`'s own default, `ccd` — an operator archiving a
+  workspace from the PWA sees "stopped by ccd" on that row, correctly,
+  because ccd itself did the unsupervising there, not the stop route. No
+  UNATTENDED lane is on that list any more: `FleetWatcher.archiveMerged`
+  was one, and `sweepMerged`, the lane that replaced it, pushes a
+  notification and unsupervises nothing — every path left to this seam is
+  one a human asked for.
   The capability is also conditional, not assumed — and its no-evidence
   default is the OPPOSITE of every other gated verb's. `stopSurfaceSupported`
   reads the same `ccdVerbs` channel `verbSupported`
@@ -1166,18 +1353,22 @@ pause, why `ws-reap` stays human-only, and the honest boundary — this section
 covers only what that one does not: the install lane, the PWA surfaces, the
 disaster-recovery drill, and the Build 4 dogfood runbook.
 
-**Both skills ship to every rostered account's config dir.** The
-coordinator's protocol is one of a pair: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, twelve clauses pinned by
-`server/test/worker-skill.test.ts`), which carries no `references/` of its own
-and points at the coordinator's — so it must land *beside* it, never instead of
-it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
-account drifts on swap — so `ccd/install-coordinator-skill.sh` and
-`ccd/install-worker-skill.sh` each install into *every* config dir
-the roster names, the same list
+**All three skills ship to every rostered account's config dir.** The
+coordinator's protocol is now a trio: its worker counterpart is the
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
+`server/test/worker-skill.test.ts`), and its reviewer counterpart is the
+`ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
+`server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
+workspace and reports — it never rules. Neither carries a `references/` of
+its own — both point at the coordinator's — so each must land *beside* it,
+never instead of it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`,
+and a session's account drifts on swap — so `ccd/install-coordinator-skill.sh`,
+`ccd/install-worker-skill.sh` and `ccd/install-reviewer-skill.sh` each install
+into *every* config dir the roster names, in that order — coordinator, then
+worker, then reviewer — the same list
 `install-session-hooks.sh` uses. There is no hooks-able subset — that concept
 existed only while the installers carried a hand-typed `homes=(…)` array; all
-three now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
+four now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
 config dir that is absent, which is what makes "every account" the safe answer
 rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
 `install-coordinator-skill.test.ts` and `install-worker-skill.test.ts` each RUN
@@ -1290,6 +1481,128 @@ the transcript surface. Before starting it:
 Success is a program that completes with human pauses only at review points,
 and an audit trail that reads true.
 
+### Cross-repo programmes: one home, waves anywhere
+
+A programme is **initiated in one project and stays there**: its current spec,
+its plan, its ledger (`docs/superpowers/programs/<slug>.md`) and its coordinator
+session all live in that one repo. For cross-repo programmes, the current build
+spec is `docs/superpowers/specs/2026-09-08-crossrepo-programmes-design.md`; it
+points back to `docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md`,
+whose historical operator rulings stand. That repo is the programme's **home
+project**, and it is *declared*, never inferred — the canonical `POST /api/runs`
+body takes `homeProject` on every wave and stores it on the programme row at first
+insert. It is not guessed from wave 1's project and not derived from the registry
+or from whoever claims the run: a fact a programme carries for its whole life
+must not depend on a live read that can degrade.
+
+**A wave, though, may run anywhere.** `runs.project` has always been per-row, so
+a wave dispatches its run into whatever repo the work is in — that repo's
+checkout, that repo's PRs, that repo's git for every re-measurement. A wave whose
+`project` differs from its programme's `homeProject` is a **crossing**.
+
+**Two refusals guard the seam, and they are two on purpose.**
+
+- `project-mismatch` — **409**, body
+  `{"ok":false,"refused":"project-mismatch","by":"<the project that session belongs to>"}`.
+  It fires at two sites: at `POST /api/runs`, when the body reuses a `sessionId`
+  whose earlier runs belong to a different project — checked *before* the row is
+  opened, so a refusal leaves no `planned` orphan; and at
+  `POST /api/runs/:id/dispatch`, when the resume arm finds a registry record
+  whose project is not the run's — checked before the hold, the `/clear` and the
+  transition, so a mismatch costs nothing. A session no run has ever named
+  refuses nothing: absence permits.
+- `home-mismatch` — **409**, body
+  `{"ok":false,"refused":"home-mismatch","by":"<the stored home>"}`, when a later
+  open of the same programme names a different `homeProject`. A stored home that
+  is still null is *backfilled* from the body instead — first writer wins.
+
+Two codes rather than one because the caller does different things with them:
+the first says "you reused the wrong workspace", the second says "you are
+opening someone else's programme".
+
+**The open response says where the ledger really is.** Beside the relative
+`ledgerPath` it has always returned, `POST /api/runs` answers `ledgerRepo` (the
+home project) and `ledgerAbsPath` (that project's checkout plus
+`docs/superpowers/programs/<slug>.md`). Both are `null` while the stored home is
+null. `ledgerAbsPath` names only the programme ledger; it is neither the home
+repository root nor a plan path.
+
+**Foreign-repo waves read named Git objects, never mutable files.** Every foreign-plan wave's
+brief carries `homeRepoRoot` (the absolute home-repository root), `planRepoPath` (the
+tracked repository-relative plan path with no leading slash), and `planSha` (the
+full 40-hex plan commit SHA), then the worker reads exactly
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. Only a consumer that
+depends on a producer interface also carries `producerRepoRoot` (the absolute producer-
+repository root), `producerSourceRepoPath` (the producer repository-relative source-file
+path), `producerSha` (the exact full 40-hex merged producer SHA), and the contract excerpt
+inlined verbatim. The worker then reads exactly
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. A foreign-plan
+wave with no producer-interface dependency carries no producer tuple and no invented
+excerpt. If a required immutable blob cannot be resolved, report and stop: no `HEAD`
+substitution, direct mutable-checkout read, fetch, checkout, or repository mutation. When
+present, the inline contract excerpt is the dispatched interface-shape authority and the
+producer blob proves its provenance; the plan blob at `planSha` is always the requirements
+authority for wave scope. The current checkout's plan and source files are not authoritative
+for that dispatched wave. When that dependency exists, before dispatch the coordinator
+separately and independently proves the producer interface PR merged at that same
+`producerSha`; a closed run in `done` proves fingerprint and close, not merge. The worker
+commits only on its own workspace branch in its own repository. Paths, not payloads; the
+8 KiB body cap stands.
+
+**Mail finds a role, not a session.** `toId: 'worker'` joins `toId: 'coordinator'`
+as a recipient, resolved at send time — `worker` to that run's own session. A
+`worker` mail **must** carry its `runId`, because a worker is per run and there
+is nothing to fall back to; one that resolves to no session is refused
+`unknown-recipient`, naming the run. Carry the `runId` on coordinator mail too:
+the runId-less form resolves only while exactly one programme is active, and
+fails shut the moment a second is. Raw session-id addressing stays for ad-hoc
+mail. When a run's session is replaced, the replacement inherits every
+outstanding role-addressed (`toId:'worker'`) delivery on that run — queued
+*and* delivered-but-unacked — as a **new** delivery row, freshly rendered, and
+the predecessor's row is parked — an envelope that names the corpse may
+not be replayed.
+
+**Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers the
+**outstanding** mail on that programme's runs — queued, delivered-but-unacked,
+and any `rejected` delivery this build gave up retrying, unless it was a
+deliberate cancel or its run is already `done`/`failed`; add `&all=1` —
+exactly `GET /api/mail?program=<slug>&all=1` — for full mail history. `to` and `program`
+are mutually exclusive — exactly one, never both and never neither; a request
+naming both is refused `400 bad-request`, because a mailbox and a programme
+thread are two different questions. `GET /api/feed?program=<slug>` is always the
+full feed archive and has no outstanding/history split. An event with no run
+behind it is **programless** and appears only unfiltered. `/mail` groups the
+feed by programme, with a filter chip; programless rows sit under their own
+header.
+
+**The board says which repo.** Every row on `/runs` carries a project badge
+(`run-project`), and a row whose project differs from its programme's home gains
+a crossing marker — a glyph *and* the word, because nothing on the board is read
+out by colour alone, and while a programme's `homeProject` is null the marker
+never shows. On the fleet board a worker stays on its own project's card — a
+card is a project's sessions, and a session's workspace lives in one repo — and
+when its coordinator is not among that card's live sessions (a rule-3 orphan)
+its row reads `<program> wave n/N`, with `· home <project>` appended only when
+the measured home differs from the card's own project. The home project's own
+card gains an `abroad` line, one sentence per wave working elsewhere
+("`<program>` wave 2/3 in `<other project>`").
+
+**What a crossing costs.** Caps stay global: one row, whole box, no per-project
+and no per-programme cap. Running-worker concurrency counts dispatched runs in
+an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely
+non-terminal ones, so a run parked IDLE at `awaiting-review`, `merging` or
+`closing` gives its slot back without closing; it does not count held
+workspaces. A terminal producer whose
+workspace remains retained uses no running-worker slot, and a planned,
+undispatched consumer uses no running-worker slot. Each actual producer or
+consumer dispatch still consumes the rolling daily dispatch budget. A
+`cap-concurrency` or `cap-daily` refusal remains authoritative when that measured
+counter is exhausted; it is not inferred from the number of live workspaces.
+`$REG/coordinator-paused` is global but narrow: it refuses every dispatch on
+that box and stops nothing else — mail keeps flowing, and `$REG/mail-disabled`
+is the mail switch. The hold reason still names programme, wave and run id and
+never a project, because the run row is what carries the project.
+
 ### Workspace holds & programs
 
 A **hold** is a program's declared claim on a workspace — `ccd ws-hold
@@ -1305,21 +1618,30 @@ answers a bare 400 `bad-request`, which is what a non-PWA client sees.
 
 A hold has more consumers than any one paragraph used to admit: **four rungs in
 ccd** — `ws-rm` and `ws-reap` refuse, `ws-release` removes, and `forget` refuses
-— plus the archive sweep, plus every place the PWA renders the reason. All four
-ccd rungs test `-e`, so an *unreadable* hold refuses too.
+— plus the merged sweep, which reads the hold to pick which notice it pushes,
+plus every place the PWA renders the reason. All four ccd rungs test `-e`, so an
+*unreadable* hold refuses too.
 
-`archiveMerged`'s auto-archive gate is *merged **and unheld*** — `held === null`
-is the conjunct — so a workspace idle between two waves of the same program
-reads as claimed, not finished, and survives a sweep even after its PR merges.
-The hold is re-read from the registry at the archive decision point, not taken
-from the snapshot the sweep opened with, so a hold placed *during* a sweep still
-lands. **Since Build 8, an absent hold is no longer sufficient**: the sweep also
-asks the server's `coord.db` whether an OPEN RUN still names the session, and
-skips if one does. That is what makes release-then-crash and the
-archive-vs-hold race stop mattering — the sweep asks the authoritative
-question, not a file that cannot answer it. The reason string is still
-display-only and parsed back nowhere; it merely gained a `run:<id>` so a human
-reading `~/.cc-sessions` can tell whose claim it is.
+`sweepMerged`, the lane that watches for a merged PR, ANNOUNCES and never acts:
+nothing in this server archives a workspace unasked. The hold therefore no
+longer gates a destruction — it picks the SENTENCE. A workspace that is
+*merged **and unheld*** — `held === null` is the conjunct — gets the plain
+`PR #N merged; nothing archived.`, while one idle between two waves of the
+same program reads as claimed, not finished, and gets `PR #N merged —
+<reason>; nothing archived.` instead. One push per (workspace, PR) — the
+number is in the latch key, because a workspace survives its own merge now and
+can land a second PR. The hold is taken
+from the snapshot the sweep opened with, not re-read at the push: the fresh
+registry read this used to take was there because the decision was destructive,
+and the cost of a stale one is a notice that does not name a hold placed thirty
+seconds ago — which the next PR's notice gets right. **An absent hold is still
+not the whole question**: since Build 8 the sweep also asks the server's
+`coord.db` whether an OPEN RUN still names the session, and names that run as
+the reason when one does, so release-then-crash (hold gone, run still open) does
+not read as finished — the sweep asks the authoritative question, not a file
+that cannot answer it. The reason string is still display-only and parsed back
+nowhere; it merely gained a `run:<id>` so a human reading `~/.cc-sessions` can
+tell whose claim it is.
 
 Destroying a workspace a program declared mid-flight takes two deliberate acts,
 never one — `ws-rm` dies with `held: <reason> — release first`, `ws-reap`
@@ -1349,10 +1671,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its ten
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twelve
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), twelve clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1379,7 +1701,16 @@ buy.
    written or read here** (the route's own docstring says so verbatim); it
    only names `docs/superpowers/programs/<slug>.md` in the response, so a
    coordinator that forgot to commit it is told once, in the place it would
-   notice. A second coordinator on the same program is refused. Wave 1 (no
+   notice. A second coordinator on the same program is refused. The body also
+   carries `homeProject`, the programme's home repo, stored on the programme
+   row at first insert: a later open naming a *different* one is refused
+   `home-mismatch` (**409**, `by:` the stored value), while a stored home
+   that is still null is backfilled from the body. A `sessionId` whose
+   earlier runs belong to another project is refused `project-mismatch`
+   (**409**, `by:` that project). Both `-mismatch` refusals are decided
+   *before the row is opened*, so neither leaves a `planned` orphan.
+   The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
+   `ledgerPath`, both null while the stored home is. Wave 1 (no
    `sessionId` in the body) places **no hold yet** — dispatch is what claims
    the workspace. Wave N≥2 (`sessionId` names the workspace being reclaimed)
    holds it immediately (`ccd ws-hold`).
@@ -1387,7 +1718,11 @@ buy.
    caps **before spawning or resuming anything**; wave 1 (`run.sessionId`
    still null) runs `ccd ws-add` and learns the new session id by diffing
    the registry before/after (never ccd's own echoed sentence, and never
-   `ccd start` — no ccd verb of that name runs anywhere in this lane). Wave
+   `ccd start` — no ccd verb of that name runs anywhere in this lane). The
+   resume arm refuses `project-mismatch` (**409**, `by:` the registry record's
+   project) when the record it finds belongs to a different project than the
+   run — *before the hold*, before the injected `/clear` and before the
+   transition, so a mismatch costs the workspace nothing. Wave
    N≥2 resumes the *same* workspace with `ccd ensure` (the harness resumes
    its own transcript) and then discards that resumed context with an
    injected `/clear` through `sendPrompt`'s full proof discipline, so
@@ -1409,21 +1744,56 @@ buy.
    is refused and mailed back with the reason. (An explicit abandon,
    `state:'failed'`, skips this re-measurement entirely — there is no
    worktree left to re-measure an abandon against.)
-5. The coordinator reviews the handoff commit like any other diff — brief
-   *quality* stays discipline, not something this server enforces — then
-   closes **this** run non-finally (`POST /api/runs/:id/close`,
-   `final:false`, `state` defaulting to `'done'`): that re-holds the same
-   workspace under the wave-N+1 reason and drives *this* run row to a
-   terminal `done`/`failed` (`RUN_TRANSITIONS` gives `done`/`failed` no
-   edges out — the row itself never dispatches again). Wave N+1 is a **new**
-   run: a second `POST /api/runs`, naming the same `sessionId`, back to
-   step 1 — then step 2's dispatch again, on the new run's id.
+5. The coordinator **dispatches a review run** (`POST /api/runs` with
+   `kind:'review'`, `reviews:<id>`) whose reviewer reads the wave in its own
+   worktree at one measured tip and mails one report; the coordinator closes
+   that run on the reviewer's `{reviewedTip, report}` — refused
+   `stale-review` if the worker pushed meanwhile — and rules: send back
+   (`advance` to `working`, cap-checked, refused `review-in-flight` while the
+   review is open) or advance to `merging`. Brief *quality* stays discipline,
+   not something this server enforces — then must
+   **open wave N+1 before it can close wave N**. A programme with zero open runs
+   retires permanently, so close-first would break role-addressed coordinator
+   mail between the two calls.
+
+   **For a same-project successor**, open the new `POST /api/runs` first with
+   the same `sessionId`; that immediately re-holds the producer workspace for
+   the new row. Then close the producer with `final:false`, verify the exact
+   producer closed row in `runs list --closed 1` is `done` with a full 40-hex
+   `handoffCommit`. If the consumer depends on an interface from this
+   producer, independently prove the producer PR merged at `producerSha`:
+   run `ccd pr-state --session <producer-session>`, select that session's
+   merged PR row, require the answer's `phase` to be `merged`, and require
+   that row's raw `headRefOid` to equal both that exact producer closed row's
+   `handoffCommit` and `producerSha`. Only then dispatch into the
+   already-held successor workspace.
+
+   **For a cross-project successor**:
+   A cross-project successor opens first without the producer's
+   `sessionId`, leaving the new row planned for fresh dispatch in the
+   target repository. Then close the producer with `final:true` so
+   its now-distinct workspace is released, require `released:true`
+   in the close response, then verify the exact producer closed row
+   is `done` with a full 40-hex `handoffCommit`. If the consumer depends
+   on an interface from this producer, independently prove
+   through `ccd pr-state --session <producer-session>` that the
+   selected `phase` is `merged` and raw `headRefOid` equals both that
+   `handoffCommit` and `producerSha` —
+   prove its PR merged at the named producer SHA
+   before dispatching the consumer. Only then dispatch the consumer
+   fresh in its target project.
+   A `done` run proves fingerprint and close, **not merge proof**;
+   missing, ambiguous, or mismatched PR evidence means report and do
+   not dispatch. Using `final:false` on that crossing would
+   strand a synthetic next-wave hold on the producer workspace.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
-   ws-release`); the ordinary merged-and-unheld sweep archives it on its own
-   clock. An explicit abandon (`state:'failed'`) alone still only
-   *releases*, exactly like a normal final close — archiving instead needs
-   `archive:true` passed explicitly (the one call in this whole lane to
-   `ccd ws-archive`, mirroring the manual archive route including its 501).
+   ws-release`); nothing archives the workspace on its own after that — the
+   merged sweep only pushes its notification, so the workspace stays live and
+   supervised until a human archives it. An explicit abandon
+   (`state:'failed'`) alone still only *releases*, exactly like a normal final
+   close — archiving instead needs `archive:true` passed explicitly (the one
+   call in this whole lane to `ccd ws-archive`, mirroring the manual archive
+   route including its 501).
    **Caution:** `state:'failed'` with `final:false` and no `archive`
    re-holds the workspace under the *next* wave's reason even though this
    run just went terminal — abandoning mid-program needs `final:true` or
@@ -1482,11 +1852,41 @@ must actually be replaced — copying the example verbatim is refused loudly
 at server boot (`MailTokenPlaceholderUnedited`), not silently accepted,
 because that exact placeholder is committed to this public repo.
 
+**Programme mail at scale.** `toId: 'coordinator'` has a sibling: `toId: 'worker'`,
+resolved at send time to that run's own session. `worker` requires a `runId` —
+a worker is per run, and there is nothing to fall back to — and one that
+resolves to no session is refused `unknown-recipient`, naming the run.
+`coordinator` keeps its fallback to the single active programme, which fails
+shut the moment a second programme is active, so carry the `runId` on both.
+Raw session-id addressing stays for ad-hoc mail. When a run's session is
+replaced, every outstanding role-addressed (`toId:'worker'`) delivery on that
+run is re-issued to the heir as a **new** row, freshly rendered, and the
+predecessor's row is parked — the act a reclaimed coordinator's heir has
+always had, generalised by role and funnelled through `bindSession`, the one
+writer that re-binds it.
+Reading it back by programme: `GET /api/mail?program=<slug>` returns the
+**outstanding** mail — queued, delivered-but-unacked, and any `rejected`
+delivery this build gave up retrying, unless it was a deliberate cancel or
+its run is already `done`/`failed` — and
+`GET /api/mail?program=<slug>&all=1` returns full history;
+`to` and `program` are mutually exclusive — exactly one, never both and
+never neither, and naming both is refused `400 bad-request`. `GET /api/feed?program=<slug>` is
+the full event archive, with no outstanding/history split. Both join through the
+run row; an event with no run behind it is programless and shows only unfiltered.
+
 **Caps and pause.** The single-row `coordinator_state` table holds
-`maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
-terminal) and `maxSessionsPerDay` (default 12 — dispatches inside a rolling
-24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. Both are an
+`maxConcurrentWorkers` (default 3 — runs currently dispatched and in an
+ACTIVE state, `dispatched` or `working` (and any state token this build
+cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
+`merging` or `closing` is idle by contract and holds no slot — design
+2026-09-14 §7.1; the one edge back into `working` is cap-checked on
+`POST /api/runs/:id/advance`) and `maxSessionsPerDay` (default 12 —
+dispatches inside a rolling 24h window, not a calendar day), both checked at
+`POST /api/runs/:id/dispatch` before anything else is touched. **Review runs
+are dispatches**, so a programme that made N dispatches per wave now makes
+about 2N; the seed `maxSessionsPerDay` of 12 covers roughly 6 waves a day,
+not 12 — raise the dial through `POST /api/coord/caps` when a programme
+runs hot rather than discovering `cap-daily` mid-wave (§7.3). Both are an
 operator control: `GET`/`POST /api/coord/caps` reads them beside their current
 usage and writes either or both, bounds-checked, and the `/runs` board renders
 the dial. (For a stretch of this build's history there was no route at all and
@@ -1594,7 +1994,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
   does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries twelve clauses, pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries thirteen clauses, pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never

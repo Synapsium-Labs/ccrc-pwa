@@ -118,14 +118,29 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd'), '#!/bin/sh\n# the installed ccd\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccrc'), '#!/bin/sh\n# the launcher\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-cap-scopes'), '#!/bin/sh\n# cap scopes\n', { mode: 0o755 });
-  // graphify Task 10/fix-round F2: the fourth `_inst_bins` executable.
+  // graphify Task 10/fix-round F2: another `_inst_bins` executable. NO
+  // ORDINALS here either — the sweep's two names below landed in the middle of
+  // this list and made every number after them wrong, which is the same defect
+  // `_uninst_tree_bins`' own census just retired. What matters is that every
+  // name `_inst_bins` writes is planted here, so the uninstall can be measured
+  // removing it.
   writeFileSync(join(bin, 'ccd-graph-sweep'), '#!/bin/sh\n# graph sweep\n', { mode: 0o755 });
+  // Routing slice 0 Task 7: the usage-accounting sweep's runner and scanner,
+  // on the sweep's exact terms — a bash driver plus its Python engine.
+  writeFileSync(join(bin, 'ccd-usage-sweep'), '#!/bin/sh\n# usage sweep\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'ccd-usage-sweep.py'), '#!/usr/bin/env python3\n# usage sweep scanner\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
-  // spec 2026-09-07 §C: the sixth `_inst_bins` executable (account-health,
-  // just above, already took the fifth).
+  // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
-  // ── the FIFTH name in ~/.local/bin, and the only one that is not a ccrc
-  // binary (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
+  // The account wave's own, and UNMARKED exactly as every name above is:
+  // `_inst_atomic` copies and chmods, it never stamps, so a real box's copy
+  // carries no marker either. It is also the only one `_inst_bins` places on
+  // BOTH platform arms.
+  writeFileSync(join(bin, 'ccd-account-auth'), '#!/bin/sh\n# account auth\n', { mode: 0o755 });
+  // ── the one name in ~/.local/bin that is not a ccrc binary (it read
+  // "the EIGHTH" while the list above had grown to nine; `_uninst_tree_bins`
+  // retired its own ordinals for the same reason, routing slice 0)
+  // (R3, D-1347): `_inst_graphify_engine` links `graphify` at the
   // pinned venv's own engine. The venv is planted too, because the proof this
   // link is ccrc's is its TARGET — the uninstall reads it with a one-hop
   // `readlink` and compares it against the exact literal the install writes.
@@ -149,6 +164,9 @@ function plantInstalledBox(home: string): void {
     'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
+    // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
+    // terms as the graph sweep above it.
+    'ccd-usage-sweep.service', 'ccd-usage-sweep.timer',
     'ccd-account-health.service', 'ccd-account-health.timer',
     'ccd-telemetry-keepalive.service', 'ccd-telemetry-keepalive.timer',
     // C5: the models pair, mirroring the three role-gated siblings above.
@@ -193,6 +211,7 @@ function plantInstalledBox(home: string): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(join(reg, 'coordinator-skill'), { recursive: true });
   mkdirSync(join(reg, 'worker-skill'), { recursive: true });
+  mkdirSync(join(reg, 'reviewer-skill'), { recursive: true });
   // The compaction card's helper (compaction-card spec §2): `_inst_files`
   // places it, so `_uninst_cc_sessions` is the sweep that must remove it.
   writeFileSync(join(reg, 'compact-card.mjs'), '// fixture helper\n', { mode: 0o644 });
@@ -201,11 +220,13 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(reg, 'notify.sh'), '#!/bin/sh\n# notify\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-coordinator-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-worker-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  writeFileSync(join(reg, 'install-reviewer-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, the same lane `_uninst_cc_sessions` must remove it from.
   writeFileSync(join(reg, 'install-graphify-skill.sh'), '#!/bin/sh\n', { mode: 0o755 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
+  writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
   // Two account homes. claude2: one managed entry per event shape the
   // installer writes, one unmanaged entry, a CUSTOM statusLine. claude3:
   // no managed entry at all, hand-formatted.
@@ -341,6 +362,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
+    expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
     expect(calls).toContain('--user disable --now ccd-telemetry-keepalive.timer');
     expect(calls).toContain('--user disable --now ccrc-models.timer');
@@ -439,8 +461,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
-      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-graphify-skill.sh',
-      'coordinator-skill', 'worker-skill']) {
+      'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
+      'install-graphify-skill.sh',
+      'coordinator-skill', 'worker-skill', 'reviewer-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled']) {
@@ -492,8 +515,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // on every session's PATH: worse than the box was before ccrc, because the
     // pip shim that used to answer there was copied aside by the install and
     // never put back.
-    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-      'ccd-telemetry-keepalive', 'graphify']) {
+    for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
+      'ccd-usage-sweep.py', 'ccd-account-health',
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
@@ -503,6 +527,29 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
     expect(existsSync(join(home, 'ccrc-backups', '20250101-000000', 'ccd'))).toBe(true);
     expect(existsSync(join(home, '.tmux.conf'))).toBe(true);
+  });
+
+  it('a STAMPED ccd-account-auth is still the bin arm\'s subject, never counted as a wrapper', () => {
+    // `_inst_atomic` does not stamp, so a real box's copy is unmarked and the
+    // wrapper arm keeps it silently whether or not `_uninst_wrappers`' case
+    // names it. The case line's whole value is that it does not DEPEND on
+    // that: stamp the file and, without the entry, `_uninst_wrappers` reads
+    // `ccrc-unmodified`, removes it FIRST, and reports a toolchain executable
+    // in the wrapper census as though ccrc had found an account launcher on
+    // this box. That is the failure this fixture can see and a text pin
+    // cannot.
+    const home = mkTmp('ccrc-uninst-auth-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-account-auth'),
+      markGenerated('#!/bin/sh\n# account auth\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-account-auth')),
+      'the helper survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-account-auth/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-account-auth.* removed from \$HOME\/\.local\/bin/);
   });
 
   // The other half of D-1347, and the half that makes the removal safe: the
@@ -565,16 +612,94 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(existsSync(gsaved), 'the graphify aside was consumed rather than named').toBe(true);
   });
 
-  it('--purge removes ~/.ccrc and ~/ccrc-backups — and NEVER worktrees', () => {
+  // R34 (final whole-branch review, Critical): since `ccrc memory --apply`,
+  // `~/.ccrc/memory/<slug>` is the SOLE live copy of a project's durable
+  // memory — every agent home's own copy is a symlink into it. A bare
+  // `--purge` must not destroy it: the documented-safe sequence `ccrc
+  // backup && ccrc uninstall --purge` would otherwise silently destroy a
+  // session's prose with no exception, no prompt and no mention. Bare
+  // `--purge` removes ~/.ccrc's CONFIG and ~/ccrc-backups but PRESERVES
+  // ~/.ccrc/memory (and so ~/.ccrc itself, now holding only `memory/`).
+  it('--purge removes ~/.ccrc\'s config and ~/ccrc-backups, PRESERVES ~/.ccrc/memory, and NEVER touches worktrees', () => {
     const home = mkTmp('ccrc-uninst-purge-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'),
+      '---\nname: A lesson\n---\nprose a session wrote once\n');
+    const r = runVerb(home, 'uninstall', ['--purge']);
+    expect(r.code, r.stderr).toBe(0);
+    // config is gone
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    // the memory store survives, byte for byte
+    expect(readFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'), 'utf8'))
+      .toContain('prose a session wrote once');
+    expect(r.stdout).toMatch(/PRESERVED/);
+    expect(r.stdout).toMatch(/--purge-memory/);
+    expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt')),
+      '--purge ate a worktree').toBe(true);
+    expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
+  });
+
+  // Bare `--purge` with NO memory ever migrated: nothing to preserve, and
+  // the whole of `~/.ccrc` (never just its config) should still go, exactly
+  // as `--purge` always did before this fix.
+  it('--purge with no memory store ever migrated removes ~/.ccrc whole, as before', () => {
+    const home = mkTmp('ccrc-uninst-purge-nomem-');
     plantInstalledBox(home);
     const r = runVerb(home, 'uninstall', ['--purge']);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, '.ccrc'))).toBe(false);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
-    expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt')),
-      '--purge ate a worktree').toBe(true);
-    expect(existsSync(join(home, 'tmux-poison'))).toBe(false);
+  });
+
+  // Re-review fix: `_uninst_purge`'s preserve-memory arm used to iterate
+  // `"$HOME/.ccrc"/*` under `nullglob` ALONE, so a DOTFILE directly under
+  // `~/.ccrc` (nothing in this tree writes one, but an operator or the OS
+  // can — a `.DS_Store`, an editor swap file, a `.bak`) survived the loop,
+  // the `rmdir` right after it then failed on ENOTEMPTY, and the close line
+  // still unconditionally claimed "~/.ccrc and ~/ccrc-backups removed" —
+  // measured, with the dotfile left behind beside that very message. Seed
+  // one and require BOTH that it is actually gone (the `dotglob` fix) and
+  // that the close line cannot lie about it either way.
+  it('a dotfile under ~/.ccrc does not survive bare --purge, and the close line never claims a removal that did not happen', () => {
+    const home = mkTmp('ccrc-uninst-purge-dotfile-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.ccrc', '.hidden-thing'), 'operator/OS residue, not written by ccrc');
+    const r = runVerb(home, 'uninstall', ['--purge']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', '.hidden-thing'))).toBe(false);
+    expect(r.stdout).toMatch(/~\/\.ccrc and ~\/ccrc-backups removed/);
+  });
+
+  // The explicit second flag: an operator who really wants the memory gone
+  // too says so, and only then does it go.
+  it('--purge --purge-memory removes ~/.ccrc whole, memory store included', () => {
+    const home = mkTmp('ccrc-uninst-purge-mem-');
+    plantInstalledBox(home);
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'), 'prose\n');
+    const r = runVerb(home, 'uninstall', ['--purge', '--purge-memory']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.ccrc'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(r.stdout).toMatch(/config AND its memory store/);
+  });
+
+  // `--purge-memory` names something to extend; without `--purge` there is
+  // nothing to extend, and silently ignoring the flag would be the same
+  // "operator asked for X, the tool quietly did not-X" shape this branch's
+  // own conventions forbid elsewhere.
+  it('--purge-memory without --purge is a usage error, exit 2, nothing removed', () => {
+    const home = mkTmp('ccrc-uninst-purgemem-alone-');
+    plantInstalledBox(home);
+    const r = runVerb(home, 'uninstall', ['--purge-memory']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/--purge-memory needs --purge/);
+    expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
+    expect(existsSync(join(home, 'ccrc'))).toBe(true);
   });
 });
 
@@ -601,6 +726,31 @@ describe('ccrc backup: update\'s step 2 standalone, with CCRC_BACKUP_KEEP prunin
       ? 'app.ccrc.ccrc.plist' : 'ccrc.service'))).toBe(true);
     expect(existsSync(join(dir, 'server-dist', 'index.js'))).toBe(true);
     expect(existsSync(join(dir, 'agent-dist', 'index.js'))).toBe(true);
+  });
+
+  // R34 (final whole-branch review): `~/.ccrc/memory` used to be absent
+  // from this set entirely — the exact gap that let `ccrc backup && ccrc
+  // uninstall --purge` read as a documented-safe sequence while destroying
+  // a project's only copy of its own memory. `ccrc backup` must snapshot it
+  // like everything else here, byte for byte.
+  it('includes ~/.ccrc/memory — the one live copy of every project\'s durable memory', () => {
+    const home = mkTmp('ccrc-backup-memory-');
+    plantInstalledBox(home);
+    plantCoordDb(home);
+    mkdirSync(join(home, '.ccrc', 'memory', '-p-demo'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'memory', '-p-demo', 'a-lesson.md'), 'prose\n');
+    const r = runVerb(home, 'backup');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const dir = /^backup: (\S+)/m.exec(r.stdout)![1]!;
+    expect(readFileSync(join(dir, 'memory', '-p-demo', 'a-lesson.md'), 'utf8')).toBe('prose\n');
+  });
+
+  it('absence of ~/.ccrc/memory (nothing ever migrated) is ordinary, not a failure', () => {
+    const home = mkTmp('ccrc-backup-nomemory-');
+    plantInstalledBox(home);
+    plantCoordDb(home);
+    const r = runVerb(home, 'backup');
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
   });
 
   it('prunes to the newest CCRC_BACKUP_KEEP timestamped dirs — hand-made siblings survive', () => {

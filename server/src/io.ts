@@ -11,17 +11,20 @@ import type { ReadFailure } from '../../shared/agent-protocol.js';
  *  box can't even tell) and this box just can't read it. Fail-shut on
  *  purpose: only a proven ENOENT is allowed to answer `absent`.
  *
- *  ONE RESIDUAL, stated rather than closed (wave-1 review minor m2): a
- *  DANGLING SYMLINK answers `absent`. `readFile` follows the link, the
- *  TARGET is missing, and the errno is ENOENT — so a name that IS in the
- *  registry listing reads measured-absent, which is the one crack in
- *  D-112's "a proven ENOENT can only come from a purge". No ccd verb
- *  writes a symlink into `$REG`, so the state is reachable only by hand,
- *  and the direction is the safe one for every current consumer (a hold
- *  reads released, an identity field retires the row). An `lstat` ladder
- *  would close it and is deliberately NOT built: it would put a second
- *  syscall on every field read of every session on every tick to
- *  distinguish a state nothing in this system produces.
+ *  ONE RESIDUAL, stated rather than closed (wave-1 review minor m2,
+ *  re-measured as D-2516): a DANGLING SYMLINK answers `absent`. `readFile`
+ *  follows the link, the TARGET is missing, and the errno is ENOENT — so a
+ *  name that IS in a registry listing reads measured-absent, which is the
+ *  one crack in D-112's "a proven ENOENT can only come from a purge". No
+ *  ccd verb writes a symlink into `$REG`, so the state is reachable only by
+ *  hand. The direction is safe for holds and identity fields, but NOT for a
+ *  pool marker: the server reports it untagged and lifts its API-side pool
+ *  constraint while ccd correctly refuses it as unreadable. ccd remains the
+ *  placement authority, so execution still fails shut. An `lstat` ladder
+ *  would close the reporting divergence but is deliberately NOT built in
+ *  this correction: it would put a second syscall on every field read of
+ *  every session on every tick to distinguish a state no shipped writer
+ *  produces.
  *
  *  DECLARED IN `shared/agent-protocol.ts`, not here (D-1438): the pair is
  *  wire-adjacent vocabulary both this file and `agent/src/fileops.ts` fold
@@ -82,8 +85,17 @@ export type MeasuredRangeRead =
  */
 export interface FleetIO {
   /** Distinguishes "genuinely does not exist" from "exists but unreadable" —
-   *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this. */
-  readFileMeasured(path: string): Promise<MeasuredRead>;
+   *  see `MeasuredRead`/`ReadFailure` above. `readFile` derives from this.
+   *  `timeoutMs` overrides the remote client's ordinary request timeout; it can
+   *  shorten or lengthen that adapter-level timer. `localIO` ignores the
+   *  argument itself, so a consumer needing a strict aggregate bound must also
+   *  race its own deadline around local and remote reads. `signal` is forwarded
+   *  by local `readFileMeasured` and by remote request-table entries. The derived
+   *  `readFile` member has no cancellation parameter. Local `readdir` ignores
+   *  both optional arguments because the Node API used by this adapter accepts
+   *  neither; Node also cannot interrupt every local
+   *  filesystem syscall after dispatch. */
+  readFileMeasured(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<MeasuredRead>;
   readFile(path: string): Promise<string | null>;   // null on ANY failure — absent and unreadable both collapse here; use readFileMeasured to tell them apart
   /** Distinguishes absence from unreadability for a range read; the EOF arm
    *  is a positive answer. `readFileFrom` derives from this. */
@@ -93,7 +105,7 @@ export interface FleetIO {
    *  from this. */
   readFileB64Measured(path: string): Promise<MeasuredB64Read>;
   readFileB64(path: string): Promise<string | null>;      // null on ANY failure — the agent's half folds a THIRD condition in here, over-cap (agent/src/fileops.ts's MAX_READ_B64_BYTES); localIO has no cap — binary-safe
-  readdir(path: string): Promise<string[] | null>;
+  readdir(path: string, timeoutMs?: number, signal?: AbortSignal): Promise<string[] | null>;
   /** Distinguishes "genuinely does not exist" from "could not be measured".
    *  `stat` derives from this; see `MeasuredStat` above for why the wire's
    *  own absence marker could not be trusted before this existed. */
@@ -137,9 +149,9 @@ const failureFor = (err: unknown): ReadFailure =>
 
 /** node:fs implementation preserving today's exact behavior. */
 export const localIO: FleetIO = {
-  async readFileMeasured(p) {
+  async readFileMeasured(p, _timeoutMs, signal) {
     try {
-      return { ok: true, content: await readFile(p, 'utf8') };
+      return { ok: true, content: await readFile(p, { encoding: 'utf8', signal }) };
     } catch (err) {
       return { ok: false, reason: failureFor(err) };
     }

@@ -161,11 +161,15 @@ spec's shape; this document references it.
   `null`. `null` means *this class is unavailable on this lane by nature*,
   never "use a default" and never "retired" (§4.3 carries retirement as its
   own marker). Ids satisfy the account-connections `MODEL_ID_RE`.
-- `subagent` — a CLASS NAME, default `sonnet`, settable to `haiku` or `opus`:
-  what `CLAUDE_CODE_SUBAGENT_MODEL` resolves to on this lane. It is a routing
+- `subagent` — a CLASS NAME, default `sonnet`, settable to `haiku`: the class
+  `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as, which Claude Code resolves
+  to that class's own slot on a materialised lane — `haiku` follows the haiku
+  slot only while that model is also `ANTHROPIC_SMALL_FAST_MODEL`, which the
+  materialiser guarantees (§6.1 amendment). `opus` and `fable` are refused
+  (§6.1 amendment, 2026-09-09: measured to run on the sonnet slot's model
+  regardless). Naming a class whose slot is `null` is refused. It is a routing
   destination the operator sets — a class-to-slot map — not a derivation
-  (ruling: `subagent` is not a class). Naming a class whose slot is `null` is
-  refused.
+  (ruling: `subagent` is not a class).
 - `discovery` — the literal `"catalogue"` (the whole advertised set; the
   default for `codex` and `compatible`) or an explicit non-empty list of ids
   (required for `openrouter`): the set discovery and classification operate
@@ -270,9 +274,81 @@ ANTHROPIC_DEFAULT_OPUS_MODEL   = classes.opus   ?? "ccrc-unavailable-opus"
 ANTHROPIC_DEFAULT_FABLE_MODEL  = classes.fable  ?? "ccrc-unavailable-fable"
 ANTHROPIC_MODEL                = classes.opus ?? classes.sonnet ?? classes.haiku   (the lane's default; refused if all null)
 ANTHROPIC_SMALL_FAST_MODEL     = classes.haiku ?? classes.sonnet
-CLAUDE_CODE_SUBAGENT_MODEL     = classes[subagent]                  (the registry's explicit class-to-slot choice; refused if that slot is null)
+CLAUDE_CODE_SUBAGENT_MODEL     = subagent                            (the class ALIAS, haiku|sonnet; opus and fable refused at write and at render, never at read; refused if that class's slot is null)
 CLAUDE_CODE_MAX_CONTEXT_TOKENS = min(catalogue.context, 200000) of ANTHROPIC_MODEL's model   (only when a non-stale catalogue names it; otherwise the key is left unset)
 ```
+
+**Amendment, 2026-09-09:** `CLAUDE_CODE_SUBAGENT_MODEL` is materialised as the
+class alias itself, not `classes[subagent]`, the model id that alias resolves
+to — and, as of this amendment, only `haiku` or `sonnet` is a legal alias
+there. Measured on a fleet host running Claude Code 2.1.267, on the gpt lane,
+in headless turns that call the Agent tool with a general-purpose subagent,
+env overridden per run on top of the materialised block
+(`ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-5.6-luna`,
+`ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.6-terra`,
+`ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.6-sol`,
+`ANTHROPIC_DEFAULT_FABLE_MODEL=gpt-6-astra` — runs 1–3 predate R11 and had the
+`ccrc-unavailable-fable` sentinel there instead —, `ANTHROPIC_MODEL=gpt-5.6-sol`,
+`ANTHROPIC_SMALL_FAST_MODEL=gpt-5.6-luna`), "ran on" read as the second model
+in the result's `modelUsage`:
+
+| # | `CLAUDE_CODE_SUBAGENT_MODEL` | other overrides | subagent ran on |
+|---|---|---|---|
+| 1 | `sonnet` | — | gpt-5.6-terra |
+| 2 | `gpt-5.6-terra` | — | gpt-5.6-luna |
+| 3 | `gpt-5.6-terra` | `ANTHROPIC_SMALL_FAST_MODEL=gpt-5.6-terra` | gpt-5.6-terra |
+| 4 | `opus` | — | gpt-5.6-terra |
+| 5 | `haiku` | — | gpt-5.6-luna |
+| 6 | `fable` | — | gpt-5.6-terra |
+| 7 | `opus` | `ANTHROPIC_DEFAULT_OPUS_MODEL=gpt-5.6-luna`, `ANTHROPIC_SMALL_FAST_MODEL=gpt-6-astra` | gpt-5.6-terra |
+| 8 | `fable` | `ANTHROPIC_DEFAULT_FABLE_MODEL=gpt-5.6-luna`, `ANTHROPIC_SMALL_FAST_MODEL=gpt-6-astra` | gpt-5.6-terra |
+| 9 | `haiku` | `ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-5.6-terra` | gpt-5.6-terra |
+| 10 | `sonnet` | `ANTHROPIC_DEFAULT_SONNET_MODEL=gpt-5.6-luna`, `ANTHROPIC_SMALL_FAST_MODEL=gpt-6-astra` | gpt-5.6-luna |
+| 11 | `haiku` | `ANTHROPIC_DEFAULT_HAIKU_MODEL=gpt-6-astra` | gpt-5.6-terra |
+
+Conclusions:
+- A model id in the key is ignored; the subagent runs on
+  `ANTHROPIC_SMALL_FAST_MODEL` (rows 2, 3).
+- `sonnet` runs on the sonnet slot's model, following that slot when it moves
+  (rows 1, 10).
+- `haiku` runs on the haiku slot's model when that model is also the
+  small-fast model (row 5) — which the materialiser guarantees, since
+  `ANTHROPIC_SMALL_FAST_MODEL` is the haiku slot whenever it is non-null — and
+  on the sonnet slot's model when the haiku default is pointed elsewhere
+  (rows 9, 11).
+- `opus` and `fable` run on the sonnet slot's model regardless of their own
+  defaults (rows 4, 6, 7, 8).
+- Mechanism, from the client's own strings only (not measured further): an
+  `availableModels` allowlist with a family step-down. This spec claims no
+  more than the table shows.
+
+**Ruling, 2026-09-09:** the registry's `subagent` accepts ONLY `haiku` and
+`sonnet`. `opus` and `fable` are REFUSED at configuration time — the same
+principle as the null-slot refusal below: a choice Claude Code would silently
+override must be refused when the lane is configured, not discovered one
+subagent at a time. This ruling is tied to Claude Code 2.1.267; lifting it
+needs a re-measurement of rows 4–8.
+
+**Transition, fix round 2A (N1):** a registry already carrying
+`subagent: opus`/`fable` — writable under Plan 1 as merged, before this ruling
+— is READ as written; the ruling above refuses `opus`/`fable` only at WRITE
+(`ccrc models <id> set-subagent`) and at RENDER (this section's env block),
+never at read, so an already-configured lane stays parseable rather than
+bricking every verb the moment this ships. Such a lane cannot materialise: the
+renderer refuses, and the hourly refresh (`ccrc-models.service`) reports the
+lane's refusal as that row's `reason` until an operator runs
+`ccrc models <id> set-subagent <haiku|sonnet>` — the one mutation that
+SUCCEEDS: every other mutation re-validates the registry it is about to write
+through the renderer and is refused `unroutable-lane` until this one has run,
+since it only ever writes `haiku` or `sonnet`. `ccrc models <id> show` names
+the same refusal as `renderRefusal` rather than answering as if the lane routed
+subagents fine.
+
+Writing the id, as the materialiser originally did, meant every subagent on
+the gpt lane ran on the haiku-class model regardless of the registry's
+`subagent` choice; writing the alias makes the key unable to diverge from the
+class it names, for whichever of the two classes the ruling above leaves
+settable.
 
 The eighth key exists because Claude Code 2.1.263 assumes a **200k window for
 any model id it does not know** and compacts proactively at that window
@@ -323,7 +399,11 @@ re-materialises on every registry edit.
 `~/.claude*/settings.json` fixture in the repo**: settings files may name
 aliases only (`haiku|sonnet|opus|fable|default`) in `model`,
 `CLAUDE_CODE_SUBAGENT_MODEL` and any `ANTHROPIC_*MODEL` key **except** inside
-the per-lane env block the materialiser owns. Concrete ids live in the roster.
+the per-lane env block the materialiser owns. `CLAUDE_CODE_SUBAGENT_MODEL` is
+alias-only EVERYWHERE, the materialiser's own block included (§6.1 amendment,
+2026-09-09): the materialiser writes the class alias there, so the exception
+covers `model` and the `ANTHROPIC_*MODEL` keys only. Concrete ids live in the
+per-account registry file, `~/.ccrc/models/<accountId>.classes.json`.
 
 ### 6.2 Wrapper migration
 
@@ -510,7 +590,7 @@ reasoning field; otherwise the shim leaves the request alone (§15).
 ccrc models <id> init <codex|openrouter|compatible>   # creates the registry file; codex seeds luna/terra/sol, fable null, subagent sonnet, effort defaults
 ccrc models <id> show [--json]                        # file + derived states + catalogue summary
 ccrc models <id> set-class <class> <modelId|none>
-ccrc models <id> set-subagent <class>
+ccrc models <id> set-subagent <haiku|sonnet>
 ccrc models <id> set-effort <class> <level|default>
 ccrc models <id> discovery add <modelId> | rm <modelId> | catalogue
 ccrc models <id> rm                                   # reap: registry, catalogue, tsv, effort file, and the seven env keys; idempotent, exit 0 when nothing is there

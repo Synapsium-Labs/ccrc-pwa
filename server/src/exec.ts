@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import type { PaneProbe } from '../../shared/api.js';
 
 /**
  * THE VOCABULARY FOR "WE DID NOT MEASURE THIS", stated once here and used
@@ -109,6 +110,25 @@ export function classifyHasSession(r: ExecResult): SessionVerdict {
   return { verdict: 'unknown', detail: `tmux exited ${r.code} with no message` };
 }
 
+/** `captureHistory`'s answer. `detail` exists ONLY on `unmeasured`, for
+ *  `SessionVerdict`'s reason: there it is the diagnosis, and on the other two
+ *  it would be noise pretending to be measurement. */
+export type CaptureHistory =
+  | { ok: true; text: string }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'unmeasured'; detail: string };
+
+/** The six per-pane formats one `list-panes` answers with, in the order the
+ *  parser below reads them (F8 — all six are per-pane formats under a verb the
+ *  agent already grants, so this opens no new door). Exported because the test
+ *  pins the string itself: a reordering would silently swap two of the numbers
+ *  for each other and every guard downstream would go on believing them. */
+export const PANE_PROBE_FORMAT =
+  '#{pane_active} #{history_size} #{history_limit} #{pane_width} #{pane_height} #{alternate_on}';
+
+/** One row of `PANE_PROBE_FORMAT`: active flag, four counts, alt flag. */
+const PANE_PROBE_ROW = /^([01]) (\d+) (\d+) (\d+) (\d+) ([01])$/;
+
 export class Tmux {
   constructor(private run: Runner) {}
   async sessionVerdict(id: string): Promise<SessionVerdict> {
@@ -137,6 +157,138 @@ export class Tmux {
     const r = await this.run('tmux', ['capture-pane', '-t', target(id), '-p', '-e']);
     return r.code === 0 ? r.stdout : null;
   }
+  /**
+   * ONE MEASUREMENT OF THE PANE the drawer is about to read, and the four
+   * answers it can honestly give (spec §5.2).
+   *
+   * THE ACTIVE ROW, NOT THE FIRST (F7). `list-panes -t <session>` lists every
+   * pane of the current window, while `capture-pane -t <session>` reads the
+   * ACTIVE one — so a probe that took row `[0]` would describe a pane the
+   * capture never read. Measured on a private tmux 3.4 socket against a split
+   * window: pane 0 answered `0 278 2000 220 25 0` and pane 1
+   * `1 5 2000 220 24 1`, and the capture returned pane 1. This is the exact
+   * defect PR #96 shipped.
+   *
+   * THE `gone` LITERAL IS `list-panes`' OWN, and it is NOT `capture-pane`'s.
+   * Measured, tmux 3.4: `list-panes -t cc-nope` answers `can't find window:
+   * cc-nope` where `capture-pane` answers `can't find pane: cc-nope`. Matching
+   * on the wrong one would make a dead session read as `unreadable` forever.
+   * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
+   * message that means gone and call everything else unknown, so an
+   * unrecognised future tmux error reads as "we could not look" rather than as
+   * death.
+   *
+   * AND `unparseable` IS ITS OWN ARM, not a flavour of `unreadable`. tmux
+   * answering rc 0 with no active row is a different fact from tmux refusing:
+   * the server is up and reachable, and what failed is this adapter's reading
+   * of it. A caller shows a different sentence for each, so folding them would
+   * be an adapter narrowing a distinction it received.
+   */
+  async paneProbe(id: string): Promise<PaneProbe> {
+    const r = await this.run('tmux', ['list-panes', '-t', target(id), '-F', PANE_PROBE_FORMAT]);
+    if (r.code !== 0) {
+      if (r.stderr.includes("can't find window")) return { ok: false, reason: 'gone' };
+      const msg = r.stderr.trim();
+      return {
+        ok: false,
+        reason: 'unreadable',
+        detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
+      };
+    }
+    const rows = r.stdout.split('\n').map((l) => l.trim()).filter((l) => l !== '');
+    const active = rows.find((l) => l.startsWith('1 '));
+    if (active === undefined) {
+      return {
+        ok: false,
+        reason: 'unparseable',
+        detail: `list-panes returned ${rows.length} row(s), none active`,
+      };
+    }
+    const m = PANE_PROBE_ROW.exec(active);
+    if (m === null) {
+      return {
+        ok: false,
+        reason: 'unparseable',
+        detail: `active row did not match the six-field shape: ${active}`,
+      };
+    }
+    return {
+      ok: true,
+      history: Number(m[2]),
+      limit: Number(m[3]),
+      width: Number(m[4]),
+      height: Number(m[5]),
+      alternate: m[6] === '1',
+    };
+  }
+  /**
+   * The drawer's scrollback read: the pane's stored history AND its live
+   * screen, with escape sequences kept so the history reads in the colours it
+   * was written in. `-S -<lines>` starts that many lines above the screen;
+   * tmux returns what it HAS, so asking for more than `history-limit` is not
+   * an error (measured on the live box: `-S -2000` against a 1953-line history
+   * answers 2003 lines, 161 KB plain / 201 KB with `-e`, in 43 ms).
+   *
+   * THREE CONDITIONS, NOT TWO, and that is why this does not return
+   * `string | null` like its two siblings above. A caller has to tell "the
+   * session is gone" (render nothing, the drawer is already showing the loss
+   * overlay) from "we could not look" (say so, offer the read again) — collapse
+   * them and the drawer reports a dead session for a tmux server that was busy.
+   * The polarity is `classifyHasSession`'s (D-308/D-309): recognise the ONE
+   * message that means gone, call everything else unknown, so an unrecognised
+   * future tmux error reads as "unmeasured" rather than as death. The message
+   * is `capture-pane`'s own and differs from `has-session`'s — measured
+   * against tmux 3.4: `can't find pane: cc-nope`.
+   */
+  async captureHistory(id: string, lines: number): Promise<CaptureHistory> {
+    // `-J` JOINS WHAT TMUX ALREADY WRAPPED, and it is here because the reader
+    // is not the pane. A stored line was hard-wrapped at the PANE's width, so a
+    // phone rendering that capture wraps the remainder a second time — a word
+    // broken mid-way and the continuation indented under nothing. `-J` hands
+    // back the LOGICAL line and lets the reader wrap it at their own width,
+    // once.
+    //
+    // AND THE LOGICAL LINE IS THE ONE THING A RESIZE CANNOT COST (F1, spec
+    // §2). An earlier version of this comment claimed the opposite — that a
+    // stored line survives a resize untouched; that is FALSE and was measured
+    // false on a private tmux 3.4 socket —
+    // `resize-window -x 43` on a 220-column pane holding 1853 stored lines took
+    // `history_size` to 9460, and at `history-limit 2000` the next output shed
+    // ~600 lines that never came back. What survives a reflow is the logical
+    // line, which is exactly what `-J` returns, which is why the flag belongs
+    // here and why the window is PINNED at the canonical grid before any client
+    // attaches (`GET /ws/pty/:id`, spec §5.1) rather than trusted not to move.
+    // The refutation deliberately does NOT restate the claim it refutes:
+    // `pane-history-route.test.ts` scans this file for that sentence, and a
+    // comment quoting it in order to deny it is indistinguishable, to a scan,
+    // from one asserting it.
+    //
+    // MEASURED on a private socket against a real 200-column transcript:
+    // 1882 captured lines become 1113 (-41%) for +0.05% of bytes and no
+    // measurable time; a 43-column phone renders 5861 rows instead of 6130,
+    // which also puts the read back inside the `lines * 3` scrollback the
+    // drawer sizes for it and over which today's capture silently spills.
+    // The saving is the ragged remainder, so it is zero when the reader's
+    // width happens to divide the pane's (200 into 40) and real everywhere
+    // else.
+    //
+    // NO TRIM RIDES WITH IT. `-J` also keeps trailing spaces that were
+    // PAINTED, and trimming them measured zero rows saved at every width while
+    // cutting a full-width reverse-video bar from 196 rendered cells to 6 —
+    // tmux strips only the trailing spaces that carry default attributes, so
+    // what is left is content, not padding. It would also be this adapter
+    // narrowing a distinction tmux handed it.
+    const r = await this.run('tmux',
+      ['capture-pane', '-t', target(id), '-p', '-e', '-J', '-S', `-${lines}`]);
+    if (r.code === 0) return { ok: true, text: r.stdout };
+    if (r.stderr.includes("can't find pane")) return { ok: false, reason: 'gone' };
+    const msg = r.stderr.trim();
+    return {
+      ok: false,
+      reason: 'unmeasured',
+      detail: msg !== '' ? msg : `tmux exited ${r.code} with no message`,
+    };
+  }
   async sendLiteral(id: string, text: string): Promise<boolean> {
     return (await this.run('tmux', ['send-keys', '-t', target(id), '-l', text])).code === 0;
   }
@@ -144,7 +296,7 @@ export class Tmux {
     return (await this.run('tmux', ['send-keys', '-t', target(id), key])).code === 0;
   }
   /** Restore the canonical size ccd spawned with. Lived inline at
-   *  server.ts:218 as a `void deps.run(...)` — so a `forbidden` there was
+   *  server.ts:227 as a `void deps.run(...)` — so a `forbidden` there was
    *  swallowed in silence, which is the exact failure the argv enumeration
    *  exists to prevent. */
   async resizeWindow(id: string, cols: number, rows: number): Promise<boolean> {

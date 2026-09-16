@@ -275,7 +275,14 @@ describe('_project_pool_state — four words, always rc 0', () => {
   });
 
   it('reads `pool-a` + 50 trailing spaces as `named pool-a` and `pool-a` + 100 as `malformed` — the PAIR is the `-n 64` cap\'s only evidence at any plausible bound', () => {
-    // WHAT THE CAP IS. `read -r -d '' -n 64 v` bounds the read at 64 bytes.
+    // WHAT THE CAP IS. `read -r -d '' -n 64 v` bounds the read at 64 BYTES —
+    // bytes and not characters because `_project_pool_state` shadows `LC_ALL=C`
+    // before it reads (D-2520/D-2521). This sentence was FALSE for as long as
+    // that shadow was missing: `read -n` counts characters in the ambient
+    // locale, so the cap moved with the caller's environment and a 96-byte,
+    // 36-character tag walked straight past a bound that claimed to stop it.
+    // The shadow is what makes the claim true; do not delete one and keep
+    // the other.
     // The type gate above (`-f`) already refuses a FIFO and a character
     // device, so no OPEN can hang — but a REGULAR file of any size was still
     // pulled whole into a shell variable, on the `ws-add` path and (from wave

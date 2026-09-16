@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -15,6 +15,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { unreadableField as withUnreadableField } from './ioDoubles.js';
+import { okRun } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const UUID = 'a'.repeat(36);
@@ -37,7 +38,7 @@ const send = (app: FastifyInstance, body: unknown, token: string | null = TOKEN)
     headers: token === null ? {} : { 'x-ccrc-mail-token': token },
     payload: body as Record<string, unknown> });
 
-const ack = (app: FastifyInstance, id: number, body: unknown, token: string | null = TOKEN) =>
+const ack = (app: FastifyInstance, id: number | string, body: unknown, token: string | null = TOKEN) =>
   app.inject({ method: 'POST', url: `/api/mail/${id}/ack`,
     headers: token === null ? {} : { 'x-ccrc-mail-token': token },
     payload: body as Record<string, unknown> });
@@ -389,6 +390,127 @@ describe('POST /api/mail — the rejection table', () => {
   });
 });
 
+describe("POST /api/mail — the 'worker' role", () => {
+  let app: FastifyInstance | undefined;
+  afterEach(async () => { if (app) await app.close(); app = undefined; });
+
+  /** One dispatched run with a bound worker, the shape a wave brief answers into. */
+  const withRun = (coord: CoordStore, sessionId: string | null): number => {
+    const r = coord.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    if (sessionId !== null) coord.setSession(r.id, sessionId);
+    return r.id;
+  };
+
+  it("resolves 'worker' to the run's own session and delivers there", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(202);
+    const due = w.coord.dueDeliveries(Date.now() + 1, 0);
+    expect(due.map((d) => d.toId)).toEqual(['demo-worker']);
+    // Resolution happens at SEND time and is stored on the delivery; the
+    // envelope names the resolved session, exactly as the coordinator role's
+    // own envelope does.
+    expect(due[0]!.envelope).toContain('to: demo-worker');
+  });
+
+  it("keeps the ROLE on the mail row and the SESSION on the delivery — the join key the worker re-bind selects on", async () => {
+    // WIRE-2 (PR #75 review round 1). `insertMail` stores the PRE-resolution
+    // literal and `queueDelivery` the resolved session, on purpose:
+    // `requeueAbandonedMail` selects `m.toId = 'worker'` (and the coordinator
+    // arm `'coordinator'`) to find what a replacement occupant inherits. A
+    // "tidy" `toId: resolvedToId` at the insert leaves every suite green while
+    // no re-bind and no reclaim ever finds a row again.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(202);
+    const mailId = (res.json() as { id: number }).id;
+    const row = w.coord.db.prepare('SELECT toId FROM mail WHERE id = ?').get(mailId) as { toId: string };
+    expect(row.toId).toBe('worker');
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0).map((d) => d.toId)).toEqual(['demo-worker']);
+  });
+
+  it("a worker-addressed mail sent through the route reaches the heir when the run is re-bound — the route's write and the store's read, pinned by one case", async () => {
+    // The two halves together: every store-side test seeds `insertMail`
+    // directly, every route-side test reads only the delivery. This one POSTs
+    // through the door and then re-binds, so the literal the route writes is
+    // the literal the re-bind selects on.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-worker'); seed(home, 'demo-heir');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId, subject: 'the wave brief' });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+    const due = w.coord.dueDeliveries(Date.now() + 1, 0);
+    expect(due.map((d) => d.toId)).toEqual(['demo-heir']);
+    expect(due[0]!.envelope).toContain('to: demo-heir');
+    expect(w.coord.outstandingMailFor('demo-worker')).toHaveLength(0);
+  });
+
+  it("refuses 'worker' with no runId — a worker is per run and there is nothing to fall back to, EVEN WHEN the coordinator fallback would resolve", async () => {
+    // THE GUARD, pinned against the mutant that matters (PR #75 review round
+    // 1, WIRE-1/MUT-1): give 'worker' the coordinator role's single-active-
+    // programme fallback and this send is ACCEPTED and delivered to the
+    // COORDINATOR — the wrong session, which the route's own comment calls
+    // worse than a refusal. The fixture therefore seeds exactly the world in
+    // which that fallback resolves (one active claimed programme, a bound
+    // worker), so a 404 here is the guard and not an accident of emptiness.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator'); seed(home, 'demo-worker');
+    const w = await withMail(home); app = w.app;
+    withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'worker', runId: null });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect((res.json() as { detail: string }).detail).toContain('needs a runId');
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0)).toHaveLength(0);
+  });
+
+  it("refuses 'worker' on a run that has no worker yet, and says which run", async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const runId = withRun(w.coord, null);
+    const res = await send(app, { ...GOOD, toId: 'worker', runId });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+    expect((res.json() as { detail: string }).detail).toContain(`run ${runId} has no worker`);
+    // Recorded, like every refusal on this route.
+    expect(w.coord.rejections().map((r) => r.code)).toContain('unknown-recipient');
+  });
+
+  it("leaves 'coordinator''s single-active-programme fallback exactly as it was", async () => {
+    // THE PIN. `worker` requires a runId; `coordinator` does not, and its
+    // no-runId arm is the documented recovery for an already-retired programme.
+    // A "tidy" change that required a runId for both roles would break that and
+    // nothing else in this file would notice.
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    withRun(w.coord, 'demo-worker');
+    const res = await send(app, { ...GOOD, toId: 'coordinator', runId: null });
+    expect(res.statusCode).toBe(202);
+    expect(w.coord.dueDeliveries(Date.now() + 1, 0).map((d) => d.toId)).toEqual(['demo-coordinator']);
+  });
+
+  it('still refuses a toId that is neither role nor a registry row', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa');
+    const w = await withMail(home); app = w.app;
+    const res = await send(app, { ...GOOD, toId: 'demo-nobody' });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ ok: false, error: 'unknown-recipient' });
+  });
+});
+
 describe('the rejection table is total, in both directions', () => {
   // The linkage discipline `wsaudit.test.ts:52-100` established: the union and
   // the emitters are one set, and neither may grow alone. A code nobody emits
@@ -428,6 +550,22 @@ describe('the rejection table is total, in both directions', () => {
     for (const code of RUN_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
   });
 
+  it('every declared AskRefuseCode is emitted somewhere in server/src/coord or server/src/inject (F7)', () => {
+    // RULING F7: `AskRefuseCode` had no reverse scan — only two of the seven
+    // vocabularies sharing the kebab scanner below get both directions —
+    // so nothing would red if a route forgot one of the five route-level
+    // codes (`unknown-ask`/`not-held`/`ask-moved`/`not-parent`, Task 9, plus
+    // `child-unmeasurable`, whole-branch review M2) or typo'd it. `answerAsk`'s own ten live in `server/src/inject/ask.ts`,
+    // OUTSIDE `server/src/coord` entirely, so a coord-only scan (the
+    // `RunRefuseCode` shape just above) could never cover them — this reads
+    // BOTH directories, unlike every other reverse scan in this file.
+    const injectDir = path.resolve(here, '../src/inject');
+    const src = sources() + '\n' +
+      readdirSync(injectDir).filter((f) => f.endsWith('.ts'))
+        .map((f) => readFileSync(path.join(injectDir, f), 'utf8')).join('\n');
+    for (const code of ASK_REFUSE_CODES) expect(src, code).toContain(`'${code}'`);
+  });
+
   it('every quoted kebab token in server/src/coord that looks like a code is declared', () => {
     // Deliberately over-broad, then filtered by an explicit allowlist of
     // NON-code kebab literals, so a new code cannot slip in unnamed. A token
@@ -438,6 +576,21 @@ describe('the rejection table is total, in both directions', () => {
     const NOT_CODES = new Set([
       'x-ccrc-mail-token',   // coord/token.ts's header name
       'not-configured',      // the generic "no store wired" answer, shared with push/notifyLog
+      // D-2545 — the READ-FAILURE family, and the same family as
+      // `not-configured` directly above: a fact about THIS BOX, not about the
+      // request. Every one of them answers 503 and none is a refusal — nothing
+      // was declined, a row could not be read. They are deliberately NOT
+      // admitted to `RunRefuseCode`, whose own docstring scopes it to the typed
+      // refusals of `POST /api/runs*`, and whose membership `coordinator-skill.
+      // test.ts` requires to be documented as a recovery in the coordinator
+      // corpus — there is no recovery to document for "this box cannot
+      // represent a persisted integer", only a report. `store.ts`'s
+      // `RunReadResult`/`AskReadResult` kinds and the route spellings are the
+      // same three words on purpose, so a reader can follow one condition from
+      // the SELECT to the status.
+      'run-unreadable',      // one run row; `store.ts` kind + five route spellings
+      'runs-unreadable',     // the list read's own word: GET /api/runs, all-or-failure
+      'ask-unreadable',      // the ask half of the same family, /answer//release//asks
       'no-commits',          // coord/fingerprint.ts — a DoneRun verdict, not a mail code
       'packed-refs',         // coord/gitref.ts — a git filename
       'refused-project',     // coord/gitref.ts — a `WorktreeRead.reason` (§1.7).
@@ -477,6 +630,7 @@ describe('the rejection table is total, in both directions', () => {
       'wave-brief',           // mail SUBJECT text (dispatch's own brief)
       'wave-done-rejected',   // mail SUBJECT text (close's own rejection)
       'wave-advance-rejected', // mail SUBJECT text (advance's own rejection, review findings 1/15)
+      'review-done-rejected', // mail SUBJECT text (the review close's own rejection, design 2026-09-14)
       'awaiting-review',      // a RunState value (advance's own target list), not a mail code
       'enter-ignored',        // a `SendResult` error (`inject/send.ts`), reached here as
                               // half of `rundefs.ts`'s `CLEAR_REFUSED_STRANDS_TEXT` — the
@@ -522,6 +676,30 @@ describe('the rejection table is total, in both directions', () => {
                               // wire vocabulary to do it. Its siblings `absent`
                               // and `parked` are one word each and never reach
                               // this scan at all.
+      'home-project-backfilled', // coord/routes.ts run_events.detail (cross-repo
+                                  // programmes §3 F2, Task 4) — recorded when a
+                                  // stored NULL homeProject is backfilled from
+                                  // the body on a later open. Not a wire code:
+                                  // no `refused`/`reject.code` ever carries it,
+                                  // and nothing switches on it over the wire —
+                                  // it is forensic history on the run, read
+                                  // back only through GET /api/runs/:id events.
+      'legacy-home-project',     // coord/routes.ts run_events.detail (§3 F2, §9
+                                  // wave 3) — recorded when an open omits
+                                  // `homeProject` while
+                                  // `HOME_PROJECT_LEGACY_ACCEPTED` is true. This
+                                  // is the row wave 3's flip counts to zero over
+                                  // seven consecutive days; same reasoning as
+                                  // its sibling above, not a wire code.
+      'session-rebound',         // coord/routes.ts run_events.detail (PR #75 review
+                                  // round 1, store-2) — recorded when a second open
+                                  // of a still-`planned` wave names a DIFFERENT
+                                  // sessionId and `bindSession` re-binds the run:
+                                  // the detail names predecessor, heir and how many
+                                  // deliveries moved. Forensic history on the run,
+                                  // exactly like its two siblings above — no
+                                  // `refused`/`reject.code` ever carries it, nothing
+                                  // switches on it over the wire.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -560,8 +738,16 @@ describe('the rejection table is total, in both directions', () => {
         // guard rather than NOT_CODES, for the reason the `LifecycleGapReason` note
         // above gives: an allowlist accepts one spelling for ever, a guard accepts a
         // member added later and still rejects a typo'd one.
-        || isReclaimRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle or ReclaimRefuseCode`).toBe(true);
+        || isReclaimRefuseCode(tok)
+        // TASK 3 (D-2174) — the SEVENTH union, checked together and never
+        // merged, on the standing rule `enter-ignored` states above. The ask
+        // pre-emption routes spell five route-level refusals (`unknown-ask`,
+        // `not-held`, `ask-moved`, `not-parent`, and `child-unmeasurable`
+        // from the whole-branch review) as literals in server/src/coord,
+        // alongside `answerAsk`'s own ten — same refusal family, one union,
+        // admitted through its own exported guard rather than NOT_CODES.
+        || isAskRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
     }
   });
 });
@@ -757,6 +943,19 @@ describe('POST /api/mail/:id/ack', () => {
     expect(unknownSender.json()).toMatchObject({ ok: false, error: 'unknown-sender' });
   });
 
+  it('preserves bad-kind and bad delivery id for a non-canonical id', async () => {
+    const home = mkTmp('ccrc-mail-');
+    seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
+    const w = await withMail(home); app = w.app;
+    await send(app, { ...GOOD, toId: 'demo-coordinator' });
+    const deliveryId = ackIdFromEnvelope(w.coord.dueDeliveries(Date.now(), 60_000)[0]!.envelope);
+
+    const res = await ack(app, `${deliveryId}.0`, { fromId: 'demo-coordinator', fromUuid: UUID });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-kind', detail: 'bad delivery id' });
+    expect(w.coord.delivery(deliveryId)?.state).toBe('queued');
+  });
+
   it('refuses to let one session ack another session\'s delivery', async () => {
     const home = mkTmp('ccrc-mail-');
     seed(home, 'demo-quiet-mesa'); seed(home, 'demo-coordinator');
@@ -844,13 +1043,15 @@ describe('GET /api/mail/:id', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'not-found' });
   });
 
-  it('400s a non-integer id', async () => {
-    const home = mkTmp('ccrc-mail-');
-    const w = await withMail(home); app = w.app;
-    const res = await getEnvelope(app, 'not-a-number');
-    expect(res.statusCode).toBe(400);
-    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
-  });
+  it.each(['not-a-number', '1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    '400s the non-canonical id %s', async (id) => {
+      const home = mkTmp('ccrc-mail-');
+      const w = await withMail(home); app = w.app;
+      const res = await getEnvelope(app, id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    },
+  );
 
   it('401s without the box token — the same gate as GET /api/mail?to=, a read with no attribution to check', async () => {
     const home = mkTmp('ccrc-mail-');

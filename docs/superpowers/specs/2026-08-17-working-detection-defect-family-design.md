@@ -209,10 +209,12 @@ subagent-refresh path now covers the orchestrator case independently — **and n
 
 **5.3 ccd's marker outlives the revive — and clearing it is a session-killer.** The disk-level twin
 of D-74. It is tempting to have `cmd_start`/`cmd_ensure` clear `$REG/<id>.archived` the way they
-clear `.stopped`. **Do not do this as a display fix.** `archiveMerged` skips on `r.archivedAt !==
-null`, so the stale marker is currently the *only* thing suppressing a level-triggered re-archive of
-those five rows; clearing it hands them to a sweep that stops the session and kills the pane the
-moment `archiveSafety` reads not-busy — which, between turns, is seconds away. Any fix here has to
+clear `.stopped`. **Do not do this as a display fix.** The reason given here was that `archiveMerged`
+skips on `r.archivedAt !== null`, so the stale marker was the *only* thing suppressing a
+level-triggered re-archive of those five rows, and clearing it handed them to a sweep that killed the
+pane seconds later. **That reason expired on 2026-09-10:** the sweep no longer archives anything, so
+clearing the marker now costs no session. The PROHIBITION stands on its second ground alone, which
+was always the load-bearing one — any fix here has to
 settle what a revived-from-archive workspace *is* first (does the old merged PR still bind it?), and
 `ws-hold` is the existing protection. Consequence of leaving it: `cmd_ws_hold` refuses on these
 rows, so a revived workspace cannot be claimed by a program until someone runs `ws-restore`.

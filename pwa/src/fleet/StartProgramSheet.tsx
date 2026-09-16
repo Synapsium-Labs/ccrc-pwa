@@ -1,11 +1,12 @@
 // The run board's own door onto a NEW program (Task 13, spec §4.4). This is
 // a COMPOSITION, not a compound route: `POST /api/runs` is the coordinator's
 // own (it demands a live `claimedBy` and refuses a second claimant,
-// `server/src/coord/routes.ts:872`, refusing a second claimant in
-// `server/src/coord/store.ts:363-371`) and this build does not add a route that both spawns
+// `server/src/coord/routes.ts:1060`, refusing a second claimant in
+// `server/src/coord/store.ts:443-451`) and this build does not add a route that both spawns
 // a session and opens a run. The flow is three EXISTING calls —
 // `api.projects`, `api.createSession`, `api.kickoff` — plus `useProjectedHome`
-// for the account name, composed here and nowhere else.
+// as the old-server and untagged-project placement fallback, composed here and
+// nowhere else. A present `ProjectRow.placement` owns the account name.
 //
 // D-291 (was D-B4-18) and D-292 (was D-B4-19) (`docs/superpowers/plans/2026-08-11-build4-conversation-and-
 // controls.md`'s Deviations section) are both load-bearing for this file and
@@ -18,7 +19,7 @@
 //   * `POST /api/sessions`'s success body is the literal `{ok:true}`
 //     (`server/src/server.ts:1510-1513`, `runCcdOr502`; the route itself is
 //     `:1517-1530`) — no id. `ccd`
-//     computes the id as `${wrapper}-${project}` (`ccd/ccd:1091`, `_id()`)
+//     computes the id as `${wrapper}-${project}` (`ccd/ccd:1209`, `_id()`)
 //     and only echoes it to stdout, which that route discards. Recomputing
 //     the same formula here was REJECTED — a second implementation of a rule
 //     ccd owns is exactly what `useProjectedHome.ts`'s own docstring refuses
@@ -29,7 +30,7 @@
 //     that is the point — see `liveMainCheckoutIn`/`startedSessionFor`, whose
 //     own docstrings carry the argument; do not fold them back into one
 //     predicate.
-//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:12117`): a second `start` whose
+//   * `cmd_start` is IDEMPOTENT (`ccd/ccd:12440`): a second `start` whose
 //     `_id()` is already `_alive` is a no-op that attaches to the session
 //     already there. A blind kickoff would hand this program to a session
 //     started for something else — the queue does not interrupt it, but it
@@ -40,7 +41,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, ProjectRow } from '../../../shared/api';
-import { ledgerPath } from '../../../shared/api';
+import { ledgerPath, programKickoffVerdict, shapeProgramSlug } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { accountLabel } from '../lib/accounts';
@@ -79,8 +80,8 @@ export const START_PROGRAM_WAIT_MS = 20_000;
 /** A MAIN CHECKOUT of `project` — not one of its workspaces. The shared half
  *  of both arms below, and the one C1 was about: `wrapper`+`project` alone is
  *  not a main checkout, because `cmd_ws_add` writes BOTH fields onto every
- *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:3530`, called
- *  at `ccd/ccd:3707`) that
+ *  WORKSPACE row too, with a `_ws_least_loaded` wrapper (`ccd/ccd:3667`, called
+ *  at `ccd/ccd:3887`) that
  *  `useProjectedHome` mirrors exactly (`server/src/limits.ts:96`) — so a
  *  two-field match hits live workers on a box in its normal state.
  *  `FleetSession.workspace` is server-reported and documented "null for a
@@ -93,9 +94,9 @@ const isMainCheckoutOf = (s: FleetSession, project: string): boolean =>
  *
  *  WRAPPER-INDEPENDENT, and that is a correction, not an oversight (re-review
  *  of the C1 fix). `cmd_swap` rewrites the registry's `wrapper` field and
- *  KEEPS the id (`ccd/ccd:13125`, `_reg_set "$id" wrapper "$target"`), while
+ *  KEEPS the id (`ccd/ccd:13459`, `_reg_set "$id" wrapper "$target"`), while
  *  `cmd_start`'s collision test is `_alive "$(_id "$wrapper" "$project")"`
- *  (`ccd/ccd:12144` and `ccd/ccd:12182`) — keyed on the ID, which a swap does
+ *  (`ccd/ccd:12467` and `ccd/ccd:12508`) — keyed on the ID, which a swap does
  *  not move. On the
  *  live fleet 5 of 10 main checkouts already report a `wrapper` that differs
  *  from their own id prefix (an id reading `<wrapper>-<project>` whose registry
@@ -153,11 +154,11 @@ function liveMainCheckoutIn(
  *
  *  Why liveness is needed: project + wrapper + `workspace === null` is NOT a
  *  unique key, by the same `cmd_swap` fact that widened the refusal arm
- *  (`ccd/ccd:13125` moves the wrapper, keeps the id). A main checkout
+ *  (`ccd/ccd:13459` moves the wrapper, keeps the id). A main checkout
  *  `claude-ccrc-pwa` swapped to `claude2` and since DEAD is skipped by the
  *  refusal (`status !== 'dead'`), so Start is offered; the projection says
  *  `claude2`, `cmd_start` spawns a NEW `claude2-ccrc-pwa`, and the next frame
- *  carries both in registry-id sort order (`registry.ts:793`), where
+ *  carries both in registry-id sort order (`registry.ts:869`), where
  *  `'claude-'` sorts before `'claude2'` (`-` 0x2D < `2` 0x32). Without
  *  liveness `.find()` returns the DEAD swapped row — it satisfies project,
  *  `workspace === null` and `wrapper === 'claude2'` — and the kickoff goes to
@@ -233,7 +234,7 @@ function startErrorText(err: unknown): string {
  *
  *  The match is EXACT. `RunSummary.project` is whatever string the coordinator
  *  passed to `POST /api/runs`, which validates it as a non-empty string and
- *  nothing more (`server/src/coord/routes.ts:889-897`); `ProjectRow.name` comes
+ *  nothing more (`server/src/coord/routes.ts:1077-1085`); `ProjectRow.name` comes
  *  from the projects listing. Nothing joins the two but convention, so a run
  *  naming a project this picker never lists is a run this sheet cannot speak
  *  about — loosening to a prefix would refuse real projects over a lookalike.
@@ -247,6 +248,38 @@ export function openRunVerdict(
 ): OpenRunVerdict {
   if (openRunProjects === null) return 'unmeasured';
   return openRunProjects.has(project) ? 'open-run' : 'clear';
+}
+
+type StartProgramPlacement =
+  | { kind: 'projected'; wrapper: string }
+  | { kind: 'pending' }
+  | { kind: 'none'; pool: string | null; source: 'project' | 'global' }
+  | { kind: 'unmeasurable' }
+  | { kind: 'pool-blind'; pool: NonNullable<ProjectRow['pool']> };
+
+/** Selects the route's project-specific forecast whenever it is present. The
+ * global forecast remains valid only for old servers and measured untagged
+ * projects, where the pool-aware and historical rules are the same. */
+function startProgramPlacement(
+  project: ProjectRow,
+  projected: ReturnType<typeof useProjectedHome>,
+): StartProgramPlacement {
+  if (project.placement !== undefined) {
+    if (project.placement.kind === 'projected') {
+      return { kind: 'projected', wrapper: project.placement.wrapper };
+    }
+    if (project.placement.kind === 'none') {
+      return { ...project.placement, source: 'project' };
+    }
+    return project.placement;
+  }
+
+  if (project.pool !== undefined && project.pool.state !== 'untagged') {
+    return { kind: 'pool-blind', pool: project.pool };
+  }
+  if (projected === undefined) return { kind: 'pending' };
+  if (projected === null) return { kind: 'none', pool: null, source: 'global' };
+  return { kind: 'projected', wrapper: projected.wrapper };
 }
 
 export interface StartProgramSheetProps {
@@ -392,7 +425,7 @@ export function StartProgramSheet({
   // wrapper-scoped. Now that `liveMainCheckoutIn` is wrapper-independent the
   // two must agree, or the suppression stops covering its own case:
   // `cmd_swap` moves a live session's `wrapper` while keeping its id
-  // (`ccd/ccd:13125`), so a session this sheet started at `W` can be reported
+  // (`ccd/ccd:13459`), so a session this sheet started at `W` can be reported
   // at `Y` on any later frame — a wrapper-comparing ownership test then fails
   // and the sheet renders "…is already running… may be mid-task" for the
   // session it started ITSELF. That is the Important-2 defect exactly,
@@ -448,9 +481,12 @@ export function StartProgramSheet({
   // touched here: the wait keeps watching for the session it really did start
   // (D-291, review fix round 1 Important 2) — only this SENTENCE, which has
   // stopped being true of what is on screen, is withdrawn.
+  const placement = project === null ? null : startProgramPlacement(project, projected);
+  const placementWrapper = placement?.kind === 'projected' ? placement.wrapper : undefined;
+
   useEffect(() => {
     setTimedOut(false);
-  }, [project?.workdir, projected?.wrapper]);
+  }, [project?.workdir, placementWrapper]);
 
   // Queues the kickoff and navigates — the ONLY place either happens. `w.mine`
   // is checked again after the queue call settles: a close during that
@@ -541,17 +577,13 @@ export function StartProgramSheet({
   const filtered =
     list === null ? [] : needle === '' ? list : list.filter((p) => p.name.toLowerCase().includes(needle));
 
-  // D-292: recomputed on every render from the reactive store selector —
-  // "whenever the target changes" (a different project picked, or the
-  // projection itself moving) falls out of React's own render cycle rather
-  // than a second piece of state tracking the same fact.
+  // D-292: recomputed on every render from the reactive store selector.
   // Wrapper-independent — see `liveMainCheckoutIn`'s own docstring for why a
-  // wrapper-scoped refusal misses a real `cmd_start` collision on any session
-  // that has been swapped. `projected != null` is still required, but only
-  // because there is no point refusing a start that has no wrapper to place
-  // with in the first place (the D-284 (was D-B4-11) arm below handles saying so).
+  // wrapper-scoped refusal misses a real `cmd_start` collision after a swap.
+  // D-2694: the PROJECT placement decides whether a target exists; the global
+  // untagged projection may be null or pending without erasing a route target.
   const existing =
-    project !== null && projected != null
+    project !== null && placement?.kind === 'projected'
       ? liveMainCheckoutIn(sessions, project.name)
       : null;
   // Review fix round 1, Important 2: `existing` alone cannot tell "someone
@@ -575,10 +607,27 @@ export function StartProgramSheet({
   // independent measurements.
   const runVerdict: OpenRunVerdict | null =
     project === null ? null : openRunVerdict(openRunProjects, project.name);
+  const kickoffVerdict = programKickoffVerdict(slug, title);
+  // The ledger line previews a SLUG, not a kickoff: `programKickoffVerdict`
+  // also refuses a blank title, and gating the path on that would blank a
+  // perfectly good preview while the operator is still typing one. Same
+  // shared shape decision, taken at the granularity this line needs.
+  const slugPreview = shapeProgramSlug(slug);
+  const kickoffOversize = !kickoffVerdict.ok && kickoffVerdict.kind === 'oversize';
+  // Branch on the verdict's own FIELD, never on its prose. A blank title is not
+  // an error to shout while the operator is still typing one, but the two causes
+  // share `kind:'bad-request'` — comparing `detail` against the L0 sentence made
+  // this sheet's behaviour depend on that sentence's wording, with no test
+  // between a reword and a silently changed error.
+  const showKickoffError = slug !== '' && !kickoffVerdict.ok
+    && (kickoffOversize || kickoffVerdict.field !== 'title');
 
   const start = async (): Promise<void> => {
-    if (starting || slug.trim() === '' || title.trim() === '' || project === null) return;
-    if (projected == null) return; // undefined (no answer yet) or null (D-284) — no wrapper to place with
+    // The button independently disables on this verdict, but a disabled control
+    // never invokes its handler. `start-program.test.tsx` therefore source-pins
+    // this defensive return too: either boundary becoming permissive must red.
+    if (starting || !kickoffVerdict.ok || project === null) return;
+    if (placement?.kind !== 'projected') return;
     if (existing !== null) return; // defensive: the confirm button is not rendered in this case at all
     // …and the run-board arm above it in the same `? :` chain withholds the
     // button on the same terms, so `runVerdict` needs no return of its own here.
@@ -588,7 +637,7 @@ export function StartProgramSheet({
     // docstring refuses to ship. If a later change ever demotes either refusal
     // to a `disabled` term, BOTH need a return here.
 
-    const wrapper = projected.wrapper;
+    const wrapper = placement.wrapper;
     const projectName = project.name;
     const mine = (gen.current += 1);
     setStarting(true);
@@ -616,11 +665,11 @@ export function StartProgramSheet({
     // sheet's INTENT TO CREATE, not a receipt for a completed one — and the
     // window it has to cover starts the moment `ccd` is asked, not the moment
     // it answers. `cmd_start` writes `$REG/<id>.uuid` and the rest of the
-    // fields, THEN `_spawn`s (`ccd/ccd:12206-12208`); the server lists a session
-    // on its `.uuid` file alone (`registry.ts:793` — `started` does not gate
+    // fields, THEN `_spawn`s (`ccd/ccd:12532-12534`); the server lists a session
+    // on its `.uuid` file alone (`registry.ts:869` — `started` does not gate
     // listing, and is written after `_spawn` anyway) and reports `status:
     // 'idle'` as soon as tmux has the id (`fleet.ts:236-237`); the watcher
-    // ticks every 2 s (`watch.ts:533`) while the HTTP call is still blocked in
+    // ticks every 2 s (`watch.ts:614`) while the HTTP call is still blocked in
     // `_accept_first_run_prompts`/`_inject_spawn_effort`. So a frame carrying
     // the new session arrives MANY SECONDS before `createSession` resolves.
     // Armed after the await, `isOwnAttempt` was false for that entire window
@@ -649,7 +698,14 @@ export function StartProgramSheet({
     }
     if (gen.current !== mine) return; // superseded while the create was in flight
 
-    waitRef.current = { mine, wrapper, project: projectName, slug: slug.trim(), title: title.trim(), preLive };
+    waitRef.current = {
+      mine,
+      wrapper,
+      project: projectName,
+      slug: kickoffVerdict.slug,
+      title: kickoffVerdict.title,
+      preLive,
+    };
     clearTimer();
     timerRef.current = setTimeout(() => {
       timerRef.current = null;
@@ -709,16 +765,18 @@ export function StartProgramSheet({
    *  its copy and its posture, and simply stops eating something that was never
    *  its business.
    *
-   *  KNOWN INCOMPLETE, and measured rather than assumed. The two OTHER arms
-   *  above the confirm fragment still retire this node, and both were measured
-   *  doing it while this fix was written: the D-284 arm swallows it when the
-   *  accounts poll turns `projected` null twenty seconds later — no operator act
-   *  at all, the same poll-tick shape the run arm had — and the D-292 arm
-   *  swallows it when the operator picks a DIFFERENT project that already has a
-   *  live main checkout. Both interactions predate this wave (the recovery is
-   *  wave 4's; both arms are older) and both were out of this review's scope.
-   *  They are named here so the next reader MEASURES the rest of the chain
-   *  rather than reading this fix as having cleaned it.
+   *  THE CURRENT CHAIN, enumerated so this warning cannot drift behind a hand-kept
+   *  cardinal. The existing-checkout condition renders its refusal alone and
+   *  displaces recovery. The run-board condition renders its refusal together
+   *  with recovery, so it does not displace it. Measured placement `none` renders
+   *  one refusal arm and displaces recovery; its global, no-pool and named-pool
+   *  messages are semantic copy subcases, not additional syntactic arms. Measured
+   *  `unmeasurable` renders its refusal alone and displaces recovery. Old-server
+   *  `pool-blind` renders its refusal alone and displaces recovery. The final
+   *  confirmation fragment renders the ordinary confirmation together with
+   *  recovery. This list deliberately names each live condition and its effect,
+   *  so the next reader measures the chain rather than treating this fix as
+   *  having cleaned every arm.
    *
    *  `null` when no failure is standing, so an arm that renders it says nothing
    *  extra in the ordinary case. */
@@ -764,14 +822,21 @@ export function StartProgramSheet({
           type="text"
           placeholder="Program slug (e.g. build4-conversation-and-controls)"
           aria-label="Program slug"
+          aria-invalid={showKickoffError}
+          aria-describedby={showKickoffError ? 'program-kickoff-error' : undefined}
           value={slug}
           onChange={(e) => setSlug(e.target.value)}
         />
+        {showKickoffError && (
+          <p id="program-kickoff-error" className="program-start-error">{kickoffVerdict.detail}.</p>
+        )}
         <input
           className="proj-search"
           type="text"
           placeholder="Program title"
           aria-label="Program title"
+          aria-invalid={title !== '' && kickoffOversize}
+          aria-describedby={title !== '' && kickoffOversize ? 'program-kickoff-error' : undefined}
           value={title}
           onChange={(e) => setTitle(e.target.value)}
         />
@@ -868,7 +933,7 @@ export function StartProgramSheet({
             //
             // The copy names the SESSION, never the account: this arm is
             // wrapper-independent, so the matched row's own `wrapper` may
-            // differ from the projected one (a swap moves it, `ccd/ccd:13125`)
+            // differ from the projected one (a swap moves it, `ccd/ccd:13459`)
             // and naming an account here would state a fact the match never
             // established. Both outcomes are covered rather than the one the
             // wrapper-scoped version could assume: if this IS the row
@@ -907,7 +972,7 @@ export function StartProgramSheet({
             // "no single active program: ambiguous or absent" guard), so a second
             // program in a DIFFERENT project wedges run-less coordinator mail just
             // as hard and this arm cannot see it; and `POST /api/runs` applies no
-            // project predicate at all (`server/src/coord/routes.ts:889-897`), so
+            // project predicate at all (`server/src/coord/routes.ts:1077-1085`), so
             // nothing behind this catches what it misses. The sentence claims a
             // consequence of THIS start and never that the fleet is otherwise
             // clean.
@@ -942,11 +1007,25 @@ export function StartProgramSheet({
               </p>
               {recovery}
             </>
-          ) : projected === null ? (
-            // D-284: the server's own "nothing is placeable" — refuse with
-            // copy rather than guessing a wrapper.
+          ) : placement?.kind === 'none' ? (
             <p className="program-start-refuse">
-              Nothing is placeable — every home-able account is disabled.
+              {placement.source === 'global'
+                ? 'Nothing is placeable — every home-able account is disabled.'
+                : placement.pool === null
+                  ? 'No eligible account can place this project.'
+                  : `No eligible account can place this project in pool ${placement.pool}.`}
+            </p>
+          ) : placement?.kind === 'unmeasurable' ? (
+            <p className="program-start-refuse">
+              This project's placement cannot be decided because its pool tag could not be measured.
+            </p>
+          ) : placement?.kind === 'pool-blind' ? (
+            <p className="program-start-refuse">
+              {placement.pool.state === 'tagged'
+                ? `This older placement answer cannot choose an eligible account for pool ${placement.pool.name}.`
+                : placement.pool.state === 'malformed'
+                  ? "This project's pool tag is malformed, so placement cannot be decided."
+                  : "This project's pool tag could not be read, so placement cannot be decided."}
             </p>
           ) : (
             <>
@@ -973,8 +1052,17 @@ export function StartProgramSheet({
                       + 'coordinator afterwards just as a pause refuses it.'}
                 </p>
               )}
+              {/* THE SHAPED SLUG, never the raw one (D-2508's own rule, which
+                  this preview was the last reader to break): `ledgerPath` is a
+                  pure interpolator, so previewing `../other` here would render a
+                  path this sheet will never send and the server would refuse —
+                  a preview that disagrees with the act it previews. The verdict
+                  is the single shape decision already computed above, so the
+                  line now shows exactly the path a successful start would use,
+                  and falls back to the placeholder while there is no valid slug
+                  to show one for. */}
               <p className="program-start-ledger">
-                {`Its ledger: ${ledgerPath(slug.trim() === '' ? '…' : slug.trim())}`}
+                {`Its ledger: ${ledgerPath(slugPreview.ok ? slugPreview.slug : '…')}`}
               </p>
               <p className="program-start-note">
                 The kickoff is queued as mail and lands at the session&rsquo;s next quiet moment,
@@ -1007,8 +1095,8 @@ export function StartProgramSheet({
                 type="button"
                 className="program-start-go"
                 disabled={
-                  slug.trim() === '' || title.trim() === '' || starting
-                  || projected === undefined || existing !== null
+                  !kickoffVerdict.ok || starting
+                  || placement?.kind !== 'projected' || existing !== null
                 }
                 onClick={() => void start()}
               >
@@ -1016,9 +1104,9 @@ export function StartProgramSheet({
                   ? 'Starting…'
                   : existing !== null
                     ? 'Started — opening it…'
-                    : projected === undefined
+                    : placement?.kind !== 'projected'
                       ? 'Checking placement…'
-                      : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, projected.wrapper)}`}
+                      : `Start ${slug.trim() === '' ? '…' : slug.trim()} on ${accountLabel(roster, placement.wrapper)}`}
               </button>
             </>
           )

@@ -2,7 +2,9 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import type { FleetWatcher } from '../watch.js';
+import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -18,17 +20,20 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
-import { holdReason, queueSystemMail } from './rundefs.js';
+import { queueSystemMail } from './rundefs.js';
 import {
-  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES,
-  isRunState, isSendableMailKind, LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
-  type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode, type PeerDeliverable,
-  type PeerSummary, type RunState, type RunSummary,
+  CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
+  isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
+  parseCanonicalPositiveSafeInteger,
+  LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
+  MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
+  type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
+  type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
 
 /**
@@ -134,13 +139,23 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     // sentence itself is L1's, spelled beside the check that refuses.
     case 'oversize':
       return reply.code(413).send({ ok: false, error: 'oversize', limit: r.limit, detail: r.detail });
+    case 'hold-oversize':
+      return reply.code(413).send({ ok: false, error: r.kind, limit: r.limit, detail: r.detail });
+    case 'hold-invalid':
+      return reply.code(400).send({ ok: false, error: r.kind, detail: r.detail });
     case 'refused': {
       const extra: Record<string, number> = {};
       if (r.limit !== undefined) extra.limit = r.limit;
       if (r.running !== undefined) extra.running = r.running;
       if (r.used !== undefined) extra.used = r.used;
       if (r.candidates !== undefined) extra.candidates = r.candidates;
-      return reply.code(409).send({ ok: false, refused: r.code, ...extra });
+      // The `by` spread, not `by: r.by` — the same discipline the
+      // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
+      // not narrow a distinction it received, and this field distinguishes by
+      // PRESENCE. Its own spread rather than a member of `extra`, whose value
+      // type is `number` and must stay so: `by` is the project's NAME.
+      return reply.code(409).send({ ok: false, refused: r.code, ...extra,
+        ...(r.by === undefined ? {} : { by: r.by }) });
     }
     // The `stderr` spread, not `stderr: r.stderr`: an L4 adapter may not narrow a
     // distinction it received, and this member's `stderr` distinguishes by
@@ -175,6 +190,10 @@ function sendCloseOutcome(reply: FastifyReply, r: CloseOutcome) {
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused': return reply.code(409).send({ ok: false, refused: r.code });
     case 'doneVerdict': return reply.code(409).send({ ok: false, error: r.code, detail: r.detail });
+    case 'hold-oversize':
+      return reply.code(413).send({ ok: false, error: r.kind, limit: r.limit, detail: r.detail });
+    case 'hold-invalid':
+      return reply.code(400).send({ ok: false, error: r.kind, detail: r.detail });
     case 'unsupported': return reply.code(501).send({ ok: false, error: 'unsupported' });
     case 'fleetFailed': return reply.code(502).send({ ok: false, stderr: r.stderr });
     case 'advanceFailed': return reply.code(409).send(r.adv);
@@ -197,6 +216,9 @@ function sendSettleItemsOutcome(reply: FastifyReply, r: SettleItemsOutcome) {
   if (r.ok) return reply.code(200).send({ ok: true, id: r.id, items: r.items });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    // D-2545. 503, never the 404 above: the run exists.
+    case 'run-unreadable':
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused':
       return reply.code(r.code === 'unknown-item' ? 404 : 409)
@@ -231,6 +253,104 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 }
 
 /**
+ * THE LEGACY GENERATION, as one constant (design §3 F2), and the switch that
+ * ends it. `true` ACCEPTED an absent `homeProject` on `POST /api/runs` and
+ * recorded a `legacy-home-project` run event, leaving the programme row's home
+ * NULL; `false` refuses the open `400 bad-request` with
+ * `detail: 'homeProject is required'` (D-2349, D-2744).
+ *
+ * FLIPPED TO `false` on operator ruling D-2867, the spec's seven-day criterion
+ * waived: 8 of the 15 opens since the 2026-09-14 deploy omitted the field, the
+ * last at 2026-09-15T07:38:57Z — the trail is in
+ * `docs/superpowers/programs/home-project-flip.md`'s `## Measurements`. Both
+ * branches of `homeProjectVerdict` stay in the tree and both stay tested
+ * (`home-project.test.ts`) — this is a value change, never a deletion. The
+ * ROUTE's `legacy` arm below is now unreachable, since the only
+ * `legacyAccepted` the route ever passes is this constant; it stays as the
+ * record of what `true` did.
+ *
+ * Read ONCE, at the single call site below, and passed as an argument to
+ * `homeProjectVerdict` rather than read inside it — which is what keeps the
+ * OTHER branch testable after the flip as it was before it.
+ * `home-project.test.ts` drives both.
+ */
+export const HOME_PROJECT_LEGACY_ACCEPTED = false;
+
+/** What the open route must DO about the body's `homeProject` and the
+ *  programme's stored one. SIX answers, none folded into another: `write` and
+ *  `agrees` both mean "nothing extra to do" but for different reasons and at
+ *  different moments (a first insert versus a later open), and collapsing them
+ *  would make the backfill event impossible to place correctly. */
+export type HomeProjectVerdict =
+  | { kind: 'write' }
+  | { kind: 'agrees' }
+  | { kind: 'backfill'; home: string }
+  | { kind: 'legacy' }
+  | { kind: 'required' }
+  | { kind: 'mismatch'; by: string };
+
+/**
+ * The home decision, pure and independently testable — no store, no reply, no
+ * clock — even though it is DEFINED here, in `server/src/coord/routes.ts`,
+ * which is L4 delivery and by the ring's own rule (`CLAUDE.md`) is NOT allowed
+ * to decide. It lives here anyway because the cross-wave contract fixes this
+ * exact file as both the constant's home and this function's, so that wave
+ * 3's flip stays the one-constant change the spec promises; moving the
+ * function to an L1 module would break that promise for a ring compliance
+ * this file's own text cannot buy back. Recorded as a further ring
+ * compromise, not argued away (a deviation beside the other six). The only
+ * L4 thing anywhere near this decision is the reply at the route's two call
+ * sites below, which this function never touches.
+ *
+ * `known` and `stored` are TWO INPUTS and not one, because `programHome`
+ * answers `null` both for a programme row with a NULL home and for a slug with
+ * no row, and this function's caller acts on those differently: the first is a
+ * BACKFILL that records an event, the second is a first insert that records
+ * nothing. Establishing existence is the caller's job (`coord.programs()`), and
+ * passing the answer in is what keeps that overloaded null out of the decision.
+ *
+ * An ABSENT body home is decided by `legacyAccepted` alone — never by `known`
+ * or `stored` — because the column stays NULL either way: nothing is guessed
+ * into it, so a later explicit home can backfill it instead of colliding.
+ */
+export function homeProjectVerdict(input: {
+  body: string | undefined; known: boolean; stored: string | null; legacyAccepted: boolean;
+}): HomeProjectVerdict {
+  if (input.body === undefined) {
+    return input.legacyAccepted ? { kind: 'legacy' } : { kind: 'required' };
+  }
+  if (!input.known) return { kind: 'write' };
+  if (input.stored === null) return { kind: 'backfill', home: input.body };
+  return input.stored === input.body ? { kind: 'agrees' } : { kind: 'mismatch', by: input.stored };
+}
+
+/** What `POST /api/runs` accepts as a `homeProject`, decided ONCE at the door
+ *  (PR #75 review round 1, F2 + F4). Two answers, never folded: an accepted
+ *  value is TRIMMED — the same fold `fieldMeasured` applies to a registry
+ *  field — and a refused one carries the sentence the caller is told. */
+export type HomeProjectShape = { ok: true; home: string } | { ok: false; detail: string };
+
+/**
+ * A home is a single path segment under `projectsRoot`, and nothing else
+ * (D-2349):
+ * `ledgerAbsPath` joins it there, and the first non-NULL home a programme
+ * stores is permanent (`setProgramHome` is `WHERE homeProject IS NULL`), so
+ * a whitespace-wrapped spelling would home the programme at `'demo\n'` for
+ * ever — every later open sending the clean spelling refused `home-mismatch`
+ * against a value that RENDERS the same — and a `..` segment would name a
+ * file outside the projects root. Pure, so `home-project.test.ts` drives
+ * every branch; the route reads `detail` onto its 400 verbatim.
+ */
+export function shapeHomeProject(raw: string): HomeProjectShape {
+  const home = raw.trim();
+  if (home === '') return { ok: false, detail: 'homeProject is empty' };
+  if (home === '.' || home === '..' || home.includes('/')) {
+    return { ok: false, detail: `homeProject must be a single path segment, not ${JSON.stringify(home)}` };
+  }
+  return { ok: true, home };
+}
+
+/**
  * The coordination routes. Registered from `buildServer` rather than declared
  * there, because `server.ts` is already the file whose whole discipline is not
  * holding a second copy of a contract, and six more routes inline would be six
@@ -238,7 +358,7 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
  *
  * EVERY ROUTE HERE ANSWERS 501 `{ok:false,error:'not-configured'}` WITHOUT A
  * STORE, the same shape the push routes and `/api/notifications/catchup`
- * already use (`server.ts:186-215`): a box with no coordination database is
+ * already use (`server.ts:195-224`): a box with no coordination database is
  * not broken, it simply has none.
  *
  * MAIL LIVES HERE; RUN ROUTES ARE TASK 9's, in this same file — both share the
@@ -268,6 +388,34 @@ export function registerCoordRoutes(
    * the box token rather than on nothing.
    */
   sessionAuth: (req: FastifyRequest) => GateDecision = () => NO_SESSION,
+  /**
+   * Task 9's `POST /api/asks/:id/answer` presses a digit through `answerAsk`,
+   * which is serialized per-session through `askDeps.queue` — the SAME
+   * `KeyedQueue` `server.ts` hands `/api/sessions/:id/{prompt,dialog,ask}`,
+   * threaded in here rather than rebuilt, so a parent's pre-emption and a
+   * child's own in-flight prompt/dialog/ask answer can never race the same
+   * tmux pane through two independent locks. Built in `server.ts`, ahead of
+   * this call, for the identical reason.
+   */
+  askDeps: AskDeps,
+  /**
+   * Task 10's `POST /api/asks/:id/release` (the decline route) drops the
+   * watcher's in-memory hold and fires the deferred push immediately —
+   * `FleetWatcher.releaseHeldAsk` is the ONLY way in, because `heldAsks` is
+   * watcher-private state (that method's own docstring) and this file has no
+   * business reaching into its shape. Threaded in as its own parameter,
+   * the same move `askDeps` just above made for `answerAsk`'s queue: `Deps`
+   * deliberately does not carry the watcher (`buildServer`'s own third
+   * argument, not a `Deps` field — see that function's signature), so a
+   * field added there would be a second place this wiring could come from.
+   * Optional and defaulted to nothing so every existing caller (`buildServer`
+   * with no watcher, or a test that builds these routes on a coord-only
+   * server) is unchanged: a decline still CASes the store row and answers
+   * `{ok:true}`, it just has no in-memory hold to drop early — `sweepAsks`
+   * would have released it anyway once `held.until` lapsed, if this process
+   * had ever held it in memory in the first place.
+   */
+  watcher?: FleetWatcher,
 ): void {
   const notConfigured = (reply: FastifyReply) => reply.code(501).send({ ok: false, error: 'not-configured' });
 
@@ -327,14 +475,24 @@ export function registerCoordRoutes(
    * nothing, so there is no delivery lane needing a recorded rejection to
    * explain itself — the claims table itself is the record of every
    * acquisition that happened.
+   *
+   * `uuidField` (Task 9 fix round 1) names the body field THIS CALLER's
+   * request actually carries — `'byUuid'` for the claim lanes, `'fromUuid'`
+   * for `POST /api/asks/:id/answer` — so the `stale-uuid` detail can tell a
+   * caller which of ITS OWN fields to re-read. Before this, the prose was a
+   * literal `'byUuid does not match...'` no matter who called it: an ask
+   * caller, whose body has no `byUuid` field at all, was told to fix a field
+   * it never sent. The wording is ALSO caller-agnostic now ("sender", not
+   * "claimant") — this gate has two callers with two different verbs for
+   * what they are doing, and "claimant" is only true of one of them.
    */
   const requireAttribution = async (
-    reply: FastifyReply, whoId: string, whoUuid: string,
+    reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid' | 'fromUuid',
   ): Promise<boolean> => {
     const names = await deps.io.readdir(deps.cfg.registryDir);
     if (names === null) {
       reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-        detail: 'the registry directory could not be listed — transient, not a fact about the claimant' });
+        detail: 'the registry directory could not be listed — transient, not a fact about the sender' });
       return false;
     }
     const registry = await readRegistry(deps.io, deps.cfg);
@@ -342,7 +500,7 @@ export function registerCoordRoutes(
     if (!row) {
       if (names.includes(`${whoId}.uuid`)) {
         reply.code(502).send({ ok: false, error: 'registry-unmeasurable',
-          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the claimant` });
+          detail: `registry row for ${whoId} is listed but unreadable — transient, not a fact about the sender` });
         return false;
       }
       reply.code(403).send({ ok: false, error: 'unknown-sender', detail: `no registry row for ${whoId}` });
@@ -356,7 +514,7 @@ export function registerCoordRoutes(
     }
     if (identity.uuid !== whoUuid) {
       reply.code(403).send({ ok: false, error: 'stale-uuid',
-        detail: 'byUuid does not match the registry — stale claimant; re-read your own .uuid' });
+        detail: `${uuidField} does not match the registry — stale sender; re-read your own .uuid` });
       return false;
     }
     return true;
@@ -389,7 +547,7 @@ export function registerCoordRoutes(
    * Every session on the box can read every `.uuid` file and could present a
    * neighbour's pair. What it catches is a STALE sender — a session that was
    * `/clear`ed or compacted since it read its own uuid, which `_sync_uuid`
-   * rotates every 5s (`ccd/ccd:9004`, cadence at `ccd/ccd:10472`) — and an honest mistake.
+   * rotates every 5s (`ccd/ccd:9327`, cadence at `ccd/ccd:10795`) — and an honest mistake.
    *
    * The order below IS the design: a cheaper refusal must never be reached
    * after an expensive one.
@@ -522,7 +680,7 @@ export function registerCoordRoutes(
     // `io.readdir` returning `null` (an ordinary transient failure in remote
     // mode: one dropped agent-WS round trip) is not evidence that no session
     // exists anywhere on the fleet, and `readRegistry` collapses exactly that
-    // failure to `[]` (`registry.ts:104`). Reading `[]` as "the sender does
+    // failure to `[]` (`registry.ts:106`). Reading `[]` as "the sender does
     // not exist" turns a transient hiccup into a PERMANENT, recorded
     // `unknown-sender` for a session that is plainly alive — the same
     // NOT-KNOWING-IS-NOT-`[]` rule `tip-unmeasurable`/`pr-unmeasurable`
@@ -544,7 +702,7 @@ export function registerCoordRoutes(
     const sender = registry.find((r) => r.id === fromId);
     if (!sender) {
       // `readRegistry` also drops a row that WAS listed (its `.uuid` file
-      // exists in `names`) when a sibling field read fails (`registry.ts:123`,
+      // exists in `names`) when a sibling field read fails (`registry.ts:125`,
       // "incomplete registry entry — skip, don't crash") — ALSO transient,
       // not "this session does not exist". `names` proves presence
       // independently of whether every field could be read, the same
@@ -586,12 +744,15 @@ export function registerCoordRoutes(
         'fromUuid does not match the registry — stale sender');
     }
 
-    // 7: recipient shape — the literal role 'coordinator', or an existing
-    // registry row. Resolving the ROLE to a concrete session id happens below,
-    // after runId (check 8) is known to be real. Same transient-vs-terminal
-    // split as check 5, reusing the same `names`/`registry` reads rather than
-    // a second round trip.
-    if (toId !== 'coordinator' && !registry.some((r) => r.id === toId)) {
+    // 7: recipient shape — a literal ROLE ('coordinator' or 'worker'), or an
+    // existing registry row. Resolving a role to a concrete session id happens
+    // below, after runId (check 8) is known to be real. Same
+    // transient-vs-terminal split as check 5, reusing the same
+    // `names`/`registry` reads rather than a second round trip.
+    //
+    // Raw session-id addressing is untouched and stays the ad-hoc lane: a role
+    // follows the chair, a session id names a session.
+    if (toId !== 'coordinator' && toId !== 'worker' && !registry.some((r) => r.id === toId)) {
       if (names.includes(`${toId}.uuid`)) {
         return refuse(reply, 502, 'registry-unmeasurable', { fromId, fromUuid, toId, kind, subject, runId },
           `registry row for ${toId} is listed but unreadable — transient, not a fact about the recipient`);
@@ -603,21 +764,50 @@ export function registerCoordRoutes(
     // 8: runId, when given, must name a run that exists. One lookup, reused
     // below for the envelope's program/wave — a second `coord.run(runId)`
     // after this would be the same read twice for no reason.
-    const run = runId !== null ? coord.run(runId) : null;
+    const runRead = runId !== null ? coord.run(runId) : null;
+    // D-2545. UNREADABLE IS NOT ABSENT, and this is the one place on this route
+    // where the difference changes what the sender should do: `unknown-run`
+    // says "you named a run that does not exist — fix the id", while this says
+    // "the run is there and this box cannot read it — do not retry blindly".
+    //
+    // NOT through `refuse()`, deliberately: that helper RECORDS a rejection row
+    // in the very database that just failed a read, and its `code` parameter is
+    // a `MailRejectCode` — admitting a read failure to that vocabulary would
+    // put a word on the mail wire for a condition no mail was ever rejected
+    // for. A plain 503, recorded nowhere, in the `not-configured` family.
+    if (runRead !== null && !runRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: runRead.detail });
+    }
+    const run = runRead === null ? null : runRead.run;
     if (runId !== null && run === null) {
       return refuse(reply, 404, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
         `no run ${runId}`);
     }
 
-    // Resolving 'coordinator'. It is a ROLE, not a session id: the store
-    // resolves it to the claimedBy of the run named in runId; with no runId,
-    // to the claimedBy of the single active program. Ambiguous or absent →
-    // unknown-recipient, recorded — no guessing: an agent-to-agent message
-    // delivered to the wrong session is worse than one refused with a reason.
-    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId) : toId;
+    // Resolving a ROLE. Neither literal is a session id: 'coordinator' resolves
+    // to the claimedBy of the run named in runId — with no runId, to the
+    // claimedBy of the single active program, UNCHANGED and deliberately so,
+    // because that arm is the documented recovery for an already-retired
+    // programme. 'worker' resolves to that run's own `sessionId` and REQUIRES a
+    // runId: a worker is per run and there is nothing to fall back to.
+    // Ambiguous or absent → unknown-recipient, recorded — no guessing: an
+    // agent-to-agent message delivered to the wrong session is worse than one
+    // refused with a reason.
+    const resolvedToId = toId === 'coordinator' ? coord.resolveCoordinator(runId)
+      : toId === 'worker' ? (runId === null ? null : coord.resolveWorker(runId))
+      : toId;
     if (resolvedToId === null) {
-      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId },
-        "the 'coordinator' role has no single claimed active program to resolve to");
+      // ONE SHAPE, TWO SENTENCES. The status and code are the coordinator
+      // role's exactly — from the server's side an unresolvable role is an
+      // unresolvable role — but the detail names which condition, because the
+      // sender's remedy differs: send the runId, versus wait for the wave to be
+      // dispatched.
+      const why = toId !== 'worker'
+        ? "the 'coordinator' role has no single claimed active program to resolve to"
+        : runId === null
+          ? "the 'worker' role needs a runId — a worker is per run, and there is nothing to fall back to"
+          : `run ${runId} has no worker`;
+      return refuse(reply, 404, 'unknown-recipient', { fromId, fromUuid, toId, kind, subject, runId }, why);
     }
 
     // 9: peer-mail bounds — `runId === null` ONLY (Build 9b wave 0, D10 hole
@@ -758,8 +948,8 @@ export function registerCoordRoutes(
     }
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) {
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) {
       return refuse(reply, 400, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
     }
 
@@ -795,7 +985,15 @@ export function registerCoordRoutes(
   });
 
   /**
-   * `GET /api/mail?to=<id>` (fix, review findings 1/15: this route fell in
+   * `GET /api/mail?to=<id>` OR `GET /api/mail?program=<slug>` (cross-repo
+   * programmes wave 1, Task 7) — EXACTLY ONE of `to`/`program` is required;
+   * both or neither is a 400 (D-2057). `to` is a MAILBOX (what one session
+   * was actually sent); `program` is a THREAD (what one programme has said,
+   * joined on `mail.runId` → `runs.program` — a mail with no `runId` matches
+   * neither and appears only under `to`). `all`/`limit` apply to either arm
+   * identically, below.
+   *
+   * (fix, review findings 1/15: this route fell in
    * the seam between the two Build 7 plans, each naming the other as its
    * author — PR I's own D-9 pointed at PR J for `POST /api/runs/:id/advance`
    * and PR J's own "Interfaces assumed from PR I" contract item 6 pointed
@@ -838,13 +1036,29 @@ export function registerCoordRoutes(
     if (!requireMailToken(req, reply, 'GET /api/mail')) return;
     const coord = deps.coord;
 
-    const q = req.query as { to?: unknown; limit?: unknown; all?: unknown };
-    if (typeof q.to !== 'string' || q.to.trim() === '') {
+    const q = req.query as { to?: unknown; program?: unknown; limit?: unknown; all?: unknown };
+    const to = typeof q.to === 'string' && q.to.trim() !== '' ? q.to : null;
+    // TRIMMED, because the write side is: `POST /api/runs` shapes the slug
+    // (which trims) before storing it, so binding the raw query value here made
+    // `?program=build4%20` test non-empty, bind `'build4 '`, and match nothing —
+    // an empty thread that looks like a programme with no mail rather than a
+    // typo. NOT `shapeProgramSlug`: this is a READ, and persisted programmes
+    // predating that grammar legitimately contain dots.
+    const program = typeof q.program === 'string' && q.program.trim() !== ''
+      ? q.program.trim() : null;
+    // EXACTLY ONE, and neither is a default for the other: `to` is a MAILBOX
+    // (what one session was actually sent) and `program` is a THREAD (what one
+    // programme has said), and a request that named both would be asking two
+    // different questions in one call. Neither is still a bad request, exactly
+    // as it was before `program` existed.
+    if ((to === null) === (program === null)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const limit = typeof q.limit === 'string' ? Number(q.limit) : undefined;
     const all = q.all === '1' || q.all === 'true';
-    const mail = all ? coord.mailForRecipient(q.to, limit) : coord.outstandingMailFor(q.to, limit);
+    const mail = program !== null
+      ? coord.mailForProgram(program, { limit, all })
+      : all ? coord.mailForRecipient(to!, limit) : coord.outstandingMailFor(to!, limit);
     return reply.code(200).send({ ok: true, mail });
   });
 
@@ -872,8 +1086,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
@@ -887,7 +1101,7 @@ export function registerCoordRoutes(
   // the PWA sees everything." Four routes (dispatch/close's sibling
   // `POST /api/runs/:id/advance` joins them below, closing review finding 1),
   // ZERO NEW CCD VERBS — every argv below is one of the five already granted
-  // (`agent/src/whitelist.ts:310-336`): `wsAdd`/`ensure` are dispatch,
+  // (`agent/src/whitelist.ts:323-349`): `wsAdd`/`ensure` are dispatch,
   // `wsHold` is the claim, `wsRelease` the close, `wsArchive` the one
   // explicit-abandon escape hatch.
   //
@@ -933,48 +1147,230 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId } = body;
-    if (typeof program !== 'string' || program.trim() === '' ||
+    const { program, title, claimedBy, sessionId, homeProject, kind, reviews } = body;
+    // Design 2026-09-14 §5.1 / D-2799. `kind` absent is 'work' — every caller
+    // that predates review runs. Checked BEFORE the shape guard below: that
+    // guard's own project/wave relaxation reads `kind !== 'review'` and would
+    // otherwise fold an invalid `kind` into "this is a work-shaped body" and
+    // answer the generic bare `bad-request` (no field named) rather than this
+    // one's own detail.
+    if (!(kind === undefined || kind === 'work' || kind === 'review')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'kind must be work or review' });
+    }
+    if (typeof program !== 'string' ||
         typeof title !== 'string' || title.trim() === '' ||
-        typeof project !== 'string' || project.trim() === '' ||
+        (kind !== 'review' && (typeof body.project !== 'string' || body.project.trim() === '')) ||
+        (body.project !== undefined && typeof body.project !== 'string') ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        typeof wave !== 'number' || !Number.isInteger(wave) || wave < 1 ||
-        !(waveOf === undefined || waveOf === null || (typeof waveOf === 'number' && Number.isInteger(waveOf))) ||
-        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== ''))) {
+        (kind !== 'review' && !isPositiveDecimalSafeInteger(body.wave)) ||
+        (body.wave !== undefined && !isPositiveDecimalSafeInteger(body.wave)) ||
+        !(body.waveOf === undefined || body.waveOf === null || isPositiveDecimalSafeInteger(body.waveOf)) ||
+        !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
+        // Present-and-not-a-string is a malformed body. The VALUE is shaped
+        // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
+        // is a single path segment — because the first non-NULL home a
+        // programme stores is permanent and `ledgerAbsPath` joins it under
+        // `projectsRoot` (D-2349; PR #75 review round 1, F2 + F4).
+        !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
-    const waveOfVal = (waveOf ?? null) as number | null;
+    // `kind`'s own vocabulary was already proven above, before this guard.
+    // Each further refusal below names its field so the caller can tell
+    // "malformed JSON" from "you sent the wrong thing".
+    const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
+    if (runKind === 'work' && reviews !== undefined) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
+    }
+    if (runKind === 'review' && !isPositiveDecimalSafeInteger(reviews)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews must name the work run under review (a positive run id)' });
+    }
+    // A programme names one ledger file, so separators, dot components, and
+    // display-label punctuation are refused before the value reaches storage or
+    // `ledgerPath`. Every programme consumer below reads this one shaped value —
+    // MOVED above the review arm (Task 5 review I2): `program` compared raw
+    // against the reviewed run's own (already-shaped, since every open shapes
+    // it) `program` let a whitespace-padded slug pass a work open and fail an
+    // otherwise-identical review open of the same programme.
+    const programShape = shapeProgramSlug(program);
+    if (!programShape.ok) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
+    }
+    const programSlug = programShape.slug;
+
+    // A review run's project, wave and waveOf are the REVIEWED run's — read off
+    // its row, never off this body, which may only agree (D-2799). The body's
+    // own shape guard above already accepted `project`/`wave` as it always
+    // did; here the review arm overrides them with the measured values.
+    let project = body.project as string, wave = body.wave as number, waveOfBody = body.waveOf;
+    if (runKind === 'review') {
+      if (sessionId !== undefined) {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' });
+      }
+      const target = coord.run(reviews as number);
+      if (!target.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: target.detail });
+      if (target.run === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews names no run' });
+      const t = target.run;
+      if (t.kind !== 'work') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a work run, not one of kind ${t.kind}` });
+      if (t.state !== 'awaiting-review') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a run at awaiting-review, not ${t.state}` });
+      if (t.program !== programSlug) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
+      if (t.claimedBy !== claimedBy) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'claimedBy must be the reviewed run\'s coordinator' });
+      if (body.project !== undefined && body.project !== t.project) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `project must be the reviewed run's (${t.project})` });
+      if (body.wave !== undefined && body.wave !== t.wave) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `wave must be the reviewed run's (${t.wave})` });
+      if (body.waveOf !== undefined && body.waveOf !== null && body.waveOf !== t.waveOf) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `waveOf must be the reviewed run's (${t.waveOf})` });
+      project = t.project; wave = t.wave; waveOfBody = t.waveOf;
+    }
+
+    // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
+    // `setProgramHome` (through the verdict's own `home`), the response —
+    // reads `home`, never the raw body field.
+    let home: string | undefined;
+    if (typeof homeProject === 'string') {
+      const shaped = shapeHomeProject(homeProject);
+      if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
+      home = shaped.home;
+    }
+    const waveOfVal = (waveOfBody ?? null) as number | null;
+
+    // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
+    // repository, and reusing it for a wave in another is the one crossing this
+    // build refuses. Measured from this store's own history, no I/O at all.
+    //
+    // HERE, AND NOT INSIDE `openRun`: the refusal must leave no `planned`
+    // orphan, so it runs after body validation and BEFORE the row exists. A
+    // null answer refuses nothing — absence permits, and `sessionProject`'s own
+    // docstring says which population that is.
+    if (typeof sessionId === 'string') {
+      const bound = coord.sessionProject(sessionId);
+      if (bound !== null && bound !== project) {
+        return reply.code(409).send({ ok: false, refused: 'project-mismatch', by: bound });
+      }
+    }
+
+    // F2 (design §3 F2) — the programme's home, decided BEFORE the row exists so
+    // a refusal leaves no `planned` orphan, exactly like the check above.
+    //
+    // `known` is measured separately from `stored` on purpose: `programHome`
+    // answers null for two conditions this route handles differently, and asking
+    // it only about a programme this box has proven exists is what keeps them
+    // apart. `programs()` is one read of a table with one row per programme.
+    const known = coord.programs().some((p) => p.slug === programSlug);
+    const homeVerdict = homeProjectVerdict({
+      body: home,
+      known, stored: known ? coord.programHome(programSlug) : null,
+      legacyAccepted: HOME_PROJECT_LEGACY_ACCEPTED,
+    });
+    if (homeVerdict.kind === 'mismatch') {
+      return reply.code(409).send({ ok: false, refused: 'home-mismatch', by: homeVerdict.by });
+    }
+    if (homeVerdict.kind === 'required') {
+      // Its OWN sentence (D-2349), not the body-shape guard's bare
+      // `bad-request` above: "your JSON is malformed" and "this build
+      // requires a home" have different remedies and must not reach the
+      // caller as one value. LIVE since 2026-09-16 (D-2867): every
+      // otherwise well-formed open with no `homeProject` gets this — a
+      // malformed body still gets the shape guard's answer first, a session
+      // bound elsewhere `409 project-mismatch`. Pinned by
+      // `home-project.test.ts`'s scan and `home-project-required.test.ts`.
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
+    }
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
-    const opened = coord.openRun({ program, title, project, wave, waveOf: waveOfVal, claimedBy });
+    const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
+      kind: runKind, reviews: runKind === 'review' ? (reviews as number) : null,
+      ...(home !== undefined ? { homeProject: home } : {}) });
+    if ('kind' in opened) {
+      return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
+        ok: false,
+        error: opened.kind,
+        ...('limit' in opened ? { limit: opened.limit } : {}),
+        detail: opened.detail,
+      });
+    }
     if ('refused' in opened) {
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
 
+    // The backfill is RECORDED, not merely done — and the legacy acceptance
+    // was too, while the constant was `true`, which is what let the flip be
+    // dated from `run_events` at all (it was ruled early instead, D-2867; the
+    // trail is in `docs/superpowers/programs/home-project-flip.md`).
+    // `recordRunEvent` writes `fromState === toState`, so the notify lane
+    // skips it and no push impersonates a transition.
+    if (homeVerdict.kind === 'backfill') {
+      tx(coord.db, () => {
+        coord.setProgramHome(programSlug, homeVerdict.home);
+        coord.recordRunEvent(opened.id, 'coordinator', 'home-project-backfilled');
+      });
+    }
+    if (homeVerdict.kind === 'legacy') {
+      coord.recordRunEvent(opened.id, 'coordinator', 'legacy-home-project');
+    }
+
     // `sessionId` names an existing workspace (wave N>=2, reclaiming what
-    // wave 1 held): place the hold immediately, and persist the id onto the
-    // row (`CoordStore.setSession`, this task's own deviation D-45) so the
-    // dispatch route can later read `run.sessionId` back and know to `ensure`
-    // rather than `ws-add` (deviation D-1).
+    // wave 1 held): place the external hold FIRST, then commit every related
+    // database write as one unit (D-2350, D-2505). `setSession` funnels into
+    // transaction-free `bindSession`, which on a RE-bind re-issues the
+    // predecessor's outstanding worker mail to the heir and parks the
+    // predecessor's rows. Keeping the transaction here avoids nesting at the
+    // dispatch caller while ensuring a late event failure rolls all of those
+    // writes back. A refused hold (501/502) still changes no database fact. The
+    // dispatch route later reads `run.sessionId` back to choose `ensure`
+    // over `ws-add` (deviation D-1; `CoordStore.setSession` is D-45).
+    //
+    // A re-bind is RECORDED on the run's own trail, naming both occupants and
+    // how many deliveries moved (D-2351; store-2): `openRun`'s dup arm keys on
+    // (program, wave, waveOf, claimedBy, planned) and not on `sessionId`, so
+    // a retried open naming a different session reaches this line with a
+    // predecessor — a live path, not a store-test-only one — and an occupant
+    // change must be attributable like every other run write.
     if (typeof sessionId === 'string') {
-      coord.setSession(opened.id, sessionId);
-      const argv = CCD_ARGV.wsHold(sessionId,
-        holdReason(program, wave, waveOfVal, opened.id),
-        sweepDec(deps.fleetState, `run:${opened.id} open`));
+      const argv = CCD_ARGV.wsHold(
+        sessionId, opened.holdReason,
+        sweepDec(deps.fleetState, `run:${opened.id} open`),
+      );
       if (!verbSupported(deps.fleetState, argv)) {
         return reply.code(501).send({ ok: false, error: 'unsupported' });
       }
       const res = await deps.runCcd(argv);
       if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
+      tx(coord.db, () => {
+        const predecessor = coord.resolveWorker(opened.id);
+        const bound = coord.setSession(opened.id, sessionId);
+        if (bound.rebound) {
+          // `bindSession` reports a rebound only when its pre-read found a
+          // non-null predecessor distinct from `sessionId`; keep that invariant
+          // visible rather than interpolating the impossible `null` silently.
+          if (predecessor === null) throw new Error('rebound reported without a predecessor');
+          coord.recordRunEvent(opened.id, 'coordinator',
+            'session-rebound' + `: ${predecessor} -> ${sessionId}, ${bound.reissued} re-issued`);
+        }
+      });
     }
 
+    // Re-read rather than reasoned about: `openRun`'s first insert and the
+    // backfill above are two different writers of this column, and the response
+    // must say what the row now HOLDS, not what this request happened to send.
+    const ledgerRepo = coord.programHome(programSlug);
     return reply.code(200).send({
-      ok: true, id: opened.id, program: opened.program, state: opened.state,
-      ledgerPath: `docs/superpowers/programs/${program}.md`,
+      ok: true, id: opened.id, program: programSlug, state: opened.state,
+      // UNCHANGED for the caller, now DERIVED: `shared/api.ts`'s `ledgerPath`
+      // is the one spelling of where a programme's ledger lives — the PWA and
+      // `coord/kickoff.ts` tell the operator where to commit it from the same
+      // helper — so a change there reaches this response too (PR #75 review
+      // round 1, WIRE-3; `single-definition.test.ts`'s census could not see the
+      // segmented join this replaces).
+      ledgerPath: ledgerPath(programSlug),
+      // Both null while the stored home is null, and never derived from the
+      // registry or the claimant (design §3 F2's rejected alternative): a fact
+      // the programme carries forever must not depend on a live read that can
+      // degrade. `ledgerRepo` is the SHAPED home the row holds (F2/F4 above).
+      ledgerRepo,
+      ledgerAbsPath: ledgerRepo === null ? null
+        : path.join(deps.cfg.projectsRoot, ledgerRepo, ledgerPath(programSlug)),
     });
     });
   });
@@ -995,8 +1391,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
@@ -1026,8 +1422,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1059,8 +1455,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1105,8 +1501,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // Read BEFORE the mutex, not inside it: a malformed body is decided by this
     // request alone, and queueing it behind a live dispatch would make the
     // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
@@ -1131,6 +1527,10 @@ export function registerCoordRoutes(
     }
     switch (r.kind) {
       case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      // D-2545. 503, never the 404 above: the run exists and this box cannot
+      // read it — the ungated release valve must say which.
+      case 'run-unreadable':
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
       // 502, the coord-route family's status for this condition
@@ -1182,6 +1582,7 @@ export function registerCoordRoutes(
    * both as "the ordinary case, not a failure") re-measures NOTHING, the
    * same D-49 reasoning close's own abandon path already uses: retreating to
    * `working` asserts no new claim of doneness for the server to check.
+   * It does take the CAP check when it comes from an idle state (design 2026-09-14 §7.2) — retreating asserts no doneness, but it does re-occupy a fleet slot.
    */
   app.post('/api/runs/:id/advance', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1189,8 +1590,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as
       { to?: unknown;
@@ -1213,13 +1614,51 @@ export function registerCoordRoutes(
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const run = coord.run(id);
+    const read = coord.run(id);
+    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
+    // the coordinator this run does not exist, which is a lie about a row
+    // sitting in the table with an integer this process cannot represent.
+    // 503, in the `not-configured` family — a fact about this box, not about
+    // the request. Before any `verifyDone` re-measurement or any advance.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    const run = read.run;
     if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
+    if (!(transitionsFor(run.kind)[run.state] as readonly RunState[]).includes(to)) {
       return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
     }
     if (run.sessionId === null) {
       return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
+    }
+
+    // Design 2026-09-14 §9 invariant 3 — the pair never disagrees. A work run
+    // under review cannot be moved back to `working` until its review run is
+    // terminal: the coordinator closes R (done, or failed if it died) BEFORE
+    // sending W back, so a report and the tip it describes stay one pair.
+    // Checked ahead of the cap: a definite refusal before a contingent one.
+    if (to === 'working' && run.kind === 'work') {
+      const inflight = coord.reviewInFlightFor(id);
+      if (inflight !== null) {
+        return reply.code(409).send({ ok: false, reject: { code: 'review-in-flight', reviewRunId: inflight } });
+      }
+    }
+
+    // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
+    // `capsUsage().running`, so the one legal edge back INTO an active state
+    // — `awaiting-review`/`merging` -> `working`, a review sending work back
+    // or a lost merge race — must take the cap check dispatch takes, or the
+    // exclusion is a bypass. `dispatched -> working` is not checked: that run
+    // is already counted. The numbers come from `capsMeasured` (D-2805), the
+    // one reader both routes share; this file's own `.capsUsage(` stays the
+    // caps view's alone, as `coord-caps-route.test.ts` pins.
+    if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
+      const { overConcurrency } = capsMeasured(coord);
+      if (overConcurrency !== null) {
+        // Fields spelled, not spread, to match dispatch.ts's frame; capsMeasured owns the arithmetic.
+        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
+          limit: overConcurrency.limit, running: overConcurrency.running } });
+      }
     }
 
     // Forward motion toward a review claim re-measures; retreating to
@@ -1240,7 +1679,18 @@ export function registerCoordRoutes(
 
     const adv = coord.advance(id, to, 'coordinator');
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    return reply.code(200).send({ ok: true, run: toRunSummary(coord.run(id)!) });
+    // Re-read after the advance for the fresh row. `!` is gone with the type
+    // (D-2545): an advance that succeeded and then read back absent or
+    // unreadable is a real condition, and answering it honestly is cheaper
+    // than a non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
+    }
+    if (after.run === null) {
+      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
+    }
+    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
     });
   });
 
@@ -1270,8 +1720,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
@@ -1297,7 +1747,7 @@ export function registerCoordRoutes(
    * The box token authenticates the FLEET HOST (build7:136-143) and the
    * coordinator holds it by design. `$REG/coordinator-paused` exists precisely
    * so the coordinator CANNOT unpause itself — "no verb, no route, no way"
-   * (`rundefs.ts:47-52`). A pause route gated by that token would hand the
+   * (`rundefs.ts`'s `MAIL_DISABLED_MARKER`). A pause route gated by that token would hand the
    * coordinator its own unpause: the same key, both sides of a boundary that
    * only means anything because the two callers are different. So this rides
    * the PWA's existing unauthenticated surface, the same perimeter
@@ -1431,7 +1881,7 @@ export function registerCoordRoutes(
     //
     // A missing `NotifyLog` degrades the RECORD and never the write; and
     // `recordFeedEvent` throws SYNCHRONOUSLY (`node:sqlite`), so it is caught
-    // here exactly the way `watch.ts:1225-1228` catches it. Refusing an
+    // here exactly the way `watch.ts:1391-1394` catches it. Refusing an
     // operator's write because the feed archive is unavailable would be the
     // collapse, not the safety.
     const log = deps.notifyLog;
@@ -1442,6 +1892,7 @@ export function registerCoordRoutes(
           title: 'caps changed',
           body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}, ` +
                 `per day ${before.maxSessionsPerDay} → ${view.caps.maxSessionsPerDay}`,
+          runId: null,
         });
         coord.recordFeedEvent(log.epoch, ev);
       } catch (err) {
@@ -1449,7 +1900,7 @@ export function registerCoordRoutes(
           `(${err instanceof Error ? err.message : String(err)}) — caps written, feed archive degraded`);
       } finally {
         // FLUSH, like the only other `record()` caller in the tree
-        // (`watch.ts:1230`) and for the reason `NotifyLog.flush`'s own docstring
+        // (`watch.ts:1396`) and for the reason `NotifyLog.flush`'s own docstring
         // gives: `record()` bumps the in-memory seq, and a seq handed to a
         // client but never persisted lets a restart re-mint the same
         // `{epoch, seq}` pair for a different event — the stale-but-valid
@@ -1541,9 +1992,49 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { closed?: string };
-    const runs = deps.coord.runs({ includeClosed: q.closed === '1' });
-    const summaries: RunSummary[] = runs.map(toRunSummary);
+    const read = deps.coord.runs({ includeClosed: q.closed === '1' });
+    // D-2545, ALL-OR-FAILURE at the board's own door. One unreadable row fails
+    // the WHOLE read rather than quietly shipping the others: a board silently
+    // missing the run an operator is looking for is worse than a board that
+    // says it could not be read. 503 and an honest error, never a partial list
+    // and never an empty one.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
+    }
+    const summaries: RunSummary[] = read.runs.map(toRunSummary);
     return { runs: summaries };
+  });
+
+  /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
+   *  gated exactly as `GET /api/runs` above: a session cookie OR the box token
+   *  when auth is armed, because the coordinator skill reads it cookieless
+   *  from the fleet host. Nothing is written here: the refused-close count it
+   *  reports is `closeRun`'s own `recordRejection` row. */
+  app.get('/api/runs/:id/signals', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false, error: 'unauthenticated', verdict: session.verdict,
+            detail: 'GET /api/runs/:id/signals takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    // The shared parser, not `Number(idParam)`: `routes.ts`'s id census
+    // (`routes.test.ts`) requires every `:id` seam in this file to read its id
+    // the one canonical way — ` 1`, `01`, `1e0`, `0x1` and anything past
+    // MAX_SAFE_INTEGER are refused rather than coerced into a row id.
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const signals = deps.coord.runSignals(id);
+    if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    return { ok: true, signals };
   });
 
   /**
@@ -1586,32 +2077,75 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // An unknown run and a run with no declared ledger are DIFFERENT answers a
     // caller acts on differently: the first means the id is wrong, the second
     // means this wave declared none (the board renders `—`, not `0/0`). They
     // must not both come back as an empty array.
-    if (deps.coord.run(id) === null) {
+    const read = deps.coord.run(id);
+    // D-2545. The comment directly above says an unknown run and a run with no
+    // declared ledger are different answers a caller acts on differently; an
+    // UNREADABLE run is a third, and folding it into the 404 would tell the
+    // caller its id was wrong.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
     return { ok: true, items: deps.coord.workItems(id) };
   });
 
   /**
-   * `GET /api/feed?limit=<n>` (Task 10, orchestrator-added scope: PR J
-   * interface 5) — the durable archive behind `NotifyLog`'s in-memory ring,
+   * `GET /api/feed?limit=<n>[&program=<slug>]` (Task 10, orchestrator-added
+   * scope: PR J interface 5; the programme filter is cross-repo programmes' —
+   * design §4) — the durable archive behind `NotifyLog`'s in-memory ring,
    * oldest-first. Survives both a ring eviction (the ring keeps only the
    * newest 200, `notifylog.ts`'s `RING`) and a restart (a fresh `NotifyLog`
    * mints a new epoch and an empty ring; this table is untouched by either).
    * `limit` clamping is `CoordStore.feedEvents`'s own job, not repeated here
    * — same division of labour as `GET /api/runs`'s `closed` flag above.
+   *
+   * `program` filters through `feed_events.runId` (migration 10). An event that
+   * names no run is PROGRAMLESS and appears only in the unfiltered read, which
+   * is this route without the parameter — a `done` or an `ask` is about a
+   * session, not about a programme.
    */
   app.get('/api/feed', async (req, reply) => {
+    // EXEMPT-BUT-AUTHENTICATED (D-2507): `ccrc-api feed list` runs
+    // cookieless on the fleet host, while the PWA carries a live session.
+    // Authenticate before `not-configured`, preserving the global gate's
+    // information boundary on an armed box.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/feed takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); ccrc-api reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
     if (!deps.coord) return notConfigured(reply);
-    const q = req.query as { limit?: string };
+    const q = req.query as { limit?: string; program?: string };
     const limit = Number(q.limit);
-    return { events: deps.coord.feedEvents(limit) };
+    // TRIMMED, because the write side is: `POST /api/runs` shapes the slug
+    // (which trims) before storing it, so binding the raw query value here made
+    // `?program=build4%20` test non-empty, bind `'build4 '`, and match nothing —
+    // an empty thread that looks like a programme with no mail rather than a
+    // typo. NOT `shapeProgramSlug`: this is a READ, and persisted programmes
+    // predating that grammar legitimately contain dots.
+    const program = typeof q.program === 'string' && q.program.trim() !== ''
+      ? q.program.trim() : null;
+    return { events: program === null
+      ? deps.coord.feedEvents(limit)
+      : deps.coord.feedEventsForProgram(program, limit) };
   });
 
   /**
@@ -1622,7 +2156,7 @@ export function registerCoordRoutes(
    * and the reason is `GET /api/runs`'s exactly: A WORKER MUST BE ABLE TO ASK
    * "WHAT HAPPENED TO MY WORKSPACE" WITHOUT A BROWSER. It runs on the fleet
    * host with no cookie jar, and the answer it needs is about a workspace that
-   * may no longer exist — `_reg_purge` (`ccd:458-556`) has already deleted
+   * may no longer exist — `_reg_purge` (`ccd:484-582`) has already deleted
    * every per-session field by then, which is the whole reason the journal is
    * a dot-prefixed DIRECTORY. Gated, an armed box answers `401 no-session` and
    * the one surface that survives a destruction is unreachable from the box
@@ -1759,7 +2293,7 @@ export function registerCoordRoutes(
     const recs = await readRegistry(deps.io, deps.cfg);
     const recById = new Map(recs.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs);
+      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -1908,10 +2442,18 @@ export function registerCoordRoutes(
         detail: `intent exceeds ${CLAIM_INTENT_MAX_BYTES} bytes — it renders on PeerSummary, it is not a spec` });
     }
 
-    if (!(await requireAttribution(reply, byId, byUuid))) return;
+    if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
-    if (runId !== null && coord.run(runId) === null) {
-      return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+    if (runId !== null) {
+      const read = coord.run(runId);
+      // D-2545: the row is there and unreadable — not absent. 503, so the
+      // claimant does not go looking for a typo in an id that is correct.
+      if (!read.ok) {
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+      }
+      if (read.run === null) {
+        return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+      }
     }
 
     const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
@@ -1940,7 +2482,8 @@ export function registerCoordRoutes(
         // re-derived through the L1's own `claimMailHint`, so the degradation
         // rule (no:<reason> -> null, never a silent send) has one spelling.
         const names = await deps.io.readdir(deps.cfg.registryDir);
-        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux);
+        const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
+          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {
@@ -1993,10 +2536,10 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    if (!(await requireAttribution(reply, body.byId, body.byUuid))) return;
+    if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
     // terminal row falls through to the store, whose answer is the honest
     // `claim-terminal`/`unknown-claim` — `not-owner` is only ever said about
@@ -2038,8 +2581,8 @@ export function registerCoordRoutes(
   app.post('/api/claims/:id/break', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     return sendClaimEndOutcome(reply, deps.coord.claimBreak(id, 'operator', Date.now()));
   });
 
@@ -2260,5 +2803,396 @@ export function registerCoordRoutes(
       allocations: rows.map((a) => ({ ...a,
         stale: a.state === 'allocated' && a.allocatedAt <= now - LEDGER_STALE_MS })),
     });
+  });
+
+  /* ── asks (ask pre-emption lane, Task 9) ─────────────────────────────── */
+
+  // `freshAskAt` (the D-2170 fail-shut re-measurement `takeAskForAnswer`'s
+  // CAS is checked against) is `registry.ts`'s export now, fix round 1
+  // finding 2 — this route and `server.ts`'s `POST /api/sessions/:id/ask`
+  // both close over the SAME `Deps` object (this file's own `deps` param IS
+  // `buildServer`'s, passed straight through by `registerCoordRoutes`), so a
+  // security-relevant fail-shut guard had no business existing as two
+  // copies that could silently drift. See `registry.ts`'s own doc comment
+  // on it for the full reasoning.
+
+  /**
+   * `POST /api/asks/:id/answer` — the parent presses the digit into its
+   * child's live menu. The most safety-sensitive route in the lane: unlike
+   * every other coordination write, this one ends in a KEYSTROKE into
+   * another session's pane, so every gate below runs BEFORE `answerAsk` is
+   * ever called, in the order the risk falls.
+   *
+   * Box token (`requireMailToken`) proves only "a process on this box" — one
+   * shared secret, identical for every session on the fleet host. It can
+   * never prove WHICH session is calling, so `requireAttribution` layers the
+   * registry pair on top, exactly as the claims lanes and the mail ingress
+   * already do. Then, and only then, `ask.parentId === fromId`: only this
+   * child's OWN derived parent may pre-empt its question — attribution alone
+   * would let any live session on the box answer any other session's ask.
+   *
+   * The CAS precedes the keystroke: `takeAskForAnswer` is the row acting as
+   * its own mutex, re-proving the INSTANCE (`freshAskAt`, D-2170) and taking
+   * exclusive ownership of the row (`not-held`, D-2171) before `answerAsk`
+   * ever touches the pane. A refused press (`answerAsk` returning
+   * `ok:false`) rolls back with `untakeAsk`, NOT `releaseAsk`: a refusal
+   * here means no digit was pressed and the question is still live and
+   * still pre-emptible — not because every one of `answerAsk`'s twelve
+   * pre-send guards plus its two post-send `sendKey` checks (D-2177)
+   * precedes the loop, but because a row here only ever exists for a
+   * SINGLE-SELECT ask (`askActions` returns null on `multiSelect`, the sole
+   * eligibility gate `hold` checks before minting one — D-2173), which
+   * makes exactly one `sendKey` call and no Enter — see `untakeAsk`'s own
+   * docstring (`store.ts`) for the full argument. `releaseAsk`'s CAS source
+   * is `'held'`, and this row sits in `'answering'`, so it cannot even
+   * reach it (it would silently strand the row forever, `changes: 0` and
+   * all). `untakeAsk` is the exact CAS built for this rollback.
+   */
+  app.post('/api/asks/:id/answer', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    if (!requireMailToken(req, reply, 'POST /api/asks/:id/answer')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid, optionIndexes } = body;
+    // `optionIndexes`, never a singular `optionIndex`: under `askActions`
+    // eligibility only single-select asks are ever held, so this array
+    // carries one element today — and that is the point. A singular field is
+    // what re-opens the multi-select commit hazard, silently, on the day
+    // someone widens eligibility. The wire shape must not be the thing to
+    // remember.
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string' ||
+        !Array.isArray(optionIndexes) || !optionIndexes.every((n) => typeof n === 'number')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'fromId/fromUuid strings, optionIndexes an array of numbers' });
+    }
+
+    // The box token proves "a process on this box", one shared secret
+    // identical for every session on the fleet host — it cannot prove "this
+    // ask's parent". The registry pair is what attributes the specific
+    // session, exactly as the mail ingress and the claims lanes do.
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const askRead = coord.askById(id);
+    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
+    // for a row that is gone; this row is not gone, it is unreadable, and the
+    // two need different sentences for the same reason `child-unmeasurable`
+    // was split out of `ask-moved` below. 503, a fact about this box.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
+    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== fromId) {
+      return reply.code(403).send({ ok: false, error: 'not-parent',
+        detail: 'only this child\'s derived parent may pre-empt its question' });
+    }
+
+    // D-2170: re-read the child's hookstate and prove the menu on screen is
+    // the INSTANCE this row was minted for — see `freshAskAt`'s own comment.
+    const fresh = await freshAskAt(deps.io, deps.cfg, ask.childId);
+    // …and say WHICH refusal this is (whole-branch review M2). `freshAskAt`
+    // answers `UNMEASURED_ASK_AT` for three READS THAT FAILED, and that
+    // value can never equal a stored `askAt` — so handing it to the CAS
+    // below would answer `ask-moved`, a true statement about the CAS and a
+    // false one about the world. The two are not interchangeable to the
+    // caller: `wave-lifecycle.md` tells a coordinator that `ask-moved` means
+    // "the child repainted — re-read the ask and answer the current one",
+    // and a coordinator told that when the truth is "this box could not read
+    // the child" re-reads, finds the row still `held`, and loops. Same
+    // fail-shut direction, before any keystroke; only the sentence changes.
+    if (fresh === UNMEASURED_ASK_AT) {
+      return reply.code(409).send({ ok: false, error: 'child-unmeasurable',
+        detail: "this box could not read the child's live state — nothing was pressed, and the ask is unchanged" });
+    }
+    const taken = coord.takeAskForAnswer(id, fresh);
+    if (!taken.ok) return reply.code(409).send({ ok: false, error: taken.why });
+
+    const res = await answerAsk(askDeps, ask.childId, ask.askKey, optionIndexes);
+    if (!res.ok) {
+      // The refused-press rollback: `untakeAsk`, NOT `releaseAsk` — see this
+      // route's own docstring. `answerAsk` never pressed a digit on this
+      // path, so the row goes back to `'held'` rather than being abandoned
+      // in `'answering'` with no exit.
+      if (!coord.untakeAsk(id)) {
+        // Unexpected (fix round 1, item 5): `untakeAsk`'s CAS source is
+        // `'answering'`, and THIS request is the one that put the row there
+        // (`takeAskForAnswer` above, this same request). Nothing else should
+        // have moved it in between — `console.warn` on the surprise, the
+        // same idiom `watch.ts`'s `sweepAsks` already uses on its own CAS
+        // calls (e.g. its "unexpectedly still 'held' after a failed
+        // release" warning), rather than a silent discard.
+        console.warn(`ccrc-server: untakeAsk(${id}) returned false after a refused press — ` +
+          "the ask row was not 'answering' when the rollback ran; it may be stranded");
+      }
+      return reply.code(409).send(res);
+    }
+    // D-2172's SECOND record — written BEFORE `settleAsk` (fix round 1, item
+    // 3), deliberately: the mint-time record (`watch.ts`'s `hold()`) is the
+    // question; this one is the answer, naming the parent and what it chose
+    // — the operator's only durable trace of a decision made in their name
+    // over a question that never reached their phone. Ordered first so that
+    // if `settleAsk` below then throws, at least ONE durable trace of the
+    // answer survives — the feed record names who chose what even when the
+    // `asks` row's own `answeredBy`/`answer` never gets written. Same
+    // pattern `POST /api/coord/caps` uses just above: `deps.notifyLog` and
+    // `coord.recordFeedEvent` are independently optional (a box with neither
+    // configured still answers the request), `recordFeedEvent` throws
+    // SYNCHRONOUSLY (`node:sqlite`) so it is caught rather than allowed to
+    // turn a successful press into a 500, and the flush is unconditional in
+    // a `finally` for the reason `POST /api/coord/caps`'s own comment gives:
+    // `record()` mints the seq before this route can fail, so its
+    // persistence must follow regardless.
+    const log = deps.notifyLog;
+    if (log) {
+      try {
+        const ev = log.record({
+          kind: 'ask', sessionId: ask.childId, runId: null,
+          title: 'question answered',
+          body: `${fromId} answered ${ask.childId}'s question: ${ask.question} → ` +
+                `${ask.options[optionIndexes[0]!] ?? '?'}`,
+        });
+        coord.recordFeedEvent(log.epoch, ev);
+      } catch (err) {
+        console.warn('ccrc-server: recordFeedEvent failed ' +
+          `(${err instanceof Error ? err.message : String(err)}) — ask answered, feed archive degraded`);
+      } finally {
+        void log.flush();
+      }
+    }
+
+    // GUARDED (fix round 1, item 3): the digit has ALREADY landed by this
+    // point — `answerAsk` returned `ok:true` above — so `settleAsk` failing
+    // must never turn a successful press into a 500. The row is held
+    // EXCLUSIVELY by this request (CAS'd to `'answering'` above; `settleAsk`'s
+    // own docstring is why no caller needs to distinguish "settled" from
+    // "lost the row between take and settle" — that race cannot happen
+    // here), so an unguarded throw would be a genuine infra fault (disk,
+    // `node:sqlite`), not a lost race — but left unguarded it would strand
+    // the row `'answering'` with no exit (`settleAsk` never ran to move it),
+    // 500 a press that actually succeeded, and the parent's natural retry
+    // would get `not-held` — a LIE about who holds it, since the retrying
+    // caller IS the one who holds it. The digit is pressed either way, so
+    // this always returns `{ok:true}`.
+    try {
+      coord.settleAsk(id, fromId, ask.options[optionIndexes[0]!] ?? '', Date.now());
+    } catch (err) {
+      console.warn('ccrc-server: settleAsk failed after the digit was already pressed ' +
+        `(${err instanceof Error ? err.message : String(err)}) — the ask row may be stranded ` +
+        "'answering'; the feed record above (if it landed) is the surviving audit trace");
+    }
+
+    return { ok: true };
+  });
+
+  /**
+   * `POST /api/asks/:id/release` — the parent DECLINES to rule on its
+   * child's question. This is the verb that makes the grace window a
+   * CEILING rather than a flat tax on every ask the parent cannot answer
+   * (Task 10, this lane's own reason for existing): a decline fires the
+   * operator's push NOW instead of making them wait out the rest of
+   * `ASK_GRACE_MS` for a question nobody upstream is going to rule on.
+   *
+   * Unlike `/answer` above, this route never touches the pane — no
+   * `answerAsk`, no CAS-then-press-then-rollback dance — so its gate ladder
+   * is the plain box-token + attribution + ownership shape the claims lanes
+   * already use, run in the order the risk falls: box token, then body
+   * shape, then attribution, then `unknown-ask`, then
+   * `ask.parentId === fromId`. Only this child's derived parent may decline
+   * its question — attribution alone would let any live session on the box
+   * decline any other session's ask, exactly the reason `/answer` layers the
+   * same check on top of the box token.
+   *
+   * `releaseAsk`'s CAS is the row acting as its own mutex, the same shape
+   * `/answer`'s `takeAskForAnswer` uses: its source state is `'held'`, so a
+   * decline of a row that is already `'answering'`/`'answered'`/`'released'`/
+   * `'stale'` refuses `not-held` rather than pretending to succeed — a
+   * decline that finds nothing held must not lie about what it did.
+   *
+   * `watcher.releaseHeldAsk` is the ONLY way this route touches the
+   * watcher's in-memory hold (F12's own argument, `watch.ts`'s docstring on
+   * `heldAsks`): the map is watcher-private state, so this route names the
+   * child id and nothing about the map's shape. It runs AFTER the CAS
+   * succeeds, never before — the store row is the fact, the in-memory hold
+   * is only ever a cache of the push `sweepAsks` would otherwise send later.
+   * A `watcher === undefined` server (every non-test `buildServer` caller
+   * always supplies one today, `src/index.ts`'s only construction) still
+   * releases the row and answers `{ok:true}` — that part is genuinely true —
+   * but has no hold to drop and no snapshotted push to fire, so it warns
+   * instead of silently dropping the operator's notification on the floor
+   * (fix round 1, item 1).
+   */
+  app.post('/api/asks/:id/release', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+    // Literally inline, not through a wrapper: the census derives lanes by
+    // regex-slicing this file between route registrations, so a gate call it
+    // cannot see is a lane it will not count.
+    if (!requireMailToken(req, reply, 'POST /api/asks/:id/release')) return;
+
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { fromId, fromUuid } = body;
+    if (typeof fromId !== 'string' || typeof fromUuid !== 'string') {
+      return reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: 'fromId/fromUuid strings' });
+    }
+
+    // The box token proves "a process on this box", one shared secret
+    // identical for every session on the fleet host — it cannot prove "this
+    // ask's parent". The registry pair is what attributes the specific
+    // session, exactly as `/answer` and the mail ingress do.
+    if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
+
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const askRead = coord.askById(id);
+    // D-2545, `/answer`'s arm exactly — see its comment.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
+    if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
+    if (ask.parentId !== fromId) {
+      return reply.code(403).send({ ok: false, error: 'not-parent',
+        detail: 'only this child\'s derived parent may decline its question' });
+    }
+
+    // A decline is not a failure — it is the parent saying "the operator
+    // should see this now", and it is what makes the grace window a CEILING
+    // rather than a tax on every ask the parent cannot rule on.
+    if (!coord.releaseAsk(id, Date.now())) {
+      return reply.code(409).send({ ok: false, error: 'not-held' });
+    }
+    // Fix round 1, item 1: `watcher` is undefined for every non-test caller
+    // of `buildServer` today (`src/index.ts` always builds one) — but the
+    // row above has ALREADY moved `'held' -> 'released'` by the time this
+    // line runs, and the response below is unconditionally `{ok:true}`.
+    // With no watcher there is no `heldAsks` entry to drop and no snapshotted
+    // push to fire, so the decline is real (the row genuinely released) but
+    // the operator's buzz — the entire reason this lane exists — silently
+    // never happens. Warning, not refusing: refusing here would tell the
+    // parent its decline failed when the store row says otherwise, which is
+    // a worse lie than a log line nobody reads until they go looking.
+    if (watcher === undefined) {
+      console.warn(`ccrc-server: POST /api/asks/:id/release released ask ${id} (child ` +
+        `${ask.childId}) with no watcher configured — the row is released but the operator's ` +
+        'push was never fired');
+    } else {
+      watcher.releaseHeldAsk(ask.childId);
+    }
+    return { ok: true };
+  });
+
+  /**
+   * `GET /api/asks?parent=<id>&state=<AskState>` — Task 11, the READ side of
+   * the ask pre-emption lane. Two callers, two credentials: a fleet PARENT
+   * reading its own children's open asks (so it can see whether two children
+   * are asking contradictory things, before either grace window lapses), and
+   * the PWA reading the same record for the operator's chip (Task 19).
+   *
+   * D-149'S SHAPE, COPIED VERBATIM FROM `GET /api/claims` (five shipped GETs
+   * already do this; do not invent a third shape): a live session cookie OR
+   * the box token, never neither, and AUTHENTICATE BEFORE ANSWERING ANYTHING
+   * INCLUDING THE 501 below — `GET /api/runs`'s own docstring is the reason
+   * this order matters at all: a bare `501` would tell an anonymous tailnet
+   * caller whether this box runs coordination, which no other route leaks.
+   *
+   * CROSS-PARENT SCOPING — the crux of this task, and the one respect in
+   * which this route is NOT a copy of `GET /api/claims`. That route's data
+   * (project paths) is fleet-wide and meant to be read across sessions; an
+   * ask's `question` is not — CLAUDE.md's own framing is "whether two
+   * children are asking contradictory things", which presumes the reader is
+   * one specific parent, not every session on the box. The box token proves
+   * only "a process on this box" — ONE SHARED SECRET, identical for every
+   * session on the fleet host — so a bare token would let ANY session read
+   * ANY OTHER parent's open asks by changing `?parent=`. The PWA/cookie
+   * caller IS the operator and reads across parents by design (unchanged);
+   * a box-token caller may not, so it must additionally ATTRIBUTE itself as
+   * the very parent it names — `?fromUuid=` standing in for the mutation
+   * routes' body field of the same name, checked against `?parent=` through
+   * the SAME registry gate `POST /api/claims` and both ask-mutation routes
+   * already run (`requireAttribution`; no separate `fromId` — the `parent`
+   * being asked about IS the identity under proof). A missing or mismatched
+   * `fromUuid` refuses `400`/`403`, exactly as it does on those routes.
+   *
+   * THIS IS FRESHNESS, NOT FORGERY-PROOFNESS — `requireAttribution`'s own
+   * honesty, `POST /api/mail`'s docstring above (:427-433), applies unchanged
+   * here: every session on the box can read every `.uuid` file under the one
+   * UNIX user this fleet runs as, including the parent's, so a determined
+   * caller can satisfy this check for a parent it is not. What it closes is
+   * an ACCIDENTAL cross-parent read — the box token alone, with no `parent`
+   * check at all — not a deliberate one; a session willing to go read its
+   * neighbour's `.uuid` file already has read access to that neighbour's
+   * live pane by the same fact (single UNIX user, no caller auth, `CLAUDE.md`).
+   *
+   * This scoping sits ONLY inside the box-token branch of the `authEnabled`
+   * block, deliberately: on a DARK box (`CCRC_AUTH` off, the shipped
+   * default) this route stays unauthenticated end to end, byte-identical to
+   * every other dual-credential GET's DARK behaviour
+   * (`peers-route.test.ts`'s own DARK case) — a box with no session gate has
+   * no notion of "a box-token caller" distinct from "anyone touching this
+   * box" left to scope (CLAUDE.md: "Identity on the fleet is attribution,
+   * not authentication: single UNIX user, ccd has no caller auth").
+   */
+  app.get('/api/asks', async (req, reply) => {
+    let viaBoxToken = false;
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false,
+            error: 'unauthenticated',
+            verdict: session.verdict,
+            detail: 'GET /api/asks takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); a fleet parent reads its own children's asks cookieless`,
+          });
+        }
+        viaBoxToken = true;
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const coord = deps.coord;
+
+    const q = req.query as { parent?: unknown; state?: unknown; fromUuid?: unknown };
+    if (typeof q.parent !== 'string' || q.parent.trim() === '') {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: '?parent= is required' });
+    }
+    const parent = q.parent.trim();
+    let state: AskState | undefined;
+    if (q.state !== undefined) {
+      if (!isAskState(q.state)) {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: '?state=, when given, must be a valid AskState' });
+      }
+      state = q.state;
+    }
+
+    if (viaBoxToken) {
+      // The box token alone cannot prove WHICH parent is asking — only that
+      // some process on this box did. `fromUuid` is the registry proof, the
+      // same shape `/answer` and `/release` already require of their
+      // callers, checked against `parent` rather than a separate `fromId`.
+      if (typeof q.fromUuid !== 'string') {
+        return reply.code(400).send({ ok: false, error: 'bad-request',
+          detail: 'a box-token caller must also prove its identity — pass ?fromUuid=' });
+      }
+      if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
+    }
+
+    const read = coord.asksForParent(parent, state);
+    // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
+    // list, so a partial one is worse than none — it looks complete.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: read.detail });
+    }
+    return reply.code(200).send({ ok: true, asks: read.asks });
   });
 }

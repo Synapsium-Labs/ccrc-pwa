@@ -670,6 +670,19 @@ if [ "$TARGET" = "agent" ]; then
   # (D-1945).
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.ccrc/graph-noise'
   install_atomic ccd/graph-noise.default.list .ccrc/graph-noise/_default.list 644
+  # The account-connection helper `ccd account-pane` execs. Unconditional, on
+  # the same terms as its siblings above, and BEFORE the agent restart below,
+  # because the agent caches `ccd caps` at boot and this deploy is what makes
+  # `account-v1` true.
+  #
+  # PLACED BELOW THE NOISE LIST, NOT BESIDE THE OTHER EXECUTABLES (D-2600), and
+  # that is a
+  # constraint rather than a preference: `graph-noise-ship.test.ts` pins the
+  # sweep and the list it feeds as NEIGHBOURS — "if the sweep moves, this
+  # follows it" — with three code lines of slack, and `ccrc-models-probe` had
+  # already spent one of them. Inserting here instead of there costs nothing:
+  # both sites are inside the agent block and both precede the restart.
+  install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755
   # The account-health probe (spec 2026-09-07 §A). Ships beside the sweep and on
   # the same terms — a sibling executable, so `ccd` itself stays network-free.
   install_atomic ccd/ccd-account-health .local/bin/ccd-account-health 755
@@ -678,6 +691,14 @@ if [ "$TARGET" = "agent" ]; then
   # there is no server-role branch to gate it against the way `ccd/ccrc`'s own
   # `_inst_bins` has to.
   install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755
+  # Routing slice 0 (spec 2026-09-14 §6): the usage accounting sweep and its
+  # scanner, unconditional here exactly as its siblings above. PLACED BELOW THE
+  # NOISE LIST, NOT BESIDE ccd-graph-sweep, for the same D-2600 reason
+  # ccd-account-auth gives above: `graph-noise-ship.test.ts` pins the sweep and
+  # the noise list as neighbours with three code lines of slack, and
+  # `ccrc-models-probe` already spends one of them.
+  install_atomic ccd/ccd-usage-sweep .local/bin/ccd-usage-sweep 755
+  install_atomic ccd/ccd-usage-sweep.py .local/bin/ccd-usage-sweep.py 755
   install_atomic ccd/tmux.conf .tmux.conf 644
   install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755
   # `ccrc` joins ccd on PATH, in the same ordering class: after the roster it
@@ -738,6 +759,15 @@ if [ "$TARGET" = "agent" ]; then
   # NO `&&` INSIDE THE HELPER BODY, and that is not style: deploy-verify reads
   # this block by splitting it on `&&`, so a body spelled with `&&` would be
   # torn across the links it scans. `|| return 1` says the same thing.
+  #
+  # 2026-09-10: a SECOND slice drop-in (`zz-no-memoryhigh.conf`) sorts LAST
+  # among the slice's drop-ins (systemd applies them in filename order, last
+  # wins), overriding MemoryHigh from limits.conf and from runtime
+  # set-property drop-ins (50-MemoryHigh.conf). An aggregate MemoryHigh froze
+  # the fleet three times today — stale-branch deploys kept reinstalling
+  # MemoryHigh=20G. The last-sorting file is the one old copies of deploy.sh
+  # never overwrite. After daemon-reload, AGENT_CMD runs assert-slice-policy.sh
+  # to read the enforced value and fail the deploy unless it is `infinity`.
   AGENT_BUILD_CMD='_unit_atomic() { cp -- "$1" "$2.incoming.$$" || return 1; chmod 644 "$2.incoming.$$" || return 1; mv -f -- "$2.incoming.$$" "$2" || return 1; rm -f -- "$2.incoming."*; }
 cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user \
@@ -746,6 +776,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && mkdir -p ~/.config/systemd/user/claude-session@.service.d "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d" ~/.config/systemd/user/ccrc-agent.service.d \
     && _unit_atomic ~/ccrc/deploy/systemd/claude-session@.service.d/limits.conf ~/.config/systemd/user/claude-session@.service.d/limits.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/limits.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/limits.conf" \
+    && _unit_atomic ~/ccrc/deploy/systemd/app-claude-session.slice.d/zz-no-memoryhigh.conf "$HOME/.config/systemd/user/app-claude\x2dsession.slice.d/zz-no-memoryhigh.conf" \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
@@ -756,7 +787,9 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.service ~/.config/systemd/user/ccd-telemetry-keepalive.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service \
-    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer'
+    && _unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.service ~/.config/systemd/user/ccd-usage-sweep.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-usage-sweep.timer ~/.config/systemd/user/ccd-usage-sweep.timer'
   "${SSH[@]}" "$BOX" "$AGENT_BUILD_CMD"
   # STAMP HERE — after the build that can fail, before the restart that makes
   # it live (I1, final review). Stamping earlier (this chain's shape until
@@ -773,16 +806,16 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # means this line is never reached if the build failed.
   stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
-  # The two SKILLS are the FIFTH and SIXTH artifacts ccrc ships to the fleet
-  # host (ccd, notify.sh, session-hook.sh + its installer, and now these two).
-  # Each rides the same four lines for the same reasons. The TREE rides rsync
-  # --delete so a reference file deleted in git is deleted on the box too — a
-  # stale reference is prose a model will still follow, and prose is read whole
-  # on the next open, so tree-level atomicity is not load-bearing for it. The
-  # INSTALLER is different: it gets EXECUTED, which is exactly the class
-  # install_atomic exists for — a deploy dying between scp and chmod must not
-  # leave a half-written script that the next deploy (or a curious operator)
-  # runs.
+  # The three SKILLS are the FIFTH, SIXTH and SEVENTH artifacts ccrc ships to
+  # the fleet host (ccd, notify.sh, session-hook.sh + its installer, and now
+  # these three). Each rides the same four lines for the same reasons. The
+  # TREE rides rsync --delete so a reference file deleted in git is deleted
+  # on the box too — a stale reference is prose a model will still follow,
+  # and prose is read whole on the next open, so tree-level atomicity is not
+  # load-bearing for it. The INSTALLER is different: it gets EXECUTED, which
+  # is exactly the class install_atomic exists for — a deploy dying between
+  # scp and chmod must not leave a half-written script that the next deploy
+  # (or a curious operator) runs.
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/coordinator-skill'
   rsync -az --delete -e "${SSH[*]}" ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/
   install_atomic ccd/install-coordinator-skill.sh .cc-sessions/install-coordinator-skill.sh 755
@@ -806,11 +839,26 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/worker-skill/ "$BOX":.cc-sessions/worker-skill/
   install_atomic ccd/install-worker-skill.sh .cc-sessions/install-worker-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-worker-skill.sh'
-  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER both
-  # roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # THE REVIEWER SKILL SHIPS THIRD (design 2026-09-14 §8). Like the worker's,
+  # its SKILL.md carries no references of its own and points a live reviewer at
+  # the coordinator's installed tree by relative path, so it lands after that
+  # lane for the worker's reason. server/test/install-reviewer-skill.test.ts
+  # pins the order against both run lines above.
+  #
+  # Like the notes above, this comment deliberately does NOT spell this
+  # skill's directory name with a trailing slash:
+  # `server/test/install-reviewer-skill.test.ts` locates the rsync by the
+  # FIRST line in the arm containing that spelling, and a comment that did
+  # would shadow the real invocation.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/reviewer-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/reviewer-skill/ "$BOX":.cc-sessions/reviewer-skill/
+  install_atomic ccd/install-reviewer-skill.sh .cc-sessions/install-reviewer-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-reviewer-skill.sh'
+  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
+  # three roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
-  # remote run rather than the rsync-a-tree-then-run shape its two neighbours
-  # need).
+  # remote run rather than the rsync-a-tree-then-run shape its three
+  # neighbours need).
   #
   # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —
   # `install-graphify-skill.sh` exits 1 with "no pin" when the venv engine
@@ -838,12 +886,13 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # the ssh exit status, and `set -e` at the top of this file aborts the
   # deploy on it.
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
-    && systemctl --user daemon-reload && systemctl --user enable --now ccrc-agent.service \
+    && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
     && systemctl --user enable --now ccd-account-health.timer \
     && systemctl --user enable --now ccd-telemetry-keepalive.timer \
     && systemctl --user enable --now ccrc-models.timer \
+    && systemctl --user enable --now ccd-usage-sweep.timer \
     && systemctl --user restart ccrc-agent.service \
     && bash ~/ccrc/deploy/verify-service.sh ccrc-agent.service'
   "${SSH[@]}" "$BOX" "$AGENT_CMD"

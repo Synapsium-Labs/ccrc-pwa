@@ -3,6 +3,8 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type Roster } from '../../shared/roster.js';
+import { poolEligible, poolUndecidable } from './poolrule.js';
+import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -19,6 +21,23 @@ export interface AccountLimits {
    *
    *  `measured()` reads this: an inferred 0 is not a score. */
   fiveRolledOver: boolean; sevenRolledOver: boolean;
+  /** The WIDTH of the 5h window, straight from the producer
+   *  (`x-codex-secondary-window-minutes`, carried by infra/handoff/ccgpt-usage).
+   *  `0` means THE PLAN HAS NO 5h WINDOW AT ALL — which is a different fact from
+   *  "nobody has measured the 5h window yet", though both look like `five: null`
+   *  in the row. `measured()` needs the difference: with no 5h window the weekly
+   *  figure is not half the truth, it is the whole of it, so the row ranks.
+   *
+   *  OPTIONAL, AND ABSENT MEANS APPLICABLE. Only a producer that KNOWS the width
+   *  states it; every Anthropic row omits it, and so does ccd's own 429 exclusion
+   *  row (`{"five":100,"seven":0,"ts":N}`) — which must keep scoring 100 rather
+   *  than collapsing to `seven` = 0, the emptiest account on the fleet. The key is
+   *  therefore emitted only when the raw row carried it, so a row that says
+   *  nothing keeps byte-for-byte the shape it has today.
+   *
+   *  ccd's `_limit_score` reads the same field by the same rule; the two are the
+   *  same predicate and must not drift. */
+  fiveWindowMinutes?: number | null;
   /** ccd's per-lane kill-switch (`~/.cc-sessions/<wrapper>-disabled`) is
    *  present, so this account cannot take work. A FLAG rather than omitting
    *  the account: the server knows the difference between "no telemetry" and
@@ -102,15 +121,30 @@ const authDeadMarkerOk = (raw: string): boolean => {
  *  only exclusion. Two languages, one fact, half-rolled rows included;
  *  `projected-home.test.ts` runs both over the same bytes and
  *  `half-rolled-window` is the case that says so. */
-const measured = (l: AccountLimits | undefined): number | null =>
-  !l || l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
+/** EXPORTED for the shared-fixture parity harness only (server/test/fixtures/
+ *  rollover.ts): this and ccd's `_limit_score` are one predicate in two
+ *  languages, and the only way to stop them drifting is to assert both against
+ *  the same rows. Production callers reach it through `projectHome`. */
+export const measured = (l: AccountLimits | undefined): number | null => {
+  if (!l) return null;
+  // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. The rule below
+  // is right that one known half bounds a max() only from below — but only when
+  // the other half EXISTS and nothing has read it. A ChatGPT/Codex Pro lane has
+  // no 5h window at all (`fiveWindowMinutes: 0`), so its weekly figure is the
+  // complete truth and ranks on its own. ccd's `_limit_score` is this, term for
+  // term; absent marker falls through to the pair rule on both sides.
+  if (l.fiveWindowMinutes === 0) {
+    return l.seven === null || l.sevenRolledOver ? null : l.seven;
+  }
+  return l.five === null || l.seven === null || l.fiveRolledOver || l.sevenRolledOver
     ? null
     : Math.max(l.five, l.seven);
+};
 
 /**
  * The account a new workspace would land on, and its pressure score.
  *
- * A mirror of ccd's `_ws_least_loaded` (ccd:2451), which is the authority
+ * A mirror of ccd's `_ws_least_loaded` (ccd:3355), which is the authority
  * — it runs at `ws-add` time and writes `home`. This only PREDICTS it, so the
  * `+` can name the account and its headroom before the tap rather than leave a
  * workspace to present as a stalled session on an exhausted account.
@@ -174,10 +208,24 @@ const measured = (l: AccountLimits | undefined): number | null =>
  * mirroring `_ws_least_loaded`'s empty-stdout "" for the same case — nothing is
  * placeable, and inventing a target would lie.
  *
+ * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
+ * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
+ * `_pool_ok "$w" "$pps" || continue` inside the loop — the FILTER moves, the
+ * scoring does not. An undecidable tag makes `poolEligible` empty and this
+ * function `null`, which is NOT the same fact as "every lane is disabled";
+ * `projectPlacement` below is what tells those two apart for the wire.
+ *
+ * Not defaulted: a default would let a caller that forgot the pool receive the
+ * unconstrained forecast, which names an out-of-pool account — the one wrong
+ * answer this function can give. `GET /api/accounts`'s global `projected` says
+ * `{state:'untagged'}` out loud, and that is what that field now MEANS.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
-export function projectHome(roster: Roster, limits: Record<string, AccountLimits>): ProjectedHome | null {
-  const live = roster.homeAble.filter((a) => limits[a.id]?.disabled !== true);
+export function projectHome(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+): ProjectedHome | null {
+  const live = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
@@ -206,6 +254,29 @@ export function projectHome(roster: Roster, limits: Record<string, AccountLimits
     return { wrapper: base.id, score: 0 };
   }
   return scored.reduce((best, cand) => (cand.score < best.score ? cand : best));
+}
+
+/**
+ * The same forecast, per PROJECT, with its three answers kept apart (spec
+ * §5.6).
+ *
+ * `unmeasurable` is a VALUE, not a null and not a `none`: an unreadable or
+ * malformed tag means nobody decided, so there is no forecast to give, and
+ * `none` there would claim the measurement "nothing can take this project".
+ * `none` carries the pool it was looking in so a renderer can name it without
+ * re-deriving the tag.
+ *
+ * COMPOSES `projectHome`; decides nothing new. The pool DECISION is
+ * `poolrule.ts`'s (L1) and is reached through `poolUndecidable`/`poolEligible`
+ * rather than by testing state tokens here.
+ */
+export function projectPlacement(
+  roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+): ProjectPlacement {
+  if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
+  const home = projectHome(roster, limits, pool);
+  if (home === null) return { kind: 'none', pool: pool.state === 'tagged' ? pool.name : null };
+  return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }
 
 export async function readLimits(
@@ -276,7 +347,12 @@ export async function readLimits(
         if (!sevenRolledOver && seven !== null && now - ts > SEVEN_WINDOW) { seven = 0; sevenRolledOver = true; }
       }
 
+      // Emitted ONLY when the producer stated it, so a row that says nothing keeps
+      // exactly the shape it has today — the wire, the fixtures and every
+      // full-row assertion are untouched for all six Anthropic accounts.
+      const fiveWindowMinutes = numOrNull(raw.fiveWindowMinutes);
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
+                       ...(fiveWindowMinutes === null ? {} : { fiveWindowMinutes }),
                        disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,

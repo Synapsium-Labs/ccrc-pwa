@@ -1,5 +1,5 @@
 import type { SendDeps } from './send.js';
-import type { HookAsk, HookAskQuestion } from '../../../shared/api.js';
+import type { AskRefuseCode, HookAsk, HookAskQuestion } from '../../../shared/api.js';
 import { askKey } from '../askkey.js';
 import { hasMenu, paneOptionRows } from '../pane/dialog.js';
 import { pairMatches } from '../transcript/ask.js';
@@ -10,14 +10,7 @@ export interface AskDeps extends SendDeps {
   readAsk: (id: string) => Promise<{ ask: HookAsk | null; state: 'working' | 'waiting' | 'done' } | null>;
 }
 
-export type AskResult =
-  | { ok: true }
-  | {
-      ok: false;
-      error:
-        | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
-        | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch';
-    };
+export type AskResult = { ok: true } | { ok: false; error: AskRefuseCode };
 
 /**
  * Answer a hook-reported AskUserQuestion by option index, without the pane
@@ -120,7 +113,28 @@ export async function answerAsk(
       q.options.every((o, i) => pairMatches(rows[i]!.label, o.label));
     if (!matches) return { ok: false, error: 'menu-mismatch' };
 
-    for (const i of indexes) await d.tmux.sendKey(id, String(i + 1));
+    // `not-alive`, again: reused rather than a new code, because a failed
+    // `sendKey` measures the exact same fact the dead-pane capture above
+    // does — the target is not there to act on — just caught one step
+    // later. Real `Tmux.sendKey` IS `send-keys`'s exit code, so a dead or
+    // rotated tmux target (a `cmd_swap` that tore the pane down, an agent
+    // round trip that failed in remote mode) answers `false` here, not a
+    // thrown error.
+    //
+    // FAIL-FAST, not best-effort: the loop returns the instant one digit
+    // does not land, rather than pressing on through the rest of `indexes`.
+    // On a multi-select answer this can leave SOME boxes toggled and others
+    // not — a genuinely partial state — but that is the honest cost of the
+    // alternative being worse: continuing to press into a pane this call can
+    // no longer prove is the one it was reading (the same reason the capture
+    // above is taken as late as possible) would risk sending digits into
+    // whatever now owns the keyboard. A caller told `not-alive` knows the
+    // answer did not land and that the pane may need a fresh look; a caller
+    // told `ok:true` would have no reason to ever check again — which is the
+    // whole D-2177 defect this closes.
+    for (const i of indexes) {
+      if (await d.tmux.sendKey(id, String(i + 1)) === false) return { ok: false, error: 'not-alive' };
+    }
     // Gated on the QUESTION's kind, never on how many options were picked. On
     // a multi-select menu a digit only TOGGLES a box; Enter is what commits,
     // so a one-option multi-select answer needs it exactly as much as a
@@ -128,7 +142,14 @@ export async function answerAsk(
     // ticked while this returns ok:true, and the retry toggles it back off.
     // Single-select is the opposite and must NOT get one: the digit already
     // confirmed, so an Enter would submit whatever the TUI painted next.
-    if (q.multiSelect === true) await d.tmux.sendKey(id, 'Enter');
+    //
+    // The commit Enter gets the identical fail-fast check: every digit
+    // toggling successfully and then the Enter failing to land is STILL a
+    // wrong answer sent as ok:true if unchecked — the selection sits ticked
+    // but never confirmed, same shape as the digit-loop failure above.
+    if (q.multiSelect === true) {
+      if (await d.tmux.sendKey(id, 'Enter') === false) return { ok: false, error: 'not-alive' };
+    }
     return { ok: true };
   });
 }

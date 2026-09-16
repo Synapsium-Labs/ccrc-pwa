@@ -346,7 +346,7 @@ describe('verifyDone — the mismatch table', () => {
   it('rejects a claim naming the wrong PR number for a really-bound PR (finding 3)', async () => {
     // `FIXED_CLAIM.prNumber` is `null` in every row of the table above — this
     // re-measured fact has no row of its own there. `cmd_pr_state`'s own
-    // comment (`ccd/ccd:2389`) describes exactly this event: a worker whose
+    // comment (`ccd/ccd:2512`) describes exactly this event: a worker whose
     // claim still names an earlier PR number after the branch has rebound.
     const root = project(TIP, null);
     const deps = fingerprintDeps(runnerFor('open'), root); // the real, bound PR is #42
@@ -504,7 +504,7 @@ describe('verifyDone — prPhase/prNumber are validated, not merely typed (findi
 describe('verifyDone — the branch to re-measure comes from the live registry (finding 1)', () => {
   /** Registry row for `SESSION`, the same field shape `name-sweep.test.ts`'s
    *  own `seed()` writes — `readRegistry` needs wrapper+workdir+uuid or it
-   *  skips the row entirely (`registry.ts:122`). `branch: null` (the default)
+   *  skips the row entirely (`registry.ts:124`). `branch: null` (the default)
    *  seeds no row at all, so `readRegistry` never lists this id. */
   const seedRegistry = (home: string, branch: string | null): void => {
     const reg = path.join(home, '.cc-sessions');
@@ -822,5 +822,55 @@ describe('verifyDone — the run.branch fallback is reached by more than "sessio
     // ABSENT, not unreadable — and the detail must not claim otherwise.
     expect((res as { detail: string }).detail).toContain('names no branch at all');
     expect((res as { detail: string }).detail).not.toContain('bytes did not come back');
+  });
+});
+
+import { verifyReviewDone, type ReviewClaim } from '../src/coord/fingerprint.js';
+import { writeFileSync as writeReport } from 'node:fs';
+
+describe('verifyReviewDone — a report and its tip are one pair (design 2026-09-14 §5.3)', () => {
+  const reportAt = (dir: string, body = '# review\n'): string => {
+    const p = path.join(dir, 'review-report.md'); writeReport(p, body); return p;
+  };
+  const claimFor = (tip: string, report: string): ReviewClaim => ({ reviewedTip: tip, report });
+
+  it('answers done when the reviewed branch is still at reviewedTip and the report is readable', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(res).toEqual({ ok: true, measured: { tip: TIP } });
+  });
+
+  it('refuses stale-review when the branch has moved since the reviewer measured it', async () => {
+    const root = project(OTHER, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(res.ok).toBe(false);
+    expect((res as { code: string }).code).toBe('stale-review');
+    expect((res as { detail: string }).detail).toContain(OTHER);
+  });
+
+  it('refuses report-unreadable for an absent report, and names the path', async () => {
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const missing = path.join(root, 'nope.md');
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, missing));
+    expect(res).toMatchObject({ ok: false, code: 'report-unreadable' });
+    expect((res as { detail: string }).detail).toContain(missing);
+  });
+
+  it('refuses tip-unmeasurable when the reviewed branch has no readable ref (the work run was abandoned)', async () => {
+    const root = project(null, null);
+    const deps = fingerprintDeps(runnerFor('open'), root);
+    const res = await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(res).toMatchObject({ ok: false, code: 'tip-unmeasurable' });
+  });
+
+  it('never runs pr-state — a review run has no PR to measure', async () => {
+    const calls: string[][] = [];
+    const root = project(TIP, null);
+    const deps = fingerprintDeps(async (_c, args) => { calls.push(args); return { code: 0, stdout: '', stderr: '' }; }, root);
+    await verifyReviewDone(deps, RUN, claimFor(TIP, reportAt(root)));
+    expect(calls.filter((c) => c[0] === 'pr-state')).toEqual([]);
   });
 });

@@ -641,7 +641,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     // Every back-off test above passes `backoffMs`, so both the constant's
     // value and the `?? RESOLVER_BACKOFF_MS` that wires it survived mutation
     // (final review, Minor #5). Production constructs the resolver with NO
-    // options at all (`sessionws.ts:144`, `watch.ts:431`), so the default is
+    // options at all (`sessionws.ts:144`, `watch.ts:509`), so the default is
     // the only back-off the fleet ever runs. Pin the value, then pin that the
     // default constructor actually uses it.
     expect(RESOLVER_BACKOFF_MS).toBe(30_000);

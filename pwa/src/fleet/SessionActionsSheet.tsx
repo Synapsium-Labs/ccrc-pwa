@@ -18,7 +18,26 @@ import { substrateFault, type FleetSession } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
-import { api, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+import { api, ApiError, apiErrorText, HOLD_EMPTY_REASON_TEXT } from '../lib/api';
+
+/**
+ * D-2731. The hold route is the one caller here whose refusal carries a sentence
+ * the operator can ACT on: `oversize` arrives with `limit` and a `detail` saying
+ * the reason is written verbatim and refused rather than shortened.
+ * `apiErrorText` has no entry for `oversize` — and must not grow one, since the
+ * kickoff translator already owns that slug with a different sentence — so
+ * without this reader the toast read `Couldn't hold — oversize`, which narrows a
+ * distinction the server took care to send. Surface-local for exactly that
+ * reason: the same slug means two things at two seams.
+ */
+const holdErrorText = (err: unknown): string => {
+  const body: unknown = err instanceof ApiError ? err.body : null;
+  if (body !== null && typeof body === 'object') {
+    const { error, detail } = body as { error?: unknown; detail?: unknown };
+    if (error === 'oversize' && typeof detail === 'string') return detail;
+  }
+  return apiErrorText(err);
+};
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from './sessionLabel';
 import { SwapSheet } from './SwapSheet';
@@ -26,28 +45,28 @@ import { ArchiveConflictSheet, runOpenRuns, type ArchiveConflictRun } from './Ar
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import './fleet.css';
 
-/** Release's consequence sentence — what re-arming the auto-archive gate
- *  actually re-enables, named BEFORE the tap that sends it (spec's naming
- *  rule for every refusal/consequence).
+/** Release's consequence sentence — what releasing the hold actually changes,
+ *  named BEFORE the tap that sends it (spec's naming rule for every
+ *  refusal/consequence).
  *
- *  MAY, NOT WILL — fix-wave observation. ccd's own `cmd_ws_release` comment
- *  says "the very next archiveMerged sweep MAY archive a merged workspace",
- *  and the gate behind it has a second deferral the hold knows nothing about:
- *  `archiveSafety` still answers busy/attached for a session someone is
- *  watching or that is mid-turn. The PrSheet two taps away is careful to name
- *  that as its own separate reason; promising "will archive" here converted a
- *  may into a will and then claimed ccd said so.
+ *  THERE IS NO AUTO-ARCHIVE GATE TO RE-ARM. `sweepMerged`
+ *  (server/src/watch.ts) announces a merge and archives nothing, so a merged
+ *  workspace stays live until a human archives it, held or not. What a hold
+ *  gates today is `cmd_ws_rm`/`cmd_ws_reap` — the audited cleanup flow — so
+ *  that is what releasing lets through, and it is the whole of what this
+ *  sentence may promise. Archiving is not on the list either way, which is
+ *  why the second clause says so outright: an operator who released to
+ *  unblock a merge needs to know the workspace is still theirs to archive.
  *
- *  CORRECTED in Build 8 Wave 2. It used to end at "(a busy or attached session
- *  defers)", which is now a promise the sweep can no longer keep: since
- *  `archiveMerged` also asks coord.db whether an OPEN RUN names the session,
- *  releasing the hold is not sufficient on its own. This is the PWA half of
- *  ccd's own corrected `cmd_ws_release` comment — uncorrected, the phone tells
- *  the operator the opposite of what the box will do. Still a MAY, never a
- *  WILL: the original correction that produced this constant stands. */
+ *  THE CARE HERE IS EARNED, twice over. This string once read "will archive on
+ *  the next sweep" when ccd's own `cmd_ws_release` said MAY, and later named
+ *  only one deferral after a second had been added. Both corrections were
+ *  about a future act the phone could not guarantee; the version that cannot
+ *  rot is the one that promises no future act at all. */
 const RELEASE_CONSEQUENCE =
-  'released — the next sweep may archive it once its PR merges (a busy or attached session defers, '
-  + 'and an open run on this workspace defers it too).';
+  'released — no program claims this workspace any more, so cleanup stops refusing. '
+  + 'No archive follows: ccrc does not archive on merge, and this workspace stays live '
+  + 'until you archive it by hand.';
 
 const CRITICAL = 75;
 
@@ -222,7 +241,7 @@ export function SessionActionsSheet({
       setHoldReason('');
       onClose();
     } catch (err) {
-      toast(`Couldn't hold — ${apiErrorText(err)}`, 'error');
+      toast(`Couldn't hold — ${holdErrorText(err)}`, 'error');
     } finally {
       setHoldBusy(false);
     }
@@ -378,10 +397,14 @@ export function SessionActionsSheet({
           )}
 
           {/* Hold/Release — workspace-only and archived refuses too, the same
-              two refusals `ccd ws-hold` itself states ("not a workspace —
-              nothing ever auto-archives a main checkout" / "archived —
-              restore first: a hold cannot protect a pane that is already
-              gone"). `session.held` is the one gate for which of the two
+              two refusals `ccd ws-hold` itself states ("not a workspace — a
+              hold gates workspace verbs, so a hold on a main checkout gates
+              nothing" / "archived — restore first: a hold cannot protect a
+              pane that is already gone"). Those are ccd's own words, quoted;
+              both are about what a hold can PROTECT, which is why neither
+              mentions a sweep — nothing archives a workspace unasked (the
+              merged lane announces and never acts, server/src/watch.ts's
+              `sweepMerged`). `session.held` is the one gate for which of the two
               shows — never both, same shape as the Archive/Restore pair
               above. The opener and the reason composer are mutually
               exclusive renders (not a stacked sheet): with only ONE control

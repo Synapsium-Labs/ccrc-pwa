@@ -6,17 +6,14 @@
 // L0, like every other module in `shared/`: it imports nothing but TYPES,
 // not even `node:*`, because the PWA bundles this file. That is not a formality here —
 // it is the whole reason the rule lives in `shared/` rather than under
-// `server/src/`. The server's 409 pre-check (wave 3) and the phone's "show
-// other pools" disclosure (wave 4) will be two renderings of ONE decision, and
-// two copies of it would drift; the copy the phone showed would then offer a
-// swap the copy the API enforces refuses, which is the failure the shared
-// fixture table (`server/test/fixtures/poolRule.ts`) exists to make impossible.
-// `ccd`'s bash `_pool_ok` is the other spelling (wave 2a landed it) — it
-// cannot share code across the language boundary, so it is driven over that
-// same table instead (`server/test/ccd-pool-ok.test.ts`). Nothing outside
-// this wave imports this function yet; every consumer named in this file is
-// an obligation on the wave that names it, not a report.
-// (D-1664 — plan-time refinement of spec §5.2/§8.)
+// `server/src/`. The server's wave-3 pre-check now consumes it; the phone's
+// wave-4 "show other pools" disclosure remains a future consumer. Two copies
+// would drift: the phone could offer a swap the API refuses, which is the
+// failure the shared fixture table (`server/test/fixtures/poolRule.ts`) exists
+// to make impossible. `ccd`'s bash `_pool_ok` is the other spelling (wave 2a
+// landed it) — it cannot share code across the language boundary, so it is
+// driven over that same table instead (`server/test/ccd-pool-ok.test.ts`).
+// (D-1664, corrected after wave 3 by D-2480.)
 //
 // PRECEDENCE IS THE POINT, and the order below is not arbitrary:
 //
@@ -51,7 +48,7 @@ import type { ProjectPoolWire } from './api.js';
 export type PoolVerdict =
   | { ok: true; why: 'untagged-project' | 'untagged-account' | 'same-pool' }
   | { ok: false; reason: 'pool-mismatch'; accountPool: string; projectPool: string }
-  | { ok: false; reason: 'pool-undecidable'; state: 'unreadable' | 'malformed' };
+  | { ok: false; reason: 'pool-undecidable'; state: 'unreadable' | 'malformed' | 'unrecognised' };
 
 /**
  * The rule, once.
@@ -71,8 +68,13 @@ export function poolRule(accountPool: string | null, projectPool: ProjectPoolWir
     return { ok: false, reason: 'pool-undecidable', state: projectPool.state };
   }
   if (projectPool.state === 'untagged') return { ok: true, why: 'untagged-project' };
-  if (accountPool === null) return { ok: true, why: 'untagged-account' };
-  return accountPool === projectPool.name
-    ? { ok: true, why: 'same-pool' }
-    : { ok: false, reason: 'pool-mismatch', accountPool, projectPool: projectPool.name };
+  if (projectPool.state === 'tagged') {
+    if (accountPool === null) return { ok: true, why: 'untagged-account' };
+    return accountPool === projectPool.name
+      ? { ok: true, why: 'same-pool' }
+      : { ok: false, reason: 'pool-mismatch', accountPool, projectPool: projectPool.name };
+  }
+  const unhandled: never = projectPool;
+  void unhandled;
+  return { ok: false, reason: 'pool-undecidable', state: 'unrecognised' };
 }

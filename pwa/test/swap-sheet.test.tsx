@@ -9,9 +9,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { AccountUsage, FleetSession } from '../../shared/api';
+import type { AccountUsage, FleetSession, ProjectPoolsWire } from '../../shared/api';
 import { api } from '../src/lib/api';
-import { SwapSheet } from '../src/fleet/SwapSheet';
+import { SwapSheet, leastLoaded } from '../src/fleet/SwapSheet';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
 import { declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
@@ -40,7 +40,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
   version: null,
   ...patch,
 });
@@ -258,6 +258,47 @@ const acct = (over: Partial<AccountUsage>): AccountUsage => ({
   fiveResetAt: null, sevenResetAt: null,
   fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false, ...over,
 });
+
+// ── SINGLE-WINDOW LANES ───────────────────────────────────────────────────
+// The third copy of the decision again: a ChatGPT/Codex lane HAS NO 5h window
+// (`fiveWindowMinutes: 0`), so `five: null` there means NOT APPLICABLE, not
+// unmeasured, and the weekly figure alone is a real score. Before this, such a
+// lane could never be ranked at all — and because ccd tied every unrankable
+// lane at the same score and broke the tie on roster order, a weekly-CAPPED
+// Codex lane could be preferred over a healthy sibling. Measured on the live
+// fleet 2026-09-11: gpt at 100% beat gpt2 at 55%.
+describe('leastLoaded — a lane with no 5h window', () => {
+  it('ranks a weekly-only lane on its weekly figure', () => {
+    const rows = [
+      acct({ wrapper: 'gpt', five: null, seven: 80, fiveWindowMinutes: 0 }),
+      acct({ wrapper: 'gpt2', five: null, seven: 30, fiveWindowMinutes: 0 }),
+    ];
+    expect(leastLoaded(rows, ['gpt', 'gpt2'])).toBe('gpt2');
+  });
+
+  it('does not rank one whose only applicable window is unknown', () => {
+    const rows = [acct({ wrapper: 'gpt', five: null, seven: null, fiveWindowMinutes: 0 })];
+    expect(leastLoaded(rows, ['gpt'])).toBe(null);
+  });
+
+  it('still refuses a half-measured row that never claimed a window shape', () => {
+    // The guard this rule narrows, NOT loosens: absent marker = both windows
+    // apply, so one known half is still only a lower bound. ccd's own 429
+    // exclusion row depends on this staying true.
+    const rows = [acct({ wrapper: 'gpt', five: null, seven: 30 })];
+    expect(leastLoaded(rows, ['gpt'])).toBe(null);
+  });
+
+  it('treats a NON-ZERO width as an ordinary two-window row', () => {
+    // The marker is a WIDTH, not a lane flag.
+    const rows = [
+      acct({ wrapper: 'claude', five: 90, seven: 10, fiveWindowMinutes: 300 }),
+      acct({ wrapper: 'claude2', five: 20, seven: 20, fiveWindowMinutes: 300 }),
+    ];
+    expect(leastLoaded(rows, ['claude', 'claude2'])).toBe('claude2');
+  });
+});
+
 
 const stubAccounts = (accounts: AccountUsage[]): void => {
   vi.spyOn(api, 'accounts').mockResolvedValue({
@@ -631,5 +672,152 @@ describe('SwapSheet reads one source for one account', () => {
     expect(row).toHaveTextContent('limits unknown');
     expect(row).not.toHaveTextContent('5%');
     expect(row).not.toHaveTextContent('suggested');
+  });
+});
+
+// Account pools, wave 4, spec §5.10 and §11 row 26. Ruling 4: mismatched
+// accounts are hidden by DEFAULT and reachable ON PURPOSE, and a crossing that
+// happens on purpose is declared on the wire so the fleet can record it.
+describe('SwapSheet and the pool line', () => {
+  const pooled = (byId: Record<string, string>) =>
+    TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
+
+  const poolStore = (
+    sessions: FleetSession[], byId: Record<string, string>, pools: ProjectPoolsWire | null,
+  ): FleetStore => {
+    const store = createFleetStore({ makeSocket: fakeSocket });
+    act(() => { store.setState({ conn: 'open', sessions, roster: pooled(byId), pools }); });
+    return store;
+  };
+
+  // Typed, so a wrong `state` word is a compile error here rather than a
+  // silent `unreadable` that would make half these assertions pass for the
+  // wrong reason.
+  const tagged = (project: string, name: string): ProjectPoolsWire =>
+    ({ listed: true, byProject: { [project]: { state: 'tagged', name } }, enforcement: 'enforced' });
+
+  // `claude` and `claude-corp` are pool-a; `claude2` is pool-b; `claude-dev0`
+  // and `gpt` carry no pool. The session runs on `claude`, so the sheet's own
+  // filter drops it and the targets are the other four; the project is pool-a,
+  // so `claude2` (team·alt) is the one crossing.
+  const POOLS = { claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a' };
+
+  it('offers only the accounts the project pool admits, and counts the rest behind a disclosure', () => {
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, tagged('demo', 'pool-a'))} />);
+
+    expect(screen.getByRole('button', { name: /team·b/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /team·d/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /team·alt/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'show other pools (1)' })).toBeInTheDocument();
+  });
+
+  it('preserves a maximum-length crossing pool in the chip name and title', () => {
+    const maximumPool = `a${'z'.repeat(31)}`;
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    const pools = { claude: 'pool-a', claude2: maximumPool, 'claude-corp': 'pool-a' };
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], pools, tagged('demo', 'pool-a'))} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
+    const poolLabel = `pool · ${maximumPool}`;
+    const chip = screen.getByLabelText(poolLabel);
+    expect(chip).toHaveAttribute('title', poolLabel);
+    expect(chip).toHaveTextContent(poolLabel);
+  });
+
+  it('names the crossing in the confirm sentence and posts crossPool on the wire', async () => {
+    const swap = vi.spyOn(api, 'swap').mockResolvedValue(undefined);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, tagged('demo', 'pool-a'))} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'show other pools (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: /team·alt/ }));
+    const consequence = await screen.findByText(/crosses pools/i);
+    expect(consequence).toBeInTheDocument();
+    expect(consequence.textContent).toContain('pool-b');
+    expect(consequence.textContent).toContain('pool-a');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Move' }));
+    expect(swap).toHaveBeenCalledWith(s.id, 'claude2', { crossPool: true });
+  });
+
+  it('an ELIGIBLE pick posts the byte-identical two-argument call', async () => {
+    // The mutant this kills: passing `{crossPool: cross}` unconditionally. It
+    // would write a `.crosspool` marker on the box for a move nobody declared,
+    // and that marker exempts the session from the pool machinery until a
+    // retag or a move — a silent, sticky consequence of a plain tap.
+    const swap = vi.spyOn(api, 'swap').mockResolvedValue(undefined);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, tagged('demo', 'pool-a'))} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /team·b/ }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Move' }));
+    expect(swap).toHaveBeenCalledWith(s.id, 'claude-corp');
+    expect(swap.mock.calls[0]).toHaveLength(2);
+  });
+
+  it('offers EVERY available account with no disclosure and one honest note when the pool is not known', () => {
+    // Hiding on unknown would be inventing a rule. The note is the whole
+    // difference between "these are the available accounts" and "these are the
+    // accounts this box could vouch for".
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, null)} />);
+
+    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
+  });
+
+  it('keeps the unknown-pool note truthful when the roster has no other account', () => {
+    const roster = TEST_ROSTER.filter((a) => a.id === 'claude');
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={storeWith([s], roster)} />);
+
+    expect(screen.getByText('No other account to move this session to yet.')).toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
+  });
+
+  it('keeps the unknown-pool note truthful when every alternative is switched off', async () => {
+    stubAccounts([
+      acct({ wrapper: 'claude2', disabled: true }),
+      acct({ wrapper: 'claude-corp', disabled: true }),
+      acct({ wrapper: 'gpt', disabled: true }),
+      acct({ wrapper: 'claude-dev0', disabled: true }),
+    ]);
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, null)} />);
+
+    expect(await screen.findByText(
+      'Every other account is switched off on the fleet host — turn one back on from Accounts.',
+    )).toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
+  });
+
+  it('says the same on an unreadable tag — nobody decides, so nothing is hidden', () => {
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    const pools: ProjectPoolsWire = {
+      listed: true, byProject: { demo: { state: 'unreadable' } }, enforcement: 'enforced',
+    };
+    render(<SwapSheet session={s} open onClose={vi.fn()} fleet={poolStore([s], POOLS, pools)} />);
+
+    expect(screen.getByRole('button', { name: /team·alt/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
+    expect(screen.getByText(
+      "This project's pool is not known from here, so pool matching does not hide otherwise available accounts.",
+    )).toBeInTheDocument();
+  });
+
+  it('shows no disclosure when every account is in the pool — a control for an empty set is noise', () => {
+    const s = fleetSession({ wrapper: 'claude', home: 'claude', project: 'demo' });
+    render(<SwapSheet session={s} open onClose={vi.fn()}
+                      fleet={poolStore([s], { claude: 'pool-a' }, tagged('demo', 'pool-a'))} />);
+    expect(screen.queryByRole('button', { name: /show other pools/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/pool is not known from here/i)).not.toBeInTheDocument();
   });
 });

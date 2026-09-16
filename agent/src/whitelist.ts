@@ -214,8 +214,8 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  * §7 says can never cross the wire.
  *
  * `ws-rename` destroys nothing, and is here because it is the second write the
- * server calls UNATTENDED — after `ws-archive`, which `FleetWatcher.archiveMerged`
- * already fires on merge with no human anywhere in the path — and the first
+ * server calls UNATTENDED — after `ws-archive`, which `coord/close.ts`'s
+ * failed-run close fires with no human anywhere in the path — and the first
  * whose argv is derived from model output (FleetWatcher's naming sweep).
  * Prefix matching means a one-token `['ws-rename']` permits `ccd ws-rename
  * <anything> <anything…>` — the whole positional argv surface the verb used
@@ -251,7 +251,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
  */
 export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
-  'project-pool': '--project',
+  'project-pool': '--project', 'route': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -390,6 +390,14 @@ export const EXEC_WHITELIST = {
     // work may be PLACED, not merely whether it is paused; wave 2b still owes
     // that same decision on the swap tick and the manual verbs.
     ['project-pool', '--project'],
+    // The routing record's writer (routing spec 2026-09-14 §5.3), granted on
+    // `coord-pause`'s terms: `$REG/<id>.<field>` writes, non-destructive,
+    // nothing server-side can perform them (`FleetIO` writes only
+    // `~/.cc-clips`). ENROLLED in `REQUIRED_VERB_FLAG` for the same reason —
+    // prefix matching leaves the tail unconstrained, so an unenrolled
+    // `['route']` would admit every positional form the verb might grow, from
+    // a route with no token of any kind. No `--apply` token in this slice.
+    ['route', '--session'],
     // Unattended caller (FleetWatcher's naming sweep): the flag is what keeps
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
     // makes losing it a boot refusal rather than a widening nobody notices.

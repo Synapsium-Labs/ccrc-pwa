@@ -574,11 +574,15 @@ describe('sendPrompt', () => {
     expect(cuPresses(calls)).toBe(0);   // REFUSE-ONLY: nothing clears operator text
   });
 
-  // THE ORDINARY `verify-failed` ARM CANNOT PROVE WHAT THE FLAG CLAIMS, and
-  // these three are the whole of what reaches it. The arm is entered exactly
-  // when the box never started with our needle on any poll — the server has
-  // just proved the box does not hold our text — so a rescue offered here
-  // presses Enter on something else. One test per shape:
+  // WHAT THE ORDINARY `verify-failed` ARM CANNOT PROVE, one test per shape.
+  // The arm is entered exactly when the box never started with our needle on
+  // any poll, and on these three that is because the box really does not hold
+  // our text — so a rescue offered here presses Enter on something else.
+  //
+  // A FOURTH shape reaches it and is the opposite case; it is the describe
+  // below, and it is why the word "three" is not "all". This comment claimed
+  // the deserving case was unreachable until a live box (2026-09-15) collapsed
+  // a long message into `[Pasted text #1]` and reached it.
   //
   //  1. SOMEBODY ELSE'S WORDS. A human typing between the clobber guard's read
   //     and the echo poll. A "Send it" button here submits their half-typed
@@ -609,6 +613,53 @@ describe('sendPrompt', () => {
     const { tmux } = fakeTmux(['❯ \n', '❯ \n']);
     const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'my message');
     expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '' });
+    expect((res as { submittable?: boolean }).submittable).toBeUndefined();
+  });
+
+  // ── THE FOURTH SHAPE: our whole message, collapsed by the widget ────────
+  //
+  // Claude Code renders a large typed burst as `[Pasted text #N]` instead of
+  // the characters. The box holds the message IN FULL — one Enter sends it —
+  // but `startsWith(needle)` is false, so the arm is reached with the claim
+  // `submittable` makes being true rather than false. Measured against a live
+  // box on 2026-09-15: a single-paragraph operator message, no newlines in it
+  // at all, came back as `❯ [Pasted text #1]` with the send refused and no
+  // button offered anywhere.
+  //
+  // The claim is PROVENANCE, not text: the box was proven empty on the capture
+  // above (the `draft-present` gate is the only way past it), this call holds
+  // the session's queue slot, and the chip appeared after our own type. The
+  // three tests above stay green — the flag is still withheld from every shape
+  // that cannot prove it.
+  it('DOES offer a rescue when the widget collapsed our whole message into a chip', async () => {
+    const { tmux, calls } = fakeTmux(['❯ \n', '❯ [Pasted text #1]\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x',
+      'a long single paragraph with no newlines in it at all, which the input box collapses',
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '[Pasted text #1]' });
+    expect((res as { submittable?: boolean }).submittable).toBe(true);
+    // Still a REFUSAL: the machine does not press Enter on a box it could not
+    // read. The operator taps Send it, and `submitEnter` proves the row.
+    expect(sendKeysCalls(calls).some((c) => c[c.length - 1] === 'Enter')).toBe(false);
+    expect(cuPresses(calls)).toBe(0);
+  });
+
+  it('and with the line-count form the widget uses for a multi-line payload', async () => {
+    const { tmux } = fakeTmux(['❯ \n', '❯ [Pasted text #2 +54 lines]\n']);
+    const res = await sendPrompt(
+      { tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'line one\nline two\nline three',
+    );
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed', draft: '[Pasted text #2 +54 lines]' });
+    expect((res as { submittable?: boolean }).submittable).toBe(true);
+  });
+
+  it('but a chip-shaped sentence a HUMAN typed is not a chip — the regex is anchored', async () => {
+    // `PASTE_CHIP` is `/^\[Pasted text #\d+/`: anchored, and the digits are
+    // required. A human writing about the feature does not earn a rescue.
+    const { tmux } = fakeTmux(['❯ \n', '❯ [Pasted text #N] is what it shows\n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'my message');
+    expect(res).toMatchObject({ ok: false, error: 'verify-failed' });
     expect((res as { submittable?: boolean }).submittable).toBeUndefined();
   });
 
@@ -711,6 +762,52 @@ describe('sendPrompt', () => {
     )).toEqual({ ok: true });
     // 1 initial guard read + 2 echo polls + 1 submit poll = 4.
     expect(calls.filter((c) => c[1] === 'capture-pane')).toHaveLength(4);
+  });
+});
+
+describe('holdIfAutoContinueArmed (D-2368)', () => {
+  const ARMED = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel\n❯ \n';
+  it('refuses auto-continue-armed before any keystroke when the caller opts in', async () => {
+    const { tmux, calls } = fakeTmux([ARMED]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('the hold is decided before the menu check — an armed screen with a menu is still reported as the limit', async () => {
+    const { tmux, calls } = fakeTmux([`${ARMED}❯ 1. Yes\n  2. No\n  Enter to select\n`]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('control: without the option the same pane is typed into — a human typing is Claude Code\'s documented cancel', async () => {
+    // Frames: the armed prompt, the echo of our text, the empty box after Enter —
+    // copy the frame sequence an existing ok-path case in this file uses.
+    const { tmux, calls } = fakeTmux([ARMED, '❯ hi\n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi');
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
+  });
+  // Final review finding 2 (2026-09-10): the whole `captureAnsi` output is not the
+  // decision window — a 220x50 pane routinely carries the ordinary English phrase
+  // ("continuing automatically") scrolled off above the fold (swap.log, this very
+  // file, a prior limit episode on screen), which is not Claude Code's own armed
+  // banner. Decided on the LAST 8 LINES, matching ccd's `_pane_auto_continue_armed`
+  // window, so a stale phrase far above the input box must not hold mail.
+  it('the armed phrase exactly 8 real rows from the end still holds with a trailing newline', async () => {
+    const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
+    const pane = [stale, ...Array.from({ length: 6 }, (_, i) => `pane row ${i}`), '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([pane]);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toMatchObject({ ok: false, error: 'auto-continue-armed' });
+    expect(sendKeysCalls(calls)).toEqual([]);
+  });
+  it('the same phrase 9 real rows from the end is above the fold and does not hold', async () => {
+    const stale = 'Usage limit reached · continuing automatically at 11:50am · esc or type to cancel';
+    const pane = [stale, ...Array.from({ length: 7 }, (_, i) => `pane row ${i}`), '❯ '].join('\n') + '\n';
+    const { tmux, calls } = fakeTmux([pane, '❯ hi\n', '❯ \n']);
+    const res = await sendPrompt({ tmux, queue: new KeyedQueue(), sleep: noSleep }, 'x', 'hi', { holdIfAutoContinueArmed: true });
+    expect(res).toEqual({ ok: true });
+    expect(sendKeysCalls(calls).length).toBeGreaterThan(0);
   });
 });
 

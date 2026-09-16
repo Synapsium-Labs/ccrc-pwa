@@ -2,8 +2,17 @@ import { createHash } from 'node:crypto';
 import type { Dialog } from '../../../shared/api.js';
 
 const BUSY_RE = /esc to interrupt/;
+/** Claude Code's own limit recovery is ARMED: the status line reads "Usage limit
+ *  reached · continuing automatically at HH:MM · esc or type to cancel" (or
+ *  "continuing shortly"). ANY keystroke cancels it — bundle 2.1.267,
+ *  `tengu_quota_auto_resume_cancelled` reason `manual_submit` — and the
+ *  continuation is discarded. The literal is ccd's `_pane_auto_continue_armed`
+ *  verbatim; `auto-continue-armed.test.ts` reads that line and fails on drift
+ *  (D-2367). */
+export const AUTO_CONTINUE_RE = /continuing automatically|continuing shortly/i;
+export function autoContinueArmed(pane: string): boolean { return AUTO_CONTINUE_RE.test(pane); }
 const MENU_RE = /Enter to (confirm|select)/;
-const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:76
+const SGR = /\x1b\[[0-9;]*m/g; // any ANSI colour/attr code — same idiom as inject/send.ts:80
 const MULTISELECT_RE = /Space to select/;
 /** A numbered menu option line, optionally carrying the ❯ selection marker. */
 const OPTION_RE = /^\s*(❯)?\s*(\d+)\.\s+(.+)$/;
@@ -162,7 +171,7 @@ export function parseDialog(pane: string): Dialog | null {
   // it — a real, expected combined screen — so the old gate answered 'busy'
   // and refused to parse a dialog that was genuinely on screen. hasMenu is
   // deliberately independent of the busy check for exactly this reason
-  // (:33-45 above); it's the same idiom inject/send.ts:320 uses. SGR strip
+  // (:33-45 above); it's the same idiom inject/send.ts:324 uses. SGR strip
   // mirrors that idiom too — every current caller already captures pane text
   // without escape codes (tmux.capture, never captureAnsi), so this is
   // defensive idiom-consistency, not a behavior change today.

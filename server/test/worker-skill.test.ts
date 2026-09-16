@@ -15,7 +15,9 @@
 // own census pins all three of ITS verbs to SKILL.md's clause 3), so pointing
 // at them licenses nothing this file cannot see.
 import { describe, it, expect } from 'vitest';
-import { readFileSync, readdirSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MAIL_MAX_ATTEMPTS, type PrPhase } from '../../shared/api.js';
@@ -31,7 +33,7 @@ const skill = readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8');
  *  first. */
 const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 
-// The twelve clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
+// The thirteen clauses, verbatim. Every entry is DOUBLE-quoted on purpose: clause 3
 // quotes `toId:'coordinator'` — the one genuinely single-quoted literal left,
 // since clause 1 stopped quoting `'#S'` — and clause 9 carries the apostrophe in
 // `done-claim's` (its eight enum words are BACKTICKED, not single-quoted).
@@ -53,7 +55,7 @@ const CONTRACT = [
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
   "Ack before you act, and key the ack on the row's DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "Keep your input box empty. A half-typed draft makes the delivery lane refuse `draft-present`, only you can clear your own text, and a parked delivery means your brief was never read.",
-  "Every question for the operator rides the AskUserQuestion tool — the structured ask the session hook captures and the PWA surfaces — never free text in your pane.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
@@ -61,6 +63,7 @@ const CONTRACT = [
   "Remote control is decided at your creation, not by you: dispatched workers spawn WITHOUT it (the 2026-08-13 ruling, task #37 — landed), declared by the dispatch path at `ws-add --no-rc` and stamped as the registry's `rc` field, while `~/.ccrc/remote-control` still governs every non-dispatched session on this box. Neither file is yours to write.",
   "Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.",
   "When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.",
+  "When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.",
 ];
 
 /** The forbidding clause, by its own index — named once so a re-ordering of the
@@ -68,7 +71,7 @@ const CONTRACT = [
 const FORBIDS = CONTRACT[7]!;
 
 describe('the worker skill: its contract', () => {
-  it('carries all twelve clauses verbatim', () => {
+  it('carries all thirteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -80,7 +83,7 @@ describe('the worker skill: its contract', () => {
   // CONTRACT pin is a SUBSET check, so appending a 13th clause to SKILL.md left
   // every assertion in this file GREEN — the contract could be extended with no
   // pin at all, which is the one thing "pinned verbatim" exists to prevent —
-  // and reverting "These twelve clauses" to "eleven" in SKILL.md, README.md or
+  // and reverting "These thirteen clauses" to "twelve" in SKILL.md, README.md or
   // CLAUDE.md was green too, because no assertion anywhere held the word. The
   // count was hand-maintained in five places and pinned in none. Both are
   // cardinality claims, so both are now derived from ONE value, `CONTRACT.length`.
@@ -105,9 +108,9 @@ describe('the worker skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it twice in its own words ("These twelve clauses", "these
-    // twelve lines"). HARVESTED, never matched literally, so a revert to
-    // "eleven" fails with the wrong word named rather than with a missing string.
+    // SKILL.md states it twice in its own words ("These thirteen clauses", "these
+    // thirteen lines"). HARVESTED, never matched literally, so a revert to
+    // "twelve" fails with the wrong word named rather than with a missing string.
     const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines)\b/g)]
       .map((m) => m[1]!).filter((w) => WORDS.includes(w));
     expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
@@ -265,7 +268,7 @@ describe('the worker skill: the facts it states about the wire', () => {
     // The two lanes are deliberately separate in the delivery code, and
     // `MAIL_MAX_ATTEMPTS`'s own docstring is emphatic about it: that budget
     // "applies ONLY while a delivery's own `deliveredAt` is still null"
-    // (`watch.ts:160-176`), the park is gated on `d.deliveredAt === null`
+    // (`watch.ts:170-186`), the park is gated on `d.deliveredAt === null`
     // (`:2042`), and a delivered row that is merely never acked parks on
     // `MAIL_REPLAY_MAX_ATTEMPTS` instead (`:207`, park at `:1981-1983`).
     //
@@ -382,7 +385,7 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
     new RegExp(`\\b${w.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`);
 
   it('names every freshness word the card can carry, and says what each licenses', () => {
-    const clause = CONTRACT[CONTRACT.length - 1]!;
+    const clause = CONTRACT[11]!;   // clause 12, by index — NOT the last entry
     for (const word of FRESHNESS) {
       expect(clause, `clause 12 branches on no card word matching \`${word}\``)
         .toMatch(wordRe(word));
@@ -393,5 +396,171 @@ describe('the worker skill: clause 12 branches on the card the hook actually pri
     // what this clause shipped as before the fix.
     expect(clause, 'clause 12 lists the card words but attaches no rule to them')
       .toMatch(/LEAD to verify/);
+  });
+});
+
+// ── cross-repo wave 2: the plan may be somewhere else (spec §3 F3) ───────────
+//
+// Clause 6 says "the plan file it names" and has always meant a file in this
+// workspace, because until now there was no other kind. A programme homed in
+// another repo makes that assumption load-bearing and wrong: the path is
+// absolute, the repo is not this one, and the two things a worker must NOT do
+// there (write to the plan, commit against it) are exactly the two an
+// unqualified "your requirements are the plan" invites.
+//
+// Sentence literals, the CONTRACT's own mechanism: a paraphrase fails as a
+// deletion does. Kept OUT of the CONTRACT array on purpose — these are
+// guidance, not the thirteen, and adding one there would red the count pins for a
+// change that adds no clause.
+describe('the worker skill: a plan in another repository (cross-repo wave 2)', () => {
+  // WHITESPACE-COLLAPSED, the `readme-holds.test.ts` idiom the sibling suite
+  // already names on its own `flat` helper (`coordinator-skill.test.ts`'s
+  // `const flat = (s: string) => s.replace(/\s+/g, ' ')`): this prose wraps at
+  // 80 columns, so a raw `toContain` would pin the wrap point rather than the
+  // sentence. Kept per-file on purpose, defined again just below — it touches
+  // nothing shared, so a copy costs one helper and an import would cost a
+  // seam.
+  const flat = (s: string): string => s.replace(/\s+/g, ' ');
+
+  const FOREIGN: readonly (readonly [string, string])[] = [
+    ['the plan may be outside this workspace',
+      'the plan file your brief names can sit OUTSIDE this workspace'],
+    ['homeRepoRoot is the absolute repository root',
+      '`homeRepoRoot`, the absolute path to the home repository root'],
+    ['planRepoPath is tracked and repository-relative',
+      '`planRepoPath`, the tracked repository-relative plan path with no leading slash'],
+    ['planSha is a full immutable identifier',
+      '`planSha`, a full 40-hex commit SHA'],
+    ['read the named plan Git object exactly',
+      'git -C "$homeRepoRoot" show "$planSha:$planRepoPath"'],
+    ['producer evidence is conditional on a real dependency',
+      'Only a wave that depends on a producer interface carries a producer contract'],
+    ['a no-dependency foreign wave carries no producer contract',
+      'A foreign-plan wave with no producer-interface dependency requires none of those producer fields and no excerpt.'],
+    ['producerRepoRoot is the absolute producer repository root',
+      '`producerRepoRoot`, the absolute path to the producer repository root'],
+    ['producerSourceRepoPath is repository-relative',
+      '`producerSourceRepoPath`, the producer source file\'s repository-relative path'],
+    ['producerSha is the exact merged producer identifier',
+      '`producerSha`, the exact full merged producer SHA'],
+    ['read the named producer Git object exactly',
+      'git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"'],
+    ['an unresolved plan object fails closed',
+      'If the repository, commit, or path cannot be resolved, report and stop.'],
+    ['an unresolved producer object fails closed',
+      'If that producer repository, commit, or path cannot be resolved, report and stop under the same immutable-read rule above.'],
+
+    ['ledgerAbsPath does not double as a plan coordinate',
+      '`ledgerAbsPath` is only the absolute programme-ledger path'],
+    ['commit only on this workspace branch, in this repository',
+      "commit only on this workspace's own branch in THIS repository"],
+    ['the contract excerpt is inlined in the brief, and is the authority',
+      'the contract excerpt INLINED in the brief, verbatim from that merged file'],
+    ['the producer blob proves provenance without replacing shape authority',
+      'The producer blob at `producerSha` proves the excerpt\'s provenance'],
+    ['the named plan blob controls wave requirements',
+      'The plan blob read at `planSha` is the authority for the WAVE\'S REQUIREMENTS'],
+    ['the current checkout cannot override the dispatch',
+      'The current checkout\'s plan is not authoritative for this dispatched wave.'],
+    ['a reply may arrive addressed to the role',
+      'A reply may arrive addressed to the ROLE `worker`'],
+  ];
+
+  it('carries the section at all', () => {
+    expect(skill).toContain('## The plan the brief names may live in another repository');
+  });
+
+  it.each(FOREIGN)('states %s', (_what, sentence) => {
+    expect(flat(skill), `SKILL.md no longer states ${_what}`).toContain(flat(sentence));
+  });
+
+  it('resolves producer provenance through its own repository, not the consumer cwd', () => {
+    const sectionStart = skill.indexOf('## The plan the brief names may live in another repository');
+    const sectionEnd = skill.indexOf('\n## ', sectionStart + 1);
+    const section = skill.slice(sectionStart, sectionEnd === -1 ? undefined : sectionEnd);
+    const command = section.match(/^git -C "\$producerRepoRoot" show "\$producerSha:\$producerSourceRepoPath"$/m)?.[0];
+    expect(command, 'the documented producer read is missing').toBeDefined();
+
+    const fixture = mkdtempSync(path.join(os.tmpdir(), 'ccrc-producer-read-'));
+    const producer = path.join(fixture, 'producer');
+    const consumer = path.join(fixture, 'consumer');
+    try {
+      for (const repo of [producer, consumer]) {
+        mkdirSync(repo);
+        execFileSync('git', ['init', '--quiet'], { cwd: repo });
+        execFileSync('git', ['config', 'user.name', 'Fixture'], { cwd: repo });
+        execFileSync('git', ['config', 'user.email', 'fixture@example.invalid'], { cwd: repo });
+      }
+      const sourcePath = 'src/interface.txt';
+      mkdirSync(path.join(producer, 'src'));
+      writeFileSync(path.join(producer, sourcePath), 'producer interface\n');
+      execFileSync('git', ['add', sourcePath], { cwd: producer });
+      execFileSync('git', ['commit', '--quiet', '-m', 'fixture producer'], { cwd: producer });
+      const producerSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+        cwd: producer, encoding: 'utf8',
+      }).trim();
+
+      const read = execFileSync('bash', ['-c', command!], {
+        cwd: consumer,
+        env: { ...process.env, producerRepoRoot: producer, producerSha,
+          producerSourceRepoPath: sourcePath },
+        encoding: 'utf8',
+      });
+      expect(read).toBe('producer interface\n');
+      expect(() => execFileSync('git', ['show', `${producerSha}:${sourcePath}`], {
+        cwd: consumer, stdio: 'pipe',
+      })).toThrow();
+    } finally {
+      rmSync(fixture, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects every mutable-checkout fallback in the foreign-plan section', () => {
+    const start = skill.indexOf('## The plan the brief names may live in another repository');
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    expect(section).not.toContain('Read it by the ABSOLUTE PATH the brief gives');
+    expect(section).not.toContain('cat "$planAbsPath"');
+    expect(section).not.toContain('show "HEAD:');
+    expect(section).not.toContain('current checkout is authoritative');
+
+    // GENERALISED from the single `-C "$PWD"` spelling this replaced. The D-2715
+    // defect is "the producer object is looked up somewhere that is not the
+    // producer repository", and `$PWD` is only its most legible form — `git -C .`,
+    // or a bare `git show` inheriting the consumer's cwd, are the same bug and
+    // walked straight past a `not.toContain` of one string. Every immutable read
+    // the section documents is harvested and required to name its own root.
+    const shows = [...section.matchAll(/git\b[^\n]*\bshow "\$(planSha|producerSha):[^"]*"/g)]
+      .map((m) => ({ cmd: m[0], sha: m[1]! }));
+    expect(shows.length, 'the foreign-plan section documents no immutable read at all')
+      .toBeGreaterThanOrEqual(2);
+    for (const { cmd, sha } of shows) {
+      const expected = sha === 'planSha' ? 'homeRepoRoot' : 'producerRepoRoot';
+      expect(cmd, `a $${sha} read is not rooted at $${expected}`)
+        .toMatch(new RegExp(`^git -C "\\$${expected}" show `));
+    }
+  });
+
+  it('adds no new clause and no second numbered list', () => {
+    // The count pins above would catch a fourteenth clause; this catches the
+    // near-miss that would make THEM unreadable — a numbered list in the new
+    // prose, which `^\d+\. ` cannot tell from a clause.
+    const numbered = [...skill.matchAll(/^(\d+)\. /gm)].map((m) => Number(m[1]));
+    expect(numbered).toEqual(CONTRACT.map((_, i) => i + 1));
+  });
+
+  it('names no destructive verb and no run route in the new section', () => {
+    // A worker that reads "the home repo" and then reads a run route in the same
+    // breath is one prompt away from advancing someone else's run. The run
+    // routes belong to the coordinator — this skill says so in its own API
+    // section, and the new section must not quietly walk it back.
+    const start = skill.indexOf('## The plan the brief names may live in another repository');
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n## ', start + 1);
+    const section = skill.slice(start, end === -1 ? undefined : end);
+    for (const forbidden of ['ws-rm', 'ws-reap', 'ws-gc', 'ws-archive', 'ws-restore',
+      '/advance', '/close', '/dispatch']) {
+      expect(section, `the foreign-plan section names ${forbidden}`).not.toContain(forbidden);
+    }
   });
 });

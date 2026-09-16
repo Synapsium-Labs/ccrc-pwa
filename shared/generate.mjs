@@ -11,8 +11,11 @@
 //
 // `roster` is consumed structurally (a plain object with `accounts`,
 // `homeAble`, `byIdLengthDesc`, `upstreamId`), never imported as a type —
-// there is no build step here, so there is nothing to import against at
-// runtime.
+// there is no build step here, so there is nothing to import a TYPE
+// against at runtime. This file does import ONE sibling, `./models.mjs`,
+// for its `SUBAGENT_CLASSES` value — the constraint that survives is no
+// dependency OUTSIDE `shared/*.mjs`, because `deploy/gen-accounts.mjs`
+// runs this generator with a bare `node` from the checkout.
 //
 // Two different embedding contexts, two different escaping rules:
 //
@@ -57,6 +60,8 @@
 //    `Roster`-shaped object by hand, the way
 //    `server/test/roster-generate.test.ts`'s hostile-payload case
 //    deliberately does. Two independent locks on one door, on purpose.
+
+import { SUBAGENT_CLASSES } from './models.mjs';
 
 /**
  * Backslash-escapes the characters that are still live inside a
@@ -128,8 +133,9 @@ function idArray(ids) {
  *
  * ── `_ccrc_dir_id`, `_ccrc_label`, `_ccrc_hue`, `CCRC_MEASURED` ──
  *
- * The four emissions that finished what stage 2a started. Their one consumer
- * is `ccd/statusline-command.sh`, which until they existed held the LAST
+ * The four emissions that finished what stage 2a started. Their consumers are
+ * `ccd/statusline-command.sh` and, for `CCRC_MEASURED`,
+ * `ccd/ccd-telemetry-keepalive`; the statusline until then held the LAST
  * hand-written copy of the roster in the tree — four literal `case` arms
  * mapping a config dir to an account, and four more mapping it to a label and
  * a colour. An account those arms did not name got no `~/.cc-limits/<id>.json`
@@ -164,14 +170,22 @@ function idArray(ids) {
  * Emitted as an array beside `CCRC_HOME_ABLE` rather than as a fifth
  * function, because membership is the only question anyone asks of it.
  *
+ * `CCRC_ANTHROPIC_BACKEND` and `CCRC_CODEX_BACKEND` are the two POSITIVE
+ * backend memberships, and they are deliberately not each other's complement:
+ * `telemetry` has a third value (`none`), so a lane can be in neither. ccd
+ * reads the first for the four things that only work against Claude Code's own
+ * protocol (`--remote-control`, spawn-effort injection, the cross-backend
+ * sanitiser, the 429 exclusion writer) and the second for the one thing that
+ * speaks Codex's usage vocabulary (`_codex_lane_status`, the `ccd ls` trailer).
+ *
  * ── `_ccrc_pool` ──
  *
  * The account half of project pools. Emitted ALWAYS, even when no account is
  * tagged — an empty `case` — for two reasons that are not the same reason:
- * `declare -F _ccrc_pool` is how `ccd`'s `_acct_pool` (wave 2a landed it)
- * asks whether this box's `accounts.sh` knows about pools at all, and a new
- * `ccd` will call this function on the supervisor's 5-second loop (wave 2b),
- * where `command not found` would be the answer on every box whose roster
+ * `declare -F _ccrc_pool` is how `ccd`'s `_acct_pool` asks whether this box's
+ * `accounts.sh` knows about pools at all, and the supervisor's 5-second loop
+ * calls this function (waves 2a/2b), where `command not found` would be the
+ * answer on every box whose roster
  * has no tags yet. An empty `case … esac` is valid bash and answers empty at
  * rc 0, which is exactly the contract below.
  *
@@ -200,6 +214,23 @@ export function generateAccountsSh(roster) {
   const ids = roster.accounts.map((a) => a.id);
   const homeAbleIds = roster.homeAble.map((a) => a.id);
   const measuredIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
+  // WHAT BACKEND IS THIS, as opposed to WHERE MAY WORK BE PLACED. Those are two
+  // questions and `homeAble` used to answer both, because until now every
+  // home-able account happened to be an Anthropic one. Four things in ccd ask
+  // `_is_home_able` when they mean "does this lane speak Claude Code's own
+  // protocol" — the `--remote-control` flag, the spawn-time effort injection,
+  // the cross-backend transcript sanitiser, and the 429 exclusion writer — and
+  // the moment a Codex lane becomes placeable those four start lying. Emit the
+  // backend answer separately so each site can ask the question it means.
+  const anthropicIds = roster.accounts.filter((a) => a.telemetry === 'anthropic').map((a) => a.id);
+  // The same split, read from the other side. `ccd ls` tells a Codex lane's
+  // usage story in Codex's own vocabulary — weekly caps, ccgpt-usage's JSON
+  // shape, a 5h cooldown — and needs to know WHICH lanes that story is true
+  // of. It cannot ask "not home-able" (both Codex lanes are home-able as of
+  // 2026-09-11) and it cannot ask "not Anthropic" (`telemetry` has a third
+  // value, `none`, and a lane on some future backend would answer yes). So the
+  // positive membership is emitted, exactly as the Anthropic one is.
+  const codexIds = roster.accounts.filter((a) => a.telemetry === 'codex').map((a) => a.id);
 
   const cfgArms = roster.byIdLengthDesc
     .map((a) => `    ${a.id}) echo "$HOME/${dqEscape(a.configDirSuffix)}" ;;`)
@@ -249,11 +280,19 @@ export function generateAccountsSh(roster) {
     .map((a) => `    ${a.id}) echo ${a.pool} ;;`)
     .join('\n');
 
+  // `CCRC_SUBAGENT_CLASSES` — the two classes a session's `subagent` routing
+  // field may name (routing spec 2026-09-14 §5.1), PROJECTED from
+  // `shared/models.mjs`'s `SUBAGENT_CLASSES` so ccd validates against the one
+  // definition instead of holding a third spelling (`single-definition.test.ts`
+  // pins exactly two: the node list and ccrc's usage-text copy).
   return `#!/usr/bin/env bash
 # Generated from ~/.ccrc/accounts.json. Do not edit — \`ccrc install\` rewrites it.
 CCRC_ACCOUNTS=${idArray(ids)}
 CCRC_HOME_ABLE=${idArray(homeAbleIds)}
 CCRC_MEASURED=${idArray(measuredIds)}
+CCRC_ANTHROPIC_BACKEND=${idArray(anthropicIds)}
+CCRC_SUBAGENT_CLASSES=${idArray(SUBAGENT_CLASSES)}
+CCRC_CODEX_BACKEND=${idArray(codexIds)}
 CCRC_UPSTREAM=${roster.upstreamId}
 _ccrc_cfg_dir() {
   case "$1" in

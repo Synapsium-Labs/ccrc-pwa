@@ -100,6 +100,7 @@ describe('GET /api/coord/caps', () => {
     const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
       wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
     coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
+    expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
     expect((await getCaps(app)).json().usage).toEqual({ running: 1, dispatchedIn24h: 1 });
   });
 });
@@ -355,7 +356,7 @@ describe('POST /api/coord/caps', () => {
     const opening = app.inject({ method: 'POST', url: '/api/runs',
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,
-                 claimedBy: 'the-coordinator', sessionId: 'the-worker' } });
+                 claimedBy: 'the-coordinator', sessionId: 'the-worker', homeProject: 'demo' } });
 
     // PREMISE 1 — THE HOLD IS REACHED AT ALL, and it fails FAST if it is not
     // (D-1228). `POST /api/runs` has three early returns before `runCcd` — a 400
@@ -490,7 +491,7 @@ const sourcesUnder = (dir: string): string[] =>
 
 /** Slice one route handler's body out of `coord/routes.ts`: from its own
  *  registration to the next one, the same slice `box-token-census.test.ts` and
- *  `auth-gate.test.ts:405-413` take. Fails LOUDLY on a missing anchor, because
+ *  `auth-gate.test.ts:432-440` take. Fails LOUDLY on a missing anchor, because
  *  `''` satisfies every assertion made about it.
  *
  *  ADDRESSED IN THE RAW TEXT, READ FROM THE BLANKED COPY — the two are the same

@@ -69,8 +69,9 @@ if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
 ```
 
 The first gate is **roster membership** — the account must be in `CCRC_MEASURED`, which
-`shared/generate.mjs:202` derives as `telemetry === 'anthropic'` and `:256` emits (the rule is
-stated at `:159-160`). The second is
+`generateAccountsSh` in `shared/generate.mjs` derives through its `measuredIds` filter as
+`telemetry === 'anthropic'` and emits as `CCRC_MEASURED`; the function's `CCRC_MEASURED`
+contract comment states the same rule. The second is
 **"a number actually arrived"**: `five_int` is derived at `ccd/statusline-command.sh:196-198` from
 `.rate_limits.five_hour.used_percentage`, and is empty whenever the payload carries none.
 

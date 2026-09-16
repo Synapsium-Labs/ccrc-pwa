@@ -17,8 +17,9 @@ import { limitBand } from '../components/LimitBar';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Sheet } from '../components/Sheet';
 import { toast } from '../components/Toast';
-import { accountHue, accountLabel, rosterWrapperIds } from '../lib/accounts';
+import { accountHue, accountLabel, accountPool, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
+import { projectPoolOf, splitByPool } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { useAccountUsage } from './useProjectedHome';
 import './fleet.css';
@@ -228,11 +229,19 @@ export function factsFor(rows: readonly AccountUsage[] | null, wrapper: string):
  *  window saying so out loud), and it remains tappable. What is gone is ccrc
  *  telling the reader it is the emptiest pool. That is the WHOLE cost a
  *  measurement is allowed to charge — preference, never eligibility. */
-const load = (l: AccountFacts): number | null =>
-  condemned(l) || l === null || l.five === null || l.seven === null
-  || l.fiveRolledOver === true || l.sevenRolledOver === true
+const load = (l: AccountFacts): number | null => {
+  if (condemned(l) || l === null) return null;
+  // A WINDOW THE PLAN DOES NOT HAVE IS NOT AN UNMEASURED WINDOW. `measured()`
+  // and ccd's `_limit_score` carry the same clause; an absent marker falls
+  // through to the pair rule on all three sides.
+  if (l.fiveWindowMinutes === 0) {
+    return l.seven === null || l.sevenRolledOver === true ? null : l.seven;
+  }
+  return l.five === null || l.seven === null
+      || l.fiveRolledOver === true || l.sevenRolledOver === true
     ? null
     : Math.max(l.five, l.seven);
+};
 
 /** The least-loaded wrapper among those whose BOTH limit windows were actually
  *  MEASURED — read, and not inferred from an elapsed window; null if none was.
@@ -307,12 +316,17 @@ export function AccountRow({
   suggested = false,
   onPick,
   roster,
+  poolChip,
 }: {
   wrapper: string;
   facts: AccountFacts;
   suggested?: boolean;
   onPick: (wrapper: string) => void;
   roster: readonly RosterWire[];
+  /** The account's pool name when a caller chooses to expose membership.
+   *  Swap targets pass it for crossing rows; new-session account rows pass it
+   *  for every known membership. A missing account pool stays quiet. */
+  poolChip?: string | null;
 }): ReactNode {
   // A direct hue lookup, not a re-parse of `accountColorVar`'s returned
   // token NAME: the string-inspection this replaced
@@ -329,6 +343,7 @@ export function AccountRow({
     background: hue === undefined ? 'var(--bg-raised)' : `var(${colorVar}-tint)`,
   };
   const off = condemned(facts);
+  const poolLabel = `pool · ${poolChip ?? ''}`;
   return (
     <button
       type="button"
@@ -341,6 +356,11 @@ export function AccountRow({
         {accountLabel(roster, wrapper)}
       </span>
       {suggested && <span className="acct-suggested">suggested</span>}
+      {poolChip != null && poolChip !== '' && (
+        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
+          {poolLabel}
+        </span>
+      )}
       <span className="acct-gauges">
         {/* Above the gauges, not instead of them: the numbers are still true of
             the last moment anything ran there, and this is the sentence that
@@ -425,8 +445,12 @@ export function SwapSheet({
 }: SwapSheetProps): ReactNode {
   const sessions = fleet((s) => s.sessions);
   const roster = fleet((s) => s.roster);
+  const pools = fleet((s) => s.pools);
   // The target awaiting its consequence confirm (null = still browsing).
   const [target, setTarget] = useState<string | null>(null);
+  // A disclosure belongs to this session's target list, just as the selected
+  // target does. It must not stay open after the sheet changes session.
+  const [showOther, setShowOther] = useState(false);
 
   // ADJUDICATED, cross-lane seam round. The ui-tsx lane listed this as a stale
   // target left behind by a CONFIRMED move — `move()` calls the sheet's
@@ -454,7 +478,7 @@ export function SwapSheet({
   // `SessionActionsSheet`'s own comment cites as the pattern — except keyed on
   // `session.id` as well as `open`, because "this state belongs to this target"
   // is the actual invariant and closing is only the way it usually ends.
-  useEffect(() => { setTarget(null); }, [open, session.id]);
+  useEffect(() => { setTarget(null); setShowOther(false); }, [open, session.id]);
 
   // ONE SOURCE FOR EVERY ACCOUNT-LEVEL FACT THIS SHEET SHOWS OR RANKS ON, and
   // it is the poll, not the fleet frame. The frame's `FleetSession.limits` used
@@ -477,7 +501,17 @@ export function SwapSheet({
   const others = pickableWrappers(roster, sessions).filter((w) => w !== session.wrapper);
   const wrappers = others.filter((w) => !switchedOff.includes(w));
   const emptiness = pickerEmptiness(others, wrappers);
-  const suggested = leastLoaded(accounts, wrappers);
+  // No pools frame is a distinct condition from a measured untagged project.
+  // `splitByPool` answers that absence permissively: all candidates remain
+  // eligible and the sheet explains that it cannot vouch for the pool.
+  const projectPool = projectPoolOf(pools, session.project);
+  const split = splitByPool(roster, wrappers, projectPool);
+  // Suggest only an eligible destination. Recommending a row hidden behind the
+  // disclosure would turn a deliberate crossing into a default action.
+  const suggested = leastLoaded(accounts, split.eligible);
+  const projectPoolName = projectPool !== null && projectPool.state === 'tagged'
+    ? projectPool.name
+    : null;
   // The two causes, worded for THIS picker. `null` renders the rows instead.
   const emptyNote =
     emptiness === null
@@ -487,9 +521,14 @@ export function SwapSheet({
         : 'Every other account is switched off on the fleet host — turn one back on from Accounts.';
 
   const move = (wrapper: string): void => {
+    // The flag belongs to the selected row, not to the sheet generally. A
+    // normal target retains the exact two-argument call used before pools.
+    const cross = split.crossing.includes(wrapper);
     void (async () => {
       try {
-        await api.swap(session.id, wrapper);
+        await (cross
+          ? api.swap(session.id, wrapper, { crossPool: true })
+          : api.swap(session.id, wrapper));
         toast(`Moving ${session.project} to ${accountLabel(roster, wrapper)}…`);
       } catch (err) {
         toast(`Couldn't move — ${apiErrorText(err)}`, 'error');
@@ -499,6 +538,13 @@ export function SwapSheet({
   };
 
   const targetLabel = target === null ? '' : accountLabel(roster, target);
+  const targetPool = target === null ? null : accountPool(roster, target);
+  const crossingClause =
+    target !== null && split.crossing.includes(target) && targetPool !== null && projectPoolName !== null
+      ? `This crosses pools on purpose: ${targetLabel} is in pool ${targetPool} and ${session.project} `
+        + `is in pool ${projectPoolName}. ccrc records the crossing, and leaves the session alone until `
+        + 'the project is retagged or it moves again. '
+      : '';
   // Read off `session.home`, never off `session.wrapper`: on a session that has
   // already been relocated those differ, and that is exactly the case where the
   // return sentence matters. `null` = nobody measured it (see the prop's
@@ -546,7 +592,7 @@ export function SwapSheet({
         </p>
         <div className="acct-list">
           {emptyNote === null ? (
-            wrappers.map((w) => (
+            split.eligible.map((w) => (
               <AccountRow
                 key={w}
                 wrapper={w}
@@ -560,12 +606,42 @@ export function SwapSheet({
             <p className="acct-none">{emptyNote}</p>
           )}
         </div>
+        {split.unknown ? (
+          <p className="pool-note">
+            This project's pool is not known from here, so pool matching does not hide otherwise available accounts.
+          </p>
+        ) : split.crossing.length > 0 ? (
+          <>
+            <button
+              type="button"
+              className="acct-disclosure"
+              aria-expanded={showOther}
+              onClick={() => setShowOther((shown) => !shown)}
+            >
+              show other pools ({split.crossing.length})
+            </button>
+            {showOther && (
+              <div className="acct-list">
+                {split.crossing.map((w) => (
+                  <AccountRow
+                    key={w}
+                    wrapper={w}
+                    facts={factsFor(accounts, w)}
+                    onPick={setTarget}
+                    roster={roster}
+                    poolChip={accountPool(roster, w)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : null}
       </Sheet>
       <QuickConfirm
         open={target !== null}
         onClose={() => setTarget(null)}
         title={`Move to ${targetLabel}?`}
-        consequence={`The session restarts under ${targetLabel}. Anyone attached is briefly ` +
+        consequence={crossingClause + `The session restarts under ${targetLabel}. Anyone attached is briefly ` +
           'disconnected. ' +
           // Same three-way split as the sheet copy, and it has to be here too:
           // this is the sentence read at the moment of commitment, and it is

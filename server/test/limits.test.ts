@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
-import { readLimits } from '../src/limits.js';
+import { readLimits, measured } from '../src/limits.js';
 import { rolloverCases } from './fixtures/rollover.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
@@ -197,5 +197,25 @@ describe('disabled-marker backfill is bounded to known wrappers', () => {
     return readLimits(localIO, cfg).then((l) => {
       expect(Object.keys(l)).not.toContain('not-an-account');
     });
+  });
+});
+
+describe('measured() — the rank ccd derives too', () => {
+  it('scores every shared fixture exactly as _limit_score does', async () => {
+    // Same rows, same expectations, other language. ccd-limits.test.ts asserts
+    // the shell half; together they are the anti-drift harness for the
+    // single-window rule as well as the rollover rule.
+    const now = Math.floor(Date.now() / 1000);
+    const home = mkTmp('ccrc-measured-');
+    seedRoster(home);
+    const dir = path.join(home, '.cc-limits');
+    mkdirSync(dir, { recursive: true });
+    const cases = rolloverCases(now);
+    for (const c of cases) writeFileSync(path.join(dir, c.file), c.content);
+    const l = await readLimits(localIO, loadConfig({ CCRC_HOME: home }), now);
+    for (const c of cases) {
+      const wrapper = c.file.slice(0, -'.json'.length);
+      expect(measured(l[wrapper]), `${c.file}: ${c.why}`).toBe(c.score);
+    }
   });
 });

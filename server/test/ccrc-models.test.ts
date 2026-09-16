@@ -325,6 +325,30 @@ describe('ccrc models <id> show', () => {
     expect(r.stderr).toMatch(/subagents run as sonnet/);
   });
 
+  it('names the render failure on a lane whose subagent is a legacy opus/fable (fix round 2A, N1)', () => {
+    writeCatalogue('gpt');
+    run(['models', 'gpt', 'init', 'codex']);
+    // A registry already on disk with `subagent: opus`, the way a lane set
+    // up before the 2026-09-09 narrowing would still read — `parseRegistry`
+    // reads it faithfully; `show` must NAME why nothing can be materialised.
+    const p = join(home, '.ccrc', 'models', 'gpt.classes.json');
+    const j = JSON.parse(fs.readFileSync(p, 'utf8'));
+    j.subagent = 'opus';
+    fs.writeFileSync(p, `${JSON.stringify(j, null, 2)}\n`);
+    const r = run(['models', 'gpt', 'show']);
+    expect(r.code).toBe(0);
+    const b = oneObject(r);
+    expect(String(b['renderRefusal'])).toMatch(/must be haiku or sonnet/);
+    expect(r.stderr).toMatch(/the env block cannot be materialised: .*must be haiku or sonnet/);
+    expect(r.stderr).toMatch(/set-subagent <haiku\|sonnet>/);
+    // NEW-2 (round 3): the resolution parenthetical is only ever true when a
+    // block was actually materialised — on this legacy lane nothing was, so
+    // "subagents run as opus (gpt-5.6-sol)" would be a fabrication naming a
+    // model that never runs a subagent.
+    expect(r.stderr).not.toMatch(/subagents run as opus \(gpt-5\.6-sol\)/);
+    expect(r.stderr).toMatch(/NOT in force/);
+  });
+
   it('an anthropic lane answers read-only and says why', () => {
     const r = run(['models', 'claude-a', 'show']);
     expect(r.code).toBe(0);
@@ -587,19 +611,36 @@ describe('ccrc models <id> set-subagent', () => {
   });
 
   it('moves CLAUDE_CODE_SUBAGENT_MODEL, and nothing else in the block', () => {
+    // `haiku`, not `opus`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet — opus is refused (see below).
     const before = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
-    const r = run(['models', 'gpt', 'set-subagent', 'opus']);
+    const r = run(['models', 'gpt', 'set-subagent', 'haiku']);
     expect(r.code).toBe(0);
     const after = JSON.parse(fs.readFileSync(join(home, '.claude-gpt', 'settings.json'), 'utf8'));
-    expect(after.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('gpt-5.6-sol');
+    expect(after.env.CLAUDE_CODE_SUBAGENT_MODEL).toBe('haiku');
     expect(after.env.ANTHROPIC_MODEL).toBe(before.env.ANTHROPIC_MODEL);
     expect(after.env.ANTHROPIC_DEFAULT_SONNET_MODEL).toBe(before.env.ANTHROPIC_DEFAULT_SONNET_MODEL);
   });
 
+  it.each(['opus', 'fable'])(
+    'refuses %s: measured 2026-09-09 on Claude Code 2.1.267, it runs on the sonnet slot regardless',
+    (cls) => {
+      const r = run(['models', 'gpt', 'set-subagent', cls]);
+      expect(r.code).toBe(1);
+      expect(oneObject(r)['error']).toBe('subagent-class-unsupported');
+      expect(String(oneObject(r)['detail'])).toMatch(/haiku or sonnet/);
+    },
+  );
+
   it('refuses a class whose slot is null, naming set-class', () => {
-    const r = run(['models', 'gpt', 'set-subagent', 'fable']);
+    // `haiku`, not `fable`: fix round 1, v2 (2026-09-09) restricts `subagent`
+    // to haiku/sonnet, so a null-slot case has to be a class the new gate
+    // still lets through — haiku, nulled first, rather than fable (which is
+    // now refused before this check is ever reached).
+    run(['models', 'gpt', 'set-class', 'haiku', 'none']);
+    const r = run(['models', 'gpt', 'set-subagent', 'haiku']);
     expect(r.code).toBe(1);
-    expect(String(oneObject(r)['detail'])).toMatch(/set-class fable/);
+    expect(String(oneObject(r)['detail'])).toMatch(/set-class haiku/);
   });
 
   it('refuses a word that is not a class, at exit 2', () => {

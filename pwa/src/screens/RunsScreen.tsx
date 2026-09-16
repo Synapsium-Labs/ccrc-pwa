@@ -5,9 +5,10 @@
 // round 1, task 5, findings 1 and 3). The live `{type:'runs'}` frame
 // (`/ws/fleet`) is ACTIVE-ONLY by construction: `watch.ts`'s `emitRuns` calls
 // `coord.runs()` with no options, and `CoordStore.runs()` defaults to
-// `WHERE state NOT IN ('done','failed')`. It can never carry a finished run,
-// so it is trusted for the ACTIVE half only — the instant it has said
-// anything at all, including an honestly empty `[]` (`runsFrameSeen`,
+// excluding `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair). It
+// can never carry a finished run, so it is trusted for the ACTIVE half only —
+// the instant it has said anything at all, including an honestly empty `[]`
+// (`runsFrameSeen`,
 // `stores/fleet.ts`), because an empty array from a frame that DID arrive is
 // a true empty roster, not silence.
 //
@@ -27,14 +28,14 @@
 // RunSummary's SHIPPED shape (`shared/api.ts`, PR I) diverges from the plan's
 // illustrative one on several points — no `waves` (it's `waveOf`), no
 // `holdReason` at all (never rides the wire — the reason string this file's
-// sibling docs keep citing, registry.ts:27, belongs to `FleetSession.held`,
+// sibling docs keep citing, registry.ts:28, belongs to `FleetSession.held`,
 // a DIFFERENT type), and `items` carries only `{done,total}` — no
 // `failed`/`blocked` columns exist anywhere yet. This file renders exactly
 // what PR I actually shipped, not the plan's historical sample.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { type CoordCapsView, type FleetSession, graphReadCount, type RunSummary, unmeasuredFields } from '../../../shared/api';
-import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runWarnings, runClosedAt, runItems, runState, runsByProgram } from '../fleet/runWords';
+import { DISPATCH_GLYPH, RUN_GLYPH, RUN_WORD, anyDispatchPending, crossingNote, dispatchWindow, isRunClosed, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runKindChip, runWarnings, runClosedAt, runItems, runState, runsByProgram, waveLabel } from '../fleet/runWords';
 import { spawnVerdictChip } from '../fleet/spawnWords';
 import { AbandonSheet } from '../fleet/AbandonSheet';
 import { CoordBanner } from '../fleet/CoordBanner';
@@ -165,6 +166,13 @@ function RunRow({
   // picks no words.
   const verdict = session === null ? null : spawnVerdictChip(session);
   const resume = resumeNote(run, nowSec);
+  // F4. TWO facts, and only one of them is conditional: the run's own project is
+  // rendered on every row (a badge that appears only sometimes teaches nothing),
+  // while the crossing marker is `crossingNote`'s single answer — silent when the
+  // home is unknown, silent when the home IS this project, two cues when it is
+  // neither. This component compares nothing.
+  const crossing = crossingNote(run);
+  const kindChip = runKindChip(run);
   // F7. The DECISION is `runWarnings`' — five conditions, one place, tolerant of
   // a server that has never heard of `health`. This component picks no words and
   // compares no thresholds; it lays out what it was handed.
@@ -174,6 +182,19 @@ function RunRow({
       <span className="run-glyph" aria-hidden="true">{RUN_GLYPH[state]}</span>
       <span className="run-state">{RUN_WORD[state]}</span>
       <span className="run-ws">{run.workspace ?? run.branch ?? String(run.id)}</span>
+      <span className="run-project">{run.project}</span>
+      {crossing !== null && (
+        <span className="run-crossing" data-home={crossing.home} title={crossing.title}>
+          <span className="run-crossing-glyph" aria-hidden="true">{crossing.glyph}</span>
+          {crossing.word}
+        </span>
+      )}
+      {kindChip !== null && (
+        <span className="run-kind" title={kindChip.title}>
+          <span className="run-kind-glyph" aria-hidden="true">{kindChip.glyph}</span>
+          {kindChip.word}
+        </span>
+      )}
       <span className="run-tally">{itemTallyLabel(items)}</span>
       <span className="run-when">
         {run.dispatchedAt === null ? '—' : formatAge(nowSec - Math.floor(run.dispatchedAt / 1000))}
@@ -698,7 +719,7 @@ export function RunsScreen({
               <div key={program} className="runs-group" role="group" aria-label={`program ${program}`}>
                 <p className="runs-group-head">
                   <span className="runs-program">{program}</span>
-                  <span className="runs-wave">wave {wave}{waveOf === null ? '' : `/${waveOf}`}</span>
+                  <span className="runs-wave">{waveLabel({ wave, waveOf })}</span>
                 </p>
                 <ul className="runs-list">
                   {list.map(rowFor)}

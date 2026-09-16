@@ -20,7 +20,9 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode,
 } from '../../shared/api.js';
+import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -326,12 +328,12 @@ describe('extraction finding — one path to the ccd script', () => {
 
 describe('one KeyedQueue for the process', () => {
   // The seam the naming sweep needs. `buildServer` used to construct its own
-  // KeyedQueue inline (`server.ts:321` on origin/main, the tree this diverged
-  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:61` vs
-  // `:63` on that same tree; `:68` vs `:70` on this one, now that the queue
+  // KeyedQueue inline (`server.ts:330` on origin/main, the tree this diverged
+  // from), which FleetWatcher — built two lines EARLIER in index.ts (`:62` vs
+  // `:64` on that same tree; `:69` vs `:71` on this one, now that the queue
   // itself hoisted one level further to `index.ts:37`) — had no way to reach.
   // A watcher that built its own would serialise its rename against nothing,
-  // and `POST /workspace/reap` (`server.ts:718`) is exactly the write it must
+  // and `POST /workspace/reap` (`server.ts:727`) is exactly the write it must
   // not race. An optional Deps field with a `?? new KeyedQueue()` fallback is
   // the same bug with a green suite, which is why this scans for the
   // CONSTRUCTOR rather than for the field.
@@ -409,40 +411,39 @@ describe('Build 7 nouns', () => {
   // the mechanism it claimed to be standing on.
   //
   // Same shape as the terminal-trio scan below, and for the same reason: the
-  // shipped list is BUILT by interpolation from the two exported constants, so
+  // shipped list is BUILT by interpolation from the three exported constants, so
   // this scanner sees no literal at all in the real source, and any hand-written
-  // SQL list of the pair scores a hit. Either order, because a copy written from
-  // memory is as likely to be the other way round.
+  // SQL list of the SET scores a hit. Any order, because a copy written from
+  // memory is as likely to land in any of the three's six permutations.
   //
   // NOT a bare scan for `'run closed'`: two files quote that string in PROSE
   // (`shared/api.ts`'s lastError vocabulary, `store.ts`'s own
   // `cancelOutstandingDeliveries` docstring), and a guard that fires on a comment
   // explaining the constant is a guard someone deletes.
-  it('spells the deliberate-cancel pair ONCE — the constant, never a hand-written SQL list', () => {
-    const PAIR = new RegExp(
-      "\\(\\s*'(run closed|coordinator reclaimed)'\\s*,\\s*'(run closed|coordinator reclaimed)'\\s*\\)");
-    // The premise, established inside the test rather than assumed: this pattern
-    // really does recognise the copy it forbids, in both orders. Without these
-    // two lines the assertion below is satisfied by a regex that matches nothing.
-    expect(PAIR.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
-    expect(PAIR.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
-    expect(PAIR.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
+  it('spells the deliberate-cancel SET once — the constant, never a hand-written SQL list', () => {
+    const MEMBERS = '(run closed|coordinator reclaimed|recipient rebound)';
+    const LIST = new RegExp(`\\(\\s*'${MEMBERS}'\\s*(?:,\\s*'${MEMBERS}'\\s*){1,2}\\)`);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed') ")).toBe(true);
+    expect(LIST.test("NOT IN ( 'coordinator reclaimed', 'run closed' )")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','coordinator reclaimed','recipient rebound')")).toBe(true);
+    expect(LIST.test("NOT IN ('run closed','recipient not in registry')")).toBe(false);
 
-    const holders = ALL.filter((f) => PAIR.test(readFileSync(f, 'utf8'))).map(rel).sort();
-    expect(holders, 'a hand-written SQL list of the deliberate-cancel pair').toEqual([]);
+    const holders = ALL.filter((f) => LIST.test(readFileSync(f, 'utf8'))).map(rel).sort();
+    expect(holders, 'a hand-written SQL list of the deliberate-cancel set').toEqual([]);
 
-    // …and the one definition is still built from the two named constants, so
+    // …and the one definition is still built from the three named constants, so
     // "no literal anywhere" cannot be satisfied by deleting the exclusion.
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
     expect(store).toMatch(
-      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}'\)`/);
-    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR']) {
+      /const DELIBERATE_CANCEL_ERRORS_SQL =\s*\n?\s*`\('\$\{MAIL_RUN_CLOSED_ERROR\}','\$\{MAIL_RECLAIM_CANCELLED_ERROR\}','\$\{MAIL_REBIND_SUPERSEDED_ERROR\}'\)`/);
+    for (const name of ['MAIL_RUN_CLOSED_ERROR', 'MAIL_RECLAIM_CANCELLED_ERROR',
+                        'MAIL_REBIND_SUPERSEDED_ERROR']) {
       const defs = ALL.filter((f) =>
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
       expect(defs, name).toEqual(['server/src/coord/store.ts']);
     }
-    // The two readers that must keep reaching the constant — "the copies are
-    // gone" is also satisfied by deleting the exclusion from both.
+    // The readers that must keep reaching the constant — "the copies are
+    // gone" is also satisfied by deleting the exclusion from all of them.
     expect((store.match(/NOT IN \$\{DELIBERATE_CANCEL_ERRORS_SQL\}/g) ?? []).length)
       .toBeGreaterThanOrEqual(2);
   });
@@ -457,7 +458,7 @@ describe('Build 7 nouns', () => {
   //
   // NO SELF-MATCH RISK, stated so the next author does not "fix" a hazard that
   // is not here: this case reads `server/src/coord/store.ts` ALONE, never `ALL`
-  // and never itself, and `ROOTS` (:32-37) does not include `server/test`. The
+  // and never itself, and `ROOTS` (:33-38) does not include `server/test`. The
   // needles below can therefore be written whole.
   it('spells the abandonment predicate ONCE — the constant, never a second copy of its clauses', () => {
     const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
@@ -465,7 +466,10 @@ describe('Build 7 nouns', () => {
     // The premise, established rather than assumed: this needle really is the
     // clause, and it really is distinct from the twelve `runs`-row predicates in
     // the same file (those read `r.state`/`state`, never the mail join's `rr`).
-    const CLAUSE = "COALESCE(rr.state, '') NOT IN ('done','failed')";
+    // Since design 2026-09-14 §7.1 (D-2794/D-2800) the run-state half is no
+    // longer a hand-written pair but L0's `TERMINAL_RUN_STATES_SQL` — updated
+    // here rather than left pinning the literal the sweep just retired.
+    const CLAUSE = "COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL}";
     expect(store, 'the abandonment clause is not in store.ts at all').toContain(CLAUSE);
     expect(store.split(CLAUSE).length - 1,
       'the abandonment run-state clause is written more than once').toBe(1);
@@ -510,6 +514,25 @@ describe('Build 7 nouns', () => {
         new RegExp(`^\\s*export const ${name}\\b`, 'm').test(readFileSync(f, 'utf8')));
       expect(hits.map(rel), name).toEqual(['shared/api.ts']);
     }
+  });
+
+  // ── D-2546: the hold route's own reason budget ──────────────────────────
+  //
+  // Same shape as the pair above, and here for the same reason: a cap with two
+  // homes is two thresholds nothing forces to agree. The SECOND assertion is
+  // the one that earns this its own block — 512 is deliberately the same
+  // number as `LC_REASON_MAX_BYTES` and deliberately NOT an alias of it
+  // (`LEDGER_TITLE_MAX_BYTES`'s stated argument: tying two seams' caps
+  // together lets a change to one silently rewrite the other's refusal
+  // threshold), so "one definition" here must mean an own-value literal, not
+  // a re-export of the neighbour that happens to hold the same integer.
+  it('defines HOLD_ROUTE_REASON_MAX_BYTES exactly once, in shared/, and not as an alias', () => {
+    const hits = ALL.filter((f) =>
+      /^\s*export const HOLD_ROUTE_REASON_MAX_BYTES\b/m.test(readFileSync(f, 'utf8')));
+    expect(hits.map(rel)).toEqual(['shared/api.ts']);
+    const src = readFileSync(hits[0]!, 'utf8');
+    expect(/export const HOLD_ROUTE_REASON_MAX_BYTES\s*=\s*\d+\s*;/.test(src),
+      'HOLD_ROUTE_REASON_MAX_BYTES must hold its own literal, never LC_REASON_MAX_BYTES').toBe(true);
   });
 
   it('spells the terminal trio ONCE — TERMINAL_ITEM_STATES, and no hand-written SQL literal', () => {
@@ -646,6 +669,44 @@ describe('Build 7 nouns', () => {
       /if \(\(TERMINAL_DELIVERY_STATES as readonly string\[\]\)\.includes\(item\.state\)\) return null;/);
   });
 
+  it('spells the run-state lists ONCE — ACTIVE_RUN_STATES / TERMINAL_RUN_STATES, never a hand-written SQL list (D-2800)', () => {
+    expect(ALL.map(rel)).not.toContain('server/test/single-definition.test.ts');
+
+    // Adjacent quoted pairs/triples of the two lists, in either order, with any
+    // spacing — the shapes a copy actually takes in SQL or JS.
+    const TERMINAL_PAIR = /\(\s*'(done|failed)'\s*,\s*'(done|failed)'\s*\)/;
+    const ACTIVE_LIST = /\(\s*'(dispatched|working|unknown)'\s*,\s*'(dispatched|working|unknown)'\s*(?:,\s*'(dispatched|working|unknown)'\s*)?\)/;
+    expect(TERMINAL_PAIR.test("NOT IN ('done','failed')")).toBe(true);
+    expect(TERMINAL_PAIR.test("IN ( 'failed', 'done' )")).toBe(true);
+    expect(ACTIVE_LIST.test("IN ('dispatched','working','unknown')")).toBe(true);
+    expect(ACTIVE_LIST.test("IN ('queued','delivered')")).toBe(false);
+
+    const holders = ALL.filter((f) => {
+      const t = readFileSync(f, 'utf8');
+      return TERMINAL_PAIR.test(t) || ACTIVE_LIST.test(t);
+    }).map(rel).sort();
+    // `schema.ts` is exempt for FROZEN migration strings only; nothing else may hold the literal.
+    expect(holders.filter((h) => h !== 'server/src/coord/schema.ts'),
+      'a hand-written SQL list of the run-state pair/triple').toEqual([]);
+
+    const api = readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8');
+    expect(api).toMatch(/export const ACTIVE_RUN_STATES = \['dispatched', 'working', 'unknown'\] as const/);
+    expect(api).toMatch(/export const TERMINAL_RUN_STATES = \['done', 'failed'\] as const/);
+    for (const name of ['ACTIVE_RUN_STATES', 'IDLE_RUN_STATES', 'TERMINAL_RUN_STATES']) {
+      const defs = ALL.filter((f) =>
+        new RegExp(`^\\s*(?:export )?const ${name}\\b`, 'm').test(readFileSync(f, 'utf8'))).map(rel);
+      expect(defs, name).toEqual(['shared/api.ts']);
+    }
+
+    const store = readFileSync(path.join(ccrcRoot, 'server/src/coord/store.ts'), 'utf8');
+    expect(store).toMatch(/const INACTIVE_RUN_STATES_SQL =\s*\n?\s*`\('\$\{\[\.\.\.IDLE_RUN_STATES, \.\.\.TERMINAL_RUN_STATES\]\.join\("','"\)\}'\)`/);
+    expect(store).toMatch(/const TERMINAL_RUN_STATES_SQL =\s*\n?\s*`\('\$\{TERMINAL_RUN_STATES\.join\("','"\)\}'\)`/);
+    expect(store, 'capsUsage no longer reads the inactive fragment')
+      .toMatch(/dispatchedAt IS NOT NULL AND state NOT IN \$\{INACTIVE_RUN_STATES_SQL\}/);
+    // The sweep's floor: at least six `TERMINAL_RUN_STATES_SQL` consumers in store.ts (measured in Task 1 step 1).
+    expect((store.match(/\$\{TERMINAL_RUN_STATES_SQL\}/g) ?? []).length).toBeGreaterThanOrEqual(6);
+  });
+
   // D-289 (was D-B4-16): no L1 file holds a database handle. `architecture:78-81` puts
   // `store.ts`/`coord/db.ts` at L3 and allows L1 to import L2 as TYPES only,
   // with "no `node:sqlite`" — so every multi-row all-or-nothing commit in this
@@ -698,7 +759,7 @@ describe('Build 7 nouns', () => {
 // Same corpus, same argument as the header above — "a comment is a request; a
 // red suite is a mechanism" — one level up from a duplicated VALUE to a
 // duplicated CLAIM. Both cases derive the fact from `server/src` and check the
-// prose against it; neither reads itself, and `ROOTS` (:32-37) contains no test
+// prose against it; neither reads itself, and `ROOTS` (:33-38) contains no test
 // directory, so no needle here can match its own source line.
 describe('store.ts docstrings that describe their own callers', () => {
   const STORE = path.join(ccrcRoot, 'server/src/coord/store.ts');
@@ -748,7 +809,7 @@ describe('store.ts docstrings that describe their own callers', () => {
     expect(/\bthis\.setDeliveryEnvelope\(/.test(codeOnly(store)),
       'no in-file caller of setDeliveryEnvelope — this half has nothing to check').toBe(true);
     expect(doc, 'the docstring does not name the in-file caller')
-      .toContain('requeueAbandonedCoordinatorMail');
+      .toContain('requeueAbandonedMail');
   });
 
   /** Statement keywords that wear a declaration's shape at two-space indent. A
@@ -934,6 +995,105 @@ describe('the account roster — runtime data, no compile-time copies', () => {
   });
 });
 
+// The provider table, §4.2. This describe is the `.tsx?` half; the other half —
+// the one that can see a copy in a `.mjs` — is `server/test/providers.test.ts`,
+// because `sources()` above (:40-57) filters `/\.tsx?$/` at :54 and has never
+// seen a `.mjs`, a `.d.mts` or a bash script (D-76, and `source-bytes.test.ts:30-36`
+// records the incident that fact caused). Both halves ship in the same commit
+// as the promise: a single-definition claim whose scanner cannot reach the file
+// a copy would land in is a comment, not a mechanism (D-1860).
+describe('the provider table — one table, one home', () => {
+  // The positive control, the shape this file already uses for its own hunt
+  // lists (`the name list this scans is real, and is the roster`, :846-853): a
+  // scan for a name nothing spells passes everything.
+  const IDS = PROVIDER_IDS;
+  it('the id list this scans is real, and is the table', () => {
+    expect(IDS.length).toBeGreaterThanOrEqual(2);
+    expect(IDS).toContain('anthropic');
+  });
+
+  it('PROVIDERS is declared in exactly one file under the four roots', () => {
+    const RE = /^\s*(?:export\s+)?const\s+PROVIDERS\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/providers.ts']);
+  });
+
+  it('the derived lists are derived, not restated', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'shared/providers.ts'), 'utf8');
+    expect(src).toMatch(/PROVIDER_IDS: readonly ProviderId\[\] = Object\.keys\(PROVIDERS\)/);
+    expect(src).toMatch(/GENERATABLE: readonly ProviderId\[\] =\s*\n?\s*PROVIDER_IDS\.filter/);
+    // …and the union is the table's keys, so the type cannot name a fifth
+    // provider the table does not describe.
+    expect(src).toMatch(/export type ProviderId = keyof typeof PROVIDERS;/);
+  });
+
+  it('no source file under the four roots restates the provider ids as an array literal', () => {
+    // `enumeratesAsArray`'s rule (:859-865), over the provider ids: two or more
+    // of them quoted inside one `[...]`. `providers.ts` itself is exempt only
+    // in the sense that it holds no such literal — the ids appear as KEYS, and
+    // that is the point of the table shape.
+    //
+    // ONE EXEMPTION, BY NAME, AND IT IS A DIFFERENT VOCABULARY (D-2603).
+    // `shared/models.ts`
+    // declares `PROBE_KINDS = ['codex', 'openrouter', 'compatible']`, two of whose
+    // three words are also provider ids. It is not a restatement of this table:
+    // that constant names which CATALOGUE PROBE a lane runs, and its own comment
+    // draws the line — "It names the DISCOVERY mechanism, not the
+    // account-connections `provider` (auth and connection): round-2 ruling 10 keys
+    // probes here and nowhere else." The two lists overlap by two tokens and
+    // neither derives from the other; `codex` is a probe and not a provider, and
+    // `anthropic` is a provider with no probe. Collapsing them would be the real
+    // defect, so the exemption is the declaration LINE, not the file.
+    const EXEMPT = /^export const PROBE_KINDS = /;
+    const scannable = (src: string): string =>
+      src.split('\n').filter((l) => !EXEMPT.test(l)).join('\n');
+    const enumerates = (src: string): boolean => {
+      for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
+        const hits = IDS.filter((p) => new RegExp(`['"]${p}['"]`).test(m[0]));
+        if (hits.length >= 2) return true;
+      }
+      return false;
+    };
+    // THE EXEMPTION IS LIVE, checked rather than assumed: if `PROBE_KINDS` is
+    // renamed, moved or loses its overlap, this filter starts exempting nothing
+    // and would go on passing while protecting a line that no longer exists.
+    const models = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
+    expect(enumerates(models),
+      'PROBE_KINDS no longer trips this scan — delete the exemption below it')
+      .toBe(true);
+    expect(enumerates(scannable(models)),
+      'shared/models.ts enumerates provider ids somewhere OTHER than PROBE_KINDS')
+      .toBe(false);
+    const holders = ALL.filter((f) => enumerates(scannable(readFileSync(f, 'utf8')))).map(rel);
+    expect(holders).toEqual([]);
+  });
+
+  it('BASE_URL_OK is declared in exactly one file, and it is not the table', () => {
+    const RE = /^\s*(?:export\s+)?const\s+BASE_URL_OK\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/base-url.ts']);
+    // The loopback SET — the three hosts written as one closed list — is the
+    // other value a second copy would be spelled from, and a caller that
+    // re-spells it has re-decided the exception rather than reused it.
+    //
+    // WHY THE SET SPELLING AND NOT THE BARE LITERAL. A scan for
+    // /['"]127\.0\.0\.1['"]/ is RED on this tree, and not because anything is
+    // wrong: four shipped files legitimately quote that host as a BIND ADDRESS
+    // or a loopback test, and none of them is a copy of this decision —
+    // measured 2026-09-07 over the four ROOTS: `server/src/config.ts:310`
+    // (`host: env.CCRC_HOST || '127.0.0.1'`), `server/src/auth/webauthn.ts:342`
+    // (`url.hostname === '127.0.0.1'`), `agent/src/index.ts:25` and
+    // `agent/src/server.ts:712` (`rawOpts.host ?? '127.0.0.1'`). Pinning the
+    // ordered three-element spelling catches the copy this task is about and
+    // leaves those four alone. Measured before writing it: the set spelling has
+    // ZERO holders under the four roots today, so this goes from `[]` to
+    // `['shared/base-url.ts']` and never through a red.
+    const LOOP_SET = /\['127\.0\.0\.1', '\[::1\]', 'localhost'\]/;
+    const loopHolders = ALL.filter((f) => LOOP_SET.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(loopHolders).toEqual(['shared/base-url.ts']);
+  });
+});
+
 describe('the account roster — config dir is data, joined in one place', () => {
   it('no source file under the four roots indexes cfg.wrappers[...] directly', () => {
     // `configDirFor` (server/src/config.ts) is the one place a wrapper
@@ -960,13 +1120,15 @@ describe('the account roster — config dir is data, joined in one place', () =>
 });
 
 describe('the program ledger is parsed by nothing', () => {
-  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4's
-  // actual mechanism is "no file under server/src mentions
-  // docs/superpowers/programs" — narrowed only as far as the shipped tree
-  // forces: nine mentions exist today, and every one but three is a comment
+  // Spec §7 says the ledger is "for humans and parsed by nothing," and D-4
+  // records the historical server-only claim, "no file under server/src
+  // mentions docs/superpowers/programs." The live guard scans all four source
+  // roots, narrowed only as far as the shipped tree forces: ten mentions exist
+  // today, and every one but three is a comment
   // explaining the convention (coord/db.ts's own migration-rule docstring,
   // coord/fingerprint.ts, coord/store.ts, coord/routes.ts's docstrings,
-  // shared/api.ts). The three non-comment mentions are STRING VALUES the
+  // shared/api.ts, watch.ts's own build4-dogfood citation). The three
+  // non-comment mentions are STRING VALUES the
   // running system emits or throws — never a value it reads back off disk —
   // and are named below, exactly, rather than pattern-matched: a
   // `readFile(Sync)?(` check on the same line catches only the single-line
@@ -983,9 +1145,6 @@ describe('the program ledger is parsed by nothing', () => {
     // message; neither reads a byte off either path.
     "'(docs/superpowers/programs/<slug>.md) plus the registry and .prhistory (spec:82-85), or ' +",
     "'from the markdown ledger (docs/superpowers/programs/<slug>.md) plus the registry and ' +",
-    // coord/routes.ts:692 — POST /api/runs's response names where a
-    // coordinator should commit the ledger; the route never opens it.
-    'ledgerPath: `docs/superpowers/programs/${program}.md`,',
     // shared/api.ts's `ledgerPath` — the same category as the entry above,
     // one ring down: it NAMES the path the operator is expected to have
     // committed, before `POST /api/runs` is ever composed, and never opens it.
@@ -1437,29 +1596,46 @@ describe('the model files, and who reads each one', () => {
   });
 
   it('the four class names are enumerated only where a walk needs the sequence', () => {
-    // A file may list all four ONLY if it walks them in order. SIX print,
-    // and FIVE of them walk it: the TypeScript source, its bare-`node` twin,
-    // the materialiser, the verbs' node half, and `ccd/ccrc` (whose bash walk
-    // is what answers a class typo at exit 2).
+    // A file may list all four ONLY if it walks them in order. SEVEN print,
+    // and SIX of them walk it: the TypeScript source, its bare-`node` twin,
+    // the materialiser, the verbs' node half, `ccd/ccrc` (whose bash walk
+    // is what answers a class typo at exit 2), and — since the routing
+    // record (routing spec 2026-09-14 §5.1) — `ccd/ccd`, which holds the four
+    // names ONCE, in `ROUTE_CLASSES` (`fable opus sonnet haiku default`), and
+    // WALKS them through `_route_word_in`'s `for x in $2` loop to answer the
+    // `class` field's vocabulary question. The `degraded` arm walks the same
+    // sequence minus `default` — a session cannot degrade TO "no override" —
+    // and DERIVES it (`${ROUTE_CLASSES% default}`, controller ruling S1-R3)
+    // rather than re-typing it three lines below the first.
     //
-    // The sixth, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
+    // THE RULE IS THE WALK, NOT THE LANGUAGE. An earlier version of this
+    // rationale said a shape check run in bash needs the vocabulary "in bash,
+    // not just in the TypeScript definition" — which routing slice 1's Task 1
+    // falsified in this very file's neighbourhood: `SUBAGENT_CLASSES` is read
+    // in bash by the same `_route_word_in` loop and is NOT spelled in bash at
+    // all, because `ccrc install` PROJECTS it into `$HOME/.ccrc/accounts.sh`
+    // (`single-definition` pins that list at exactly two languages for that
+    // reason). A projection is available to every holder listed here, so
+    // "bash needs its own copy" is not the argument that admits any of them.
+    // What admits a file is that it walks the sequence in order.
+    //
+    // The seventh, `pwa/src/lib/models.ts`, is NOT an accidental, unrelated
     // file — the spec names it three times as the CURRENT hardcoded picker
     // this design will eventually replace: §1 calls it out by path and line
     // range ("The PWA picker is a hardcoded table keyed on the wrapper
     // string"), §8 describes what it becomes ("Session picker … becomes
     // data: rows are the four classes …", Plan 3a), and §13.4's migration
     // step 4 is "`pwa/src/lib/models.ts`'s table is deleted, not kept as a
-    // fallback." So it is a real, spec-acknowledged sixth holder TODAY, and
+    // fallback." So it is a real, spec-acknowledged holder TODAY, and
     // Plan 3a is the task that removes it — when that lands, this row comes
-    // OUT of the list below rather than staying as a permanent exception, and
-    // the list shrinks back to five.
+    // OUT of the list below rather than staying as a permanent exception.
     //
     // Until then it matches through the QUOTED-literal arm — its `/model
     // <alias>` rows quote the same four words as Claude Code CLI
     // slash-command aliases (`row('Opus 5', 'opus', 'opus')` literally
     // contains `'opus'`), not as a classification walk — so tightening the
     // bare-word arm (the fix for a match found in PROSE) cannot exclude it
-    // without also excluding the five real holders, which reach the quoted
+    // without also excluding the other real holders, which reach the quoted
     // arm the same way. Named here rather than carved out of the corpus, per
     // the same rule this file's header states for every other scan: the list
     // is what the scan actually finds, honestly reconciled, not narrowed to
@@ -1469,6 +1645,7 @@ describe('the model files, and who reads each one', () => {
         new RegExp(`(?:'${c}'|"${c}"|(?<![\\w'-])${c}\\s*:|(?<![\\w-])${c}(?![\\w-]))`).test(src));
     const holders = MODELS_CORPUS.filter((f) => enumerates(codeOf(f))).map(rel).sort();
     expect(holders).toEqual([
+      'ccd/ccd',                // ROUTE_CLASSES and _route_valid's degraded arm — routing spec §5.1
       'ccd/ccrc',               // MODELS_CLASSES — the usage-error gate
       'deploy/models-op.mjs',   // CLASSES — the mutation walk
       'pwa/src/lib/models.ts',  // the picker's aliases — spec §1/§8/§13.4, deleted by Plan 3a
@@ -1483,6 +1660,39 @@ describe('the model files, and who reads each one', () => {
     // list above into every source in the tree.
     const src = readFileSync(path.join(ccrcRoot, 'shared/models.ts'), 'utf8');
     expect(src).toContain("export const CLASSES = ['haiku', 'sonnet', 'opus', 'fable'] as const;");
+  });
+
+  it('ANTHROPIC_SMALL_FAST_MODEL never reaches `fable`, pinned in source (fix round 2A, N4)', () => {
+    // `modelenv.test.ts`'s own guard for this chain used to be a REGISTRY
+    // (haiku and sonnet both null, opus and fable both set) that reached this
+    // exact line, so a `?? fable` added to it would red. Fix round 1, v2
+    // (2026-09-09) narrowed `subagent` to haiku/sonnet, and the registry that
+    // test built also named `subagent: 'opus'` to stay otherwise legal — a
+    // shape `parseRegistry`'s own gate refused BEFORE `modelEnvBlock` ever
+    // reached this line, so the commit correctly retired that case rather
+    // than ship a registry `parseRegistry` would refuse. Nothing else took
+    // its place: measured 2026-09-10, mutating this line to
+    // `haiku ?? sonnet ?? fable ?? sentinel('haiku')` and running the four
+    // model test files (models, modelenv, models-op, ccrc-models) reds
+    // NOTHING — `Test Files 4 passed (4)`. A source pin is the only guard
+    // left, the same
+    // shape `modelenv.test.ts`'s own static pin further down that file uses
+    // for `ANTHROPIC_MODEL`'s chain.
+    const src = readFileSync(path.join(ccrcRoot, 'shared', 'modelenv.mjs'), 'utf8');
+    expect(src).toContain("ANTHROPIC_SMALL_FAST_MODEL: haiku ?? sonnet ?? sentinel('haiku'),");
+  });
+
+  it('SUBAGENT_CLASSES is one list spelled in two languages — shared/models.mjs and ccd/ccrc\'s MODELS_SUBAGENT_CLASSES (round 3, NEW-4)', () => {
+    // `MODELS_CLASSES` (the four) is covered by the enumeration scan above.
+    // Nothing pinned its narrower sibling — the two classes `set-subagent`
+    // accepts — before this: a divergence between the node list and the bash
+    // copy is message-text only (it cannot misroute a write), but it can
+    // still promise a class the other half refuses, or refuse one the other
+    // half still offers.
+    const models = readFileSync(path.join(ccrcRoot, 'shared', 'models.mjs'), 'utf8');
+    expect(models).toContain("export const SUBAGENT_CLASSES = Object.freeze(['haiku', 'sonnet']);");
+    const ccrc = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    expect(ccrc).toContain('MODELS_SUBAGENT_CLASSES="haiku sonnet"');
   });
 });
 
@@ -1695,7 +1905,7 @@ describe('one ccrc-ddns unit name, spelled once in bash through CCRC_DDNS_UNIT',
 });
 
 // — the account-health probe's token convention —
-describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files', () => {
+describe('one .cc-secrets/<id>-oauth.env convention, in exactly four bash files', () => {
   // `shared/roster.ts` permits `exec.secretsFile` only on `kind: 'generated'`,
   // so the mandatory upstream account cannot declare where its credential
   // lives — and a roster-driven probe would silently skip the primary account.
@@ -1714,17 +1924,31 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files
   // that lives for the upstream account. It is therefore the same convention,
   // used by a third consumer, and the value comparison below covers it exactly
   // as it covers the other two. A FOURTH holder should have to argue again.
+  //
+  // THE FOURTH ARGUES, AND IT IS THE WRITER (D-2602). `ccd-account-auth` does
+  // not read
+  // this path — it CREATES it: `_auth_write_secret` writes a 0600 temp file
+  // beside the target and renames it into place, which is the act that makes
+  // the other three holders' reads mean anything. Every earlier holder was a
+  // consumer of a convention nobody in this tree established; the account wave
+  // added the producer, so the convention now has one writer and three readers
+  // rather than three readers and an absent author. It cannot share a constant
+  // with them for the reason already stated above — it too is installed alone
+  // into $HOME/.local/bin with no library beside it — so it is measured here
+  // on exactly the same terms, and the value comparison below covers it.
+  // A FIFTH holder should still have to argue.
   const NEEDLE = '-oauth.env';
 
   it('is spelled by exactly those three files, each named here BY NAME', () => {
     expect(holdersOf(NEEDLE)).toEqual([
+      'ccd/ccd-account-auth',         // _auth_write_secret — the WRITER; the other three read what it renames into place
       'ccd/ccd-account-health',       // _ah_token_file — the probe's own reader
       'ccd/ccd-telemetry-keepalive',  // _ka_turn — the keepalive sources it into the turn
       'ccd/ccrc-doctor-checks',       // _check_credentials — the operator-facing re-measurement
     ]);
   });
 
-  it('and all three build the same path from an id', () => {
+  it('and all four build the same path from an id', () => {
     // NARROWED TO THE CONSTRUCTING LINE, deliberately. `codeLines` drops only
     // lines whose trimmed start is `#`, and each file names the file TWICE in
     // shell — once building the path and once in an operator-facing message
@@ -1744,9 +1968,16 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files
     // quoted path on the line, which is the one the guard tests.
     const keepalive = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-telemetry-keepalive'))
       .filter((l) => l.includes(NEEDLE) && l.includes('[ -r '));
+    // The WRITER's constructing line is the RENAME, not the temp path beside it:
+    // `_auth_write_secret` writes `.<id>-oauth.env.$$.tmp` first, so the file is
+    // never half-written at the name the readers watch. Both lines carry the
+    // needle; only the `mv` names the path this convention is about.
+    const writer = codeLines(path.join(ccrcRoot, 'ccd', 'ccd-account-auth'))
+      .filter((l) => l.includes(NEEDLE) && l.includes('mv -f --'));
     expect(probe.length, `the probe builds it on ${probe.length} lines`).toBe(1);
     expect(doctor.length, `the doctor builds it on ${doctor.length} lines`).toBe(1);
     expect(keepalive.length, `the keepalive builds it on ${keepalive.length} lines`).toBe(1);
+    expect(writer.length, `the writer renames onto it on ${writer.length} lines`).toBe(1);
     // A REAL comparison, not a tautology. Each line is reduced to the path it
     // BUILDS, with the two files' different spellings of "the secrets dir" and
     // "the account id" normalised away — the probe's `printf '%s/%s-oauth.env'
@@ -1758,11 +1989,14 @@ describe('one .cc-secrets/<id>-oauth.env convention, in exactly three bash files
       const m = /['"]([^'"]*-oauth\.env)['"]/.exec(l);
       expect(m, `no quoted -oauth.env path on: ${l.trim()}`).not.toBeNull();
       return m![1]!.replace('%s/%s', '<dir>/<id>').replace('$HOME/.cc-secrets/$id', '<dir>/<id>')
-        .replace('$SECRETS_DIR/$acct', '<dir>/<id>');
+        .replace('$SECRETS_DIR/$acct', '<dir>/<id>')
+        .replace('$SECRETS_DIR/$AUTH_ID', '<dir>/<id>');
     };
     expect(shape(probe[0]!), 'the probe builds a path the doctor does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(doctor[0]!), 'the doctor builds a path the probe does not').toBe('<dir>/<id>-oauth.env');
     expect(shape(keepalive[0]!), 'the keepalive builds a path the other two do not')
+      .toBe('<dir>/<id>-oauth.env');
+    expect(shape(writer[0]!), 'the writer creates a path its three readers do not watch')
       .toBe('<dir>/<id>-oauth.env');
   });
 });
@@ -1789,7 +2023,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
 
   it("'mail-disabled' is deliberately NOT held to one literal, and this says so BY NAME", () => {
     // THE EXCLUSION IS WRITTEN DOWN, not a scanner quietly narrowed — the
-    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:184` holds
+    // `MAIL_REJECT_CODES`-excludes-`undeliverable` idiom. `watch.ts:194` holds
     // a second literal ON PURPOSE (`sweepMail` uses it; importing the
     // `rundefs.ts` copy into that scope as well would be a redeclaration,
     // TS2451), and `rundefs.ts`'s own docstring carries the argument for the
@@ -2093,6 +2327,86 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
     oneDefinition(/^\s*export function readyVerdict\b/m, 'readyVerdict');
     oneDefinition(/^\s*export function foldSkillStates\b/m, 'foldSkillStates');
   });
+
+  describe('AskState', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_STATE_MAP')).toEqual(['shared/api.ts']);
+      expect(oneDefinition('ASK_STATES')).toEqual(['shared/api.ts']);
+    });
+
+    it('derives its runtime list from the map, never a second array', () => {
+      const src = read('shared/api.ts');
+      expect(src).not.toMatch(/ASK_STATES[^=]*=\s*\[/);
+    });
+
+    it('round-trips every member and refuses non-members', () => {
+      expect(ASK_STATES.length).toBe(6);
+      expect(new Set(ASK_STATES).size).toBe(ASK_STATES.length);
+      for (const s of ASK_STATES) expect(isAskState(s)).toBe(true);
+      expect(isAskState('nope')).toBe(false);
+      expect(isAskState(null)).toBe(false);
+      expect(isAskState(7)).toBe(false);
+    });
+  });
+
+  describe('AskRefuseCode', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const oneDefinition = (name: string): string[] =>
+      ALL.filter((f) => new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(oneDefinition('ASK_REFUSE_CODE_MAP')).toEqual(['shared/api.ts']);
+    });
+
+    it('leaves no second copy of the literal set in inject/ask.ts', () => {
+      // D-2174: the union used to live here, inline, with no runtime list.
+      expect(read('server/src/inject/ask.ts')).not.toMatch(/'menu-mismatch'\s*;/);
+    });
+
+    it('round-trips every member', () => {
+      // RULING F1: fourteen, not the brief's ten — the four route-level
+      // refusals (`unknown-ask`, `not-held`, `ask-moved`, `not-parent`,
+      // emitted by later tasks' routes in server/src/coord) share this same
+      // refusal family and so join this one union rather than a second.
+      // FIFTEEN since the whole-branch review (M2): `child-unmeasurable`
+      // split "this box could not read the child" back out of `ask-moved`,
+      // which had been carrying both — a narrowing that reached the shipped
+      // coordinator contract, not merely a taxonomy.
+      expect(ASK_REFUSE_CODES.length).toBe(15);
+      for (const c of ASK_REFUSE_CODES) expect(isAskRefuseCode(c)).toBe(true);
+      expect(isAskRefuseCode('nope')).toBe(false);
+      expect(isAskRefuseCode(null)).toBe(false);
+    });
+  });
+
+  // WHOLE-BRANCH REVIEW, F1: the one principal token BOTH sides act on —
+  // `server.ts` writes it into `asks.answeredBy`, the PWA renders a
+  // different sentence for it ("answered by you"). Two literals would let
+  // the writer and the reader drift into a chip that silently stops
+  // recognising the operator's own answer and falls back to naming the
+  // parent, which is exactly the defect F1 closed.
+  describe('ASK_OPERATOR_PRINCIPAL', () => {
+    const read = (f: string): string => readFileSync(path.join(ccrcRoot, f), 'utf8');
+    const definers = (): string[] =>
+      ALL.filter((f) => /export const ASK_OPERATOR_PRINCIPAL\b/.test(readFileSync(f, 'utf8'))).map(rel);
+
+    it('is spelled once, in shared/api.ts', () => {
+      expect(definers()).toEqual(['shared/api.ts']);
+    });
+
+    it("leaves no bare 'operator' literal in either file that acts on it", () => {
+      // The writer and the renderer, by name. `coord/rundefs.ts` legitimately
+      // owns the same WORD for the mail lane (`SYSTEM_MAIL_SENDER_MAP`) and is
+      // deliberately not scanned: those members answer "who sent this", a
+      // different question from "who pressed the key".
+      expect(read('server/src/server.ts')).not.toMatch(/'operator'/);
+      expect(read('pwa/src/fleet/SessionLine.tsx')).not.toMatch(/'operator'/);
+    });
+  });
 });
 
 // Task 5 (docs/superpowers/plans/2026-08-20-fleetio-measured-read.md): the
@@ -2103,7 +2417,7 @@ describe('Build 8 vocabularies — one definition each, all derived from their m
 // `BranchEvidence`
 // DERIVES it (`'named' | ReadFailure | 'empty'`) rather than restating the
 // pair — it used to spell `'absent' | 'unreadable'` a second time at
-// `registry.ts:20`. `oneDefinition` above is per-named-symbol and hardcodes
+// `registry.ts:21`. `oneDefinition` above is per-named-symbol and hardcodes
 // `shared/api.ts` as the one legal home, so it cannot be reused for a
 // symbol whose home is `shared/agent-protocol.ts` — this is a bespoke assertion in
 // the same style.
@@ -2414,7 +2728,7 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
   });
 
   it('keeps the NARROWING maps module-private, and the RENDERING map exported', () => {
-    // `STOP_SURFACES`' argument (:1140-1148), one level in: with the map
+    // `STOP_SURFACES`' argument (:1215-1223), one level in: with the map
     // unexported, `LIFECYCLE_ACT_MAP[raw]` cannot be written in another file
     // at all, so `isLifecycleAct` is the only narrowing route.
     //
@@ -2462,10 +2776,10 @@ describe('Build 9 nouns — the lifecycle journal vocabulary', () => {
     // for EVERY file, turning the assertion above into a list of all 200-odd
     // sources — loud, but for the wrong reason. This fails first, and
     // specifically. Measured when written: the highest-scoring NON-holder is
-    // `pwa/src/lib/api.ts` at 8 of 23, so the margin is 15 tokens.
+    // `pwa/src/lib/api.ts` at 8 of 24, so the margin is 15 tokens.
     const enumerates = (src: string): boolean =>
       LIFECYCLE_ACTS.every((a) => new RegExp(`(?:'${a}'|(?<![\\w'-])${a}\\s*:)`).test(src));
-    expect(LIFECYCLE_ACTS.length).toBe(23);
+    expect(LIFECYCLE_ACTS.length).toBe(24);
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'shared/api.ts'), 'utf8'))).toBe(true);
     expect(enumerates(readFileSync(path.join(ccrcRoot, 'pwa/src/lib/api.ts'), 'utf8'))).toBe(false);
@@ -2617,5 +2931,162 @@ describe('the ccrc-install fixture tree — one TREE_FILES, one installFixtureTr
       expect(src, f).toMatch(
         /import\s*\{[^}]*\binstallFixtureTree\b[^}]*\}\s*from\s*'\.\/installTreeFixture\.js'/);
     }
+  });
+});
+
+// ── D-2375: the scratch-slug predicate ─────────────────────────────────────
+describe('one scratch-slug predicate — four prefixes, three bash sites, one mirror', () => {
+  // "Did the harness mint this slug for a throwaway directory?" is asked at
+  // three sites that cannot share a function between them:
+  //
+  //   - `ccrc`'s `_mem_is_scratch` is the rule and carries the measurement.
+  //     Its two callers (the census and `--apply`) reach it directly.
+  //   - `ccrc-doctor-checks`'s `_check_memory` cannot: the table is sourced
+  //     under `set -u` by things that are not `ccrc` (`ccrc-doctor.test.ts`'s
+  //     `tableNames()`), so a `declare -F` guard would be the second spelling
+  //     with a branch in front of it. D-92's trade, unchanged.
+  //   - `session-hook.sh` is installed INTO an agent home and sources nothing
+  //     from this tree at all.
+  //
+  // So the agreement cannot be structural, and this is the mechanism that
+  // holds it instead. It matters more than the usual drift argument does: the
+  // hook DERIVES its slug from a live cwd (`pwd -P`), so its own copy can only
+  // ever be exercised on the platform the suite runs on — a Linux-only
+  // spelling was invisible to every ubuntu leg and to five task reviews, and
+  // only `test-macos` caught it. The two read-side sites read a directory
+  // NAME, so they are measurable everywhere; this pin is what carries their
+  // coverage across to the one site that is not.
+  //
+  // THE SITE LIST IS THREE BECAUSE THE HOOK ASKS IN SLUG SPACE. It holds the
+  // un-lossy value and could ask an exact question of it instead (the
+  // completeness critic's C1, 2026-09-10); `_mem_is_scratch`'s own comment
+  // records why it does not. If that is ever revisited, this list shrinks to
+  // two — a deliberate edit, not a drift.
+  const PRED = '-tmp*|-private-tmp*|-var-folders*|-private-var-folders*';
+
+  /** The guard line at one site, found by the one token no other line in
+   *  these tools carries. Exactly one per file, or the row that reads it is
+   *  measuring something it did not mean to. */
+  const guardLine = (f: string): string => {
+    const hits = codeLines(f).filter((l) => l.includes('-var-folders'));
+    expect(hits, `${rel(f)}: expected exactly one scratch-guard code line`).toHaveLength(1);
+    return hits[0] ?? '';
+  };
+
+  it('is spelled identically at exactly three sites, each named here BY NAME', () => {
+    expect(holdersOf(PRED)).toEqual([
+      'ccd/ccrc',                 // _mem_is_scratch — the rule, and the measurement
+      'ccd/ccrc-doctor-checks',   // _check_memory — spelled here, D-92's trade
+      'ccd/session-hook.sh',      // the hook's own case — shares nothing with either
+    ]);
+  });
+
+  it('each site carries the WHOLE alternation and nothing appended to it', () => {
+    // EQUALITY, NOT CONTAINMENT, and the difference is the whole value of this
+    // row. `holdersOf` matches with `String.includes`, so the row above stays
+    // green when a site APPENDS an alternative — measured 2026-09-10: adding
+    // `|-private-var-*` to `session-hook.sh` alone left every Linux-visible
+    // row in the tree green while, on Darwin, it would have swept up
+    // `/private/var/tmp` and skipped every fixture in `session-hook.test.ts`'s
+    // memory-convergence block. Capturing the arm closes both directions at
+    // once, and it is what makes the row above's title true.
+    for (const f of ['ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/session-hook.sh']) {
+      const m = /case "\$(?:1|slug)" in ([^)]*)\)/.exec(guardLine(path.join(ccrcRoot, f)));
+      expect(m, `${f}: the scratch guard is not a case arm this row can read`).toBeTruthy();
+      expect(m?.[1], f).toBe(PRED);
+    }
+  });
+
+  it('no site anywhere in the corpus carries the narrower Linux-only spelling', () => {
+    // The row above pins the three KNOWN sites. This one has a different
+    // population: a FOURTH site, written anywhere in these tools with the
+    // pre-D-2375 rule — which named the OS scratch root on Linux and nothing
+    // at all on Darwin.
+    for (const f of BASH) {
+      const narrow = codeLines(f).filter((l) => /in\s+-tmp\*\)/.test(l));
+      expect(narrow, rel(f)).toEqual([]);
+    }
+  });
+
+  it('no site anywhere in the corpus sweeps up /var/tmp, in either spelling', () => {
+    // The widening's UPPER BOUND, and the prefix a careless one takes first:
+    // `/var/tmp` survives a reboot by design, `session-hook.test.ts` roots its
+    // memory-convergence fixtures there, and skipping it would hide a real
+    // fork from the operator.
+    //
+    // BOTH SPELLINGS, and bare rather than glob-anchored. Measured
+    // 2026-09-10, twice: an over-widening written `-var-tmp-*` — a dash before
+    // the star, which is what a hand actually writes — slipped a needle
+    // anchored as `-var-tmp*`; and `-private-var-tmp` is the spelling a real
+    // Darwin box produces, which a Linux-only control cannot see at all.
+    for (const needle of ['-var-tmp', '-private-var-tmp']) {
+      for (const f of BASH) {
+        const swept = codeLines(f).filter((l) => l.includes(needle));
+        expect(swept, `${rel(f)} (${needle})`).toEqual([]);
+      }
+    }
+  });
+
+  // KNOWN BOUND, stated rather than implied: a FOURTH site written in some
+  // other shell shape — a `[[ ]]` test, a helper of its own — is caught by
+  // neither the equality row (it reads three sites by name) nor the narrowing
+  // row (it looks for the old `case` spelling). Nothing here scans for an
+  // arbitrary re-implementation of the question.
+  it('the TypeScript mirror in scratchSlugs.ts carries the same four prefixes', () => {
+    // Three suites state fixture preconditions against this rule and none can
+    // import a bash `case`, so `server/test/scratchSlugs.ts` is the one mirror
+    // they share. The first cut of D-2375 put a copy in each suite and pinned
+    // one of the three; this row is why that is now impossible.
+    const src = readFileSync(path.join(ccrcRoot, 'server/test/scratchSlugs.ts'), 'utf8');
+    const m = /export const SCRATCH_PREFIXES = \[([^\]]*)\]/.exec(src);
+    expect(m, 'scratchSlugs.ts declares no SCRATCH_PREFIXES').toBeTruthy();
+    const mirror = [...(m?.[1] ?? '').matchAll(/'([^']+)'/g)].map((x) => x[1]).sort();
+    const shipped = PRED.split('|').map((p) => p.replace(/\*$/, '')).sort();
+    expect(mirror).toHaveLength(4);           // an empty capture must not pass as agreement
+    expect(mirror).toEqual(shipped);
+  });
+
+  it('no suite re-declares the mirror — scratchSlugs.ts is its only home', () => {
+    // The same two directories the scans above enumerate rather than name:
+    // an unscanned sibling is the "clean and unchecked becomes dirty and
+    // unchecked with nothing saying so" shape this file already refuses.
+    const holders = [path.join(ccrcRoot, 'server', 'test'),
+      path.join(ccrcRoot, 'server', 'test-e2e')]
+      .flatMap(sources)
+      // ANCHORED TO A DECLARATION, not a mention, and that is not cosmetic:
+      // the bare needle read the regex literal in the row above and reported
+      // THIS file as a second holder (measured). A declaration is what the
+      // row claims anyway.
+      .filter((f) => /^\s*(?:export\s+)?(?:const|let|var)\s+SCRATCH_PREFIXES\s*=/m
+        .test(readFileSync(f, 'utf8')))
+      .map(rel)
+      .sort();
+    expect(holders).toEqual(['server/test/scratchSlugs.ts']);
+  });
+});
+
+describe('the pane read is declared once, in L0', () => {
+  // PANE_HISTORY_LINES is echoed back to the PWA in every history response and
+  // will be read by wave 3's fit floor beside READER_MIN_COLS and
+  // STALL_BUDGET_LINES. A second copy is a second number to keep in step.
+  it('PANE_HISTORY_LINES is defined in shared/api.ts and nowhere else', () => {
+    const holders = ALL.filter((f) => /^\s*export const PANE_HISTORY_LINES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('PaneProbe is declared in shared/api.ts and nowhere else', () => {
+    const holders = ALL.filter((f) => /^\s*export type PaneProbe\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('PaneHistoryReply is declared in shared/api.ts and nowhere else', () => {
+    const holders = ALL.filter((f) => /^\s*export type PaneHistoryReply\b/m.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  it('server.ts no longer spells the 2000 itself — it imports the name', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'server', 'src', 'server.ts'), 'utf8');
+    expect(src, 'server.ts still defines its own PANE_HISTORY_LINES').not.toMatch(/const PANE_HISTORY_LINES\s*=/);
+    expect(src, 'server.ts uses the constant without importing it').toMatch(/PANE_HISTORY_LINES/);
   });
 });

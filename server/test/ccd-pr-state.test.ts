@@ -237,7 +237,7 @@ gh() {
   esac
   return 0
 };
-timeout() { printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
+timeout() { case "$1" in -*) return 125 ;; esac; printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
 `;
 
 describe('the project sweep fetches the rollup it reads, not the ninety-nine it drops', () => {
@@ -748,9 +748,10 @@ describe('a branch the registry names that no longer resolves', () => {
     // bound row first, and `no-commits` — a positive claim that this branch has
     // nothing past base — is the one thing an unresolvable ref may never
     // manufacture. Shipped behaviour was {phase:"no-commits", tip:""} with
-    // prnumber REMOVED, which makes Task 14's auto-archive (prPhase==='merged')
-    // unable to ever fire for this workspace and leaves `cmd_ws_archive` with no
-    // number to file as `archivedreason merged:#42`.
+    // prnumber REMOVED, which makes `sweepMerged`'s `phase==='merged'` gate —
+    // Task 14's condition, auto-archive back then and announce-only now —
+    // unable to ever fire for this workspace and leaves `cmd_ws_archive` with
+    // no number to file as `archivedreason merged:#42`.
     const { tip } = renameAway();
     h.ghRows([mergedRow({ headRefOid: tip })]);
     const o = line(h.sh(`${GH_STUB} cmd_pr_state --session demo-quiet-basin`));

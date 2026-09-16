@@ -5,17 +5,25 @@ import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
-import { measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
-import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, clearRefusedDetail, holdReason, queueSystemMail } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  COORDINATOR_PAUSE_MARKER,
+  MAIL_DISABLED_MARKER,
+  clearRefusedDetail,
+  holdReasonVerdict,
+  queueSystemMail,
+  type HoldReasonVerdict,
+} from './rundefs.js';
+import {
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict, transitionsFor,
+  type CoordCaps, type CoordCapsUsage, type RunKind, type RunRefuseCode, type RunState, type SkillState,
+  type SpawnVerdict,
 } from '../../../shared/api.js';
-import { readWorkerSkillState } from '../skillstate.js';
+import { readSkillState, skillDirFor } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -32,6 +40,17 @@ import { readWorkerSkillState } from '../skillstate.js';
 // `name:`, so a rename cannot leave every worker being sent after a ghost.
 export const WORKER_KICKOFF_PREFIX =
   "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+// The reviewer's half of the same pair (design 2026-09-14 §8): one sentence,
+// one skill name, bound to `ccd/reviewer-skill/SKILL.md`'s frontmatter by
+// `reviewer-skill.test.ts` exactly as the worker's is.
+export const REVIEWER_KICKOFF_PREFIX =
+  "Run the ccrc-reviewer skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+/** Which standing protocol a brief of this kind invokes. `unknown` never
+ *  reaches here — dispatch refuses it at the transition precondition. */
+export const kickoffPrefixFor = (kind: RunKind): string =>
+  kind === 'review' ? REVIEWER_KICKOFF_PREFIX : WORKER_KICKOFF_PREFIX;
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -108,10 +127,25 @@ export type DispatchOutcome =
    *  indistinguishable from a bug") applied to a total the sender cannot
    *  compute from what they sent. */
   | { ok: false; kind: 'oversize'; limit: number; detail: string }
+  | Extract<HoldReasonVerdict, { ok: false }>
   | { ok: false; kind: 'refused';
       code: Extract<RunRefuseCode, 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily' |
-        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable'>;
-      limit?: number; running?: number; used?: number; candidates?: number }
+        'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'project-mismatch'>;
+      limit?: number; running?: number; used?: number; candidates?: number;
+      /** WHICH project the measured party belongs to — `project-mismatch`'s
+       *  own field, and the only refusal on this union that carries a string.
+       *  PRESENT EXACTLY WHEN `.project` was MEASURED with a non-empty name
+       *  that differs from the run's — never `record.project`, whose
+       *  `registry.ts` collapsing read (`project ?? id`) would arrive as the
+       *  session id on an absent or unreadable field and name a project
+       *  nobody measured, which is why the guard below reads `<id>.project`
+       *  through `fieldMeasured` itself instead. Unreadable answers
+       *  `registry-unmeasurable` instead; absent answers nothing at all; an
+       *  empty string is never sent, because presence is the distinction and
+       *  `''` would collapse "no comparison was made" into "the project is
+       *  nothing". The open route's own refusal already carries a `by`
+       *  (`routes.ts`), so the two sites of one code answer one shape. */
+      by?: string }
   /** `stderr` is PRESENT exactly when the ccd call in the same dispatch ALSO
    *  failed, and it is then ccd's own words. Two things went wrong on the
    *  fresh-spawn path once §1.5 moved the `!res.ok` return PAST the AFTER read —
@@ -142,11 +176,44 @@ export type DispatchOutcome =
  * the route used to (D-46: the transition guard runs BEFORE the body is even
  * looked at).
  */
+
+/**
+ * THE CAP, MEASURED ONCE AND DECIDED ONCE (design 2026-09-14 §7.2 pin 2; D-2805).
+ * Two routes refuse on the concurrency cap — `dispatchRun` below and
+ * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
+ * state — and both take their numbers from this one read, so the refusal's
+ * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * taking the pair as arguments because `coord-caps-route.test.ts` pins that
+ * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
+ * needs the numbers for a refusal asks here and never reads them itself.
+ * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
+ * a cap that refuses without saying what it is is indistinguishable from a bug).
+ */
+export function capsMeasured(coord: CoordStore): {
+  caps: CoordCaps; usage: CoordCapsUsage;
+  overConcurrency: { limit: number; running: number } | null;
+} {
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
+    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
+    : null;
+  return { caps, usage, overConcurrency };
+}
+
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
 ): Promise<DispatchOutcome> {
   const coord = deps.coord;
-  const run = coord.run(id);
+  const read = coord.run(id);
+  // D-2545, `closeRun`'s own arm exactly (see its comment): the row exists and
+  // its integers are unrepresentable — refused in words, ahead of any fleet
+  // act, never thrown. `POST /api/runs/:id/dispatch` is as uncaught as the
+  // close route, so a throw here was a bare 500 with no `DispatchOutcome`
+  // shape. `hold-invalid` for the same reason, and the same `detail` rule:
+  // the column, never the value.
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
   if (!run) return { ok: false, kind: 'unknown-run' };
   // Precondition (D-46; a genuine CLAIM, not a stale read, because the
   // caller runs this whole function behind `CoordMutex` — see that class's
@@ -156,7 +223,11 @@ export async function dispatchRun(
   // this only answers the question early enough that `ccd ensure`/`/clear`/
   // `ws-add`/`ws-hold` never fire for a transition that was always going to
   // be refused.
-  if (run.state !== 'planned') {
+  // Read by KIND through `transitionsFor` (design 2026-09-14 §5.2): identical
+  // for both real kinds — only `planned` carries a `dispatched` edge in
+  // either table — and it refuses a `kind:'unknown'` row (D-2795) here,
+  // BEFORE `ccd ensure`/`ws-add`/`ws-hold` fire.
+  if (!transitionsFor(run.kind)[run.state].includes('dispatched')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'dispatched' };
   }
 
@@ -166,7 +237,8 @@ export async function dispatchRun(
   // THE MAIL, composed once: the standing protocol by name, then the wave's
   // own brief. Composed HERE, before the cap below, because the cap must
   // measure what is actually queued — see that check's own comment.
-  const body = WORKER_KICKOFF_PREFIX + brief;
+  const prefix = kickoffPrefixFor(run.kind);
+  const body = prefix + brief;
   // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
   // its own `body`, applied to the mail this dispatch will queue —
   // `queueSystemMail` below is a SECOND producer of `mail`/`mail_deliveries`
@@ -186,8 +258,8 @@ export async function dispatchRun(
   // 8 KiB means, by exactly the length of a constant in this file.
   if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
-      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
-        `${Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')} bytes exceeds the ` +
+      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + kickoff prefix ` +
+        `${Buffer.byteLength(prefix, 'utf8')} bytes exceeds the ` +
         `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
   }
 
@@ -217,6 +289,14 @@ export async function dispatchRun(
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
 
+  // The complete hold is known from the persisted run. Validate it after the
+  // cheaper untrusted-body checks retain their existing precedence, but before
+  // pause/cap reads and, critically, before a fresh dispatch can spawn a
+  // workspace. `openRun` checks this too; this seam rechecks authoritatively
+  // because reconstructed or newer-database rows can bypass that ingress.
+  const hold = holdReasonVerdict(run.program, run.wave, run.waveOf, run.id);
+  if (!hold.ok) return hold;
+
   // 1: PAUSE / KILL-SWITCH FIRST, before anything is counted or spawned. A
   // directory we cannot list is a pause we cannot rule out — fail-shut, the
   // identical idiom `watch.ts`'s mail sweep uses for its own `mail-disabled`
@@ -236,11 +316,11 @@ export async function dispatchRun(
 
   // 2: caps. The refusal carries the numbers — a cap that refuses without
   // saying what it is is indistinguishable from a bug.
-  const caps = coord.caps();
-  const usage = coord.capsUsage();
-  if (usage.running >= caps.maxConcurrentWorkers) {
+  const { caps, usage, overConcurrency } = capsMeasured(coord);
+  if (overConcurrency !== null) {
+    // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return { ok: false, kind: 'refused', code: 'cap-concurrency',
-      limit: caps.maxConcurrentWorkers, running: usage.running };
+      limit: overConcurrency.limit, running: overConcurrency.running };
   }
   if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
     return { ok: false, kind: 'refused', code: 'cap-daily',
@@ -297,7 +377,7 @@ export async function dispatchRun(
   if (run.sessionId === null) {
     // 3/4: fresh spawn — wave 1. Learn the new id by REGISTRY DIFF, never
     // by parsing ccd's own echoed sentence (`workspace <id> on <wrapper> —
-    // <path> (branch …)`, `ccd/ccd:1116`) — a prose line nobody wrote a
+    // <path> (branch …)`, `ccd/ccd:1234`) — a prose line nobody wrote a
     // contract for, and this repo has already paid for one of those. Read
     // the registry before and after; exactly one new `workspace !== null`
     // row for this project is the run's session.
@@ -488,6 +568,58 @@ export async function dispatchRun(
     if (record !== undefined && recordIdentity === null) {
       return { ok: false, kind: 'registry-unmeasurable' };
     }
+    // F1's registry rung (design 2026-09-08 §3 F1) — MEASURED at the decision
+    // point, not read off `record.project`. `SessionRecord.project` is built
+    // `project ?? id` over `field()`'s collapsing read (`registry.ts`), so an
+    // absent or unreadable `.project` file would arrive here as the SESSION
+    // ID and compare unequal to every run's project: a false, non-retryable
+    // `project-mismatch` naming a session id as the offending repository, on
+    // a fact nobody measured. The design's own sentence forbids exactly that
+    // ("refusing on a fact not measured would be the same error in the other
+    // direction"), so this rung reads the one field it decides on through the
+    // D-114 ladder and tells three answers apart:
+    //   unreadable — the registry could not be measured for THIS row, which is
+    //     what `registry-unmeasurable` already means a few lines up: transient,
+    //     retryable, nothing spent.
+    //   absent, or present and empty — a PROVEN ENOENT, or a field with no
+    //     name in it. The row predates the field (ccd writes `.project` at
+    //     `ws-add`; rows from before 2026-07-28 carry none, as ccd's own
+    //     `_project_pool_state` says) and its repository is unknown to the
+    //     registry. Absence PERMITS, exactly as the open route's
+    //     `sessionProject` null does: nothing is measured, nothing is refused,
+    //     and the dispatch proceeds as it did before this wave existed.
+    //   measured — the file's content, compared to the run's project. Unequal
+    //     is the crossing this build refuses, and `by` names what was READ.
+    // `record.project` keeps its `project ?? id` default for every display
+    // consumer; only the DECISION reads measured. Putting `project` on the
+    // measured ladder inside `readRegistryMeasured` itself is the fuller
+    // remedy and reaches every consumer of `SessionRecord.project` — it is
+    // recorded as D-2342 in this wave's deviation ledger, with the fuller
+    // remedy as the follow-up, not done here.
+    //
+    // THE POSITION IS PART OF THE GUARD. Here it is: after the record is found
+    // and its identity measured, and BEFORE the hold, the injected `/clear` and
+    // `markDispatched`. Moved past the hold, a crossing costs a claim on a
+    // workspace this run is not going to use; moved past the `/clear`, it costs
+    // a live worker's context. Nothing has been spawned at this point — the
+    // resume arm only ran `ensure` — so the run is untouched and still
+    // `planned`.
+    //
+    // `record !== undefined` is load-bearing and is NOT the same condition as
+    // the refusal above it: an undefined record on a LISTABLE registry is the
+    // tolerated honest-stale case, which keeps falling back to `run.workspace`
+    // below exactly as it always has. An unlistable registry never reaches here
+    // — `readRegistryMeasured` refused it with its own code. Refusing on a
+    // fact not measured would be the same error in the other direction.
+    if (record !== undefined) {
+      const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sessionId, 'project');
+      if (!projectRead.ok && projectRead.reason === 'unreadable') {
+        return { ok: false, kind: 'registry-unmeasurable' };
+      }
+      if (projectRead.ok && projectRead.content !== '' && projectRead.content !== run.project) {
+        return { ok: false, kind: 'refused', code: 'project-mismatch', by: projectRead.content };
+      }
+    }
     workspace = record?.workspace ?? run.workspace;
     branch = record?.branch ?? run.branch;
     // `recordIdentity` is null exactly when `record` is undefined — the
@@ -569,9 +701,7 @@ export async function dispatchRun(
   // call-site count pins `CCD_ARGV.wsHold` to exactly one occurrence in this
   // file, so the fix is the `/clear` relocating to meet the hold, not a
   // second hold call meeting the `/clear`.
-  const holdArgv = CCD_ARGV.wsHold(sessionId,
-    holdReason(run.program, run.wave, run.waveOf, run.id),
-    dispatchDec);
+  const holdArgv = CCD_ARGV.wsHold(sessionId, hold.reason, dispatchDec);
   if (!verbSupported(deps.fleetState, holdArgv)) {
     return { ok: false, kind: 'unsupported' };
   }
@@ -660,8 +790,13 @@ export async function dispatchRun(
   // it written only for absent/unmeasurable, the ABSENCE of a row would mean
   // either `present` or "an older build with no preflight" — a second
   // overloaded null, one layer down from the one this field deletes.
-  const skillState = await readWorkerSkillState(
-    deps.io, wrapper === null ? undefined : deps.configDir(wrapper));
+  // Which skill directory: BY KIND. The cast is sound because the transition
+  // precondition above (`:190`, Task 4) already refused a `kind:'unknown'`
+  // row before this function ever reaches an irreversible act — `unknown`
+  // never lands here, so the narrower union is not a lie.
+  const skillState = await readSkillState(
+    deps.io, wrapper === null ? undefined : deps.configDir(wrapper),
+    skillDirFor(run.kind as 'work' | 'review'));
   coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never

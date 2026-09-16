@@ -4,7 +4,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { graphGateCount, type FleetSession } from '../../shared/api';
+import { ASK_OPERATOR_PRINCIPAL, graphGateCount, sessionAsk, type AskState, type FleetSession } from '../../shared/api';
 import { SessionLine } from '../src/fleet/SessionLine';
 import { TEST_ROSTER } from './rosterFixture';
 
@@ -21,7 +21,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
 });
 
 describe('label', () => {
@@ -235,8 +235,8 @@ describe('context pressure chip (D-2011) and the wedge signature (D-2016)', () =
   });
 
   // Finding 5 (fix round): `liveSessionStatus` collapses Claude Code's
-  // `waiting` into this row's `status: 'busy'` (server/src/fleet.ts:316-317)
-  // while the SAME read sets `dialogPending` true (fleet.ts:419) — so a row
+  // `waiting` into this row's `status: 'busy'` (server/src/fleet.ts:451-452)
+  // while the SAME read sets `dialogPending` true (fleet.ts:554) — so a row
   // blocked on a human permission prompt for hours, at high context, is
   // `status: 'busy'` with no other signal distinguishing it from a real
   // wedge unless this row itself checks `dialogPending`. D-2016's own text:
@@ -678,6 +678,116 @@ describe('held chip', () => {
     const chip = document.querySelector('[data-held]');
     expect(chip).not.toBeNull();
     expect(chip).toHaveAttribute('title', 'program:x wave:2/4');
+  });
+});
+
+// The ask pre-emption lane's chip (design doc §2.8, Task 19). Same
+// `data-*`/`title` pattern as the held chip above, and deliberately the same
+// KIND of cell — a short, verbatim fact, informational only.
+describe('ask chip', () => {
+  it('shows "held — <parent> may answer" while a parent may still pre-empt', () => {
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('held — coord-1 may answer')).toBeInTheDocument();
+  });
+
+  it('shows "ruled by <parent>" once a parent has answered', () => {
+    render(<SessionLine session={s({ ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-1' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ruled by coord-1')).toBeInTheDocument();
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — the three `answered` sentences, and the reason
+  // this block was green and blind: every chip test above settles with the
+  // PARENT's id, so a chip that read `parentId` and ignored `answeredBy`
+  // passed all of them. `server.ts`'s `POST /api/sessions/:id/ask` settles
+  // the operator's own answer with `ASK_OPERATOR_PRINCIPAL`, on the same row,
+  // inside the same grace window — and that case rendered "ruled by
+  // <parent-session-id>", naming a session that did not answer.
+  it('shows "answered by you" when the OPERATOR answered their own held ask (F1)', () => {
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: ASK_OPERATOR_PRINCIPAL },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('answered by you')).toBeInTheDocument();
+    // …and NEVER the parent's name: the parent is still on the row (it is who
+    // MAY have answered), and it is not who did.
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+    expect(document.querySelector('[data-ask-state]'))
+      .toHaveAttribute('title', 'you answered this question yourself, before its parent pre-empted it');
+  });
+
+  it('names whoever answeredBy says, even when that is not the parent on the row', () => {
+    // The general property, not the two shipped principals: the cell reads
+    // the field that MEANS "who ruled". A chip built from `parentId` renders
+    // `coord-1` here and passes nothing.
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'coord-2' },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('ruled by coord-2')).toBeInTheDocument();
+    expect(screen.queryByText('ruled by coord-1')).toBeNull();
+  });
+
+  it('says only "answered" when the row names no principal — never the parent by default', () => {
+    // Reachable, not hypothetical: `settleAsk` is guarded on BOTH answer
+    // routes precisely because it can throw after the digit has landed,
+    // leaving `answeredBy` null on an `answered` row.
+    render(<SessionLine session={s({
+      ask: { state: 'answered', parentId: 'coord-1', answeredBy: null },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('answered')).toBeInTheDocument();
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+    expect(document.querySelector('[data-ask-state]')).toHaveAttribute(
+      'title',
+      'this question was answered before the operator was notified; the row names no principal',
+    );
+  });
+
+  it('renders neither chip when the session carries no ask — byte-identical to today', () => {
+    const { container } = render(<SessionLine session={s({ ask: null })}
+                                                onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.sess-ask-state')).not.toBeInTheDocument();
+    expect(screen.queryByText(/may answer/)).toBeNull();
+    expect(screen.queryByText(/ruled by/)).toBeNull();
+  });
+
+  it('marks the chip data-ask-state for tests, and carries the full sentence as a title', () => {
+    render(<SessionLine session={s({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const chip = document.querySelector('[data-ask-state]');
+    expect(chip).not.toBeNull();
+    expect(chip).toHaveAttribute('data-ask-state', 'held');
+    expect(chip).toHaveAttribute('title', 'coord-1 may answer this question before the operator is notified');
+  });
+
+  it('does not collide with .sess-ask (the hookState askSummary line) — different cell, different class', () => {
+    // The name collision this task was warned off is `AskState` (ToolCard.tsx's
+    // own local, unrelated three-member type) — this is a DIFFERENT, adjacent
+    // collision risk: `.sess-ask` already exists as the askSummary third line
+    // (`describe('ask summary')` above). Both can render on the same row at
+    // once, and neither may shadow the other's class or text.
+    render(<SessionLine session={s({
+      hookState: 'waiting', askSummary: 'Deploy now?',
+      ask: { state: 'held', parentId: 'coord-1', answeredBy: null },
+    })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('Deploy now?')).toHaveClass('sess-ask');
+    expect(screen.getByText('held — coord-1 may answer')).toHaveClass('sess-ask-state');
+  });
+
+  // Fix round 1: `sessionAsk` passes ANY valid `AskState` through honestly
+  // (its own contract, pinned above) — `released`/`stale`/`unknown` are all
+  // vocabulary `isAskState` accepts, and a server ahead of or behind this
+  // build could genuinely send one on a live frame. The fold to "no chip"
+  // for those four has to happen HERE, not by trusting "only held/answered
+  // ever arrive" — a claim only true of a same-build server.
+  it('renders no chip for a valid-but-unrendered ask state — released/stale/unknown are not held or answered', () => {
+    for (const state of ['released', 'stale', 'unknown'] as const) {
+      const { container, unmount } = render(
+        <SessionLine session={s({ ask: { state, parentId: 'coord-1', answeredBy: null } })}
+                     onOpen={() => {}} onActions={() => {}} />,
+      );
+      expect(container.querySelector('.sess-ask-state'), state).not.toBeInTheDocument();
+      unmount();
+    }
   });
 });
 
@@ -1166,5 +1276,187 @@ describe('graphGateCount — the one reader of graphGateDenials, pinned directly
     expect(graphGateCount({ graphGateDenials: 3 })).toBe(3);
     expect(graphGateCount({ graphGateDenials: Number.NaN })).toBeNull();
     expect(graphGateCount({ graphGateDenials: '2' as unknown as number })).toBeNull();
+  });
+});
+
+// Fix round 1, item 2 (coordinator review): `sessionAsk` had zero tests —
+// every degrade branch below was reachable only from a server ahead of or
+// behind this build, exactly the seam a suite driven through `SessionLine`
+// alone cannot reach (the server never SENDS a malformed `ask`; this reader
+// exists for the case where it does). Pinned directly, the `graphGateCount`/
+// `substrateFault` pattern: `return s.ask ?? null` — no validation at all —
+// would stay green without this describe block.
+describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned directly (fix round 1)', () => {
+  it('reads absent, explicit null, and a well-formed pair straight through', () => {
+    expect(sessionAsk({})).toBeNull();
+    expect(sessionAsk({ ask: null })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+    expect(sessionAsk({ ask: { state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' } }))
+      .toEqual({ state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' });
+  });
+
+  // WHOLE-BRANCH REVIEW, F1 — `answeredBy` degrades ON ITS OWN and never
+  // takes the chip down with it. A server predating the field omits the key
+  // entirely (the live frame is CAST, not revived, which is why this reader
+  // exists at all), and blank/wrong-typed values mean the same thing an
+  // absent one does: the row names no principal. What must NEVER happen is
+  // the substitution the chip used to make — filling the gap in with
+  // `parentId`, which names a session that did not answer.
+  it('degrades a missing, blank or wrong-typed answeredBy to null — and never to parentId', () => {
+    for (const raw of [
+      { state: 'answered', parentId: 'coord-1' },
+      { state: 'answered', parentId: 'coord-1', answeredBy: null },
+      { state: 'answered', parentId: 'coord-1', answeredBy: '' },
+      { state: 'answered', parentId: 'coord-1', answeredBy: 5 },
+      { state: 'answered', parentId: 'coord-1', answeredBy: { id: 'coord-1' } },
+    ]) {
+      expect(sessionAsk({ ask: raw as unknown as FleetSession['ask'] }), JSON.stringify(raw))
+        .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
+    }
+  });
+
+  it('degrades the WHOLE pair to null on any malformed half — the pair only means something together', () => {
+    // Not an object at all — the shape a hand-rolled or adversarial frame
+    // could carry despite the type calling `ask` an object.
+    expect(sessionAsk({ ask: 'held' as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: 5 as unknown as FleetSession['ask'] })).toBeNull();
+    // `parentId` missing, wrong type, or empty.
+    expect(sessionAsk({ ask: { state: 'held' } as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: 5 } as unknown as FleetSession['ask'] })).toBeNull();
+    expect(sessionAsk({ ask: { state: 'held', parentId: '' } })).toBeNull();
+    // `state` out of the six-member vocabulary entirely (not even `unknown`
+    // — a token `isAskState` itself rejects, e.g. a 7th member a build ahead
+    // of this one shipped).
+    expect(sessionAsk({ ask: { state: 'bogus' as AskState, parentId: 'coord-1' } })).toBeNull();
+  });
+
+  it('passes a valid-but-unrendered state through unchanged — folding those to "no chip" is SessionLine\'s job, not this reader\'s', () => {
+    // `released`/`stale`/`unknown` are all in `AskState`'s six-member
+    // vocabulary, so `isAskState` accepts them; this function's own
+    // contract is "read the wire honestly", not "decide what the design
+    // doc has words for" — that fold lives where the design doc's two
+    // sentences do, in `SessionLine.tsx`.
+    expect(sessionAsk({ ask: { state: 'released', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'released', parentId: 'coord-1', answeredBy: null });
+    expect(sessionAsk({ ask: { state: 'unknown', parentId: 'coord-1', answeredBy: null } }))
+      .toEqual({ state: 'unknown', parentId: 'coord-1', answeredBy: null });
+  });
+});
+
+// Account pools, wave 4. Two cells, two different facts: the STRAND is "this
+// session has nowhere to go and is not moving on its own" (ruling 6), and
+// OFF-POOL is "it is running where the project's pool does not want it, and it
+// will move when its cooldown gate opens or its hold clears" (ruling 5). One
+// is stuck; the other is in transit. Rendering them as one cell would lose the
+// difference the operator acts on.
+describe('the strand cell', () => {
+  it('renders the reason verbatim and repeats it in the title', () => {
+    render(<SessionLine session={s({ stranded: { at: 1, reason: 'no account in pool pool-a can take it' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const cell = screen.getByText('stranded — no account in pool pool-a can take it');
+    expect(cell).toHaveAttribute('title', 'no account in pool pool-a can take it');
+  });
+
+  it('keeps the marker when the reason is missing or unreadable — presence is the durable fact', () => {
+    // The registry reads `.stranded` fail-shut, so a marker it could see and
+    // not read arrives with `at: 0` and a stand-in reason. Dropping the half it
+    // does not have and keeping the half it does is `.sess-swapblocked`'s own
+    // contract, restated.
+    const { rerender } = render(
+      <SessionLine session={s({ stranded: { at: 0, reason: '' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('stranded')).toBeInTheDocument();
+
+    rerender(<SessionLine session={s({ stranded: { at: 0, reason: 'registry field unreadable' } })}
+                          onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('stranded — registry field unreadable')).toBeInTheDocument();
+  });
+
+  it('is silent on a dead row, exactly as `away` is', () => {
+    // Nothing is running, so "stranded" would describe a rescue with nothing
+    // left to rescue.
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'nowhere' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+
+  it('is silent with no marker, and on a server that predates the field', () => {
+    render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+
+    const older = { ...s() } as Record<string, unknown>;
+    delete older['stranded'];
+    cleanup();
+    render(<SessionLine session={older as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the off-pool marker', () => {
+  const pooled = (byId: Record<string, string>) =>
+    TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
+
+  it('marks the account cell and shows one visible cue when both pools are known and differ', () => {
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                        roster={pooled({ claude2: 'pool-b' })}
+                        projectPool={{ state: 'tagged', name: 'pool-a' }}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(acct).toHaveAttribute('data-offpool', 'true');
+    expect(screen.getAllByText('off-pool')).toHaveLength(1);
+  });
+
+  it('says nothing when only one side is known — an untagged account is not off-pool', () => {
+    const { rerender } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                   roster={pooled({})} projectPool={{ state: 'tagged', name: 'pool-a' }}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+
+    // …and the mirror: the account is tagged, the project is not.
+    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                          roster={pooled({ claude2: 'pool-b' })} projectPool={{ state: 'untagged' }}
+                          onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('says nothing when the names agree, and nothing at all with no projectPool', () => {
+    const { rerender } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                   roster={pooled({ claude2: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+
+    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                          roster={pooled({ claude2: 'pool-b' })}
+                          onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('is silent on a dead row', () => {
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2', status: 'dead', bucket: 'dead' })}
+                        roster={pooled({ claude2: 'pool-b' })}
+                        projectPool={{ state: 'tagged', name: 'pool-a' }}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('outranks the away arrow\'s aria sentence, and leaves the arrow itself alone', () => {
+    // A session can be BOTH away from its pin and off-pool — a retag is
+    // exactly how that happens. One element, one accessible name: off-pool is
+    // the sharper fact and already names the account it is running on, so it
+    // is the sentence that wins. `data-away` and the ↗ are untouched.
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+                        roster={pooled({ claude2: 'pool-b' })}
+                        projectPool={{ state: 'tagged', name: 'pool-a' }}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(acct).toHaveAttribute('data-away', 'true');
+    expect(acct).toHaveAttribute('data-offpool', 'true');
   });
 });

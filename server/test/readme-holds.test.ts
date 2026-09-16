@@ -23,6 +23,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 const readme = readFileSync(path.join(root, 'README.md'), 'utf8');
 const ccd = readFileSync(CCD, 'utf8');
 
+/** The lifecycle list alone. The ordering assertion below is deliberately
+ * scoped here: the README also discusses historical close/open mistakes, and
+ * those words must not satisfy the operator instruction. */
+const lifecycleSection = (): string => {
+  const start = readme.indexOf('**Run lifecycle**');
+  expect(start).toBeGreaterThan(-1);
+  const end = readme.indexOf('**The mail bus and its token.**', start);
+  expect(end).toBeGreaterThan(start);
+  return readme.slice(start, end);
+};
+
 /** The holds subsection alone — from its own `###` heading to the next
  *  top-level heading — so a match anywhere else in a 500-line README cannot
  *  satisfy an assertion about this paragraph. */
@@ -32,6 +43,45 @@ const holdsSection = (): string => {
   const end = readme.indexOf('\n## ', start);
   return readme.slice(start, end === -1 ? undefined : end);
 };
+
+// D-2745: this passage (the run-lifecycle list, steps 1-6) is pinned TWICE,
+// by two suites in two files with different slicers, and neither is
+// discoverable from the other. This file's own `lifecycleSection()` above
+// ('**Run lifecycle**' → '**The mail bus and its token.**', then this
+// describe's own '\n6. ' sub-slice on the crossing) pins the
+// operator-visible SENTENCES as literals. `server/test/crossrepo-prose.test.ts`'s
+// `lifecyclePassage()` ('**Run lifecycle**' → '\n**The mail bus') pins the
+// MECHANISM names (response fields, refusal codes, evidence tokens) over the
+// same region. An edit to this passage must be run against BOTH files.
+describe('README: run lifecycle ordering (D-2680)', () => {
+  it('opens wave N+1 before it closes wave N, so the programme never retires between calls', () => {
+    const section = lifecycleSection();
+    const open = section.indexOf('open wave N+1');
+    const close = section.indexOf('close wave N');
+
+    expect(open, 'the lifecycle never instructs the coordinator to open wave N+1').toBeGreaterThan(-1);
+    expect(close, 'the lifecycle never instructs the coordinator to close wave N').toBeGreaterThan(-1);
+    expect(open, 'the lifecycle puts close before open and can permanently retire the programme')
+      .toBeLessThan(close);
+    expect(section).toMatch(/zero open runs/i);
+    expect(section).toMatch(/retires (?:the program|permanently)/i);
+
+    const crossingAt = section.indexOf('A cross-project successor opens first');
+    const crossing = section.slice(crossingAt, section.indexOf('\n6. ', crossingAt));
+    const opened = crossing.indexOf('opens first');
+    const closed = crossing.indexOf('close the producer with `final:true`');
+    const released = crossing.indexOf('require `released:true`');
+    const merged = crossing.indexOf('prove its PR merged at the named producer SHA');
+    const dispatched = crossing.indexOf('before dispatching the consumer');
+
+    expect(crossingAt, 'the cross-project lifecycle instruction is missing').toBeGreaterThan(-1);
+    expect(closed, 'the crossing does not close its producer with final:true').toBeGreaterThan(opened);
+    expect(released, 'the crossing does not require the producer workspace release').toBeGreaterThan(closed);
+    expect(merged, 'the crossing does not prove the producer merge at its named SHA').toBeGreaterThan(released);
+    expect(dispatched, 'the crossing dispatches before proving the producer merge').toBeGreaterThan(merged);
+    expect(crossing).toMatch(/Using `final:false` on that crossing would\s+strand a synthetic/);
+  });
+});
 
 describe('README: workspace holds', () => {
   it('names every consumer of the hold that ccd actually ships', () => {
@@ -102,9 +152,11 @@ describe('README: workspace holds', () => {
 
   it('states the archive gate as it now is: an absent hold is NOT sufficient', () => {
     const section = holdsSection();
-    // Wave 2 — `archiveMerged` also asks coord.db, and the by-hand route
-    // refuses `run-open`. A section that still says a release re-arms the
-    // sweep is describing a build that no longer exists.
+    // Wave 2 — `archiveMerged` used to ask coord.db too; its announce-only
+    // successor `sweepMerged` still does (to pick the reason, not to gate an
+    // act), and the by-hand route refuses `run-open`. A section that still
+    // says a release re-arms the sweep is describing a build that no longer
+    // exists.
     expect(section).toMatch(/open run/i);
     expect(section).toMatch(/run-open/);
     expect(section).toMatch(/force/i);
@@ -178,7 +230,16 @@ describe('README: the --surface bullet', () => {
     expect(bullet).toMatch(/ws-rm/);
     expect(bullet.toLowerCase()).toMatch(/reap/);
     expect(bullet).toMatch(/forget/);
-    expect(bullet).toMatch(/archiveMerged/);
+    // NOT `/archiveMerged/` any more. That assertion bound this bullet's
+    // honesty to a FUNCTION NAME, and the function is gone (operator ruling,
+    // 2026-09-10 — the merged lane announces and unsupervises nothing). It
+    // stayed green only because the corrected README kept the word as history,
+    // so the next person to tidy a dead symbol out of the prose would have red
+    // this suite for a reason that has nothing to do with what it guards.
+    // What must not go silent is the CLAIM: this bullet is about which callers
+    // record `_ws_unsupervise`'s own `ccd` default, and the fact worth stating
+    // is that none of them now runs unasked.
+    expect(bullet.toLowerCase()).toMatch(/unattended/);
     // Grounded in the real default `_ws_unsupervise` falls back to.
     expect(ccd).toMatch(/surface="\$\{2-ccd\}"/);
   });

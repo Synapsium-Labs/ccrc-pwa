@@ -17,6 +17,7 @@ import type { PushPayload } from '../src/push.js';
 import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { okRuns } from './coordReadHelpers.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
@@ -319,8 +320,9 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
   // suppression set agreed with the assembled row by luck of the fixture.
   // `tick()` used to take TWO independent whole-fleet reads — its own, at the
   // top, which `unmeasuredIds` is computed from, and `assembleFleet`'s own,
-  // ~21 field reads per session later — and the gate only ever suppressed
-  // rows the FIRST one could not measure. A drop landing in the SECOND
+  // 23 [registry-read-census:fields] reads per session later — and the gate
+  // only ever suppressed rows the FIRST one could not measure. A drop landing
+  // in the SECOND
   // window (the "ordinary shape in remote mode" the ladder exists for) left
   // `unmeasuredIds` empty while `assembleFleet` emitted a wrapper-degraded
   // row frozen at its `!cfgDir` default of 'idle' — and the false
@@ -403,7 +405,7 @@ function toggleableLiveIO(): { io: FleetIO; degrade: () => void; heal: () => voi
 // `busy` rather than leaving it at the `alive` default of 'idle' — and that
 // second route reached the push loop looking exactly like a measurement.
 //
-// `unmeasuredIds` (`watch.ts:749`) is derived from `FleetSession.unmeasured`,
+// `unmeasuredIds` (`watch.ts:849`) is derived from `FleetSession.unmeasured`,
 // which is typed `IdentityField[]` and means, precisely, "which of the
 // identity TRIPLE this assembly could not measure". An unreadable live-status
 // file degrades none of the three, so the new `busy` was not in that set — it
@@ -651,7 +653,7 @@ describe('ask notifications carry actions only where the route would accept them
   // RC-off pane renders the busy spinner WHILE a dialog is painted below it —
   // a real, expected combined screen. `detectDialogs`'s own gate asks
   // `hasMenu`, not `paneState() === 'menu'` (the send.ts:320 idiom). Fix
-  // round 1 closed the second half: `parseDialog` (pane/dialog.ts:169) also
+  // round 1 closed the second half: `parseDialog` (pane/dialog.ts:178) also
   // now gates on `hasMenu` instead of vetoing on the busy marker, so the
   // pending set really does pick this session up and the ask push fires.
   it('D-102: a live busy spinner painted alongside a menu still raises the ask push — RC-off panes render both at once', async () => {
@@ -784,6 +786,34 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(sent[0]!.title).toBe('✉ status › cc-a-ws');
     });
 
+    it('records the feed row with the run id when the mail is run-scoped (review finding 2)', async () => {
+      const sent: PushPayload[] = [];
+      const push = { notify: async (p: PushPayload) => { sent.push(p); } };
+      const log = new NotifyLog(path.join(await dir(), 'n.json'));
+      await log.load();
+      const w = watcher({ push, notifyLog: log, coord: true, sessions: ['ccrc-pwa/cc-a'] });
+      await w.tick();
+
+      const run = w.coord!.openRun({
+        program: 'build7', title: 'Fleet coordination', project: 'ccrc-pwa',
+        wave: 1, waveOf: 3, claimedBy: 'ccrc-pwa-coordinator',
+      }) as { id: number };
+      w.coord!.markDispatched(run.id, 'cc-a', 'cc-a-ws', 'build7/wave1', false);
+      const mail = w.coord!.insertMail({
+        fromId: 'cc-a', fromUuid: 'u-a', toId: 'coordinator', runId: run.id,
+        kind: 'status', subject: 'wave 1 update', body: 'b', artifacts: [],
+      });
+      w.coord!.queueDelivery(mail.id, 'cc-a', 'e1');
+      await w.tick();
+
+      expect(sent).toHaveLength(1);
+      // `pushOne` must forward the run the mail lane already knows into the
+      // durable feed, not just onto the decorated title — GET
+      // /api/feed?program= depends on this column, and its only writer is
+      // `pushNewMail`'s `runId: m.runId` (watch.ts).
+      expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id]);
+    });
+
     // Review finding 3. `mailQueuedSince`'s `project` comes off a `LEFT
     // JOIN` to the mail's run and is NULL for ad-hoc mail with no run — a
     // fully supported case (`POST /api/mail` treats `runId` as optional) —
@@ -889,6 +919,10 @@ describe('Task 10: the mail/run NotifyEvent lanes and the durable feed', () => {
       expect(w.coord!.feedEvents(10).map((e) => e.title)).toEqual([
         '▸ dispatched › ccrc-pwa', '▸ closing › ccrc-pwa', '▸ done › ccrc-pwa',
       ]);
+      // review finding 1 (fix round 2): the run lane's own feed rows must
+      // carry the run they are about — every one of the three, since
+      // `recordAlways` records the suppressed `closing` push too.
+      expect(w.coord!.feedEvents(10).map((e) => e.runId)).toEqual([run.id, run.id, run.id]);
     });
 
     it('never pushes or records a NON-transition row on a bound run', async () => {

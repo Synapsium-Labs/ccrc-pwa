@@ -7,7 +7,7 @@
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
-  type RunHealth, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+  type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -79,9 +79,10 @@ export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
 
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
- *  own source, `watch.ts`'s `emitRuns`) draws the SAME line on `state NOT IN
- *  ('done','failed')`, so this is not a new definition, it is the existing
- *  one restated where the client can use it. `closedAt` is written by
+ *  own source, `watch.ts`'s `emitRuns`) draws the SAME line by excluding
+ *  `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair), so this is
+ *  not a new definition, it is the existing one restated where the client
+ *  can use it. `closedAt` is written by
  *  exactly one path (`advanceInner`, `store.ts`) and `CoordStore.reconstruct`
  *  — the disaster-recovery rebuild `server/test/reconstruction-drill.test.ts`
  *  pins as one of the twelve facts the drill CANNOT recover — never sets it,
@@ -248,11 +249,19 @@ export function anyDispatchPending(
  *
  *  Callers pass the ACTIVE runs they already hold, so `null` means "the board
  *  has no row for this session" — exactly the question a door needs answered,
- *  and not the same as "this session has never had a run". */
+ *  and not the same as "this session has never had a run".
+ *
+ *  During the required open-successor-before-close-producer boundary, two rows
+ *  can name the same session. The API orders rows oldest-first, so the last
+ *  matching id is the current wave; first-match would render the outgoing one. */
 export function runForSession(
   runs: readonly RunSummary[], sessionId: string,
 ): RunSummary | null {
-  return runs.find((r) => r.sessionId === sessionId) ?? null;
+  let current: RunSummary | null = null;
+  for (const run of runs) {
+    if (run.sessionId === sessionId && (current === null || run.id > current.id)) current = run;
+  }
+  return current;
 }
 
 /** What the board says about a wave that RESUMED its session rather than
@@ -356,6 +365,102 @@ export function programWave(list: readonly RunSummary[]): { wave: number; waveOf
   for (const run of list) if (run.wave > best.wave) best = run;
   return { wave: best.wave, waveOf: best.waveOf };
 }
+
+/* ── cross-repo: which repo, and whose programme (spec §3 F4) ─────────────── */
+
+/**
+ * The programme's HOME project, tolerantly — the ONE reader of
+ * `RunSummary.homeProject` in `pwa/src`.
+ *
+ * The field is declared REQUIRED on the wire type and is still optional at
+ * RUNTIME, the same measured skew `runItems`/`runClosedAt`/`graphReadCount`
+ * already carry: `api.runs()` is a bare cast and the `{type:'runs'}` frame is
+ * shape-checked at the array level only, so a row from a server that predates
+ * this field arrives with the key missing. `undefined !== null` is true, so a
+ * raw comparison at a call site paints a crossing marker naming `undefined` —
+ * which is why every reader goes through here.
+ *
+ * THREE conditions collapse to `null` and that is deliberate, not an overloaded
+ * null: absent, non-string and empty all mean "this board cannot name a home",
+ * and the caller's answer to each is the same silence. What must NOT collapse
+ * into it is a home that is genuinely the run's own project — that is a
+ * measured sameness, and `crossingNote` decides it separately, below.
+ */
+export const runHomeProject = (run: { homeProject?: string | null }): string | null =>
+  typeof run.homeProject === 'string' && run.homeProject !== '' ? run.homeProject : null;
+
+/** `wave 2/5`, or `wave 2` when the programme declared no total. One spelling,
+ *  three callers (the group header, the card's orphan marker, the card's abroad
+ *  line) — a fragment this small is exactly the kind that drifts into four
+ *  slightly different ones. */
+export const waveLabel = (run: { wave: number; waveOf: number | null }): string =>
+  run.waveOf === null ? `wave ${run.wave}` : `wave ${run.wave}/${run.waveOf}`;
+
+/** The one glyph both crossing surfaces draw. A GLYPH, beside a WORD, never
+ *  instead of one: the board's standing rule is that nothing is read out of
+ *  colour or shape alone. */
+export const CROSSING_GLYPH = '⇄';
+
+export interface CrossingNote {
+  readonly glyph: string;
+  readonly word: string;
+  /** The programme's home project — measured, never inferred. */
+  readonly home: string;
+  readonly title: string;
+}
+
+/**
+ * What the board says about a wave running outside its programme's home repo,
+ * or `null` when there is nothing to say. TWO ways to get `null` and they are
+ * different facts kept apart on purpose:
+ *   • the home is UNKNOWN (legacy generation, or an older server) — absence
+ *     permits, and a marker here would be this build asserting a crossing it
+ *     never measured;
+ *   • the home IS this run's project — measured, and a marker would be a lie.
+ * Neither renders, which is why they may share a return value: the CALLER does
+ * the same thing with both, and the distinction that matters (is there a home
+ * at all) is `runHomeProject`'s, one line up.
+ */
+export function crossingNote(
+  run: { project: string; homeProject?: string | null },
+): CrossingNote | null {
+  const home = runHomeProject(run);
+  if (home === null || home === run.project) return null;
+  return {
+    glyph: CROSSING_GLYPH,
+    word: 'crossing',
+    home,
+    title: `this wave runs in ${run.project}; its programme is homed in ${home}`,
+  };
+}
+
+/* ── design 2026-09-14 §8: the kind chip ──────────────────────────────────── */
+
+export const REVIEW_GLYPH = '⌕';
+
+export interface RunKindChip { readonly glyph: string; readonly word: string; readonly title: string }
+
+/**
+ * THE ONE READER of `RunSummary.kind` and `RunSummary.reviews` on this side
+ * of the wire (CLAUDE.md "Wire discipline": a newer peer tolerates an older
+ * peer omitting a field, through a SINGLE reader per field). Both are declared
+ * optional here though the wire type requires them, `runWarnings`'s idiom: an
+ * older SERVER omits them, and absence means a work run — the only kind that
+ * server knew. `null` = render nothing, which is what every work row does.
+ */
+export const runKindChip = (run: { kind?: RunKind; reviews?: number | null }): RunKindChip | null => {
+  if (run.kind === undefined || run.kind === 'work') return null;
+  if (run.kind === 'review') {
+    return {
+      glyph: REVIEW_GLYPH,
+      word: run.reviews === null || run.reviews === undefined ? 'review' : `reviews #${run.reviews}`,
+      title: run.reviews === null || run.reviews === undefined
+        ? 'a review run: reads one work run at one measured tip and reports; the coordinator rules'
+        : `a review run: reads run #${run.reviews} at one measured tip and reports; the coordinator rules`,
+    };
+  }
+  return { glyph: '·', word: 'unknown kind', title: 'a run of a kind this build cannot name' };
+};
 
 /* ── F7: the compact warn row ──────────────────────────────────────────────── */
 

@@ -74,8 +74,10 @@ export interface FleetSession {
   pr: PrState | null;
   /** Epoch SECONDS this workspace was archived (ccd writes `$REG/<id>.archived`
    *  as an epoch), or null. Every piece of archive copy in the UI derives from
-   *  THIS, never from `pr.phase`: a merged PR whose archive was deferred
-   *  because the session was busy must not claim it was archived. */
+   *  THIS, never from `pr.phase`: nothing archives a workspace on merge — a
+   *  merged workspace stays live and supervised until a human archives it — so
+   *  a merged PR whose workspace is still here must not claim it was
+   *  archived. */
   archivedAt: number | null;
   /** The worktree size ws-archive measured AT ARCHIVE TIME. Null when the
    *  manifest is absent or half-written — never 0, which would argue
@@ -113,6 +115,83 @@ export interface FleetSession {
    *  and never `''`, since this line renders unconditionally on a waiting
    *  card. */
   askSummary: string | null;
+  /**
+   * The ask pre-emption lane's chip (design doc §2.8, Task 19): computed
+   * SERVER-SIDE in `fleet.ts`'s `assembleFleet`, reading `CoordStore`
+   * directly — NOT a consumer of `GET /api/asks`, which keeps the parent's
+   * cross-sibling read and any later PWA list view (D-2310, fix round 1:
+   * the tracked spec/plan said otherwise at the time this shipped — see
+   * those documents' own `## Deviations found` for the correction). Every
+   * other `FleetSession` field is computed in `assembleFleet`, and routing
+   * this one through an HTTP call to the server's own route would be a new
+   * pattern for no gain (ruling F5).
+   *
+   * Only two of `AskState`'s six members ever reach this field: `held`
+   * while a parent may still pre-empt the child's live question, and
+   * `answered` once one has ruled AND recently (`fleet.ts`'s
+   * `ASK_ANSWERED_CHIP_WINDOW_MS`, fix round 1 item 4 — past that window
+   * `answered` folds to `null` too, since the chip stops being a true
+   * explanation of why the operator was not asked once "just now" has
+   * become "a while ago"; `held` is bounded too, by `askwindow.ts`'s
+   * `ASK_HELD_CHIP_MAX_MS` since the row's own mint — F2(b), correcting a
+   * wave in which this field claimed a held ask is "live by definition").
+   * The design doc's §2.8 gave the chip two sentences — "held — <parent>
+   * may answer" and "ruled by <parent>" — and F1 made the second three,
+   * because the OPERATOR can settle the same row from their own phone: see
+   * `answeredBy` below, and `SessionLine.tsx`'s `askWords` for the wording
+   * of each. `assembleFleet` folds the other four
+   * (`answering`, `released`, `stale`, `unknown`) to `null` rather than
+   * pass them through raw: `answering` is the between-tick sliver while a
+   * digit is in flight, so it is folded onto `held` (still, functionally,
+   * "may answer") rather than shown as a state the design doc gives no
+   * words for; `released` and `stale` both mean the operator's own ordinary
+   * push has already fired or the dialog itself is gone, so a chip
+   * explaining why they were not asked would be explaining something no
+   * longer true; `unknown` is an out-of-vocabulary token this build cannot
+   * speak for.
+   *
+   * `parentId` is the session the row was ADDRESSED to — the one that may
+   * pre-empt this question — and `answeredBy` is the principal that actually
+   * ruled. THEY ARE NOT THE SAME FIELD, and this docstring said they were
+   * for one wave (whole-branch review F1): it claimed "for `answered` this
+   * is the same id `answeredBy` carries, since only a child's own derived
+   * parent is ever allowed to press the digit". That stopped being true when
+   * Task 12 landed — BEFORE this chip was written — because `server.ts`'s
+   * `POST /api/sessions/:id/ask` takes the held row itself and settles it
+   * with `ASK_OPERATOR_PRINCIPAL`. So an ask the operator answered from
+   * their own phone, inside the grace window, rendered as "ruled by
+   * <parent-session-id>": a false attribution on the one surface this lane
+   * exists to make honest. `answeredBy` is carried through and rendered on
+   * its own terms.
+   *
+   * `answeredBy` is `null` on every `held` chip (nobody has ruled) and —
+   * REACHABLY — on an `answered` one whose row names no principal:
+   * `settleAsk` is guarded on both answer routes precisely because it can
+   * throw after the digit has already landed. `state` is what tells those
+   * two apart, so the pair is not an overloaded null. A reader must NOT fill
+   * a missing `answeredBy` in with `parentId`; that substitution is the
+   * defect this field exists to close.
+   *
+   * `null` when this session has never raised an ask `CoordStore` still
+   * holds a row for, when the relevant row is one of the four folded states
+   * above (or an `answered` row past its window), or when this assembly had
+   * no `CoordStore` open at all (a dark box, or a caller/test with no
+   * `coord` fixture) — several different reasons, one answer, because none
+   * is something the chip can act on differently from the others.
+   *
+   * ADDITIVE, `FLEET_PROTO` untouched. Read through `sessionAsk` below when
+   * consuming a LIVE (cast, not revived) frame — the same tolerant-reader
+   * discipline `substrateFault`/`graphReadCount` already state, because a
+   * server predating this field omits the key at runtime despite this
+   * being typed as required. `reviveFleetSession` below: absent (an older
+   * snapshot predates the lane entirely) -> null; present-but-malformed
+   * ALSO -> null, never a rejection of the whole session (D-2311, fix
+   * round 1 — `reviveAsk`'s own docstring has the full argument: this
+   * field gates no action, so there is no direction a degrade could get
+   * backwards, and `reviveFleetSessions` rejecting one bad chip would cost
+   * the operator their ENTIRE cached snapshot for it).
+   */
+  ask: { state: AskState; parentId: string; answeredBy: string | null } | null;
   /** Subagents the hook last reported running. Null mirrors `hookState`: no
    *  fresh hook data at all. `[]` is a MEASUREMENT — fresh hook data, zero
    *  subagents running — same null-vs-empty-array discipline as `WsAudit`'s
@@ -214,6 +293,25 @@ export interface FleetSession {
    *  leaves the refusal banner standing on the row it just revived teaches the
    *  operator to ignore banners. */
   readonly swapBlocked: { readonly at: number; readonly reason: string } | null;
+
+  /** The supervisor's standing "nowhere to move this" record —
+   *  `$REG/<id>.stranded`, written by `_strand_mark` when the pane is
+   *  hard-blocked and no account in the project's pool can take it (spec §5.8,
+   *  ruling 6). Epoch MS (converted from the registry's seconds in `fleet.ts`,
+   *  like `swapBlocked`) and the reason carried VERBATIM through REST/WebSocket
+   *  for wave 4's renderer, never parsed. Null when no strand stands.
+   *
+   *  AN AXIS, NOT A STATE, on `substrate`'s terms: a new FIELD beside
+   *  `status`/`bucket`/`lifecycle`, never a member of any of them. `at: 0` is
+   *  the "marker listed but unreadable" degrade from the registry read; a
+   *  renderer must show the text without fabricating a 1970 timestamp.
+   *
+   *  `reviveFleetSession` below: absent → null (an older snapshot predates the
+   *  axis), present-but-malformed → reject the WHOLE session — the
+   *  `swapBlocked` contract, because free text has no vocabulary to degrade
+   *  onto and "no strand recorded" over a flagged row is the direction that
+   *  makes the loud cell silent. */
+  readonly stranded: { readonly at: number; readonly reason: string } | null;
   /** The supervisor's standing substrate fault — `$REG/<id>.substrate`, the
    *  decision record `cmd_supervise` writes while tmux answers neither `live`
    *  nor `gone` (spec §2). Epoch MS (converted from the registry's seconds in
@@ -245,6 +343,18 @@ export interface FleetSession {
    *  today after a failed spawn yesterday, and showing one as the other would be
    *  an adapter narrowing a distinction it received. */
   readonly spawnState: SpawnVerdict | null;
+  /** The reading from the most recent sweep that could read the sidecar
+   *  (routing spec 2026-09-14 §6). Absent and malformed drop to `null`; an
+   *  UNREADABLE read carries the previous reading forward with its `stale`
+   *  verdict re-derived against the current sweep (see
+   *  `FleetWatcher.sweepUsage`) rather than copied byte-for-byte, since
+   *  `stale` is a verdict computed at read time, not a property of the
+   *  sidecar itself. `reviveFleetSession` is the one reader that cannot do
+   *  that: it has no clock, so it REPUBLISHES whatever `stale` was persisted
+   *  into `state-cache.json` — a verdict measured against the sweep that wrote
+   *  it — and the first tick's `sweepUsage` re-derives it against the current
+   *  one. */
+  readonly usage: SessionUsage | null;
 }
 
 /**
@@ -369,6 +479,51 @@ export function graphGateCount(s: { graphGateDenials?: number | null }): number 
 }
 
 /**
+ * Tolerant read of `FleetSession.ask` for a value that has NOT been through
+ * `reviveFleetSession` — the live `fleet` WS frame, cast on arrival by
+ * `pwa/src/stores/fleet.ts`'s `asFleetMsg`. This field is ADDITIVE
+ * (`FLEET_PROTO` held at 1), so a server predating Task 19 omits the key
+ * entirely, and a row from it reads as a session with no ask — never as a
+ * session whose ask this client failed to read — the same absence-permits
+ * stance every sibling tolerant reader above takes.
+ *
+ * A present-but-broken shape (not an object, `parentId` not a non-empty
+ * string, `state` not one of `AskState`'s six tokens) degrades to `null`
+ * whole: unlike `substrateFault`'s per-half tolerance, the `(state,
+ * parentId)` pair only means something TOGETHER — a state with no parent to
+ * name, or a parent with a state this build cannot read, has nothing honest
+ * left to display, and there is no affordance behind this field to fail
+ * open or closed toward (it is informational only).
+ *
+ * The ONE place every PWA surface reads this field, so the fleet card and
+ * any later surface cannot drift onto two different fallbacks.
+ * `SessionLine.tsx` then renders content for exactly `held`/`answered` —
+ * the two the design doc gives words to (`FleetSession.ask`'s own
+ * docstring) — so the other four valid-but-unrendered tokens read as "no
+ * chip" here too, the same fold `assembleFleet` already applies
+ * server-side, now doubled client-side for a server ahead of this build.
+ */
+export function sessionAsk(
+  s: { ask?: { state: AskState; parentId: string; answeredBy?: string | null } | null },
+): { state: AskState; parentId: string; answeredBy: string | null } | null {
+  const v = s.ask ?? null;
+  if (v === null || typeof v !== 'object') return null;
+  const raw = v as { state?: unknown; parentId?: unknown; answeredBy?: unknown };
+  if (typeof raw.parentId !== 'string' || raw.parentId === '' || !isAskState(raw.state)) return null;
+  // `answeredBy` (F1) degrades ON ITS OWN and never rejects the chip: a
+  // server predating that field omits the key entirely, and an unattributed
+  // `answered` row is a real shape (see `FleetSession.ask`'s docstring).
+  // Absent, wrong-typed and blank all read as "the row names no principal";
+  // the one thing a reader must never do is substitute `parentId`.
+  const by = raw.answeredBy;
+  return {
+    state: raw.state,
+    parentId: raw.parentId,
+    answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
+}
+
+/**
  * Tolerant read of `FleetSession.ctxPct` (D-2011/D-2016) for a value that has
  * NOT been through `reviveFleetSession` — the live `fleet` WS frame, cast on
  * arrival by `pwa/src/stores/fleet.ts`'s `asFleetMsg` (`unmeasuredFields`
@@ -414,6 +569,26 @@ export interface TaskProgress {
   done: number;
   running: number;
   active: string | null; // activeForm of the first in-progress task, else null
+}
+
+/** What a session was measured running, from its usage sidecar
+ *  (`~/.cc-sessions/usage/<ccd-id>.json`, written by the statusline hook on
+ *  every render — routing spec 2026-09-14 §6). `ts` is the hook's clock in
+ *  epoch SECONDS; `stale` is the server's verdict against `USAGE_FRESH_S`.
+ *  `class` is one of `shared/models.ts`'s `CLASSES` or null, derived from
+ *  `model` by `familyClassOf` on the SERVER and never carried by the hook; it
+ *  is spelled `string` here because this file imports nothing (one pinned
+ *  import line) and a second copy of the class list is what
+ *  `single-definition.test.ts` forbids — a consumer compares by string.
+ *  Additive on the wire: an older server omits the whole field. */
+export interface SessionUsage {
+  readonly ts: number;
+  readonly model: string | null;
+  readonly class: string | null;
+  readonly effort: string | null;
+  readonly ctxPct: number | null;
+  readonly cost: number | null;
+  readonly stale: boolean;
 }
 
 /** Where a workspace's pull request is, as ccrc last managed to find out.
@@ -556,7 +731,7 @@ export interface PrState {
  * "We have not looked yet", as ONE object.
  *
  * Integration finding 6. This literal existed three times — `PrKeycap.tsx:17`,
- * `watch.ts:38` and `prstate.ts:190` (as `UNCHECKED`) — and the first of them
+ * `watch.ts:48` and `prstate.ts:190` (as `UNCHECKED`) — and the first of them
  * carried the docstring "Exported because `PrSheet` needs the identical object
  * and a second copy would drift." Two more copies appeared anyway, which is the
  * finding: a comment saying "do not copy this" is not a mechanism, and the two
@@ -808,7 +983,7 @@ export interface WsAudit {
    *
    *  `bytes` is `number | null` and the `null` is the POINT (cross-lane seam
    *  round, the thirteenth measurement forgery). `_ws_clip_manifest`
-   *  (ccd:6935/6917) answered a failed `du`/`stat` with `0` for as long as this
+   *  (ccd:8631/6917) answered a failed `du`/`stat` with `0` for as long as this
    *  field was typed `number`, and that is not a coincidence: a producer that
    *  must emit a `number` has exactly two options for an unreadable clip, and
    *  one of them compiles. Typing the absence is what stops the next person
@@ -851,7 +1026,7 @@ export interface WsAudit {
   /** `commitsAheadOfBase` is `null` when `$base` did not resolve, `$branch` was
    *  empty, or the `rev-list` failed — final-round destructive review F2, the
    *  last surviving `|| x=0` in ccd. 0 is the claim "this branch is level with
-   *  base", which is what `_pr_state_one` (ccd:4656) already refuses to
+   *  base", which is what `_pr_state_one` (ccd:5862) already refuses to
    *  fabricate for the identical figure on the PR sheet. */
   stashes: number | null; worktreeBytes: number | null; commitsAheadOfBase: number | null;
   pr: { number: number | null; url: string; mergeCommit: string; headRefOid: string };
@@ -916,7 +1091,7 @@ export interface ReapResult {
  *
  *  DECLARED HERE THOUGH NOTHING IMPORTS IT YET, which is the point and is the
  *  cross-lane seam pass's residual #1 closed: `clips[].bytes: null` reaches
- *  `_ws_tombstone` (ccd:6973) and is round-tripped by `_ws_tombstone_reclip`
+ *  `_ws_tombstone` (ccd:8669) and is round-tripped by `_ws_tombstone_reclip`
  *  through `python3 json` on every resume, both JSON-transparent and both
  *  exercised — but the tombstone had NO declared type at all, so the one
  *  document that survives the delete was the only place on this branch where
@@ -1070,9 +1245,9 @@ export type BucketInput = Pick<
  * their justification (D-74). They are entered on `archivedAt !== null` AND
  * `status === 'dead'`, because a live pane is proof the marker has outlived
  * what it describes: `cmd_ws_archive` kills the session before it stamps
- * (`ccd:3958`), but `ccd start`/`ccd ensure` clear `.stopped` and
+ * (`ccd:5164`), but `ccd start`/`ccd ensure` clear `.stopped` and
  * `.swapblocked` on a deliberate revival and leave `$REG/<id>.archived`
- * standing — only `ws-restore` removes it (`ccd:4498`). So a workspace
+ * standing — only `ws-restore` removes it (`ccd:5704`). So a workspace
  * archived on merge and later revived for more work carried a marker that
  * outranked every live rung below, for ever. MEASURED on the live fleet
  * 2026-08-17: 5 of the 7 archive markers on the box sat on sessions with a
@@ -1134,14 +1309,15 @@ export function sessionBucket(
     if (s.pr?.phase === 'merged') {
       // `cleanup` needs BOTH conjuncts, so it is entered at the LATER of the
       // two events — not at whichever one this branch happens to read first.
-      // The auto-archive path makes them nearly coincide (sweepPr flips the
-      // phase, archiveMerged archives seconds later), which is why plain
-      // `archivedAt` looked correct: there, archiving IS the later event.
-      // The MANUAL path inverts it. Archive a workspace whose PR is still
-      // open at T0, open it at T1 (which acks it at T1), let the PR merge at
-      // T2: the session enters `cleanup` at T2 while `archivedAt` still says
-      // T0, so `isUnseen` compares T0 > T1 and the leapfrog bucket's badge
-      // never fires in the exact flow it exists for. `pr.mergedAt` is already
+      // Plain `archivedAt` reads correct in the ordinary order: nothing
+      // archives a workspace on merge, so the stamp comes from a human who
+      // has already seen the PR land, and archiving IS the later event there.
+      // ARCHIVING FIRST INVERTS IT, and nothing stops a human doing that.
+      // Archive a workspace whose PR is still open at T0, open it at T1
+      // (which acks it at T1), let the PR merge at T2: the session enters
+      // `cleanup` at T2 while `archivedAt` still says T0, so `isUnseen`
+      // compares T0 > T1 and the leapfrog bucket's badge never fires in the
+      // exact flow it exists for. `pr.mergedAt` is already
       // on the wire (prstate.ts parses gh's own `mergedAt`), so the honest
       // stamp costs nothing. Null when the registry fallback supplied the
       // phase without a timestamp (`persistedPr`), which degrades to exactly
@@ -1486,6 +1662,86 @@ export function isReadyVerdict(v: unknown): v is ReadyVerdict {
   return typeof v === 'string' && (READY_VERDICTS as readonly string[]).includes(v);
 }
 
+/** The life of one ask — a child's live `AskUserQuestion` that its parent may
+ *  pre-empt before the operator is notified.
+ *
+ *  `held`      the push is deferred; the parent may answer.
+ *  `answering` a principal has taken the row and is pressing a key (D-2171).
+ *  `answered`  a digit landed. `answeredBy` says which principal.
+ *  `released`  the parent declined, or the window lapsed. The push has fired.
+ *  `stale`     the dialog went away unanswered — interrupted, cleared, swapped.
+ *  `unknown`   a token this build does not know, read off disk after a deploy
+ *              rollback. Never accepted at ingress; a writer claiming it is
+ *              refused `bad-state`. */
+export type AskState = 'held' | 'answering' | 'answered' | 'released' | 'stale' | 'unknown';
+
+export const ASK_STATE_MAP: Record<AskState, true> = {
+  held: true, answering: true, answered: true, released: true, stale: true, unknown: true,
+};
+
+export const ASK_STATES: readonly AskState[] = Object.keys(ASK_STATE_MAP) as AskState[];
+
+export function isAskState(v: unknown): v is AskState {
+  return typeof v === 'string' && (ASK_STATES as readonly string[]).includes(v);
+}
+
+/**
+ * The principal an ask row names when THE OPERATOR answered it themselves —
+ * `server.ts`'s `POST /api/sessions/:id/ask`, the lock-screen path, which
+ * takes the held row and settles it around its own press (Task 12, D-2171).
+ * Every other value `answeredBy` can carry is a registry session id: the
+ * parent's own route settles with `fromId`, guarded to equal the row's
+ * `parentId`.
+ *
+ * L0 and spelled ONCE, because it is a value both sides act on: the server
+ * writes it, and the PWA renders a different sentence for it ("answered by
+ * you" — the operator IS the person reading the fleet card, so a role word
+ * there would be stranger than the second person). Deliberately NOT derived
+ * from `coord/rundefs.ts`'s `SYSTEM_MAIL_SENDER_MAP`, which owns the same
+ * word for the MAIL lane: that map is server-side (the PWA cannot import
+ * it) and its members answer "who sent this message", a different question
+ * from "who pressed the key".
+ */
+export const ASK_OPERATOR_PRINCIPAL = 'operator';
+
+/** `answerAsk`'s ten typed refusals, plus the five route-level refusals the
+ *  ask pre-emption routes (server/src/coord) emit as their own literals —
+ *  `unknown-ask`, `not-held`, `ask-moved`, `not-parent`, `child-unmeasurable`.
+ *  Both groups are the same refusal family (reasons an ask answer was
+ *  refused), so they share this one union rather than splitting into two
+ *  (D-2174, the `ReadFailure` precedent of D-1438). Map idiom: a code that
+ *  leaves `AskResult` and is not removed here is a compile error.
+ *
+ *  `child-unmeasurable` is the whole-branch review's addition (M2), and it is
+ *  a DIFFERENT CONDITION from `ask-moved`, not a nicer word for it:
+ *  `freshAskAt` answers `UNMEASURED_ASK_AT` for three reads that failed (no
+ *  session record, no measured identity, no readable hookstate), and folding
+ *  those onto "the child repainted its question" narrowed a distinction the
+ *  route had received — the highest-yield rule in this tree. It mattered
+ *  because it reached a shipped contract: `wave-lifecycle.md` tells a
+ *  coordinator that `ask-moved` means re-read the ask and answer the current
+ *  one, and a coordinator told that when the truth is "this box could not
+ *  read the child" re-reads, finds the row still `held`, and loops. */
+export const ASK_REFUSE_CODE_MAP: Record<AskRefuseCode, true> = {
+  'not-alive': true, 'not-waiting': true, 'stale-ask': true, 'ask-mismatch': true,
+  'multi-question': true, range: true, multiselect: true, 'duplicate-index': true,
+  'no-menu': true, 'menu-mismatch': true,
+  'unknown-ask': true, 'not-held': true, 'ask-moved': true, 'not-parent': true,
+  'child-unmeasurable': true,
+};
+
+export const ASK_REFUSE_CODES: readonly AskRefuseCode[] =
+  Object.keys(ASK_REFUSE_CODE_MAP) as AskRefuseCode[];
+
+export type AskRefuseCode =
+  | 'not-alive' | 'not-waiting' | 'stale-ask' | 'ask-mismatch' | 'multi-question'
+  | 'range' | 'multiselect' | 'duplicate-index' | 'no-menu' | 'menu-mismatch'
+  | 'unknown-ask' | 'not-held' | 'ask-moved' | 'not-parent' | 'child-unmeasurable';
+
+export function isAskRefuseCode(v: unknown): v is AskRefuseCode {
+  return typeof v === 'string' && (ASK_REFUSE_CODES as readonly string[]).includes(v);
+}
+
 /** The five measured preconditions, without the derived verdict or the stamp. */
 export interface ReadinessFacts {
   readonly worker: SkillState;
@@ -1511,11 +1767,21 @@ export interface ProjectReadiness extends ReadinessFacts {
  *   - an object: measured.
  * A reader that folds the first two together has thrown away the difference
  * between "upgrade the server" and "wait two seconds".
+ *
+ * `pool` and `placement` follow the same absence rule with one fewer rung: the
+ * key ABSENT means an older server that does not read project pools, and a
+ * reader must render NOTHING for it — never `{state:'untagged'}`, which would
+ * flag every project on the box as un-tagged worklist the day before the
+ * feature ships (account pools, spec §5.4.5, §5.9). There is no `null` rung:
+ * this build measures on every request, and its four states already contain
+ * "we could not read it".
  */
 export interface ProjectRow {
   name: string;
   workdir: string;
   readiness?: ProjectReadiness | null;
+  pool?: ProjectPoolWire;
+  placement?: ProjectPlacement;
 }
 
 /**
@@ -1527,16 +1793,16 @@ export interface ProjectRow {
  * symlink loop) and `malformed` (it was read and is not one pool name) are the
  * two ways NOBODY DECIDES: creation refuses, naming the file (wave 2a landed
  * it — `ccd/ccd`'s `cmd_ws_add` refusal names `$POOLS_DIR/$project`), the
- * auto-swapper must hold (wave 2b), and the server must answer 503 (wave 3).
+ * auto-swapper holds (wave 2b), and the server answers 503 (wave 3).
  * Folding either into `untagged` would silently LIFT the constraint — the
  * overloaded-null defect this tree refuses at a seam, in its most expensive
  * form, because the direction of the mistake is always "run the work somewhere
  * it was not allowed to run".
  *
- * No detail string beside the state, deliberately: the detail belongs in
- * exactly two places once they land — `ccrc doctor` will carry the bytes
- * (wave 2a) and the PWA's warning chip will carry the full path (wave 4) — so
- * a third rendering of the same fact would be a third thing to keep true.
+ * No detail string beside the state, deliberately: operator-facing diagnosis
+ * and remedies already live in `ccrc doctor` (wave 2a), while the PWA's warning
+ * chip will carry the full path (wave 4). A third rendering of the same fact
+ * would be a third thing to keep true.
  *
  * Declared ahead of its consumers so both ends of the wire import ONE spelling
  * rather than each inventing its own.
@@ -1563,8 +1829,9 @@ export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
  * The fleet-level pool census, as one frame carries it.
  *
  * `listed: false` is not "no projects are tagged" — it is "this server could not
- * enumerate the tags", which is the registry root being unlistable or a regular
- * file planted where `pools/` belongs. The distinction survives to the phone
+ * enumerate the tags": the registry root was unlistable, a regular file was
+ * planted where `pools/` belongs, or the caller's deadline expired before the
+ * listing completed. The distinction survives to the phone
  * because a fleet of silently untagged projects and a fleet whose tags cannot be
  * read look identical otherwise, and only one of them is a reason to stop
  * trusting the chips.
@@ -2094,6 +2361,74 @@ const reviveSubstrate = (o: RawObj, k: string): { at: number; text: string } | n
   return { at: reqNum(s, 'at'), text: reqStr(s, 'text') };
 };
 
+/** `reviveSwapBlocked`'s contract exactly: the reason is free prose the
+ *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
+ *  Absent → null (an older snapshot predates the axis); present-but-malformed
+ *  rejects the session. */
+const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
+};
+
+/** `FleetSession.ask`'s own persistence contract (Task 19, CORRECTED by fix
+ *  round 1 / D-2311). Absent → null: an older snapshot predates the ask
+ *  pre-emption lane entirely. Present but malformed — not an object, or
+ *  `parentId` missing/not a non-empty string — ALSO → null, and this is a
+ *  DELIBERATE departure from the `reviveSwapBlocked`/`reviveSubstrate`
+ *  stance this docstring used to (wrongly) claim it followed — and from
+ *  `reviveStranded` directly above, which the account-pools wave-3 merge
+ *  landed as a THIRD member of that family after this paragraph was
+ *  written, on `reviveSwapBlocked`'s contract exactly.
+ *
+ *  Those three fields reject the whole session on a malformed value because
+ *  each flags a FAULT an operator must not have silently laundered into
+ *  "nothing wrong" — their own docstrings' "fails open toward" language,
+ *  i.e. there is a direction (flagged vs. clean) that a wrong degrade would
+ *  get backwards. The ask chip has no such direction: it "gates no action"
+ *  (`FleetSession.ask`'s own docstring, unchanged by this fix), so a bad
+ *  chip and no chip are the SAME outcome for the operator, not two outcomes
+ *  one of which is dangerous to reach silently.
+ *
+ *  What made the old "reject the session" choice actively wrong here, not
+ *  merely a stricter option: `reviveFleetSessions` (below) returns `null`
+ *  on the FIRST unrevivable row, discarding the ENTIRE array — the whole
+ *  `state-cache.json` (`server/src/fleetstate.ts`) and the whole PWA
+ *  offline cache (`pwa/src/lib/offline.ts`), the two surfaces an operator
+ *  falls back to when things are ALREADY bad. One malformed `parentId` on
+ *  one session's chip is not worth that cost for a field with nothing to
+ *  protect.
+ *
+ *  `state` still degrades onto `AskState`'s designated-ignorance member,
+ *  `unknown` (`reviveStoppedBy`'s pattern — an out-of-vocabulary token from
+ *  a build ahead of this one, not a fault): an unreadable `state` on an
+ *  otherwise-valid `parentId` is not a reason to drop the pair. Only a
+ *  missing/malformed `parentId`, or a non-object `ask` entirely, folds the
+ *  WHOLE field to `null` — the pair only means something together, the
+ *  same rule `sessionAsk` (this file's live-frame twin, below) already
+ *  states for identical input; the two readers now agree where before they
+ *  did not (`sessionAsk({ask:{state:'held'}})` always answered `null`,
+ *  while this function used to destroy the file on the same shape). */
+const reviveAsk = (o: RawObj, k: string): { state: AskState; parentId: string; answeredBy: string | null } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  if (typeof v !== 'object' || Array.isArray(v)) return null;
+  const s = v as RawObj;
+  const parentId = s['parentId'];
+  if (typeof parentId !== 'string' || parentId === '') return null;
+  const stateRaw = s['state'];
+  // `answeredBy` (F1) degrades exactly as `sessionAsk`'s does, and for the
+  // same two reasons: a snapshot written before that field existed omits the
+  // key, and a genuinely unattributed `answered` row is a real shape.
+  const by = s['answeredBy'];
+  return {
+    state: isAskState(stateRaw) ? stateRaw : 'unknown',
+    parentId,
+    answeredBy: typeof by === 'string' && by !== '' ? by : null,
+  };
+};
+
 function revivePr(raw: unknown): PrState {
   const o = asObj(raw, 'pr');
 
@@ -2174,6 +2509,19 @@ const optUnmeasured = (o: RawObj, k: string): readonly IdentityField[] => {
   }
   return v as IdentityField[];
 };
+
+/** Shape only: `class` is a string the SERVER derived (see `SessionUsage`);
+ *  membership is not re-checked here because this file imports no class list. */
+function reviveUsage(o: Record<string, unknown>, key: string): SessionUsage | null {
+  const raw = o[key];
+  if (raw === undefined || raw === null) return null;
+  const u = asObj(raw, key);
+  return {
+    ts: reqNum(u, 'ts'), model: optStr(u, 'model'), class: optStr(u, 'class'),
+    effort: optStr(u, 'effort'), ctxPct: optNum(u, 'ctxPct'), cost: optNum(u, 'cost'),
+    stale: optBool(u, 'stale', false),
+  };
+}
 
 /** One persisted session in today's shape, or null if it cannot be one. */
 export function reviveFleetSession(raw: unknown): FleetSession | null {
@@ -2284,6 +2632,16 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       held: optStr(o, 'held'),
       hookState: hookStateRaw as FleetSession['hookState'],
       askSummary: optStr(o, 'askSummary'),
+      // Absent → null (`reviveAsk`'s own rule): an older snapshot predates
+      // the ask pre-emption lane entirely, the same degrade `held` takes
+      // for the same reason. Present-but-malformed ALSO degrades to null
+      // inside `reviveAsk` (D-2311) — deliberately NOT the `held`/`bucket`
+      // shape above, whose malformed values throw and this function's catch
+      // turns into "reject the whole session": a bad ask chip and no ask
+      // chip are the same outcome for the operator, so one bad chip must
+      // not discard the whole snapshot. See `reviveAsk`'s own docstring for
+      // the full argument.
+      ask: reviveAsk(o, 'ask'),
       subagents: optSubagents(o, 'subagents'),
       // Absent → null, exactly as `optSubagents` degrades: a snapshot written
       // before this field existed is ignorant of the count, not a witness to
@@ -2303,6 +2661,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       lifecycle: lifecycleRaw,
       stoppedBy: reviveStoppedBy(o, 'stoppedBy'),
       swapBlocked: reviveSwapBlocked(o, 'swapBlocked'),
+      stranded: reviveStranded(o, 'stranded'),
       substrate: reviveSubstrate(o, 'substrate'),
       // THE DEGRADE, DOCUMENTED: absent reads TRUE, not false. Every session a
       // pre-Wave-1 build persisted had a claim, and `false` would light
@@ -2310,6 +2669,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       // makes a surface ignorable.
       started: optBool(o, 'started', true),
       spawnState: spawnRaw,
+      usage: reviveUsage(o, 'usage'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -2549,6 +2909,22 @@ export interface FleetHealth {
    */
   build?: BuildAgreement;
   /**
+   * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
+   * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).
+   * One `ccd` inode ships the verb and every reader, so the verb's presence IS
+   * the evidence that placement, the auto-swapper and the manual verbs apply
+   * the rule.
+   *
+   * Same three-state rule as `roster` and `build`, with its own remedy:
+   * `'unavailable'` means tags will DISPLAY and nothing on the fleet will
+   * enforce them — redeploy the agent lane; `'unknown'` means nobody could
+   * tell, and a reader must stay SILENT on it (the banner arms on
+   * `'unavailable'` only).
+   *
+   * Optional for the same absence-permits reason the two above are.
+   */
+  projectPools?: PoolsEnforcement;
+  /**
    * The lifecycle journal mirror (build 9). Optional for the same
    * absence-permits reason `roster` and `build` are — an older server's
    * response omits it, and a reader must treat an absent block as
@@ -2762,6 +3138,12 @@ export interface AccountUsage {
   fiveResetAt: number | null;   // epoch seconds the 5h window resets
   sevenResetAt: number | null;  // epoch seconds the 7d window resets
   fiveRolledOver: boolean;      // the 5h window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
+  /** Width of the 5h window in minutes, from the producer. `0` means the plan
+   *  HAS NO 5h window — a different fact from "unmeasured", though both read as
+   *  `five: null`. ADDITIVE and OPTIONAL: only a producer that knows the width
+   *  states it, so every Anthropic row keeps exactly the shape it has today, and
+   *  an older client that has never heard of the key is unaffected. */
+  fiveWindowMinutes?: number;
   sevenRolledOver: boolean;     // the 7d window ended (lapsed resetAt, or an over-age sample); the 0 above is inferred, not measured
   disabled: boolean;            // ccd's kill-switch for this lane is on
   /** The fleet host's account-health probe measured this account's credential
@@ -2795,6 +3177,22 @@ export interface ProjectedHome {
   wrapper: Wrapper;
   score: number;
 }
+
+/**
+ * Where a new workspace for ONE PROJECT would land, once that project's pool
+ * tag is applied (`GET /api/projects`'s `placement`). `ProjectedHome` above is
+ * the same forecast for an UNTAGGED project and stays exactly what it was.
+ *
+ * THREE MEMBERS, and `unmeasurable` is a VALUE, not a null (spec §5.6): a
+ * project whose tag could not be read has no forecast, and saying `none` there
+ * would claim a measurement — "nothing can take this project" — that nobody
+ * made. `none` carries the pool it was looking in (`null` for an untagged
+ * project) so a renderer can say WHICH pool is empty without re-deriving it.
+ */
+export type ProjectPlacement =
+  | { kind: 'projected'; wrapper: string; score: number }
+  | { kind: 'none'; pool: string | null }
+  | { kind: 'unmeasurable' };
 
 /**
  * One roster entry as the wire carries it — the PWA's entire view of an
@@ -2896,7 +3294,15 @@ export type FleetMsg =
    *  disagreement BETWEEN sources, so it cannot ride on a `FleetSession` — and
    *  keeping it off `FleetSession` is what keeps `reviveFleetSession` from
    *  becoming a second producer. */
-  | { type: 'divergence'; divergences: Divergence[] };
+  | { type: 'divergence'; divergences: Divergence[] }
+  /** Account pools, spec §5.4.5. Additive on the same terms as
+   *  `runs`/`coord`/`divergence` above — an already-deployed PWA drops an
+   *  unknown frame type silently, so NO `FLEET_PROTO` bump. FLEET-LEVEL, not
+   *  row-level: a project's tag is a fact about a PROJECT, so it cannot ride on
+   *  a `FleetSession` — and keeping it off `FleetSession` is what keeps
+   *  `reviveFleetSession` from becoming a second producer of it. The PWA
+   *  derives a session's project pool from this frame by `s.project`. */
+  | { type: 'pools'; pools: ProjectPoolsWire };
 
 /**
  * What a registry MARKER file was measured to be. One type covers both markers
@@ -2934,6 +3340,27 @@ export interface SlashCommand {
   kind: 'builtin' | 'skill';
 }
 
+/** D-2228 — WHO WROTE A `system` ROW. Claude Code's `--resume` writes a META
+ *  user "Continue from where you left off." and pads it with a synthetic
+ *  assistant "No response requested." (`message.model === '<synthetic>'`);
+ *  without CLAUDE_CODE_RESUME_INTERRUPTED_TURN it submits nothing. Rendered as
+ *  a user bubble and a reply, that stall read as "someone sent resume and it
+ *  was ignored" (the 2026-09-09 clip). Additive, optional: an older reader
+ *  ignores it, an older writer omits it.
+ *  'limit' — the assistant row Claude Code appends on a 429
+ *  (`isApiErrorMessage:true, error:"rate_limit"`; D-2365). */
+export type SystemOrigin = 'resume-prompt' | 'no-response' | 'limit';
+/** The sentence Claude Code's default resume prompt is, and every variant —
+ *  including ccd's RESUME_PROMPT — begins with. The parser matches the prefix. */
+export const RESUME_PROMPT_PREFIX = 'Continue from where you left off.';
+export const NO_RESPONSE_TEXT = 'No response requested.';
+export const SYNTHETIC_MODEL = '<synthetic>';
+/** The `error` Claude Code writes on the assistant row it appends for a 429
+ *  (`isApiErrorMessage:true, apiErrorStatus:429, quotaLimits:{resetsAt,…}`;
+ *  measured 2026-09-10). ccd's `_transcript_limit_banner` holds the same
+ *  literal in bash — it cannot import this — and `ccd-limit-banner.test.ts`
+ *  reads that line from source and fails on drift (D-2362). */
+export const RATE_LIMIT_ERROR = 'rate_limit';
 /**
  * `truncatedBytes` — THREE DOCUMENTED STATES, and the third is why the field
  * is optional (Build 4, spec §2.2/§2.4):
@@ -2961,7 +3388,11 @@ export type ChatEvent =
   | { kind: 'assistant'; uuid: string; ts: string; text: string }
   | { kind: 'tool_use'; uuid: string; ts: string; toolId: string; name: string; input: string; truncatedBytes?: number }
   | { kind: 'tool_result'; ts: string; toolId: string; text: string; isError: boolean; truncatedBytes?: number }
-  | { kind: 'system'; uuid: string; ts: string; text: string };
+  | { kind: 'system'; uuid: string; ts: string; text: string; origin?: SystemOrigin;
+      /** With `origin: 'limit'` only: Claude Code's `quotaLimits.resetsAt`, epoch
+       *  SECONDS, copied — never converted — from the banner row (D-2365).
+       *  Absent when the row carried none; absence-permits. */
+      resetsAt?: number };
 
 export interface AskOption { label: string; description?: string; preview?: string }
 export interface AskQuestion {
@@ -3155,6 +3586,32 @@ export interface NotifyEvent {
    *  degradation this union was given `unknown` for. */
   kind: 'ask' | 'done' | 'merged' | 'mail' | 'run' | 'coord' | 'unknown';
   sessionId: string; title: string; body: string;
+  /**
+   * WHICH RUN this notification is about, or `null` when it is about none.
+   *
+   * ADDITIVE (design 2026-09-08 §4); `FLEET_PROTO` is deliberately not bumped.
+   * TWO tolerant readers at two different boundaries, deliberately, not one
+   * reader total and not a duplicate: `reviveNotifyEvent` below is what a
+   * `NotifyEvent` crosses coming IN — an older server's frame carries no
+   * `runId` at all, and that absence becomes `null` there, at the wire. The
+   * render boundary has its own reader, `pwa/src/lib/feed.ts`'s `eventRunId`,
+   * for a store row that reached a renderer WITHOUT having crossed that wire
+   * check just now — an older build's cached record, or a merge that put an
+   * unrevived object back in the store — and it turns that same absence into
+   * the same `null` there. Neither reaches past its own boundary: every
+   * `pwa/src` render site reads `eventRunId(ev)`, never `ev.runId` directly,
+   * so the wire's normalisation is never re-derived, only covered where it
+   * could still be missed.
+   *
+   * NULL IS "ABOUT NO RUN", NOT "UNKNOWN". An `ask`, a `done`, a `merged` and a
+   * `coord` are about a SESSION or about the config; they belong to no
+   * programme and appear only in the unfiltered feed. The two lanes that DO
+   * know a run — the mail lane and the run-transition lane — populate it, which
+   * is what makes `GET /api/feed?program=` a join rather than a guess. Nothing
+   * reads a run to compute this, so there is no read that could fail and no
+   * third condition to fold in here.
+   */
+  runId: number | null;
 }
 
 /** `resync: true` means "I cannot prove you saw everything" — the epoch moved,
@@ -3219,6 +3676,14 @@ export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
       sessionId: reqStr(o, 'sessionId'),
       title: reqStr(o, 'title'),
       body: reqStr(o, 'body'),
+      // TOLERANT, and deliberately not `reqNum`: an older server's frame omits
+      // this field entirely, and rejecting the whole event over an additive
+      // field would drop a real notification for a build difference. Anything
+      // that is not a number — absent, null, a string — becomes `null`, which
+      // is this field's own documented "about no run". The `kind` degradation
+      // eight lines up is the same policy for the same reason.
+      runId: typeof (o as { runId?: unknown }).runId === 'number'
+        ? (o as { runId: number }).runId : null,
     };
   } catch (err) {
     if (err instanceof MalformedSnapshot) return null;
@@ -3239,7 +3704,7 @@ export function reviveNotifyEvent(raw: unknown): NotifyEvent | null {
  *
  *  `'unknown'` is the designated we-do-not-know member (spec:77) and is NEVER
  *  WRITTEN: it is what a row from a newer build reads as, exactly the way
- *  `PrPhase`'s `'unchecked'` degrades (`server/src/registry.ts:133-140`). A
+ *  `PrPhase`'s `'unchecked'` degrades (`server/src/registry.ts:135-142`). A
  *  state this build does not know must never reach a `switch` as a raw string
  *  and render as nothing. */
 export type RunState =
@@ -3262,6 +3727,20 @@ export const RUN_STATES: readonly RunState[] = [
  *  forces a caller to assert the very thing it is asking). */
 export function isRunState(v: unknown): v is RunState {
   return typeof v === 'string' && (RUN_STATES as readonly string[]).includes(v);
+}
+
+/** What a run IS (design 2026-09-14 §5.1): `'work'` — a wave's worker, the only
+ *  kind that existed before that design; `'review'` — a reviewer reading one
+ *  work run's finished wave and reporting, never ruling. `'unknown'` is the
+ *  designated we-do-not-know member on `RunState`'s own model (D-2795): NEVER
+ *  WRITTEN, it is what a `kind` token from a newer build reads as, and
+ *  `transitionsFor('unknown')` has no edges at all, so such a row can neither
+ *  advance nor dispatch until a build that knows the word reads it. */
+export type RunKind = 'work' | 'review' | 'unknown';
+export const RUN_KINDS: readonly RunKind[] = ['work', 'review', 'unknown'];
+/** Use THIS, never `RUN_KINDS.includes(x as RunKind)` — `isRunState`'s rule. */
+export function isRunKind(v: unknown): v is RunKind {
+  return typeof v === 'string' && (RUN_KINDS as readonly string[]).includes(v);
 }
 
 /**
@@ -3327,6 +3806,84 @@ export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = 
   failed:            [],
   unknown:           [],
 });
+
+/**
+ * THE PARTITION OF `RunState` THE DISPATCH CAP READS (design 2026-09-14 §7.1).
+ * Three lists, spelled ONCE, and `run-states.test.ts` pins that every
+ * `RunState` sits in exactly one of them — so a future state cannot be
+ * silently UNCOUNTED, which is the dangerous direction for a cap (an
+ * uncounted busy session over-dispatches the fleet without a word).
+ *
+ * ACTIVE = a dispatched session is doing work: `dispatched`, `working`. Both
+ * kinds of run (`RunKind`) are busy in exactly these two. `unknown` is here
+ * for the cap's own safe direction: a row whose state this build cannot name
+ * COUNTS, wedging visibly and fixably, rather than not counting and
+ * over-dispatching silently — and that is today's behaviour too, since
+ * `unknown` was never among the terminal pair.
+ *
+ * IDLE = the coordinator's states: the session beneath them is idle by
+ * contract (a worker stops pushing at `wave-done`, worker skill clause 9), so
+ * it holds a workspace but not a fleet slot. `planned` has never been
+ * dispatched (D-13's own narrowing, kept); `awaiting-review`, `merging` and
+ * `closing` are waits on the coordinator, not on the worker — run 43 sat at
+ * `merging` for hours on 2026-09-14 with its worker idle throughout.
+ *
+ * TERMINAL = the pair nothing leaves. `store.ts` builds its SQL fragments
+ * from these by `.join`, the `TERMINAL_DELIVERY_SQL` idiom, and
+ * `single-definition.test.ts` refuses a second hand-written copy of either
+ * list anywhere under the four roots. `unknown` is NOT terminal: it has no
+ * outgoing edge in `RUN_TRANSITIONS` because nothing may transition a state
+ * this build cannot name — not because such a row is finished (D-2794).
+ */
+export const ACTIVE_RUN_STATES = ['dispatched', 'working', 'unknown'] as const satisfies
+  readonly RunState[];
+export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closing'] as const satisfies
+  readonly RunState[];
+export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
+
+/**
+ * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
+ * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
+ * or release-with-ceremony, and reusing those states would make the table lie
+ * about what a row is doing. `failed` is reachable from every non-terminal
+ * state, as in `RUN_TRANSITIONS`. `working -> done` is direct: the close
+ * route's review arm (Task 7 of the plan) skips the `closing` hop for this
+ * kind (`viaClosing: false`, the same skip the abandon-of-a-planned-run
+ * already takes).
+ *
+ * Every state is a key so the two tables have one shape and one reader; the
+ * three work-only states are dead ends here, never reached. Those three dead
+ * ends are unreachable by construction — `advanceInner` refuses every edge
+ * into them for this kind — so a review row can never need an exit from one;
+ * `run-states.test.ts` pins that every REACHABLE non-terminal review state
+ * has one.
+ */
+export const REVIEW_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned:           ['dispatched', 'failed'],
+  dispatched:        ['working', 'failed'],
+  working:           ['done', 'failed'],
+  'awaiting-review': [],
+  merging:           [],
+  closing:           [],
+  done:              [],
+  failed:            [],
+  unknown:           [],
+});
+
+/** No edges at all — what a run of a kind this build cannot name may do (D-2795). */
+export const NO_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned: [], dispatched: [], working: [], 'awaiting-review': [], merging: [], closing: [],
+  done: [], failed: [], unknown: [],
+});
+
+/**
+ * THE ONE READER of the transition tables. Every route and the store's own
+ * `advanceInner` consult this by the run's kind; nothing indexes
+ * `RUN_TRANSITIONS` or `REVIEW_RUN_TRANSITIONS` directly outside this file
+ * (pinned by `run-states.test.ts`'s source scan).
+ */
+export const transitionsFor = (kind: RunKind): Readonly<Record<RunState, readonly RunState[]>> =>
+  kind === 'work' ? RUN_TRANSITIONS : kind === 'review' ? REVIEW_RUN_TRANSITIONS : NO_RUN_TRANSITIONS;
 
 /** A unit inside a run. `'unknown'` is the we-do-not-know member, as above. */
 export type WorkItemState = 'pending' | 'claimed' | 'done' | 'failed' | 'abandoned' | 'unknown';
@@ -3410,7 +3967,7 @@ export const MAIL_MAX_ATTEMPTS = 6;
  * finding 8 / D-44): `subject` renders as one envelope line and `artifacts`
  * renders one line PER ENTRY (`coord/envelope.ts`'s own `renderEnvelope`),
  * and `sendPrompt` costs one agent round trip PER LINE it types
- * (`inject/send.ts:300-305`). A message whose `body` is well under 8KB can
+ * (`inject/send.ts:304-309`). A message whose `body` is well under 8KB can
  * still carry tens of thousands of artifact-path lines and stay under
  * Fastify's default 1 MiB request-body ceiling — `coord/envelope.ts`'s own
  * COST paragraph names "a few hundred round trips" as the worst case the
@@ -3421,6 +3978,132 @@ export const MAIL_MAX_ATTEMPTS = 6;
 export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
+
+/** Numeric fields rendered into a run hold use this one exact domain at every
+ *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
+ *  integers can lose identity or switch to exponent punctuation the session hook
+ *  grammar refuses. Every runtime hold-writing boundary enforces it. */
+export const RUN_HOLD_NUMBER_MAX = Number.MAX_SAFE_INTEGER;
+export const isPositiveDecimalSafeInteger = (value: unknown): value is number =>
+  typeof value === 'number' && Number.isSafeInteger(value) && value >= 1;
+
+/** Parse the one canonical textual spelling of a positive safe integer. Route
+ *  identifiers are resource names, so coercion must not make two spellings name
+ *  the same row. */
+export const parseCanonicalPositiveSafeInteger = (text: unknown): number | null => {
+  if (typeof text !== 'string' || !/^[1-9][0-9]*$/.test(text)) return null;
+  const value = Number(text);
+  return isPositiveDecimalSafeInteger(value) && String(value) === text
+    ? value
+    : null;
+};
+
+/** The widest decimal the RUN ID's slot must reserve room for: SQLite's signed
+ *  INTEGER maximum, nineteen digits. Deliberately WIDER than the JavaScript
+ *  domain above, which every runtime seam still enforces — `runs.id` is an
+ *  int64 column, so budgeting its full width means a slug the cap admits can
+ *  never compose an over-long hold for any id that column can hold, not merely
+ *  for the ids this process agrees to serialize.
+ *
+ *  A STRING, never a number, and never coerced through one: `9223372036854775807`
+ *  is not representable as a JavaScript number — `Number(...)` silently yields
+ *  9223372036854775808 — so the placeholder is carried as the decimal TEXT it
+ *  stands for and rendered through the same serializer as every real hold. */
+export const RUN_ID_MAX_DECIMAL = '9223372036854775807';
+
+/** The complete hold text must fit the session hook's readable window. The
+ *  shell keeps a literal because it cannot import TypeScript; a server test
+ *  binds the values. */
+export const HOLD_REASON_MAX_CHARS = 127;
+
+/**
+ * `POST /api/sessions/:id/hold`'s free-form `reason` cap (D-2546). BYTES,
+ * measured as UTF-8 — deliberately a different UNIT from `HOLD_REASON_MAX_CHARS`
+ * directly above, which counts CHARACTERS on purpose because it sizes the
+ * session hook's readable DISPLAY window. This one bounds what crosses an HTTP
+ * ingress into an argv element and a registry file, where the cost is bytes;
+ * a reader "fixing" one to match the other would change what both mean.
+ *
+ * NOT A REPAIR OF A DEFECT. Nothing on this path truncates, crashes or
+ * mis-renders at any width, and the one discriminating reader — the session
+ * hook — degrades to SILENCE by design (its own shape gate, proven at 200,000+
+ * characters by `server/test/session-hook.test.ts`). This is a BUDGET CHOICE
+ * about how much free-form operator text a registry field should carry, ruled
+ * by the operator rather than derived from a constraint.
+ *
+ * 512 mirrors `LC_REASON_MAX_BYTES` — the closest STRUCTURAL match in the tree:
+ * a free-form `--reason` written verbatim and parsed nowhere, refuse-never-
+ * truncate. SAME NUMBER, SEPARATE CONSTANT, and deliberately NOT an alias of
+ * it, for `LEDGER_TITLE_MAX_BYTES`'s stated reason: tying two seams' caps
+ * together lets a change to one silently rewrite the other's refusal threshold.
+ * `WORK_ITEM_TITLE_MAX`/`MAIL_SUBJECT_MAX_BYTES`/`LEDGER_TITLE_MAX_BYTES` are
+ * three existing precedents that are all 200 and all deliberately separate.
+ *
+ * REFUSE, NEVER TRUNCATE: a shortened hold reason is a silently altered
+ * operator statement, recorded as if the operator had written it.
+ *
+ * A CONTRACT AT THE HTTP CHOKEPOINT, NOT AN OS WALL. `ccd ws-hold` stays
+ * directly callable on the box, and a human with a shell can still write a
+ * reason of any width — ccd's own emptiness check (`ccd/ccd`'s `cmd_ws_hold`)
+ * is all that stops them, by its own stated design intent ("the reason string
+ * is the display everywhere — write it verbatim, parse it nowhere"). This is
+ * the same honesty `CLAUDE.md` already requires of the caps-and-pause
+ * chokepoint, "a contract the coordinator skill honors, not an OS wall", and
+ * it is what keeps the next reader from believing the registry field is
+ * structurally bounded when it is not.
+ */
+export const HOLD_ROUTE_REASON_MAX_BYTES = 512;
+
+/** One field rendered into a hold: a runtime JavaScript number, or the decimal
+ *  TEXT of a width the budget reserves but no JavaScript number can hold. Both
+ *  interpolate identically, which is exactly what lets the cap below be derived
+ *  THROUGH this serializer instead of through a second copy of its grammar. */
+export type HoldNumeral = number | string;
+
+/** The standing hold-reason serialization, shared with the cap derivation so a
+ *  grammar change automatically changes the slug budget it consumes. */
+export const holdReason = (
+  program: string,
+  wave: HoldNumeral,
+  waveOf: HoldNumeral | null,
+  runId: HoldNumeral | null,
+): string =>
+  `program:${program} wave:${wave}${waveOf === null ? '' : `/${waveOf}`}` +
+  `${runId === null ? '' : ` run:${runId}`}`;
+
+/** Reserve room for every numeric slot at its OWN widest supported decimal —
+ *  wave and denominator at the JavaScript safe maximum they are validated
+ *  against, the run id at the SQLite width its column can actually assign.
+ *  Derived through the real serializer, so the budget follows the grammar
+ *  rather than restating it. Programme slugs are ASCII-only below, so
+ *  characters and UTF-8 bytes agree. */
+export const PROGRAM_SLUG_MAX_CHARS =
+  HOLD_REASON_MAX_CHARS - holdReason(
+    '', RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL,
+  ).length;
+
+/** A programme is a ledger filename, never a path or a display label. */
+export type ProgramSlugShape =
+  | { ok: true; slug: string }
+  | { ok: false; detail: string };
+
+/** Shape every HTTP programme ingress once before it can reach {@link ledgerPath}. */
+export const shapeProgramSlug = (raw: string): ProgramSlugShape => {
+  const slug = raw.trim();
+  if (!/^[A-Za-z0-9_-]+$/.test(slug)) {
+    return {
+      ok: false,
+      detail: 'program must contain only letters, numbers, underscores, and hyphens',
+    };
+  }
+  if (slug.length > PROGRAM_SLUG_MAX_CHARS) {
+    return {
+      ok: false,
+      detail: `program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`,
+    };
+  }
+  return { ok: true, slug };
+};
 
 /** The path a program's ledger is expected to live at. It NAMES the path the
  *  operator is expected to have committed and asserts nothing about it: the
@@ -3473,6 +4156,84 @@ export const programResumeKickoff = (
   `Run the ccrc-coordinator skill. Its run is ALREADY OPEN: read \`GET /api/runs\`,\n` +
   `find run ${runId} at wave ${wave}, and pick that wave up where the ledger says it\n` +
   `stands. Do not open the run for wave ${wave} again, and do not open wave 1 again.`;
+
+export interface ProgramKickoffResume { runId: number; wave: number }
+export interface ProgramKickoffResumeInput { runId: unknown; wave: unknown }
+
+/** The complete kickoff decision shared by browser pre-create validation and
+ *  the server's authoritative queue seam. Measuring the composed body is the
+ *  only way to cover the slug twice, arbitrary UTF-8 in the title, and the
+ *  longer resume template without giving any raw field a misleading cap.
+ *
+ *  The input pair stays `unknown` until this verdict validates both members.
+ *  Its success arm carries the normalized pair so an HTTP adapter never has to
+ *  repeat the numeric decision merely to call the authoritative queue seam. */
+/** WHICH input a `bad-request` verdict is about. A field, not a sentence: all
+ *  three causes share one `kind`, and a consumer that needs to tell them apart
+ *  (the start sheet shows a slug refusal while the operator is still typing the
+ *  title, and must not show a title refusal then) would otherwise have to
+ *  compare `detail` against L0 prose — narrowing a distinction it received by
+ *  string-matching copy, so rewording a sentence here would silently change
+ *  which errors an operator sees with nothing red. */
+export type ProgramKickoffField = 'slug' | 'title' | 'resume';
+
+export type ProgramKickoffVerdict =
+  | { ok: true; slug: string; title: string; body: string; bytes: number;
+      resume?: ProgramKickoffResume }
+  | { ok: false; kind: 'bad-request'; field: ProgramKickoffField; detail: string }
+  | { ok: false; kind: 'oversize'; limit: number; bytes: number; detail: string };
+
+export const programKickoffVerdict = (
+  rawSlug: string,
+  rawTitle: string,
+  resumeInput?: ProgramKickoffResumeInput,
+): ProgramKickoffVerdict => {
+  const shaped = shapeProgramSlug(rawSlug);
+  if (!shaped.ok) return { ok: false, kind: 'bad-request', field: 'slug', detail: shaped.detail };
+  const title = rawTitle.trim();
+  if (title === '') {
+    return {
+      ok: false, kind: 'bad-request', field: 'title',
+      detail: 'program title must not be blank',
+    };
+  }
+  let resume: ProgramKickoffResume | undefined;
+  if (resumeInput !== undefined) {
+    if (!isPositiveDecimalSafeInteger(resumeInput.runId)
+        || !isPositiveDecimalSafeInteger(resumeInput.wave)) {
+      return {
+        ok: false,
+        kind: 'bad-request',
+        field: 'resume',
+        detail: 'resume runId and wave must be positive safe integers',
+      };
+    }
+    resume = { runId: resumeInput.runId, wave: resumeInput.wave };
+  }
+  const body = resume
+    ? programResumeKickoff(shaped.slug, title, resume.runId, resume.wave)
+    : programKickoff(shaped.slug, title);
+  const bytes = new TextEncoder().encode(body).byteLength;
+  if (bytes > MAIL_BODY_MAX_BYTES) {
+    return {
+      ok: false,
+      kind: 'oversize',
+      limit: MAIL_BODY_MAX_BYTES,
+      bytes,
+      detail:
+        `kickoff body ${bytes} bytes exceeds the ` +
+        `${MAIL_BODY_MAX_BYTES} byte mail body cap`,
+    };
+  }
+  return {
+    ok: true,
+    slug: shaped.slug,
+    title,
+    body,
+    bytes,
+    ...(resume === undefined ? {} : { resume }),
+  };
+};
 
 /** The kickoff's mail subject. Defined HERE, beside the body it labels, rather
  *  than in `coord/kickoff.ts`: one home for the two halves of one message, and
@@ -3735,6 +4496,111 @@ export function parseFetchedMailEnvelope(text: string): MailEnvelopeParse {
   return parseMailEnvelope(envelope);
 }
 
+/** One `<name>value</name>` member of a harness envelope, in ARRIVAL ORDER. */
+export interface EnvelopeMember { name: string; value: string }
+
+/**
+ * Split a harness envelope into its `<tag>…</tag>` members, or null when the
+ * text is not ENTIRELY such members — prose before, between or after any of
+ * them disqualifies it, and so does an unclosed tag.
+ *
+ * ONE DEFINITION, TWO READERS, for the reason `parseMailEnvelope` states about
+ * itself: the PWA holds no rule the server does not also hold. The transcript
+ * parser reads it to decide WHAT a record is; `parseTaskNotification` below
+ * reads it again to decide what the record SAYS.
+ *
+ * Structural, and deliberately NOT sufficient on its own — every caller must
+ * also find a member it NAMES. A bare "the content is all tag blocks" rule has
+ * zero false positives against every human turn measured on the fleet box and
+ * is still not safe, because no human turn measured there so much as BEGINS
+ * with `<`: the corpus never exercised the predicate, so it is no evidence
+ * about `<p>one</p>\n<p>two</p>` or a pasted `<config>`. The named member is
+ * what makes it safe; the corpus only says it is sufficient.
+ *
+ * Members come back IN ARRIVAL ORDER, because order is the thing the envelope
+ * read exists to stop mattering and a Map would silently collapse a repeat.
+ */
+export function envelopeMembers(text: string): EnvelopeMember[] | null {
+  const t = text.trim();
+  if (!t.startsWith('<')) return null;
+  const re = /<([a-z][a-z0-9-]*)>([\s\S]*?)<\/\1>/g;
+  const members: EnvelopeMember[] = [];
+  let outside = '';
+  let last = 0;
+  for (let m = re.exec(t); m !== null; m = re.exec(t)) {
+    outside += t.slice(last, m.index);
+    last = re.lastIndex;
+    // Both groups are mandatory in the pattern, so neither can be absent on a
+    // match; the defaults are here because the PWA compiles this file under
+    // `noUncheckedIndexedAccess` and the server does not.
+    members.push({ name: m[1] ?? '', value: m[2] ?? '' });
+  }
+  if (members.length === 0) return null;
+  outside += t.slice(last);
+  return outside.trim() === '' ? members : null;
+}
+
+/**
+ * What a task notification says: the harness's own summary and status, and
+ * every other member it wrote, kept by name.
+ *
+ * `summary` and `status` are null when the member is ABSENT — the card renders
+ * no such row rather than an empty one, exactly as `runLabel` refuses to say
+ * "run —" about a mail that belongs to no run. Measured over the fleet box's
+ * 13 notifications, both are present in all 13 and `summary` never exceeds 209
+ * bytes; `fields` is everything else, in arrival order, nothing dropped.
+ */
+export interface TaskNotification {
+  summary: string | null;
+  status: string | null;
+  fields: EnvelopeMember[];
+}
+
+export type TaskNotificationParse =
+  | { ok: true; notification: TaskNotification }
+  | { ok: false; why: 'not-a-notification' };
+
+/**
+ * Parse the harness's background-task report out of a transcript row.
+ *
+ * THE SAME SHAPE AS `parseMailEnvelope`, and for the same reason: a structured
+ * record the machine wrote was rendering as a wall of its own markup filed
+ * under the operator's name, and the fix is to read the structure once, in
+ * `shared/`, and let the delivery layer render it as what it is. A refusal
+ * falls through to the ordinary row — never a half-populated card.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY. The transcript is a rank-3 source and
+ * a session can write this text into itself. Consequence of a forgery: one row
+ * looks like a task report. Named, accepted — the same sentence
+ * `parseMailEnvelope` carries, restated rather than inherited.
+ *
+ * The OUTER wrapper must be the whole record and must be named
+ * `task-notification`; the members inside it are read one level down. Both
+ * levels go through `envelopeMembers`, so a human pasting one of these plus a
+ * question keeps every word: the prose outside the block disqualifies it.
+ */
+export function parseTaskNotification(text: string): TaskNotificationParse {
+  const outer = envelopeMembers(text);
+  const body = outer?.find((m) => m.name === 'task-notification');
+  if (body === undefined) return { ok: false, why: 'not-a-notification' };
+  const members = envelopeMembers(body.value);
+  if (members === null) return { ok: false, why: 'not-a-notification' };
+  const take = (name: string): string | null => {
+    const m = members.find((x) => x.name === name);
+    return m === undefined ? null : m.value.trim();
+  };
+  return {
+    ok: true,
+    notification: {
+      summary: take('summary'),
+      status: take('status'),
+      fields: members
+        .filter((m) => m.name !== 'summary' && m.name !== 'status')
+        .map((m) => ({ name: m.name, value: m.value.trim() })),
+    },
+  };
+}
+
 /**
  * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
  * for `MAIL_SUBJECT_MAX_BYTES`'s own reason one block up: a title is one line
@@ -3772,7 +4638,7 @@ export const WORK_ITEM_MAX = 32;
  *  - DONE-AUTHORITY (spec:127-132): the claim is rejected, the run is unchanged.
  *
  * `tip-unmeasurable`/`pr-unmeasurable` exist because NOT KNOWING IS NOT `[]` —
- * ccd's own three-answer ladder (`ccd/ccd:1957-1963`). A fact the server could
+ * ccd's own three-answer ladder (`ccd/ccd:2080-2086`). A fact the server could
  * not re-measure must never read as a fact that matched. `registry-unmeasurable`
  * (D-37) is the INGRESS member of the same family: a `readRegistry` that could
  * not list its directory, or that dropped a listed row for an unreadable
@@ -3803,13 +4669,19 @@ export const MAIL_REJECT_CODES = [
   // done-authority
   'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed', 'pr-unmeasurable',
   'no-handoff-commit',
+  // review-run verdicts (design 2026-09-14 §5.3)
+  'stale-review', 'report-unreadable',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
- * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
- * a forward advance can be refused with, as distinct from the ingress, peer-bound
- * and delivery families above.
+ * The done-authority subset of `MAIL_REJECT_CODES` — the eight a wave-done claim
+ * or a forward advance can be refused with, as distinct from the ingress,
+ * peer-bound and delivery families above: four a work run's claim alone
+ * (`stale-tip`, `pr-regressed`, `pr-unmeasurable`, `no-handoff-commit`), two
+ * shared by the branch resolution both verifiers run (`tip-unmeasurable`,
+ * `branch-unmeasurable`), two a review run's alone (`stale-review`,
+ * `report-unreadable`) (D-2797).
  *
  * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
  * one: the ARRAY is the single definition and the type follows it, because wave
@@ -3825,6 +4697,8 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 export const DONE_AUTHORITY_CODES = [
   'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
   'pr-unmeasurable', 'no-handoff-commit',
+  // review-run verdicts (design 2026-09-14 §5.3)
+  'stale-review', 'report-unreadable',
 ] as const satisfies readonly MailRejectCode[];
 export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 
@@ -3867,8 +4741,36 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Thirteen codes exist below today; the next new one would be the
- * fourteenth, not the ninth.
+ * Eighteen codes exist below today; the next new one would be the
+ * nineteenth, not the ninth.
+ *
+ * `hold-oversize` is the complete session-card reason refusing before a run
+ * or fleet act can create a hold the hook cannot display. `hold-invalid` is
+ * the separate grammar/domain refusal: the serialized slug or an included
+ * wave, denominator, or run id cannot be accepted by the hook. Both differ
+ * from `oversize`, which names mail bytes and is shared with mail ingress.
+ *
+ * `project-mismatch` is cross-repo programmes' first guard (design
+ * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
+ * SESSION's workspace is a git worktree in exactly one repository, and until
+ * this code existed the "same `sessionId`, same workspace" idiom crossed
+ * repos with nothing to stop it — the mismatch surfaced one advance later as
+ * a `tip-unmeasurable` naming a branch and a project the coordinator did not
+ * expect. It is emitted at TWO sites for the same fact measured two ways:
+ * `POST /api/runs` reads this store's own history (`sessionProject`), and
+ * `POST /api/runs/:id/dispatch`'s resume arm reads the live registry record.
+ * Its body carries `by`, the project the session actually belongs to, so the
+ * coordinator's report names the repo rather than the surprise.
+ *
+ * `home-mismatch` is its sibling and NOT a flavour of it (design §3 F2). A
+ * programme has ONE home — the project whose repository holds its ledger,
+ * spec and plan — and a later open naming a different one is refused rather
+ * than allowed to move it. The two are separate codes because the caller acts
+ * on them completely differently: `project-mismatch` says "open this wave
+ * without a `sessionId` and spawn fresh in the target repo", while
+ * `home-mismatch` says "you are addressing the wrong programme, or you typed
+ * the wrong home" — the wave does not move, the programme does not move, and
+ * `by` names the home this programme has carried since its first open.
  *
  * `hookstate-unmeasurable` is `worker-busy`'s twin at the same gate and the
  * distinction between them is the whole of D-115: `worker-busy` asserts a
@@ -3887,17 +4789,24 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * The last two are the ledger's (Build 4, spec §3.2): `unknown-item` — "an
  * item id that is not THIS RUN's", 404 — and `item-terminal` — the item
  * already settled, 409, refused rather than silently applied.
+ *
+ * `review-in-flight` — a second non-terminal review run named the same
+ * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
+ * invariant 3).
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
-  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal';
+  | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
   'cap-daily': true, 'ambiguous-dispatch': true, 'worker-busy': true,
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
+  'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
+  'review-in-flight': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -4058,9 +4967,12 @@ export interface RunHealth {
   /** Deliveries of this run's mail still `queued` or `delivered`. */
   readonly mailOutstanding: number;
   /** Deliveries PARKED — `rejected` — for a reason that is NOT a deliberate
-   *  cancel. A `run closed` or `coordinator reclaimed` park is the machinery
-   *  working as designed and is excluded, because reporting it would announce a
-   *  chair that has already changed hands. */
+   *  cancel: every reason named by `store.ts`'s `DELIBERATE_CANCEL_ERRORS_SQL`
+   *  is excluded (PR #75 review round 1, store-7) — a `run closed` park (the
+   *  run ended), a `coordinator reclaimed` park (a chair changed hands) and a
+   *  `recipient rebound` park (a worker was re-bound to a new session,
+   *  cross-repo §4) are all the machinery working as designed, and reporting
+   *  any of them would announce a change that has already been handled. */
   readonly mailParked: number;
   /** MAX(`replayCount`) across this run's deliveries. Mail 120 reached 722
    *  delivery attempts and mail 129 reached 911, each arriving after the work it
@@ -4106,10 +5018,39 @@ export interface RunSummary {
   wave: number;
   waveOf: number | null;
   project: string;
+  /**
+   * The project whose repository holds this run's PROGRAMME — its ledger, its
+   * spec and its plan — or `null` when the programme row stores none.
+   *
+   * `project` above is where THIS RUN works; this is where the programme
+   * lives, and the two differ exactly when the run is a crossing. That is the
+   * whole reason the board needs it (design §5, F4): a runs-screen row can
+   * only mark a crossing by comparing them.
+   *
+   * ADDITIVE; `FLEET_PROTO` is deliberately not bumped. REQUIRED here because
+   * `hydrateRun` returns a literal and must therefore compute it — the same
+   * mechanism `health` relies on — and `null` is a first-class answer rather
+   * than a missing one: it is what every programme opened before this column
+   * had a writer says, and what one opened during the legacy generation says.
+   * A renderer marks NOTHING while it is null; absence permits. It is never
+   * derived from the registry or from the claimant — a fact the programme
+   * carries forever must not depend on a live read that can degrade.
+   */
+  homeProject: string | null;
   sessionId: string | null;
   workspace: string | null;
   branch: string | null;
   state: RunState;
+  /** `'work'` or `'review'` (design 2026-09-14 §5.1). ADDITIVE; `FLEET_PROTO`
+   *  is not bumped. REQUIRED here because `hydrateRun` returns a literal and
+   *  must compute it; TOLERATED ABSENT at the one PWA reader (`runKindChip`,
+   *  `pwa/src/fleet/runWords.ts`) because an older server omits it — absence
+   *  means `'work'`, the only kind that older server knew. */
+  kind: RunKind;
+  /** On a review run, the id of the work run it reviews; `null` on a work run
+   *  — a first-class answer ("reviews nothing"), never a failed read. Set at
+   *  open, immutable. */
+  reviews: number | null;
   /** The ONE coordinator that owns this run: the tmux-derived session id of
    *  the session that opened it, stamped at `POST /api/runs`. That stamp is the
    *  mechanism behind the `claimed-by-another` refusal — a second coordinator,
@@ -4202,6 +5143,49 @@ export interface RunSummary {
    * tolerance guarantee. No JSX reads a member directly.
    */
   health: RunHealth;
+}
+
+/** Speed and quality per run (routing spec 2026-09-14 §6), READ-ONLY, from the
+ *  run's own events, its refused wave-dones and the WORKER session's lifecycle
+ *  rows. `wallMs` is dispatch → final state on the SERVER's clock. `holdMs` is
+ *  the worker's paired hold→release time inside that window on CCD's clock
+ *  (two NTP-disciplined boxes; the skew is bounded, not zero — a signal, not an
+ *  invoice). `swaps` COUNTS the worker's account swaps in the window and
+ *  nothing more: ccd journals a swap as one `done` row with no landing pair,
+ *  so swap wall time is structurally unmeasurable from the journal today
+ *  (pairing it needs a `swap intent` at `_swap_target` and a landing row — a
+ *  slice-3 change, if the count proves it matters).
+ *
+ *  `excludedUnmeasured` IS THE DEFAULT, not the exception: it is false ONLY for
+ *  a window that was actually scanned end to end with everything in it paired.
+ *  True when `swaps > 0`; when a hold could not be paired (no release, a
+ *  release with no open hold, or a SECOND hold arriving while one is open);
+ *  when the worker session carries a hold/release/swap row ccd could not
+ *  timestamp, which no window query can place in time; AND for every window
+ *  nobody scanned — a run with no `sessionId` yet, a RECONSTRUCTED run (no
+ *  `run_events`, so no `dispatched` transition), and every OPEN run. An open
+ *  run is deliberately in that list: `holdMs: 0, swaps: 0` on a window with no
+ *  end yet are initialisers, not readings, and §6's arm attribution — the
+ *  consumer that must never average an unmeasured run into an arm's mean —
+ *  would otherwise have to test `closedAt` as a second condition to know which
+ *  zeroes it may believe. So `activeMs` (`wallMs - holdMs`) is a ceiling
+ *  whenever this is true, and a total only when it is false. `closeRefusals` is the
+ *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
+ *  run — the rows `closeRun` writes for a refused wave-done — and
+ *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
+ *  before. */
+export interface RunSignals {
+  readonly runId: number;
+  readonly dispatchedAt: number | null;
+  readonly closedAt: number | null;
+  readonly finalState: 'done' | 'failed' | null;
+  readonly wallMs: number | null;
+  readonly holdMs: number;
+  readonly swaps: number;
+  readonly excludedUnmeasured: boolean;
+  readonly activeMs: number | null;
+  readonly closeRefusals: number;
+  readonly firstSubmission: boolean | null;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
@@ -4313,11 +5297,14 @@ export interface MailSummary {
   /**
    * The delivery lane's last failure, RAW (`mail_deliveries.lastError`).
    *
-   * FREE TEXT, and it has to be treated as such: four writers put four
-   * different kinds of thing here — a typed `sendPrompt` error code,
-   * `'recipient not in registry'`, `'run closed'`, and a whole English
-   * sentence (`MAIL_REPLAY_CEILING_ERROR`). The column is a maintainer's grep
-   * target, not a vocabulary, and it has never been validated on the way in.
+   * FREE TEXT, and it has to be treated as such (PR #75 review round 1,
+   * store-7). `backOff` and `rejectDelivery` accept arbitrary strings, and the
+   * lane currently passes typed `sendPrompt` errors, registry/lifecycle/tmux
+   * diagnoses, and a whole English sentence (`MAIL_REPLAY_CEILING_ERROR`).
+   * Three direct SQL writers add the deliberate-cancel sentences `'run
+   * closed'`, `'coordinator reclaimed'`, and `'recipient rebound'`. Those are
+   * examples of the column's contents, not a closed census or vocabulary: it
+   * is a maintainer's grep target and has never been validated on the way in.
    *
    * SO THE RULE FOR EVERY CLIENT, and it is not negotiable: branch on the ONE
    * literal token you have a surface for (`=== 'draft-present'`), never key a
@@ -4373,7 +5360,10 @@ export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: nu
  *
  *  Named here only since the operator dial shipped (D-1209): before that the
  *  shape existed solely as an inline structural type on one method, because
- *  `dispatchRun` was its only reader and never had to name it. */
+ *  `dispatchRun` was its only reader and never had to name it.
+ *
+ *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
+ *  `ACTIVE_RUN_STATES`. */
 export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
@@ -4815,7 +5805,7 @@ export interface PasskeyListResponse {
  *
  * Every act a session or a human takes on the fleet leaves an append-only
  * NDJSON line in `$REG/.lifecycle/`, a dot-prefixed DIRECTORY that `_reg_purge`
- * (`ccd:458-556`) structurally cannot reach — its suffix filter globs
+ * (`ccd:484-582`) structurally cannot reach — its suffix filter globs
  * `$REG/<id>.*` and ids never begin with a dot. That is what makes a
  * destruction record possible at all: a new registry FIELD would be destroyed
  * by the loop the day it was added.
@@ -4885,13 +5875,18 @@ export type LifecycleAct =
                     // absence-permits exists to survive.
   | 'gc'            // RESERVED, and nothing emits it — `ws-gc --prune`'s
                     // per-row removals go out as `destroy` with `verb ws-gc`
-                    // (ccd:8699, ccd:8812). A run-level line would need an
+                    // (ccd:10395, ccd:10508). A run-level line would need an
                     // identity `_lc_emit` cannot express: it takes a session
                     // id, and a prune RUN sweeps many. Kept rather than
                     // removed because this vocabulary is wire-facing and
                     // additive-only — a newer ccd emitting `gc` at an older
                     // server is what absence-permits exists to survive.
   | 'spawn'         // _spawn_settle, CHANGE-ONLY (§2)
+  | 'route'         // a routing field written (routing spec 2026-09-14 §5.3):
+                    // `cmd_route` is the one emitter; dec.actor / dec.reason
+                    // carry who and why, `detail` carries "<field>: <from> ->
+                    // <to>" (no new dec key — the dec vocabulary is pinned at
+                    // four). Additive on the wire, as every act is.
   | 'start' | 'ensure' | 'swap' | 'enable' | 'stop' | 'forget'
   | 'unknown';      // the reader's degrade. NEVER written by a ccd call site.
 
@@ -4903,7 +5898,7 @@ export type LifecycleAct =
 const LIFECYCLE_ACT_MAP: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
-  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, start: true, ensure: true,
+  'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
   swap: true, enable: true, stop: true, forget: true,
   unknown: true,
 };
@@ -5005,13 +6000,13 @@ export function isActorClass(v: unknown): v is ActorClass {
 
 /**
  * What the CALLER said (D2, wire `dec.surface`, seam `decSurface`): ccd's own
- * closed set (`ccd:1523`) plus `'none'`, which is what the journal writes when
+ * closed set (`ccd:2407`) plus `'none'`, which is what the journal writes when
  * no `--surface` flag was passed at all.
  *
  * `StopSurface` IS UNCHANGED (spec §2) — no fifth surface word. `'none'` is a
  * journal-only member, and it is a MEASUREMENT of absence rather than a
- * default: `cmd_stop` defaults its own `surface` to `cli` (`ccd:11151`) and
- * `_ws_unsupervise` defaults its second parameter to `ccd` (`ccd:650-663`,
+ * default: `cmd_stop` defaults its own `surface` to `cli` (`ccd:11474`) and
+ * `_ws_unsupervise` defaults its second parameter to `ccd` (`ccd:676-689`,
  * `${2-ccd}` and not `${2:-ccd}`), and NEITHER of those internal defaults may
  * reach this field. Journaling a default as a declaration would manufacture
  * corroboration out of silence, which is the one thing this family exists to
@@ -5083,8 +6078,8 @@ const DEC_CORROBORATES: Record<ActorClass, readonly DecSurface[]> = {
  *   2. no declaration at all       -> unmeasured
  *   3. a word one side cannot name -> not-comparable
  *   4. `ccd` names a LAYER, not a host (ccd re-entering itself: `cmd_swap`'s
- *      `|| cmd_ensure "$id"` fallback at `ccd:11061`, `cmd_enable`'s
- *      `cmd_start "$@"` at `ccd:11105`), so it corroborates nothing about who
+ *      `|| cmd_ensure "$id"` fallback at `ccd:11384`, `cmd_enable`'s
+ *      `cmd_start "$@"` at `ccd:12978`), so it corroborates nothing about who
  *      was at the keyboard
  *                                  -> not-comparable
  *   5. the table                   -> agrees | disagrees
@@ -5137,11 +6132,11 @@ export interface LifecycleObs {
 /**
  * D2 — declared. SELF-ASSERTED, and the wire says so by keeping it in its own
  * object: `--surface pwa` means only that the caller said so
- * (`ccd:658-661`'s own words about the same field).
+ * (`ccd:684-687`'s own words about the same field).
  */
 export interface LifecycleDec {
   /** `'none'` when NO flag was passed. ccd's internal defaults — `cmd_stop`'s
-   *  `cli` (`ccd:11151`), `_ws_unsupervise`'s `ccd` (`ccd:663`) — must never
+   *  `cli` (`ccd:11474`), `_ws_unsupervise`'s `ccd` (`ccd:689`) — must never
    *  reach this field. Seam spelling: `decSurface`. */
   readonly surface: DecSurface;
   /** `--actor`, free text, or null. Attribution, not authentication. */
@@ -5152,15 +6147,15 @@ export interface LifecycleDec {
    *  truncating it, because a 900-byte
    *  reason recorded as 512 reads as the operator's own words. Written
    *  verbatim, PARSED NOWHERE — `cmd_ws_hold`'s standing rule for the same
-   *  kind of value (`ccd:3585`). It is free text off the wire, so it must
+   *  kind of value (`ccd:3757`). It is free text off the wire, so it must
    *  never reach an arithmetic context, an array subscript, an `eval` or an
-   *  unquoted expansion: `ccd:9937-9941` is the paid lesson.
+   *  unquoted expansion: `ccd:11633-11637` is the paid lesson.
    *
    *  THE CAP IS NOT UNIFORM ACROSS EVERY WRITER OF THIS FIELD (final review,
    *  F3, disclosed rather than fixed here): `cmd_ws_hold` journals its own
    *  mandatory hold reason into this SAME field UNCAPPED — bound at
-   *  `ccd:3635`, blank-checked at `ccd:3657`, but never passed through
-   *  `_lc_dec_ok` before it lands at `ccd:3696`. A hold therefore accepts and
+   *  `ccd:4737`, blank-checked at `ccd:4759`, but never passed through
+   *  `_lc_dec_ok` before it lands at `ccd:4798`. A hold therefore accepts and
    *  records a reason that `ws-release` would refuse verbatim as `--reason`.
    *  Unifying the two (capping the hold reason, or truncating instead of
    *  refusing) is a verb-contract change on a LIVE verb and is explicitly
@@ -5253,8 +6248,8 @@ export const LIFECYCLE_DEC_KEYS: readonly (keyof LifecycleDec)[] =
  * inverted, see there) was pinned specifically to stop either being re-added
  * "on the brief's say-so" without the wire evidence to back it. Wave 3
  * supplied that evidence: `cmd_ws_rm`'s attic pin now emits `meas.atticsrc`
- * (`ccd:2983`) and `cmd_ws_restore`'s supersede now emits
- * `meas.manifestBytes` (`ccd:4493`), so the union returns to the plan's
+ * (`ccd:3887`) and `cmd_ws_restore`'s supersede now emits
+ * `meas.manifestBytes` (`ccd:5699`), so the union returns to the plan's
  * original 25.
  *
  * `home`, `pool`, `reason` — ADDED, account pools wave 2b (Task 6 fix round
@@ -5286,20 +6281,20 @@ export interface LifecycleMeas {
   /** Where the attic pin's tip came from — `worktree` (read live off
    *  `$workdir`'s HEAD), `registry` (the worktree was already gone; read off
    *  the registry's own `branch` field instead), or `none` (neither had one
-   *  to pin). `cmd_ws_rm`'s attic pin (`ccd:2983`); the local starts `none`
-   *  and only ever moves to `worktree` or `registry` (`ccd:2952,2954,2965`). */
+   *  to pin). `cmd_ws_rm`'s attic pin (`ccd:3887`); the local starts `none`
+   *  and only ever moves to `worktree` or `registry` (`ccd:3856,2954,2965`). */
   readonly atticsrc: 'worktree' | 'registry' | 'none' | null;
   /** Epoch SECONDS as `_reg_set "$id" archived "$(date +%s)"` wrote it
-   *  (`ccd:4000`) — the registry's own unit, carried unconverted so the record
+   *  (`ccd:5206`) — the registry's own unit, carried unconverted so the record
    *  is what the file said. */
   readonly archivedAt: number | null;
-  /** `merged:#N | empty | manual` as `ccd:4001` wrote it, or null when the row
+  /** `merged:#N | empty | manual` as `ccd:4967` wrote it, or null when the row
    *  carries no reason. Not proven present by any guard — absent is a
    *  legitimate state. */
   readonly archivedReason: string | null;
   /** The byte total of the `.archivemanifest` file `ws-restore` is about to
    *  remove, read fresh with `stat` right before the removal (`cmd_ws_restore`
-   *  R4-2 supersede, `ccd:4493`) — null when `stat` could not measure it
+   *  R4-2 supersede, `ccd:5699`) — null when `stat` could not measure it
    *  (missing or unreadable), never a fabricated 0. Nothing in ccd reads the
    *  manifest back; this byte count is the one thing preserved of it. */
   readonly manifestBytes: number | null;
@@ -5311,15 +6306,15 @@ export interface LifecycleMeas {
   /** The base branch a new workspace was created from (`cmd_ws_create`). */
   readonly base: string | null;
   /** The name a rename REPLACED — `branch` carries what it became
-   *  (`cmd_ws_rename`, `ccd:3291`). */
+   *  (`cmd_ws_rename`, `ccd:4195`). */
   readonly old: string | null;
-  /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:9867`).
+  /** The prompt's exit status on a re-spawn (`cmd_ensure`, `ccd:11240`).
    *  Carried unconverted, like `archivedAt`. */
   readonly rc: number | null;
   /** The start mode `cmd_start` resolved before spawning. */
   readonly mode: string | null;
   /** `${CCD_IN_UNIT:-0}` — whether `cmd_ensure` ran inside the supervising
-   *  unit or as an outside request for one (`ccd:10339`). */
+   *  unit or as an outside request for one (`ccd:12035`). */
   readonly inUnit: number | null;
   /** The account a `swap` OR a `rehome` moved AWAY from — two acts share this
    *  field, and their destinations ride different keys. A `swap`'s
@@ -5534,18 +6529,23 @@ export interface MirroredLifecycleEvent extends LifecycleEvent {
  * no stdout and no exit contract — so it contributes no token to that scan. An
  * entry there for a journal-only token would red the stale-copy direction, and
  * the only fixes would be deleting copy or weakening an approved mechanism
- * (`ccd:2121-2128` records that argument being had once already).
+ * (`ccd:3025-3032` records that argument being had once already).
  * `wsaudit.test.ts` must stay green WITH NO EDIT; that is itself an assertion
  * of this program. The shared rungs — `held`, `dirty-tree`, `no-such-session`,
  * `foreign-worktree`, `tree-unreadable`, `nested-checkouts-present`,
  * `in-progress` and the rest of the 54 — keep their single home over there.
  *
- * THE CONTRACT WAVE 3 HONOURS, AND WHAT ENFORCES IT: every token wave 3 hands
- * `_lc_refuse` / `_lc_fail` is a member of this union OR already a SENTENCES
- * key, and wave 3's own cross-language scan over `ccd/ccd` asserts it in both
- * directions with a coverage floor. It cannot live here — it would be red
- * until wave 3 lands. Adding a tenth token is a two-line edit;
- * `Record<LcRefusalToken, string>` makes forgetting its word a TS2739.
+ * THE CONTRACT THE LIFECYCLE JOURNAL HONOURS, AND WHAT ENFORCES IT: every token
+ * handed to `_lc_refuse` / `_lc_fail` is a member of this union OR already a
+ * SENTENCES key. The cross-language scan over `ccd/ccd` asserts that every
+ * literal token in its three journal-refusal argument positions is known and
+ * that every member of this journal-only union appears in one of those literal
+ * positions, with a coverage floor; `wsaudit.test.ts` separately holds the
+ * SENTENCES vocabulary set-equal to its stdout producers. A new union member may
+ * not precede its literal `ccd` emission in the tested tree, and adding one is a
+ * coordinated edit to that emission, this union, `LC_REFUSAL_WORD`, and the
+ * exhaustive test inventory. `Record<LcRefusalToken, string>` makes forgetting
+ * its word a TS2739.
  */
 export type LcRefusalToken =
   | 'scratch-unwritable'       // ws-rm could not make the scratch file it reads $workdir with
@@ -5655,11 +6655,11 @@ export function lcRefusalWord(token: string): string | null {
  * ------------------------------------------------------------------------ */
 
 /** `$REG/.lifecycle/`. A DOT-PREFIXED DIRECTORY, and that is the whole
- *  feature: `_reg_purge`'s suffix filter (`ccd:527-536`) globs `$REG/<id>.*`
+ *  feature: `_reg_purge`'s suffix filter (`ccd:553-562`) globs `$REG/<id>.*`
  *  and ids never begin with a dot, so no id's purge glob matches it — and
  *  `rm -f` cannot take a directory regardless. Precedent already load-bearing:
  *  `$REG/.reaped/` has survived since Aug 6 with zero deleters in 9,815 lines.
- *  ccd's `$REG` inventory comment (`ccd:1536`) today says SEVEN dot-prefixed
+ *  ccd's `$REG` inventory comment (`ccd:2420`) today says SEVEN dot-prefixed
  *  artifacts live there; wave 2 amends it to EIGHT — not nine, because
  *  `.rotate.lock` and the generations live INSIDE `.lifecycle/` and are
  *  counted with it exactly as `.reaped/`'s contents are. An inventory a future
@@ -5682,7 +6682,7 @@ export const LC_ERRORS_NAME = 'errors';
 
 /** `_lc_rotate`'s lock. NEVER UNLINKED, not even as cleanup — "unlinking a
  *  lock file while another process holds it is exactly how two processes come
- *  to hold the lock on two different inodes" (`ccd:1094-1095`), and all four
+ *  to hold the lock on two different inodes" (`ccd:1746-1747`), and all four
  *  of ccd's existing lock paths already follow that rule. */
 export const LC_ROTATE_LOCK_NAME = '.rotate.lock';
 
@@ -6090,3 +7090,99 @@ export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
  *  Policy is REFUSE, never truncate: a trimmed title is a different sentence
  *  in the durable record. */
 export const LEDGER_TITLE_MAX_BYTES = 200;
+
+/** How far above the screen the drawer's history read starts. Stated ONCE,
+ *  here, and echoed back to the client in the response — the PWA never names a
+ *  number of its own, so there is nothing for the two sides to disagree about.
+ *  2000 is tmux's DEFAULT `history-limit`; `ccd/tmux.conf` sets none, so that
+ *  default is what the fleet runs. Asking for more is not an error — tmux
+ *  returns what it has.
+ *
+ *  IT IS A CEILING NOTHING HAS REACHED, and raising it is deliberately not
+ *  this program's move (spec §6.4). Census of 2026-09-14, 31 live panes on this
+ *  box: `history_size` min 0 / median 0 / p90 5 / max 11, with 25 of the 31 at
+ *  zero, every pane at `history-limit 2000`. What ends a pane's history is the
+ *  program inside it — Claude Code emits `ESC[3J` on repaint, which resets
+ *  `history_size` to 0 (measured, 452 -> 0). A raise would cost tmux memory and
+ *  a whole-server stall on every reflow (F10: ~linear in reflowed lines, 455 ms
+ *  narrow / 1230 ms widen at 19951) for a case the census says does not occur.
+ *  The lever, if a later census disagrees, is one `set -g history-limit N` line
+ *  in `ccd/tmux.conf` — read at tmux server start (F2), reaching no pane that
+ *  already exists. */
+export const PANE_HISTORY_LINES = 2000;
+
+/**
+ * ONE MEASUREMENT OF A PANE, and its failures told apart.
+ *
+ * Read with a single `list-panes -t cc-<id> -F '#{pane_active} #{history_size}
+ * #{history_limit} #{pane_width} #{pane_height} #{alternate_on}'` — all six are
+ * per-pane formats (F8) under a verb the agent already grants, so this opens no
+ * new door in the exec surface.
+ *
+ * FOUR ARMS, NOT A NULL. `list-panes -t <session>` lists EVERY pane of the
+ * current window and the ACTIVE one is the pane `capture-pane -t <session>`
+ * reads (F7) — PR #96 took row `[0]` and mismatched on a split window, where
+ * pane 0 held 278 lines of history and pane 1 was the 24-row active one. So
+ * "tmux answered, but no row said it was active" is a real and separate
+ * condition from "tmux refused" and from "the session is gone", and a caller
+ * that shows a different sentence for each must never receive one value for
+ * all three (CLAUDE.md, no overloaded null; `io.ts`'s `readFileMeasured` is the
+ * pattern).
+ *
+ * `alternate` is CONTEXT, neither a permit nor a refusal (spec §7.2): while the
+ * alternate screen is up a resize does not reflow, but the reflow is only
+ * DEFERRED to alt-exit and lands then, at a size that is exactly what the
+ * numbers at attach predict — nothing scrolls into history while a full-screen
+ * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
+ *
+ * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
+ * reader — one reader per field is the wire rule.
+ */
+export type PaneProbe =
+  | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'unreadable'; detail: string }
+  | { ok: false; reason: 'unparseable'; detail: string };
+
+/**
+ * What `GET /api/sessions/:id/pane/history` answers.
+ *
+ * ADDITIVE AND ABSENCE-PERMITTING. `scrollback`, `alternate` and `width` are
+ * present exactly when the pane probe was `ok` and absent exactly when it was
+ * not — and absent is NOT zero. A `scrollback` of 0 is a MEASURED zero ("there
+ * is nothing above this screen"); an absent one is "we could not look", and a
+ * reader that finds it absent must behave exactly as it did before the field
+ * existed. Nothing here bumps `FLEET_PROTO`.
+ *
+ * `error` keeps `unmeasured` as the single wire token for every could-not-look
+ * condition, and `detail` beside it is the CAPTURE's own message — tmux's
+ * stderr, by way of `CaptureHistory`, whose reasons are only `gone` and
+ * `unmeasured`.
+ *
+ * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
+ * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
+ * narrow a distinction it received, but nothing here carries that pair: the
+ * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
+ * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * this reply's status, and a probe that failed while the capture succeeded is a
+ * 200 with the three measured fields simply absent. Absent is the whole of what
+ * the client is told, and it is enough: the drawer's behaviour on a failed probe
+ * is uniform by design.
+ *
+ * An earlier version of this docstring said the opposite — that `unreadable` vs
+ * `unparseable` "rides in `detail`, which is what the drawer renders". It never
+ * did, and could not: `detail` exists only on the `ok:false` arm, which only the
+ * capture produces. The sentence came from spec §5.3 by way of the plan, which
+ * then overrode it in its own must-not-re-decide note; the contradiction landed
+ * here. (Its deviation number is recorded in the commit that corrected this
+ * paragraph, and not inline: this wave's plan is not a file in this tree, so a
+ * D-ref here would name a number no plan HERE defines. That reds
+ * `deviation-refs.test.ts`'s floor-seed assertion — the one comparing
+ * `floorFromScan` over the tracked tree against the high-water DEFINED in this
+ * tree's plans — and not an orphan-ref scan, which that suite does not have.) If a
+ * later wave does want the probe's reason on the wire, that is a deliberate
+ * widening of this type — not something to infer from this paragraph.
+ */
+export type PaneHistoryReply =
+  | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
+  | { ok: false; error: 'gone' | 'unmeasured' | 'bad-session-id'; detail?: string };

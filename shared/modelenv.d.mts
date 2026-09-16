@@ -22,6 +22,14 @@ export type ModelEnv = {
   ANTHROPIC_DEFAULT_FABLE_MODEL: string;
   ANTHROPIC_MODEL: string;
   ANTHROPIC_SMALL_FAST_MODEL: string;
+  // The class ALIAS `registry.subagent` names — ALIAS ONLY, `haiku` or
+  // `sonnet`, measured 2026-09-09 on Claude Code 2.1.267 (SUBAGENT_CLASSES,
+  // shared/models.mjs). The other two classes are refused at WRITE
+  // (`deploy/models-op.mjs`'s `set-subagent`) and at RENDER (this module's
+  // `modelEnvBlock`, which is what produces a `ModelEnv` value at all) — NOT
+  // at read: a registry already on disk naming either, from before this
+  // narrowing, still parses (fix round 2A, N1), it just cannot reach this
+  // type.
   CLAUDE_CODE_SUBAGENT_MODEL: string;
   // §6.1, amended 2026-09-08: present only when `catalogue` is non-null, not
   // stale, and names ANTHROPIC_MODEL's resolved model with a POSITIVE

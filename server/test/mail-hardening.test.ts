@@ -502,7 +502,7 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
 
     // THE ANTI-VACUITY FLOOR. Two call sites at f7421733 (`rundefs.ts`'s
     // `queueSystemMail` and `routes.ts`'s mail-send route); Task 61 added the
-    // third (`store.ts`'s `requeueAbandonedCoordinatorMail`) and RAISED this
+    // third (`store.ts`'s `requeueAbandonedMail`) and RAISED this
     // rather than breaking it, exactly as this comment said it would. Without
     // the floor a scan that found nothing — a renamed method, a broken walk, an
     // over-eager comment strip — passes silently, which is the failure this wave
@@ -516,7 +516,7 @@ describe('every delivery-row writer names a shared terminality guard (wave 8)', 
     // `CALL` requiring a receiver, not as the strip's proof.
     //
     // THIS WAS `toEqual([])` AND HAD TO CHANGE (D-1425). Task 61 gave `store.ts`
-    // its first genuine IN-FILE caller — `requeueAbandonedCoordinatorMail` calls
+    // its first genuine IN-FILE caller — `requeueAbandonedMail` calls
     // `this.setDeliveryEnvelope(…)` to stamp the second delivery it queues — so
     // an empty-set assertion now reds on a REAL call site, which is the opposite
     // of the defect it was written to catch. What it protected is kept exactly,

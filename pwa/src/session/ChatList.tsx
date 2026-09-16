@@ -8,12 +8,13 @@
 import { useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
-import type { ChatEvent, MailEnvelope } from '../../../shared/api';
-import { parseFetchedMailEnvelope, parseMailEnvelope } from '../../../shared/api';
+import type { ChatEvent, MailEnvelope, TaskNotification } from '../../../shared/api';
+import { parseFetchedMailEnvelope, parseMailEnvelope, parseTaskNotification } from '../../../shared/api';
 import { api, ApiError, apiErrorText, clipUrl, submitErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
+import { TaskCard } from './TaskCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
@@ -39,6 +40,16 @@ export type ChatItem =
    *  question about it, so the item carries the answer rather than discarding
    *  it. */
   | { kind: 'mail'; key: string; envelope: MailEnvelope; event: MessageEvent | ToolResultEvent }
+  /** The harness's report of a finished background task. DERIVED at render
+   *  time from a `system` event already in the store, exactly as `mail` is —
+   *  nothing is minted into `s.events`, so the revival discipline needs no new
+   *  clause and a reconnect re-derives the same card from the same bytes.
+   *
+   *  A `ChatItem` kind, NOT a `ChatEvent` kind: the ban in `shared/api.ts` is
+   *  on the latter, because an unknown `ChatEvent` kind reaches an older PWA
+   *  over the wire and renders as a broken bubble. This type is local to the
+   *  render and crosses nothing. */
+  | { kind: 'task'; key: string; notification: TaskNotification; event: MessageEvent }
   | { kind: 'pending'; key: string; send: PendingSend }
   | { kind: 'working'; key: 'working' };
 
@@ -126,6 +137,17 @@ export function buildChatItems(
       toolByToolId.set(e.toolId, tool);
       items.push(tool);
     } else {
+      if (e.kind === 'system') {
+        // The harness's own background-task report. `parse.ts` has already
+        // ruled it is not the operator speaking; this reads what it SAYS, and
+        // a refusal falls through to the ordinary system row below — spec
+        // §2.4's degradation, never a half-populated card.
+        const task = parseTaskNotification(e.text);
+        if (task.ok) {
+          items.push({ kind: 'task', key: e.uuid, notification: task.notification, event: e });
+          continue;
+        }
+      }
       if (e.kind === 'user') {
         // Only when the WHOLE turn is one fenced ccrc-mail block —
         // `parseMailEnvelope` enforces that itself, so this file holds no
@@ -397,6 +419,8 @@ function ChatItemView({
       );
     case 'mail':
       return <MailCard envelope={item.envelope} />;
+    case 'task':
+      return <TaskCard notification={item.notification} />;
     case 'pending':
       return <PendingBubble id={id} send={item.send} onRetry={onRetry} onDiscard={onDiscard} />;
     case 'working':

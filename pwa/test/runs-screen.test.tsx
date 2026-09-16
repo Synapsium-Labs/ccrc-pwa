@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { RUN_ORDER, RUN_WORD, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runItems } from '../src/fleet/runWords';
+import { CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -28,9 +28,10 @@ afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 // absent and every row keeps its top-level position.
 const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
-  wave: 3, waveOf: 4, project: 'ccrc-pwa',
+  wave: 3, waveOf: 4, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
@@ -48,7 +49,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/clear-cove', ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
 });
 
 const makeStore = (): FleetStore => createFleetStore({
@@ -70,6 +71,19 @@ describe('the run vocabulary tracks RUN_STATES, not a hand-copied list', () => {
     // `Record<RunState,…>` typing (a compile error to miss a member);
     // RUN_ORDER is a bare array and gets no such check from the type system.
     expect([...RUN_ORDER].sort()).toEqual([...RUN_STATES].sort());
+  });
+});
+
+describe('runForSession — the current wave during a boundary overlap (D-2616)', () => {
+  it('chooses the newest matching run, not the outgoing wave returned by find()', () => {
+    const outgoing = r({ id: 41, wave: 1, sessionId: 'shared-worker' });
+    const incoming = r({ id: 44, wave: 2, sessionId: 'shared-worker', state: 'planned' });
+
+    expect(runForSession([outgoing, incoming], 'shared-worker')).toBe(incoming);
+  });
+
+  it('returns null when no active row names the session', () => {
+    expect(runForSession([r({ sessionId: 'someone-else' })], 'shared-worker')).toBeNull();
   });
 });
 
@@ -1008,7 +1022,7 @@ describe('the run row renders its session’s spawn verdict (Task 5)', () => {
     //    whose premise is "stop saying that" must not propagate it to a second
     //    surface.
     // 2. On THIS surface the word cannot even be true the way it is on the
-    //    fleet screen. `cmd_ws_add` writes the claim (`_reg_claim`, ccd:2708)
+    //    fleet screen. `cmd_ws_add` writes the claim (`_reg_claim`, ccd:3612)
     //    BEFORE the settle it then blocks in, and a run learns its `sessionId`
     //    only from the registry diff AFTER `ws-add` returns
     //    (`dispatch.ts`, the fresh-spawn arm) — so at the first instant a run
@@ -1338,5 +1352,158 @@ describe('the run board worker row carries the graph chip', () => {
     // `graph` and a text query would MISS the very chip this test forbids.
     const chip = container.querySelector('.sess-graph');
     expect(chip, `a numberless chip rendered: ${chip?.outerHTML}`).toBeNull();
+  });
+});
+
+// ── cross-repo wave 2: which repo is this run in, and whose programme is it? ──
+//
+// TWO facts, never one. `run.project` is where the WORK is happening and is
+// true of every row; `homeProject` is where the PROGRAMME lives, and the pair
+// differing is the only thing that makes a row a crossing. The badge is
+// unconditional (a board that names the repo only sometimes teaches the reader
+// nothing); the marker is conditional and its condition is a MEASUREMENT, which
+// is why `runHomeProject` exists rather than a `??` at the call site.
+describe('runHomeProject — the one tolerant reader of an additive wire field', () => {
+  it('answers the home when the server sent one', () => {
+    expect(runHomeProject(r({ homeProject: 'home-repo' }))).toBe('home-repo');
+  });
+
+  it('answers null for the legacy generation, where the column is genuinely NULL', () => {
+    expect(runHomeProject(r({ homeProject: null }))).toBeNull();
+  });
+
+  it('answers null for a row from a server that never heard of the field', () => {
+    // The case the static type cannot express and the wire produces anyway:
+    // `api.runs()` is a bare cast and the `{type:'runs'}` frame is validated at
+    // the ARRAY level only, so an older server's row reaches this renderer with
+    // the key missing. A raw `run.homeProject !== null` reads `undefined !==
+    // null` as TRUE and paints a crossing marker naming `undefined`.
+    // `Partial<RunSummary>` rather than an intersection: `homeProject` is
+    // REQUIRED on the wire type, and `delete` on a required property does not
+    // compile — which is itself the point. The runtime shape this models is one
+    // TypeScript says cannot exist and the network produces anyway.
+    const older: Partial<RunSummary> = { ...r() };
+    delete older.homeProject;
+    expect(runHomeProject(older)).toBeNull();
+  });
+
+  it('answers null for an empty string — a home nobody can navigate to is not a home', () => {
+    expect(runHomeProject(r({ homeProject: '' }))).toBeNull();
+  });
+});
+
+describe('crossingNote — a crossing is a measured difference, never an absence', () => {
+  it('is a note when the home differs from the run’s own project', () => {
+    const note = crossingNote(r({ project: 'other-repo', homeProject: 'home-repo' }));
+    expect(note).not.toBeNull();
+    expect(note!.home).toBe('home-repo');
+    expect(note!.glyph).toBe(CROSSING_GLYPH);
+    expect(note!.word).toBe('crossing');
+    expect(note!.title).toContain('other-repo');
+    expect(note!.title).toContain('home-repo');
+  });
+
+  it('is null when the home is the run’s own project — measured sameness', () => {
+    expect(crossingNote(r({ project: 'home-repo', homeProject: 'home-repo' }))).toBeNull();
+  });
+
+  it('is null while the home is unknown — absence permits (spec §3 F4)', () => {
+    expect(crossingNote(r({ project: 'other-repo', homeProject: null }))).toBeNull();
+  });
+});
+
+describe('waveLabel — one spelling of `wave N/M`', () => {
+  it('spells both shapes', () => {
+    expect(waveLabel({ wave: 2, waveOf: 5 })).toBe('wave 2/5');
+    expect(waveLabel({ wave: 2, waveOf: null })).toBe('wave 2');
+  });
+
+  it('is what the group header renders — the header no longer spells it inline', () => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r()], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+    expect(screen.getByText(waveLabel({ wave: 3, waveOf: 4 }))).toBeInTheDocument();
+  });
+});
+
+describe('the run row names its repo', () => {
+  const board = (run: RunSummary): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [run], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  };
+
+  it('badges EVERY row with the run’s own project', () => {
+    board(r({ project: 'other-repo', homeProject: 'home-repo' }));
+    expect(document.querySelector('.run-project')?.textContent).toBe('other-repo');
+  });
+
+  it('badges a row that is not a crossing too — the badge is not the marker', () => {
+    board(r({ project: 'home-repo', homeProject: 'home-repo' }));
+    expect(document.querySelector('.run-project')?.textContent).toBe('home-repo');
+    expect(document.querySelector('.run-crossing')).toBeNull();
+  });
+
+  it('marks a crossing with BOTH cues and names the home in the title', () => {
+    board(r({ project: 'other-repo', homeProject: 'home-repo' }));
+    const marker = document.querySelector('.run-crossing');
+    expect(marker).not.toBeNull();
+    expect(marker!.querySelector('.run-crossing-glyph')?.textContent).toBe(CROSSING_GLYPH);
+    // Every DOM assertion above compares the rendered glyph to the imported
+    // CONSTANT, so a mutation of the constant itself (e.g. to `''`) moves
+    // both sides together and stays green — the plan's Global Constraint
+    // ("two cues on every state: a glyph AND a word, never colour alone")
+    // would then be one cue in practice while every assertion still passed.
+    // Pin the literal, not just self-consistency with it.
+    expect(CROSSING_GLYPH).toBe('⇄');
+    expect(marker!.textContent).toContain('crossing');
+    expect(marker!.getAttribute('title')).toContain('home-repo');
+    // The glyph is decoration for the word, never the carrier of the fact.
+    expect(marker!.querySelector('.run-crossing-glyph')?.getAttribute('aria-hidden')).toBe('true');
+  });
+
+  it('stays silent while homeProject is null — the legacy generation renders as it always did', () => {
+    board(r({ project: 'other-repo', homeProject: null }));
+    expect(document.querySelector('.run-project')?.textContent).toBe('other-repo');
+    expect(document.querySelector('.run-crossing')).toBeNull();
+  });
+});
+
+describe('runKindChip — the one tolerant reader of RunSummary.kind (design 2026-09-14 §8)', () => {
+  it('is silent on a work run, and on a row from a server that has never heard of kind', () => {
+    expect(runKindChip(r({ kind: 'work', reviews: null }))).toBeNull();
+    const older = { ...r() } as Partial<RunSummary>; delete older.kind; delete older.reviews;
+    expect(runKindChip(older)).toBeNull();
+  });
+  it('names the reviewed run on a review row, with a glyph and a word', () => {
+    expect(runKindChip(r({ kind: 'review', reviews: 47 })))
+      .toEqual({ glyph: REVIEW_GLYPH, word: 'reviews #47', title: 'a review run: reads run #47 at one measured tip and reports; the coordinator rules' });
+  });
+  it('still marks a review row whose reviews column could not be read as a review', () => {
+    expect(runKindChip(r({ kind: 'review', reviews: null }))!.word).toBe('review');
+  });
+  it('says unknown for a kind this build cannot name — never a blank cell', () => {
+    expect(runKindChip(r({ kind: 'unknown', reviews: null }))!.word).toBe('unknown kind');
+  });
+});
+
+describe('the run board marks review runs (design 2026-09-14 §8)', () => {
+  const board = (over: Partial<RunSummary>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  };
+  it('renders no kind chip on a work row', () => {
+    board({ kind: 'work', reviews: null });
+    expect(document.querySelector('.run-kind')).toBeNull();
+  });
+  it('renders the chip with BOTH cues on a review row and names the reviewed run', () => {
+    board({ kind: 'review', reviews: 47 });
+    const chip = document.querySelector('.run-kind');
+    expect(chip).not.toBeNull();
+    expect(chip!.querySelector('.run-kind-glyph')?.textContent).toBe(REVIEW_GLYPH);
+    expect(chip!.querySelector('.run-kind-glyph')?.getAttribute('aria-hidden')).toBe('true');
+    expect(chip!.textContent).toContain('reviews #47');
+    expect(chip!.getAttribute('title')).toContain('coordinator rules');
   });
 });

@@ -23,7 +23,7 @@ gh() {
   local rc=0; [[ -f "$HOME/gh-rc" ]] && rc=$(cat "$HOME/gh-rc")
   return "$rc"
 };
-timeout() { printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
+timeout() { case "$1" in -*) return 125 ;; esac; printf 'timeout %s\\n' "$*" >> "$HOME/gh-calls"; shift; "$@"; };
 `;
 
 export interface PrHarness extends CcdHarness {
@@ -73,7 +73,7 @@ export function makePrHarness(prefix: string): PrHarness {
   };
 }
 
-/** `_cfg_dir` (ccd:8993-9002) as a lookup. Which wrapper `_ws_least_loaded`
+/** `_cfg_dir` (ccd:10366-10375) as a lookup. Which wrapper `_ws_least_loaded`
  *  happened to pick is what decides where Claude Code keeps that session's
  *  transcript, so every assertion about a transcript path reads the registry's
  *  `wrapper` field and comes through here — hardcoding `.claude` is right for

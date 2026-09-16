@@ -10,7 +10,29 @@
 
 **Spec:** docs/superpowers/specs/2026-09-04-account-pools-design.md
 
-**Base:** origin/main 2b15144e; branch ws/amber-summit
+**Base:** origin/main `db580771` (#67, the C1 carry); branch `ws/clear-meadow`.
+Written against `2b15144e` on `ws/amber-summit` — both were re-pointed at execution, and the branch
+matters as much as the sha: `ws/amber-summit` is the COORDINATOR's workspace, and a worker committing
+there would leave its own branch tip unmoved and wedge every close with `stale-tip`.
+
+> **EVERY `:NNN` IN THIS PLAN IS A SNAPSHOT OF A 2026-09-04 TREE. NAVIGATE BY SYMBOL.**
+> Re-measured file by file at execution, against `db580771`:
+>
+> | file | drift | verdict |
+> |---|---|---|
+> | `shared/api.ts` | **+13 to +134**, growing with position in the file | every citation stale; grep the symbol |
+> | `server/src/ccdargv.ts` | 0 early, **+35** at `POOLS_CAP` (its own docstring grew) | mixed; grep |
+> | `server/src/fleet.ts` | **+8** (its one citation) | stale |
+> | `server/src/server.ts` | **+1**, and **+2** at the roster emission | near-exact; still verify |
+> | `registry.ts`, `io.ts`, `remote/io.ts`, `limits.ts`, `lifecycle.ts`, `fleetstate.ts`, `coord/mirrorplan.ts`, `pwa/src/lib/api.ts`, `watch.ts`, `auth/gate.ts`, `auth-gate.test.ts` | **0** | EXACT — do not "correct" these |
+>
+> No cited symbol is missing on `db580771`, and no anchor is ambiguous once the surrounding prose is
+> read — the numbers are wrong, the names are not. Two anchors whose bare form recurs tree-wide and
+> must be taken WITH their file: `const read = async (io = localIO) =>` (twice in `registry.test.ts`,
+> :1007 and :1142) and `const collect = (ws: WebSocket` (`fleetws.test.ts:53` and `sessionws.test.ts:62`).
+> Per the coordinator's ruling 3 the forty numbers are NOT patched — a patched number goes stale
+> again on the next merge, and correcting one implies the other hundred were audited. Locate by
+> symbol; where a step below cites a line this pass actually touched, it is corrected in place.
 
 ## Global Constraints
 
@@ -18,7 +40,7 @@
 - No account name, account label, pool name, host name or IP that belongs to any real fleet appears in any source file, test or document. Fixture names only: pools `pool-a`, `pool-b`; projects `demo`, `quiet-basin`, `acct-a-demo`; accounts `claude`, `claude-a`, `claude-b` (label `team·b`), `gpt`, `claude-d` (`server/test/helpers.ts:60`, `DEFAULT_TEST_ROSTER`).
 - Wire discipline is ADDITIVE-ONLY: `FLEET_PROTO` stays 1 and `FLEET_PROTO_MIN` stays 1 (`shared/api.ts:2876-2877`). A new frame type, a new optional field and a new required-with-`| null` field are all additive; a bump is not.
 - No overloaded null at a seam: two conditions a caller handles differently must not collapse to one value. `unreadable` is never folded into `untagged`; `absent` is never folded into `unlistable`.
-- Every change under `ccd/` is AGENT-FIRST at deploy time. **This wave touches no file under `ccd/`** — it consumes what waves 2a/2b shipped there — so it carries no deploy step of its own.
+- Every change under `ccd/` is AGENT-FIRST at deploy time. The planned implementation consumes what waves 2a/2b shipped and changes no `ccd/` behavior, but #81's merged-tree review corrected authoritative history in `ccd/ccd`; any eventual deployment is therefore AGENT-FIRST. D-2000 is the operator/coordinator convention that still forbids deploying this wave; no mechanism in `deploy/` or `server/src/` enforces that hold.
 - `EXEC_COMMANDS` stays `['tmux','ccd']`. No `gh` grant, ever. The server writes nothing on the fleet box.
 - L0 (`shared/*.ts`) imports nothing, not even `node:*` — the PWA bundles those files.
 - Mutation-table discipline: every guard ships WITH a test measured RED before and GREEN after. Each test step below names the exact mutation and the exact expected red.
@@ -40,12 +62,12 @@
 - From wave 1 — `shared/roster.ts`: `POOL_NAME_RE` (`/^[a-z][a-z0-9-]{0,31}$/`), `AccountDef.pool: string | null` (required on the type, `null` = untagged), `'pool'` in `ACCOUNT_KEYS`. `shared/api.ts`: `PoolsEnforcement`, `ProjectPoolWire`, `ProjectPoolsWire`, `RosterWire.pool` (and its emission at `server/src/server.ts:1186`, which wave 1 must have landed or `tsc` is already red). `shared/poolrule.ts`: `poolRule(accountPool: string | null, projectPool: ProjectPoolWire): PoolVerdict` and the `PoolVerdict` union. `server/test/fixtures/poolRule.ts`: `PoolRuleCase`, `POOL_RULE_CASES`, `POOLED_TEST_ROSTER`.
 - From wave 2a — `server/src/pools.ts` existing with ONLY `export const POOLS_DIR_NAME = 'pools';` (this wave fills the module), `CCD_ARGV.projectPoolSet` / `CCD_ARGV.projectPoolClear`, `export const POOLS_CAP = 'pools-v1'` beside `ACTOR_FLAGS_CAP` (`server/src/ccdargv.ts:346`), the `project-pool` verb in `ccd caps`, and the agent grant `['project-pool','--project']`.
 - From wave 2a (the OTHER half of that wave, in `ccd/ccd`) — `_project_pool_state`, `_pool_ok`, `_acct_pool`, `POOLS_DIR`, and `_ws_least_loaded [project]` (optional positional; zero-arg unchanged). **Task 4 is a BUILD dependency on these**: it drives the bash side of `server/test/fixtures/leastLoaded.ts` through the real `ccd`, and is red without them.
-- From wave 2b — `_strand_mark`/`_strand_clear` and `$REG/<id>.stranded` on the fleet box. A RUNTIME dependency only: Task 3 reads that file's shape and seeds it by hand in fixtures, so this wave builds and passes without wave 2b — but the field stays permanently null on a real fleet until 2b ships.
+- From wave 2b — `_strand_mark`/`_strand_clear` and `$REG/<id>.stranded` on the fleet box. A RUNTIME dependency only: Task 3 reads that file's shape and seeds it by hand in fixtures, so this wave could build and pass before wave 2b; now that wave 2b is live, a real strand marker populates the field.
 
 **This wave PRODUCES (later waves rely on these exact names):**
 
 - `server/src/poolrule.ts` (L1): `RosterVerdict`, `poolVerdict(roster, wrapper, pool)`, `poolEligible(roster, pool)`, `poolUndecidable(pool)`, `poolRostered(roster, name)`; re-export of `ProjectPlacement`.
-- `server/src/pools.ts` (L3): `ProjectPoolsRead`, `readProjectPools(io, cfg, rootNames)`, `poolFor(read, project)`, `poolsEnforcement(ccdVerbs)`, `poolsWire(read, enforcement)`.
+- `server/src/pools.ts` (L3): `ProjectPoolsRead`, `ProjectPoolsWithRoot`, `readProjectPools(io, cfg, root, budgetMs)`, `readProjectPoolsWithRoot(io, cfg, readRoot, budgetMs, needsPools?)`, `poolFor(read, project)`, `poolsEnforcement(ccdVerbs)`, `poolsWire(read, enforcement)`. The finite budget is consumer-owned: the watcher passes half its cadence and HTTP routes pass the server's ten-second request budget. Route root reads start through callbacks only after the aggregate deadline exists; session creation reuses the returned root answer for its revival decision and skips pool marker I/O for a proven revival or declared crossing.
 - `server/src/limits.ts`: `projectHome(roster, limits, pool)` (third argument REQUIRED), `projectPlacement(roster, limits, pool)`.
 - `server/src/registry.ts`: `SessionRecord.stranded`, `STRANDED_NO_REASON`, `STRANDED_UNREADABLE`.
 - `shared/api.ts`: `ProjectPlacement`, `FleetSession.stranded`, `reviveStranded`, `ProjectRow.pool?`, `ProjectRow.placement?`, `FleetMsg | { type: 'pools'; pools: ProjectPoolsWire }`, `FleetHealth.projectPools?`.
@@ -55,6 +77,7 @@
 
 ---
 
+### Task 1 — DONE 2026-09-08 (5/5 mutations red)
 ### Task 1: `server/src/poolrule.ts` — the server's L1 mirror of the rule
 
 **Files:**
@@ -414,6 +437,7 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 
 ---
 
+### Task 2 — DONE 2026-09-08 (6/6 plan mutations red; row 20a 4 red + 1 documented no-op, D-2017)
 ### Task 2: `server/src/pools.ts` — the measured reader, four states in, four states out
 
 **Files:**
@@ -427,9 +451,20 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
   export type ProjectPoolsRead =
     | { listed: false }
     | { listed: true; tags: Map<string, ProjectPoolWire> };
+  export type ProjectPoolsWithRoot =
+    | { rootNames: readonly string[] | null; poolsRead: false }
+    | { rootNames: readonly string[] | null; poolsRead: true; pools: ProjectPoolsRead };
   export async function readProjectPools(
-    io: FleetIO, cfg: CcrcConfig, rootNames: readonly string[] | null,
+    io: FleetIO, cfg: CcrcConfig,
+    root: readonly string[] | null | ((timeoutMs: number, signal: AbortSignal) => Promise<readonly string[] | null>),
+    budgetMs: number,
   ): Promise<ProjectPoolsRead>;
+  export async function readProjectPoolsWithRoot(
+    io: FleetIO, cfg: CcrcConfig,
+    readRoot: (timeoutMs: number, signal: AbortSignal) => Promise<readonly string[] | null>,
+    budgetMs: number,
+    needsPools?: (rootNames: readonly string[] | null) => boolean,
+  ): Promise<ProjectPoolsWithRoot>;
   export function poolFor(read: ProjectPoolsRead, project: string): ProjectPoolWire;
   export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnforcement;
   export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement): ProjectPoolsWire;
@@ -439,8 +474,9 @@ git commit -m "feat(pools): the server mirrors the rule in L1 and never re-deriv
 
 **Mutation table:**
 - Row 20 — `project-pools-read.test.ts`. Goes RED when the `rootNames.includes(POOLS_DIR_NAME)` gate is deleted (absent directory would answer `unreadable` instead of `untagged`), when the null-`readdir` arm returns an empty map instead of `{listed:false}` (unlistable would answer `untagged` — the tag silently lifted), when the dot-leading skip is removed, or when a mid-read `absent` is treated as anything but a skip.
+- Row 20a (coordinator ruling 1) — `project-pools-read.test.ts`'s `a tag padded to 64 bytes is malformed, and 63 still strips to a name`. Goes RED three separate ways, which is why it is one case and not three: DELETE the cap entirely and the 64-byte tag strips back to `pool-a` (`tagged`, disagreeing with `ccd`); WEAKEN it to `> 64` and the same case answers `tagged` while the 65-byte input a looser test would have used still passes (D-2010 — the mutant a `> 64`-shaped test cannot see); MOVE it below the strip and the padding is gone before it is measured, so the length check reads 6. The 63-byte half is the anti-mutant: a cap written `>= 63`, or one applied to the STRIPPED value, takes that arm to `malformed` and reds too. **The `\0` arm is NOT pinned and cannot be** — measured, and recorded as D-2017 rather than dressed up: delete `.includes('\0')` and all 14 cases stay green, because `POOL_NAME_RE` is anchored and its class excludes `\0`, so every NUL-bearing content is already `malformed` by the grammar. Four mutations measured red for this row (delete the cap, `> 64`, `>= 63`, cap below the strip); the fifth is a documented no-op with a void condition, not a row.
 
-**LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:96`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
+**LEDGER:** `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling (`:105`, `string[] | null`), so this reader resolves the absent/unlistable collapse OUT OF BAND, using the registry root listing the caller already holds. One residual is accepted and disclosed rather than closed: a regular file (or an EACCES directory) at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` — the correct polarity (nobody decides, nothing crosses) but a fleet-wide one, and the only shape of `pools/` trouble that cannot be attributed to a single project (D-1680 — plan-time, no spec label).
 
 - [ ] **Step 1: Write the failing test**
 
@@ -448,8 +484,9 @@ Create `server/test/project-pools-read.test.ts`:
 
 ```ts
 // Spec §5.4.4. `io.readdir` answers `string[] | null` and folds "the directory
-// is not there" into "the directory would not list" (`io.ts:96` — the one read
-// with no measured sibling). This reader splits them ONE LEVEL UP, off the
+// is not there" into "the directory would not list" (the `FleetIO.readdir`
+// member in `server/src/io.ts` is the one read with no measured sibling). This
+// reader splits them ONE LEVEL UP, off the
 // registry root listing the caller already took, the same trick `readLimits`
 // plays for `-disabled` markers. Getting that split wrong in the permissive
 // direction silently LIFTS every project's pool constraint, which is the whole
@@ -490,7 +527,7 @@ const tag = (project: string, bytes: string): void => {
 
 describe('readProjectPools — absent, unlistable and the four per-entry states', () => {
   it('a null ROOT listing is listed:false — the registry itself could not be read', async () => {
-    const read = await readProjectPools(localIO, cfg(), null);
+    const read = await readProjectPools(localIO, cfg(), null, 1_000);
     expect(read).toEqual({ listed: false });
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
@@ -498,7 +535,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
   it('a root listing WITHOUT pools/ is a MEASURED absence — every project untagged', async () => {
     // Ruling 3: nothing strands on rollout. Nobody has tagged anything, and
     // that is a positive answer, not a failure to look.
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read).toEqual({ listed: true, tags: new Map() });
     expect(poolFor(read, 'demo')).toEqual({ state: 'untagged' });
   });
@@ -506,33 +543,75 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
   it('pools/ present at the root but unlistable is listed:false — never a fleet of untagged projects', async () => {
     // A REGULAR FILE planted where the directory belongs: `localIO.readdir`
     // answers null for it, exactly as it does for EACCES and exactly as
-    // `remote/io.ts` answers for a whitelist refusal (`remote/io.ts:104-112`).
+    // `remote/io.ts` answers for a whitelist refusal (`server/src/remote/io.ts:104`).
     // The permissive reading — an empty map — would lift every tag on the box.
     writeFileSync(pools, 'not a directory');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read).toEqual({ listed: false });
     expect(poolFor(read, 'demo')).toEqual({ state: 'unreadable' });
   });
 
   it('reads a tag, strips a trailing newline, and refuses a leading space', async () => {
     // `printf '%s'` is the verb's writer, `echo` is the 2am writer (ruling 2),
-    // so trailing whitespace is stripped — TRAILING ONLY, byte for byte with
-    // `_project_pool_state`'s `v=${v%"${v##*[![:space:]]}"}`. A leading space
-    // is malformed on both sides or the two readers disagree.
+    // so trailing whitespace is stripped — TRAILING ONLY. A leading space is
+    // malformed on both sides or the two readers disagree.
+    //
+    // AGREEMENT IS DECIDED ONE LINE EARLIER THAN THIS COMMENT USED TO SAY.
+    // It read "byte for byte with `_project_pool_state`'s
+    // `v=${v%"${v##*[![:space:]]}"}`", and that quote is still VERBATIM
+    // correct — what stopped being true is its SUFFICIENCY. Wave 2a inserted a
+    // 64-byte read cap ABOVE the strip (`grep -n "read -r -d '' -n 64" ccd/ccd`,
+    // D-1850), and the strip cannot see it: a valid name padded with 58+ bytes
+    // of trailing whitespace is `malformed` to `ccd` and would strip back to a
+    // clean tag here. The cap is mirrored below, and the padded case is one of
+    // the cases in this describe.
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b\n');
     tag('acct-a-demo', ' pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
     expect(poolFor(read, 'acct-a-demo')).toEqual({ state: 'malformed' });
+  });
+
+  it('a tag padded to 64 bytes is malformed, and 63 still strips to a name', async () => {
+    // RULING 1's case, and the one that decides the CAP rather than the strip.
+    // `ccd`'s `IFS= read -r -d '' -n 64` succeeds AT 64 characters, so 64 is
+    // already `malformed` there (measured: 63 -> rc 1, 64 -> rc 0). The pair
+    // below is deliberately one byte apart, because a cap written `> 64`
+    // passes the 64 case, strips it, and answers `tagged` — agreeing with
+    // `ccd` on 65 and disagreeing on exactly the boundary (D-2010).
+    tag('demo', 'pool-a' + ' '.repeat(58));        // 6 + 58 = 64
+    tag('quiet-basin', 'pool-b' + ' '.repeat(57)); // 6 + 57 = 63
+    // THE NUL, AND WHAT THIS ASSERTION DOES NOT MEASURE — said here because a
+    // green expectation that cannot fail is worse than no expectation at all,
+    // and this one cannot. `ccd` needs the NUL arm: `read -d ''` STOPS at the
+    // delimiter, so `pool-a\0junk` would otherwise yield the valid prefix
+    // `pool-a` and place on a pool the file does not name. The SERVER cannot
+    // reach that state — it holds the whole string — and `POOL_NAME_RE`
+    // (`/^[a-z][a-z0-9-]{0,31}$/`, anchored, and its class excludes `\0`) already
+    // answers `malformed` for every NUL-bearing content. `\s` does not include
+    // `\0` either, so the strip cannot remove one. MEASURED: delete
+    // `.includes('\0')` from the mirror and this whole file stays green.
+    // The arm is kept because ruling 1 requires it and because it states the
+    // parity at the site, but it is a DOCUMENTED NO-OP, not a pinned guard —
+    // the same treatment C1's M19 got rather than a case written to look red.
+    // VOID (i.e. it becomes load-bearing, and this comment becomes wrong) if
+    // `POOL_NAME_RE` ever admits a NUL, or if the cap is ever applied to the
+    // STRIPPED value, or if this reader ever stops holding the whole string.
+    tag('acct-a-demo', 'pool-a\0pool-b');
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
+    expect(poolFor(read, 'demo')).toEqual({ state: 'malformed' });
+    expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
+    expect(poolFor(read, 'acct-a-demo'),
+      'malformed — but by the name grammar, not by the cap: see above').toEqual({ state: 'malformed' });
   });
 
   it('two tokens, uppercase and an empty file are all malformed — never untagged', async () => {
     tag('demo', 'pool a');
     tag('quiet-basin', 'Pool-A');
     tag('acct-a-demo', '');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     for (const p of ['demo', 'quiet-basin', 'acct-a-demo']) {
       expect(poolFor(read, p), p).toEqual({ state: 'malformed' });
     }
@@ -542,7 +621,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     tag('demo', 'pool-a');
     tag('quiet-basin', 'pool-b');
     const io = degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/quiet-basin`));
-    const read = await readProjectPools(io, cfg(), await rootNames());
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'demo')).toEqual({ state: 'tagged', name: 'pool-a' });
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'unreadable' });
   });
@@ -552,7 +631,7 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // which is exactly what `readFileMeasured` exists to be able to say.
     tag('demo', 'pool-a');
     const io = absentReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/demo`));
-    const read = await readProjectPools(io, cfg(), await rootNames());
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect(read.listed && read.tags.has('demo')).toBe(false);
     expect(poolFor(read, 'demo')).toEqual({ state: 'untagged' });
   });
@@ -563,13 +642,13 @@ describe('readProjectPools — absent, unlistable and the four per-entry states'
     // skip is exact.
     tag('demo', 'pool-a');
     tag('.demo.4242.tmp', 'pool-b');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(read.listed && [...read.tags.keys()]).toEqual(['demo']);
   });
 
   it('poolFor answers untagged for a project with no entry, on a listed read', async () => {
     tag('demo', 'pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'untagged' });
   });
 });
@@ -580,7 +659,7 @@ describe('L3 may not narrow — four states in, four states out', () => {
     tag('quiet-basin', 'Pool A');     // malformed
     tag('acct-a-demo', 'pool-b');     // -> made unreadable below
     const io = degradedReadIO((p) => p.endsWith(`${POOLS_DIR_NAME}/acct-a-demo`));
-    const read = await readProjectPools(io, cfg(), await rootNames());
+    const read = await readProjectPools(io, cfg(), await rootNames(), 1_000);
     expect([
       poolFor(read, 'demo').state,
       poolFor(read, 'quiet-basin').state,
@@ -608,7 +687,7 @@ describe('poolsEnforcement — the three-state shape lifecycleState uses', () =>
 describe('poolsWire', () => {
   it('carries the map as a plain object when listed, and the enforcement either way', async () => {
     tag('demo', 'pool-a');
-    const read = await readProjectPools(localIO, cfg(), await rootNames());
+    const read = await readProjectPools(localIO, cfg(), await rootNames(), 1_000);
     expect(poolsWire(read, 'enforced')).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'enforced',
     });
@@ -624,25 +703,86 @@ Expected: FAIL — `SyntaxError: The requested module '../src/pools.js' does not
 
 - [ ] **Step 3: Write minimal implementation**
 
-Replace the body of `server/src/pools.ts`, keeping wave 2a's `POOLS_DIR_NAME` declaration exactly as it is and adding below it:
+Use `server/src/pools.ts`'s current as-built implementation. The consumer-owned finite budget supersedes the original module-private one-second draft:
 
 ```ts
 import path from 'node:path';
+import { performance } from 'node:perf_hooks';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import { CCD_ARGV } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
 
-// (wave 2a's `export const POOLS_DIR_NAME = 'pools';` stays exactly where it is)
+/**
+ * L3 — the server's view of the fleet box's project pool tags.
+ *
+ * Wave 2a first shipped `POOLS_DIR_NAME` so `pool-name-parity.test.ts` could
+ * compare `ccd/ccd`'s `POOLS_DIR=` against a TypeScript spelling before any
+ * server reader existed. Wave 3 completes that seam in this module:
+ * `readProjectPools`, `poolFor`, `poolsEnforcement` and `poolsWire` now carry
+ * the measured tags into watcher and route decisions. The staged history
+ * matters because waiting for the reader would have left the fleet's Bash
+ * constant unpinned during wave 2a — the state `ccd/ccrc-wrapper-shape:67`
+ * already has to disclose for another constant.
+ */
+export const POOLS_DIR_NAME = 'pools';
+
+/** Do not launch a marker burst that has too little time to produce evidence. */
+const MARKER_LAUNCH_FLOOR_MS = 50;
+
+interface PoolReadDeadline {
+  budgetMs: number;
+  signal: AbortSignal;
+  expired(): boolean;
+  remaining(): number;
+  race<T>(operation: Promise<T>): Promise<T | null>;
+  close(): void;
+}
+
+/** One monotonic, aborting aggregate deadline for the complete pool read. */
+function openPoolReadDeadline(budgetMs: number): PoolReadDeadline | null {
+  const budget = Number.isFinite(budgetMs) ? Math.max(0, budgetMs) : 0;
+  if (budget === 0) return null;
+
+  const deadlineAt = performance.now() + budget;
+  const controller = new AbortController();
+  let deadlineExpired = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<null>((resolve) => {
+    timer = setTimeout(() => {
+      deadlineExpired = true;
+      controller.abort();
+      resolve(null);
+    }, budget);
+    timer.unref?.();
+  });
+
+  return {
+    budgetMs: budget,
+    signal: controller.signal,
+    expired: () => deadlineExpired,
+    remaining: () => {
+      const elapsedBudget = Math.floor(deadlineAt - performance.now());
+      return Number.isFinite(elapsedBudget) ? Math.max(0, elapsedBudget) : 0;
+    },
+    race: async <T>(operation: Promise<T>): Promise<T | null> =>
+      Promise.race([operation.catch(() => null), deadline]),
+    close: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      controller.abort();
+    },
+  };
+}
 
 /**
  * One sweep of `$REG/pools/`, ring L3 (spec §5.4.4).
  *
- * `listed: false` is the `io.readdir` COLLAPSE itself and nothing else: the
- * registry root would not list, or `pools` is at the root but would not list
- * (a regular file planted there, an EACCES, a remote `forbidden`). It is NOT
- * "there are no tags" — that is `listed: true` with an empty map, and the
+ * `listed: false` means the marker population could not be established: the
+ * registry root would not list, `pools` is at the root but would not list (a
+ * regular file planted there, an EACCES, a remote `forbidden`), or the caller's
+ * budget expired before that listing arrived. It is NOT "there are no tags" —
+ * that is `listed: true` with an empty map, and the
  * difference is the whole reason this type exists. `poolFor` reads the first
  * as `unreadable` (nobody decides) and the second as `untagged`
  * (unconstrained); folding them would silently LIFT every constraint on the
@@ -651,6 +791,18 @@ import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../
 export type ProjectPoolsRead =
   | { listed: false }
   | { listed: true; tags: Map<string, ProjectPoolWire> };
+
+/** A route-owned root measurement and its optional pool view. */
+export type ProjectPoolsWithRoot =
+  | { rootNames: readonly string[] | null; poolsRead: false }
+  | { rootNames: readonly string[] | null; poolsRead: true; pools: ProjectPoolsRead };
+
+type RootReader = (
+  timeoutMs: number,
+  signal: AbortSignal,
+) => Promise<readonly string[] | null>;
+
+type RootSource = readonly string[] | null | RootReader;
 
 /**
  * The verb whose PRESENCE in `ccd caps` is the evidence that the deployed ccd
@@ -667,49 +819,167 @@ const PROJECT_POOL_VERB: string = CCD_ARGV.projectPoolClear('')[0] ?? '';
 /**
  * Read every project's pool tag in one pass.
  *
- * `rootNames` is the registry root listing the CALLER already took — the
- * watcher's `registryRead.names` (`watch.ts:702`'s own source), or the route's
- * own `io.readdir(cfg.registryDir)`. It is a PARAMETER rather than a read of
- * our own because it is what splits "the directory is not there" from "the
- * directory would not list": `io.readdir` cannot say (`io.ts:96` — the one
- * read in that file with no measured sibling), and the parent listing can.
+ * `root` is either the registry root listing the CALLER already took — the
+ * watcher's `registryRead.names` — or a callback that starts a route's listing
+ * only after the aggregate deadline exists. `readProjectPoolsWithRoot` is the
+ * variant for a route that also consumes that root answer.
+ * The parent listing is what splits "the directory is not there" from "the
+ * directory would not list": the `FleetIO.readdir` member in `server/src/io.ts`
+ * cannot say (it is the one read with no measured sibling), and the parent can.
  *
- * Cost: ZERO extra root readdirs for a caller that has a listing, then one
- * `pools/` readdir and one measured read per tagged project.
+ * `budgetMs` belongs to that caller too: a watcher supplies a slice of its poll
+ * cadence and request routes supply their request-oriented budget. One shared
+ * deadline covers a promised root listing, the pools listing and all concurrent
+ * marker reads, and its remaining time is also forwarded to remote FleetIO. The
+ * aggregate race is still necessary because local or test FleetIO implementations
+ * may ignore the forwarded timeout. An AbortSignal reaches local
+ * `readFileMeasured` operations and removes losing remote requests from the client
+ * table. The derived local `readFile` has no cancellation parameter, and the
+ * local `readdir` adapter ignores both timeout and signal — the Node API used
+ * there accepts neither — so only the aggregate race strictly
+ * bounds when its caller receives a decision. Node cannot interrupt every local
+ * filesystem syscall after dispatch (a FIFO blocked in open is the known example),
+ * so cancellation is best-effort beneath that strict result deadline.
+ *
+ * Cost: ZERO extra root readdirs for a caller that has a listing; a route starts
+ * exactly one root readdir here, then one `pools/` readdir and concurrent measured
+ * reads for the listed projects.
  */
-export async function readProjectPools(
-  io: FleetIO, cfg: CcrcConfig, rootNames: readonly string[] | null,
+async function readProjectPoolsWithinDeadline(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  rootNames: readonly string[] | null,
+  deadline: PoolReadDeadline,
 ): Promise<ProjectPoolsRead> {
-  if (rootNames === null) return { listed: false };
+  const rootRemainingMs = deadline.remaining();
+  if (rootNames === null || rootRemainingMs === 0) return { listed: false };
   if (!rootNames.includes(POOLS_DIR_NAME)) return { listed: true, tags: new Map() };
+
   const dir = path.join(cfg.registryDir, POOLS_DIR_NAME);
-  const names = await io.readdir(dir);
-  if (names === null) return { listed: false };
+  const names = await deadline.race(io.readdir(dir, rootRemainingMs, deadline.signal));
+  const remainingMs = deadline.remaining();
+  if (names === null || remainingMs === 0) return { listed: false };
+  const projectNames = names.filter((name) => !name.startsWith('.'));
+
+  // A listing that consumed nearly all the budget proves which markers
+  // existed, but leaves no useful time for a burst of file reads. Preserve
+  // that population as unreadable without launching already-doomed requests
+  // (D-2482, D-2488).
+  const reads = remainingMs < MARKER_LAUNCH_FLOOR_MS
+    ? projectNames.map((name) => ({ name, read: null }))
+    : await Promise.all(projectNames.map(async (name) => ({
+        name,
+        read: await deadline.race(
+          io.readFileMeasured(path.join(dir, name), remainingMs, deadline.signal),
+        ),
+      })));
+  // Re-measure the monotonic deadline after the whole burst too. A blocked event
+  // loop can delay the timer callback until after late marker promises settle;
+  // callback order must not extend elapsed-time policy (D-2488).
+  const markersExpired = deadline.remaining() === 0;
   const tags = new Map<string, ProjectPoolWire>();
-  for (const name of names) {
-    // Dot-leading is ccd's private namespace and the disclosed tmp-leak shape
-    // (`$REG/pools/.<p>.$BASHPID.tmp`). Exact, since no project may lead with
-    // a dot (`_ws_project_valid`).
-    if (name.startsWith('.')) continue;
-    const read = await io.readFileMeasured(path.join(dir, name));
-    if (!read.ok) {
+  for (const { name, read: completedRead } of reads) {
+    // If the shared deadline fired or elapsed while its callback was delayed,
+    // publish one coherent degraded snapshot. Which individual request happened
+    // to settle first is transport timing, not a stable pool fact (D-2482).
+    const read = deadline.expired() || markersExpired ? null : completedRead;
+    if (read === null || !read.ok) {
       // A PROVEN ENOENT is a proven untag — the `--clear` (or the `rm`) that
       // landed between the listing and this read. Anything else is the file
       // being there and this box not being able to read it, which is a state
       // of its own and must never read as absence (D-114's rule).
-      if (read.reason === 'absent') continue;
+      if (read !== null && read.reason === 'absent') continue;
       tags.set(name, { state: 'unreadable' });
       continue;
     }
-    // TRAILING whitespace only, byte for byte with `_project_pool_state`'s
-    // `v=${v%"${v##*[![:space:]]}"}`: `echo pool-a > …` is a legal writer
-    // (ruling 2), a leading space is not, and the two readers must agree.
+    // THE CAP COMES FIRST, exactly as it does on the other side, and the
+    // COMPARISON IS `>=`, NOT `>` (D-2010 — this line said `> 64` for one
+    // commit). `ccd` reads the tag with `IFS= read -r -d '' -n 64`
+    // (`grep -n "read -r -d '' -n 64" ccd/ccd`) and answers `malformed` when
+    // that read SUCCEEDS. `read -n 64` succeeds when it gets its 64 characters
+    // OR meets the NUL; it fails only at EOF before either. So a 64-byte file
+    // is ALREADY malformed there — measured, not reasoned: 63 bytes rc 1,
+    // 64 bytes rc 0, 65 bytes rc 0. `> 64` would pass a 64-byte tag straight
+    // to the strip and answer `tagged` for the one input the cap exists to
+    // catch. `ccd`'s own comment names the same boundary from the other end:
+    // "a tag padded with 58+ characters of trailing whitespace", and
+    // `pool-a` + 58 spaces is exactly 64.
+    //
+    // BYTES vs UTF-16 UNITS, said once so nobody re-derives it: `.length`
+    // counts UTF-16 code units and `read -n` counts characters in the shell's
+    // locale, so the two agree only for ASCII. That is sufficient here because
+    // anything non-ASCII fails `POOL_NAME_RE` below and is `malformed` on both
+    // sides regardless of which side's cap it trips — the boundary only ever
+    // decides an all-ASCII input, where the three units coincide.
+    if (read.content.length >= 64 || read.content.includes('\0')) {
+      tags.set(name, { state: 'malformed' });
+      continue;
+    }
+    // TRAILING whitespace only: `echo pool-a > …` is a legal writer (ruling 2),
+    // a leading space is not. The quote this comment used to carry —
+    // `v=${v%"${v##*[![:space:]]}"}` — is still verbatim at `ccd`'s strip, but
+    // it is no longer the whole rule (D-1850); the cap above is the rest of it.
     const value = read.content.replace(/\s+$/, '');
     tags.set(name, POOL_NAME_RE.test(value)
       ? { state: 'tagged', name: value }
       : { state: 'malformed' });
   }
   return { listed: true, tags };
+}
+
+export async function readProjectPools(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  root: RootSource,
+  budgetMs: number,
+): Promise<ProjectPoolsRead> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  // No production caller supplies an unusable value; this prevents future
+  // direct callers from launching I/O without a meaningful bound.
+  if (deadline === null) return { listed: false };
+
+  try {
+    const rootNames = typeof root === 'function'
+      ? await deadline.race(root(deadline.budgetMs, deadline.signal))
+      : root;
+    return await readProjectPoolsWithinDeadline(io, cfg, rootNames, deadline);
+  } finally {
+    deadline.close();
+  }
+}
+
+/**
+ * Route variant for a caller that also needs the parent listing itself.
+ * The root and pool answers share one deadline and one root measurement;
+ * `needsPools` may skip remaining work for any verdict that does not consume pool
+ * evidence, including a proven revival or a declared crossing.
+ */
+export async function readProjectPoolsWithRoot(
+  io: FleetIO,
+  cfg: CcrcConfig,
+  readRoot: RootReader,
+  budgetMs: number,
+  needsPools: (rootNames: readonly string[] | null) => boolean = () => true,
+): Promise<ProjectPoolsWithRoot> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  if (deadline === null) return { rootNames: null, poolsRead: false };
+
+  try {
+    const completedRoot = await deadline.race(readRoot(deadline.budgetMs, deadline.signal));
+    // A delayed timer callback must not let a late root answer prove revival.
+    // Normalize it to the same unmeasurable value as an ordinary timeout before
+    // either consumer sees it.
+    const rootNames = deadline.remaining() === 0 ? null : completedRoot;
+    return needsPools(rootNames)
+      ? {
+          rootNames,
+          poolsRead: true,
+          pools: await readProjectPoolsWithinDeadline(io, cfg, rootNames, deadline),
+        }
+      : { rootNames, poolsRead: false };
+  } finally {
+    deadline.close();
+  }
 }
 
 /** One project's answer. `unreadable` for a collapsed listing: nobody
@@ -740,6 +1010,8 @@ export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement)
 }
 ```
 
+> **AS-BUILT OVERRIDE (D-2478, D-2482, D-2484–D-2488):** the implementation excerpt above is synchronized to `server/src/pools.ts`. The current reader takes a required finite `budgetMs: number`; the watcher passes half its cadence and all five HTTP consumers pass the server-owned ten-second request budget. Route callers pass a root-reader callback so the deadline exists before the first I/O; session creation uses `readProjectPoolsWithRoot` to share that bounded root answer with its revival check and skip marker reads for a proven revival. One monotonic aggregate deadline races the root listing, pools listing and concurrent marker reads; its non-negative remainder and AbortSignal are forwarded to the adapter, and fewer than 50 ms remaining declines the whole marker burst. Expiry makes the entire listed population `unreadable`, including any tagged or proven-absent marker that completed before another marker exhausted the shared deadline; this coherent degradation deliberately discards transport-order evidence. The returned decision is strictly bounded, while cancellation beneath it is best-effort: remote pending entries and signalled local measured file reads are cancelled, but derived local `readFile`, local `readdir`, or a kernel-blocked FIFO/stale-mount syscall can outlive the decision and repeated requests can multiply it. The timer is cleared and supported losing work is aborted in `finally`. `server/src/pools.ts` and `server/test/project-pools-read.test.ts` are the executable authority. Local `readFileMeasured` forwards the signal; local `readdir` cannot honor either optional argument, so only the aggregate race bounds its returned decision. Session creation skips marker work for both a proven revival and a declared crossing, whose authoritative check stays on the fleet box.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/project-pools-read.test.ts`
@@ -769,6 +1041,7 @@ git commit -m "feat(pools): the server reads the project tags off the listing it
 
 ---
 
+### Task 3 — DONE 2026-09-08 (5/5 mutations red)
 ### Task 3: `stranded` — fail-shut on the registry, additive on the wire
 
 **Files:**
@@ -814,10 +1087,9 @@ Append to `server/test/registry.test.ts`, inside the same describe that holds th
     });
   });
 
-  it('gives a strand with no reason a sentence, never an empty display string', async () => {
-    // The same ruling as SWAP_BLOCKED_NO_REASON and for the same reason: the
-    // reason string IS the display on the fleet card, and `reason: ''` renders
-    // as a cell visible enough to alarm and empty enough to ignore.
+  it('gives a strand with no reason a sentence, never empty wire text', async () => {
+    // The same ruling as SWAP_BLOCKED_NO_REASON: preserve an actionable reason
+    // for wave 4's renderer instead of carrying `reason: ''` through the wire.
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000' });
     expect((await read()).stranded).toEqual({ at: 1785299000, reason: STRANDED_NO_REASON });
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000    ' });
@@ -826,8 +1098,8 @@ Append to `server/test/registry.test.ts`, inside the same describe that holds th
 
   it('a LISTED but unreadable strand marker fails SHUT — never null', async () => {
     // "Not stranded" over a flagged row is the destructive direction (spec
-    // §5.8.3): the cell is the loud one, and a misread that blanks it teaches
-    // the operator that the fleet is fine while a session waits on nobody.
+    // §5.8.3): a misread must not make the wire assert that the fleet is fine
+    // while a session waits on nobody.
     seed(reg, 'demo-quiet-basin', { stranded: '1785299000 nowhere' });
     const r = await read(unreadableField('demo-quiet-basin', 'stranded'));
     expect(r.stranded).toEqual({ at: 0, reason: STRANDED_UNREADABLE });
@@ -893,9 +1165,9 @@ Append to `server/test/fleetstate.test.ts`, inside the same describe as the revi
   });
 
   it('rejects a malformed stranded rather than laundering it into null', async () => {
-    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote
-    // and it IS the display, so there is no vocabulary to degrade onto — and
-    // null would read "no strand recorded" over a row a supervisor flagged.
+    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote,
+    // so there is no vocabulary to degrade onto — and null would read "no
+    // strand recorded" over a row a supervisor flagged.
     const cachePath = path.join(tmpDir(), 'state-cache.json');
     for (const bad of [
       { stranded: 'nowhere' },
@@ -915,8 +1187,8 @@ Append to `server/test/fleet-lifecycle.test.ts`, beside its `swapBlocked` cases 
   it('carries the strand marker onto the wire in epoch MS, with its reason verbatim', async () => {
     // Seconds on disk (registry-native, the `swapblocked` shape), MS on the
     // wire — the conversion happens at THIS seam only, like `stoppedBy` and
-    // `swapBlocked` beside it. The reason is `_strand_why`'s sentence and it IS
-    // the display, so it rides untouched.
+    // `swapBlocked` beside it. Preserve `_strand_why`'s sentence untouched for
+    // wave 4's renderer.
     const s = await one({ stranded: `${NOW_SEC - 300} claude:pool=pool-b claude-a:limit` }, false);
     expect(s.stranded).toEqual({
       at: (NOW_SEC - 300) * 1000, reason: 'claude:pool=pool-b claude-a:limit',
@@ -931,7 +1203,7 @@ Append to `server/test/fleet-lifecycle.test.ts`, beside its `swapBlocked` cases 
 
   it('a LISTED but unreadable strand marker reaches the wire at 0 with the sentence, never as null', async () => {
     // The fail-shut arm, end to end: `at: 0` is the "listed but unreadable"
-    // degrade and renderers show the text without fabricating a 1970 stamp.
+    // wire contract; a future renderer must not fabricate a 1970 stamp.
     const { cfg, tmux } = fixture({ stranded: `${NOW_SEC - 300} nowhere` }, false);
     const blind = degradedReadIO((p) => p.endsWith(`${ID}.stranded`));
     const fleet = await assembleFleet(blind, cfg, tmux, NOW_SEC);
@@ -979,8 +1251,8 @@ Add the two constants immediately after `SWAP_BLOCKED_NO_REASON` (`:308`):
  * nothing after it. Same ruling as `SWAP_BLOCKED_NO_REASON`: `_strand_mark`
  * always writes a reason (`_strand_why` synthesizes one), so the only ways in
  * are the residual empty-field routes `BranchEvidence`'s `'empty'` rung sets
- * out — and a strand cell with nothing in its tooltip is visible enough to
- * alarm and empty enough to ignore.
+ * out. Carry a sentence instead of empty text so the wire preserves an
+ * actionable reason for wave 4's renderer.
  */
 export const STRANDED_NO_REASON = '<strand recorded no reason>';
 
@@ -988,8 +1260,8 @@ export const STRANDED_NO_REASON = '<strand recorded no reason>';
  * The reason a strand carries when the marker is LISTED in the registry
  * directory but its bytes could not be read. `SUBSTRATE_UNREADABLE`'s ruling
  * applied to ruling 6's marker: presence comes from the LISTING, never from a
- * non-null read, because "no strand recorded" is what every surface renders as
- * a healthy fleet.
+ * non-null read, because collapsing an unreadable marker to null would make the
+ * wire assert "no strand recorded" over a supervisor-flagged row.
  */
 export const STRANDED_UNREADABLE = '<strand marker unreadable>';
 ```
@@ -1039,13 +1311,13 @@ In the returned literal, immediately after the `swapBlocked` entry (`:753-755`):
    *  `$REG/<id>.stranded`, written by `_strand_mark` when the pane is
    *  hard-blocked and no account in the project's pool can take it (spec §5.8,
    *  ruling 6). Epoch MS (converted from the registry's seconds in `fleet.ts`,
-   *  like `swapBlocked`) and the reason VERBATIM — the reason is the display on
-   *  every surface, never parsed. Null when no strand stands.
+   *  like `swapBlocked`) and the reason carried VERBATIM through REST/WebSocket
+   *  for wave 4's renderer, never parsed. Null when no strand stands.
    *
    *  AN AXIS, NOT A STATE, on `substrate`'s terms: a new FIELD beside
    *  `status`/`bucket`/`lifecycle`, never a member of any of them. `at: 0` is
-   *  the "marker listed but unreadable" degrade from the registry read;
-   *  renderers show the text without fabricating a 1970 timestamp.
+   *  the "marker listed but unreadable" degrade from the registry read; a
+   *  renderer must show the text without fabricating a 1970 timestamp.
    *
    *  `reviveFleetSession` below: absent → null (an older snapshot predates the
    *  axis), present-but-malformed → reject the WHOLE session — the
@@ -1058,9 +1330,9 @@ In the returned literal, immediately after the `swapBlocked` entry (`:753-755`):
 Add the reviver immediately after `reviveSubstrate` (`:1888`):
 
 ```ts
-/** `reviveSwapBlocked`'s contract exactly, for the same reason: the reason is
- *  free prose the supervisor wrote and it IS the display, so a malformed value
- *  has no vocabulary to degrade onto. Absent → null (an older snapshot
+/** `reviveSwapBlocked`'s contract exactly: the reason is free prose the
+ *  supervisor wrote, so a malformed value has no vocabulary to degrade onto.
+ *  Absent → null (an older snapshot
  *  predates the axis); present-but-malformed rejects the session. */
 const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | null => {
   const v = o[k];
@@ -1146,6 +1418,7 @@ git commit -m "feat(pools): a strand is a fail-shut axis on the row, never a bla
 
 ---
 
+### Task 4 — DONE 2026-09-08 (3/3 mutations red)
 ### Task 4: `projectHome` takes the pool, `projectPlacement` forecasts per project, and one fixture drives both languages
 
 **Files:**
@@ -1282,7 +1555,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // The tag reaches the TS side through the real reader, not a literal —
       // so this case exercises `readProjectPools` against the same bytes ccd's
       // `_project_pool_state` is about to read.
-      const read = await readProjectPools(localIO, cfg, await localIO.readdir(cfg.registryDir));
+      const read = await readProjectPools(localIO, cfg, await localIO.readdir(cfg.registryDir), 1_000);
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);
@@ -1310,8 +1583,13 @@ Add a `projectPlacement` describe at the end of the file:
 ```ts
 describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
   const L = (five: number | null, seven: number | null): AccountLimits =>
+    // `authDead` joined `AccountLimits` in #66, AFTER this plan's block was
+    // written — a required member, so the plan's literal no longer typechecks.
+    // `false` is the right value here: this describe is about the POOL
+    // dimension and a condemned lane would change which account wins for a
+    // reason that has nothing to do with it.
     ({ five, seven, ts: 1, fiveResetAt: null, sevenResetAt: null,
-       fiveRolledOver: false, sevenRolledOver: false, disabled: false });
+       fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
 
   it('forecasts the in-pool account for a tagged project', () => {
     const cfg = loadConfig({ CCRC_HOME: home });
@@ -1447,6 +1725,7 @@ git commit -m "feat(pools): the forecast takes the project's pool, and one fixtu
 
 ---
 
+### Task 5 — DONE 2026-09-08 (3/3 mutations red)
 ### Task 5: `GET /api/projects` composes `pool` and `placement`; `listProjects` stays pool-free
 
 **Files:**
@@ -1456,6 +1735,7 @@ git commit -m "feat(pools): the forecast takes the project's pool, and one fixtu
 
 **Interfaces:**
 - Consumes: `readProjectPools`, `poolFor` (Task 2); `projectPlacement` (Task 4); `readLimits` (`limits.ts:110`); `listProjects` (`lifecycle.ts:126`); `ProjectPlacement`, `ProjectPoolWire` (Task 1).
+- Produces in `server/src/server.ts`: `const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;` — one finite aggregate policy shared by all five HTTP consumers; watcher policy remains cadence-derived in Task 7.
 - Produces:
   ```ts
   export interface ProjectRow {
@@ -1473,7 +1753,7 @@ git commit -m "feat(pools): the forecast takes the project's pool, and one fixtu
 - Row 21 — `lifecycle.test.ts`'s new pair plus its existing `listProjects itself still returns rows with NO readiness key` case, widened. Goes RED when the composition is moved into `listProjects` (the fleet read would grow a policy read) or dropped from either arm of the route.
 - Row 48 — `projects-route-placement.test.ts`. Goes RED when `unmeasurable` is collapsed into `none`, when the global `projected` is given a project, or when `pool`/`placement` are composed on only one of the route's two arms.
 
-**Cost, stated:** this route now takes one `io.readdir(cfg.registryDir)` of its own, plus `readProjectPools` (one `pools/` readdir and one read per tagged project) and one `readLimits` (one `.cc-limits` readdir, one registry readdir, one read per account). It is a screen-open read, not a 2-second tick — the tick's own pool read (Task 7) rides `registryRead.names` and costs no extra root readdir at all.
+**Cost, stated:** this route starts one registry-root readdir through `readProjectPools`, after its ten-second aggregate timer exists, plus one `pools/` readdir and one read per listed marker; `readLimits` adds one `.cc-limits` readdir, one registry readdir and one read per account. It is a screen-open read, not a 2-second tick — the tick's own pool read (Task 7) rides `registryRead.names` and costs no extra root readdir at all.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -1696,7 +1976,14 @@ export interface ProjectRow {
 }
 ```
 
-`server/src/server.ts` — rewrite the `/api/projects` handler body (`:1667-1691`), keeping every existing comment above it:
+`server/src/server.ts` — first declare the HTTP-owned policy once near the other server constants:
+
+```ts
+/** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
+const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
+```
+
+Then rewrite the `/api/projects` handler body (`:1667-1691`), keeping every existing comment above it:
 
 ```ts
   app.get('/api/projects', async () => {
@@ -1707,8 +1994,12 @@ export interface ProjectRow {
     // `readiness` already draws. One root readdir feeds `readProjectPools`,
     // which needs the PARENT listing to tell an absent `pools/` from an
     // unlistable one (`pools.ts`, spec §5.4.4).
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
     const limits = await readLimits(deps.io, deps.cfg);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
@@ -1766,6 +2057,7 @@ git commit -m "feat(pools): every project row carries its tag and the forecast i
 
 ---
 
+### Task 6 — DONE 2026-09-08 (3/3 mutations red)
 ### Task 6: `GET /api/fleet` carries `pools` for first paint; `/api/fleet/health` carries `projectPools`
 
 **Files:**
@@ -1902,8 +2194,12 @@ Expected: FAIL — `expected undefined to be 'unknown'` on the two health cases,
     // the watcher tick, so a client connecting into a quiet fleet would
     // otherwise see no tags until one moved; this is where it gets the
     // measured answer, off its own root listing.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const poolsRead = await readProjectPools(deps.io, deps.cfg, rootNames);
+    const poolsRead = await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    );
     return {
       sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates()),
       pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
@@ -1944,6 +2240,7 @@ git commit -m "feat(pools): first paint carries the tags, health carries whether
 
 ---
 
+### Task 7 — DONE 2026-09-08 (4/4 mutations red)
 ### Task 7: the `pools` frame — additive, change-only, off the tick's own listing
 
 **Files:**
@@ -2170,7 +2467,7 @@ beside `emitCoord` (`:1063`):
    *  readdir and one read per tagged project), so it is async and awaited by
    *  the caller before the fail-shut return, for `emitCoord`'s own reason. */
   private async emitPools(names: readonly string[] | null): Promise<void> {
-    const read = await readProjectPools(this.deps.io, this.deps.cfg, names);
+    const read = await readProjectPools(this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)));
     const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
     const json = JSON.stringify(wire);
     if (json === this.lastPoolsJson) return;
@@ -2234,6 +2531,7 @@ git commit -m "feat(pools): the tick relays the tags on change, off the listing 
 
 ---
 
+### Task 8 — DONE 2026-09-09 (2/2 mutations red)
 ### Task 8: `swapCross`, `startCross`, `enableCross` — a LEADING flag, enumerated
 
 **Files:**
@@ -2349,6 +2647,7 @@ git commit -m "feat(pools): a crossing is its own argv, and the flag leads so an
 
 ---
 
+### Task 9 — DONE 2026-09-09 (5/5 mutations red)
 ### Task 9: `POST /api/projects/:project/pool` — the tag route, gated on the verb, answering a MEASURED state
 
 **Files:**
@@ -2651,8 +2950,12 @@ Expected: FAIL — `project-pool-route.test.ts`: every case `expected 404 to be 
     }
     const res = await deps.runCcd(argv);
     if (!res.ok) return reply.code(502).send({ ok: false, stderr: res.stderr });
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const measured = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), project);
+    const measured = poolFor(await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    ), project);
     // A WARNING, never a refusal (O4): this box's `accounts.json` is one of two
     // hand-owned copies and can lag the fleet's, so "no account carries that
     // name" is a thing worth saying and not a thing worth blocking on.
@@ -2697,6 +3000,7 @@ git commit -m "feat(pools): the tag route asks the box and then reads the file, 
 
 ---
 
+### Task 10 — DONE 2026-09-09 (5/5 mutations red)
 ### Task 10: the 409, the 503 and the `crossPool` override on swap and sessions
 
 **Files:**
@@ -2715,7 +3019,7 @@ git commit -m "feat(pools): the tag route asks the box and then reads the file, 
 **Mutation table:**
 - Row 46 — `swap-route-pool.test.ts`. Goes RED when the verdict branch is removed (a mismatch would reach ccd), when `verbSupported` is used for the capability instead of `capSupported` (a `--cross-pool` argv would go to a box with no evidence it parses the flag — the silent-success class), or when a REVIVAL is refused instead of passing through.
 
-**Cost, stated:** a plain swap now takes one `readSessionRecord` (~23 measured field reads for ONE id — not the fleet) plus one registry-root readdir, one `pools/` readdir and one read per tagged project, before the argv is built. `POST /api/sessions` takes the readdir set only. Both are human-tapped controls, not tick lanes, and the freshness is the point: the 409 decides on the same bytes `cmd_swap` is about to read (spec §5.6).
+**Cost, stated:** a plain swap now takes one `readSessionRecord` (~23 measured field reads for ONE id — not the fleet) plus one bounded registry-root readdir, one `pools/` readdir and one read per listed marker before the argv is built. `POST /api/sessions` takes one bounded root listing; a proven revival or declared crossing stops there, while an ordinary creation continues through the same deadline into the pool listing and marker burst. Both are human-tapped controls, not tick lanes, and the freshness is the point: the 409 decides on the same bytes `cmd_swap` is about to read (spec §5.6).
 
 **No fast path, deliberately.** A short-circuit that skipped the record read while `pools/` is empty would make the 404 ladder appear only once something is tagged — one route with two behaviours depending on unrelated state. One path, always.
 
@@ -3020,14 +3324,18 @@ Add one shared helper beside `runCcdOr502` (`:1645`):
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
-    // ONE registry listing, two questions: is this a revival, and what is this
-    // project's tag. CREATION-ONLY, mirroring `cmd_start`'s own guard placement
-    // (spec §5.5.5): the two-argument form is a revival path as well as a
-    // creation path, and on a revival THE REGISTRY WINS over the wrapper
-    // argument — so refusing here would refuse a revive of a session already
-    // running wrong-pool, which ruling 5's auto path is what moves.
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const revival = await knownId(`${body.wrapper}-${body.project}`, rootNames);
+    // ONE bounded registry listing, two questions: is this a revival, and, only
+    // when it is not, what is this project's tag. The predicate keeps revivals
+    // CREATION-ONLY without starting marker I/O that their verdict never uses.
+    const candidateId = `${body.wrapper}-${body.project}`;
+    const measured = await readProjectPoolsWithRoot(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+      (names) => names === null || !names.includes(`${candidateId}.uuid`),
+    );
+    const revival = await knownId(candidateId, measured.rootNames);
     if (!revival) {
       if (body.crossPool === true) {
         // REFUSE ON NO EVIDENCE — `capSupported`, never `verbSupported`. A flag
@@ -3040,7 +3348,10 @@ Add one shared helper beside `runCcdOr502` (`:1645`):
           ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
           : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
       }
-      const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), body.project);
+      const pool = poolFor(
+        measured.poolsRead ? measured.pools : { listed: false },
+        body.project,
+      );
       const refused = refusePool(reply, body.wrapper, pool);
       if (refused) return refused;
     }
@@ -3083,8 +3394,12 @@ Add one shared helper beside `runCcdOr502` (`:1645`):
       return reply.code(read.reason === 'unlistable' ? 503 : 404)
         .send({ ok: false, error: read.reason === 'unlistable' ? 'registry-unmeasurable' : 'unknown-session' });
     }
-    const rootNames = await deps.io.readdir(deps.cfg.registryDir);
-    const pool = poolFor(await readProjectPools(deps.io, deps.cfg, rootNames), read.record.project);
+    const pool = poolFor(await readProjectPools(
+      deps.io,
+      deps.cfg,
+      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+      PROJECT_POOLS_REQUEST_BUDGET_MS,
+    ), read.record.project);
     const refused = refusePool(reply, body.wrapper, pool);
     if (refused) return refused;
     return runCcdOr502(reply, CCD_ARGV.swap(id, body.wrapper));
@@ -3120,6 +3435,7 @@ git commit -m "feat(pools): the server refuses a crossing with a slug, and a dec
 
 ---
 
+### Task 11 — DONE 2026-09-10 (1/1 mutation red, after the pin was re-aimed — D-2383)
 ### Task 11: the remote-mode isolation pin — the server never reads its OWN box
 
 **Files:**
@@ -3178,7 +3494,7 @@ describe('remote mode reads the FLEET box, never the server box', () => {
   it('a pools/ planted on the SERVER box is invisible, and reads unreadable — never tagged, never untagged', async () => {
     const cfg = loadConfig({ CCRC_HOME: serverHome, CCRC_FLEET: 'remote' });
     const io = fleet!.io;
-    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir));
+    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir), 1_000);
     // The path is outside the agent's read roots (its home is the FIXTURE's),
     // so the listing is refused -> null -> `listed:false`. UNREADABLE, not
     // untagged: a whitelist regression must refuse to decide, not silently lift
@@ -3196,7 +3512,7 @@ describe('remote mode reads the FLEET box, never the server box', () => {
     writeFileSync(path.join(dir, 'quiet-basin'), 'pool-b');
     const cfg = loadConfig({ CCRC_HOME: fixture!.home, CCRC_FLEET: 'remote' });
     const io = fleet!.io;
-    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir));
+    const read = await readProjectPools(io, cfg, await io.readdir(cfg.registryDir), 1_000);
     expect(poolFor(read, 'quiet-basin')).toEqual({ state: 'tagged', name: 'pool-b' });
   });
 });
@@ -3225,6 +3541,7 @@ git commit -m "test(pools): the reader crosses the agent, so a tag on the server
 
 ---
 
+### Task 12 — DONE 2026-09-10 (the gate ran; one load finding, D-2409)
 ### Task 12: Whole-branch gate
 
 **Files:** none — this task changes nothing and proves everything.
@@ -3235,7 +3552,7 @@ git commit -m "test(pools): the reader crosses the agent, so a tag on the server
 
 **Spec:** the brief's whole-branch step; `CLAUDE.md`'s "Build / test / deploy".
 
-**No deploy step:** this wave touches no file under `ccd/`, `session-hook.sh` or `ccd/coordinator-skill/`, so the AGENT-FIRST rule does not bind it. Waves 2a and 2b carry that ordering; this wave ships on the ordinary server lane behind them.
+**No deploy step in this task:** the planned implementation touched no `ccd/` behavior, `session-hook.sh` or `ccd/coordinator-skill/`. The later #81 merged-tree review did correct authoritative history in `ccd/ccd`, so AGENT-FIRST now binds any eventual deployment; D-2000 is the operator/coordinator convention that still forbids deploying this wave, not an enforced gate in `deploy/` or `server/src/`.
 
 - [ ] **Step 1: Run the three package suites, in the foreground**
 
@@ -3309,7 +3626,7 @@ is never a ledger number.
   `ccd` unvalidated as `/workspaces` does, and `poolFor` is a Map lookup against names a LISTING returned,
   so no request-supplied name is ever joined into a path — recorded for alignment. (spec §12 P-16)
 - **D-1680** (Task 2) — `io.readdir` is still the one read in `server/src/io.ts` with no measured sibling
-  (`:96`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
+  (`:105`), so `readProjectPools` resolves the absent/unlistable collapse OUT OF BAND from the registry root
   listing the caller already holds. One residual is disclosed rather than closed: a regular file or an
   EACCES directory at `$REG/pools` answers `{listed:false}`, which makes EVERY project read `unreadable` —
   the correct polarity (nobody decides, nothing crosses) but fleet-wide, and the only `pools/` failure
@@ -3336,3 +3653,798 @@ is never a ledger number.
   unlistable registry no longer lies with 404. `crossPool: true` skips the verdict AND the 503, as the
   spec's own else-structure reads; an undecidable tag is then refused by `cmd_swap`'s guard one box over
   and reaches the caller as a 502 carrying `ccd`'s sentence.
+
+### Carry triage — what wave 3 takes from wave 2b, and what it does not
+
+The brief listed five carries plus two W3 items and asked which are taken. Answered once, here,
+rather than a decision per task. **Every "not taken" below is a scope answer, not a judgement that
+the finding is wrong** — four of the five require `ccd/` behavior changes and the implementation
+scope was server-only. Later review-only corrections to `ccd/ccd` history do not reopen those behavior
+carries.
+
+| Carry | Taken? | Why |
+|---|---|---|
+| **I-2** — §5.8.4's deploy-window mechanism | **TAKEN** (coordinator ruling D) | The code half shipped in 2b and states the correction at the assignment itself; the SPEC still asserted the mechanism I-2 falsified, and the mitigation row still listed it. Docs-only, no `ccd/` file. Both corrected, and `git grep I-2` over the spec is no longer empty — it was, which is why nobody had noticed for four days. |
+| **W3-2** — the ornamental absence assertions | **TAKEN** | `server/test/ccd-auto-swap-pool.test.ts` is a `server/test/` file, so plan:21 permits it. See the row below for what was actually unfalsifiable. |
+| **D-1916** — `cmd_project_pool`'s census walks `CCRC_ACCOUNTS`, placement walks `CCRC_HOME_ABLE` | not taken | A behaviour hunk in `cmd_project_pool`. `ccd/`, and its own red-first test. Wave 5. |
+| **D-1917** — `_strand_mark`'s banner names a pool, its census names `_pool_for` | not taken | `ccd/`; and the banner string is asserted VERBATIM, so rewording it is a test change in the same commit. Wave 5. |
+| **D-1919** — `_sanitize_anthropic`'s warning never reaches `carry_rc` | not taken | `ccd/`, and it is #61's exposure rather than this program's. Wave 5, or #61's owner. |
+| **D-1918** — README has no account-pools section | not taken **here, and it needs an owner** | Docs-only, so plan:21 does not forbid it — but the README is the canonical system overview for the WHOLE product, and a pools section written before the server half exists would document a half-feature. It belongs at the end of the program, not inside a wave. Flagged to the coordinator rather than silently dropped. |
+| **W3-1** | n/a | The brief's W3-1 has no referent in any plan or spec (`git grep 'W3-1'` over `docs/` is empty; so is `W3-2`, which is why both are quoted from the brief rather than cited). Reported to the coordinator; not invented here. |
+| **D-1957** — the `ccd:NNNN` citation sweep | not taken | Explicitly a `ccd/` sweep, and its own count drifts under it. **A count with no ref is not a measurement**, so: `git show <ref>:ccd/ccd \| grep -c 'ccd:[0-9]'` (lines) and `\| grep -o 'ccd:[0-9]\+' \| wc -l` (occurrences) give **143/154** as recorded, **146/157** at `cf1c8005` (the figure mailed to the coordinator, correct for the ref it was taken at) and **149/160** at `db580771` — C1 added three. Three refs, three answers, one sweep: that is the argument for doing it as one deliberate pass at a named ref, not in pieces. |
+
+**W3-2, measured rather than accepted.** The case is
+`server/test/ccd-auto-swap-pool.test.ts`'s overflow-lane case; the assertions are `:564`, `:566`,
+`:570` and `:571`. The tick DISPATCHES — it never runs `cmd_swap` — so `:570`
+(`h.reg(ID,'crosspool')` is null) and `:571` (`swapLog()` has no `cross-pool`) assert the absence of
+two artifacts that only `cmd_swap` writes: **unfalsifiable in this fixture, by construction, whatever
+the tick decides.** `:566` (`.not.toContain('--cross-pool')`) IS load-bearing — `_svc_run_detached`
+records the whole argv — and it is the one the brief mislabelled; `:562-563`'s `toMatch` is the
+SEARCH the brief meant, and a trailing flag would leave it green, which is exactly why `:566` has to
+exist beside it. Fix is Option A: a sibling case that runs `cmd_swap` for real against the same
+fixture, where both artifacts are writable and their absence therefore means something.
+
+### Found during execution
+
+Allocated in their own calls at the moment they were found, never taken from a gap in the plan-time
+block above.
+
+- **D-2008 (2026-09-08)** (Task 2, Task 7) — DISCLOSED, NOT CLOSED: capping the VERDICT does not
+  bound the TRANSFER. Task 2 now mirrors `ccd`'s 64-byte read cap so the two readers cut at the same
+  byte (coordinator ruling 1), but the cap is applied to `read.content` — i.e. AFTER the whole file
+  has been read. On `CCRC_FLEET=remote` that read is the agent's `readWhole` (`agent/src/fileops.ts`,
+  `grep -n 'readWhole' agent/src/fileops.ts`), which is uncapped, so the bytes still cross the fleet
+  WebSocket in full; on `local` it is `localIO.readFileMeasured`, a bare `readFile(p,'utf8')`, equally
+  uncapped. Task 7 then puts that read on the WATCHER TICK — one whole-file read per tagged project
+  per tick. This is D-1850's own hazard restated in TypeScript on a faster loop, and D-1850's argument
+  names a non-adversarial constructor: `ln -s ~/.cc-sessions/swap.log pools/<p>` is a tag that grows
+  on every swap append. A 100 MB tag is then read whole, per tick, per project.
+  **Why it is not closed here:** a bounded read is a NEW agent op — a new frame, a new whitelist
+  entry, a new failure contract on both sides — and this wave's Global Constraint is that the server
+  adds no agent surface. It is stated in the source at the read, not only here.
+  **Spec drift this does NOT fix, flagged for wave 5:** §5.4.4's algorithm block, its step 4, and the
+  "every reader strips trailing whitespace" sentence all predate the cap and describe a reader that no
+  longer exists on either side. Wave 5 corrects the spec; this wave does not edit it.
+- **D-2009 (2026-09-08)** (no task — REPORTED, NOT TAKEN; `ccd`, so out of this wave's scope by
+  plan:21) — **D-2000 is wider than the tag, and this half needs no project to be tagged.**
+  `_project_pool_state`'s first statement is the empty-argument short-circuit
+  (`[[ -n "${1-}" ]] || { echo untagged; return 0; }`, `ccd/ccd:1148`), and it precedes that
+  function's own anomaly checks: `$REG` not a searchable directory (`:1167`), `$POOLS_DIR` a dangling
+  symlink / a regular file / unsearchable (`:1177-1180`). Every one of those answers `unreadable`,
+  which is what makes the three `prc -eq 2` refusals fire (`:13703` `cmd_start`, `:14952` `cmd_swap`,
+  `:15198` `cmd_prefer` — each `die "pool tag for $project is $pps … nothing was touched"`).
+  But all three feed `_project_pool_state` from `project=$(_reg_get "$id" project)`, and `_reg_get`
+  folds unreadable to `""` — so **the condition that would trigger the registry-unreadable arm is the
+  same condition that empties its argument.** An unsearchable `$REG` makes every `.project` read
+  fail, every call takes the `:1148` arm, and `:1167` — the guard written for "a registry you cannot
+  enter tells you nothing about a field" — cannot fire at any of its three call sites. It is dead in
+  the exact state it was written for.
+  **Why this changes D-2000's reachability argument, not its ordering.** D-2000 was deferred on the
+  measurement that it is inert while no project is tagged, which is correct for the TAG-level effect:
+  with `$POOLS_DIR` absent, a readable `.project` answers `untagged` too, so the placement outcome is
+  unchanged. This arm is different — it is a REFUSAL that does not happen, and it is reachable today,
+  tags or no tags. **Blast radius measured honestly and it is small:** on an unsearchable `$REG` the
+  rest of each verb (`_reg_set`, the journal writes) fails too, so what is lost is a clean
+  "nothing was touched" refusal, not a proven bad placement. Not a reason to re-order; a reason the
+  ledger should not record "inert" as the whole of it.
+  Reported to the coordinator (mail 315) under its own invitation to challenge ruling C. See D-2000.
+- **D-2010 (2026-09-08)** (Task 2) — **the mirrored cap was off by one, in my own pre-flight commit,
+  at exactly the boundary the ruling exists to align.** Ruling 1 said mirror `ccd`'s 64-byte cap; I
+  wrote `read.content.length > 64`. Measured in a shell rather than reasoned about:
+  `IFS= read -r -d '' -n 64 v < f` returns **1** for a 63-byte file, **0** for a 64-byte file and
+  **0** for a 65-byte file — `read -n N` succeeds when it gets its N characters or meets the
+  delimiter, and fails only at EOF before either. So `ccd` calls a 64-byte tag `malformed`, and
+  `> 64` passed it to the strip and answered `tagged`. `ccd`'s own comment names the same boundary
+  from the other end — "a tag padded with 58+ characters of trailing whitespace" — and `pool-a`
+  plus 58 spaces is 64 bytes exactly, i.e. the ruling's own worked example is the input the first
+  version got wrong. Fixed to `>= 64`. The reason this survived writing is worth more than the fix:
+  a mirror is only as good as the SIDE-BY-SIDE, and I had quoted `ccd`'s expression without running
+  it. Row 20a's 63/64 pair is one byte apart on purpose — a case built on a 65-byte input passes
+  under both spellings and cannot see this mutant at all.
+- **D-2017 (2026-09-08)** (Task 2) — **ruling 1's NUL half is a no-op on the server side, and the
+  first version of its test case hid that.** The ruling said "treat an embedded NUL the same", and
+  the mirror does: `read.content.includes('\0')` answers `malformed`. But `POOL_NAME_RE` is
+  `/^[a-z][a-z0-9-]{0,31}$/` — anchored, no `m` flag, and its character class excludes `\0` — and
+  JS `\s` does not include `\0` either, so the strip cannot remove one. No NUL-bearing content can
+  reach `tagged` by any path. **Measured: delete `.includes('\0')` and all 14 cases stay green.**
+  The case I first wrote asserted `malformed` for `pool-a\0pool-b` and read as if it pinned the arm;
+  it was passing on the grammar. That is the ornamental-assertion class again, and the three prior
+  instances I OPENED rather than recalled are `ccd-auto-swap-pool.test.ts`'s own D-1921 ("could not
+  have failed") and D-1955 ("left all 39 cases GREEN. Measured."), plus W3-2's `:570`/`:571` in that
+  same file. Written, again, by the session doing the triage of the previous one — which is the part
+  worth recording: knowing the class by name did not stop me writing one.
+  **Why the arm stays anyway.** It is not dead weight on the OTHER side of the mirror: `ccd`'s
+  `read -r -d '' -n 64` STOPS at the delimiter, so without its NUL handling `pool-a\0junk` yields the
+  valid prefix `pool-a` and places on a pool the file does not name — the "partial read leaving a
+  valid prefix" hazard `ccd`'s own comment parks. The server holds the whole string and cannot reach
+  that state, so the arm here states the parity at the site rather than enforcing anything. Kept,
+  labelled at the assertion, with the VOID condition written out: it becomes load-bearing if
+  `POOL_NAME_RE` ever admits a NUL, if the cap is ever applied to the STRIPPED value, or if this
+  reader ever stops holding the whole string. Same treatment as C1's M19 — document the no-op, never
+  write a case that cannot fail.
+
+- **D-2382 (2026-09-10)** (Task 11) — **the snippet's second case could not run: no roster on the
+  fixture home.** Task 11's step 1 gives the describe verbatim and its step 2 says *"Expected: PASS on
+  the first run"*. Measured, it does not: `makeFixture()` builds `.cc-sessions`, `.cc-limits`,
+  `.cc-clips` and `.claude` and no `.ccrc/accounts.json`, while `seedRoster` is called only on
+  `serverHome` — so `the FLEET box's own pools/ IS what a remote read answers` threw
+  `RosterError: no account roster at <fixture>/.ccrc/accounts.json` at `config.ts:218`. One line
+  (`seedRoster(fixture.home)`) fixes it, and it plants no `pools/`, so what the pin measures is
+  untouched. Booked rather than silently repaired because **a plan that states its own expected
+  result is making a claim, and this one was never run.**
+- **D-2383 (2026-09-10)** (Task 11) — **the pin as specified could not see the mutation it names, and
+  a live control is what proved it.** Step 3 says to plant a `localIO` shortcut in `readProjectPools`
+  and expect `a pools/ planted on the SERVER box is invisible` to go RED. Measured: with the shortcut
+  planted it **PASSED**, while three sibling cases went red — so the mutation was applied and
+  reachable, and the new case simply was not sensitive to it (a green mutation with a live control,
+  which is what makes this a finding rather than an ambiguity). The cause is upstream of the mutation:
+  the snippet passed `await io.readdir(cfg.registryDir)` as `rootNames`, the agent refuses that path
+  (it is outside its read roots), and `readProjectPools` returns `{listed:false}` at its FIRST guard —
+  never reaching either read a `localIO` shortcut corrupts. **The case asserted `{listed:false}` and
+  got it from the test's own refused listing, not from the reader crossing the agent.** Re-aimed by
+  supplying `[POOLS_DIR_NAME]`, which clears both early guards and puts the reader's own reads under
+  the assertion. Re-measured both directions: RED with the shortcut —
+  `expected { listed: true, tags: Map{ …(1) } } to deeply equal { listed: false }`, which is the exact
+  message step 3 predicted and never got — and GREEN 16/16 with it reverted. The row this pins,
+  §11 row 17 server half, is now a mechanism rather than a request.
+
+- **D-2409 (2026-09-10)** (Task 12) — **`boot.test.ts` is load-sensitive and is NOT on `CLAUDE.md`'s
+  known-flake list, so the gate's own instruction cannot classify it.** Task 12 step 1 names five
+  suites to re-run in isolation before calling a break; `boot.test.ts` is not among them, and it is
+  the only suite that failed the whole-branch run. Its failures are timing assertions against a
+  3000 ms budget — `expected 5819 to be less than 3000` in the full run, `expected 3129 to be less
+  than 3000` in isolation — and **isolation did NOT clear it**, which by the list's own rule would
+  make it a real break. It is not. The control settles it: the identical suite on **unmodified
+  `origin/main` (`29e634b3`), same box, same minute, fails identically** (1 of 3). The box was at
+  **load average 43.66 on 16 cores**, with eight other sessions running `tsc`/`vitest`/`esbuild`; the
+  `pwa` suite in the same window went 2191/2192 on one run and 2173/2192 on the next, the second's 19
+  failures every one `Test timed out in 5000 ms` across 12 files. **Two lessons, and the second is the
+  one worth carrying: (a) `boot.test.ts` belongs on the flake list; (b) "re-run in isolation" is not a
+  sufficient test for a load flake when the box stays loaded — the sufficient test is the SAME suite
+  on an UNMODIFIED ref at the same moment**, which distinguishes "this branch broke it" from "this box
+  cannot meet a timing budget right now" and costs one worktree.
+
+- **D-2421 (2026-09-10)** (wave 4 / run 35 close) — **Opening a PR moves two claimed fingerprint fields
+  with no commit anywhere, and clause 9 names only commits.** Worker clause 9 says a done-claim is
+  measured once and sent once, and that after `wave-done` you stop pushing because "a new commit under
+  your own claim makes it stale". Both parties reasoned in commits all morning; the coordinator even
+  warned that a PR DESCRIPTION is not a commit, which was true and irrelevant. Measured: the
+  coordinator accepted a fingerprint carrying `prNumber 67 / prPhase merged`, `ccd pr-state --session
+  ccrc-pwa-clear-meadow` answered `67 / merged` at that moment, and one `gh pr create` later — no
+  commit, the branch tip unmoved at `7ca2b97a` — the same probe answered **`81 / open`**.
+  `prNumber`/`prPhase` are re-measured against the branch's NEWEST PR, so opening one falsifies an
+  accepted claim from outside the vocabulary clause 9 uses to warn about staleness: against
+  `prVerdict` (`server/src/coord/fingerprint.ts`), `claimed 'merged'` against `measured 'open'` hits
+  `if (claimed === 'merged' && measured !== 'merged') return 'regressed'`, and re-verification would
+  have refused `pr-regressed`. **The remedy is ORDERING, and the worker skill already implies it** —
+  work, push, open the PR, THEN mail `wave-done`. This wave inverted it because the C1 rescue lane was
+  measured and claimed before wave 3's own PR existed, and the inversion is what exposed the seam.
+  Worth one sentence in `ccd/worker-skill/SKILL.md`'s "Reporting a wave-done": *measure the fingerprint
+  after the PR exists, never before.* Coordinator ruled no second fingerprint is sent:
+  `awaiting-review -> merging -> closing` re-measures at CLOSE time, by which point the honest pair is
+  `81 / merged`, which `prVerdict` passes and which cannot go stale again.
+
+- **D-2422 (2026-09-10)** (the #81 merge) — **A comment measured correctly on one parent can be FALSE on
+  the merge, and no guard in this tree can see it.** The whole review apparatus — mutation tables,
+  census pins, the citation sweep — measures a claim against the tree it was written on. A merge
+  produces a tree neither author ever ran. Concrete instance, and it is the sharpest possible one
+  because the falsified sentence was itself the CORRECTED half of a #78 sweep: `origin/main`'s
+  `server/test/ccd-crosspool.test.ts` asserts that ``git grep -c stranded server/src/registry.ts`` is
+  **0 on this tree, so the banner is what carries it until that reader lands**. This merge lands that
+  reader — account-pools wave 3 makes `SessionRecord.stranded` a real fail-shut field with 12
+  `stranded` lines in `registry.ts`, and `fleet.ts` carries its `reason` onto `FleetSession.stranded`.
+  So the newer, swept, more-careful side is the one the merge breaks, and taking "main's side because
+  main is newer" would have shipped it. Rewritten to the post-merge truth, including what is STILL
+  true: nothing under `pwa/src` reads `FleetSession.stranded` — every `stranded` hit there is
+  `strandedAccount`, the transcript axis, a different field. **The rule this yields: in a merge, the
+  side to distrust is not the older one, it is whichever side made a claim ABOUT THE OTHER SIDE'S
+  ABSENCE.**
+
+- **D-2423 (2026-09-10)** (the #81 merge) — **D-2177's census is wrong by one route, and the correction
+  found a second unqueued pane-destroying write.** `server/src/server.ts`, the ask-preemption plan
+  (`docs/superpowers/plans/2026-09-09-ask-preemption-lane.md:45`), its spec (`:457`) and
+  `server/test/lifecycle.test.ts:293` all call `cmd_swap` "the one live-pane-destroying operation that
+  was NOT routed through the per-session `KeyedQueue`". Measured on the merged tree: `POST
+  /api/sessions/:id/stop` reaches `cmd_stop`, which ends in `_ws_unsupervise` + `tmux kill-session`,
+  through `runCcdOr502` with no queue — that much D-2177's own author had already found. What nobody
+  measured is `POST /api/sessions/:id/archive`: `cmd_ws_archive` ends in the **same two-line pair**
+  (`grep -n '^cmd_ws_archive()' ccd/ccd`, whose own header calls the pane "its one cost"), and it too
+  returns straight through `runCcdOr502`. The queued routes are swap, pr-open, forget and
+  workspace/reap; `/restore` is unqueued but `cmd_ws_restore` kills no pane, so the honest census is
+  **two** gaps, not one and not three. Both are named at every site now. Neither is closed here — that
+  is the ask lane's call, not this merge's.
+
+- **D-2424 (2026-09-10)** (the #81 merge) — **The merge made an existing mutation-table guard able to
+  pass vacuously, by adding awaited work in front of the thing it was timing.**
+  `server/test/lifecycle.test.ts`'s D-2177 case held the queue slot, slept **20 ms**, and asserted the
+  swap had not reached ccd — with its premise stated in the comment: "an unserialized swap has nothing
+  async blocking it before its ccd call, so this is ample time for it to have run if it bypassed the
+  queue." That was true when written. It is false after this merge: wave 3's swap route awaits
+  `readSessionRecord`, a registry `readdir` and `readProjectPools` BEFORE the queued call, so a mutant
+  that deleted `queue.run` could still be inside those reads at the 20 ms mark on a loaded box, and the
+  case would report green while proving nothing. **A timing assertion is a claim about the code in
+  front of it, and a merge can add code in front of it.** Fixed by removing the clock: the test now
+  waits until the route has ENQUEUED (observed through a recording `KeyedQueue`), which is the same
+  property with nothing to out-race. MEASURED RED under a queue bypass: `Error: the swap route never
+  enqueued`; GREEN 50/50 restored.
+
+- **D-2425 (2026-09-10)** (the #81 merge) — **The merge minted an invariant neither parent had, and until
+  it was pinned it lived only in a comment.** On `ws/clear-meadow` the swap route's `crossPool` arm
+  returned `runCcdOr502(reply, CCD_ARGV.swapCross(...))` outside any queue; on `origin/main` there was
+  no `crossPool` arm and the ordinary swap went straight into `sendDeps.queue.run` (D-2177). Composing
+  them required a decision no reviewer of either PR ever made: **both arms behind ONE queued call**,
+  with each arm's applicable refusals hoisted in front of it — the 501 on the crossing arm, the
+  404/503 ladder and pool verdict on the ordinary arm (D-1684). That is a new guard, so by this repo's
+  own doctrine it ships with a test that reds when it is deleted.
+  `server/test/swap-route-pool.test.ts` now pins it WITHOUT a timeout, by observing the enqueue.
+  MEASURED RED with the `crossPool` arm reverted to a direct `runCcdOr502`: `Error: waitFor timed out:
+  the swap route to enqueue`; GREEN 14/14 restored. **A conflict resolution is authorship, not
+  arbitration — the decisions it makes have no PR of their own and no reviewer unless the resolver
+  gives them one.**
+
+- **D-2426 (2026-09-10)** (the #81 merge) — **Two counts in ONE sentence composed differently, and a
+  naive union of both would have been wrong.** `server/test/auth-gate.test.ts` reads "the assertion
+  that covers all 69, not the 24 exempt" on this branch and "all 71, not the 27 exempt" on
+  `origin/main`. Measured on the merged tree the pair is **72 / 27**: the WHOLE moved because both
+  parents added routes, while the EXEMPT half took `origin/main`'s number unchanged, because this
+  branch's one new route (`POST /api/projects/:project/pool`) is deliberately NOT exempt and
+  `origin/main`'s three ask-lane routes all are. Same for the totals — `ROUTES.length` is **75** (47 +
+  28), a number NEITHER parent's literal carries, so that assertion could not be resolved by choosing a
+  side at all. `server/src/auth/gate.ts`'s docstring must read **72** or this file's own F7/D-1302
+  self-check reds with "gate.ts claims a route count this tree does not derive". **The lesson is not
+  the arithmetic, it is that "compose both sides" is itself a claim that needs measuring per quantity,
+  not per conflict.**
+
+- **D-2427 (2026-09-10)** (the #81 merge) — **Five unpinned prose censuses inside `auth-gate.test.ts` were
+  false on the merge and NOTHING reds on them — inside the very file whose F7/D-1223 scan exists to
+  stop exactly this.** That scan covers four "claim lines" by needle; these five sit outside all four
+  and outside the three conflicts, so the suite stays green while they lie: `59 scanned + the static
+  wildcard` (derived value 75, and 59 was stale for several waves before this merge); the exempt-class
+  breakdown `25 = /health + the 13 box-token lanes … + the FIVE exempt-BUT-authenticated GETs`
+  (measured: **28 = … 15 box-token lanes … SIX**, the ask lane's two POSTs joining the box-token class
+  and its GET joining D-149's); `a toEqual listing 25 keys` (28); `71 scanned − 3 websockets − 24
+  exempt-and-scanned = 44` (**75 − 3 − 27 = 45**); and `44 since the caps pair` (45). All five
+  corrected against the merged tree. **A census pin protects the sentences it names and advertises
+  safety for the ones it does not** — the file that documents this defect class was shipping five
+  instances of it.
+
+- **D-2428 (2026-09-10)** (the #81 merge) — **#78's citation sweep left the same false spatial claim
+  standing in `ccd/ccd` itself, inside the census block a pin scans, where the pin is structurally
+  blind to it.** `ccd/ccd:1846` reads "the same shape `ccd-pool-ok.test.ts` already carries for the
+  `_pool_ok` header **one function away**". Measured: `_pool_ok()` is at `ccd/ccd:1549` and `_reg_get()`
+  at `1809`, with six function definitions in between (`_id`, `_tmux`, `_session_probe`,
+  `_session_verdict`, `_alive`, `_reg_set`). The sweep corrected the copy in
+  `server/test/ccd-reg-get-census.test.ts` to "in the same file" and did not correct this one — and
+  `ccd-reg-get-census.test.ts`'s cardinal scan cannot catch it, because that scan only sees DIGITS, so
+  a false SPATIAL citation in the block it guards can never red. **FIXED IN THIS ROUND after the
+  coordinator reversed the initial C1 deferral:** `ccd/ccd` now says "earlier in this file", and the
+  two residual adjacency claims found in the same pass say "earlier"/"later" rather than invent a
+  distance. The generated marker was restamped and `ownership.test.ts` plus the ccd census/behaviour
+  suites passed. This is a source edit, not a deployment; D-2000 is the operator/coordinator convention
+  that still blocks wave 3's deploy, with no enforcing mechanism in `deploy/` or `server/src/`; the eventual
+  lane remains agent-first.
+
+- **D-2429 (2026-09-10)** (the #81 merge) — **This branch's `ccd/ccd` was strictly OLDER than a fix that
+  is merged AND deployed on the live fleet, so a per-file merge decision could have reverted production
+  behaviour.** The probe that settled it, run twice independently: `_pane_auto_continue_armed` 0 on
+  this branch vs 5 on `main`, `_transcript_stalled_pair` 0 vs 4, `_resume_env` 0 vs 4 — i.e. all of
+  #73, whose post-swap resume landing was measured live on the fleet (53 landings, 0 fallback
+  keystrokes) the same day. Of the 42 lines this branch's `ccd/ccd` had that `main` lacked, **39 were
+  comments and were exactly the false citations #78 swept**, and the other 3 were the PRE-#73 spawn
+  lines without `_resume_env`. So the side with MORE unique content was the side with NOTHING worth
+  keeping. **`ccd/ccd` takes `main`'s side wholesale, and the argument is a measurement of what each
+  side uniquely contains — never a diff size, a date, or which branch "owns" the file.**
+
+- **D-2430 (2026-09-10)** (the #81 merge) — **A merge resolution is measured against a ref that keeps
+  moving, and the completeness pass is what noticed.** The 37-conflict resolution was measured against
+  `origin/main` at `cc0d744d`. By the time it was verified, `main` was at `878ee3ce` — two commits
+  nobody in the resolution had seen (#80's ask instance guard, #72's MemoryHigh removal), touching
+  three of the same source files plus `ccd/ccd`. Nothing in the merge machinery says so: `git merge`
+  pins `MERGE_HEAD` at the ref you started from and reports success against it, and the PR's own
+  `mergeable` field would have said `CONFLICTING` afterwards with no explanation of why the resolution
+  you just verified was not enough. Taken as a SECOND merge commit rather than by re-opening a verified
+  resolution, and checked rather than trusted (`ccd/ccd` `cmp`-identical to `main`'s; `registry.ts`
+  keeps both `stranded` and #80's `updatedAt` argument; `watch.ts` keeps both the `pools` emitter and
+  `sweepAsks`). **A conflict measurement has a shelf life, and it is shorter than a careful
+  resolution.**
+
+- **D-2431 (2026-09-10)** (the #81 merge) — **Taking THIS branch's side in
+  `ccd-reg-get-census.test.ts` would have redded the suite, because its anchors do not exist in the
+  merged `ccd/ccd` at all.** The case slices `ccd/ccd`'s `_reg_get` header on
+  `block.indexOf('It has moved four times in five rounds')` and
+  `block.indexOf('converted the three verb readers')`. Both measure **-1** against the merged tree
+  (`/bin/grep -n -F`, no hit) — #78 replaced that history with "It has moved six times". The first
+  fails `expect(history, 'the dated history clause could not be found').toBeGreaterThan(-1)`
+  immediately; worse, the second would make `block.indexOf('\n', -1)` resolve to the block's FIRST
+  newline, so `outsideHistory` would carry the whole dated list and the cardinal scan would report
+  every historical figure as a stale census. **A test that reads another file by literal is a
+  cross-file coupling with no type and no compiler** — when the file it reads takes the other side of a
+  merge, the test must follow it or the suite goes red for a reason the diff does not show.
+
+- **D-2432 (2026-09-10)** (the #81 merge) — **Main's own hunk left a dangling antecedent two lines
+  outside its own conflict, and three of this branch's stale cardinals were corrected in passing.**
+  `server/test/ccd-reg-get-census.test.ts`'s docstring ended "that pin is why the `_pool_ok` census
+  never went stale through **the same five rounds**" — a phrase pointing at "the five review rounds
+  that touched it", which `origin/main`'s rewrite of the paragraph ABOVE deleted. Unconflicted text,
+  byte-identical on both parents, and false the moment the merge landed: the merged `ccd/ccd` counts
+  SIX moves. Rewritten to stand on its own. Corrected in the same pass, each measured against the
+  merged `ccd/ccd`: "Four sites carry `&& ! _pool_untaggable`" (**five** —
+  `/bin/grep -cF '&& ! _pool_untaggable' ccd/ccd`); "`_undecidable_cause` interpolates `$POOLS_DIR`
+  into ONE of its **five** operator-facing sentences" (**six** arms — home, wrapper, crosspool,
+  project, pool, `*` — the cardinal having been true for exactly one commit, between round 4 creating
+  the function and round 5 adding the `wrapper` arm); and "the half left open is the one with **135**
+  call sites" (133 across 109 non-comment lines, and the durable form names the census that holds it
+  rather than restating a number). **A merge is where one branch's stale prose meets the other
+  branch's corrected prose, and the conflict markers show you only the sentences that happen to
+  collide.**
+
+- **D-2445 (2026-09-10)** (the #81 merge) — **When one parent deletes a use and the other parent adds
+  adjacent machinery, a union merge can keep an import whose last caller is gone.** Wave 3 imported
+  `readSessionRecord` into `watch.ts` for a second registry read in `emitPools`; main deleted that
+  second read while hardening the live-session path. The merge correctly kept main's deletion and
+  wave 3's pools imports, but a keep-both resolution could have retained `readSessionRecord` with no
+  call site: green under this tree's TypeScript settings, and one `noUnusedLocals` switch away from a
+  build failure. Measured on `d7c11dd7`: the token appears exactly once in `watch.ts`, inside the
+  current fail-shut return's logging comment that names the two registry readers sharing episode
+  state, while the import names only `measuredIdentity`, `readRegistry` and `readRegistryMeasured`.
+  **For a deletion/addition overlap, the merge question is
+  not "does each parent's text survive?"; it is "does every retained import still have a caller in the
+  composed tree?"** This is a review rule rather than new runtime machinery, so the measured caller
+  census is the mechanism and no ornamental source guard was added.
+
+- **D-2458 (2026-09-10)** (the #81 independent refute pass) — **A table claiming every pre-queue
+  refusal can still miss two branches hidden behind one shared status and response shape.** The held-slot
+  table covered the unsupported crossing, mismatch, absent session and unlistable registry, but its sole
+  ordinary 503 exited from `readSessionRecord`; it never reached `readProjectPools`, so neither a malformed
+  nor unreadable project tag was proven to answer ahead of a held same-session write. Moving only those
+  two `refusePool` branches behind `queue.run` would have left the table green. Both project-tag states now
+  hold the slot independently and assert their exact 503 bodies, no second queue key and no ccd call.
+  **Enumerate decisions, not HTTP codes: several distinct guards can deliberately share one status.**
+
+- **D-2459 (2026-09-10)** (the #81 independent refute pass) — **A source-derived value guarded only
+  in a hand-maintained file list lets stale claims sit beside the mechanism while the mechanism stays
+  green.** The new registry census scanned six named files, but `hold-gate.test.ts` and
+  `push-copy.test.ts` still said approximately 21 reads against `buildRecord`'s measured 23. The missed
+  claims are corrected and tagged; the census now discovers every tagged TypeScript/JavaScript source
+  under `server/` rather than enumerating claim holders. A future claim must opt into the tag, but once
+  tagged its location cannot fall outside a hand-maintained corpus. **A derived guard must discover its
+  population; a list of today's holders is another unguarded census.**
+
+- **D-2464 (2026-09-10)** (the #81 coordinator verification of exact head
+  `65b5cb2a`) — **Correcting several merge-tree absence claims does not prove the authoritative source
+  carries no residual copy of the same false claim.** The D-2013 history in `ccd/ccd` still said the
+  reader carrying `stranded.at` was not on this tree, but the composed tree's `server/src/fleet.ts`
+  maps the preserved strand epoch to `FleetSession.stranded.at` for both REST and WebSocket fleet
+  payloads. The paragraph now states the actual distinction: `stranded` preserves when the episode
+  began, while `compactskip` anchors when its current refusal reason became current. This corrects
+  authoritative shipped-source history only; it changes no Bash or server behavior and introduces no
+  runtime guard. The existing generated-file ownership gate is re-stamped because the committed
+  `ccd/ccd` bytes changed, but an ornamental source assertion for one corrected sentence would not
+  discover the next residual absence claim. **A review that finds a merge-authored falsehood must
+  search for the claim class, then distrust any surviving absence statement until the composed tree
+  proves it.**
+
+- **D-2465 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `be44395b`) — **A per-request timeout does not bound a sweep that awaits an unbounded number of
+  requests serially.** `server/src/pools.ts` reads every non-dot project marker one after another;
+  in remote mode each `readFileMeasured` can consume the client's 15-second request timeout. Because
+  `watch.ts` awaits the pool snapshot before hook-state and dialog work, K stalled markers can delay
+  every later watcher lane by about `15s * K`, while overlapping two-second ticks are dropped and the
+  WebSocket can remain healthy. The specification requires one awaited, ordered snapshot, not serial
+  I/O. Bound the total pool-sweep time: let the consumer pass a per-operation timeout through
+  `FleetIO` and its remote adapter, race the `pools/` listing and concurrent marker reads against one
+  shared deadline, and map every unfinished or failed marker to `unreadable`, preserving all four pool
+  states. That aggregate deadline also bounds how long the reader awaits a local implementation even
+  though `localIO` itself ignores the optional timeout argument (corrected by D-2483). Separate deterministic
+  `project-pools-read` cases prove that a never-resolving
+  listing finishes as `listed:false` and several never-resolving markers finish as `unreadable`; fake timers
+  advance the production budget exactly, so neither case depends on a real-time watchdog. The listing case
+  first failed on the unbounded listing, and removing the marker race made the marker case red without hanging
+  the suite; exact restoration is green. **A bounded member operation multiplied by an unbounded serial
+  population is not a bounded aggregate; put the deadline around the decision's whole input set.**
+
+- **D-2466 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `be44395b`) — **Source history that describes a staged rollout in future tense becomes an
+  authoritative lie once the later stage lands in the same tree.** `server/src/ccdargv.ts` still says
+  no route calls `projectPoolSet`/`projectPoolClear`, yet `server/src/server.ts`'s project-pool route
+  selects those builders at its current call sites. The `POOLS_CAP` history says its cross-pool argv
+  decision, tag route, 409 pre-check and placement forecast do not exist, while current create/swap,
+  tag and projects routes implement all four. `server/src/pools.ts` likewise says
+  `readProjectPools`, `poolFor`, `poolsEnforcement` and `poolsWire` are future wave-3 work even though
+  this module defines them and `server.ts`/`watch.ts` call them. Leaving these claims in current source
+  sends the next maintainer toward duplicate or wrongly gated machinery. Correct the rollout
+  docstrings in `server/src/ccdargv.ts` and `server/src/pools.ts` to preserve why wave 2a introduced
+  the seams while stating what wave 3 now ships. **A staged-rollout comment must graduate when its
+  stage does; history can name the old boundary without presenting it as the current tree.**
+
+- **D-2467 (2026-09-10)** (the #81 coordinator acceptance review of exact
+  head `be44395b`) — **A wire field being display-ready is not evidence that a production renderer
+  consumes it.** `shared/api.ts` says `FleetSession.stranded.reason` is displayed on every surface and
+  renderers suppress a fabricated 1970 timestamp, but a production census finds no
+  `FleetSession.stranded` consumer under `pwa/src`; those `strandedAccount` symbols describe transcript
+  history, a separate axis. The wave-3 plan repeats the premature renderer claims in its Task 3 code
+  and test excerpts, while D-2422 already records the actual state: the server carries `stranded` on
+  REST and WebSocket now and wave 4 consumes it later. The false claims can make a wire-only test read
+  as end-to-end visibility and conceal the still-open PWA work. Correct `shared/api.ts`,
+  `server/src/registry.ts`, `server/test/registry.test.ts`, `server/test/fleet-lifecycle.test.ts`,
+  `server/test/fleetstate.test.ts` and the plan's mirrored excerpts to say the reason is carried
+  verbatim for a future renderer and that `at: 0` is the wire contract a renderer must treat as timestamp-less;
+  keep D-2422 and D-2464's server-carriage wording intact. **A transport contract may prescribe how a
+  renderer must behave without claiming that renderer exists.**
+
+- **D-2468 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `be44395b`) — **Two control-flow arms sharing a serialized execution seam does not mean they share
+  the preflight decisions before it.** The swap-route preamble said ordinary and `crossPool` swaps
+  differed only in which argv they choose and that the 501, 404/503 ladder and pool verdict all run
+  before either arm queues. The implementation and D-1684's explicit override contract disagree:
+  `crossPool: true` checks only the 501 capability skew gate, then skips `readSessionRecord` and the
+  server pool verdict; `cmd_swap` re-measures session and tag on the fleet box and returns the
+  authoritative refusal. Only the ordinary arm owns the early 404/503 and pool verdict. Adding those
+  reads to the crossing arm would erase the specified bypass merely to satisfy prose, so the preamble
+  in `server/src/server.ts` now says the arms share only the queued invocation and enumerates their
+  distinct preflights. **A shared sink does not imply shared upstream guards; describe each arm at
+  the branch where the decision actually runs.**
+
+- **D-2476 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A bounded result set does not prove its marker reads overlap.** Replacing
+  `Promise.all(projectNames.map(...))` with a serial loop left all 23 reader tests green: the first stalled
+  marker consumed the shared deadline, and every later race then settled immediately against the already-
+  resolved promise, preserving both elapsed time and verdicts. The replacement test holds the first marker
+  unresolved and requires a later marker to start in the same launch turn before releasing it; a `setImmediate`
+  sentinel replaces the old 250 ms real-time watchdog, so a loaded host cannot invert the verdict. Measured
+  against that exact serial mutation it reds with `later marker did not start in the same launch turn`; restored
+  concurrency is green. **Test concurrency by observing overlap, not by inferring it from a shared deadline's
+  total time.**
+
+- **D-2477 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A port test proving an adapter forwards a timeout does not prove its caller supplies one.**
+  Deleting both optional timeout arguments in `readProjectPools` left the old focused suites green because
+  the aggregate race still bounded their result, while every abandoned remote request retained the client's
+  normal 15-second pending entry. A reader-level test records the listing's full budget and every marker's
+  remaining budget. Deleting both arguments now reds with three `timeoutMs: undefined` values; restored is
+  green. **Pin each side of an optional seam: what the caller passes and what the adapter forwards.**
+
+- **D-2478 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`, superseded in part by D-2484) — **The layer that owns a cadence must own its deadline policy.**
+  L3's hard-coded one-second budget applied watcher policy to five HTTP paths, making a slow but connected fleet
+  report every marker unreadable to create, swap, projects, fleet-first-paint and post-write measurement.
+  `readProjectPools` therefore accepts consumer policy: `FleetWatcher` passes half its own interval, and a watcher
+  test constructs an 8-second cadence and observes 4-second listing and marker budgets, so replacing the
+  expression with a fixed second reds. The original correction allowed HTTP callers to pass `null`; that was the
+  coordinator's erroneous “or none” remedy and removed their aggregate bound. D-2484 closes it with a required
+  finite number and a server-owned ten-second request budget. **Make shared readers accept policy, but require
+  every consumer to bound a read that can otherwise never settle.**
+
+- **D-2479 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **Bounding one watcher leg does not restore the watcher's cadence when an earlier leg remains
+  serial and unbounded at the aggregate.** The same tick awaits `readRegistryMeasured` first, and its
+  `for (const id of ids) await buildRecord(...)` can still cost roughly one 15-second remote timeout per
+  session before `emitPools` starts. This wave does not widen into that pre-existing reader. `emitPools` now
+  claims only that its concurrent bounded marker reads stop the pool leg multiplying timeout by project
+  population, and explicitly records the dominant registry limitation. **State the bound at the exact leg
+  it controls; a downstream deadline cannot make an upstream serial sweep punctual.**
+
+- **D-2480 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **A correction that stops at named files leaves the same stale claim class authoritative one
+  file over.** `shared/roster.ts` still called the now-shipped project-pool route a future importer;
+  `server/src/poolrule.ts` claimed the PWA already consumed `shared/poolrule.ts`, while no `pwa/src` import
+  exists; and `shared/poolrule.ts` still said no consumer existed although the server now imports it. The
+  source-wide pass graduates the server consumers while preserving the wave-4 PWA as future work. **After
+  correcting a false rollout or consumer claim, search its semantic class across the whole source ring.**
+
+- **D-2481 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`, corrected by coordinator mail 508) — **A comment cited the wrong test for one half of a shared
+  queue invariant.** `swap-route-pool.test.ts` pins crossing-arm enqueue and each arm's applicable held-slot
+  refusal, but ordinary-arm queueing is pinned in `lifecycle.test.ts`: an ordinary-only queue bypass leaves
+  the former green and reds the latter. The swap preamble now credits each file precisely; no redundant test
+  was added. **A test citation is a coverage claim — name the suite that actually turns red for that arm.**
+
+- **D-2482 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`, tightened by D-2484 and D-2488) — **A deadline needs lifecycle and snapshot semantics, not only
+  a race.** The first implementation retained one timer closure after every fast read, launched one already-
+  doomed request per project after an exhausted listing budget, and let whichever markers happened to win
+  produce a different partial frame on each tick. Every path now uses a finite consumer-owned bound, clears its
+  timer in `finally`, declines the marker burst below a 50 ms launch floor, and degrades the entire listed
+  population when the shared deadline fires so byte-equality sees a stable fail-shut snapshot. That means a
+  completed tagged marker and a completed proven-absent marker BOTH become `unreadable` when another marker
+  expires the shared deadline; neither transport-order result survives. Deterministic fake-timer tests pin the
+  cleanup and coherent output, while topology cases pass an explicit second solely as test policy. AbortSignal
+  cancellation now removes a losing remote request from `FleetClient`'s pending table and stops ordinary local
+  reads, but the measured FIFO counterexample proves a kernel-blocked local `open` can survive the verdict and
+  repeated callers can multiply it. **A deadline's output must be coherent and its returned decision bounded;
+  cancellation claims must stop at the adapter behavior actually measured.**
+
+- **D-2483 (2026-09-10)** (the #81 coordinator acceptance review of exact head
+  `4470ea21`) — **The first deadline correction falsified its own inventories and local-behavior claim.**
+  `listed:false` can also mean the caller's budget elapsed before the listing; the `FleetIO.readdir` member in
+  `server/src/io.ts` is not the now-measured `readFileB64Measured`; and an aggregate race bounds local reads even though localIO ignores
+  the forwarded parameter. Those source and test claims are corrected. Commit `4470ea21` had already
+  made D-2465's “several never-resolving markers” literal by splitting rejection into a separate case; the
+  overlap test now proves the stronger mechanism. **After inserting lines or a new outcome, re-measure every
+  positional citation and every supposedly exhaustive sentence in the same round.** The final review then
+  caught the timeout-comment edit shifting `FleetIO.readdir` once more (98 → 99), plus the overlap test's
+  losing watchdog handle; the citations were re-measured and the watchdog is cleared in `finally`.
+
+- **D-2484 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **Consumer-owned policy is not
+  permission for a consumer to remove the aggregate bound.** Five HTTP paths passed `null`, so default-local
+  `localIO` ignored the forwarded timeout and the aggregate reader constructed no deadline. A FIFO or stale
+  mount under `$REG/pools/<project>` could therefore leave projects, fleet first-paint, create, swap or
+  post-write measurement pending forever; four blocked filesystem reads could also occupy libuv's default
+  worker pool. Remote mode retained only its ordinary per-request timers, and every HTTP caller initially
+  awaited its registry-root `readdir` before the aggregate timer existed, so the legs could still consume
+  sequential waits. `readProjectPools` now requires a finite `number`; the watcher still passes half its
+  cadence, while all five HTTP consumers pass one server-owned ten-second request budget and route-owned root
+  reads start through callbacks after the timer exists. Session creation's `readProjectPoolsWithRoot` returns
+  that same bounded root answer to the revival check and skips marker reads for a proven revival. The shared
+  aggregate race remains because adapter timeout forwarding cannot bound `localIO`. **Every consumer owns its
+  deadline value, but none may opt out or do prerequisite I/O before it when that input can fail to settle.**
+
+- **D-2485 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A finite route budget needs a
+  route-level pin; reader tests cannot prove an HTTP consumer supplies it.** `GET /api/projects` now runs through
+  a `FleetIO` whose root or project-marker promise never settles; both cases assert the exact `10_000` timeout,
+  fake time advances that request budget, and the route answers 200 with projects `unreadable`. Session creation
+  separately stalls its shared revival/pool root read, asserts the same exact policy, and answers 503 without
+  calling ccd. Against the shipped `null` call the marker case first stayed pending until its real-time watchdog
+  returned `route-still-pending`; against a pre-reader root await, the new root cases stay pending too. A
+  source-level route census additionally enumerates all five HTTP consumers and requires each registration to
+  pass both the callback root and `PROJECT_POOLS_REQUEST_BUDGET_MS`; removing the budget, pre-starting the root,
+  changing the policy token, or adding an uncensused HTTP pool read makes it red. The reader's direct deadline
+  tests remain separate evidence for the aggregate mechanism. **Test policy at every consumer shape that
+  chooses it and mechanism at the reader that enforces it.**
+
+- **D-2486 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **Remaining-time arithmetic must
+  be pinned beyond the exact-boundary value where clamped and unclamped expressions agree.** The reader now
+  floors the monotonic remainder, maps a non-finite result to zero, then applies `Math.max(0, elapsedBudget)`;
+  tests advance the clock one millisecond beyond the budget and inject `NaN`, proving no marker starts while
+  source-pinning the non-negative clamp. Deleting `Math.max(0, ...)` makes the overrun case red even though both
+  zero and negative budgets should decline the burst.
+  **Exercise derived bounds outside their valid interval; a boundary-only test cannot prove the clamp.**
+
+- **D-2487 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **An unreachable defense must not
+  be cited as live protection.** The marker helper's `if (deadlineExpired) return null` could not run before the
+  synchronous `Promise.all(...map())` launch and was removed; the launch floor is the actual pre-launch guard.
+  The unusable-budget arm remains deliberately defensive rather than production-reachable: every current watcher
+  and route supplies a positive finite number, but the public reader accepts any `number`. Its comment says that
+  plainly, and direct zero, negative, `NaN` and infinite cases prove fail-shut `{listed:false}` with no I/O.
+  **Name defensive reachability at the guard, and pin what it does instead of crediting it for a production path
+  it cannot receive.**
+
+- **D-2488 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A wall clock and an exact-zero
+  threshold are both unstable foundations for deadline work.** `Date.now()` let a forward adjustment falsely
+  expire healthy reads and a backward adjustment lengthen the forwarded budget. The reader now derives its
+  deadline and remainder from monotonic `performance.now()`, clamps the integer remainder non-negative, and
+  rechecks it immediately after the root listing, pools listing and completed marker burst so an event-loop-
+  delayed timer callback cannot admit an operation that settled after the monotonic deadline. It declines the whole marker burst when fewer
+  than 50 ms remain rather than launching one nearly-doomed remote frame per project. Parameterized wall-clock-
+  step tests preserve a positive budget in both directions; explicit post-deadline listing and marker settlement
+  plus a 49 ms remainder prove late evidence and marker floods are refused. Replacing the monotonic clock or restoring the zero-only knife edge
+  makes the focused suite red. **Use elapsed-time clocks for elapsed-time policy, and reserve enough remainder
+  for a population burst to produce evidence.**
+
+- **D-2489 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **Correct implementation beside
+  executable stale plan text is a regression waiting for the next plan executor.** Task 2 still specified the
+  rejected module-private one-second constant and three-argument signature, while D-2478 said HTTP could opt
+  out, D-2482 reversed coherent-expiry semantics for completed tagged and absent markers, and D-2465/D-2476
+  described obsolete watchdogs. The Task 2 implementation excerpt now matches the as-built reader,
+  the interface inventory names required `budgetMs` plus both root-source forms, and the deviation entries state
+  the finite watcher/request policies, callback-started route roots, best-effort cancellation boundary,
+  `setImmediate` overlap sentinel, fake-timer deadline tests and coherent whole-population degradation.
+  At correction head `9736a70e`, positional `FleetIO.readdir` citations were re-measured at
+  `server/src/io.ts:103` and correctly described that tree. The next correction, `d978afc6`, inserted two
+  docstring lines above the member and moved it to `:105` without updating those citations; D-2498 records the
+  resulting drift. **When a correction rejects a plan's mechanism, amend the executable task block and its
+  historical claims in the same change.**
+
+- **D-2490 (2026-09-10)** (the #81 coordinator gate on exact head `c833746b`) — **A rollout correction must sweep
+  the shared contract imported by both ends, not only the server source that implements it.** `shared/api.ts`
+  still presented the server's wave-3 503 behavior as future work and exhaustively described `listed:false`
+  without the now-reachable listing-deadline outcome. The same contract still said `ccrc doctor` would carry
+  pool details after its wave-2a implementation had already landed. The contract now says the server answers 503
+  in wave 3, enumerates an unlistable root, a regular file at `pools/`, or expiry before listing completion, and
+  names doctor diagnosis as current behavior. That round's claim that the source sweep found no further staged
+  pool prose was false: `shared/generate.mjs` still described the live supervisor consumer as something a new
+  `ccd` "will call". D-2497 corrects the remaining instance and records the reproducible class-wide search.
+  **After changing staged behavior or a state vocabulary, sweep every source ring that publishes the contract.**
+
+- **D-2491 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **An override that
+  intentionally bypasses a verdict must also bypass the I/O used only by that verdict.** Session creation shared
+  one bounded registry-root listing between revival detection and pool measurement, but its `needsPools`
+  predicate skipped markers only for a proven revival. `crossPool: true` later discarded the completed pool
+  result and delegated the authoritative check to `ccd`, so it still listed `pools/` and read every marker for
+  evidence no server branch consumed. The predicate now excludes declared crossings while preserving the parent
+  registry listing needed to detect a revival. The crossing test observes that root listing but zero `pools/`
+  listings and zero marker reads; removing the `body.crossPool !== true` guard reds on both extra operations.
+  **Skipping a decision without skipping its private inputs leaves the cost and failure surface behind.**
+
+- **D-2492 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **Observing an aborted signal
+  after a sweep settles cannot distinguish deadline cancellation from `finally` cleanup.** The old test awaited
+  the result before checking `signal.aborted`, so deleting `controller.abort()` from the deadline timer stayed
+  green because `deadline.close()` performed the same abort on exit. The replacement waits until a losing marker
+  has registered its listener, advances fake time synchronously, and asserts the abort from inside that timer
+  turn before promise continuations can reach `finally`; the exact deletion now reds with
+  `the deadline callback aborts losing adapter work`. **Test a lifecycle event at the boundary that owns it, not
+  after another boundary can manufacture the same state.**
+
+- **D-2493 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **A fake-time route test can
+  still carry an accidental one-second real-time policy through its wait helper or watchdog.** Both projects-route
+  stalls and the session-create root stall used `vi.waitFor`'s default one-second cap; the marker case then raced
+  its completed route against another one-second real timer. All three waits now declare a 10-second diagnostic
+  cap and name the awaited root or marker launch, and the post-deadline route watchdog uses the same generous
+  cap. Fake timers still advance the production budget exactly; these bounds diagnose a broken setup without
+  turning a loaded host into a product verdict. **Every test wait has policy too; state it where the wait runs.**
+
+- **D-2494 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **Testing late root rejection
+  through `readProjectPools` does not cover the shared-root variant whose answer also drives revival.** A direct
+  `readProjectPoolsWithRoot` case makes the root callback return `claude-demo.uuid` after mocked monotonic time
+  has crossed the deadline, requires `needsPools` to receive `null`, and requires the returned `rootNames` to be
+  `null`. Replacing the post-root normalization with the raw `completedRoot` reds on the callback argument before
+  a caller can treat stale bytes as proof of revival. **When one measurement feeds two decisions, pin the
+  normalized value at their shared seam.**
+
+- **D-2495 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`, corrected by D-2503) — **Removing
+  a pending-table row is not complete request cancellation if its timer or AbortSignal listener survives.** The
+  real-WebSocket abort test freezes timers only around request registration, observes one request timer, aborts,
+  and requires zero timers before accepting a late response. A separate already-
+  aborted case asserts synchronously that no pending entry, timer, listener, or request frame is registered before
+  checking the rejection. Deleting abort-path `clearTimeout` or deleting the pre-aborted guard makes its
+  corresponding assertion red. D-2503 narrows this evidence: a `{ once:true }` listener has already been removed
+  by the event target when the abort callback runs, so the redundant abort-path disposer is removed and timeout
+  and response settlement carry
+  the load-bearing listener-detachment tests. **Every settlement path must release the resources still registered
+  for that request; do not infer another path's effect from the same helper call.**
+
+- **D-2496 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`) — **An aggregate deadline's strict
+  decision bound must not be described as universal syscall cancellation.** `FleetIO` and the pool reader now
+  say precisely that the signal reaches local `readFileMeasured` and remote pending requests, while derived local
+  `readFile` has no signal parameter and this local adapter's `readdir` ignores timeout and signal because the
+  Node API used there accepts neither; the aggregate race is what still bounds the returned pool decision. A
+  real-adapter test passes an already-aborted signal to a readable file and requires fail-shut `unreadable`; removing the signal from
+  `fs.promises.readFile` makes it return the bytes and reds. **Name strict decision timing and best-effort work
+  cancellation as separate guarantees.**
+
+- **D-2497 (2026-09-10)** (the #81 coordinator gate on exact head `9736a70e`, corrected by D-2498 and D-2504) —
+  **A semantic sweep is evidence only when its corpus, query class, and classifications are reproducible.**
+  D-1680's positional citation was re-measured at `server/src/io.ts:103` before the same commit inserted two lines
+  above it, moving the member to `:105`, so that claim did not describe the published tree; D-2498 replaces shipped
+  offsets with symbol citations.
+  D-2490 now admits its false exhaustive conclusion; the wave input no
+  longer says a live wave-2b strand producer has not shipped; and `shared/generate.mjs` now says the supervisor's
+  live five-second loop calls `_ccrc_pool`, rather than that a new `ccd` will call it later. The class search was
+  case-insensitive over every `shared/**/*.{ts,mjs,mts}`, every `server/src/**/*.ts`, and this complete plan,
+  pairing `pool|pools` with `later|future|will|not yet|until|once|when`, then separately searching rollout phrases
+  (`later task|wave`, `next task|wave`, `will call|read|use|consume|carry|expose|ship|land|add`, `has no caller`,
+  `until/once/when ... ships|lands`). Each surviving hit was read in context and its named consumers were checked
+  by symbol/import search. The sweep found three more live contradictions outside the pool-specific hits:
+  `shared/mark.mjs` said its already-used marker functions had not acquired callers, `shared/roster.ts` called
+  the already-live config reader and tooling future, and `server/src/remote/client.ts` said nothing imported its
+  `FleetState` re-export although `refreshcaps.ts` does. Those comments now name current ownership and consumers.
+  The remaining staged statements are accurate: `shared/poolrule.ts`'s phone rule and `shared/api.ts`'s warning
+  renderer remain wave-4 PWA work (no current PWA pool consumer), and `shared/roster.ts`'s possible future grammar
+  divergence is conditional. The unrelated `shared/api.ts` lifecycle paragraph was another stale rollout claim,
+  so it now describes the live journal contract; other `when`/`once` hits state runtime conditions, not rollout
+  status. D-2504 rules that this method was still too narrow: its corpus omitted shipped `ccd/` and deploy-side
+  consumers, and pairing pool terms with rollout verbs could never find a present-tense consumer census such as
+  "their one consumer is X". The relevant class is a sentence asserting who consumes something, or when something
+  lands, that the current tree has since falsified. **A negative search proves only its query; neither a published
+  query nor classified survivors makes an omitted corpus or unreachable sentence class complete.**
+
+- **D-2498 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A citation measured
+  before the same commit's edits is not evidence for that commit.** The D-2497 correction inserted two lines into
+  `FleetIO`'s docstring after measuring `readdir` at `server/src/io.ts:103`, moving the member to `:105` while six
+  live plan/source/test citations continued to point at `readFileB64Measured`, the exact counterexample to their
+  claim. The two shipped citations now name the `FleetIO.readdir` symbol rather than an offset; plan snapshots use
+  the corrected `:105`, and D-2489/D-2497 disclose that their re-measurement preceded the invalidating edit.
+  **Apply every hunk before measuring a positional citation, and use a symbol where position carries no meaning.**
+
+- **D-2499 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A public constant's
+  rationale must name its measured production consumer, not tests that do not import it.** `HUES` is exported for
+  `pwa/src/lib/offline.ts`, which validates cached roster entries against it. `shared/roster-json.mjs` and
+  `ccd/ccrc-adopt` currently repeat the six-value order, so the comment retains the warning that consolidation must
+  reuse this sequence rather than add another copy. **Follow the export to its importer before explaining why it is public.**
+
+- **D-2500 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A consumer census
+  cannot stop at the first familiar reader.** The generated `_ccrc_dir_id`, `_ccrc_label`, and `_ccrc_hue` helpers
+  feed `ccd/statusline-command.sh`, while `CCRC_MEASURED` also gates and drives `ccd/ccd-telemetry-keepalive`.
+  `shared/generate.mjs` now names both consumers instead of calling the statusline the sole one.
+  **Search each emitted symbol independently before claiming one consumer for a group.**
+
+- **D-2501 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **Landed installer
+  behavior must not remain future tense in a shipped executable.** `ccd/ccrc` calls `_inst_accounts_sh` on every
+  install run, so `ccd/ccd` now says both `deploy/deploy.sh` and `ccrc install` generate `accounts.sh`; it no longer
+  says that install support will land later. **A sentence about when a verb lands must be checked against that verb's tree.**
+
+- **D-2502 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`, corrected by
+  D-2512) — **"Both directions" requires two assertions.** `ccd-refusal-scan.test.ts` already rejected literal
+  refusal arguments absent from the combined L0/SENTENCES vocabulary; it now also rejects each journal-only
+  `LC_REFUSAL_TOKENS` member absent from the three scanned literal argument positions. `wsaudit.test.ts`
+  separately keeps SENTENCES set-equal to its stdout producers. Removing a journal token's final literal call-site
+  argument now reds as `declared journal-only tokens with no literal ccd call-site argument`.
+  **State literal-vocabulary equality only when stale declarations and unknown literal arguments both fail.**
+
+- **D-2503 (2026-09-11)** (the #81 coordinator round-six review of exact head `d978afc6`) — **A disposer call on
+  an abort callback registered `{ once:true }` does not prove listener cleanup on paths where the listener never
+  fires.** The event target has already detached that listener before the callback invokes `entry.dispose()`, so
+  the prior abort assertion measured a no-op. Real-WebSocket cases now settle through timeout and a normal response
+  while retaining the caller's signal, and each requires `removeEventListener`; removing either path's disposer
+  reds its own case. The behavior-preserving abort-path disposer is removed rather than retained as ceremonial cleanup.
+  **Pin cleanup on the settlement paths where the resource remains registered.**
+
+- **D-2504 (2026-09-11)** (the #81 coordinator round-six ruling on exact head `d978afc6`) — **The repeated defect
+  class is not "staged pool prose"; it is a sentence asserting who consumes something, or when something lands,
+  that the current tree has since falsified.** D-2497's corpus omitted shipped `ccd/`, deploy-side and `pwa/`
+  consumers plus `server/test/` evidence; D-2499 needed both the PWA importer and the absence of the claimed test
+  imports to refute its rationale. Its pool-term-plus-rollout-verb query also could not reach D-2500's present-tense
+  "one consumer" census. Per the ruling, this correction fixes D-2498 through D-2503 and records the class without
+  running another sweep.
+  **A search method that structurally cannot match a known counterexample cannot close that counterexample's class.**
+
+- **D-2509 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **A historical
+  correction must distinguish a citation that was correct at its own commit from one invalidated within the same
+  commit.** Git proves the sequence: `c833746b` put `FleetIO.readdir` at `:99`; `9736a70e` moved it to `:103`
+  and correctly updated the plan; `d978afc6` inserted two docstring lines, moved it to `:105`, and left `:103`
+  behind. D-2489 now says its `:103` measurement was correct at `9736a70e` and the next commit invalidated it;
+  D-2497 says its same-commit measurement was `:103` before the edit moved the member to `:105`.
+  **A correction's chronology is part of the claim: name the commit that changed the fact.**
+
+- **D-2510 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`, amended by
+  coordinator delivery 523) — **Fixing one positional-citation family does not protect plans citing other files
+  edited elsewhere in the PR.** Edits to `shared/generate.mjs` and `shared/roster.ts` shifted six verified citation
+  sites across the telemetry-keepalive, account-health-probe and two model-class-registry plans; one roster citation
+  moved in opposite directions across two commits, so hunk arithmetic could not recover its current target. Those
+  sites now name `generateAccountsSh`'s `measuredIds`/`CCRC_MEASURED` anchors, `ExecSpec`, or
+  `AccountDef.telemetry`, so adjacent comment edits cannot silently turn the evidence into a plausible but unrelated line.
+  **When a change moves cited code, update every plan that cites that file before publishing the change.**
+
+- **D-2511 (2026-09-11)** (the #81 coordinator round-seven ruling on exact head `e0a0c4cd`) — **Repeated line
+  drift makes the positional-citation convention the defect, not the latest set of numbers.** Every citation this PR
+  writes or touches into a file this PR edits now uses a symbol or anchor quote where the cited thing has a name;
+  D-2510's six verified sites use those stable anchors, following the `ccd/ccd` precedent that records a grep rather
+  than a line number. The roughly 85 untouched repository citations are deliberately outside this correction: sweeping them
+  would expand a targeted review fix into an unrequested repository-wide documentation rewrite.
+  **Cite identity by symbol and use a range only when the range itself carries the meaning.**
+
+- **D-2512 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **A regex that
+  recognizes bare literals in fixed argument positions pins literal call-site coverage, not semantic production.**
+  `ccd/ccd` already passes the dynamic `$REAP_VERDICT` through `_lc_emit`, a producer shape the scan deliberately
+  cannot name. The test label, failure text and `shared/api.ts` contract now say exactly that the three regexes hold
+  literal refusal arguments against the vocabularies in both directions; they no longer call every match a producer.
+  **Name the syntax a source scan observes, especially when the same executable carries a dynamic counterexample.**
+
+- **D-2513 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **Adding a refusal
+  token is not a two-line edit, and a reverse literal scan imposes an ordering constraint.** A new union member also
+  needs its `LC_REFUSAL_WORD`, exhaustive test inventory, and literal `ccd` emission; the union may not name it before
+  that emission exists in the tested tree. `shared/api.ts` now states the coordinated edit and ordering rule rather
+  than promising an already-false edit count.
+  **A maintenance recipe must include every red mechanism that guards the change.**
+
+- **D-2514 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **Once redundant
+  abort-path disposal is removed, `{ once:true }` is the sole listener-release mechanism on that settlement path.**
+  The real-WebSocket abort test now spies on registration and requires the exact
+  `('abort', function, { once:true })` shape before aborting. Removing the option reds that assertion while the
+  timer/pending/late-response checks continue to exercise the rest of the path.
+  **When simplification leaves one owner for a resource, pin the ownership mechanism itself.**
+
+- **D-2515 (2026-09-11)** (the #81 coordinator round-seven review of exact head `e0a0c4cd`) — **Cleanup in a
+  disconnect helper is not protected until a real pending request crosses that boundary.** A real-WebSocket test now
+  issues a request with a caller-held signal, terminates the server socket, requires a `disconnected` rejection and
+  requires `removeEventListener` once. Removing only the disposer reds the listener assertion; gutting
+  `rejectAllPending` leaves the promise unsettled and times the test out rather than leaving the full suite green.
+  **Test lifecycle helpers through the event that invokes them, not by trusting their call sites.**
+
+- **D-2516 (2026-09-11)** (the #81 coordinator round-eight review of exact head `b6b7fb4a`) — **A dangling pool
+  marker symlink is present but the server reports it absent, so its API-side constraint is lifted while ccd refuses
+  the marker as unreadable.** `readFile` follows the symlink and receives ENOENT for its missing target;
+  `readFileMeasured` therefore returns `reason:'absent'`, and `readProjectPools` skips that listed name as untagged.
+  ccd pairs `! -e` with `-L` and fails shut. No shipped writer creates such a link and ccd remains the placement
+  authority, so this is a non-blocking reporting/status divergence reachable only through hand-written fleet state.
+  The disclosure path is taken rather than adding an `lstat` syscall to every measured field read: `server/src/io.ts`
+  now names the unsafe pool consumer and the remaining ccd/server divergence instead of claiming absence is safe for
+  every consumer.
+  **An errno describes the followed target, not necessarily whether the directory entry itself exists.**
+
+- **D-2517 (2026-09-11)** (coordinator-owned, recorded from the #81 round-eight review of exact head
+  `b6b7fb4a`) — **D-2000 is a deployment convention, not an enforced gate.** No deploy-side guard or server-side
+  mechanism implements it; the operator and coordinator honour it procedurally. The three deployment statements in
+  this plan now say that explicitly while retaining both constraints: this wave must not be deployed, and any later
+  deployment remains AGENT-FIRST because #81 changes `ccd/ccd`.
+  **Name a procedural hold as a convention unless a mechanism can red or refuse when it is violated.**

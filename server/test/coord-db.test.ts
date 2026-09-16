@@ -657,9 +657,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 8 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(8);
-    expect(MIGRATIONS.length).toBe(8);
+  it('COORD_SCHEMA_VERSION derives to 11 — never hand-edited beside a growing array', () => {
+    // Bumped to 11 by migration 11, runs.kind/runs.reviews (design 2026-09-14 §5.1).
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    expect(MIGRATIONS.length).toBe(11);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -675,6 +676,48 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
       'state', 'claimedBy', 'resumed', 'clearedAt', 'openedAt', 'dispatchedAt', 'closedAt',
       'handoffCommit', 'prLineage', 'dispatchStartedAt',
     ]));
+    db.close();
+  });
+});
+
+describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-14 §5.1)', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const runsColumn = (db: DatabaseSync, name: string): ColumnInfo | undefined =>
+    (db.prepare('PRAGMA table_info(runs)').all() as unknown as ColumnInfo[]).find((c) => c.name === name);
+
+  it('gives a fresh database both columns: kind NOT NULL DEFAULT work, reviews nullable with no default', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const kind = runsColumn(db, 'kind');
+    expect(kind).toBeDefined();
+    expect(kind!.type).toBe('TEXT');
+    expect(kind!.notnull).toBe(1);
+    expect(kind!.dflt_value).toBe("'work'");
+    const reviews = runsColumn(db, 'reviews');
+    expect(reviews).toBeDefined();
+    expect(reviews!.type).toBe('INTEGER');
+    expect(reviews!.notnull).toBe(0);
+    expect(reviews!.dflt_value).toBeNull();
+    db.close();
+  });
+
+  it('reaches a database ALREADY at user_version 10 and reads every existing row as a work run', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < 10; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec('PRAGMA user_version = 10');
+      raw.exec("INSERT INTO programs (slug, title, createdAt, state) VALUES ('p', 'P', 1, 'active')");
+      raw.exec("INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) " +
+               "VALUES ('p', 1, 1, 'demo', 'working', 'c', 1)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
+    expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
   });
 });
@@ -752,5 +795,97 @@ describe('coord.db: migration 8 — un-landing the two rows a CITATION stamped',
     db.exec(MIGRATIONS[7]!);
     expect(db.prepare(ROWS).all()).toEqual(before);
     db.close();
+  });
+});
+
+// D-2410: main's ask lane owns migration 9; this wave must prove its columns
+// arrive from the next entry against a file on which that lane already ran.
+describe('coord.db: migration 10 — the programme knows its home, the feed row names its run', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 9 — it cannot amend the ask migration it rebased over', () => {
+    // Migrations 2..9 are already frozen. A file left by the ask-lane server is
+    // at 9; db.ts's loop starts at `current`, so anything amended INTO entries
+    // 0..8 can never run against it again. The two columns must therefore arrive
+    // as their own entry, and this proves they do without weakening the ask lane.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let i = 0; i <= 8; i++) raw.exec(MIGRATIONS[i]!);
+      raw.prepare(
+        'INSERT INTO asks (at, childId, parentId, runId, askKey, askAt, dialogId, question, options, state) ' +
+        "VALUES (1, 'child', 'parent', NULL, 'key', 1, 'dialog', 'question', '[\"answer\"]', 'held')",
+      ).run();
+      raw.exec('PRAGMA user_version = 9');
+    });
+    raw.close();
+
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION);
+    expect(columnOf(db, 'programs', 'homeProject'), 'programs.homeProject is absent').toBeDefined();
+    expect(columnOf(db, 'feed_events', 'runId'), 'feed_events.runId is absent').toBeDefined();
+    expect((db.prepare('SELECT count(*) AS n FROM asks').get() as { n: number }).n).toBe(1);
+    // READABLE, not merely present: a v-9 row written before the columns existed
+    // reads back NULL rather than throwing.
+    db.prepare("INSERT INTO programs (slug,title,createdAt,state) VALUES ('p','P',1,'active')").run();
+    expect((db.prepare('SELECT homeProject FROM programs WHERE slug = ?').get('p') as
+      { homeProject: string | null }).homeProject).toBeNull();
+    db.close();
+  });
+
+  it('gives both columns the nullability the design depends on', () => {
+    // NULLABLE, NO DEFAULT, both — and both halves are load-bearing. A NULL
+    // `homeProject` means "no home was ever stored", which a later explicit
+    // home BACKFILLS; a default would guess a home nothing could then correct
+    // without colliding with it. A NULL `feed_events.runId` means "this event
+    // is about no run" — an ask/done/merged about a session — which is
+    // programless, not unmeasured.
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const home = columnOf(db, 'programs', 'homeProject');
+    const rid = columnOf(db, 'feed_events', 'runId');
+    expect(home!.type).toBe('TEXT');
+    expect(rid!.type).toBe('INTEGER');
+    for (const c of [home, rid]) {
+      expect(c!.notnull, `${c!.name} must be nullable`).toBe(0);
+      expect(c!.dflt_value, `${c!.name} must carry no default`).toBeNull();
+    }
+    db.close();
+  });
+
+  it('is ADDITIVE: every column migration 1 wrote on programs is still there', () => {
+    const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
+    const names = (db.prepare('PRAGMA table_info(programs)').all() as unknown as ColumnInfo[])
+      .map((c) => c.name);
+    expect(names).toEqual(expect.arrayContaining(['slug', 'title', 'createdAt', 'state', 'homeProject']));
+    db.close();
+  });
+
+  it('a database from a NEWER build still READS both columns — rollback is real', () => {
+    // spec:78-81 and `db.ts:105`: an older build meeting a higher user_version
+    // may refuse to MIGRATE, never to READ. This is that promise for THESE two
+    // columns specifically — `programs.homeProject` and `feed_events.runId` —
+    // since a rollback across this migration is the exact window the design's
+    // §8 rollback paragraph is about, and both are read back below.
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    const a = openCoordDb(p);
+    a.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 3}`);
+    a.prepare("INSERT INTO programs (slug,title,createdAt,state,homeProject) VALUES ('p','P',1,'active','demo')").run();
+    a.prepare("INSERT INTO feed_events (epoch, seq, at, kind, sessionId, title, body, runId) VALUES ('e', 1, 1, 'run', 's', 't', 'b', 7)").run();
+    a.close();
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const b = openCoordDb(p);
+    expect((b.prepare('SELECT homeProject FROM programs WHERE slug = ?').get('p') as
+      { homeProject: string | null }).homeProject).toBe('demo');
+    expect((b.prepare('SELECT runId FROM feed_events WHERE seq = 1').get() as
+      { runId: number | null }).runId).toBe(7);
+    expect((b.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
+      .toBe(COORD_SCHEMA_VERSION + 3);
+    warnSpy.mockRestore();
+    b.close();
   });
 });

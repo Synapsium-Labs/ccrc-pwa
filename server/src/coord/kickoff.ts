@@ -1,6 +1,10 @@
 import type { CoordStore } from './store.js';
 import { queueSystemMail, type SystemMailQueued } from './rundefs.js';
-import { MAIL_BODY_MAX_BYTES, PROGRAM_KICKOFF_SUBJECT, programKickoff, programResumeKickoff } from '../../../shared/api.js';
+import {
+  PROGRAM_KICKOFF_SUBJECT,
+  programKickoffVerdict,
+  type ProgramKickoffResume,
+} from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -143,15 +147,12 @@ export function queueProgramKickoff(
   deps: KickoffDeps,
   toId: string,
   program: { slug: string; title: string },
-  resume?: { runId: number; wave: number },
+  resume?: ProgramKickoffResume,
 ): KickoffOutcome {
-  const body = resume
-    ? programResumeKickoff(program.slug, program.title, resume.runId, resume.wave)
-    : programKickoff(program.slug, program.title);
-  const bytes = Buffer.byteLength(body, 'utf8');
-  if (bytes > MAIL_BODY_MAX_BYTES) {
-    return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
-      detail: `kickoff body ${bytes} bytes exceeds the ${MAIL_BODY_MAX_BYTES} byte mail body cap` };
+  const verdict = programKickoffVerdict(program.slug, program.title, resume);
+  if (!verdict.ok) {
+    if (verdict.kind === 'oversize') return verdict;
+    throw new Error(`queueProgramKickoff received invalid program: ${verdict.detail}`);
   }
   return { ok: true, ...queueSystemMail(deps.coord, null, {
     fromId: 'operator',
@@ -159,6 +160,6 @@ export function queueProgramKickoff(
     runId: null,
     kind: 'status',
     subject: PROGRAM_KICKOFF_SUBJECT,
-    body,
+    body: verdict.body,
   }) };
 }

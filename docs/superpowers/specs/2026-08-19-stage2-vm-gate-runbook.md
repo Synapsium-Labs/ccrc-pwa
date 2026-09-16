@@ -773,7 +773,7 @@ ccrc uninstall
 Expect the close:
 
 ```
-uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity), the session registry rows, worktrees and ~/ccrc-backups were all preserved
+uninstall: done — this box is off ccrc, and reinstall is safe: ~/.ccrc (config, roster, identity, and every project's memory), the session registry rows, worktrees and ~/ccrc-backups were all preserved
 ```
 
 Confirm the Claude settings are clean — `jq .hooks ~/.claude/settings.json` shows none of ccrc's

@@ -115,3 +115,30 @@ export function asManagerCalls(lines: string[]): string[] {
   }
   return out;
 }
+
+/** A claim that the two userlands behave DIFFERENTLY — and the way to make one.
+ *
+ *  D-2765. A case written as `itDarwin('BSD: it still ends a child that IGNORES
+ *  SIGTERM')` red on macOS and was reported as a BSD fact. It was UNIVERSAL:
+ *  Linux behaved identically, and the control that would have said so was never
+ *  written. Note what could NOT have caught it — the file already had `itLinux`
+ *  cases, and so did the same `describe`. A scan for "this file tests both
+ *  platforms" would have passed it. Only requiring the two arms of ONE CLAIM
+ *  together can, which is what this does: TypeScript refuses a missing key.
+ *
+ *  Use it whenever the point is that one platform differs from the other. Where
+ *  a platform genuinely has no counterpart — an input only it can produce, a
+ *  binary only it ships — say so with a `PLATFORM-ONLY:` comment above the bare
+ *  `itDarwin`/`itLinux`, which `macos-platform.test.ts` requires and reads. The
+ *  two escapes are deliberate: the mechanism is meant to force a DECISION about
+ *  the other platform, not to manufacture a symmetry that is not there. */
+export function platformContrast(
+  subject: string,
+  arms: {
+    darwin: [says: string, test: () => void | Promise<void>],
+    linux: [says: string, test: () => void | Promise<void>],
+  },
+): void {
+  itDarwin(`${subject} — ${arms.darwin[0]}`, arms.darwin[1]);
+  itLinux(`${subject} — ${arms.linux[0]}`, arms.linux[1]);
+}

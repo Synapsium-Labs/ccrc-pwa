@@ -47,7 +47,10 @@ export const WORKER_SKILL_DIR = 'ccrc-worker';
  */
 export const COORDINATOR_SKILL_DIR = 'ccrc-coordinator';
 
-/** THE join — one, still. The file both installers' `REQUIRED_FILES` name. */
+/** The directory `ccd/install-reviewer-skill.sh` writes, same parent. */
+export const REVIEWER_SKILL_DIR = 'ccrc-reviewer';
+
+/** THE join — one, still. The file all three installers' `REQUIRED_FILES` name. */
 export function skillPath(configDir: string, skillDir: string): string {
   return path.join(configDir, 'skills', skillDir, 'SKILL.md');
 }
@@ -82,9 +85,17 @@ export async function readSkillState(
   return read.reason === 'absent' ? 'absent' : 'unmeasurable';
 }
 
-/** The dispatch preflight's call, unchanged in signature and in semantics. */
+/** Kept for `skillstate.test.ts`; dispatch's own preflight now calls
+ *  `readSkillState` directly through `skillDirFor`, since a review run's
+ *  preflight measures the REVIEWER skill, not this one. */
 export async function readWorkerSkillState(
   io: Pick<FleetIO, 'readFileMeasured'>, configDir: string | undefined,
 ): Promise<SkillState> {
   return readSkillState(io, configDir, WORKER_SKILL_DIR);
 }
+
+/** Which skill directory the dispatch preflight measures, by run kind.
+ *  `unknown` is refused before dispatch asks; answering the worker's dir for
+ *  it here would measure the wrong file. */
+export const skillDirFor = (kind: 'work' | 'review'): string =>
+  kind === 'review' ? REVIEWER_SKILL_DIR : WORKER_SKILL_DIR;

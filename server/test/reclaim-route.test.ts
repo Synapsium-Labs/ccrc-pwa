@@ -19,6 +19,7 @@ import type { Runner } from '../src/exec.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 const PROGRAM = 'leverage';
@@ -30,7 +31,7 @@ const PROJECT = 'demo';
 const DEAD = 'demo-coordinator-old';
 const HEIR = 'demo-coordinator-new';
 
-/** `coord-abandon.test.ts:30-38`'s registry row, field for field, so a fixture
+/** `coord-abandon.test.ts:31-39`'s registry row, field for field, so a fixture
  *  session reads exactly like a ccd one. */
 const seed = (home: string, id: string): void => {
   const reg = path.join(home, '.cc-sessions');
@@ -47,7 +48,7 @@ const seed = (home: string, id: string): void => {
  *  recognises exactly `can't find session` as proof of death and calls every other
  *  failure `unknown`, so a fixture that improvised a stderr would be scripting
  *  `unmeasurable` by accident and passing for the wrong reason. `cmd` is recorded
- *  as well as the argv (`kickoff-route.test.ts:133`'s reason) — "nothing was
+ *  as well as the argv (`kickoff-route.test.ts:175`'s reason) — "nothing was
  *  measured" is a statement about `cmd`, which `calls.push(args)` cannot make. */
 const makeRunner = (live: ReadonlySet<string> = new Set()): { run: Runner; execs: string[][] } => {
   const execs: string[][] = [];
@@ -74,7 +75,7 @@ const openApp = async (home: string, run: Runner, over: Partial<Omit<Deps, 'cfg'
 
 /** One run of `PROGRAM`, claimed by `DEAD`. `openRun` answers a UNION — it can
  *  refuse a second coordinator — so the id is narrowed rather than destructured
- *  off the refusal shape (`coord-abandon.test.ts:70-73`). */
+ *  off the refusal shape (`coord-abandon.test.ts:71-74`). */
 const openWave = (coord: CoordStore, wave: number, claimedBy = DEAD): number => {
   const opened = coord.openRun({
     program: PROGRAM, title: 'Program leverage', project: PROJECT, wave, waveOf: 8, claimedBy,
@@ -119,8 +120,8 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     // `resolveCoordinator(null)` (`store.ts:1188-1191`) both read the LOWEST-id
     // claimed row with no state predicate, so a rewrite that spared wave 1
     // would leave both readers answering the corpse and the wedge intact.
-    expect(w.coord.run(w1)!.claimedBy).toBe(HEIR);
-    expect(w.coord.run(w2)!.claimedBy).toBe(HEIR);
+    expect(okRun(w.coord.run(w1))!.claimedBy).toBe(HEIR);
+    expect(okRun(w.coord.run(w2))!.claimedBy).toBe(HEIR);
     const ev = w.coord.runEvents(w1).at(-1)!;
     expect(ev.causedBy).toBe('operator');
     expect(ev.detail).toBe(`reclaim:${DEAD} -> ${HEIR}`);
@@ -142,7 +143,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
   it('409 no-claimant for a reconstructed run whose claimedBy is NULL', async () => {
     // `reconstruct` inserts every rebuilt run with `claimedBy` bound to NULL
     // (`store.ts:361-368`) and no in-tree method writes that shape, so the row
-    // is made the way `run-routes.test.ts:1329` already makes it.
+    // is made the way `run-routes.test.ts:2145` already makes it.
     const home = mkTmp('ccrc-reclaim-');
     seed(home, HEIR);
     const { run } = makeRunner();
@@ -168,7 +169,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(res.json()).toEqual({ ok: false, error: 'unknown-session' });
     // …and the run did NOT move: a refusal that half-committed would be worse
     // than the wedge it was called to clear.
-    expect(w.coord.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(w.coord.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('502 registry-unmeasurable, with its detail, when the registry DIRECTORY will not list', async () => {
@@ -212,7 +213,7 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     // pane AND from a gone-but-restarting lifecycle, and the sheet must be able
     // to tell the operator which.
     expect(body.detail.length).toBeGreaterThan(0);
-    expect(w.coord.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(w.coord.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('501 not-configured on a box that does no coordination at all', async () => {
@@ -241,6 +242,23 @@ describe('POST /api/runs/:id/reclaim — the union→status map', () => {
     expect(res.statusCode).toBe(400);
     expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
   });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'a non-canonical id %s answers 400 without reclaiming run 1', async (id) => {
+      const home = mkTmp('ccrc-reclaim-');
+      seed(home, HEIR);
+      const { run, execs } = makeRunner();
+      const w = await openApp(home, run); app = w.app;
+      const runId = openWave(w.coord, 1);
+      expect(runId).toBe(1);
+
+      const res = await post(app, id);
+      expect(res.statusCode).toBe(400);
+      expect(res.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(okRun(w.coord.run(runId))!.claimedBy).toBe(DEAD);
+      expect(execs).toEqual([]);
+    },
+  );
 
   it('a NON-INTEGER id answers 400 before anything is measured — the sweep probe', async () => {
     // `auth-gate.test.ts:93`'s `concrete()` rewrites `:id` to `x` and injects

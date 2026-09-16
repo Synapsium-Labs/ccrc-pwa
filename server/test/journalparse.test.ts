@@ -224,8 +224,8 @@ describe('parseJournalLine: the vocabulary', () => {
 
   // FIX ROUND 1, F1: `badoutcome` was entirely dropped before this round —
   // no field on `JournalRow`, `o['badoutcome']` never read — even though
-  // ccd writes it today (`ccd/ccd:1351`, `:1417-1422`) and
-  // `LifecycleEvent.badoutcome` (`shared/api.ts:4007-4010`) already declares
+  // ccd writes it today (`ccd/ccd:1469`, `:1417-1422`) and
+  // `LifecycleEvent.badoutcome` (`shared/api.ts:4873-4876`) already declares
   // it with the identical invariant `badact` has. These two cases mirror the
   // two `badact` cases directly above, one per side of the pair.
   it('degrades an outcome this build does not declare to `unknown` AND KEEPS THE TOKEN', () => {
@@ -242,14 +242,14 @@ describe('parseJournalLine: the vocabulary', () => {
     expect(r.badoutcome).toBe('stalled');
   });
 
-  // FIX ROUND 1, F2 (a forging vector, closed): `shared/api.ts:4003-4005` /
+  // FIX ROUND 1, F2 (a forging vector, closed): `shared/api.ts:4869-4871` /
   // `:4007-4010` state the invariant in so many words — "null whenever `act`
   // [`outcome`] is not `LC_ACT_UNKNOWN` [`LC_OUTCOME_UNKNOWN`]. The two are
   // never both set." Before this round, `badact: badact ?? (act ===
   // LC_ACT_UNKNOWN ? actRaw : null)` read a caller-supplied `badact` key
   // FIRST regardless of what `act` resolved to, so a forged line pairing a
   // perfectly valid `act` with an attacker's own `badact` string came out
-  // with BOTH set — exactly the signal `ccd/ccd:1417-1422`'s `_lc_emit`
+  // with BOTH set — exactly the signal `ccd/ccd:1535-1540`'s `_lc_emit`
   // guarantees never happens on a genuine line, and exactly what a reader
   // uses to decide "ccd's own vocabulary is stale". The journal is
   // append-only on a box with a single UNIX user (identity there is

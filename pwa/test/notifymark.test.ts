@@ -3,7 +3,7 @@ import { loadMark, saveMark, applyCatchUp } from '../src/lib/notifymark';
 import type { CatchUp, NotifyEvent } from '../../shared/api';
 
 const ev = (seq: number): NotifyEvent =>
-  ({ seq, at: 1_000 + seq, kind: 'ask', sessionId: 'cc-a', title: `t${seq}`, body: '' });
+  ({ seq, at: 1_000 + seq, kind: 'ask', sessionId: 'cc-a', title: `t${seq}`, body: '', runId: null });
 
 beforeEach(() => localStorage.clear());
 

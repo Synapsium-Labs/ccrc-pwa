@@ -46,18 +46,17 @@ export interface RemoteFleetConfig {
 
 type ResolvedConfig = Required<RemoteFleetConfig>;
 
-// Re-exported so every importer of `FleetState` from `remote/client.js` keeps
-// working unchanged now that this module no longer declares its own copy.
-// Disclosed rather than pinned: as of this change nothing in this tree
-// imports `FleetState` from here yet (every current call site — server.ts,
-// fleet-health.test.ts — reaches it via `fleetstate.js` directly), so no test
-// or tsc error currently distinguishes this line from its own deletion. It
-// exists for the callers this split was done for: `ccdargv.ts`'s
-// `Pick<FleetState, 'ccdVerbs'>` and the `verbSupported(deps.fleetState, …)`
-// call sites landing in later tasks.
+// Re-exported so callers can obtain the connected client and its state type
+// from one remote boundary. `refreshcaps.ts` and its test import `FleetState`
+// here; deleting this export is therefore a TypeScript error.
 export type { FleetState };
 
-interface Pending { resolve: (v: ResOk) => void; reject: (e: Error) => void; timer: NodeJS.Timeout }
+interface Pending {
+  resolve: (v: ResOk) => void;
+  reject: (e: Error) => void;
+  timer: NodeJS.Timeout;
+  dispose(): void;
+}
 
 type TailListener = (msg: TailData | TailReset) => void;
 type PtyListener = (msg: PtyData | PtyExit) => void;
@@ -173,19 +172,36 @@ export class FleetClient {
     }
   }
 
-  request(payload: AgentReqPayload, timeoutMs?: number): Promise<ResOk> {
+  request(payload: AgentReqPayload, timeoutMs?: number, signal?: AbortSignal): Promise<ResOk> {
     if (!this.ready || !this.socket || this.socket.readyState !== WebSocket.OPEN) {
       return Promise.reject(new Error('disconnected'));
     }
+    if (signal?.aborted) return Promise.reject(new Error('aborted'));
     const ws = this.socket;
     const id = this.nextId++;
     const wait = timeoutMs ?? this.cfg.requestTimeoutMs;
     return new Promise<ResOk>((resolve, reject) => {
+      const abort = (): void => {
+        const entry = this.pending.get(id);
+        if (entry === undefined) return;
+        clearTimeout(entry.timer);
+        this.pending.delete(id);
+        // `{ once: true }` has already detached the listener before this runs.
+        reject(new Error('aborted'));
+      };
+      const dispose = (): void => signal?.removeEventListener('abort', abort);
       const timer = setTimeout(() => {
         this.pending.delete(id);
+        dispose();
         reject(new Error('timeout'));
       }, wait);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, {
+        resolve,
+        reject,
+        timer,
+        dispose,
+      });
+      signal?.addEventListener('abort', abort, { once: true });
       const req = { ...payload, t: 'req', id } as AgentReq;
       ws.send(JSON.stringify(req));
     });
@@ -273,6 +289,7 @@ export class FleetClient {
       if (!entry) return;
       this.pending.delete(id);
       clearTimeout(entry.timer);
+      entry.dispose();
       if (msg.ok === false) {
         entry.reject(new Error(typeof msg.err === 'string' ? msg.err : 'error'));
       } else {
@@ -390,6 +407,7 @@ export class FleetClient {
   private rejectAllPending(err: Error): void {
     for (const entry of this.pending.values()) {
       clearTimeout(entry.timer);
+      entry.dispose();
       entry.reject(err);
     }
     this.pending.clear();

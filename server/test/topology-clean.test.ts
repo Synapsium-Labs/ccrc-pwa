@@ -39,7 +39,7 @@
 // commit and REMOVED by the next — tip clean, history dirty, the exact state
 // the tip walk cannot see. The pre-guard suite ran 39/39 GREEN on it (the
 // blindness, measured rather than argued); the guarded suite ran exactly 1 red,
-// `README.md:1831: 1.2.3.4` on the public-IPv4 RANGE row, with all 47 other
+// `README.md:2250: 1.2.3.4` on the public-IPv4 RANGE row, with all 47 other
 // rows — every tip row included — still green; 48/48 on revert.
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -135,7 +135,13 @@ const PATH_CORPUS: CorpusFile[] = trackedPaths.map((p) => ({ file: p, lines: [p]
  *  would happen. CI therefore carries `fetch-depth: 0`, and deleting it makes
  *  this suite red instead of making it vacuous. */
 function resolveBase(cwd: string): string | null {
-  const candidates = [process.env.CCRC_HISTORY_BASE, 'origin/main', 'main']
+  // D-2732, and `deviation-refs.test.ts` says it copied this function from here,
+  // so both drop the third candidate together. Local `main` on the fleet host is
+  // a fossil another worktree parks — measured 356 commits behind `origin/main` —
+  // and a transient `packed-refs` rewrite from any of ~10 sibling worktrees is
+  // enough to make `origin/main` fail to resolve and hand this scan the fossil
+  // silently. The null-base refusal below is the honest answer.
+  const candidates = [process.env.CCRC_HISTORY_BASE, 'origin/main']
     .filter((r): r is string => Boolean(r));
   for (const ref of candidates) {
     try {
@@ -506,7 +512,7 @@ describe('the corpus this walks', () => {
 describe('the published history, not just the tip', () => {
   it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
     expect(HISTORY_BASE,
-      'no $CCRC_HISTORY_BASE, origin/main or main resolved: a shallow checkout cannot guard history, and this refuses to report a range nobody measured')
+      'no $CCRC_HISTORY_BASE or origin/main resolved (D-2732 removed the local-main fallback, which was a fossil): a shallow checkout cannot guard history, and this refuses to report a range nobody measured')
       .not.toBeNull();
   });
 

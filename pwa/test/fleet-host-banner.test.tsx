@@ -22,7 +22,31 @@ const health = (over: Partial<FleetHealth> = {}): FleetHealth => ({
   ...over,
 });
 
+const POOLS_UNAVAILABLE_COPY =
+  "The fleet host's ccd does not honour project pools yet. Redeploy the agent lane.";
+
 describe('FleetHostBanner', () => {
+  it('keeps the newest issued poll authoritative when an older request resolves last', async () => {
+    vi.useFakeTimers();
+    try {
+      const first = Promise.withResolvers<FleetHealth>();
+      const latest = health({ connected: true, downSince: null, roster: 'divergent' });
+      vi.spyOn(api, 'fleetHealth')
+        .mockReturnValueOnce(first.promise)
+        .mockResolvedValueOnce(latest);
+
+      render(<FleetHostBanner />);
+      await act(async () => { await vi.advanceTimersByTimeAsync(15_000); });
+      expect(screen.getByText(/different account rosters/i)).toBeInTheDocument();
+
+      await act(async () => { first.resolve(health()); await first.promise; });
+      expect(screen.getByText(/different account rosters/i)).toBeInTheDocument();
+      expect(screen.queryByText(/unreachable/i)).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('renders nothing while the fleet is local', async () => {
     vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ mode: 'local', connected: true, downSince: null }));
     render(<FleetHostBanner />);
@@ -71,6 +95,64 @@ describe('FleetHostBanner', () => {
     render(<FleetHostBanner />);
     expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
     expect(screen.queryByText(/different account rosters/i)).not.toBeInTheDocument();
+  });
+
+  it('warns truthfully when no visible project tag was measured', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+      health({ connected: true, downSince: null, projectPools: 'unavailable' }));
+    render(<FleetHostBanner />);
+
+    const banner = await screen.findByRole('status');
+    expect(banner).toHaveTextContent(POOLS_UNAVAILABLE_COPY);
+    expect(banner).not.toHaveTextContent(/tag shown here/i);
+    // The banner is the whole reachable screen state in this component test:
+    // no project row or pool tag exists for the copy to point at.
+    expect(screen.queryByText(/pool ·/i)).not.toBeInTheDocument();
+    // The remedy is a deploy on the other box, not a PWA action.
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('stays silent when pools are enforced, and when nobody could tell', async () => {
+    for (const projectPools of ['enforced', 'unknown'] as const) {
+      vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+        health({ connected: true, downSince: null, projectPools }));
+      render(<FleetHostBanner />);
+      await act(async () => {});
+      expect(screen.queryByText(/project pools/i), projectPools).not.toBeInTheDocument();
+      cleanup();
+    }
+  });
+
+  it('stays silent when an older remote server omits the optional pools answer', async () => {
+    const older = health({ connected: true, downSince: null });
+    delete older.projectPools;
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(older);
+    render(<FleetHostBanner />);
+    await act(async () => {});
+    expect(screen.queryByText(/project pools/i)).not.toBeInTheDocument();
+  });
+
+  it('stays silent for a local host whose own ccd lacks pool support', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+      health({ mode: 'local', connected: true, downSince: null, projectPools: 'unavailable' }));
+    render(<FleetHostBanner />);
+    await act(async () => {});
+    expect(screen.queryByText(/project pools/i)).not.toBeInTheDocument();
+  });
+
+  it('a divergent roster outranks it — one is silent damage, the other is a feature not yet arrived', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(
+      health({ connected: true, downSince: null, roster: 'divergent', projectPools: 'unavailable' }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/different account rosters/i)).toBeInTheDocument();
+    expect(screen.queryByText(/project pools/i)).not.toBeInTheDocument();
+  });
+
+  it('an unreachable host outranks it too — nothing can be redeployed until the box is back', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ projectPools: 'unavailable' }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/unreachable/i)).toBeInTheDocument();
+    expect(screen.queryByText(/project pools/i)).not.toBeInTheDocument();
   });
 
   it('Reboot opens a confirm naming the whole-box collateral, and only calls the API on confirm', async () => {

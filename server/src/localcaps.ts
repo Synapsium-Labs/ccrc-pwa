@@ -141,11 +141,13 @@ export const KILL_GRACE_MS = 2_000;
  *     gated call sites at once, not just this one — a real, sharp-edged
  *     consequence of a genuinely empty answer, disclosed here rather than
  *     left to be discovered.
- *   - Two of those ~twenty call sites degrade SILENTLY on a `false`
+ *   - ONE of those ~twenty call sites degrades SILENTLY on a `false`
  *     verdict rather than answering an HTTP error: `FleetWatcher`'s naming
- *     sweep (`watch.ts`) simply skips the row, and `archiveMerged`'s
- *     auto-archive gate simply does not archive. Both comments' own
- *     "self-heals on the next sweep once the host is upgraded" premise is
+ *     sweep (`watch.ts`) simply skips the row. (Its sibling lane, the
+ *     pr-state sweep, takes the same verdict and does NOT go quiet — it
+ *     writes `reason: 'unsupported'` onto every affected `PrState`, which
+ *     reaches the wire.) That comment's own "self-heals on the next sweep
+ *     once the host is upgraded" premise is
  *     true in REMOTE mode — `FleetWatcher`'s OWN 60s timer (`watch.ts`'s
  *     `CAPS_REFRESH_MS`) re-asks the agent regardless of any signal from
  *     ccd; the agent itself has no timer, it answers when asked and

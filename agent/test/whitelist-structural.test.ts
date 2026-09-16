@@ -105,6 +105,13 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the pool tag verb granted without the flag that is its whole argument surface',
     codes: ['TS2322'],
   },
+  // ROUTING slice 1, g10's shape one verb over: `['route','--session']` ->
+  // `['route']` keeps the verb and drops the flag that is its whole argument
+  // surface; the enrolment in `REQUIRED_VERB_FLAG` is what makes it TS2322.
+  'g11-route-without-session.ts': {
+    what: 'the routing verb granted without --session',
+    codes: ['TS2322'],
+  },
 };
 
 describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is written', () => {
@@ -127,7 +134,7 @@ describe('mechanism 1+2 — granting `gh` fails to COMPILE, wherever it is writt
 
   it('every whitelist literal in the fixtures uses the SHIPPED construct', () => {
     // ROUND 3, P4. g1/g2/g4 and the positive control's `good` were written
-    // `const x: ExecWhitelist = { … }` while the real site at whitelist.ts:309
+    // `const x: ExecWhitelist = { … }` while the real site at whitelist.ts:322
     // had become `} as const satisfies ExecWhitelist;`. The two are not the
     // same check — excess-property behaviour under `satisfies` has moved across
     // TS releases before — so a compile-failure pin in the annotation form

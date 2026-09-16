@@ -61,7 +61,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
 });
 
 const line = (session: FleetSession): void => {
@@ -470,7 +470,7 @@ describe('a chat that had to look elsewhere says so', () => {
   // Rung 6 (§5.1): the file is real and it renders, but never silently —
   // M2 measured 17 of 23 rows carrying residue under 1-4 OTHER accounts.
   // Kills a resolver answer whose `foreignAccount` is dropped on the way to
-  // the UI. Field names are the wire's real ones (`shared/api.ts:1759-1770`)
+  // the UI. Field names are the wire's real ones (`shared/api.ts:2201-2212`)
   // — `foreignAccount`/`searchComplete`, not the brief's `account`/`complete`.
   //
   // `foreignAccount: 'claude2'`, deliberately NOT `'claude'`: this session's

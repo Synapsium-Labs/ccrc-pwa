@@ -7,13 +7,25 @@
 // from the ledger + the registry + .prhistory after the database is LOST.
 import { describe, it, expect } from 'vitest';
 import path from 'node:path';
-import { openCoordDb } from '../src/coord/db.js';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore, MAIL_RECLAIM_CANCELLED_ERROR, MAIL_REPLAY_CEILING_ERROR,
-         MAIL_RUN_CLOSED_ERROR } from '../src/coord/store.js';
+         MAIL_RUN_CLOSED_ERROR, toRunSummary } from '../src/coord/store.js';
 import { renderEnvelope } from '../src/coord/envelope.js';
-import { releaseIsSafe } from '../src/coord/rundefs.js';
-import { PROGRAM_KICKOFF_SUBJECT } from '../../shared/api.js';
+import {
+  HOLD_REASON_MAX_CHARS,
+  holdReason,
+  releaseIsSafe,
+} from '../src/coord/rundefs.js';
+import {
+  PROGRAM_KICKOFF_SUBJECT,
+  PROGRAM_SLUG_MAX_CHARS,
+  RUN_HOLD_NUMBER_MAX,
+  RUN_ID_MAX_DECIMAL,
+} from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun, okRuns, okSiblings } from './coordReadHelpers.js';
 
 const store = (): CoordStore =>
   new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
@@ -47,6 +59,250 @@ describe('CoordStore: runs', () => {
       .toMatchObject({ refused: 'claimed-by-another' });
   });
 
+  it('validates a fresh hold with SQLite\'s exact id and rolls both inserts back on overflow', () => {
+    const s = store();
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+
+    const refused = openRun(s, { program, title: program, wave, waveOf });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+      detail:
+        `hold reason ${HOLD_REASON_MAX_CHARS + 1} characters exceeds the ` +
+        `${HOLD_REASON_MAX_CHARS} character session-card cap`,
+    });
+    expect(s.programs()).toEqual([]);
+    expect(okRuns(s.runs({ includeClosed: true }))).toEqual([]);
+
+    // A rolled-back AUTOINCREMENT insert does not consume its id. This pins the
+    // sentinel path rather than accepting a refusal that committed then cleaned.
+    const next = openRun(s, { program: 'after-refusal', title: 'After refusal' });
+    expect(next).toMatchObject({ id: 1, holdReason: 'program:after-refusal wave:1/5 run:1' });
+  });
+
+  it('measures the actual multi-digit generated id at the fresh-insert boundary', () => {
+    const s = store();
+    for (let wave = 1; wave <= 9; wave++) {
+      const decoy = openRun(s, { program: `decoy-${wave}`, title: 'Decoy', wave });
+      expect(decoy).toMatchObject({ id: wave });
+    }
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 10).length;
+    const exact = 'x'.repeat(HOLD_REASON_MAX_CHARS - overhead);
+    const accepted = openRun(s, { program: exact, title: exact, wave, waveOf });
+    expect(accepted).toMatchObject({
+      id: 10,
+      holdReason: holdReason(exact, wave, waveOf, 10),
+    });
+  });
+
+  it('revalidates an idempotent planned row with its reused exact id', () => {
+    const s = store();
+    const wave = 22;
+    const waveOf = 333;
+    const overhead = holdReason('', wave, waveOf, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const now = Date.now();
+    s.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+    ).run(program, program, now, 'active', null);
+    s.db.prepare(
+      'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?)',
+    ).run(program, wave, waveOf, 'ccrc-pwa', 'planned', 'ccrc-pwa-coordinator', now);
+
+    const refused = openRun(s, { program, title: program, wave, waveOf });
+    expect(refused).toMatchObject({
+      ok: false,
+      kind: 'hold-oversize',
+      limit: HOLD_REASON_MAX_CHARS,
+    });
+    expect(okRuns(s.runs({ includeClosed: true }))).toHaveLength(1);
+  });
+
+  it('opens the widest hold a budget-sized slug can compose, inside the cap by exactly the ' +
+     'width the nineteen-digit run-id reservation buys', () => {
+    const s = store();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX - 1);
+    const program = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const opened = openRun(s, {
+      program,
+      title: program,
+      wave: RUN_HOLD_NUMBER_MAX,
+      waveOf: RUN_HOLD_NUMBER_MAX,
+    });
+    expect(opened).toMatchObject({ id: RUN_HOLD_NUMBER_MAX });
+    if (!('id' in opened)) throw new Error('worst-case open refused');
+
+    // THE RESERVATION, MEASURED. The budget sizes the run-id slot against
+    // SQLite's INTEGER width, not JavaScript's safe maximum, so the widest hold
+    // this process will ever actually serialize lands strictly INSIDE the cap —
+    // and the gap is precisely the three digits the wider reservation bought.
+    const reserved = RUN_ID_MAX_DECIMAL.length - String(RUN_HOLD_NUMBER_MAX).length;
+    expect(reserved).toBe(3);
+    expect(opened.holdReason).toHaveLength(HOLD_REASON_MAX_CHARS - reserved);
+
+    // …while the reserved shape itself lands exactly ON the cap. That equality
+    // is what makes the slug budget a derivation rather than a guess: one more
+    // slug character would put the reserved worst case over the hook's window.
+    expect(holdReason(program, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL))
+      .toHaveLength(HOLD_REASON_MAX_CHARS);
+    expect(holdReason(`${program}x`, RUN_HOLD_NUMBER_MAX, RUN_HOLD_NUMBER_MAX, RUN_ID_MAX_DECIMAL).length)
+      .toBeGreaterThan(HOLD_REASON_MAX_CHARS);
+  });
+
+  it('rejects an unsafe generated SQLite id and rolls both inserts back', () => {
+    const s = store();
+    s.db.prepare("INSERT INTO sqlite_sequence(name, seq) VALUES ('runs', ?)")
+      .run(RUN_HOLD_NUMBER_MAX);
+
+    const refused = openRun(s, { program: 'unsafe-id', title: 'Unsafe id' });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'generated run id is not a positive safe integer',
+    });
+    expect(s.programs()).toEqual([]);
+    expect(okRuns(s.runs({ includeClosed: true }))).toEqual([]);
+  });
+
+  it.each([
+    ['an unsafe wave', { wave: Number.MAX_SAFE_INTEGER + 1 }],
+    ['an exponent-scale wave', { wave: 1e100 }],
+    ['a negative denominator', { waveOf: -1 }],
+    ['an unsafe denominator', { waveOf: Number.MAX_SAFE_INTEGER + 1 }],
+    ['a malformed programme', { program: 'bad program' }],
+  ])('rejects %s and rolls a fresh programme and run back', (_label, fields) => {
+    const s = store();
+    const refused = openRun(s, fields);
+    expect(refused).toMatchObject({ ok: false, kind: 'hold-invalid' });
+    expect(s.programs()).toEqual([]);
+    expect(okRuns(s.runs({ includeClosed: true }))).toEqual([]);
+  });
+
+  it('rejects an unsafe persisted id on an idempotent retry', () => {
+    const s = store();
+    const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+    const now = Date.now();
+    s.db.prepare(
+      'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+    ).run('unsafe-reused-id', 'Unsafe reused id', now, 'active', null);
+    s.db.prepare(
+      'INSERT INTO runs (id, program, wave, waveOf, project, state, claimedBy, openedAt) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(unsafe, 'unsafe-reused-id', 1, 5, 'ccrc-pwa', 'planned', 'ccrc-pwa-coordinator', now);
+
+    const refused = openRun(s, { program: 'unsafe-reused-id', title: 'Unsafe reused id' });
+    expect(refused).toEqual({
+      ok: false,
+      kind: 'hold-invalid',
+      detail: 'reused run id is not a positive safe integer',
+    });
+    expect((s.db.prepare('SELECT COUNT(*) AS n FROM runs').get() as { n: number }).n).toBe(1);
+  });
+
+  // ── D-2545: the persisted-integer READ surface ────────────────────────────
+  //
+  // `openRun`'s two arms above were the only statements in the whole store that
+  // proved a persisted integer. Every read coerced straight into a number, so a
+  // row a newer build wrote and a rollback left behind crashed the READ with a
+  // bare `RangeError` — and with no `app.setErrorHandler` anywhere in
+  // `server/src`, that became Fastify's default 500 with no typed shape at all.
+  //
+  // The SECOND test in each pair is the one that proves the fix did not simply
+  // swap one overloaded value for another: an ABSENT row still answers
+  // `{ok:true, …}` with `null`/`[]`, so "no such row" and "this row is
+  // unreadable" never collapse into one value.
+  describe('the read surface refuses an unrepresentable row, and still tells absent from unreadable', () => {
+    const UNSAFE = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+
+    /** Plant a `runs` row whose named column is wider than the JavaScript safe
+     *  domain — the idiom `rejects an unsafe persisted id on an idempotent
+     *  retry` above already uses, generalised over which column carries it. */
+    const plantUnsafe = (s: CoordStore, column: 'id' | 'wave' | 'waveOf' | 'reviews',
+                         over: { sessionId?: string } = {}): void => {
+      const now = Date.now();
+      s.db.prepare(
+        'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
+      ).run('wide', 'Wide', now, 'active', null);
+      // `runs.reviews REFERENCES runs(id)` (migration 11): an UNSAFE value can
+      // never reference a real row, so with FK enforcement on this INSERT
+      // would be refused by SQLite itself before the store's own proof ever
+      // runs. Disabled for this one planted row only — the exact shape a row
+      // written before the column existed, or by anything outside this store,
+      // could already carry on disk; re-enabled immediately after.
+      s.db.exec('PRAGMA foreign_keys = OFF');
+      try {
+        s.db.prepare(
+          'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt, reviews) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        ).run(
+          column === 'id' ? UNSAFE : 7,
+          'wide',
+          column === 'wave' ? UNSAFE : 1,
+          column === 'waveOf' ? UNSAFE : 5,
+          'ccrc-pwa', over.sessionId ?? null, 'planned', 'ccrc-pwa-coordinator', now,
+          column === 'reviews' ? UNSAFE : null,
+        );
+      } finally {
+        s.db.exec('PRAGMA foreign_keys = ON');
+      }
+    };
+
+    it.each([
+      ['id', 'run id is not a positive safe integer'],
+      ['wave', 'run wave is not a positive safe integer'],
+      ['waveOf', 'run waveOf is not a positive safe integer'],
+      ['reviews', 'run reviews is not a positive safe integer'],
+    ] as const)('run() refuses an unrepresentable %s, naming the COLUMN and no value', (column, detail) => {
+      const s = store();
+      plantUnsafe(s, column);
+      const id = column === 'id' ? Number(UNSAFE) : 7;
+      const read = s.run(id);
+      expect(read).toEqual({ ok: false, kind: 'run-unreadable', detail });
+      // RULING 4: the offending value never rides out. Not as a bigint, not
+      // rounded, not in the sentence.
+      expect(detail).not.toMatch(/[0-9]/);
+    });
+
+    it('run() answers {ok:true, run:null} for a genuinely ABSENT row — absent is NOT unreadable', () => {
+      const s = store();
+      expect(s.run(4242)).toEqual({ ok: true, run: null });
+    });
+
+    it('runs() fails the WHOLE list on one unreadable row — never a partial board', () => {
+      const s = store();
+      const good = openRun(s) as { id: number };
+      plantUnsafe(s, 'id');
+      expect(s.runs()).toEqual({
+        ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
+      });
+      expect(s.runs({ includeClosed: true })).toMatchObject({ ok: false, kind: 'run-unreadable' });
+      // …and the readable row is genuinely there: the refusal is all-or-failure,
+      // not "there was nothing to return".
+      expect(okRun(s.run(good.id))?.id).toBe(good.id);
+    });
+
+    it('runs() answers {ok:true, runs:[]} on an EMPTY store — absent is not unreadable here either', () => {
+      expect(store().runs()).toEqual({ ok: true, runs: [] });
+    });
+
+    it('openRunsForSession() refuses an unrepresentable sibling, and answers [] when there are none', () => {
+      const s = store();
+      plantUnsafe(s, 'id', { sessionId: 'demo-alpha' });
+      expect(s.openRunsForSession('demo-alpha')).toEqual({
+        ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
+      });
+      expect(s.openRunsForSession('demo-nobody')).toEqual({ ok: true, siblings: [] });
+    });
+  });
+
   it('records who caused every transition, and refuses one the machine forbids', () => {
     const s = store();
     const r = openRun(s) as { id: number };
@@ -55,7 +311,7 @@ describe('CoordStore: runs', () => {
     // planned is not reachable from working — and the run is UNCHANGED.
     expect(s.advance(r.id, 'planned', 'operator'))
       .toEqual({ ok: false, error: 'bad-transition', from: 'working', to: 'planned' });
-    expect(s.run(r.id)!.state).toBe('working');
+    expect(okRun(s.run(r.id))!.state).toBe('working');
     expect(s.runEvents(r.id).map((e) => [e.fromState, e.toState, e.causedBy])).toEqual([
       ['planned', 'dispatched', 'coordinator'],
       ['dispatched', 'working', 'ccrc-pwa-quiet-mesa'],
@@ -64,11 +320,11 @@ describe('CoordStore: runs', () => {
 
   it('reads a state token this build does not know as `unknown`, never as a raw string', () => {
     // The designated we-do-not-know member (spec:77), the same shape PrPhase's
-    // 'unchecked' already has (registry.ts:133-140). Written by a NEWER build.
+    // 'unchecked' already has (registry.ts:135-142). Written by a NEWER build.
     const s = store();
     const r = openRun(s) as { id: number };
     s.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run('reconciling', r.id);
-    expect(s.run(r.id)!.state).toBe('unknown');
+    expect(okRun(s.run(r.id))!.state).toBe('unknown');
   });
 
   it('lets the coordinator close directly from `dispatched` or `working` — the paths Task 9 actually writes (D-9)', () => {
@@ -96,10 +352,10 @@ describe('CoordStore: runs', () => {
     // `foldPrLineage` gives `prLineage` one.
     const s = store();
     const r = openRun(s) as { id: number };
-    expect(s.run(r.id)!.handoffCommit).toBeNull();
+    expect(okRun(s.run(r.id))!.handoffCommit).toBeNull();
     const sha = 'c'.repeat(40);
     s.setHandoffCommit(r.id, sha);
-    expect(s.run(r.id)!.handoffCommit).toBe(sha);
+    expect(okRun(s.run(r.id))!.handoffCommit).toBe(sha);
   });
 
   it('refuses a transition from a state token this build does not know, rather than throwing (found in a later Task 3 review, D-27)', () => {
@@ -125,10 +381,10 @@ describe('CoordStore: runs', () => {
     // must report the real value, not a value baked into `hydrateRun`.
     const s = store();
     const r = openRun(s) as { id: number };
-    expect(s.run(r.id)!.clearedAt).toBeNull();
+    expect(okRun(s.run(r.id))!.clearedAt).toBeNull();
     const at = 1_700_000_000_000;
     s.db.prepare('UPDATE runs SET clearedAt = ? WHERE id = ?').run(at, r.id);
-    expect(s.run(r.id)!.clearedAt).toBe(at);
+    expect(okRun(s.run(r.id))!.clearedAt).toBe(at);
   });
 
   // Test gap, I5 (finding 24): `runs({includeClosed:true, closedLimit})`'s
@@ -148,19 +404,19 @@ describe('CoordStore: runs', () => {
 
     // A clamp of 2 keeps the NEWEST 2 (by id) of the 3 closed runs, plus the
     // active one — never the oldest closed run.
-    const capped = s.runs({ includeClosed: true, closedLimit: 2 }).map((r) => r.id).sort((a, b) => a - b);
+    const capped = okRuns(s.runs({ includeClosed: true, closedLimit: 2 })).map((r) => r.id).sort((a, b) => a - b);
     expect(capped).toEqual([active.id, ...closedIds.slice(1)].sort((a, b) => a - b));
     expect(capped).not.toContain(closedIds[0]);
 
     // A non-positive/non-finite closedLimit falls back to `clampMailLimit`'s
     // 100 default (never 0, which would silently hide every closed run).
-    expect(s.runs({ includeClosed: true, closedLimit: 0 }).map((r) => r.id).sort((a, b) => a - b))
+    expect(okRuns(s.runs({ includeClosed: true, closedLimit: 0 })).map((r) => r.id).sort((a, b) => a - b))
       .toEqual([active.id, ...closedIds].sort((a, b) => a - b));
 
     // `includeClosed:false` (the live-frame path) carries NO limit at all —
     // every closed run is simply absent because the WHERE clause never names
     // them, clamp or no clamp.
-    expect(s.runs().map((r) => r.id)).toEqual([active.id]);
+    expect(okRuns(s.runs()).map((r) => r.id)).toEqual([active.id]);
   });
 });
 
@@ -172,22 +428,88 @@ describe('CoordStore: caps', () => {
     const b = openRun(s, { wave: 2 }) as { id: number };
     s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
     s.markDispatched(b.id, 'ccrc-pwa-still-fen', 'still-fen', 'ws/still-fen', true, now - 25 * 3600_000);
+    // `markDispatched` alone does not advance `state` (design 2026-09-14
+    // §7.1; see its own docstring) — `dispatchRun` is the real caller and
+    // always pairs it with `advance(..., 'dispatched', ...)` in the same
+    // transaction. Mirrored here so this fixture matches production instead
+    // of resting on `state` staying `planned`.
+    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
+    expect(s.advance(b.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.capsUsage(now)).toEqual({ running: 2, dispatchedIn24h: 1 });
     expect(s.caps()).toEqual({ maxConcurrentWorkers: 3, maxSessionsPerDay: 12 });
   });
 
   it('does not count a `planned` run that never dispatched — a botched dispatch must not wedge the cap (D-13)', () => {
-    // capsUsage review: `state NOT IN ('done','failed')` alone also matched
-    // `planned` — the state `openRun` writes and Task 9's `ambiguous-dispatch`
-    // refusal deliberately leaves a run in, with no session and no workspace.
-    // Before this fix three botched dispatches on one program would pin
-    // `running` at the default `maxConcurrentWorkers` forever.
+    // capsUsage review: a bare "state is not terminal" predicate alone also
+    // matched `planned` — the state `openRun` writes and Task 9's
+    // `ambiguous-dispatch` refusal deliberately leaves a run in, with no
+    // session and no workspace. Before this fix three botched dispatches on
+    // one program would pin `running` at the default `maxConcurrentWorkers`
+    // forever.
     const s = store();
     const now = 1_000_000_000_000;
     openRun(s);                                                   // never dispatched
     const dispatched = openRun(s, { wave: 2 }) as { id: number };
     s.markDispatched(dispatched.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // See the previous test's comment: mirror `dispatchRun`'s pairing.
+    expect(s.advance(dispatched.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 1 });
+  });
+
+  it('does not count a run advanced to `dispatched` with no `dispatchedAt` — D-13\'s clause, now that `planned` is excluded by state too (spec §7.1 review, Important 1)', () => {
+    // Before design 2026-09-14 §7.1 this exact shape WAS D-13's whole proof:
+    // a `planned` row (NULL `dispatchedAt`) counted under the old predicate
+    // unless `dispatchedAt IS NOT NULL` excluded it. Now `planned` is ALSO
+    // excluded by state (`planned` is in `IDLE_RUN_STATES`), so every other
+    // caps assertion in the tree survives a mutant that deletes the
+    // `dispatchedAt IS NOT NULL` clause — `advance()` is public and does not
+    // require `markDispatched`, so a run can reach `dispatched` STATE with
+    // no dispatch timestamp at all, and only this clause still excludes it.
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);
+  });
+
+  it('stops counting a run the moment it reaches an IDLE state, and counts it again at working (spec §7.1)', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // `markDispatched` itself does not advance `state` (it stamps
+    // `dispatchedAt`/`workspace`/`branch`/`sessionId` only, per its own
+    // docstring); the real dispatch commit is `dispatchRun`, which calls
+    // `markDispatched` and `advanceInner(..., 'dispatched', ...)` together.
+    // Mirrored here explicitly, matching every other `advance(id,
+    // 'dispatched', ...)` call site in this file.
+    expect(s.advance(a.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(1);                 // dispatched: active
+    expect(s.advance(a.id, 'working', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(1);                 // working: active
+    expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);                 // the worker is idle by contract
+    expect(s.advance(a.id, 'working', 'test').ok).toBe(true); // a send-back
+    expect(s.capsUsage(now).running).toBe(1);
+    expect(s.advance(a.id, 'awaiting-review', 'test').ok).toBe(true);
+    expect(s.advance(a.id, 'merging', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);                 // merging: the coordinator's wait
+    expect(s.advance(a.id, 'closing', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);
+    expect(s.advance(a.id, 'done', 'test').ok).toBe(true);
+    expect(s.capsUsage(now).running).toBe(0);
+    // `dispatchedIn24h` is untouched by state: one dispatch happened.
+    expect(s.capsUsage(now).dispatchedIn24h).toBe(1);
+  });
+
+  it('still counts an `unknown`-state row — a state this build cannot name must wedge, not over-dispatch', () => {
+    const s = store();
+    const now = 1_000_000_000_000;
+    const a = openRun(s) as { id: number };
+    s.markDispatched(a.id, 'ccrc-pwa-quiet-mesa', 'quiet-mesa', 'ws/quiet-mesa', false, now);
+    // The one way such a row exists: written by a newer build. Planted raw.
+    s.db.prepare("UPDATE runs SET state = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
+    expect(s.capsUsage(now).running).toBe(1);
   });
 
   it('excludes a dispatch exactly 24h old — the window is `>`, not `>=` (D-59)', () => {
@@ -199,6 +521,8 @@ describe('CoordStore: caps', () => {
     const now = 1_000_000_000_000;
     const a = openRun(s) as { id: number };
     s.markDispatched(a.id, 'ccrc-pwa-boundary', 'boundary', 'ws/boundary', false, now - 24 * 3600_000);
+    // See the caps describe's first test comment: mirror `dispatchRun`'s pairing.
+    expect(s.advance(a.id, 'dispatched', 'coordinator').ok).toBe(true);
     expect(s.capsUsage(now)).toEqual({ running: 1, dispatchedIn24h: 0 });
   });
 });
@@ -418,7 +742,7 @@ describe('CoordStore: programs', () => {
     // pinned nowhere — D-8's closing note (plan:88) and schema.ts's header
     // both say the gap is shut on the strength of the guard existing, but a
     // green suite that cannot tell the guard from `r.state as ProgramState`
-    // is not the mechanism that record claims (shared/api.ts:1331: "a
+    // is not the mechanism that record claims (shared/api.ts:1623: "a
     // comment is a request and a red suite is a mechanism").
     const s = store();
     openRun(s);
@@ -450,7 +774,7 @@ describe('CoordStore: programs', () => {
 
   it('resolves \'coordinator\' to the NAMED RUN\'s own claim when a runId is given (fix-round finding 6) — zero coverage anywhere in the tree before this', () => {
     // Every prior test of `resolveCoordinator` called it with `null` only
-    // (`coord-store.test.ts:195/199/203`, above) — the `runId !== null` arm
+    // (`coord-store.test.ts:354/199/203`, above) — the `runId !== null` arm
     // ("the run's own claim", `store.ts`'s own docstring) had no test
     // anywhere, and `routes.ts:185`'s `toId === 'coordinator' ?
     // coord.resolveCoordinator(runId) : toId` is the only caller outside this
@@ -605,8 +929,8 @@ describe('the disaster-recovery path (spec:82-85)', () => {
     expect(rebuilt[1]!.dispatchedAt).toBe(rebuilt[1]!.openedAt);
 
     // Judgment call 2 (.prhistory folds onto the last DONE wave only).
-    expect(s.run(rebuilt[1]!.id)!.prLineage).toEqual([]);       // wave 2 has retired no PR yet
-    expect(s.run(rebuilt[0]!.id)!.prLineage).toEqual([
+    expect(okRun(s.run(rebuilt[1]!.id))!.prLineage).toEqual([]);       // wave 2 has retired no PR yet
+    expect(okRun(s.run(rebuilt[0]!.id))!.prLineage).toEqual([
       { pr: 31, branch: 'ws/quiet-mesa', phase: 'merged', recordedAt: 1 },
     ]);
   });
@@ -1096,7 +1420,7 @@ describe('CoordStore: feed (Task 10)', () => {
   // signature would never let a caller pass, then read it back.
   it('reads a kind token this build does not know as `unknown`, never as a raw string', () => {
     const s = store();
-    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b' });
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'done', sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     s.db.prepare('UPDATE feed_events SET kind = ? WHERE seq = ?').run('review', 1);
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['unknown']);
   });
@@ -1104,7 +1428,7 @@ describe('CoordStore: feed (Task 10)', () => {
   it('still reads every KNOWN kind through the same guard, unchanged', () => {
     const s = store();
     for (const kind of ['ask', 'done', 'merged', 'mail', 'run'] as const) {
-      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b' });
+      s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind, sessionId: 'cc-a', title: 't', body: 'b', runId: null });
     }
     expect(s.feedEvents(10).map((e) => e.kind)).toEqual(['ask', 'done', 'merged', 'mail', 'run']);
   });
@@ -1249,7 +1573,7 @@ describe('CoordStore: outstanding mail (fix round 1, findings 2/4)', () => {
     // `unreadMailCount` (the run row's own `RunSummary.unreadMail`, read
     // through `run()`) derives off the SAME predicate — the MailStrip/badge
     // count this ruling names must clear too, not just the list read.
-    expect(s.run(willCloseRun.id)!.unreadMail).toBe(0);
+    expect(okRun(s.run(willCloseRun.id))!.unreadMail).toBe(0);
   });
 
   // I7 (subsumed by I2(a)'s rewrite, as its own text anticipates): a NULL
@@ -1344,7 +1668,7 @@ describe('CoordStore.openRunsForSession', () => {
     const b = openRun(s, { wave: 2 }) as { id: number };
     s.setSession(a.id, 'demo-alpha');
     s.setSession(b.id, 'demo-alpha');
-    const got = s.openRunsForSession('demo-alpha');
+    const got = okSiblings(s.openRunsForSession('demo-alpha'));
     // Not a promise: the whole point. `await`ing this would be the one move
     // that threatens coord.db's stated synchrony invariant.
     expect(got).toBeInstanceOf(Array);
@@ -1360,8 +1684,8 @@ describe('CoordStore.openRunsForSession', () => {
     const b = openRun(s, { wave: 2 }) as { id: number };
     s.setSession(a.id, 'demo-alpha');
     s.setSession(b.id, 'demo-alpha');
-    expect(s.openRunsForSession('demo-alpha', a.id).map((r) => r.id)).toEqual([b.id]);
-    expect(s.openRunsForSession('demo-alpha', b.id).map((r) => r.id)).toEqual([a.id]);
+    expect(okSiblings(s.openRunsForSession('demo-alpha', a.id)).map((r) => r.id)).toEqual([b.id]);
+    expect(okSiblings(s.openRunsForSession('demo-alpha', b.id)).map((r) => r.id)).toEqual([a.id]);
   });
 
   it('excludes done and failed, and answers [] for a session no run names', () => {
@@ -1371,8 +1695,8 @@ describe('CoordStore.openRunsForSession', () => {
     expect(s.advance(a.id, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
     expect(s.advance(a.id, 'closing', 'coordinator')).toMatchObject({ ok: true });
     expect(s.advance(a.id, 'done', 'coordinator')).toMatchObject({ ok: true });
-    expect(s.openRunsForSession('demo-alpha')).toEqual([]);
-    expect(s.openRunsForSession('demo-nobody')).toEqual([]);
+    expect(okSiblings(s.openRunsForSession('demo-alpha'))).toEqual([]);
+    expect(okSiblings(s.openRunsForSession('demo-nobody'))).toEqual([]);
   });
 
   it('does NOT filter on dispatchedAt — the open-time hold belongs to an undispatched run (F9)', () => {
@@ -1383,8 +1707,8 @@ describe('CoordStore.openRunsForSession', () => {
     const s = store();
     const a = openRun(s, { wave: 2 }) as { id: number };
     s.setSession(a.id, 'demo-alpha');
-    expect(s.run(a.id)!.dispatchedAt).toBeNull();
-    expect(s.openRunsForSession('demo-alpha').map((r) => r.id)).toEqual([a.id]);
+    expect(okRun(s.run(a.id))!.dispatchedAt).toBeNull();
+    expect(okSiblings(s.openRunsForSession('demo-alpha')).map((r) => r.id)).toEqual([a.id]);
   });
 });
 
@@ -1612,7 +1936,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     expect(s.advance(ids[0]!, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
     expect(s.advance(ids[0]!, 'closing', 'coordinator')).toMatchObject({ ok: true });
     expect(s.advance(ids[0]!, 'done', 'coordinator')).toMatchObject({ ok: true });
-    expect(s.run(ids[0]!)!.state).toBe('done');   // anti-vacuity: the fixture is really terminal
+    expect(okRun(s.run(ids[0]!))!.state).toBe('done');   // anti-vacuity: the fixture is really terminal
     return ids;
   };
 
@@ -1623,8 +1947,8 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
       .toEqual({ ok: true, program: 'build4', runIds: ids, from: DEAD });
     // The closed wave-1 row is the whole assertion: it is the id both readers
     // reach first, and a rewrite that skipped it leaves them on the corpse.
-    expect(s.run(ids[0]!)!.state).toBe('done');
-    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([LIVE, LIVE, LIVE, LIVE, LIVE]);
+    expect(okRun(s.run(ids[0]!))!.state).toBe('done');
+    expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([LIVE, LIVE, LIVE, LIVE, LIVE]);
     expect(s.resolveCoordinator(null)).toBe(LIVE);
     expect(openRun(s, { wave: 6, waveOf: 6, claimedBy: LIVE })).toMatchObject({ state: 'planned' });
   });
@@ -1639,7 +1963,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[2]!);
     expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
       .toEqual({ ok: true, program: 'build4', runIds: [ids[0]!, ids[1]!, ids[3]!, ids[4]!], from: DEAD });
-    expect(s.run(ids[2]!)!.claimedBy).toBeNull();
+    expect(okRun(s.run(ids[2]!))!.claimedBy).toBeNull();
     expect(s.runEvents(ids[2]!)).toEqual([]);     // and no trail invented for it either
   });
 
@@ -1670,7 +1994,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000))
       .toEqual({ ok: true, program: 'build4', runIds: [], from: DEAD });
     expect(ids.flatMap((id) => s.runEvents(id)).length).toBe(before);
-    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+    expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
   });
 
   it('refuses an id no run carries, and a run whose claimant is NULL — writing nothing either way', () => {
@@ -1682,7 +2006,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
       .toEqual({ ok: false, kind: 'no-claimant' });
     // The refusal returned BEFORE the UPDATE: the other four rows are untouched.
-    expect(s.run(ids[0]!)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(ids[0]!))!.claimedBy).toBe(DEAD);
   });
 
   it('is ONE transaction — an attribution row that throws rolls the whole rewrite back', () => {
@@ -1696,7 +2020,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     const patched = s as unknown as { recordRunEvent: () => void };
     patched.recordRunEvent = () => { throw new Error('attribution failed'); };
     expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('attribution failed');
-    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+    expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
   });
 });
 
@@ -1861,7 +2185,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
   const parkRendered = (
     s: CoordStore, mailToId: string, runId: number, lastError: string,
   ): number => {
-    const r = s.run(runId)!;
+    const r = okRun(s.run(runId))!;
     const mail = s.insertMail({ fromId: WORKER, fromUuid: `u-${WORKER}`, toId: mailToId,
       runId, kind: 'status', subject: 'wave-done', body: 'the wave is done', artifacts: [] });
     const d = s.queueDelivery(mail.id, DEAD, '');
@@ -1938,7 +2262,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // WORKER who wrote the report — a re-queue changes who READS a message,
     // never who sent it — and the `run:` line is what tells the heir which wave
     // of which program it is being handed.
-    const wave = s.run(ids[3]!)!;
+    const wave = okRun(s.run(ids[3]!))!;
     for (const m of heir) {
       const env = s.deliveryEnvelope(m.deliveryId)!.envelope;
       expect(env).toContain(`to: ${LIVE}`);
@@ -1985,14 +2309,15 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
     parkRendered(s, 'coordinator', ids[3]!, MAIL_REPLAY_CEILING_ERROR);
     const reach = s as unknown as {
-      requeueAbandonedCoordinatorMail: (p: string, to: string, d: readonly string[]) => number;
+      requeueAbandonedMail: (role: { role: 'coordinator'; program: string },
+                             to: string, d: readonly string[]) => number;
     };
 
-    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(2);
+    expect(reach.requeueAbandonedMail({ role: 'coordinator', program: 'build4' }, LIVE, [DEAD])).toBe(2);
     // Again, with nothing left to move: the `NOT EXISTS` guard sees the two rows
     // the first call minted, so the answer is 0 rather than 2 a second time —
     // which is also why the number cannot be pinned as a constant.
-    expect(reach.requeueAbandonedCoordinatorMail('build4', LIVE, [DEAD])).toBe(0);
+    expect(reach.requeueAbandonedMail({ role: 'coordinator', program: 'build4' }, LIVE, [DEAD])).toBe(0);
   });
 
   it('re-queues exactly the abandoned role mail this program owes the chair — nothing else', () => {
@@ -2119,29 +2444,29 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const ids = waves(s);
     s.setSession(ids[3]!, WORKER);
     queue(s, { toId: WORKER, runId: ids[3]! }, WORKER);
-    expect(s.run(ids[3]!)!.unreadMail).toBe(1);
+    expect(okRun(s.run(ids[3]!))!.unreadMail).toBe(1);
 
     const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
-    expect(s.run(ids[3]!)!.unreadMail).toBe(1);
+    expect(okRun(s.run(ids[3]!))!.unreadMail).toBe(1);
 
     expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
 
     // The heir really did get the report…
     expect(s.outstandingMailFor(LIVE).map((m) => m.id)).toEqual([s.delivery(parked)!.mailId]);
     // …and the wave's badge did not move.
-    expect(s.run(ids[3]!)!.unreadMail).toBe(1);
+    expect(okRun(s.run(ids[3]!))!.unreadMail).toBe(1);
   });
 
   it('the fifth arm is in the SAME transaction — a throw rolls back runs, mail AND the re-queue', () => {
     const s = store();
     const ids = waves(s);
     const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
-    const patched = s as unknown as { requeueAbandonedCoordinatorMail: () => void };
-    patched.requeueAbandonedCoordinatorMail = () => { throw new Error('requeue failed'); };
+    const patched = s as unknown as { requeueAbandonedMail: () => void };
+    patched.requeueAbandonedMail = () => { throw new Error('requeue failed'); };
 
     expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('requeue failed');
 
-    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+    expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
     expect(del(s, parked).toId).toBe(DEAD);
     expect(s.mailForRecipient(LIVE)).toEqual([]);
   });
@@ -2159,7 +2484,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(del(s, mine).toId).toBe(LIVE);
     // The sibling program still names DEAD as its own coordinator — this door
     // hands over ONE program — so its mail must stay where its chair is.
-    expect(s.run(other)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(other))!.claimedBy).toBe(DEAD);
     expect(del(s, theirs).toId).toBe(DEAD);
   });
 
@@ -2203,13 +2528,13 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([k]);
     // …and it never reached `RunSummary.unreadMail` in the first place, before or
     // after: that count is `m.runId = ?`-scoped and a kickoff names no run.
-    expect(s.run(ids[4]!)!.unreadMail).toBe(0);
+    expect(okRun(s.run(ids[4]!))!.unreadMail).toBe(0);
 
     expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
 
     expect(s.outstandingMailFor(DEAD)).toEqual([]);
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
-    expect(s.run(ids[4]!)!.unreadMail).toBe(0);
+    expect(okRun(s.run(ids[4]!))!.unreadMail).toBe(0);
     // The record itself survives — nothing DELETEs from `mail_deliveries` — so
     // the operator's own history read still finds it.
     expect(s.mailForRecipient(DEAD).map((m) => m.deliveryId)).toEqual([k]);
@@ -2269,7 +2594,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
 
     expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('repoint failed');
 
-    expect(ids.map((id) => s.run(id)!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
+    expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
     expect(del(s, report).toId).toBe(DEAD);
     // The cancel ran BEFORE the throw and is gone with it: one commit, not three.
     expect(del(s, k).state).toBe('queued');
@@ -2288,10 +2613,36 @@ describe('CoordStore: the coord feed kind', () => {
     // that the row lands would have passed against exactly that defect.
     const s = store();
     s.recordFeedEvent('epoch-1', { seq: 1, at: 10, kind: 'coord', sessionId: '',
-      title: 'caps', body: 'workers 3 to 5' });
+      title: 'caps', body: 'workers 3 to 5', runId: null });
     expect(s.feedEvents(10)).toEqual([
-      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5' },
+      { seq: 1, at: 10, kind: 'coord', sessionId: '', title: 'caps', body: 'workers 3 to 5', runId: null },
     ]);
+  });
+});
+
+describe('the durable feed carries the run it is about', () => {
+  it('stores and returns runId, and answers null for an event about no run', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    s.recordFeedEvent('epoch-1', { seq: 1, at: 1000, kind: 'mail', sessionId: 'demo-quiet-mesa',
+      title: 't', body: 'b', runId: r.id });
+    // An `ask` is about a SESSION and belongs to no run. Programless, not
+    // unmeasured — and it must still be in the unfiltered feed.
+    s.recordFeedEvent('epoch-1', { seq: 2, at: 1001, kind: 'ask', sessionId: 'demo-quiet-mesa',
+      title: 'q', body: '', runId: null });
+    expect(s.feedEvents(10).map((e) => e.runId)).toEqual([r.id, null]);
+  });
+});
+
+describe('programHome', () => {
+  it('answers the stored home, and null for a programme that stores none', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    expect(s.programHome('build4')).toBeNull();
   });
 });
 
@@ -2366,11 +2717,349 @@ describe('CoordStore: openCoordinatorIds', () => {
     // The premise, established rather than assumed: a NON-terminal row exists,
     // and its claimedBy really is null.
     expect(rebuilt.map((r) => r.state)).toEqual(['working']);
-    expect(s.run(rebuilt[0]!.id)!.claimedBy).toBeNull();
+    expect(okRun(s.run(rebuilt[0]!.id))!.claimedBy).toBeNull();
     expect(s.openCoordinatorIds()).toEqual([]);
   });
 
   it('is empty on a store with no runs at all', () => {
     expect(store().openCoordinatorIds()).toEqual([]);
+  });
+});
+
+describe('sessionProject — which repo a reused session belongs to', () => {
+  it('answers the project of the FIRST run that ever named the session, and null for one no run has', () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const a = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator' });
+    if (!('id' in a)) throw new Error('open refused');
+    s.setSession(a.id, 'demo-existing');
+    expect(s.sessionProject('demo-existing')).toBe('demo');
+    // ORDER BY id LIMIT 1 and not "the newest": the question is which repo the
+    // WORKSPACE was created in, and that is a fact about the session's first
+    // run. A later row naming the same session cannot re-home a worktree.
+    const b = s.openRun({ program: 'build5', title: 'U', project: 'other-project',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-coordinator-two' });
+    if (!('id' in b)) throw new Error('open refused');
+    s.setSession(b.id, 'demo-existing');
+    expect(s.sessionProject('demo-existing')).toBe('demo');
+    // ABSENCE PERMITS, and it is a real answer rather than a failure: every
+    // wave-1 open that adopts an operator-made workspace lands here.
+    expect(s.sessionProject('demo-never-run')).toBeNull();
+  });
+});
+
+describe('the programme row remembers its home', () => {
+  const store = () => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const open = (s: CoordStore, over: Record<string, unknown> = {}) => {
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 2, claimedBy: 'ccrc-pwa-coordinator', ...over } as Parameters<CoordStore['openRun']>[0]);
+    if (!('id' in r)) throw new Error('open refused');
+    return r;
+  };
+
+  it('writes homeProject on the FIRST insert, and never rewrites it on a later open', () => {
+    const s = store();
+    open(s, { homeProject: 'demo' });
+    expect(s.programHome('build4')).toBe('demo');
+    // The ON CONFLICT arm updates `title` and nothing else — a second open of
+    // the same programme cannot silently re-home it, which is the whole reason
+    // `setProgramHome` exists as a separate, NULL-only write.
+    open(s, { wave: 2, homeProject: 'other-project' });
+    expect(s.programHome('build4')).toBe('demo');
+  });
+
+  it('leaves the column NULL when no home is given', () => {
+    const s = store();
+    open(s);
+    expect(s.programHome('build4')).toBeNull();
+  });
+
+  it('setProgramHome backfills a NULL home and REFUSES to overwrite a stored one', () => {
+    const s = store();
+    open(s);
+    s.setProgramHome('build4', 'demo');
+    expect(s.programHome('build4')).toBe('demo');
+    s.setProgramHome('build4', 'other-project');
+    expect(s.programHome('build4'), 'setProgramHome overwrote a home that was already stored')
+      .toBe('demo');
+  });
+
+  it('puts the home on the wire, null and non-null alike', () => {
+    const s = store();
+    const a = open(s, { homeProject: 'demo' });
+    expect(toRunSummary(okRun(s.run(a.id))!).homeProject).toBe('demo');
+    const t = store();
+    const b = open(t);
+    expect(toRunSummary(okRun(t.run(b.id))!).homeProject).toBeNull();
+  });
+});
+
+describe('bindSession — the one writer of runs.sessionId, and the heir inherits the mail', () => {
+  const store = () => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const openOne = (s: CoordStore): number => {
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator' });
+    if (!('id' in r)) throw new Error('open refused');
+    return r.id;
+  };
+  /** One `toId:'worker'` mail queued to the session that holds the run today —
+   *  the shape `POST /api/mail` mints once the role resolves. */
+  const workerMail = (s: CoordStore, runId: number, toId: string, subject: string): number =>
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'worker', runId,
+        kind: 'status', subject, body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, toId, '');
+      const stamped = s.setDeliveryEnvelope(d.id, `to: ${toId}\nack: ccrc-api mail ack ${d.id}\n`);
+      if (!stamped.ok) throw new Error(stamped.why);
+      return d.id;
+    });
+
+  it('a FIRST bind, from null, re-issues nothing', () => {
+    const s = store();
+    const runId = openOne(s);
+    expect(s.bindSession(runId, 'demo-worker')).toEqual({ rebound: false, reissued: 0 });
+    expect(okRun(s.run(runId))?.sessionId).toBe('demo-worker');
+  });
+
+  it('re-binding to the SAME session re-issues nothing', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    workerMail(s, runId, 'demo-worker', 'the wave brief');
+    expect(s.bindSession(runId, 'demo-worker')).toEqual({ rebound: false, reissued: 0 });
+    expect(s.mailForRecipient('demo-worker')).toHaveLength(1);
+  });
+
+  it('re-binding to a DIFFERENT session gives the heir a freshly rendered row and parks the predecessor', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    const oldDelivery = workerMail(s, runId, 'demo-worker', 'the wave brief');
+
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+
+    // The heir gets a NEW delivery of the SAME mail — two delivery rows for one
+    // mail is what this schema has always meant by "delivered to two
+    // recipients", and its counters are ZERO because they are true of it.
+    const heirs = s.mailForRecipient('demo-heir');
+    expect(heirs).toHaveLength(1);
+    expect(heirs[0]!.subject).toBe('the wave brief');
+    expect(heirs[0]!.attempts).toBe(0);
+    expect(heirs[0]!.state).toBe('queued');
+    expect(heirs[0]!.deliveryId).not.toBe(oldDelivery);
+
+    // FRESHLY RENDERED — the envelope names the HEIR, not the corpse, and its
+    // `ack:` line names its own delivery id. A replay may never be re-rendered;
+    // this is a second delivery, so it renders its own.
+    const env = s.deliveryEnvelope(heirs[0]!.deliveryId)!.envelope;
+    expect(env).toContain('to: demo-heir');
+    expect(env).not.toContain('to: demo-worker');
+    expect(env).toContain(`ack: ccrc-api mail ack ${heirs[0]!.deliveryId}`);
+
+    // …and the predecessor's row is PARKED, with a sentence that is true of it.
+    const old = s.delivery(oldDelivery)!;
+    expect(old.state).toBe('rejected');
+    // A DELIBERATE cancel: it must not read as "this park still needs a human"
+    // in a mailbox nobody is watching any more.
+    expect(s.outstandingMailFor('demo-worker')).toHaveLength(0);
+  });
+
+  it('leaves mail addressed to a literal session id alone — it was sent to a session, not to a chair', () => {
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
+        runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, 'demo-worker', '');
+      s.setDeliveryEnvelope(d.id, 'to: demo-worker\n');
+      return m;
+    });
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 0 });
+    expect(s.mailForRecipient('demo-heir')).toHaveLength(0);
+    expect(s.outstandingMailFor('demo-worker')).toHaveLength(1);
+  });
+
+  it('scopes the predecessor park to the mails it actually re-issued — a session-addressed mail to the same predecessor stays OUTSTANDING', () => {
+    // MUT-2 (PR #75 review round 1). `parkSupersededDeliveries` is `AND mailId
+    // IN (…)` for a reason: the predecessor may hold a `toId:'worker'` brief AND
+    // a mail sent to it BY NAME, and only the first is re-issued to the heir.
+    // Without the scope the second is parked `recipient rebound` too — lost to
+    // both sessions. The literal-session case above drives `reissued: 0`, so
+    // the park never RUNS there and could never observe its own scope.
+    const s = store();
+    const runId = openOne(s);
+    s.bindSession(runId, 'demo-worker');
+    workerMail(s, runId, 'demo-worker', 'the wave brief');   // toId:'worker', delivered to demo-worker
+    tx(s.db, () => {
+      const m = s.insertMail({ fromId: 'demo-coordinator', fromUuid: 'u', toId: 'demo-worker',
+        runId, kind: 'status', subject: 'personal', body: 'b', artifacts: [] });
+      const d = s.queueDelivery(m.id, 'demo-worker', '');
+      s.setDeliveryEnvelope(d.id, 'to: demo-worker\n');
+      return m;
+    });
+    expect(s.bindSession(runId, 'demo-heir')).toEqual({ rebound: true, reissued: 1 });
+    expect(s.outstandingMailFor('demo-heir').map((m) => m.subject)).toEqual(['the wave brief']);
+    expect(s.outstandingMailFor('demo-worker').map((m) => m.subject)).toEqual(['personal']);
+  });
+
+  it('runs.sessionId has exactly ONE re-binding writer in the store, and it is bindSession', () => {
+    // The funnel as a MECHANISM. `setSession` and `markDispatched` both wrote
+    // this column directly before this wave, and either one restored would keep
+    // every behavioural case above green while silently reopening the hole the
+    // funnel exists to close: a re-bind that hands nobody the mail.
+    //
+    // ANY `UPDATE runs SET …` that mentions the column before its WHERE — not
+    // one spelling of it (PR #75 review round 1, MUT-3): the old scan matched
+    // `UPDATE runs SET sessionId` only, and a restored write with the column
+    // LAST in its SET list walked straight past it, measured green.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
+    const updates = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/g)]
+      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    expect(updates, 'runs.sessionId is written outside bindSession').toHaveLength(1);
+    // The one that remains sits inside bindSession — the funnel, not a caller.
+    const bindAt = src.indexOf('  bindSession(runId: number, sessionId: string)');
+    const nextMethodAt = src.indexOf('\n  setSession(', bindAt);
+    expect(bindAt).toBeGreaterThan(-1);
+    expect(updates[0]!.index!).toBeGreaterThan(bindAt);
+    expect(updates[0]!.index!).toBeLessThan(nextMethodAt);
+    // The OTHER writer, named and argued rather than hidden (store-4):
+    // `reconstruct`'s `INSERT INTO runs (…, sessionId, …)` makes a FRESH row
+    // from the registry — there is no predecessor to inherit mail from, so it
+    // is not a re-bind and the funnel has nothing to do for it. Exactly one
+    // such INSERT, and it lives in `reconstruct`.
+    const inserts = [...src.matchAll(/INSERT INTO runs \(([^)]*)\)/g)]
+      .filter((m) => /\bsessionId\b/.test(m[1]!));
+    expect(inserts, 'a second INSERT names runs.sessionId — argue it here or route it through bindSession').toHaveLength(1);
+    expect(inserts[0]!.index!).toBeGreaterThan(src.indexOf('  reconstruct(input: {'));
+    // Premise: the widened regex recognises what it forbids — it finds the
+    // funnel's own statement.
+    expect(updates[0]![0]).toContain('sessionId');
+  });
+});
+
+describe('the programme filters', () => {
+  /** Two programmes, one mail each, plus one mail and one event that belong to
+   *  no run at all — the population every assertion below turns on. */
+  const seeded = () => {
+    const s = new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+    const mk = (program: string, project: string, claimedBy: string): number => {
+      const r = s.openRun({ program, title: program, project, wave: 1, waveOf: 1, claimedBy });
+      if (!('id' in r)) throw new Error('open refused');
+      s.setSession(r.id, `${project}-worker`);
+      return r.id;
+    };
+    const mine = mk('build4', 'demo', 'demo-coordinator');
+    const theirs = mk('build5', 'other-project', 'other-project-coordinator');
+    const mail = (runId: number | null, subject: string): void => {
+      tx(s.db, () => {
+        const m = s.insertMail({ fromId: 'demo-quiet-mesa', fromUuid: 'u', toId: 'coordinator',
+          runId, kind: 'status', subject, body: 'b', artifacts: [] });
+        const d = s.queueDelivery(m.id, 'demo-coordinator', '');
+        s.setDeliveryEnvelope(d.id, `to: demo-coordinator\nack: ccrc-api mail ack ${d.id}\n`);
+        return m;
+      });
+    };
+    mail(mine, 'ours');
+    mail(theirs, 'theirs');
+    mail(null, 'peer chatter');           // programless — no run at all
+    s.recordFeedEvent('e', { seq: 1, at: 1, kind: 'run', sessionId: 'demo-worker',
+      title: 'ours', body: '', runId: mine });
+    s.recordFeedEvent('e', { seq: 2, at: 2, kind: 'run', sessionId: 'other-project-worker',
+      title: 'theirs', body: '', runId: theirs });
+    s.recordFeedEvent('e', { seq: 3, at: 3, kind: 'ask', sessionId: 'demo-worker',
+      title: 'a question', body: '', runId: null });
+    return s;
+  };
+
+  it('mailForProgram answers this programme only — a programless mail is not in it, nor another programmeial row', () => {
+    const s = seeded();
+    expect(s.mailForProgram('build4', {}).map((m) => m.subject)).toEqual(['ours']);
+    expect(s.mailForProgram('build5', {}).map((m) => m.subject)).toEqual(['theirs']);
+  });
+
+  it('mailForProgram honours `all` exactly as the recipient read does', () => {
+    const s = seeded();
+    // Park the one row this programme has; the default read drops a deliberate
+    // cancel, `all` returns history.
+    s.cancelOutstandingDeliveries(okRuns(s.runs())[0]!.id);
+    expect(s.mailForProgram('build4', {})).toHaveLength(0);
+    expect(s.mailForProgram('build4', { all: true }).map((m) => m.subject)).toEqual(['ours']);
+  });
+
+  it('feedEventsForProgram answers this programme only — a programless event is not in it', () => {
+    const s = seeded();
+    expect(s.feedEventsForProgram('build4', 100).map((e) => e.title)).toEqual(['ours']);
+    expect(s.feedEventsForProgram('build5', 100).map((e) => e.title)).toEqual(['theirs']);
+    // …and the unfiltered read still carries all three, which is where a
+    // programless event belongs and the ONLY place it appears.
+    expect(s.feedEvents(100).map((e) => e.title)).toEqual(['ours', 'theirs', 'a question']);
+  });
+});
+
+describe('CoordStore: run kind (design 2026-09-14 §5.1)', () => {
+  it('opens a work run by default and reads it back as kind work, reviews null', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    const row = okRun(s.run(a.id))!;
+    expect(row.kind).toBe('work');
+    expect(row.reviews).toBeNull();
+  });
+
+  it('persists kind review and the reviewed id, and hydrates both', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 5,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(r.id).not.toBe(w.id);   // the dup arm keys on kind too
+    const row = okRun(s.run(r.id))!;
+    expect(row.kind).toBe('review');
+    expect(row.reviews).toBe(w.id);
+    expect(okRun(s.run(w.id))!.reviews).toBeNull();
+  });
+
+  it('reads an out-of-vocabulary kind token as unknown, never as a raw string (D-2795)', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.db.prepare("UPDATE runs SET kind = 'x-from-a-newer-build' WHERE id = ?").run(a.id);
+    expect(okRun(s.run(a.id))!.kind).toBe('unknown');
+  });
+
+  it('advances a review run working -> done directly, and refuses the work-only states (spec §5.2)', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'demo', wave: 1, waveOf: 3,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(s.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.advance(r.id, 'working', 'test').ok).toBe(true);
+    expect(s.advance(r.id, 'awaiting-review', 'test'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'working', to: 'awaiting-review' });
+    expect(s.advance(r.id, 'closing', 'test').ok).toBe(false);
+    expect(s.advance(r.id, 'done', 'test').ok).toBe(true);
+    expect(okRun(s.run(r.id))!.closedAt).not.toBeNull();
+  });
+
+  it('refuses every advance on a run whose kind this build cannot name (D-2795)', () => {
+    const s = store();
+    const a = openRun(s) as { id: number };
+    s.db.prepare("UPDATE runs SET kind = 'x-newer' WHERE id = ?").run(a.id);
+    expect(s.advance(a.id, 'dispatched', 'test'))
+      .toEqual({ ok: false, error: 'bad-transition', from: 'planned', to: 'dispatched' });
+  });
+
+  it('reviewInFlightFor: null with no reviewer, the review id while non-terminal, null again once terminal (Task 5 review m8)', () => {
+    const s = store();
+    const w = openRun(s) as { id: number };
+    expect(s.reviewInFlightFor(w.id)).toBeNull();
+    const r = s.openRun({ program: 'build4', title: 'T', project: 'ccrc-pwa', wave: 1, waveOf: 5,
+      claimedBy: 'ccrc-pwa-coordinator', kind: 'review', reviews: w.id }) as { id: number };
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // planned
+    expect(s.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // dispatched
+    expect(s.advance(r.id, 'working', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBe(r.id);   // working
+    expect(s.advance(r.id, 'failed', 'test').ok).toBe(true);
+    expect(s.reviewInFlightFor(w.id)).toBeNull();
   });
 });

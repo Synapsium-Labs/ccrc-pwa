@@ -90,7 +90,7 @@ describe('run close releases the claims — inside the close transaction', () =>
     const h = fixture();
     const open = h.coord.openRun({ program: 'build9b', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'demo-calm-mesa' });
-    if ('refused' in open) throw new Error('unreachable');
+    if (!('id' in open)) throw new Error('unreachable');
     h.claim({ runId: open.id });
     const closed = h.coord.closeRun({ runId: open.id, finalState: 'failed',
       causedBy: 'operator', handoffCommit: null, program: 'build9b', viaClosing: false });
@@ -103,7 +103,7 @@ describe('run close releases the claims — inside the close transaction', () =>
     const h = fixture();
     const open = h.coord.openRun({ program: 'build9b', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'demo-calm-mesa' });
-    if ('refused' in open) throw new Error('unreachable');
+    if (!('id' in open)) throw new Error('unreachable');
     h.claim({ runId: open.id });
     // planned has no `closing` edge — viaClosing:true refuses at the first hop
     const refused = h.coord.closeRun({ runId: open.id, finalState: 'done',
@@ -208,7 +208,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
     h.plantRecord('demo-quiet-basin');
     const open = h.coord.openRun({ program: 'build9b', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'demo-calm-mesa' });
-    if ('refused' in open) throw new Error('unreachable');
+    if (!('id' in open)) throw new Error('unreachable');
     h.claim({ runId: open.id });
     // The crash shape the alarm exists for: the run reached terminal WITHOUT
     // closeRun's release (simulated by writing the state directly).
@@ -225,7 +225,7 @@ describe('sweepDivergences feeds claim-orphan from what it already read', () => 
     h.plantRecord('demo-quiet-basin');
     const open = h.coord.openRun({ program: 'build9b', title: 'T', project: 'demo',
       wave: 1, waveOf: 1, claimedBy: 'demo-calm-mesa' });
-    if ('refused' in open) throw new Error('unreachable');
+    if (!('id' in open)) throw new Error('unreachable');
     h.claim({ runId: open.id });
     h.coord.closeRun({ runId: open.id, finalState: 'failed', causedBy: 'operator',
       handoffCommit: null, program: 'build9b', viaClosing: false });

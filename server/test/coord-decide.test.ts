@@ -34,9 +34,11 @@ import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import { configDirFor } from '../src/config.js';
 import { closeRun, type CloseRunDeps } from '../src/coord/close.js';
+import { HOLD_REASON_MAX_CHARS, holdReason } from '../src/coord/rundefs.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { okRun } from './coordReadHelpers.js';
 
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
@@ -132,6 +134,69 @@ function makeCountingRunner(home: string): { run: Runner; calls: string[][] } {
   return { run, calls };
 }
 
+describe('dispatchRun hold preflight', () => {
+  it('refuses a reconstructed oversized hold before spawning, ensuring, or holding', async () => {
+    const home = mkTmp('ccrc-decide-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-never-created'] });
+    const base = testDeps(home, run);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const overhead = holdReason('', 22, 333, 1).length;
+    const program = 'x'.repeat(HOLD_REASON_MAX_CHARS + 1 - overhead);
+    const reconstructed = coord.reconstruct({
+      ledger: { slug: program, title: 'Recovered', waves: [
+        { wave: 22, of: 333, handoffCommit: null },
+      ] },
+      registry: { sessionId: 'demo-recovered', project: PROJECT,
+        workspace: 'recovered', branch: 'ws/recovered', held: 'legacy hold' },
+      prHistory: [],
+    })[0];
+    if (!reconstructed) throw new Error('reconstruct did not return a run');
+    // Simulate a planned row read from a newer/recovered database. `openRun`
+    // cannot create this shape once its ingress guard lands, but dispatch must
+    // still enforce its own irreversible boundary.
+    coord.db.prepare("UPDATE runs SET state = 'planned' WHERE id = ?").run(reconstructed.id);
+    const deps: DispatchRunDeps = {
+      coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      configDir: (w: string) => configDirFor(base.cfg, w),
+    };
+
+    expect(await dispatchRun(deps, reconstructed.id, 'do the thing', undefined))
+      .toMatchObject({ ok: false, kind: 'hold-oversize', limit: HOLD_REASON_MAX_CHARS });
+    expect(calls).toEqual([]);
+    expect(okRun(coord.run(reconstructed.id))!.state).toBe('planned');
+  });
+
+  it('refuses an invalid reconstructed hold before pause/cap reads or any fleet act', async () => {
+    const home = mkTmp('ccrc-decide-');
+    mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-never-created'] });
+    const base = testDeps(home, run);
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const reconstructed = coord.reconstruct({
+      ledger: { slug: 'bad program', title: 'Recovered', waves: [
+        { wave: 1, of: 1, handoffCommit: null },
+      ] },
+      registry: { sessionId: 'demo-recovered', project: PROJECT,
+        workspace: 'recovered', branch: 'ws/recovered', held: 'legacy hold' },
+      prHistory: [],
+    })[0];
+    if (!reconstructed) throw new Error('reconstruct did not return a run');
+    coord.db.prepare("UPDATE runs SET state = 'planned' WHERE id = ?").run(reconstructed.id);
+    const deps: DispatchRunDeps = {
+      coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
+      fleetState: undefined, tmux: base.tmux, queue: base.queue,
+      configDir: (w: string) => configDirFor(base.cfg, w),
+    };
+
+    expect(await dispatchRun(deps, reconstructed.id, 'do the thing', undefined))
+      .toMatchObject({ ok: false, kind: 'hold-invalid' });
+    expect(calls).toEqual([]);
+    expect(okRun(coord.run(reconstructed.id))!.state).toBe('planned');
+  });
+});
+
 describe('dispatchRun, called CONCURRENTLY with no CoordMutex in the loop (fix round 1, finding 4/5 — D-46 is the caller\'s property)', () => {
   it('two dispatchRun calls fired together for the SAME planned run both reach ccd ws-add', async () => {
     const home = mkTmp('ccrc-decide-');
@@ -200,7 +265,7 @@ describe('dispatchRun, called CONCURRENTLY with no CoordMutex in the loop (fix r
     // race is what `run-routes.test.ts`'s own D-46 case proves unreachable
     // once the caller wraps the call in `coordMutex.run(...)`, which is
     // exactly the difference this file exists to isolate.
-    expect(['planned', 'dispatched']).toContain(coord.run(opened.id)!.state);
+    expect(['planned', 'dispatched']).toContain(okRun(coord.run(opened.id))!.state);
   });
 });
 
@@ -223,7 +288,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
       configDir: (w: string) => configDirFor(base.cfg, w), };
     const dispatched = await dispatchRun(dispatchDeps, opened.id, 'do the thing', undefined);
     expect(dispatched.ok).toBe(true);
-    expect(coord.run(opened.id)!.state).toBe('dispatched');
+    expect(okRun(coord.run(opened.id))!.state).toBe('dispatched');
 
     // An explicit abandon (`state:'failed'`) skips `verifyDone` entirely
     // (D-49) — the one shape that lets this test exercise the `ws-release`
@@ -242,8 +307,8 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     // function refused to close must be EXACTLY where it was — `dispatched`,
     // never `closing`/`done`/`failed` — or `RUN_TRANSITIONS.done = []`/
     // `.failed = []` would give no way out at all.
-    expect(coord.run(opened.id)!.state).toBe('dispatched');
-    expect(coord.run(opened.id)!.closedAt).toBeNull();
+    expect(okRun(coord.run(opened.id))!.state).toBe('dispatched');
+    expect(okRun(coord.run(opened.id))!.closedAt).toBeNull();
 
     // The new claim a route-level test cannot isolate: called AGAIN, on the
     // SAME run, with nothing but a healthy runner swapped in — no HTTP retry,
@@ -256,7 +321,7 @@ describe('closeRun, called directly — a failing ws-release leaves the run retr
     const closed = await closeRun(retryDeps, opened.id, abandon, 'coordinator');
     expect(closed).toMatchObject({ ok: true, id: opened.id, state: 'failed' });
     expect(healthyCalls.some((c) => c[0] === 'ws-release')).toBe(true);
-    expect(coord.run(opened.id)!.state).toBe('failed');
-    expect(coord.run(opened.id)!.closedAt).not.toBeNull();
+    expect(okRun(coord.run(opened.id))!.state).toBe('failed');
+    expect(okRun(coord.run(opened.id))!.closedAt).not.toBeNull();
   });
 });

@@ -103,8 +103,17 @@ function abandonErrorText(err: unknown): string {
     return typeof stderr === 'string' && stderr.trim().length > 0 ? stderr.trim() : ABANDON_COPY['fleet-failed'];
   }
   // 400 bad-request (non-integer id) is not reachable from the UI (the phone
-  // always has a real run id) and anything else this route has never sent
-  // falls to the same total catch-all.
+  // always has a real run id) and falls to the same total catch-all.
+  //
+  // `hold-oversize` (413) and `hold-invalid` (400) ARE reachable here now — the
+  // abandon path re-holds a surviving sibling, and that hold is validated — so
+  // "anything else this route has never sent" stopped being true. They
+  // deliberately keep the catch-all rather than gaining copy: both mean the
+  // SURVIVING run's stored programme or numbers cannot be written as a hold,
+  // which is an operator-side repair on a row this sheet is not abandoning and
+  // cannot name, and the one action this sheet offers (abandon THIS run) is not
+  // the remedy for either. The generic sentence sends the operator to the
+  // server's own `detail`, which does name it.
   return ABANDON_COPY.unknown;
 }
 

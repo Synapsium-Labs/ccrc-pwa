@@ -9,6 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { ProjectPoolWire } from '../../shared/api.js';
 import { poolRule } from '../../shared/poolrule.js';
 import { POOL_RULE_CASES } from './fixtures/poolRule.js';
 
@@ -46,6 +47,35 @@ describe('poolRule over the shared truth table', () => {
     expect(poolRule('pool-a', { state: 'untagged' })).toEqual({ ok: true, why: 'untagged-project' });
     expect(poolRule(null, { state: 'tagged', name: 'pool-a' })).toEqual({ ok: true, why: 'untagged-account' });
     expect(poolRule('pool-a', { state: 'tagged', name: 'pool-a' })).toEqual({ ok: true, why: 'same-pool' });
+  });
+});
+
+describe('poolRule fails shut on an unrecognised project-pool wire state', () => {
+  // Wire evolution can carry a state that this build's declared union does not
+  // know. Keep these casts at the ingress-shaped test boundary, not in L0.
+  const futureStateWithoutName = { state: 'future-state' } as unknown as ProjectPoolWire;
+  const archivedNamedPool = { state: 'archived', name: 'pool-z' } as unknown as ProjectPoolWire;
+  const unrecognisedState = { state: 'unrecognised' } as unknown as ProjectPoolWire;
+
+  it.each([
+    ['a future state without a name', 'pool-a', futureStateWithoutName],
+    ['a named archived state', 'pool-a', archivedNamedPool],
+    ['an unrecognised state over an untagged account', null, unrecognisedState],
+  ] as const)('%s is undecidable rather than inferred', (_name, accountPool, projectPool) => {
+    expect(poolRule(accountPool, projectPool)).toEqual({
+      ok: false, reason: 'pool-undecidable', state: 'unrecognised',
+    });
+  });
+
+  it.each([
+    ['unreadable', 'pool-a', { state: 'unreadable' }, { ok: false, reason: 'pool-undecidable', state: 'unreadable' }],
+    ['malformed', null, { state: 'malformed' }, { ok: false, reason: 'pool-undecidable', state: 'malformed' }],
+    ['untagged project', 'pool-a', { state: 'untagged' }, { ok: true, why: 'untagged-project' }],
+    ['untagged account', null, { state: 'tagged', name: 'pool-a' }, { ok: true, why: 'untagged-account' }],
+    ['same tagged pool', 'pool-a', { state: 'tagged', name: 'pool-a' }, { ok: true, why: 'same-pool' }],
+    ['different tagged pools', 'pool-a', { state: 'tagged', name: 'pool-b' }, { ok: false, reason: 'pool-mismatch', accountPool: 'pool-a', projectPool: 'pool-b' }],
+  ] as const)('%s remains in-vocabulary', (_name, accountPool, projectPool, expected) => {
+    expect(poolRule(accountPool, projectPool)).toEqual(expected);
   });
 });
 

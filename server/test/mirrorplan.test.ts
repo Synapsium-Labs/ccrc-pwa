@@ -30,7 +30,7 @@ describe('frameRead: the partial trailing line is NOT consumed', () => {
 
   it('answers an empty payload with the cursor unmoved — a cursor at EOF is a POSITIVE answer', () => {
     // `readFileFrom` clamps and returns {data:'', size} when from >= size
-    // (`io.ts:101-102`), which is what makes "no cross-call carry buffer" true.
+    // (`io.ts:113-114`), which is what makes "no cross-call carry buffer" true.
     const r = frameRead(410, '', 410, 410);
     expect(r.lines).toEqual([]);
     expect(r.nextCursor).toBe(410);

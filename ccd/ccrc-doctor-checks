@@ -188,12 +188,15 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  accounts
   credentials
   pools
   graphify
   graphify-path
   build
   fleet
+  memory
+  routing
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -483,13 +486,13 @@ _check_python3() {
     "install it: sudo apt install python3"
 }
 _check_flock() {
-  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:2501-2502)" \
+  _dr_need_bin flock "ccd serialises registry writes with it, and refuses to run ws-restore without it (ccd:3282-3283)" \
     "install it: sudo apt install util-linux"
 }
 
 # ── gh's authentication ───────────────────────────────────────────────────
 # DELIBERATE DIVERGENCE FROM ccd, do not "harmonise" the two: `ccd` never
-# probes `gh auth status` — it classifies gh's own stderr instead (ccd:707-715,
+# probes `gh auth status` — it classifies gh's own stderr instead (ccd:733-741,
 # "`gh auth status` is NOT probed first: it is another network call on the
 # unhappy path"), because ccd runs that path in a poll loop over every open PR.
 # Doctor is the COLD path: it runs when a human asks "is this box fit to
@@ -729,7 +732,7 @@ _check_path() {
 # this asks about the units whose FILE is present and skips a box that has none
 # rather than demanding units a dev checkout was never meant to have. A server
 # box has `ccrc.service`, a fleet host has `ccrc-agent.service` and the
-# cap-scopes timer, and `deploy.sh` (:416, :463) is what puts each there.
+# cap-scopes timer, and `deploy.sh` (:417, :464) is what puts each there.
 #
 # ── TWO CLASSES, BECAUSE THEY ARE TWO DIFFERENT MORNINGS ─────────────────
 # A stopped `ccrc.service`/`ccrc-agent.service` is a FAIL: the box is configured
@@ -1640,7 +1643,7 @@ _check_exposure() {
 
 # ── caddy: the SYSTEM unit the D2 ceremony was supposed to arm ────────────
 # Its own `systemctl`, in SYSTEM scope — NOT `_check_services`, which reads
-# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:443 as root and is
+# only `$CCRC_UNIT_DIR` user units: caddy binds :80/:444 as root and is
 # nobody's user unit. The FAIL is the D2 pending state made visible: exposure
 # configured, ceremony not yet run — so the remedy IS the ceremony, all three
 # steps, not a pointer back to a transcript that has scrolled away.
@@ -1736,7 +1739,7 @@ _check_caddyfile() {
 # the answer exists before DNS propagates and never depends on the WAN path.
 # The handshake is the WHOLE conversation — no HTTP request is sent (the
 # D-150 note above). Bounded by CCRC_DOCTOR_GH_TIMEOUT for the reason that
-# knob exists: a wedged listener holding :443 without answering is precisely a
+# knob exists: a wedged listener holding :444 without answering is precisely a
 # box this check will be run on.
 _check_cert() {
   if [ -z "${CCRC_EXPOSURE_FILE:-}" ] || [ -z "${CCRC_CADDY_ROOT_CA:-}" ] || ! declare -F _box_env_value >/dev/null 2>&1; then
@@ -1767,7 +1770,7 @@ _check_cert() {
   # Candidates: loopback first (the common all-interfaces bind), then this
   # box's own addresses (`hostname -I` — the name check's source). Caddy CAN
   # bind a single interface: live 2026-08-21, tailscaled held the tailnet
-  # IP's :443, caddy took the public IP, and loopback REFUSED — a probe that
+  # IP's :444, caddy took the public IP, and loopback REFUSED — a probe that
   # stopped there FAILed a box serving a perfectly good certificate. The
   # first listener that completes a handshake is the one measured.
   local -a cert_cands=(127.0.0.1)
@@ -2091,7 +2094,7 @@ _dr_wr_has() {
 
 # IS THERE AN EXECUTABLE AT $HOME/.local/bin/<id> AT ALL — the one question
 # every roster account of every kind must answer yes to, because that path is
-# literally what ccd runs (ccd:7361). Three distinguishable ways to answer no,
+# literally what ccd runs (ccd:9057). Three distinguishable ways to answer no,
 # because an operator does something different about each: a link whose target
 # was deleted is a broken install, an absent file is an install that never
 # happened, and a present non-executable file is a `chmod`.
@@ -2366,7 +2369,7 @@ _check_wrappers() {
       continue
     fi
     # An id is not decoration: it is the FILENAME ccd executes
-    # ($HOME/.local/bin/<id>, ccd:7361), so the roster's ids are held to the
+    # ($HOME/.local/bin/<id>, ccd:9057), so the roster's ids are held to the
     # same rule as the disk's, `WRAPPER_ID_RE` — the one `shared/roster.ts`
     # states. Nothing else in this check can be trusted about an entry whose id
     # is not an id, so it is reported and skipped rather than looked up on disk
@@ -2655,6 +2658,93 @@ _check_wrappers() {
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
 }
 
+# ── the accounts surface, by existence ────────────────────────────────────
+# TWO FACTS NOTHING ELSE ON THIS BOX MEASURES. `_check_wrappers` compares the
+# roster against ~/.local/bin; neither of these files is there.
+#   credential-declared-absent — the roster DECLARES a secretsFile and the file
+#     is not on disk, so the lane looks configured and authenticates as nobody.
+#     `secretsFile` is legal on `upstream` as a DECLARATION for exactly this
+#     reason: it is the only way "the upstream account has a credential nobody
+#     can see" becomes checkable at all.
+#   settings-env-drift — a lane's settings.json `env` block disagrees with the
+#     roster's provider config. The base URL and the model map live in that
+#     block rather than in the wrapper, so it is the one place a lane can talk
+#     somewhere the roster does not name while every other check passes.
+#
+# EXISTENCE ONLY, NEVER CONTENTS, for the credential half. Those files are 0600
+# under a 0700 ~/.cc-secrets and CLAUDE.md's rule is absolute; the reader calls
+# `existsSync` and reports a PATH. settings.json is a different class — a 0644
+# config file whose key field this design deliberately leaves EMPTY — so it is
+# read, and reported by key name and endpoint.
+#
+# `launcher-absent` IS NOT REPORTED HERE, and its absence is deliberate. It is
+# the third member of the shared vocabulary because the PWA renders it on a
+# card; doctor's renderer of it is `_check_wrappers`, whose `external)` arm has
+# run `_dr_wr_present … wr_hard` since stage 2b. A second verdict line would
+# count one finding twice — `_check_tmux_skew`'s own first arm is this file's
+# ruling on that. The PASS detail below names which axes were measured, so a
+# reader can see the third was asked elsewhere rather than not at all.
+#
+# NEVER A SKIP. A box with no roster is exactly the box whose operator most
+# needs a line, and the roster's own health is `_check_wrappers`' FAIL one entry
+# up — so this WARNs, says where that FAIL lives, and returns 2. THE ARM ORDER
+# IS PART OF THAT: the roster test runs FIRST, because a box with no roster
+# usually has no node stub either and the sentence its operator needs is about
+# the roster.
+_check_accounts() {
+  local roster="$HOME/.ccrc/accounts.json" gen="$CCRC_HERE/../deploy/account-op.mjs"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_warn accounts "no readable account roster at \$HOME/.ccrc/accounts.json, so no account's credential or provider config was measured" \
+      "the roster's own health is the wrappers check above — fix what it reports first, then re-run doctor"
+    return 2
+  fi
+  if [ ! -f "$gen" ]; then
+    _dr_warn accounts "the account helper did not ship ($gen), so no account's credential or provider config was measured" \
+      "the helper lives one directory up from ccrc (at ~/ccrc/deploy on a deployed box): re-run the install, or redeploy, so ccrc and deploy/ come from one tree"
+    return 2
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_warn accounts "node is not on PATH, so \$HOME/.ccrc/accounts.json could not be read" \
+      "install Node first — see the 'node' check above"
+    return 2
+  fi
+
+  local out rc=0
+  out="$(node "$gen" doctor --file "$roster" --home "$HOME" 2>/dev/null)" || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_warn accounts "\$HOME/.ccrc/accounts.json could not be read as a roster, so no account's credential or provider config was measured" \
+      "the roster's own health is the wrappers check above — fix what it reports first, then re-run doctor"
+    return 2
+  fi
+
+  # ONE LINE PER FINDING, plus one COUNTS line, TAB-separated and read into FOUR
+  # variables. Every field the helper writes is non-empty by construction (a
+  # code, an id, a sentence, or a number), so CLAUDE.md's measured TSV hazard —
+  # TAB is an IFS whitespace character, so a run of them collapses and shifts
+  # every field after an empty one — cannot bite here; a finding's absent fourth
+  # field is TRAILING, which `read` leaves empty without shifting anything.
+  # `_dr_line` squashes embedded newlines out of both halves, so the findings
+  # join onto ONE verdict line and the remedy stays the line after it.
+  local -a findings=()
+  local n_acct=0 n_cred=0 n_env=0
+  local code a b c
+  while IFS=$'\t' read -r code a b c; do
+    [ -n "$code" ] || continue
+    if [ "$code" = COUNTS ]; then n_acct="$a"; n_cred="$b"; n_env="$c"; continue; fi
+    findings+=("$code: $a — $b")
+  done <<<"$out"
+
+  # THE COUNTS ARE THE MEASUREMENT (this file's "never the bare word ok" rule),
+  # and they come from the SAME run that produced the findings.
+  if [ "${#findings[@]}" -eq 0 ]; then
+    _dr_pass accounts "$n_acct account(s): $n_cred declared credential file(s), all present; $n_env provider env block(s), all agreeing with the roster (an account's launcher is the wrappers check's subject, not this one)"
+    return 0
+  fi
+  _dr_warn accounts "$(_dr_join "${findings[@]}")" \
+    "a declared credential file that is not on disk is re-written by: ccrc account credential --id <id> --credential - ; a drifted env block by re-running the lane's provisioning, whose settings.json merge is idempotent"
+  return 2
+}
+
 # ── credentials: does every account this box will PROBE have a token file? ──
 # `ccd-account-health` derives each token's path by CONVENTION —
 # `$HOME/.cc-secrets/<id>-oauth.env` for every `telemetry: "anthropic"` account
@@ -2801,6 +2891,15 @@ _check_pools() {
   # directory that constant names. Renaming the directory in the two files that
   # already had pins, and not here, is red twice over.
   local dir="$HOME/.cc-sessions/pools" reg="$HOME/.cc-sessions" proot="$HOME/projects"
+  # SAME SHADOW AS THE READER, FOR THE SAME THREE DECISIONS (D-2520/D-2522).
+  # This check is the THIRD reader of the tag — it repeats `ccd`'s `-n 64` cap,
+  # its `[[:space:]]` strip and its `POOL_NAME_RE`, and it is pinned byte-equal
+  # to both other spellings. Byte-equal is not behaviour-equal while the locale
+  # is free, so a doctor run under one environment could pass a tag that the
+  # reader under another calls `malformed` — the check disagreeing with the
+  # thing it exists to check. Shadow it here too, or the parity this file
+  # asserts is textual only.
+  local LC_ALL=C
   # `$REG` UNSEARCHABLE IS NOT `$REG` ABSENT, and the absence branch below
   # cannot tell them apart — checked FIRST, ahead of it, because that branch
   # is the one that answers. `-e "$dir"` and `-L "$dir"` are BOTH false when
@@ -3172,7 +3271,7 @@ _check_graphify() {
   # measured and WARN would report a problem there is none. Existence and
   # readability are checked BEFORE `_box_env_value` runs (its `< "$file"`
   # redirection is fatal to a missing file) — the same guard
-  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:4205-4208).
+  # `cmd_update`'s own CCRC_ROLE read uses (ccrc:9243-9246).
   local role=""
   if [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && declare -F _box_env_value >/dev/null 2>&1; then
     role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
@@ -3949,7 +4048,7 @@ _check_fleet() {
   # different bodies (no `connected` at all; `"yes"`; `null`; the STRING
   # `"false"`) each produced `PASS fleet: … in remote mode, connected` — a
   # verdict asserting the opposite of what the last one says. The justification
-  # written here was wrong as well as the code: `shared/api.ts:1484` declares
+  # written here was wrong as well as the code: `shared/api.ts:1926` declares
   # `connected` REQUIRED, so absence is a malformed answer, and the
   # absence-permits rule belongs to the optional pair `roster?`/`build?` and
   # licenses nothing here. `mode` and `build`/`roster` already WARN on a value
@@ -3973,4 +4072,345 @@ _check_fleet() {
     return "$rc"
   fi
   _dr_pass fleet "the two boxes agree — same build, and the same generated ~/.ccrc/accounts.sh (measured by the server at $addr, in remote mode, connected)"
+}
+
+# ── memory convergence ────────────────────────────────────────────────────
+# THE WHOLE DEFECT EXISTED BECAUSE A FORK IS SILENT. Nothing on this box
+# reported that two homes disagreed about a project's memory, so a session read
+# its own superseded record after an account swap and acted on it. A
+# convergence mechanism without a detector only moves the silence one layer
+# down: the next unconverged home forks exactly as `.claude-dev0` did.
+#
+# HOMES COME FROM THE FILESYSTEM, NOT THE ROSTER. `.claude-glm` and
+# `.claude-kimi` are on disk, hold memory, and are in no roster entry — a
+# roster-driven check would report PASS while the homes most likely to fork
+# went unexamined.
+#
+# THE GLOB ITSELF IS STILL A NARROWER PROMISE THAN "every agent home", AND
+# THAT IS A DOCUMENTED LIMIT, NOT FIXED HERE (whole-branch review, Important).
+# It is `"$HOME"/.claude*/`, so a config dir whose suffix does not start with
+# `.claude` — legal by `shared/roster.ts`'s own validator
+# (`/^\.[A-Za-z0-9._-]+$/`, whose own error text suggests `.${id}`, e.g.
+# `.kimi` for account id "kimi") — is invisible to this check exactly as it is
+# invisible to `_mem_homes` (ccd/ccrc), while the hook
+# (`_hook_memory_converge`) takes the home from the transcript path with no
+# name filter at all and WOULD converge such a home regardless. Left alone
+# deliberately: `_mem_homes` and the hook are owned by other work in this same
+# review wave, and widening only THIS copy's glob (say, by reading
+# `~/.ccrc/accounts.json` for `configDirSuffix`, which no other enumerator
+# does) would make doctor report — and hand a `ccrc memory --apply` remedy
+# for — a home the census and `--apply` still cannot see or migrate, which is
+# a worse lie than today's shared blind spot. A real fix has to land in
+# `_mem_homes`, this check and the hook together (D-2181's four-site parity),
+# or not at all.
+#
+# THREE CONDITIONS, NEVER TWO. "Forked" and "unreachable" have different
+# remedies: the first is `ccrc memory --apply`, the second is wiring the home
+# into `install-session-hooks.sh` (whose list is built from CCRC_ACCOUNTS, which
+# is why a non-rostered home can never be hooked). Collapsing them sends the
+# operator to the wrong fix. Since R33 they also carry different SEVERITIES —
+# forked is a WARN, unreachable stays a FAIL — because a fork is the expected
+# state of every multi-home box before its one-time migration, while an
+# unreachable home is a misconfiguration nothing will ever repair on its own.
+# See the WARN/FAIL calls at the bottom of this function for the full
+# reasoning.
+#
+# THIS RE-DERIVES `_mem_homes`/`_mem_state` (ccrc's own memory functions)
+# RATHER THAN SOURCING THEM — DELIBERATELY (D-92). `cmd_doctor` happens to
+# source this file into the same shell where `ccrc` already defines those two
+# functions, so calling them would technically work today. But this file is
+# ALSO sourced standalone, under `set -u`, by callers that are not `ccrc`
+# (this suite's own test harness does exactly that to read
+# `CCRC_DOCTOR_CHECKS`), and D-92 (ccd/ccrc:971-981, pinned by
+# ccrc-install.test.ts:2416-2425) is this repo's standing ruling that
+# ccrc-doctor-checks must hold its own second spelling of anything it needs,
+# rather than lean on a scope accident. Don't "fix" this duplication by
+# reaching across a boundary that does not reliably exist.
+#
+# THE HOME GLOB ON A BOX WITH NO `.claude*` AT ALL: this check does not set
+# nullglob itself, so `"$HOME"/.claude*/` expands to its own literal text
+# when nothing matches — `_check_wrappers`, elsewhere in this file, toggles
+# `shopt -s nullglob` on and restores it before returning (`:2410`/`:2420`),
+# but that toggle lives and dies inside `_check_wrappers`' own subshell
+# (`cmd_doctor` runs every check as `out="$( "_check_$name" )"`), so it can
+# never leak into this one. The `[ -d "${h}projects" ]` guard right below is
+# what makes an unmatched literal glob harmless either way — it is never a
+# directory, so the loop body simply never runs and this check PASSes having
+# measured a box with no agent homes at all. That PASS is vacuous, not a
+# lie: there is nothing here that could have forked.
+#
+# EXTERNAL BINARIES ARE NOT BANNED HERE — `_check_caddyfile` calls `readlink`
+# (`:1720`) and `_check_graphify-path` calls `realpath` twice (`:3575`-
+# `:3576`), so "this file never shells out" would overstate its own practice.
+# The real doctrine is D-1350 (`:3555`-`:3572`): a tool is fine to use, but
+# its ABSENCE must become an unmeasured/SKIP outcome, never a narrowed or
+# wrong verdict — an adapter may not narrow a distinction it received. This
+# check still avoids `basename`/`readlink`/`grep` (below), but for a sharper
+# reason than house style: this check's OWN test harness
+# (`ccrc-doctor.test.ts`'s `doctorEnv`) runs every check against a PATH of
+# only its own stub binaries, and unlike `stat`/`date`/`timeout`/`jq` (which
+# `healthy()` explicitly links in), none of those three are ever linked —
+# measured, they resolve to nothing there. Reaching for them would need this
+# check to ALSO grow the SKIP/unmeasured handling D-1350 requires; writing it
+# in bash builtins sidesteps needing that machinery at all:
+# `${x%/}` then `${x##*/}` is `basename` in pure parameter expansion (the
+# same idiom `_check_wrappers` already uses at `name="${f##*/}"`), and the
+# settings.json scan below is a `read` loop rather than `grep`.
+#
+# CONVERGED MEANS THE LINK RESOLVES TO THE STORE *AND THE STORE IS A
+# DIRECTORY* (R20, Task 4 review round 2 — see `_mem_state` in `ccd/ccrc` for
+# the full ruling this mirrors). `[ "$link" -ef "$store" ]` alone answers only
+# "resolves to something that exists" — it is TRUE for a link resolving to a
+# regular FILE sitting where the store belongs, which is just as unusable a
+# memory store as a dangling link but LOOKS nothing like one. Round 2's
+# review measured this exact gap: `_check_memory` PASSed a box whose "store"
+# was `: > $HOME/.ccrc/memory/<slug>`, a plain file. `[ -d "$store" ]` is
+# therefore a SECOND, INDEPENDENT conjunct, not implied by `-ef` — deleting it
+# alone (leaving `-ef` in place) reproduces exactly that false PASS. `-ef`
+# still does the other half of the job for free: it compares device+inode
+# THROUGH the symlink (the same operator `_check_wrappers` already uses for
+# its own alias detection), so a RELATIVE link that genuinely resolves to the
+# store reads as converged without any `readlink` at all — a bare dangling
+# link (nothing to stat on either side) or a link naming a different file
+# both fail `-ef` on that fact alone.
+#
+# `[ -e "$link" ] || [ -L "$link" ] || continue`, NOT `[ -e "$link" ] ||
+# continue`: `-e` DEREFERENCES, so it is false for a dangling symlink —
+# exactly the pair the rule above calls forked, because its target text is
+# right but nothing is behind it. Skipping past it here would let doctor PASS
+# a box the census (`ccrc memory`) calls forked (R10 — the same defect Task 2
+# and Task 3 each hit once already on this branch).
+#
+# THREE SETTINGS.JSON SHAPES, NOT TWO (R22 + a Minor, Task 4 review round 2).
+# `install-session-hooks.sh:107-115` writes `cur='{}'` and proceeds to insert
+# the hook for ANY rostered home that has no settings.json at all — so a
+# missing file is not "nothing to report", it is proof the installer has
+# never touched this home, the MAXIMAL case of "will fork on first use".
+# Round 1 of this check only ever examined a settings.json that existed,
+# which silently PASSed exactly the home most likely to fork (measured:
+# `.claude-kimi/projects/` with no settings.json at all read as converged).
+# The third shape is a settings.json that EXISTS but cannot be READ (mode
+# problem, not a content problem): folding that into "unreachable" would be
+# the overloaded-null defect this codebase bans by name yet again — D-1350's
+# "an adapter may not narrow a distinction it received" applies here just as
+# it does to a missing `realpath`. "I could not read it" and "it is
+# definitely not wired" are different facts an operator fixes differently
+# (a permissions fix vs. a roster/settings.json edit), so an unreadable file
+# earns its own WARN, `unmeasured`, with its own remedy — never silently
+# promoted to the FAIL a confirmed-absent hook gets. `[ -r "${h}settings.json" ]`
+# is checked BEFORE ever opening the file for exactly this reason too: a
+# `while read … done < file` whose open() fails leaks bash's own permission-
+# denied diagnostic to the REAL stderr (redirections are set up left to right,
+# so a trailing `2>/dev/null` on that same line cannot catch the failure of
+# the `<` that precedes it) — refusing to attempt the open at all is simpler
+# than getting that ordering right, and it is what makes the WARN path clean.
+#
+# R21 (Task 4 review round 2): a box can be forked AND carry an unreachable
+# home AND carry an unmeasured one, all at once, and this check now answers
+# in all three classes rather than picking the loudest and discarding the
+# rest — `ccrc-doctor-checks`'s own header rules exactly this ("ONE CHECK MAY
+# ANSWER IN TWO (OR MORE) CLASSES": distinct findings are distinct operator
+# actions, so each gets its own line and its own remedy). The instruction
+# that shipped round 1's early-return ("emit exactly one verdict line or
+# doctor's tallies go inconsistent") was wrong: `cmd_doctor` counts VERDICT
+# LINES, not a fixed arity per check — the counting loop and the comment that
+# rules it are `ccd/ccrc:1990`-`:2007`, and the contract the count then has to
+# satisfy (the return code must be the WORST class the check printed, or the
+# check is failed as a ccrc bug) is `ccd/ccrc:2048`-`:2063` — so a fork on one
+# home and an unreachable finding on an unrelated home are computed
+# independently below and BOTH printed — dropping either one is silence about
+# a real finding, which is the one thing this whole task exists not to do.
+# SINCE R33 THE TWO ARE NO LONGER BOTH FAIL: a forked-and-unreachable box now
+# prints one WARN line and one FAIL line, and the worst-class cross-check at
+# `ccd/ccrc:2048`-`:2063` still picks FAIL as the return code — `unreachable`
+# alone is what can still fail `ccrc update`.
+#
+# NO `.claude-docserver` SPECIAL CASE, DELIBERATELY (Minor, whole-branch
+# review round 3 — reached independently of `_mem_homes`'s identical guard in
+# ccd/ccrc, which is owned by other work in this wave, but for the same
+# reason). It used to be excluded by name in this loop. Removed because (a)
+# hard-coding one operator's box-local tool's directory name into shipped,
+# public-release-bound source is exactly the residue class the top-level
+# CLAUDE.md bans by name ("no account-name list in ANY shipped source file"),
+# and this tree is not supposed to know `.claude-docserver` exists at all —
+# it is "operator plumbing this tree does not know about", the same phrase
+# that CLAUDE.md uses to keep Tailscale out of this codebase; (b) it excluded
+# nothing measurable: `~/.claude-docserver` carries no `projects/` directory
+# on the box it was written for, so the very next line
+# (`[ -d "${h}projects" ] || continue`) already skips it. If some future box's
+# docserver ever does grow a `projects/` directory, treating it like any other
+# `.claude*` directory is the right answer — a silent blind spot for a name
+# this tool has no business knowing is worse than one more row in the census.
+_check_memory() {
+  local h b d slug link store forked="" unreachable="" unmeasured="" line hooked rc=0
+  for h in "$HOME"/.claude*/; do
+    b="${h%/}"; b="${b##*/}"
+    [ -d "${h}projects" ] || continue
+    if [ ! -f "${h}settings.json" ]; then
+      # R22: never touched by install-session-hooks.sh — the maximal case of
+      # "will fork on first use".
+      unreachable="${unreachable:+$unreachable }$b"
+    elif [ -r "${h}settings.json" ]; then
+      hooked=0
+      while IFS= read -r line || [ -n "$line" ]; do
+        case "$line" in *session-hook.sh*) hooked=1; break ;; esac
+      done < "${h}settings.json"
+      [ "$hooked" -eq 1 ] || unreachable="${unreachable:+$unreachable }$b"
+    else
+      unmeasured="${unmeasured:+$unmeasured }$b"
+    fi
+    for d in "${h}projects"/*/; do
+      [ -d "$d" ] || continue
+      slug="${d%/}"; slug="${slug##*/}"
+      # THE PATTERN LIST IS SPELLED HERE, and that is D-92's trade rather
+      # than an oversight — the same one this file already records for `ccd`'s
+      # `POOL_NAME_RE`: this table is sourced under `set -u` by things that are
+      # NOT `ccrc` (`ccrc-doctor.test.ts`'s `tableNames()`), so it cannot reach
+      # `_mem_is_scratch`, and a `declare -F` guard would be the second
+      # spelling with a branch in front of it. `single-definition.test.ts`
+      # compares all three literals and reds on a drift. `_mem_is_scratch` in
+      # `ccrc` carries the rule and the measurement (D-2375).
+      case "$slug" in -tmp*|-private-tmp*|-var-folders*|-private-var-folders*) continue ;; esac
+      link="${d}memory"
+      [ -e "$link" ] || [ -L "$link" ] || continue
+      store="$HOME/.ccrc/memory/$slug"
+      [ "$link" -ef "$store" ] && [ -d "$store" ] && continue
+      forked="${forked:+$forked }$b:$slug"
+    done
+  done
+  if [ -n "$forked" ]; then
+    # R33 (controller ruling — implemented, not relitigated): WARN, not FAIL.
+    # `cmd_install` ends with `cmd_doctor` in both role arms, and `cmd_doctor`
+    # returns 1 the moment any check FAILs, so a FAIL here hard-dies
+    # `cmd_update` (`_ccrc_die`) BEFORE `_upd_sweep` ever runs — the fleet's
+    # ~20 `claude-session@*` supervisors keep running the OLD ccd while the
+    # operator reads a message naming doctor, never the sweep it silently
+    # skipped. And this check FAILs on `forked` BY CONSTRUCTION on every box
+    # that has ever run more than one agent home, until the operator runs the
+    # one irreversible `ccrc memory --apply` — so an unrelated verb (`ccrc
+    # update`) was coercing operators into that migration to make itself
+    # succeed. `unreachable` below is not the same kind of finding and stays
+    # FAIL: a fork is the expected PRE-MIGRATION state of every multi-home
+    # box, but an unreachable home is a misconfiguration nothing will ever
+    # repair on its own. The three conditions this check answers in are still
+    # never collapsed to two — they now carry two severities instead of one,
+    # which is what the difference in their remedies actually means. A WARN
+    # still prints with its own remedy, and `cmd_doctor` still counts it —
+    # it just cannot fail `ccrc update`.
+    _dr_warn memory "memory is forked across agent homes: $forked" \
+      "one store per project: run \`ccrc memory\` to see the census, then \`ccrc memory --apply\`"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ -n "$unreachable" ]; then
+    _dr_fail memory "agent homes the session hook cannot reach, so they will fork on first use: $unreachable" \
+      "add the account to the roster so install-session-hooks.sh wires it, or register session-hook.sh in that home's settings.json by hand"
+    rc=1
+  fi
+  if [ -n "$unmeasured" ]; then
+    _dr_warn memory "could not tell whether the session hook reaches every agent home — settings.json exists but could not be read for: $unmeasured" \
+      "fix its permissions so doctor can read it (chmod u+r <home>/settings.json), or check by hand whether it references session-hook.sh"
+    [ "$rc" -eq 1 ] || rc=2
+  fi
+  if [ "$rc" -eq 0 ]; then
+    _dr_pass memory "one memory store per project; every agent home converged"
+  fi
+  return "$rc"
+}
+
+_check_routing() {
+  # Routing spec 2026-09-14 §5.2 / §8: on an Anthropic lane the subagent floor
+  # rides the spawn PROCESS ENV (`CLAUDE_CODE_SUBAGENT_MODEL`, composed by ccd
+  # from the routing record), which a `settings.json` env key would override
+  # silently; and CLAUDE_CODE_EFFORT_LEVEL overrides every effort control and
+  # must appear nowhere. A text scan, like `_check_memory`: presence is the
+  # fact. A box with no projection or no Anthropic lane has nothing that could
+  # contradict the rule and PASSES vacuously, in those words — not a SKIP: the
+  # doctor's own healthy fixture has no projection, and a check that skips
+  # there is a check that cannot be counted.
+  local sh="$HOME/.ccrc/accounts.sh" raw="" eff="" sub="" unread="" a d f line n=0 sn=0 he hs rc
+  if [ ! -r "$sh" ]; then
+    _dr_pass routing "0 Anthropic lane(s): no roster projection at \$HOME/.ccrc/accounts.sh, so no settings.json can override the routing record's spawn env (the wrappers check owns the roster's health)"
+    return 0
+  fi
+  # An unsourceable projection (corrupt file, `.` fails) and a projection that
+  # sources fine but predates one of the routing arrays (`declare -p` fails) are
+  # NOT "the roster declares no Anthropic-backend account" — that PASS is
+  # reserved for an array that IS declared, with zero elements. Folding all
+  # three into one empty `raw` would report green having measured nothing, so
+  # this is its own probe, done first and separately from building `raw`.
+  #
+  # BOTH ARRAYS, not just the backend one (fix round 2, Finding 1b). `ccrc
+  # install` writes `CCRC_ANTHROPIC_BACKEND` and `CCRC_SUBAGENT_CLASSES` from
+  # the same generator in the same file, but they arrived in different
+  # releases — the second is routing slice 1's — so a box last installed
+  # between them has the first and not the second, and ccd cannot validate a
+  # `subagent` routing field there at all (`_route_valid` answers "unmeasured"
+  # and the field fails closed). Probing only the array that predates the
+  # feature is S1-R9's vacuous-green shape one array over: a green line whose
+  # subject was never measured. One `&&`, one remedy, the same sentence.
+  if ! ( . "$sh" 2>/dev/null \
+         && declare -p CCRC_ANTHROPIC_BACKEND >/dev/null 2>&1 \
+         && declare -p CCRC_SUBAGENT_CLASSES >/dev/null 2>&1 ); then
+    _dr_warn routing "could not read the roster projection at \$HOME/.ccrc/accounts.sh, or it predates the routing arrays (CCRC_ANTHROPIC_BACKEND, CCRC_SUBAGENT_CLASSES)" \
+      "re-run ccrc install to regenerate it, or check the Anthropic lanes' settings.json by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
+    return 2
+  fi
+  raw="$( . "$sh" 2>/dev/null && for a in "${CCRC_ANTHROPIC_BACKEND[@]}"; do printf '%s\t%s\n' "$a" "$(_ccrc_cfg_dir "$a")"; done )"
+  if [ -z "$raw" ]; then
+    _dr_pass routing "0 Anthropic lane(s): the roster declares no Anthropic-backend account, so no settings.json can override the routing record's spawn env"
+    return 0
+  fi
+  # TWO KEYS, TWO SEVERITIES (controller ruling S1-R13). The scan used to fold
+  # both names into one `bad` list and one FAIL, and that FAIL is not a finding
+  # about this box's configuration — it is a finding about the fleet's own
+  # earlier mechanism. `CLAUDE_CODE_SUBAGENT_MODEL` in a lane's settings.json
+  # PREDATES the routing record (the 2026-09-07 subagent-routing ruling put it
+  # there deliberately, so subagents would stop inheriting an orchestrator's
+  # model), so a box that honoured that ruling FAILs here BY CONSTRUCTION — and
+  # `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
+  # `_ccrc_die` BEFORE `_upd_sweep`, so the FAIL did not merely print: it
+  # half-landed every `ccrc update` on that box (new executables on disk, live
+  # supervisors still executing the old ccd) until an operator edited three
+  # lane config dirs. Exactly `_check_memory`'s `forked` shape, and it takes the
+  # same answer: WARN, with its own remedy, countable by doctor and unable to
+  # fail `ccrc update`. The two keys are NOT the same kind of finding —
+  # `CLAUDE_CODE_EFFORT_LEVEL` overrides every effort control and has no
+  # sanctioned writer anywhere (spec §5.2, §8), so it stays a FAIL, and the
+  # lists stay separate so each line names only the lanes its own key was
+  # measured on. A lane carrying BOTH is an effort lane: the FAIL wins, and it
+  # is the arm whose remedy the operator must act on.
+  while IFS=$'\t' read -r a d; do
+    [ -n "$a" ] || continue
+    n=$((n + 1)); f="$d/settings.json"
+    [ -e "$f" ] || continue
+    [ -r "$f" ] || { unread="${unread:+$unread }$a"; continue; }
+    he=0; hs=0
+    while IFS= read -r line || [ -n "$line" ]; do
+      case "$line" in *CLAUDE_CODE_EFFORT_LEVEL*) he=1 ;; esac
+      case "$line" in *CLAUDE_CODE_SUBAGENT_MODEL*) hs=1 ;; esac
+      if [ "$he" -eq 1 ] && [ "$hs" -eq 1 ]; then break; fi
+    done < "$f"
+    if [ "$he" -eq 1 ]; then
+      eff="${eff:+$eff }$a"
+    elif [ "$hs" -eq 1 ]; then
+      sub="${sub:+$sub }$a"; sn=$((sn + 1))
+    fi
+  done <<<"$raw"
+  if [ -n "$eff" ]; then
+    _dr_fail routing "an Anthropic lane's settings.json names CLAUDE_CODE_EFFORT_LEVEL, which overrides every effort control — the routing record's effort field included: $eff" \
+      "remove the key from that lane's settings.json — the effort override must not exist; effort is chosen per session by the routing record (ccd route)"
+    return 1
+  fi
+  rc=0
+  if [ -n "$sub" ]; then
+    _dr_warn routing "$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed" \
+      "remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
+    rc=2
+  fi
+  if [ -n "$unread" ]; then
+    _dr_warn routing "could not read settings.json for: $unread" "chmod u+r <home>/settings.json, or check by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
+    rc=2
+  fi
+  [ "$rc" -eq 0 ] || return "$rc"
+  _dr_pass routing "$n Anthropic lane(s): no settings.json overrides the routing record's spawn env"
 }

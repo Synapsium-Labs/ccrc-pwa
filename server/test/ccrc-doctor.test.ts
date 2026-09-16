@@ -46,6 +46,9 @@ import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
+// One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
+// for the rule, and for why the /var/tmp control needs both spellings.
+import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
 import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 
@@ -63,7 +66,7 @@ const LIB_SRC = join(REPO, 'ccd', 'ccrc-wrapper-shape');
 /** bash's absolute path, resolved ONCE under this process's real PATH. Every
  *  spawn below hands the child a PATH built only from fixture directories, and
  *  libuv resolves the executable against the CHILD's environment — so spawning
- *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:226 uses. */
+ *  bare `bash` would be ENOENT. Same trick ccrc-cli.test.ts:231 uses. */
 const BASH = spawnSync('bash', ['-c', 'command -v bash'], { encoding: 'utf8' }).stdout.trim();
 
 const realPath = (name: string): string => {
@@ -99,6 +102,25 @@ function installCcrc(home: string): void {
   // developer's tree — instead of the fixture's own.
   plantAuthHelper(join(home, 'ccrc'));
   plantAuthModule(join(home, 'ccrc'));
+  // ── the `accounts` check's helper (Task 33) ────────────────────────────
+  // COPIED, not symlinked, for `plantAuthHelper`'s reason above: node resolves
+  // a module's own imports from its REAL path, so a symlinked helper would
+  // import THIS CHECKOUT's `shared/`.
+  //
+  // THE TRANSITIVE SET IS THREE FILES, counted against the module as it stands
+  // NOW rather than as its header first described it: `account-op.mjs` imports
+  // `../shared/roster-json.mjs` and `../shared/base-url.mjs`, and the first
+  // imports the second. `base-url.mjs` imports nothing, so these three close
+  // it. A missing one is not a degraded check — `node "$gen" doctor …` exits
+  // non-zero with ERR_MODULE_NOT_FOUND, `_check_accounts` takes its
+  // roster-unreadable WARN arm on every fixture in this file, and the summary
+  // case's `expect(warn).toBe(0)` reds along with the accounts cases.
+  copyFileSync(join(REPO, 'deploy', 'account-op.mjs'),
+    join(home, 'ccrc', 'deploy', 'account-op.mjs'));
+  mkdirSync(join(home, 'ccrc', 'shared'), { recursive: true });
+  for (const f of ['roster-json.mjs', 'base-url.mjs']) {
+    copyFileSync(join(REPO, 'shared', f), join(home, 'ccrc', 'shared', f));
+  }
 }
 
 /** `~/.ccrc/auth.scrypt`, as `ccrc passwd` really writes it: 0600, one line,
@@ -260,7 +282,16 @@ function stubLoginctl(home: string): void {
 interface RosterEntry {
   id: string;
   configDirSuffix?: string;
-  exec: { kind: 'upstream' | 'generated' | 'external'; secretsFile?: string };
+  exec: {
+    kind: 'upstream' | 'generated' | 'external';
+    secretsFile?: string;
+    // The two provider fields the roster model carries. `writeRoster` spreads
+    // the entry, so nothing else in this file changes — but a fixture writing a
+    // field the interface does not declare is a `typecheck-tests` failure
+    // rather than a runtime one, which is why it lands in this commit.
+    provider?: string;
+    baseUrl?: string;
+  };
   /** Task: `credentials` reads it, and `healthy()`'s contract is that every
    *  check PASSES — so the fixture's one account has to be an account the check
    *  has something to measure about. `_check_wrappers`' own TSV reader ignores
@@ -542,7 +573,7 @@ function writeRcFlag(home: string, text: string): void {
  *  does for a unit that is not running. SYSTEM-scope `is-active <unit>` (no
  *  `--user`) answers from `<home>/fixture-system-unit-<unit>` — a SEPARATE
  *  namespace on purpose: the caddy check asks in system scope (caddy binds
- *  :80/:443 as root and is nobody's user unit), and a stub that answered both
+ *  :80/:471 as root and is nobody's user unit), and a stub that answered both
  *  scopes from one file could not catch a check asking in the wrong one (a
  *  `--user is-active caddy` reads the OTHER namespace, finds nothing, and the
  *  PASS case reds). Any other argv is a loud failure — a status verb that
@@ -720,7 +751,7 @@ function endDateFixture(days: number): string {
 
 /** openssl, answering the ONLY two argv shapes the cert check sends — both
  *  hops of its pipeline. `s_client` answers a handshake marker (or, with
- *  `<home>/fixture-tls-refused` planted, fails the way a closed :443 really
+ *  `<home>/fixture-tls-refused` planted, fails the way a closed :471 really
  *  does); `x509 -noout -enddate` answers `notAfter=` from
  *  `<home>/fixture-cert-enddate`. Every argv is logged to
  *  `<home>/openssl-calls`, so a test can prove the SNI host and the loopback
@@ -735,7 +766,7 @@ function stubOpenssl(home: string): void {
     '    echo "connect:errno=111" >&2; exit 1',
     '  fi',
     // Per-address refusal — the caddy-binds-one-interface topology (the live
-    // 2026-08-21 ceremony: tailscaled owns the tailnet IP's :443, caddy binds
+    // 2026-08-21 ceremony: tailscaled owns the tailnet IP's :471, caddy binds
     // the public IP only, loopback refuses).
     '  if [ -f "$HOME/fixture-tls-refused-addrs" ]; then',
     '    while IFS= read -r bad; do',
@@ -786,7 +817,7 @@ function stubHostname(home: string): void {
 }
 
 /** `n` ccd sessions in the registry, as ccd itself counts them: one `<id>.uuid`
- *  file each (ccd:8526). */
+ *  file each (ccd:10222). */
 function writeSessions(home: string, n: number): void {
   const reg = join(home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
@@ -1072,7 +1103,7 @@ function tableNames(): string[] {
   if (r.status !== 0) throw new Error(`could not read the check table: ${r.stderr}`);
   const names = (r.stdout ?? '').split('\n').filter(Boolean);
   // A scan over an empty list passes everything (the discipline
-  // single-definition.test.ts:50-55 states outright). `"${arr[@]}"` on an
+  // single-definition.test.ts:52-57 states outright). `"${arr[@]}"` on an
   // UNSET array is not an error under `set -u` in bash 4.4+, so a missing or
   // renamed table would otherwise return [] and quietly disarm every caller —
   // measured: it did, in this suite's own red run.
@@ -2909,7 +2940,7 @@ describe('ccrc doctor: wrappers', () => {
     expect(lines[hardIdx]).toContain('acct-a');
     expect(lines[hardIdx]).toMatch(/\.somewhere-else.*\.acct-a/);
     // The DISAGREEMENT remedy stays the verbatim roster sentence (the pin at
-    // ccrc-doctor-checks:1011 / the "keeps a soft finding OFF the FAIL line"
+    // ccrc-doctor-checks:1012 / the "keeps a soft finding OFF the FAIL line"
     // test above) — the split must not have touched wr_hard's own wording.
     expect(lines[hardIdx + 1]).toMatch(/^ {2}remedy: the roster is the source of truth/);
     expect(r.code).toBe(1);
@@ -4625,7 +4656,7 @@ describe('ccrc doctor: fleet', () => {
   });
 
   // AN ANSWER THIS CHECK DID NOT UNDERSTAND MUST NOT BECOME A CLAIM THAT THE
-  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts:1484),
+  // OPPOSITE IS TRUE. `connected` is required on the wire (shared/api.ts:1926),
   // so each of these is a malformed answer — and each used to PASS with the
   // words "in remote mode, connected", which is the strongest claim this check
   // can make, made about the one field the answer did not state. The
@@ -5769,7 +5800,7 @@ describe('ccrc doctor: cert', () => {
   });
 
   // Live finding, 2026-08-21 ceremony: caddy CAN bind one interface only —
-  // tailscaled held the tailnet IP's :443, so caddy took the public IP and
+  // tailscaled held the tailnet IP's :471, so caddy took the public IP and
   // loopback refused. A loopback-only probe FAILed a box that was serving a
   // perfectly good certificate. The probe now walks loopback first, then the
   // box's own addresses (`hostname -I`, the name check's source), and
@@ -6190,5 +6221,675 @@ describeLinux('ccrc doctor: scopes', () => {
     const home = healthy('ccrc-doctor-scopes-none-');
     rmSync(join(home, 'fixture-scopes'), { force: true });
     expect(runDoctor(home).stdout).toMatch(/^SKIP scopes: no tmux pane scopes/m);
+  });
+});
+
+/** A lane whose config dir carries a settings.json env block — the shape an
+ *  api-key lane is provisioned with, API key field deliberately empty. */
+function writeSettingsEnv(home: string, suffix: string, env: Record<string, string>): void {
+  const d = join(home, suffix);
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
+}
+
+describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
+  const ROUTING_ROSTER = { version: 1, accounts: [
+    { id: 'claude', label: 'team·max', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+    { id: 'gpt', label: 'gpt', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: false, hue: 'magenta', telemetry: 'none' },
+  ] };
+  const routingBox = (prefix: string): string => {
+    const home = healthy(prefix);
+    seedAccountsSh(home, ROUTING_ROSTER);
+    return home;
+  };
+
+  it('routing: PASSES when no Anthropic lane\'s settings.json names a routing env key', () => {
+    const home = routingBox('ccrc-doctor-routing-pass-');
+    writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+    writeSettingsEnv(home, '.gpt-cfg', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });   // a non-Anthropic lane is not this check's subject
+    const line = lineFor(runDoctor(home).stdout, 'routing');
+    expect(line).toMatch(/^PASS routing: 1 Anthropic lane\(s\)/);
+  });
+  it('routing: WARNS — never FAILS — on the lane whose settings.json pins CLAUDE_CODE_SUBAGENT_MODEL (controller ruling S1-R13)', () => {
+    // THE SEVERITY IS THE ASSERTION, and the reason is `ccrc update`. A FAIL
+    // here is not a finding about a misconfigured box: the key predates the
+    // routing record (the fleet's own 2026-09-07 subagent-routing ruling put it
+    // in settings.json on purpose), so an honouring box FAILs by construction —
+    // and `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
+    // `_ccrc_die` BEFORE `_upd_sweep`, half-landing every update on that box.
+    // So: WARN, naming the count, the lanes, and the CONSEQUENCE (the record's
+    // subagent field is overridden there), with a remedy that admits keeping it.
+    const home = routingBox('ccrc-doctor-routing-subagent-warn-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line).toContain('claude');
+    expect(line, 'the consequence, not just the key')
+      .toContain("the routing record's subagent field is overridden there until the key is removed");
+    expect(out).toContain('remedy: remove the key from those lanes');
+    expect(out, 'the subagent key alone must never read as a FAIL').not.toMatch(/^FAIL routing: /m);
+  });
+  it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL — the arm that stays a FAIL, naming the lane', () => {
+    const home = routingBox('ccrc-doctor-routing-effort-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^FAIL routing: /);
+    expect(line).toContain('CLAUDE_CODE_EFFORT_LEVEL');
+    expect(line).toContain('claude');
+    expect(out).toContain('remedy: remove the key');
+  });
+  it('routing: a lane carrying BOTH keys is a FAIL — the effort arm wins, and it is named once', () => {
+    const home = routingBox('ccrc-doctor-routing-bothkeys-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet', CLAUDE_CODE_EFFORT_LEVEL: 'high' });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'routing'), out).toMatch(/^FAIL routing: /);
+    expect(out, 'one lane, one line — not also a WARN about the same lane').not.toMatch(/^WARN routing: /m);
+  });
+  it('routing: a box with no projection PASSES vacuously and says so — never a SKIP, which the healthy fixture\'s counts forbid', () => {
+    const home = healthy('ccrc-doctor-routing-noroster-');
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^PASS routing: 0 Anthropic lane\(s\).*no roster projection/);
+  });
+  it('routing: a roster with only non-Anthropic lanes PASSES vacuously naming the reason', () => {
+    const home = healthy('ccrc-doctor-routing-gptonly-');
+    // parseRoster requires exactly one `exec.kind: 'upstream'` account, so the
+    // single lane here is upstream — that is a launcher-identity question,
+    // orthogonal to `telemetry`, which is what `_check_routing` actually reads.
+    seedAccountsSh(home, { version: 1, accounts: [
+      { ...ROUTING_ROSTER.accounts[1], exec: { kind: 'upstream' } },
+    ] });
+    expect(lineFor(runDoctor(home).stdout, 'routing'))
+      .toMatch(/^PASS routing: 0 Anthropic lane\(s\).*declares no Anthropic-backend/);
+  });
+  it.skipIf(process.getuid?.() === 0)(
+    'routing: WARNS, never silently PASSES, when a lane\'s settings.json exists but cannot be read', () => {
+      const home = routingBox('ccrc-doctor-routing-unreadable-settings-');
+      writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+      const p = join(home, '.claude', 'settings.json');
+      chmodSync(p, 0o000);
+      try {
+        expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
+      } finally {
+        chmodSync(p, 0o600);
+      }
+    });
+  it('routing: WARNS (never a silent vacuous PASS) when accounts.sh fails to source', () => {
+    const home = healthy('ccrc-doctor-routing-corrupt-sh-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'this is not bash (\n');
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'routing')).toMatch(/^WARN routing: could not read/);
+    expect(out).toContain('remedy: re-run ccrc install');
+  });
+  it('routing: WARNS when the projection predates CCRC_ANTHROPIC_BACKEND', () => {
+    const home = healthy('ccrc-doctor-routing-stale-projection-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'accounts.sh'), 'CCRC_ACCOUNTS=(claude)\n');
+    expect(lineFor(runDoctor(home).stdout, 'routing')).toMatch(/^WARN routing: could not read/);
+  });
+  it('routing: WARNS when the projection predates CCRC_SUBAGENT_CLASSES — the array ccd validates `subagent` against', () => {
+    // The vacuous-green shape S1-R9 removed, ONE ARRAY OVER: `ccrc install`
+    // writes both arrays from one generator, but they shipped in different
+    // releases, so a box installed between them has the backend array and not
+    // this one — and ccd cannot validate a `subagent` field there at all.
+    const home = routingBox('ccrc-doctor-routing-stale-subagent-');
+    const sh = join(home, '.ccrc', 'accounts.sh');
+    writeFileSync(sh, readFileSync(sh, 'utf8').split('\n')
+      .filter((l) => !l.startsWith('CCRC_SUBAGENT_CLASSES=')).join('\n'));
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: could not read/);
+    expect(line).toContain('CCRC_SUBAGENT_CLASSES');
+    expect(out).toContain('remedy: re-run ccrc install');
+  });
+});
+
+describe('ccrc doctor: accounts', () => {
+  const COMPATIBLE: RosterEntry = {
+    id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
+    exec: {
+      kind: 'generated', provider: 'compatible',
+      baseUrl: 'https://orchard-api/api/v1',
+      secretsFile: '.cc-secrets/orchard-api-compatible.env',
+    },
+  };
+
+  const plantSecret = (home: string, rel: string): void => {
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    writeFileSync(join(home, rel), 'export X=y\n', { mode: 0o600 });
+  };
+
+  it('is in the table and has a function — both directions', () => {
+    expect(tableNames()).toContain('accounts');
+  });
+
+  it('PASSES on a healthy box, naming the axes it measured — not the bare word ok', () => {
+    // `healthy()`'s contract is that every check passes, and the summary case
+    // asserts "0 warned" on exactly this fixture.
+    const home = healthy('ccrc-doctor-accounts-ok-');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'accounts');
+    expect(line, out).toMatch(/^PASS accounts: /);
+    expect(line).toContain('1 account');
+    expect(line).toContain('0 declared credential file');
+    expect(line, 'the bare word ok is not a measurement').not.toMatch(/: ok$/);
+  });
+
+  it('WARNS on a declared credential file that is not there, naming the PATH and no byte of it', () => {
+    const home = healthy('ccrc-doctor-accounts-cred-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'alt-max', configDirSuffix: '.claude-alt-max',
+        exec: { kind: 'generated', provider: 'anthropic',
+          secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+    ]);
+    writeWrapper(home, 'alt-max', { cfgDir: '.claude-alt-max' });
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN accounts: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('credential-declared-absent');
+    expect(lines[i]).toContain('.cc-secrets/alt-max-oauth.env');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+  });
+
+  it('says nothing about a credential file that IS there, and never opens it', () => {
+    const home = healthy('ccrc-doctor-accounts-cred-ok-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'alt-max', configDirSuffix: '.claude-alt-max',
+        exec: { kind: 'generated', provider: 'anthropic',
+          secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+    ]);
+    writeWrapper(home, 'alt-max', { cfgDir: '.claude-alt-max' });
+    mkdirSync(join(home, '.cc-secrets'), { recursive: true, mode: 0o700 });
+    // A canary INSIDE the 0600 file: nothing doctor prints may contain it.
+    // This is CLAUDE.md's "existence checks by ls only" as a mechanism.
+    writeFileSync(join(home, '.cc-secrets', 'alt-max-oauth.env'),
+      'export CLAUDE_CODE_OAUTH_TOKEN=sk-ant-CANARY-0000\n', { mode: 0o600 });
+    const r = runDoctor(home);
+    expect(lineFor(r.stdout, 'accounts'), r.stdout).toMatch(/^PASS accounts: /);
+    expect(r.stdout + r.stderr, 'doctor opened a 0600 credential file').not.toContain('sk-ant-CANARY-0000');
+  });
+
+  it('WARNS when a lane\'s settings.json env block names a different endpoint', () => {
+    const home = healthy('ccrc-doctor-accounts-drift-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      COMPATIBLE,
+    ]);
+    writeWrapper(home, 'orchard-api', { cfgDir: '.claude-orchard-api' });
+    plantSecret(home, '.cc-secrets/orchard-api-compatible.env');
+    writeSettingsEnv(home, '.claude-orchard-api',
+      { ANTHROPIC_BASE_URL: 'http://127.0.0.1:8642', ANTHROPIC_API_KEY: '' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'accounts');
+    expect(line, out).toMatch(/^WARN accounts: /);
+    expect(line).toContain('settings-env-drift');
+    expect(line).toContain('orchard-api');
+    // The endpoint is ROSTER DATA and is shown. The key's value never is, and
+    // there is none here — the block this design writes leaves it empty.
+    expect(line).toContain('127.0.0.1:8642');
+  });
+
+  it('says nothing when the env block agrees with the roster', () => {
+    const home = healthy('ccrc-doctor-accounts-agree-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      COMPATIBLE,
+    ]);
+    writeWrapper(home, 'orchard-api', { cfgDir: '.claude-orchard-api' });
+    plantSecret(home, '.cc-secrets/orchard-api-compatible.env');
+    writeSettingsEnv(home, '.claude-orchard-api',
+      { ANTHROPIC_BASE_URL: 'https://orchard-api/api/v1', ANTHROPIC_API_KEY: '' });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'accounts'), out).toMatch(/^PASS accounts: /);
+  });
+
+  it('does not report launcher-absent — the wrappers check owns that fact', () => {
+    // ONE FACT, ONE VERDICT LINE. `_check_wrappers`' external arm already
+    // reports a missing launcher, and this file's own `_check_tmux_skew` is the
+    // standing ruling against a second verdict for one finding.
+    const home = healthy('ccrc-doctor-accounts-nolauncher-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'gpt', configDirSuffix: '.claude-gpt', exec: { kind: 'external' } },
+    ]);
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'wrappers'), out).toMatch(/^FAIL wrappers: /);
+    expect(lineFor(out, 'accounts'), out).toMatch(/^PASS accounts: /);
+    expect(out, 'one finding got two verdict lines').not.toContain('launcher-absent');
+  });
+
+  it('WARNS — never SKIPS — on a box with no roster at all', () => {
+    // THE POINTER LIVES ON THE REMEDY LINE. `_dr_warn` prints its third
+    // argument on the line AFTER the verdict, and `lineFor` matches the verdict
+    // line alone — so asserting the pointer on the verdict would be red against
+    // a check that is behaving correctly.
+    const home = broken('ccrc-doctor-accounts-noroster-');
+    const out = runDoctor(home).stdout;
+    expect(out, 'a box with no accounts surface is where a SKIP helps least')
+      .not.toMatch(/^SKIP accounts:/m);
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN accounts: '));
+    expect(i, out).toBeGreaterThan(-1);
+    // The verdict names the file it could not read and what went unmeasured…
+    expect(lines[i]).toContain('.ccrc/accounts.json');
+    expect(lines[i]).toContain('credential');
+    // …and the remedy, one line down, names the check that DOES judge a roster.
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(lines[i + 1]).toContain('wrappers');
+  });
+
+  it('measures a roster this check is not the judge of — validation is the wrappers check\'s job', () => {
+    // `writeRoster` writes id/configDirSuffix/exec and nothing else: no label,
+    // no homeAble, no telemetry. `rosterFromJson` REFUSES that shape, and
+    // `healthy()` builds its roster with it — so a check that validated through
+    // the parser would WARN on every fixture in this file, including the one
+    // the summary case asserts zero warnings on. `_check_wrappers` reads the
+    // same file with its own lax reader for exactly this reason.
+    const home = healthy('ccrc-doctor-accounts-lax-');
+    writeRoster(home, [
+      { id: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' } },
+      { id: 'alt-max', configDirSuffix: '.claude-alt-max',
+        exec: { kind: 'generated', provider: 'anthropic',
+          secretsFile: '.cc-secrets/alt-max-oauth.env' } },
+    ]);
+    writeWrapper(home, 'alt-max', { cfgDir: '.claude-alt-max' });
+    plantSecret(home, '.cc-secrets/alt-max-oauth.env');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'accounts');
+    expect(line, out).toMatch(/^PASS accounts: /);
+    expect(line).toContain('2 account');
+    expect(line).toContain('1 declared credential file');
+  });
+
+  it('spells the vocabulary that shared/providers.ts defines, and no other code', () => {
+    // The three codes are ONE definition — `ACCOUNT_FINDINGS` in
+    // `shared/providers.ts` — and `deploy/account-op.mjs` is a bare-node module
+    // that cannot import the TypeScript one. The copy is kept honest by
+    // comparison rather than by promise, and this is the only scan that can see
+    // `deploy/` at all: `single-definition.test.ts` filters `/\.tsx?$/`. The
+    // scrape is over the CODES rather than over either identifier, so it stays
+    // true whatever the two constants are named.
+    const ts = readFileSync(join(REPO, 'shared', 'providers.ts'), 'utf8');
+    const mjs = readFileSync(join(REPO, 'deploy', 'account-op.mjs'), 'utf8');
+    const codes = (src: string): string[] =>
+      [...src.matchAll(/'(credential-declared-absent|settings-env-drift|launcher-absent)'/g)]
+        .map((m) => m[1]!).filter((v, i, a) => a.indexOf(v) === i).sort();
+    expect(codes(ts)).toEqual(['credential-declared-absent', 'launcher-absent',
+      'settings-env-drift']);
+    expect(codes(mjs), 'the helper emits a code the wrappers check already owns')
+      .toEqual(['credential-declared-absent', 'settings-env-drift']);
+  });
+});
+
+// ── memory ───────────────────────────────────────────────────────────────
+//
+// Task 4 of 2026-09-09-project-scoped-memory. `_check_memory` is the detector:
+// the spec's whole premise is that a fork is currently SILENT, so this check's
+// entire job is to make one loud. THREE conditions — "forked" (a pair has
+// already diverged; the remedy is `ccrc memory --apply`), "unreachable" (a
+// home the session hook can never wire up, so it *will* fork on first use;
+// the remedy is roster/settings.json) and, since fix round 2, "unmeasured"
+// (settings.json exists but could not be READ, a WARN distinct from both
+// hard FAILs) — get different bodies and different remedies on purpose (task
+// brief, "Why three conditions and not two"; R22/R23 add the third).
+//
+// R33 (controller ruling, whole-branch review): "forked" is a WARN, not a
+// FAIL. `cmd_install` ends with `cmd_doctor`, whose non-zero exit on any FAIL
+// hard-dies `ccrc update` before its supervisor sweep ever runs, and `forked`
+// FAILs by construction on every multi-home box until the operator runs the
+// one irreversible `ccrc memory --apply` — so an unrelated verb was coercing
+// that migration. "unreachable" stays a FAIL: it names a misconfiguration,
+// not an expected pre-migration state. The tests below were all written
+// against the pre-R33 FAIL and are updated in place, not reworded around it —
+// see `_check_memory`'s own comments in ccd/ccrc-doctor-checks for the fuller
+// reasoning.
+//
+// `healthy()` plants no `.claude*` directory at all, so these tests build
+// agent homes by hand under each fixture's own `home`.
+//
+// EVERY FIXTURE HOME BELOW THAT PARTICIPATES IN A FORKED/CONVERGED ASSERTION
+// ALSO GETS A `settings.json` NAMING session-hook.sh (`HOOKED_SETTINGS`) —
+// fix round 2, R22: since a home with `projects/` and no settings.json at
+// all is now (correctly) ITS OWN unreachable finding, a fixture that means
+// to test only forked/converged would otherwise also trip unreachable on the
+// same home and muddy what a failing assertion is pinning.
+const HOOKED_SETTINGS =
+  '{"hooks":{"SessionStart":[{"hooks":[{"type":"command","command":"bash \\"$HOME/.cc-sessions/session-hook.sh\\""}]}]}}';
+
+describe('ccrc doctor: memory (spec 2026-09-08 §4, task 4)', () => {
+  it('PASSes on a box where every pair is converged — including the vacuous case of no agent homes at all', () => {
+    const home = healthy('ccrc-doctor-mem-ok-');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS memory: /m);
+  });
+
+  // Not vacuous this time: a real symlink to a real, existing store. This is
+  // the check's `-ef` comparison (see the function's own header comment) doing
+  // its actual job rather than never firing — a mutation that broke `-ef`
+  // into always-false would turn this PASS into a false FAIL.
+  it('PASSes a genuinely converged pair, not just the vacuous no-homes case', () => {
+    const home = healthy('ccrc-doctor-mem-converged-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    mkdirSync(store, { recursive: true });
+    symlinkSync(store, join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS memory: /m);
+  });
+
+  // R20 (fix round 2, Important 1): a RELATIVE link that genuinely resolves
+  // to the canonical store used to read as `forked` under a raw `readlink`
+  // text comparison against the absolute store path — the memory really is
+  // shared into the one store, only the link's own spelling differs. `-ef`
+  // (device+inode, followed through the symlink) answers the real question
+  // regardless of how the target is spelled.
+  it('PASSes when a RELATIVE symlink correctly resolves to the canonical store (R20)', () => {
+    const home = healthy('ccrc-doctor-mem-relative-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    mkdirSync(store, { recursive: true });
+    symlinkSync(path.relative(d, store), join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^PASS memory: /m);
+  });
+
+  // R20 (fix round 2, Important 1 — the WORSE of the two measured bugs): a
+  // link resolving to something that EXISTS but is a plain FILE, not a
+  // directory, passed `-ef` alone while being just as unusable a memory
+  // store as a dangling link — and it does not even LOOK dangling. `[ -d
+  // "$store" ]` is what this test pins as a SEPARATE, independently mutable
+  // conjunct from `-ef`.
+  it('WARNs (forked) when the store exists but is a regular FILE, not a directory (R20, R33)', () => {
+    const home = healthy('ccrc-doctor-mem-store-is-file-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    mkdirSync(join(home, '.ccrc', 'memory'), { recursive: true });
+    writeFileSync(store, '');   // the "store" is a FILE, not a directory
+    symlinkSync(store, join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  it('WARNs and names the home and project when a pair is forked (plain directory, not a symlink) (R33)', () => {
+    const home = healthy('ccrc-doctor-mem-fork-');
+    const d = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+    const i = r.stdout.split('\n').findIndex((l) => l.startsWith('WARN memory:'));
+    expect(r.stdout.split('\n')[i + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
+    // R33: a forked-only box is a WARN, not a FAIL — `ccrc update` (which ends
+    // in `cmd_doctor`) must not hard-die over the expected pre-migration
+    // state of a multi-home box.
+    expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+    expect(r.code).toBe(0);
+  });
+
+  // R4: the brief's fork fixture seeds a plain DIRECTORY, which a mutation
+  // that "treats any symlink as converged, ignoring the target" (M3) would
+  // still fail correctly on, because a directory is not a symlink at all.
+  // This fixture is the one M3 actually has to answer to: a symlink that
+  // IS a symlink, but points at the wrong place.
+  it('WARNs and names the pair when the symlink exists but points at the wrong target (R4, R33)', () => {
+    const home = healthy('ccrc-doctor-mem-wrong-target-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const elsewhere = join(home, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    symlinkSync(elsewhere, join(d, 'memory'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  // R12 (review round 2, extended here from Task 2's `_mem_state`): a link
+  // whose TEXT already names the canonical store, but whose store directory
+  // does not exist, is NOT converged — `ccrc memory --apply` still has work
+  // to do on it, and a doctor that PASSed here would be the exact silence
+  // this task exists to remove, one layer down. This also exercises R10: a
+  // dangling symlink like this one is invisible to a bare `[ -e "$link" ]`.
+  it('WARNs, not PASSes, when the link already points at the correct store but the store does not exist (R12, R33)', () => {
+    const home = healthy('ccrc-doctor-mem-dangling-');
+    const d = join(home, '.claude', 'projects', '-p-demo');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const store = join(home, '.ccrc', 'memory', '-p-demo');
+    symlinkSync(store, join(d, 'memory'));   // store deliberately never created
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude:-p-demo/m);
+  });
+
+  // R33 (controller ruling, whole-branch review Important — "none of
+  // `_check_memory`'s three verdict→rc assignments has a red test"): each of
+  // the three `rc=`/`[ "$rc" -eq 1 ] || rc=2` lines gets its own dedicated
+  // fixture here, isolated so exactly one of the three findings fires, and
+  // pins BOTH the printed verdict word AND `cmd_doctor`'s own worst-class
+  // cross-check (`ccd/ccrc:2048`-`:2063`) — deleting any one of the three
+  // lines leaves the WARN/FAIL text unchanged (that text is printed by
+  // `_dr_warn`/`_dr_fail` unconditionally) but desyncs the check's return code
+  // from what it printed, which `cmd_doctor` catches as a bug and reports as
+  // an EXTRA `FAIL memory: the check exited …` line — invisible to a test
+  // that only regexes for the original verdict line, which is exactly why
+  // R21/R23's existing assertions above did not catch it.
+  it('a forked-only box: WARN, no synthetic bug line, exit 0 (pins the forked rc=2 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-forked-');
+    const d = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked/m);
+    expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(0);
+  });
+
+  it('an unreachable-only box: exactly one FAIL memory line, no synthetic bug line, exit 1 (pins the unreachable rc=1 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-unreach-');
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    const failLines = r.stdout.split('\n').filter((l) => l.startsWith('FAIL memory:'));
+    expect(failLines).toEqual(['FAIL memory: agent homes the session hook cannot reach, so they will fork on first use: .claude-glm']);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(1);
+  });
+
+  it('an unmeasured-only box: WARN, no synthetic bug line, exit 0 (pins the unmeasured rc=2 assignment)', () => {
+    const home = healthy('ccrc-doctor-mem-rc-unmeasured-');
+    const h = join(home, '.claude-corp');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const settings = join(h, 'settings.json');
+    writeFileSync(settings, HOOKED_SETTINGS);
+    chmodSync(settings, 0o000);
+    try {
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches/m);
+      expect(r.stdout).not.toMatch(/^FAIL memory:/m);
+      expect(r.stdout).not.toMatch(/the check exited/);
+      expect(r.code).toBe(0);
+    } finally {
+      chmodSync(settings, 0o644);   // afterEach's rmSync must still be able to clean up
+    }
+  });
+
+  it('FAILs differently for a home the session hook can never reach, and does not confuse it with a fork', () => {
+    const home = healthy('ccrc-doctor-mem-unreach-');
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-glm/m);
+    const i = r.stdout.split('\n').findIndex((l) => l.startsWith('FAIL memory:'));
+    expect(r.stdout.split('\n')[i + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
+    // Pin that this is NOT the forked remedy — the two bodies must stay
+    // distinguishable, which is the entire point of "three conditions never
+    // two" (R13: a bare `/FAIL memory/` match would not catch a collapse).
+    expect(r.stdout).not.toContain('ccrc memory --apply');
+  });
+
+  // R22 (fix round 2, Important 3): `install-session-hooks.sh:107-115` writes
+  // `cur='{}'` and inserts the hook for ANY rostered home lacking a
+  // settings.json at all — so absence itself proves the installer has never
+  // touched this home, the MAXIMAL case of "will fork on first use". Measured
+  // before this fix: `.claude-kimi/projects/` with no settings.json at all
+  // read as `PASS memory: … every agent home converged`.
+  it('reports a home unreachable when it has projects/ but no settings.json at all (R22)', () => {
+    const home = healthy('ccrc-doctor-mem-no-settings-');
+    const h = join(home, '.claude-kimi');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-kimi/m);
+  });
+
+  // R23 Minor (fix round 2): "I could not read it" and "it is definitely not
+  // wired" are different facts an operator fixes differently (a permissions
+  // fix vs. a roster/settings.json edit) — D-1350's rule ("an adapter may not
+  // narrow a distinction it received") applied to this check's own settings
+  // .json read. An unreadable file must WARN as unmeasured, never silently
+  // promote to the FAIL a confirmed-absent hook gets.
+  //
+  // THE STDERR ASSERTION IS THE OTHER HALF OF R23, and it is the half no
+  // stdout assertion in this file can see. The pre-fix code attempted the
+  // open and hung a `2>/dev/null` off the `done <` line to quieten it, which
+  // does NOT work: redirections are set up left to right, so the trailing
+  // `2>` is not yet in force when the `<` that precedes it fails, and bash's
+  // own `Permission denied` diagnostic reaches the REAL stderr. Measured
+  // standalone (fix round 1): `while … done < <mode-000 file> 2>/dev/null`
+  // still prints `bash: line 1: …: Permission denied`. `[ -r … ]` refusing to
+  // attempt the open at all is what makes the WARN path clean, so this test
+  // pins the silence as well as the classification — without this line,
+  // deleting `-r` reds only on the WARN and the leak rides along unmeasured.
+  it('WARNs, not FAILs, when settings.json exists but cannot be read (R23)', () => {
+    const home = healthy('ccrc-doctor-mem-unreadable-');
+    const h = join(home, '.claude-corp');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    const settings = join(h, 'settings.json');
+    writeFileSync(settings, HOOKED_SETTINGS);
+    chmodSync(settings, 0o000);
+    try {
+      const r = runDoctor(home);
+      expect(r.stderr).not.toMatch(/Permission denied/);
+      expect(r.stdout).toMatch(/^WARN memory: could not tell whether the session hook reaches.*\.claude-corp/m);
+      expect(r.stdout).not.toMatch(/^FAIL memory: agent homes the session hook cannot reach.*\.claude-corp/m);
+    } finally {
+      chmodSync(settings, 0o644);   // afterEach's rmSync must still be able to clean up
+    }
+  });
+
+  // Guard test (Global Constraints: every guard ships with a red-when-deleted
+  // test). A scratch slug is a cwd the harness mints for every directory a
+  // session starts in; converging (or reporting) them would fill the census
+  // with noise about directories nobody will ever read. Each fixture LOOKS
+  // forked (a plain, non-symlink `memory` directory) and must never reach the
+  // verdict.
+  //
+  // FOUR PREFIXES, ONE RULE (D-2375): `/tmp` on Linux, and on Darwin
+  // `/private/tmp` plus a per-user `/var/folders/<x>/<y>/T`. `_check_memory`
+  // reads a directory NAME, so all four are measurable on a Linux runner —
+  // unlike the hook's own copy, which derives its slug from a live cwd and can
+  // only be measured where it runs. That asymmetry is why the Linux-only
+  // spelling survived to `test-macos`.
+  for (const slug of SCRATCH_SLUGS) {
+    it(`skips the scratch project slug ${slug} even when it looks forked`, () => {
+      const home = healthy('ccrc-doctor-mem-tmp-skip-');
+      const d = join(home, '.claude', 'projects', slug, 'memory');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'a.md'), 'x');
+      writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(/^PASS memory: /m);
+    });
+  }
+
+  // THE NEGATIVE CONTROL for that list. `/var/tmp` is POSIX *persistent*
+  // scratch, not the OS scratch root, and it is where `session-hook.test.ts`
+  // roots every project fixture it owns — so a widening that swept it up would
+  // hide a real fork from the operator, which is the one thing this check
+  // exists to report. Without this row, widening the list has no upper bound
+  // any suite can see.
+  for (const slug of PERSISTENT_SLUGS) {
+    it(`still WARNs about a forked ${slug} — persistent scratch is not the scratch root`, () => {
+      const home = healthy('ccrc-doctor-mem-vartmp-');
+      const d = join(home, '.claude', 'projects', slug, 'memory');
+      mkdirSync(d, { recursive: true });
+      writeFileSync(join(d, 'a.md'), 'x');
+      writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+      const r = runDoctor(home);
+      expect(r.stdout).toMatch(
+        new RegExp(`^WARN memory: memory is forked across agent homes: .*\\.claude:${slug}`, 'm'));
+    });
+  }
+
+  // `.claude-docserver` is NO LONGER special-cased (Minor, whole-branch
+  // review round 3 — reached independently for this file's own reason, see
+  // `_check_memory`'s comments in ccd/ccrc-doctor-checks): hard-coding a
+  // single operator's box-local tool name into shipped, public-release-bound
+  // source is the residue class CLAUDE.md bans, and on every measured box the
+  // exclusion excluded nothing the generic `[ -d "${h}projects" ]` guard did
+  // not already exclude. So a `.claude-docserver`-named directory is now
+  // examined like any other `.claude*` home — this test used to pin a PASS
+  // here (the old guard test) and now pins the opposite: a `projects/` dir
+  // under that name is real evidence, and doctor reports it like it would for
+  // any other home.
+  it('no longer special-cases .claude-docserver — a forked pair there is reported like any other home', () => {
+    const home = healthy('ccrc-doctor-mem-docserver-skip-');
+    const d = join(home, '.claude-docserver', 'projects', '-p-demo', 'memory');
+    mkdirSync(d, { recursive: true });
+    writeFileSync(join(d, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude-docserver', 'settings.json'), HOOKED_SETTINGS);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^WARN memory: memory is forked across agent homes: .*\.claude-docserver:-p-demo/m);
+  });
+
+  // R21 (fix round 2, Important 2): round 1's "emit exactly one verdict line"
+  // instruction was wrong twice over — `cmd_doctor` counts verdict LINES, not
+  // a fixed arity per check, and this file's own header already rules that
+  // two distinct hard findings are two distinct operator actions and get two
+  // lines, each with its own remedy. A fork on one home and an unreachable
+  // finding on an unrelated home are independent facts; dropping either one
+  // to keep to "one line" is exactly the silence this task exists to end.
+  //
+  // SINCE R33 THIS IS A WARN LINE AND A FAIL LINE, not two FAILs: forked is
+  // demoted, unreachable is not, and the worst-class cross-check
+  // (`ccd/ccrc:2048`-`:2063`) still has to pick FAIL as the check's return
+  // code — this test pins that too (`r.code`), which the pre-R33 version of
+  // this test never needed to.
+  it('prints a WARN line and a FAIL line, each with its own remedy, when a box is both forked and unreachable (R33)', () => {
+    const home = healthy('ccrc-doctor-mem-both-');
+    const forkedDir = join(home, '.claude', 'projects', '-p-demo', 'memory');
+    mkdirSync(forkedDir, { recursive: true });
+    writeFileSync(join(forkedDir, 'a.md'), 'x');
+    writeFileSync(join(home, '.claude', 'settings.json'), HOOKED_SETTINGS);
+    const h = join(home, '.claude-glm');
+    mkdirSync(join(h, 'projects'), { recursive: true });
+    writeFileSync(join(h, 'settings.json'), '{}');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const verdictLines = lines.filter((l) => /^(PASS|WARN|FAIL|SKIP) memory: /.test(l));
+    expect(verdictLines.length).toBe(2);
+    const forkedIdx = lines.findIndex((l) => l.startsWith('WARN memory: memory is forked across agent homes:'));
+    const unreachIdx = lines.findIndex((l) => l.startsWith('FAIL memory: agent homes the session hook cannot reach'));
+    expect(forkedIdx).toBeGreaterThanOrEqual(0);
+    expect(unreachIdx).toBeGreaterThanOrEqual(0);
+    expect(lines[forkedIdx]).toContain('.claude:-p-demo');
+    expect(lines[unreachIdx]).toContain('.claude-glm');
+    expect(lines[forkedIdx + 1]).toMatch(/^ {2}remedy: .*ccrc memory --apply/);
+    expect(lines[unreachIdx + 1]).toMatch(/^ {2}remedy: .*install-session-hooks\.sh/);
+    expect(r.stdout).not.toMatch(/the check exited/);
+    expect(r.code).toBe(1);
   });
 });

@@ -169,6 +169,82 @@ describe('answerAsk', () => {
     expect(await answerAsk(d as never, 'cc-x', key, [0])).toEqual({ ok: false, error: 'not-alive' });
   });
 
+  // — D-2177 — `answerAsk` must check `sendKey`'s own return, not assume the
+  // keystroke landed just because every gate above it passed. A `cmd_swap`
+  // that tore the pane down between the identity gate above and this send
+  // (the race the queue-serialization half of D-2177 closes) leaves
+  // `sendKey` returning `false` — real `Tmux.sendKey` is `send-keys`'s exit
+  // code, and a dead/rotated target makes tmux exit nonzero. Reusing
+  // `not-alive` rather than inventing a code: the pane capture arm already
+  // uses it for "the target is not there to act on", which is exactly what
+  // a failed `sendKey` measures too, just one step later.
+  describe('a failed sendKey is a refusal, not an ok:true (D-2177)', () => {
+    it('downgrades a single-select keystroke that did not land to not-alive', async () => {
+      const { keys, d } = deps({
+        tmux: {
+          capture: async () => MENU_PANE,
+          captureAnsi: async () => MENU_PANE,
+          sendKey: async (_id: string, k: string) => { keys.push(k); return false; },
+          sendLiteral: async () => {},
+        } as never,
+      });
+      const key = askKey(ask('Which colour?', ['Red', 'Blue']))!;
+      const r = await answerAsk(d as never, 'cc-x', key, [1]);
+      expect(r).toEqual({ ok: false, error: 'not-alive' });
+      expect(keys).toEqual(['2']);   // the attempt was made — it just didn't land
+    });
+
+    it('stops the instant a digit fails mid multiSelect — no trailing digits, no Enter', async () => {
+      // [0,2] on a 3-option multiSelect sends '1' then '3' then 'Enter' on the
+      // happy path (see "sends every digit then Enter for a multiSelect
+      // answer" above). Here the SECOND digit ('3') fails: the honest answer
+      // is a refusal reported the instant that is known, not a best-effort
+      // finish of the sequence into a pane that may no longer be the one
+      // this answer was meant for.
+      const multi = { questions: [{ question: 'Pick some', multiSelect: true,
+        options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
+      const keys: string[] = [];
+      const d = {
+        queue: new KeyedQueue(),
+        tmux: {
+          capture: async () => MULTI_PANE,
+          captureAnsi: async () => MULTI_PANE,
+          sendKey: async (_id: string, k: string) => { keys.push(k); return k !== '3'; },
+          sendLiteral: async () => {},
+        } as never,
+        readAsk: async () => ({ ask: multi, state: 'waiting' as const }),
+        sleep: async () => {},
+      };
+      const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 2]);
+      expect(r).toEqual({ ok: false, error: 'not-alive' });
+      expect(keys).toEqual(['1', '3']);   // never reached the third digit or the commit Enter
+    });
+
+    it('a failed trailing Enter on an otherwise-landed multiSelect is still a refusal', async () => {
+      // Every digit toggled successfully but the commit never landed — the
+      // menu is left ticked and unconfirmed. Reporting ok:true here would be
+      // exactly the D-2177 bug: a client that saw {ok:true} would stop
+      // retrying while the session sits `waiting` on an uncommitted selection.
+      const multi = { questions: [{ question: 'Pick some', multiSelect: true,
+        options: [{ label: 'A' }, { label: 'B' }, { label: 'C' }] }] };
+      const keys: string[] = [];
+      const d = {
+        queue: new KeyedQueue(),
+        tmux: {
+          capture: async () => MULTI_PANE,
+          captureAnsi: async () => MULTI_PANE,
+          sendKey: async (_id: string, k: string) => { keys.push(k); return k !== 'Enter'; },
+          sendLiteral: async () => {},
+        } as never,
+        readAsk: async () => ({ ask: multi, state: 'waiting' as const }),
+        sleep: async () => {},
+      };
+      const r = await answerAsk(d as never, 'cc-x', askKey(multi)!, [0, 2]);
+      expect(r).toEqual({ ok: false, error: 'not-alive' });
+      expect(keys).toEqual(['1', '3', 'Enter']);
+    });
+  });
+
   // — Task 2 review, CRITICAL — a multi-question envelope defeats the key gate —
   //
   // `session-hook.sh` writes the WHOLE `questions` array once and the

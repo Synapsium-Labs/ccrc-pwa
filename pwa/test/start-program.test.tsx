@@ -7,7 +7,7 @@
 // controls.md`'s Deviations section) are both pinned here, alongside the
 // brief's own eleven cases. The sheet cannot know the new session's id from
 // `createSession`'s own response (`{ok:true}`, no id — `server/src/
-// server.ts:593-596`), so it matches on fields a `/ws/fleet` frame reports,
+// server.ts:602-605`), so it matches on fields a `/ws/fleet` frame reports,
 // never on a recomputed id — and the two arms match on DIFFERENT fields:
 //
 //   * D-291's WAIT ("has the session I asked for appeared?") is
@@ -17,7 +17,7 @@
 //   * D-292 (was D-B4-19)'s REFUSAL ("is a live main checkout already running here?") is
 //     wrapper-INDEPENDENT — `project` + `workspace === null` + alive.
 //     `cmd_swap` rewrites a session's `wrapper` and keeps its id
-//     (`ccd/ccd:7307`) while `cmd_start` collides on the id, so a
+//     (`ccd/ccd:7630`) while `cmd_start` collides on the id, so a
 //     wrapper-scoped refusal misses a real collision and dead-ends the
 //     operator on "not shown yet". It only ever withholds a button, so
 //     over-refusing is the safe direction.
@@ -32,10 +32,17 @@
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { useState } from 'react';
 import type { ReactNode } from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { programKickoff, readyVerdict } from '../../shared/api';
+import {
+  MAIL_BODY_MAX_BYTES,
+  PROGRAM_SLUG_MAX_CHARS,
+  programKickoff,
+  readyVerdict,
+} from '../../shared/api';
 import type {
-  CoordStatus, FleetSession, ProjectReadiness, ReadinessFacts,
+  CoordStatus, FleetSession, ProjectReadiness, ProjectRow, ReadinessFacts,
 } from '../../shared/api';
 import { StartProgramSheet, openRunVerdict, startedSessionFor, START_PROGRAM_WAIT_MS } from '../src/fleet/StartProgramSheet';
 import { missingPreconditions } from '../src/fleet/readinessWords';
@@ -53,11 +60,11 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   // An alive row: `lifecycle` answers "why is this row NOT alive", so null is
   // the correct value here, not merely the one that compiles.
-  lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null, started: true, spawnState: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false, ...over,
 });
 
-const proj = (over: Partial<{ name: string; workdir: string }> = {}): { name: string; workdir: string } => ({
+const proj = (over: Partial<ProjectRow> = {}): ProjectRow => ({
   name: 'ccrc-pwa', workdir: '/home/u/projects/ccrc-pwa', ...over,
 });
 
@@ -199,7 +206,7 @@ describe('openRunVerdict — the run-board arm, directly (D-1130)', () => {
 
   // The join between `RunSummary.project` and `ProjectRow.name` is CONVENTION:
   // `POST /api/runs` validates the field as a non-empty string and nothing more
-  // (`server/src/coord/routes.ts:889-897`), so a run can name a string this
+  // (`server/src/coord/routes.ts:1077-1085`), so a run can name a string this
   // picker never lists. A prefix or case-folded match would refuse a real
   // project on the strength of a lookalike; an exact one means the sheet simply
   // has nothing to say about that run, which is the honest answer.
@@ -258,6 +265,173 @@ describe('StartProgramSheet', () => {
 
     // Named on the confirm button's own label — before any tap on it.
     expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
+  });
+
+  // D-2694: `/api/projects` answers placement for THIS project, while
+  // `/api/accounts` answers the historical untagged projection. Once the route
+  // supplies the project-specific answer, every target-bearing part of the
+  // attempt must use it and the global answer becomes irrelevant.
+  it('uses the selected project placement for the label and exact create request', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const createSession = vi.fn(() => new Promise<void>(() => {}));
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+    const go = await screen.findByRole('button', { name: /start build9-demo on claude2/i });
+    fireEvent.click(go);
+
+    expect(await screen.findByRole('button', { name: /^starting…$/i })).toBeDisabled();
+    expect(createSession).toHaveBeenCalledWith({
+      wrapper: 'claude2', project: 'ccrc-pwa', workdir: row.workdir,
+    });
+    expect(createSession.mock.calls[0]).toHaveLength(1);
+  });
+
+  it.each([
+    ['pending', () => new Promise<ReturnType<typeof projected>>(() => {})],
+    ['failed', () => Promise.reject(new Error('accounts unavailable'))],
+    ['measured null', () => Promise.resolve({ accounts: [], projected: null, roster: [] })],
+  ])('keeps present project placement authoritative while the global projection is %s', async (_state, answer) => {
+    vi.spyOn(api, 'accounts').mockImplementation(answer as typeof api.accounts);
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).not.toBeDisabled();
+    expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /checking placement/i })).toBeNull();
+  });
+
+  it('waits for the route-selected wrapper, never a session on the global projection', async () => {
+    history.pushState(null, '', '/runs');
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    const queueKickoff = vi.fn().mockResolvedValue({ queued: true });
+    const store = makeStore();
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      createSession={async () => {}} queueKickoff={queueKickoff}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+    fireEvent.click(await screen.findByRole('button', { name: /^start build9-demo on claude2/i }));
+    await screen.findByRole('button', { name: /^starting…$/i });
+
+    act(() => { store.setState({ sessions: [sess({ id: 'claude-ccrc-pwa', wrapper: 'claude' })] }); });
+    await act(async () => { await Promise.resolve(); await Promise.resolve(); });
+    expect(queueKickoff).not.toHaveBeenCalled();
+    expect(location.pathname).toBe('/runs');
+
+    act(() => {
+      store.setState({ sessions: [
+        sess({ id: 'claude-ccrc-pwa', wrapper: 'claude' }),
+        sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' }),
+      ] });
+    });
+    await waitFor(() => expect(queueKickoff).toHaveBeenCalledWith(
+      'claude2-ccrc-pwa', { slug: 'build9-demo', title: 'Build 9 demo' },
+    ));
+    await waitFor(() => expect(location.pathname).toBe('/s/claude2-ccrc-pwa'));
+  });
+
+  it('still refuses a live-project collision when global placement says none', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster: [] });
+    const store = makeStore();
+    act(() => { store.setState({ sessions: [sess({ id: 'claude2-ccrc-pwa', wrapper: 'claude2' })] }); });
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={store}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(/claude2-ccrc-pwa is already running/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing is placeable/i)).toBeNull();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it.each([
+    [{ kind: 'none', pool: 'pool-b' } as const, /no eligible account.*pool pool-b/i],
+    [{ kind: 'none', pool: null } as const, /no eligible account/i],
+    [{ kind: 'unmeasurable' } as const, /placement cannot be decided/i],
+  ])('refuses a measured non-projectable placement without using the global target: $0', async (placement, copy) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj({ placement })] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it.each([
+    [undefined, 'older server'],
+    [{ state: 'untagged' } as const, 'measured untagged project'],
+  ])('preserves the global projection when placement is absent for a $1', async (pool, _description) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude2'));
+    const row = proj(pool === undefined ? {} : { pool });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByRole('button', { name: /start build9-demo on claude2/i })).not.toBeDisabled();
+  });
+
+  it.each([
+    [{ state: 'tagged', name: 'pool-b' } as const, /pool pool-b/i],
+    [{ state: 'malformed' } as const, /pool tag is malformed/i],
+    [{ state: 'unreadable' } as const, /pool tag could not be read/i],
+  ])('refuses pool-blind fallback when placement is absent for measured pool state $pool.state', async (pool, copy) => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected('claude'));
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      loadProjects={async () => ({ roots: [], projects: [proj({ pool })] })} />);
+
+    await fillAndPick();
+
+    expect(await screen.findByText(copy)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /^start/i })).toBeNull();
+  });
+
+  it('does not clear a route-target timeout when only the global projection changes', async () => {
+    vi.spyOn(api, 'accounts')
+      .mockResolvedValueOnce(projected('claude'))
+      .mockResolvedValue(projected('claude3'));
+    const row = proj({
+      pool: { state: 'tagged', name: 'pool-b' },
+      placement: { kind: 'projected', wrapper: 'claude2', score: 9 },
+    });
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={async () => {}}
+      loadProjects={async () => ({ roots: [], projects: [row] })} />);
+
+    await fillAndPick();
+    vi.useFakeTimers();
+    try {
+      fireEvent.click(screen.getByRole('button', { name: /^start build9-demo on claude2/i }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(START_PROGRAM_WAIT_MS + 1); });
+
+      expect(screen.getByText(/board just hasn't shown it yet/i)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /start build9-demo on claude2/i })).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('refuses with copy when the projection is null: nothing is placeable (D-284 (was D-B4-11))', async () => {
@@ -591,6 +765,174 @@ describe('StartProgramSheet', () => {
     expect(ledgerLine.textContent).not.toMatch(/exists|confirmed|found|verified/i);
   });
 
+  it('refuses an invalid slug before creating a coordinator', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('build 9 demo');
+
+    expect(await screen.findByText(/only letters, numbers, underscores, and hyphens/i)).toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start build 9 demo/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('keeps uppercase letters in the accepted slug vocabulary (D-2508)', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={vi.fn().mockResolvedValue(undefined)}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('Build9_Demo');
+
+    expect(screen.queryByText(/only letters, numbers, underscores, and hyphens/i)).toBeNull();
+    expect(screen.getByRole('button', { name: /^Start Build9_Demo/ })).not.toBeDisabled();
+  });
+
+  it('keeps the composite kickoff verdict in both the button and handler guards', () => {
+    // A disabled button never invokes `start()`, so behavior tests alone cannot
+    // kill removal of its defensive return. Pin both independent call sites in
+    // the source; each is a boundary capable of preventing `createSession`.
+    const src = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'StartProgramSheet.tsx'),
+      'utf8',
+    );
+    expect(src).toMatch(
+      /const start = async \(\): Promise<void> => \{[\s\S]{0,400}?if \(starting \|\| !kickoffVerdict\.ok \|\| project === null\) return;/,
+    );
+    expect(src).toMatch(
+      /disabled=\{\n\s+!kickoffVerdict\.ok \|\| starting/,
+    );
+  });
+
+  it('accepts a slug at exactly the shared budget and refuses budget+1 before creating a coordinator', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+    const exactSlug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+
+    await fillAndPick(exactSlug, 'x');
+    expect(screen.getByRole('button', { name: /^start x+/i })).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: `${exactSlug}x` } });
+    expect(await screen.findByText(
+      new RegExp(`program must be at most ${PROGRAM_SLUG_MAX_CHARS} characters`, 'i'),
+    )).toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start x+/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('a whitespace-only title cannot start a program, and is not SHOUTED at while being typed', async () => {
+    // Two claims about one guard, because the sheet depends on it alone now.
+    // BLOCKS: the button stays disabled and no coordinator is created, so a
+    // program can never be started without a title. DOES NOT SHOUT: a missing
+    // title is not an error to show someone mid-keystroke, which is the whole
+    // reason the verdict carries a `field` — this used to be decided by string
+    // -matching L0 copy, so rewording that sentence changed this behaviour
+    // silently.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('build9-demo', '   \t  ');
+    const go = await screen.findByRole('button', { name: /^start build9-demo/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+    expect(screen.queryByText(/must not be blank/i)).not.toBeInTheDocument();
+
+    // …while a slug refusal at the same moment IS shown, which is what proves
+    // the silence above is the field discriminator and not a mute error slot.
+    fireEvent.change(screen.getByLabelText(/program slug/i), { target: { value: 'bad slug' } });
+    expect(await screen.findByText(/letters, numbers, underscores, and hyphens/i))
+      .toBeInTheDocument();
+  });
+
+  it('previews the ledger from the SHAPED slug, so a traversal spelling never renders as a path', async () => {
+    // D-2508 made `ledgerPath` a pure interpolator whose callers shape first;
+    // this preview was the last reader still handing it raw input, so a slug the
+    // sheet will never send rendered as a real-looking path. It is display-only
+    // — the guards already stop the create — but a preview that disagrees with
+    // the act it previews is exactly the overloaded surface the rule forbids.
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={vi.fn()}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    // The project must be picked for this section to render at all; the TITLE is
+    // then cleared, which is what pins that the preview reads the SLUG decision
+    // and not the kickoff verdict (that one also refuses a blank title, and
+    // would blank this line while the operator is still typing one).
+    await fillAndPick('build_4-name', 'x');
+    const slugField = screen.getByLabelText(/program slug/i);
+    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: '' } });
+
+    fireEvent.change(slugField, { target: { value: '  build_4-name  ' } });
+    expect(await screen.findByText(/Its ledger: docs\/superpowers\/programs\/build_4-name\.md/))
+      .toBeInTheDocument();
+
+    // A traversal spelling renders the placeholder, never the escaping path.
+    fireEvent.change(slugField, { target: { value: '../other' } });
+    expect(await screen.findByText(/Its ledger: docs\/superpowers\/programs\/…\.md/))
+      .toBeInTheDocument();
+    // Scoped to the ledger LINE on purpose: the start button legitimately echoes
+    // the raw spelling the operator typed ("Start ../other on …"), which is a
+    // different surface making a different claim — it quotes input, this one
+    // names a path.
+    expect(document.querySelector('.program-start-ledger')?.textContent)
+      .not.toContain('../other');
+  });
+
+  it('accepts exactly 8,192 kickoff bytes and blocks one byte more before create', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+    const slug = 'x'.repeat(PROGRAM_SLUG_MAX_CHARS);
+    const base = new TextEncoder().encode(programKickoff(slug, '')).byteLength;
+    const exactTitle = 'x'.repeat(MAIL_BODY_MAX_BYTES - base);
+
+    await fillAndPick(slug, exactTitle);
+    expect(screen.getByRole('button', { name: /^start x+/i })).not.toBeDisabled();
+
+    fireEvent.change(screen.getByLabelText(/program title/i), { target: { value: `${exactTitle}x` } });
+    expect(await screen.findByText(
+      new RegExp(`kickoff body ${MAIL_BODY_MAX_BYTES + 1} bytes exceeds the ${MAIL_BODY_MAX_BYTES} byte mail body cap`, 'i'),
+    )).toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start x+/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
+  it('refuses title-driven composite overflow before creating a coordinator', async () => {
+    vi.spyOn(api, 'accounts').mockResolvedValue(projected());
+    const createSession = vi.fn().mockResolvedValue(undefined);
+    render(<StartProgramSheet openRunProjects={NO_OPEN_RUNS} open onClose={() => {}} fleet={makeStore()}
+      createSession={createSession}
+      loadProjects={async () => ({ roots: [], projects: [proj()] })} />);
+
+    await fillAndPick('build9-demo', '𝄞'.repeat(2_048));
+
+    expect(await screen.findByText(/kickoff body \d+ bytes exceeds the 8192 byte mail body cap/i))
+      .toBeInTheDocument();
+    const go = screen.getByRole('button', { name: /^start build9-demo/i });
+    expect(go).toBeDisabled();
+    fireEvent.click(go);
+    expect(createSession).not.toHaveBeenCalled();
+  });
+
   it('warns, and does NOT block, when coord.pause is set', async () => {
     vi.spyOn(api, 'accounts').mockResolvedValue(projected());
     const store = makeStore();
@@ -806,7 +1148,7 @@ describe('StartProgramSheet', () => {
   // — Program-leverage wave 5, D-1130. The run board is a fact this sheet never
   // had. `POST /api/runs` will happily open a SECOND program in a project that
   // already has one: it validates `project` as a non-empty string and nothing
-  // else (`server/src/coord/routes.ts:889-897`), and `openRun`'s own refusal is
+  // else (`server/src/coord/routes.ts:1077-1085`), and `openRun`'s own refusal is
   // per-PROGRAM (its one-coordinator guard, `store.ts`), so it never fires for
   // a different slug. The sheet is the last place the operator can still be
   // told. —
@@ -970,7 +1312,7 @@ describe('StartProgramSheet', () => {
 
   // — Whole-branch review, C1: `wrapper`+`project` alone is not the target
   // `cmd_start` would collide with. `cmd_ws_add` writes `project` AND a
-  // `_ws_least_loaded` wrapper onto every WORKSPACE row (`ccd/ccd:1164+`),
+  // `_ws_least_loaded` wrapper onto every WORKSPACE row (`ccd/ccd:1282+`),
   // and `useProjectedHome`'s wrapper is the server's own mirror of that same
   // `_ws_least_loaded` (`server/src/limits.ts:96`) — so the projected wrapper
   // is exactly the wrapper workspaces cluster on, and on a box running ~11
@@ -1072,7 +1414,7 @@ describe('StartProgramSheet', () => {
 
   it('never resolves the wait onto a STALE main checkout that pre-dated the create (B-2)', async () => {
     // The B-2 chain end to end: `claude-ccrc-pwa` was swapped to `claude2`
-    // (`ccd/ccd:7307` moves the wrapper, keeps the id) and has since died, so
+    // (`ccd/ccd:7630` moves the wrapper, keeps the id) and has since died, so
     // the refusal skips it and Start is offered. The projection is `claude2`,
     // so `cmd_start` spawns a NEW `claude2-ccrc-pwa` — and the next frame
     // carries both in registry-id sort order, where `'claude-'` sorts BEFORE
@@ -1138,10 +1480,10 @@ describe('StartProgramSheet', () => {
   // OWN just-started session on the ORDINARY path, because `myAttemptRef` was
   // armed only AFTER `await createSession(...)`. The window is seconds, not
   // milliseconds: `cmd_start` writes `$REG/<id>.uuid` and the other fields
-  // then `_spawn`s (`ccd/ccd:7203-7208`), the server lists a session on its
-  // `.uuid` file ALONE (`registry.ts:375`) and reports `idle` as soon as tmux
-  // has the id (`fleet.ts:186-190`), and the watcher ticks every 2 s
-  // (`watch.ts:424`) while the HTTP call is still blocked in
+  // then `_spawn`s (`ccd/ccd:7526-7531`), the server lists a session on its
+  // `.uuid` file ALONE (`registry.ts:427`) and reports `idle` as soon as tmux
+  // has the id (`fleet.ts:299-303`), and the watcher ticks every 2 s
+  // (`watch.ts:502`) while the HTTP call is still blocked in
   // `_accept_first_run_prompts`. Every OTHER test in this file uses
   // `mockResolvedValue` and pushes its frame after the create has already
   // resolved, which is exactly why this went unpinned. —
@@ -1203,8 +1545,8 @@ describe('StartProgramSheet', () => {
 
   // — Re-review of the C1 fix: `cmd_swap` breaks the wrapper↔id link, so the
   // REFUSAL arm cannot be wrapper-scoped. `_reg_set "$id" wrapper "$target"`
-  // (`ccd/ccd:7307`) moves the field and keeps the id; `cmd_start` collides on
-  // `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7202-7203`), i.e. on the
+  // (`ccd/ccd:7630`) moves the field and keeps the id; `cmd_start` collides on
+  // `_alive "$(_id "$wrapper" "$project")"` (`ccd/ccd:7525-7526`), i.e. on the
   // id. Measured on the live fleet: 5 of 10 main checkouts report a `wrapper`
   // that differs from their own id prefix (`claude-rp-llm` → `wrapper=
   // claude2`). —

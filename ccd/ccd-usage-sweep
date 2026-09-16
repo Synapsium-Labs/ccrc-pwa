@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# ccd-usage-sweep — the offline accounting sweep's runner (routing spec
+# 2026-09-14 §6). Serialized oneshot driven by ccd-usage-sweep.timer, owned the
+# way ccd-graph-sweep is: one lock, one census of the last ten passes, one pause
+# file. READ-ONLY over transcripts; the only writes are `latest.json`, the
+# census, and (`--reap-orphans`) usage sidecars whose registry row is gone.
+set -uo pipefail
+REG="$HOME/.cc-sessions"
+LIMITS="$HOME/.cc-limits"
+OUT_DIR="$REG/usage/sweep"
+CENSUS="$HOME/.ccrc/usage-sweep.json"
+PAUSE="$HOME/.ccrc/usage-sweep-paused"
+LOCK="$HOME/.ccrc/usage-sweep.lock"
+ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
+SCANNER="$HOME/.local/bin/ccd-usage-sweep.py"
+# The deployed tree (`ccrc install` puts it at ~/ccrc; `_check_accounts` reaches
+# deploy/ the same way). The class table is READ from shared/models.mjs, the one
+# definition, and handed to the scanner as data — never copied into it.
+: "${CCRC_TREE:=$HOME/ccrc}"
+MODELS_MJS="$CCRC_TREE/shared/models.mjs"
+: "${CCRC_USAGE_SWEEP_DAYS:=7}"
+STARTED="$(date -u +%FT%TZ)"
+
+_us_finish() {   # status records rc
+  local status="$1" records="$2" rc="$3" tmp
+  mkdir -p "$(dirname "$CENSUS")"
+  tmp="$(mktemp "$CENSUS.XXXXXX")"
+  jq -cn --arg started "$STARTED" --arg finished "$(date -u +%FT%TZ)" --arg status "$status" --argjson records "$records" \
+    '{started:$started, finished:$finished, status:$status, records:$records}' > "$tmp" \
+    || { rm -f "$tmp"; echo "usage-sweep: census assembly failed" >&2; exit 1; }
+  jq -c --slurpfile p "$tmp" '.passes = ((.passes // []) + $p | .[-10:])' "$CENSUS" 2>/dev/null > "$tmp.2" \
+    || jq -cn --slurpfile p "$tmp" '{passes: $p}' > "$tmp.2"
+  mv "$tmp.2" "$CENSUS"; rm -f "$tmp"
+  exit "$rc"
+}
+
+[ -e "$PAUSE" ] && { echo "usage-sweep: paused ($PAUSE exists)"; exit 0; }
+for bin in jq python3 node; do
+  command -v "$bin" >/dev/null 2>&1 || { echo "usage-sweep: $bin is required" >&2; exit 1; }
+done
+[ -r "$SCANNER" ] || { echo "usage-sweep: scanner missing at $SCANNER" >&2; exit 1; }
+[ -r "$MODELS_MJS" ] || { echo "usage-sweep: no shared/models.mjs at $MODELS_MJS (set CCRC_TREE to the ccrc checkout)" >&2; exit 1; }
+# The roster projection, sourced for the same reason the statusline hook sources
+# it: the account list is DATA. An empty or absent projection is a refusal, not a
+# sweep of nothing — a census pass of zero accounts would read as "measured".
+# shellcheck source=/dev/null
+if ! [ -r "$ACCOUNTS_SH" ] || ! . "$ACCOUNTS_SH" 2>/dev/null || ! declare -F _ccrc_cfg_dir >/dev/null 2>&1 \
+   || [ "${#CCRC_ACCOUNTS[@]}" -eq 0 ]; then
+  echo "usage-sweep: no usable roster projection at $ACCOUNTS_SH (generate it: ccrc install)" >&2; exit 1
+fi
+tokens="$(node --input-type=module -e "import { FAMILY_TOKENS } from '$MODELS_MJS'; console.log(JSON.stringify(FAMILY_TOKENS));" 2>/dev/null)" \
+  || { echo "usage-sweep: could not read FAMILY_TOKENS from $MODELS_MJS" >&2; exit 1; }
+[ -n "$tokens" ] || { echo "usage-sweep: FAMILY_TOKENS read empty from $MODELS_MJS" >&2; exit 1; }
+mkdir -p "$(dirname "$LOCK")" "$OUT_DIR"
+exec 9>"$LOCK"
+flock -n 9 || { echo "usage-sweep: another pass holds $LOCK"; exit 0; }
+
+# {configDir: accountId} for every roster account — including unmeasured ones,
+# so an account with no telemetry still gets its transcripts counted.
+dirs="$(for a in "${CCRC_ACCOUNTS[@]}"; do d="$(_ccrc_cfg_dir "$a")"; [ -n "$d" ] && jq -cn --arg d "$d" --arg a "$a" '{($d): $a}'; done | jq -cs 'add // {}')"
+
+records=0
+if python3 "$SCANNER" --dirs "$dirs" --class-tokens "$tokens" --registry "$REG" --limits "$LIMITS" \
+     --out "$OUT_DIR/latest.json" --days "$CCRC_USAGE_SWEEP_DAYS" --reap-orphans; then
+  records="$(jq -r '.scan.records // 0' "$OUT_DIR/latest.json" 2>/dev/null || echo 0)"
+  echo "usage-sweep: ok — $records records in the last $CCRC_USAGE_SWEEP_DAYS days -> $OUT_DIR/latest.json"
+  _us_finish ok "$records" 0
+else
+  echo "usage-sweep: scanner failed" >&2
+  _us_finish failed 0 1
+fi

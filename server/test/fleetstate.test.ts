@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
-import { substrateFault, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, substrateFault, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -16,8 +16,8 @@ const session = (id: string): FleetSession => ({
   dialogPending: false, version: null, model: null, effort: null, ultracode: false,
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
-  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, substrate: null,
-  started: true, spawnState: null,
+  unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
+  started: true, spawnState: null, ask: null, usage: null,
 });
 
 describe('fleetstate', () => {
@@ -112,12 +112,15 @@ describe('loadSnapshot revives a cache written by an older build', () => {
     expect(s?.subagents).toBeNull();
     expect(s?.graphQueries).toBeNull();
     expect(s?.graphGateDenials).toBeNull();
+    // Task 19: an older-build snapshot predates the ask pre-emption lane
+    // entirely, so `ask` degrades exactly like its siblings above.
+    expect(s?.ask).toBeNull();
     // D-2011: same degrade as its graph-counter siblings above — an older
     // snapshot predates the field entirely, never a measured 0.
     expect(s?.ctxPct).toBeNull();
     expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(
       ['pr', 'archivedAt', 'tasks', 'hookState', 'askSummary', 'subagents', 'graphQueries',
-       'graphGateDenials', 'ctxPct'],
+       'graphGateDenials', 'ask', 'ctxPct'],
     ));
     // Not a discard: what the old build did know is still here.
     expect(s?.id).toBe('claude-quiet-basin');
@@ -553,6 +556,168 @@ describe('loadSnapshot revives a cache written by an older build', () => {
       expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
     }
   });
+
+  it('revives `stranded` — absent degrades to null, and the CACHE STILL REVIVES', async () => {
+    // Every state-cache.json on disk the day this ships lacks the key, and a
+    // rejection here would empty degraded mode at exactly the moment it is the
+    // only data there is.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    writeRaw(cachePath, [v1Session('claude-quiet-basin')]);
+    const snap = await loadSnapshot(cachePath);
+    expect(snap, 'an older cache must still revive').not.toBeNull();
+    const s = snap?.sessions[0];
+    expect(s?.stranded).toBeNull();
+    // Present as a KEY, not merely undefined — `undefined !== null`.
+    expect(Object.keys(s ?? {})).toEqual(expect.arrayContaining(['stranded']));
+  });
+
+  it('round-trips a populated stranded axis', async () => {
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    const populated: FleetSession = {
+      ...session('claude-quiet-basin'),
+      stranded: { at: 1785299000000, reason: 'claude:pool=pool-b claude-a:limit' },
+    };
+    await saveSnapshot([populated], cachePath);
+    expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+  });
+
+  it('rejects a malformed stranded rather than laundering it into null', async () => {
+    // `reviveSwapBlocked`'s contract exactly: the reason is free text ccd wrote,
+    // so there is no vocabulary to degrade onto — and null would read "no
+    // strand recorded" over a row a supervisor flagged.
+    const cachePath = path.join(tmpDir(), 'state-cache.json');
+    for (const bad of [
+      { stranded: 'nowhere' },
+      { stranded: { at: 1785299000000 } },                  // no `reason`
+      { stranded: { at: 1785299000000, reason: 7 } },
+      { stranded: { reason: 'nowhere' } },                  // no `at`
+    ]) {
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+      expect(await loadSnapshot(cachePath), JSON.stringify(bad)).toBeNull();
+    }
+  });
+
+  // Fix round 1, item 1 (coordinator review) — `reviveAsk` had NO test at all;
+  // `const reviveAsk = () => null` kept the full server/pwa suites green.
+  // This block is the mutation-table guard: every branch below must fail
+  // under that mutant (a session that should carry a live `ask` reads null
+  // instead) or under a naive `return v as any` passthrough (a malformed
+  // shape would survive uncaught). Deliberately the OPPOSITE stance from
+  // `stoppedBy`/`swapBlocked` — and, since the account-pools wave-3 merge
+  // landed its three cases directly above this block, from `stranded` too:
+  // this field degrades a malformed value to `null`, it never rejects the
+  // session — `reviveAsk`'s own docstring (`shared/api.ts`) has the full
+  // argument (D-2311). ("just above" named only the first pair until that
+  // merge moved a third fail-shut sibling in between.)
+  describe('ask (Task 19, corrected by fix round 1 / D-2311)', () => {
+    it('round-trips a populated HELD ask — the present half, not just absent→null', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      const populated: FleetSession = {
+        ...session('claude-quiet-basin'),
+        ask: { state: 'held', parentId: 'coord-1', answeredBy: null },
+      };
+      await saveSnapshot([populated], cachePath);
+      expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+    });
+
+    it('round-trips a populated ANSWERED ask', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      const populated: FleetSession = {
+        ...session('claude-quiet-basin'),
+        ask: { state: 'answered', parentId: 'coord-2', answeredBy: 'coord-2' },
+      };
+      await saveSnapshot([populated], cachePath);
+      expect((await loadSnapshot(cachePath))?.sessions[0]).toEqual(populated);
+    });
+
+    it('degrades an unrecognised state token to "unknown", keeping the valid parentId — the reviveStoppedBy pattern', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{
+        ...v1Session('claude-quiet-basin'),
+        ask: { state: 'a-future-build-invented-this', parentId: 'coord-1' },
+      }]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap, 'the session must still revive').not.toBeNull();
+      expect(snap?.sessions[0]?.ask).toEqual({ state: 'unknown', parentId: 'coord-1', answeredBy: null });
+    });
+
+    it('degrades a non-object ask to null — the SESSION still revives, unlike stoppedBy/swapBlocked', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ask: 'held' }]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap, 'a malformed ask must NOT reject the session').not.toBeNull();
+      expect(snap?.sessions[0]?.ask).toBeNull();
+      expect(snap?.sessions[0]?.id).toBe('claude-quiet-basin');
+    });
+
+    it('degrades a missing/wrong-type/empty parentId to null — the whole pair, not a partial object', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      for (const bad of [
+        { ask: { state: 'held' } },                          // no parentId
+        { ask: { state: 'held', parentId: 7 } },              // wrong type
+        { ask: { state: 'held', parentId: '' } },             // empty
+      ]) {
+        writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ...bad }]);
+        const snap = await loadSnapshot(cachePath);
+        expect(snap, JSON.stringify(bad)).not.toBeNull();
+        expect(snap?.sessions[0]?.ask, JSON.stringify(bad)).toBeNull();
+      }
+    });
+
+    // WHOLE-BRANCH REVIEW, F1 — `answeredBy` is a SECOND field on the same
+    // object, and it degrades on its own terms: a snapshot written before
+    // this field existed omits the key entirely, and an `answered` row that
+    // names no principal is a real shape (`settleAsk` is guarded on both
+    // answer routes precisely because it can throw after the digit lands).
+    // The one thing this reader must never do is fill the gap in with
+    // `parentId` — that substitution IS the defect the field closes.
+    it('degrades a missing, blank or wrong-typed answeredBy to null, keeping the rest of the chip', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      for (const bad of [
+        { state: 'answered', parentId: 'coord-1' },                        // an older snapshot
+        { state: 'answered', parentId: 'coord-1', answeredBy: null },
+        { state: 'answered', parentId: 'coord-1', answeredBy: '' },
+        { state: 'answered', parentId: 'coord-1', answeredBy: 9 },
+      ]) {
+        writeRaw(cachePath, [{ ...v1Session('claude-quiet-basin'), ask: bad }]);
+        const snap = await loadSnapshot(cachePath);
+        expect(snap, JSON.stringify(bad)).not.toBeNull();
+        expect(snap?.sessions[0]?.ask, JSON.stringify(bad))
+          .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: null });
+      }
+    });
+
+    it('carries an operator-answered chip through the cache verbatim', async () => {
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [{
+        ...v1Session('claude-quiet-basin'),
+        ask: { state: 'answered', parentId: 'coord-1', answeredBy: 'operator' },
+      }]);
+      expect((await loadSnapshot(cachePath))?.sessions[0]?.ask)
+        .toEqual({ state: 'answered', parentId: 'coord-1', answeredBy: 'operator' });
+    });
+
+    it('a malformed ask on ONE session does not cost the OTHER sessions in the same snapshot', async () => {
+      // The blast-radius correction, pinned directly: `reviveFleetSessions`
+      // still discards the WHOLE array on the first session it cannot
+      // revive AT ALL — but a malformed `ask` no longer makes a session
+      // unrevivable, so a snapshot with N-1 clean sessions and one bad
+      // `ask` now loads all N, rather than losing every one of them to a
+      // single chip field.
+      const cachePath = path.join(tmpDir(), 'state-cache.json');
+      writeRaw(cachePath, [
+        { ...v1Session('claude-alpha'), ask: { state: 'held', parentId: 'coord-1', answeredBy: null } },
+        { ...v1Session('claude-beta'), ask: 'not an object' },
+        { ...v1Session('claude-gamma') },
+      ]);
+      const snap = await loadSnapshot(cachePath);
+      expect(snap).not.toBeNull();
+      expect(snap?.sessions.map((x) => x.id)).toEqual(['claude-alpha', 'claude-beta', 'claude-gamma']);
+      expect(snap?.sessions[0]?.ask).toEqual({ state: 'held', parentId: 'coord-1', answeredBy: null });
+      expect(snap?.sessions[1]?.ask).toBeNull();
+      expect(snap?.sessions[2]?.ask).toBeNull();
+    });
+  });
 });
 
 describe('substrateFault — the ONE tolerant reader both PWA surfaces use (spec §4)', () => {
@@ -576,5 +741,17 @@ describe('substrateFault — the ONE tolerant reader both PWA surfaces use (spec
       .toEqual({ at: 0, text: 'kept verbatim' });
     expect(substrateFault({ substrate: { at: 5, text: '' } }))
       .toEqual({ at: 5, text: 'substrate fault (reason unreadable)' });
+  });
+});
+
+describe('reviveFleetSession carries usage (routing slice 0)', () => {
+  it('revives usage when present, tolerates its absence from an older peer, refuses a malformed one', () => {
+    const base = JSON.parse(JSON.stringify(session('demo-a'))) as Record<string, unknown>;
+    delete base['usage'];
+    expect(reviveFleetSession(base)?.usage).toBeNull();
+    const usage = { ts: 1, model: 'claude-sonnet-5', class: 'sonnet', effort: 'medium', ctxPct: null, cost: 0, stale: true };
+    expect(reviveFleetSession({ ...base, usage })?.usage).toEqual(usage);
+    expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
+    expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string
   });
 });
