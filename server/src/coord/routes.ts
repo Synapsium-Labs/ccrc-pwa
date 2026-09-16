@@ -3,7 +3,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import {
+  UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord,
+} from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
@@ -1217,13 +1219,22 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
 
+    // The coordinator's project, from the REGISTRY — never `sessionProject`,
+    // which reads the runs table and so answers only for a session that has
+    // been a worker. Measured over all 64 runs in history: no session has ever
+    // been both, so `sessionProject(claimedBy)` is null for every coordinator.
+    // An unreadable or absent record leaves the stamp off; absence permits.
+    const coordRec = await readSessionRecord(deps.io, deps.cfg, claimedBy);
+    const coordProject = coordRec.found ? coordRec.record.project : undefined;
+
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
-      ...(home !== undefined ? { homeProject: home } : {}) });
+      ...(home !== undefined ? { homeProject: home } : {}),
+      ...(coordProject !== undefined ? { coordProject } : {}) });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,

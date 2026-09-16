@@ -867,6 +867,28 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN homeProject TEXT;
   ALTER TABLE feed_events ADD COLUMN runId INTEGER;
   `,
+
+  // ── 11: user_version 10 -> 11 ───────────────────────────────────────────
+  // The coordinator's project, stamped on the run AT OPEN TIME.
+  //
+  // Why stamped and not derived: the board places a coordinated workspace on
+  // its coordinator's card, and deriving that placement from a LIVE read of
+  // the coordinator's registry record means the workers scatter the moment
+  // that record is archived, removed or unreadable. Stamping makes the
+  // placement a fact the run carries for its whole life.
+  //
+  // NULLABLE, and null is a real answer with two producers: a run opened
+  // before this column existed, and an open where the coordinator's registry
+  // record could not be read. Both mean "not stamped", and the placement
+  // policy treats both the same way — the session's own project.
+  //
+  // MIGRATIONS[0..9] are frozen: `db.ts:182` iterates `for (let v = current;
+  // v < COORD_SCHEMA_VERSION; v++)`, so an edit to an applied entry never
+  // runs against the live `~/.ccrc/coord.db`. Re-verified against origin/main
+  // at 98236c81 that `runs` carries no `coordProject` today.
+  `
+  ALTER TABLE runs ADD COLUMN coordProject TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

@@ -199,6 +199,33 @@ describe('POST /api/runs', () => {
     expect(okRun(w.coord.run(id))?.state).toBe('planned');
   });
 
+  it('stamps the coordinator project read from the registry, never from the run\'s own project', async () => {
+    // `claimedBy`'s registry record names a DIFFERENT project than the run's
+    // own `project` field, deliberately, so a stamp that matched
+    // `OPEN_BODY.project` would prove the route read the wrong column rather
+    // than proving nothing at all.
+    const home = mkTmp('ccrc-runs-');
+    seed(home, CLAIMED_BY, { project: 'intake-platform' });
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
+    expect(res.statusCode).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    expect(okRun(w.coord.run(id))?.coordProject).toBe('intake-platform');
+    expect(okRun(w.coord.run(id))?.coordProject).not.toBe(OPEN_BODY.project);
+  });
+
+  it('leaves the stamp null when the coordinator has no readable registry record — absence permits', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // CLAIMED_BY is never seeded: the registry has no `.uuid` for it.
+    const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
+    expect(res.statusCode).toBe(200);
+    const id = (res.json() as { id: number }).id;
+    expect(okRun(w.coord.run(id))?.coordProject).toBeNull();
+  });
+
   it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home);
@@ -1158,12 +1185,14 @@ describe('POST /api/runs/:id/dispatch', () => {
      async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
-    // Succeeds on the pause-marker's own read (call 1), fails on the very
-    // next one — this route's own registry read for the resumed session
-    // (call 2) — never a third: nothing else in this branch touches
-    // `io.readdir` before either of those two.
+    // Call 1 is `POST /api/runs`' own coordinator-project stamp read
+    // (Task 1); it succeeds (CLAIMED_BY is unseeded, so this reads as
+    // absent, not unlistable, and stamps nothing). Call 2 is the
+    // pause-marker's own read, which also succeeds. Call 3 — this route's
+    // own registry read for the resumed session — is the one that fails;
+    // nothing else in this branch touches `io.readdir` before it.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
@@ -1292,13 +1321,15 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing', { project: 'other-project' });
     const { run } = makeRunner(home);
-    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
-    // readdir, before anything is counted) and answers `paused`, never
-    // reaching this arm at all — so this scopes the failure to the SECOND
-    // read, the resumed session's own registry listing, the same idiom the
-    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
+    // Call 1 is `POST /api/runs`' own coordinator-project stamp read
+    // (Task 1); CLAIMED_BY is unseeded, so it reads as absent and succeeds.
+    // A blanket `unlistableIO` for dispatch's OWN reads would fail the PAUSE
+    // check (dispatch's first readdir) and answer `paused`, never reaching
+    // this arm at all — so this scopes the failure to the THIRD read, the
+    // resumed session's own registry listing, the same idiom the wave-N>=2
+    // `registry-unmeasurable` case above this one already uses.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(opened.statusCode).toBe(200);
@@ -2145,17 +2176,23 @@ describe('GET /api/runs', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { if (app) await app.close(); app = undefined; });
 
-  it('lists open runs by default, and never leaks prLineage onto the wire', async () => {
+  it('lists open runs by default, and never leaks prLineage or coordProject onto the wire', async () => {
     const home = mkTmp('ccrc-runs-');
+    seed(home, CLAIMED_BY, { project: 'intake-platform' });
     const { run } = makeRunner(home, { wsAddCreates: ['demo-list1'] });
     const w = await openApp(home, run); app = w.app;
-    const opened = (await postOpen(app)).json() as { id: number };
+    const opened = (await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY })).json() as { id: number };
     await postDispatch(app, opened.id);
     const res = await getRuns(app);
     expect(res.statusCode).toBe(200);
     const { runs } = res.json() as { runs: Record<string, unknown>[] };
     expect(runs.length).toBe(1);
     expect(runs[0]).not.toHaveProperty('prLineage');
+    // The stamp IS set on this row (proven directly against the store below),
+    // so a passing `not.toHaveProperty` here proves the strip, not merely
+    // that the field was never populated.
+    expect(okRun(w.coord.run(opened.id))?.coordProject).toBe('intake-platform');
+    expect(runs[0]).not.toHaveProperty('coordProject');
     expect(runs[0]).toMatchObject({ id: opened.id, state: 'dispatched' });
   });
 

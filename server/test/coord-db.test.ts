@@ -657,9 +657,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 10 — never hand-edited beside a growing array', () => {
-    expect(COORD_SCHEMA_VERSION).toBe(10);
-    expect(MIGRATIONS.length).toBe(10);
+  it('COORD_SCHEMA_VERSION derives to 11 — never hand-edited beside a growing array', () => {
+    expect(COORD_SCHEMA_VERSION).toBe(11);
+    expect(MIGRATIONS.length).toBe(11);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -844,5 +844,52 @@ describe('coord.db: migration 10 — the programme knows its home, the feed row 
       .toBe(COORD_SCHEMA_VERSION + 3);
     warnSpy.mockRestore();
     b.close();
+  });
+});
+
+describe('coord.db: migration 11 — runs.coordProject', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 10', () => {
+    const dir = mkTmp('ccrc-mig11-');
+    const p = path.join(dir, '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    // Build a db at exactly user_version 10 by applying the first ten entries only.
+    const old = new DatabaseSync(p);
+    for (let v = 0; v < 10; v++) old.exec(MIGRATIONS[v]!);
+    old.exec('PRAGMA user_version = 10');
+    old.close();
+
+    const db = openCoordDb(p);                    // must migrate 10 -> 11
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 11 });
+    expect(columnOf(db, 'runs', 'coordProject')).toBeDefined();
+    db.close();
+  });
+
+  it('is NULLABLE — an existing run predates the stamp and must survive', () => {
+    const dir = mkTmp('ccrc-mig11-null-');
+    const db = openCoordDb(path.join(dir, '.ccrc', 'coord.db'));
+    expect(columnOf(db, 'runs', 'coordProject')!.notnull).toBe(0);
+    db.close();
+  });
+
+  it('is ADDITIVE: every runs column migration 1 wrote is still there', () => {
+    const dir = mkTmp('ccrc-mig11-add-');
+    const db = openCoordDb(path.join(dir, '.ccrc', 'coord.db'));
+    const names = (db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual(expect.arrayContaining(
+      ['id', 'program', 'project', 'wave', 'state', 'claimedBy', 'sessionId', 'dispatchStartedAt']));
+    db.close();
+  });
+
+  it('a database from a NEWER build still READS — rollback is real', () => {
+    const dir = mkTmp('ccrc-mig11-fwd-');
+    const p = path.join(dir, '.ccrc', 'coord.db');
+    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    expect(() => openCoordDb(p).close()).not.toThrow();
   });
 });

@@ -50,6 +50,23 @@ describe('CoordStore: runs', () => {
     expect(s.programs().length).toBe(1);          // second open reuses the slug
   });
 
+  it('openRun stamps the coordinator project it is given, and it round-trips', () => {
+    const s = store();
+    const opened = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
+    expect('id' in opened).toBe(true);
+    const row = okRuns(s.runs({ includeClosed: true })).find((r) => r.id === opened.id);
+    expect(row).toBeDefined();
+    expect(row!.coordProject).toBe('intake-platform');
+  });
+
+  it('openRun leaves the stamp null when none is given — absence permits', () => {
+    const s = store();
+    const opened = openRun(s) as { id: number };
+    expect('id' in opened).toBe(true);
+    const row = okRuns(s.runs({ includeClosed: true })).find((r) => r.id === opened.id);
+    expect(row!.coordProject).toBeNull();
+  });
+
   it('refuses a second coordinator rather than arbitrating', () => {
     // spec:291-292 — one coordinator per program; `claimedBy` exists so a
     // second one REFUSES.

@@ -57,8 +57,14 @@ const TERMINAL_RUN_STATES: readonly RunState[] =
  * cannot live in `shared/` without `RunSummary` importing server-only
  * knowledge of `.prhistory`'s shape, so this stays a server-side supertype
  * rather than growing the wire type.
+ *
+ * `coordProject` (migration 11) is the same idea for a second field: the
+ * coordinator's project, stamped at open time from a registry read the caller
+ * made, kept here for the board-placement policy to read server-side. It is
+ * NOT one of the design's two wire additions, so it stays off `RunSummary`
+ * and gets stripped by `toRunSummary` alongside `prLineage`.
  */
-export interface RunRow extends RunSummary { prLineage: PrLineageEntry[] }
+export interface RunRow extends RunSummary { prLineage: PrLineageEntry[]; coordProject: string | null }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
  *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
@@ -76,7 +82,7 @@ export interface OpenSibling {
  *  frame's own emitter (`watch.ts`'s `emitRuns`, Task 10) rather than each
  *  holding its own copy of the strip. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
   return summary;
 };
 
@@ -304,6 +310,7 @@ interface RunRowDb {
   prLineage: string | null;
   briefQueued: number | null;
   clearError: string | null;
+  coordProject: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -323,7 +330,7 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -747,6 +754,11 @@ export class CoordStore {
      *  OPTIONAL: during the legacy generation an open carries none, and the
      *  column then stays NULL rather than taking a guess. */
     homeProject?: string;
+    /** The project of the session in `claimedBy`, measured by the CALLER from
+     *  the registry and stamped here for the run's whole life. Optional, and
+     *  its absence is a real answer: an older row, or an open where the
+     *  coordinator's registry record could not be read. */
+    coordProject?: string;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -817,14 +829,15 @@ export class CoordStore {
           'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
         ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, coordProject) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
+          input.coordProject ?? null,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -2318,6 +2331,13 @@ export class CoordStore {
       // cannot forget it and quietly ship a zeroed health object.
       health,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
+      // Read straight through, on `homeProject`'s idiom: a free-form project
+      // name stamped once at open time (migration 11), never re-derived here.
+      // NULL means "not stamped" — an older row, or an open whose registry
+      // read came back absent/unlistable — and `RunRow`'s own docstring says
+      // this stays off the wire (`toRunSummary` strips it alongside
+      // `prLineage`).
+      coordProject: row.coordProject,
     };
   }
 
@@ -3772,6 +3792,10 @@ export class CoordStore {
         // it gets `dispatchedAt` bound — the reconstruction time stands in
         // for the real dispatch time nothing in the ledger preserves.
         const dispatchedAt = state === 'working' ? now : null;
+        // `coordProject` is deliberately NOT reconstructed: it is a measurement
+        // taken at open time from a registry record that may no longer exist,
+        // and inventing one here would be a placement nobody measured. A
+        // reconstructed run reads as unstamped, which the policy already handles.
         const res = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, sessionId, workspace, branch, state, ' +
           'dispatchedAt, claimedBy, openedAt, handoffCommit, prLineage) ' +
