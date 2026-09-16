@@ -472,17 +472,6 @@ export async function dispatchRun(
     // exists to describe. Nothing clears it; `state` ends the render.
     coord.markDispatchStarted(id, Date.now());
     const res = await deps.runCcd(argv);
-    // routing spec §6 "Arms": the `arm:` record, ONLY when routing was
-    // actually seeded onto the argv above (`routeFields !== null` AND the
-    // cap that gates it supported — the identical pair the omission event a
-    // few lines up gates on) AND the fleet act that carried it succeeded
-    // (`res.ok`). A refusal records no arm: a retried dispatch's own
-    // eventual success writes its own arm when it lands, and an arm on a
-    // call that never reached the fleet would be a fact this trail never
-    // measured.
-    if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP) && res.ok) {
-      coord.recordRunEvent(id, 'coordinator', `arm:${armWords(routeFields)}`);
-    }
     // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
     // this line, before the diff below — see the gate after `winner`.
     // AFTER never tolerates degradation — the question here is "is this
@@ -580,6 +569,23 @@ export async function dispatchRun(
     // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
     // before the hold, which can still fail two steps below.
     coord.setSession(id, sessionId);
+    // routing spec §6 "Arms": the `arm:` record, ONLY when routing was
+    // actually seeded onto the argv above (`routeFields !== null` AND the
+    // cap that gates it supported — the identical pair the omission event a
+    // few lines up gates on). Gated on the dispatch actually BINDING a
+    // session, never on `res.ok` (fix round 1, finding #1): `res.ok` is not
+    // "the fleet act succeeded" (§1.5) — the adoption path above reaches
+    // here with `res.ok === false` and a real, bound session (`cmd_ws_add`
+    // writes the worktree and every registry row before it can be killed),
+    // so gating on `res.ok` lost the arm on every adopted spawn that carried
+    // one. And every path that refuses before this line (registry-unmeasurable,
+    // ambiguous-dispatch, fleetFailed with no adoption) returns before this
+    // statement is ever reached, so a refused attempt — retried later, maybe
+    // with different routing — records no arm here at all, leaving the
+    // first-wins reader (`runRoutingEvents`) nothing false to latch onto.
+    if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      coord.recordRunEvent(id, 'coordinator', `arm:${armWords(routeFields)}`);
+    }
   } else {
     // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
     // spawn fresh into an existing one), then discard the resumed context
