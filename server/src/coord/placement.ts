@@ -47,7 +47,12 @@ export function boardPlacement(input: PlacementInput): string {
   for (let hop = 0; hop < MAX_HOPS; hop++) {
     const next = input.coordOf(at);
     if (next === null) return at;                 // settled: nothing coordinates `at`
-    if (seen.has(next)) return input.ownProject;  // cycle — refuse, do not loop
+    // For a genuine cycle this only trims the call count — MAX_HOPS bounds the
+    // walk either way, so the return value is identical with or without this
+    // line. Its non-redundant job is refusing a chain that walks BACK THROUGH
+    // `ownProject`: `seen` is seeded with it, so revisiting it here is a
+    // transitive self-placement, not a cycle among unrelated projects.
+    if (seen.has(next)) return input.ownProject;
     seen.add(next);
     at = next;
   }
