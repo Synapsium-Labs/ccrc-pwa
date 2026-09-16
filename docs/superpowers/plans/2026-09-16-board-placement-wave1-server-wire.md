@@ -397,9 +397,11 @@ measured insufficient and the file grew. Do not treat a count in this plan as th
 
 Run each mutation, record RED, restore. A green mutation means the case is unpinned:
 
-> **This table shipped partly false — corrected by D-2873.** Rows 2 and 3 were measured GREEN against
-> the seven cases below, and row 2's parenthetical is wrong twice over: a cycle neither hangs nor is
-> distinguishable by return value at all. The corrected table is below; the history is in D-2873.
+> **This table shipped partly false — corrected by D-2873 and D-2874.** Two of its five rows were
+> measured GREEN against the seven test cases this plan originally specified, and the cycle row's
+> parenthetical is wrong twice over: a cycle neither hangs nor is distinguishable by return value at
+> all. The corrected table below has SEVEN rows, not five — D-2874 added the last two after finding
+> the self-placement case vacuous.
 
 | Mutation | Must red | Pinned by |
 |---|---|---|
@@ -408,7 +410,8 @@ Run each mutation, record RED, restore. A green mutation means the case is unpin
 | `return at` → `return input.ownProject` | the coordinator and chain cases | return value |
 | `MAX_HOPS = 4` → `MAX_HOPS = 99` | the one-hop-past-the-cap case | return value, via a chain that TERMINATES (a never-terminating chain cannot distinguish any cap) |
 | `if (seen.has(next))` → `if (false)` | the revisit case | `coordOf` CALL COUNT — a cycle returns the same value either way, so no return-value test can see it |
-| `new Set([input.ownProject])` → `new Set()` | the walk-through-own-project case | return value (D-2874) |
+| `if (seen.has(at))` → `if (false)` | the stamp-walks-back-to-own-project case | return value (D-2874) |
+| `new Set([input.ownProject])` → `new Set()` | the chain-passes-THROUGH-own-project case | return value (D-2874) |
 
 - [ ] **Step 6: Commit**
 
