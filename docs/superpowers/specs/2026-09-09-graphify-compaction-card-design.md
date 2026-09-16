@@ -1198,7 +1198,7 @@ file and is the "one more gate" named below, not a sixth row):
 | `ccd/ccd:2967` | `_lc_rotate` | fail OPEN — the probe's failure arm is a bare `return 0`, so rotation is skipped and the caller proceeds |
 | `ccd/ccd:5059-5060` | `cmd_ws_add` | fail **CLOSED** — `die "flock (util-linux) is unavailable — refusing to create a workspace unserialised"` |
 | `ccd/ccd:7568-7570` | `cmd_ws_restore` | fail **CLOSED** — `_lc_refuse restore … flock-unavailable` |
-| `ccd/ccd:11025-11027` | `cmd_ws_reap` | fail **CLOSED** — `command -v flock >/dev/null 2>&1 \` at `:11025` guarding `_lc_refuse reap "$id" flock-unavailable` at `:11026`, pinned by `server/test/ccd-ws-reap.test.ts:344`, `it('refuses to run the destructive verb unserialised when flock is missing')` |
+| `ccd/ccd:11025-11027` | `cmd_ws_reap` | fail **CLOSED** — `command -v flock >/dev/null 2>&1 \` at `:11025` guarding `_lc_refuse reap "$id" flock-unavailable` at `:11026`, pinned by `server/test/ccd-ws-reap.test.ts:344`, `it('refuses to run the destructive verb unserialised when flock is missing', …)` |
 | `ccd/ccd:14231-14242` | `_tmux_new_session` | fail OPEN (`if command -v flock …; then … fi`, no `else`) |
 
 **Each of the five keeps its shipped disposition. D-2605 adds one more gate, and only that one fails open.**
@@ -1275,7 +1275,8 @@ status 2, and that caller carries the distinct refusal like the other three. **T
 and on darwin the difference decides whether the row can be cleared at all.**
 
 - **`ws-rm` recovers by re-running from a flock-capable PATH**, full stop. Measured: its re-run skips the
-  dirty/foreign gates when `[[ -d "$workdir" ]]` is false (`ccd/ccd:4724`) and it has no session-verdict
+  dirty/foreign gates when `[[ -d "$workdir" ]]` is false (`ccd/ccd:5480`, the gate inside `cmd_ws_rm` — its base
+  line is byte-identical to four tip lines, so this referent is measured by NAME rather than by bytes) and it has no session-verdict
   precondition to re-enter.
 - **`forget` recovers by re-running ONLY while a tmux server is answering.** Its liveness precondition is
   `case "$(_session_verdict "$id")" in` (`ccd/ccd:16620`), whose `unknown` arm is
@@ -1506,10 +1507,11 @@ successor at all — that much was right — but neither keeps its shipped name:
   `<pid>.<id>.compactset.tmp` to the table's `compactset.<pid>.<nonce>.hook-write.tmp`. Its measured legacy
   shape — the two-id-occurrence one — is what the age-gated, locked transition matcher matches, never the bare
   `<pid>.compactset.tmp` an earlier draft of this paragraph stated.
-- **The SessionStart claim producer changes its name construction too.** Its shipped shape is
-  `<pid>.compactcard-claim.tmp` (measured at `ccd/session-hook.sh:952`,
-  `claim="$REG/.$id.$$.compactcard-claim.tmp"`), and the table's row for that family is
-  `compactcard.<pid>.<nonce>.session-claim.tmp` — a different grammar, not the same one. The target grammar is
+- **The SessionStart claim producer changes its name construction too.** Its shape BEFORE Task 9 was
+  `<pid>.compactcard-claim.tmp` (measured on that tree at `8e457995:ccd/session-hook.sh:952`,
+  `claim="$REG/.$id.$$.compactcard-claim.tmp"`, and superseded at this tip — Task 9 built the target grammar,
+  `claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"` at `ccd/session-hook.sh:1966`), and the table's
+  row for that family is `compactcard.<pid>.<nonce>.session-claim.tmp` — a different grammar, not the same one. The target grammar is
   buildable at that point in the arm: §3.3 step 2 validates the nonce before step 3 claims, so the nonce is in
   hand and already safe when the claim name is constructed. Leaving the producer at its shipped shape would
   leave a name that matches neither PreCompact's exact-family sweep nor `_reg_purge`'s exact cleanup, so a
@@ -1658,7 +1660,7 @@ Every integer requirement explicitly uses `floor == .`.
 
 **Under D-2605 the input is the retained claim FD or its FD-derived private snapshot, never a reopened canonical path** (§3.4, Settlement). The `cited` row's "computed from the set file alone, no graph needed" is about the DOCUMENT, not about which pathname delivered it: the point it makes is that citation resolution needs no graph, so a journal line stays interpretable long after the graph has moved on.
 
-**Where each of these is pinned, measured on the shipped tests** (so the prose above is a restatement of a mechanism, not a new promise): normalisation at `server/test/compact-card.test.ts:688-692` ("normalises as the harness does: the FIRST `<analysis>` dropped, `<summary>` REPLACED by a `Summary:` line, blank runs collapsed, trimmed"); the heading regex's tolerance of `#`, `**`, case and a trailing colon at `:694-701`, with both `3. Files and Code Sections:` and its `**`-wrapped spelling exercised and the null-when-absent leg at `:700`; the fence rule and the unmatched opener at `:703-732` (`fences` 0 on an inline triple-backtick, 1 on a real pair, 0 on an unpaired opener), and the complete backtick-fence grammar — indentation, opener width, info strings, whitespace-only closers — at `:734-756`; citation boundaries and within-set suffix uniqueness at **`:758-792`**, three blocks: the base rule at `:758-765` (a bare basename scores 0, an ambiguous 2-segment suffix scores 0), the full-path-vs-suffix left-boundary distinction at `:767-788` (`:782` credits a unique suffix beginning immediately after `/`, `:784` refuses it when the right boundary is a PATH character — `src/watch.tsx`, where the `x` continues the token; a NON-path right boundary is what credits a match, as the `cited` row states — and `:787` refuses `nota/b/c.ts` against an ambiguous set), and the two-segment full-path guard at `:790-792`; null-vs-0 and null-vs-`main` at `:810-812` and `:820-829`; and `files: []` ⇒ `cited: 0`/`setSize: 0` at `:830`. Round 1 deleted the prose and left every one of these green, which is exactly why no suite went red and no round noticed.
+**Where each of these is pinned, measured on the shipped tests** (so the prose above is a restatement of a mechanism, not a new promise): normalisation at `server/test/compact-card.test.ts:688-692` ("normalises as the harness does: the FIRST <analysis> dropped, <summary> REPLACED by a Summary: line, blank runs collapsed, trimmed" — quoted as the source spells it, without this document's backticks, so the quotation is byte-true of the line it names); the heading regex's tolerance of `#`, `**`, case and a trailing colon at `:694-701`, with both `3. Files and Code Sections:` and its `**`-wrapped spelling exercised and the null-when-absent leg at `:700`; the fence rule and the unmatched opener at `:703-732` (`fences` 0 on an inline triple-backtick, 1 on a real pair, 0 on an unpaired opener), and the complete backtick-fence grammar — indentation, opener width, info strings, whitespace-only closers — at `:734-756`; citation boundaries and within-set suffix uniqueness at **`:758-792`**, three blocks: the base rule at `:758-765` (a bare basename scores 0, an ambiguous 2-segment suffix scores 0), the full-path-vs-suffix left-boundary distinction at `:767-788` (`:782` credits a unique suffix beginning immediately after `/`, `:784` refuses it when the right boundary is a PATH character — `src/watch.tsx`, where the `x` continues the token; a NON-path right boundary is what credits a match, as the `cited` row states — and `:787` refuses `nota/b/c.ts` against an ambiguous set), and the two-segment full-path guard at `:790-792`; null-vs-0 and null-vs-`main` at `:810-812` and `:820-829`; and `files: []` ⇒ `cited: 0`/`setSize: 0` at `:830`. Round 1 deleted the prose and left every one of these green, which is exactly why no suite went red and no round noticed.
 
 The validator consumes one raw string through `jq -Rse`, not an array. It accepts only empty content or content
 ending in exactly the line structure below: a nonempty journal has a terminal LF, and after splitting it removes
