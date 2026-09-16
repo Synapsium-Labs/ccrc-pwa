@@ -6992,10 +6992,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
    *  census can see without inventing a new verdict.
    *
    *  SELF-REFUTATION, because a floor stated as a rule has to be measured as
-   *  one: across all three documents the tokens of THREE non-space characters
-   *  or fewer that this rule still ACCEPTS are exactly `jq`, `ccd`, `it(` and
-   *  `out` — each a name rather than a keyword, and measured, NOT ONE of them
-   *  is the only satisfying token of any reference in the corpus. */
+   *  one — and the measurement is over EVERY REFERENCE THESE THREE DOCUMENTS
+   *  RESOLVE, which is narrower than "every token in them" and is the honest
+   *  bound: of the tokens offered to those references, the ones of THREE
+   *  non-space characters or fewer that this rule still ACCEPTS are exactly
+   *  `jq`, `ccd`, `it(` and `out` — each a NAME rather than a keyword. And
+   *  measured the other way too: NOT ONE reference in the corpus is anchored
+   *  only by tokens that short, so none of the four decides anything on its
+   *  own. */
   const MIN_QUOTE = 8;
   /** The six tokens the review MEASURED as self-anchoring across this corpus,
    *  refused by name. Five of them rule (a) already refuses for carrying no
