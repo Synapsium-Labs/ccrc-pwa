@@ -7158,3 +7158,21 @@ later reader mints one.
 **Mechanism (D-2824) again:** `advance 47 → working`, then `status` mail **1385**, subject `fix-round`,
 body 7257 bytes of 8192, first line the artifact path. Run 47 is `working`; PRs #108, #113 and #114 all
 still MERGEABLE and blocked on the approval only the operator gives.
+
+### 2026-09-16 09:5x UTC — #114 conflicts with main, and wave 6's OWN new ratchet is what catches it (mail 1386)
+
+`origin/main` moved to `98236c81` while round 1 was in flight — #100 (crossrepo wave 3), #115
+(D-2836..D-2841), #102 (drawer design). #108 and #113 still merge clean; **#114 does not**, on exactly
+ONE line: `CLAUDE.md`'s `README.md (~N lines)` claim, `~2875` on main against `~2900` on the wave tip.
+
+**Measured on the merge tree `df7c2a32` — a tree nobody has a checkout of:** the merged README is
+**3074** lines, so `|3074-2875| = 199` and `|3074-2900| = 174`, and the ±100 ratchet B-M-8 asked for
+**reds on BOTH sides of the conflict**. Resolving by taking either side ships a red suite; the number has
+to be re-measured on the merged tree. That is the pin doing its job on the first merge after it landed,
+and it is the strongest evidence in this wave that the mechanism is real rather than decorative —
+[[a-merge-is-a-tree-nobody-ran]] caught by a guard the same wave wrote.
+
+Told the worker (mail 1386, addendum to 1385, same round): merge `origin/main` in, resolve that line by
+re-measuring, and re-run the suites on the MERGED tree — the crossrepo wave edited the operator's docs,
+which is the exact surface these pins read, so every citation and passage slice needs re-checking there
+rather than at `7bac1727`.
