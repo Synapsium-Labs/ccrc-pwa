@@ -101,11 +101,16 @@ with the run now `dispatched`, or a refusal:
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
 | `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
 
-**Caps count runs, not holds.** Concurrency counts dispatched non-terminal runs,
-not held workspaces: a terminal producer retained on a hold and a planned
-undispatched consumer consume no running-worker slot. Each actual dispatch still
-consumes daily budget, and a dispatched non-terminal consumer consumes one
-concurrency slot. Each refusal's own numbers are the authority, and the two
+**Caps count ACTIVE runs, not holds and not merely non-terminal ones.**
+Concurrency counts dispatched runs whose state is ACTIVE — `dispatched`,
+`working`, `unknown` — so a terminal producer retained on a hold, a planned
+undispatched consumer, and a run parked IDLE at `awaiting-review`, `merging` or
+`closing` all consume no running-worker slot. **An idle run gives its slot back
+WITHOUT closing** (D-2803); before wave 6 of review-runs it held one until it
+reached a terminal state, and prose written against that older rule is wrong
+rather than merely imprecise. Each actual dispatch still consumes daily budget,
+and a dispatched run consumes one concurrency slot for as long as it stays
+active. Each refusal's own numbers are the authority, and the two
 carry DIFFERENT ones: `cap-concurrency` carries `limit` and `running`, while
 `cap-daily` carries `limit` and `used` — it never carries `running`, so a
 coordinator refused `cap-daily` that goes looking for one is reading a field
