@@ -2133,10 +2133,10 @@ and exact-one helper output. **Their home is a MEASURED set of plan items, quote
 wording, not a table name (round 14, A-1 = B-I4, A-2, B-M1):** the plan's numbered `Step N: Mutation checks`
 lists, which exist under **Tasks 2–8 only**. Measured against the `### Task N` boundaries of
 `docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md`
-(`:61`/`:340`/`:827`/`:1187`/`:1463`/`:1929`/`:2207`/`:2520`/`:2721`/`:3273`/`:3427`), those headings sit at
+(`:61`/`:340`/`:827`/`:1187`/`:1463`/`:1929`/`:2207`/`:2520`/`:2721`/`:3296`/`:3710`), those headings sit at
 plan `:799`, `:1169`, `:1447`, `:1909`, `:2182`, `:2495` and `:2702` — Tasks 2, 3, 4, 5, 6, 7 and 8. **Task 1
 is fixtures-only and has no such step; Task 9 has none either; and the eighth heading in the file, plan
-`:3411`, belongs to Task 10 and is its own — it is NOT part of this deferral.** The plan carries no
+`:3677`, belongs to Task 10 and is its own — it is NOT part of this deferral.** The plan carries no
 `expected red` column anywhere (measured: `grep -c 'expected red'` over the plan returns 1, in the ledger's
 prose), so each item below is quoted as the plan spells it, with the behaviour it pins beside it:
 
