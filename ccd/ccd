@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8953158c43786b57d7cdb848184219be3405ec8898259efb306fae3366a5d6b7
+# ccrc:generated 1 sha256=31bd529862409f6b6c5fc9d822ad40862fc0a836725c7b32694233b364bcf753
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1097,7 +1097,16 @@ ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 ROUTE_WORKFLOWS="on off"
 ROUTE_INERTABLE="effort workflow"
-ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse notes for one id+field
+ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / route-skip notes for one
+                                # id+field. EQUAL TO `COMPACT_NOTE_FLOOR` BY CHOICE, NOT BY DERIVATION:
+                                # both bound the same load — the 5s supervisor tick across ~20 sessions
+                                # writing into the one `$REG/swap.log` a human reads — and each is free
+                                # to move without the other. Neither reads the other's constant.
+ROUTE_ACK_WAIT=5                # seconds `_route_ack_wait` polls the pane (one `sleep 1` per poll) for
+                                # Claude Code's own acknowledgement of a session-only `/effort` or
+                                # `/model`. The keystrokes land in under a second on a live pane; this
+                                # is the budget for a TUI mid-repaint, not for a session to become idle
+                                # — that question was already answered by `_idle_for_keystroke`.
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -6337,6 +6346,13 @@ EOF
   # this token may compose routing fields onto a dispatch argv; one that does
   # not passes none and journals that it could not.
   echo route-argv-v1
+  # route-apply-v1 — this ccd takes `--apply` on `route`, and its supervise tick
+  # re-applies a pending routing record with the SESSION-ONLY keystrokes
+  # (`/effort` slider + `s`, `/model` picker + `s`), reading the acknowledgement
+  # back before recording anything as applied. A server that sees this token may
+  # ask for a live change; one that does not writes the record and lets the next
+  # settle apply it.
+  echo route-apply-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -6742,22 +6758,28 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
 }
 
 cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
-  # Routing spec 2026-09-14 §5.3. WRITES THE RECORD, NEVER A KEYSTROKE: this
-  # slice has no --apply (slice 4 adds it for the server's picker path only),
-  # so a coordinator running this against a worker types nothing into that
-  # worker's pane — ccd applies the fields at the next settle. Every value is
+  # Routing spec 2026-09-14 §5.3. WRITES THE RECORD; TYPES ONLY UNDER `--apply`.
+  # Without that flag — the COORDINATOR's form, and the default — a session
+  # running this against a worker types nothing into that worker's pane and ccd
+  # applies the fields at the next settle. With it, the record is written first
+  # and then applied to the LIVE pane with the session-only keystrokes, if and
+  # only if the pane answers the same idle predicate the compactor uses; a pane
+  # that is mid-turn, drafting or sitting out a limit is left alone, the refusal
+  # is recorded in `routeskip`, the verb says `queued`, and the supervise tick
+  # retries. Every value is
   # validated BEFORE anything is written, so a bad call is a `die` the caller
   # sees and an unchanged record, never a silently-absent field. The PREVIOUS
   # value is read VALIDATED: an unrecognised one is rendered as a byte count in
   # the log and the journal, never its bytes — the file is writable by any
   # session on the box and a multi-line value would forge log lines.
-  local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--actor <text>] [--reason <text>]"
-  local id="" actor="" reason="" kv f v cls eff old raw rc
+  local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--apply] [--actor <text>] [--reason <text>]"
+  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc
   local -a sets=()
   while (( $# )); do
     case "$1" in
       --session) [[ $# -ge 2 ]] || die "$usage"; id="$2"; shift 2 ;;
       --set)     [[ $# -ge 2 ]] || die "$usage"; sets+=("$2"); shift 2 ;;
+      --apply)   apply=1; shift ;;
       --actor)   [[ $# -ge 2 ]] || die "$usage"; actor="$2"; shift 2 ;;
       --reason)  [[ $# -ge 2 ]] || die "$usage"; reason="$2"; shift 2 ;;
       *)         die "$usage" ;;
@@ -6825,6 +6847,31 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
     echo "set $id $f=$v"
   done
+  (( apply )) || return 0
+  # THE SETTLE-APPLIED FIELDS ARE RECORDED AT WRITE TIME. `workflow`, `subagent`
+  # and `compact` have no keystroke — they are an argv `--settings` key, an env
+  # var and a field the compactor reads — so recording them here is not a claim
+  # that a pane was touched; it is the honest statement that the applier has
+  # nothing left to do about them. Without it a `--apply` that wrote only one of
+  # the three would leave this session pending for ever against a keystroke that
+  # does not exist. Gated on `--apply` because a plain `cmd_route` promises to
+  # touch nothing but the record.
+  for kv in "${sets[@]}"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    case "$f" in workflow|subagent|compact) _route_applied_set "$id" "$f" "$v" ;; esac
+  done
+  # THE SAME PREDICATE THE COMPACTOR USES, and it is asked BEFORE any keystroke
+  # for the same three reasons that function gives: a mid-turn pane would take
+  # the slash command as a message, an occupied input box would swallow it, and
+  # a session sitting out a usage limit on its own loses that wait to ANY key
+  # (D-2229). `queued` is the honest answer in every one of those cases — the
+  # record is written, the tick will retry, and nothing was typed.
+  if _pane_for_keystroke "$id" && _idle_for_keystroke "$id" "$KS_PANE" ""; then
+    _route_apply_now "$id" || echo "queued $id"
+  else
+    _route_note "$id" "$KS_WHY" "$KS_DETAIL"
+    echo "queued $id"
+  fi
 }
 
 cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
@@ -15273,6 +15320,320 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
 }
 
+# ── APPLYING THE RECORD TO A LIVE SESSION (routing spec §5.3; slice 4, Task 4) ─
+#
+# ccd IS THE ONE TYPER. The record is the arbiter and nothing above ccd — not
+# the server, not the PWA — sends `/effort` or `/model` into a pane; everything
+# below is the whole of the fleet's live-change machinery, reached from exactly
+# two places: `ccd route --apply` (the operator, once) and `_route_apply_check`
+# (the supervise tick, every 5s per live session).
+#
+# ONLY THE SESSION-ONLY FORMS, and that is a measurement rather than a
+# preference. `/effort high` typed plain PERSISTS: it writes
+# `modelSettings.<model-id>.effortLevel` into the LANE's settings.json, which
+# every other session on that account then inherits (D-2808, and D-2810 found
+# four such pins already on the fleet). The slider + `s` writes nothing — the
+# probe diffed settings.json before and after on both lanes. So the applier
+# drives the pickers even though typing an argument would be one line.
+#
+# WHAT IS APPLIED LIVE AND WHAT WAITS FOR THE SETTLE. `class` and `effort` have
+# a keystroke; `workflow`, `subagent` and `compact` do not — workflows are an
+# argv `--settings` key, the subagent floor is an env var, and `compact` is read
+# by the compactor itself. Those three are recorded applied the moment they are
+# WRITTEN, because the next spawn composes them from the same record, and a
+# field that waits for a keystroke that does not exist would keep this session
+# pending for ever.
+_route_note() {   # id reason [detail] — record why the applier declined this tick.
+  # `_compact_note`'s shape, line for line, and the split is the same one D-2013
+  # argues at length there: `$REG/<id>.routeskip` is the MARKER (`<epoch>
+  # <reason>`, rewritten the moment the reason CHANGES, removed by
+  # `_route_note_clear`) and `$REG/<id>.routenote` is the log floor's ANCHOR (a
+  # bare epoch, never cleared). Without that split a reason that FLAPS — an
+  # overlay hiding the statusline for one tick, a turn starting between two
+  # ticks — defeats the floor completely and writes a swap.log line every 5s.
+  #
+  # ITS OWN FIELDS, NOT THE COMPACTOR'S. A refusal to apply a routing change and
+  # a refusal to compact are two conditions an operator handles differently, so
+  # they never share `compactskip`: a below-threshold compaction tick clears
+  # `compactskip` and must leave a standing `routeskip` exactly where it was.
+  local id="$1" reason="$2" detail="${3:-}" rec prev now
+  now=$(date +%s)
+  rec=$(_reg_get "$id" routeskip)
+  prev="${rec#* }"; [[ "$rec" == "$prev" ]] && prev=""   # one-token (or empty): no reason half
+  [[ "$prev" == "$reason" ]] || _reg_set "$id" routeskip "$now $reason"
+  # THE FLOOR IS `_route_note_floored`, not a second copy of its arithmetic.
+  # `_compact_note` spells that `[[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt … ]]`
+  # guard inline because it predates this file's own floor helper; writing it out
+  # a third time here would put a byte-identical line beside the helper's and
+  # leave the D-299 digit guard on it unpinned by anything (the structural table
+  # in `ccd-arith-containment.test.ts` anchors on the line's text and asserts the
+  # match is unique). One reader of `ROUTE_NOTE_FLOOR`, already guarded.
+  _route_note_floored "$id" routenote && return 0
+  echo "$(date '+%F %T') route-skip $id: $reason${detail:+ ($detail)}" >> "$REG/swap.log"
+  return 0
+}
+
+_route_note_clear() {   # id — the applier is no longer declining, so the MARKER must go; a stale
+  # `mid-turn` read as current is the same lie `_compact_note_clear` names. The
+  # ANCHOR (`routenote`) is deliberately left standing — clearing it is what let
+  # an alternating reason defeat the floor. Silent by construction.
+  [[ -e "$REG/$1.routeskip" ]] && rm -f -- "$REG/$1.routeskip"
+  return 0
+}
+
+# ── `routeapplied`: what this pane is ACTUALLY running ───────────────────────
+# A space-separated `field=value` word list in `$REG/<id>.routeapplied`. It is
+# the only thing that makes the tick cheap: the record says what is WANTED and
+# this says what LANDED, so the comparison that decides whether to touch tmux at
+# all is two registry reads. It is written by the settle (from what `_spawn_start`
+# COMPOSED) and by the applier (on a read-back acknowledgement, never on the
+# send-keys alone), and by nothing else.
+_route_applied_set() {   # id field value — rewrite the list with <field> replaced or appended
+  local id="$1" f="$2" v="$3" cur out="" w
+  local -a words=()
+  cur=$(_reg_get "$id" routeapplied 2>/dev/null)
+  # `read -a`, not `for w in $cur`: the file is writable by any session on the
+  # box (one UNIX user — attribution, not authentication), and an unquoted
+  # expansion would GLOB a value carrying `*` against this directory.
+  read -r -a words <<< "$cur"
+  for w in ${words[@]+"${words[@]}"}; do
+    [[ "$w" == "$f="* ]] && continue
+    out="${out:+$out }$w"
+  done
+  _reg_set "$id" routeapplied "${out:+$out }$f=$v"
+}
+
+_route_applied_get() {   # id field -> stdout the recorded value, or nothing. Always 0.
+  local id="$1" f="$2" w
+  local -a words=()
+  read -r -a words <<< "$(_reg_get "$id" routeapplied 2>/dev/null)"
+  for w in ${words[@]+"${words[@]}"}; do
+    [[ "$w" == "$f="* ]] && { printf '%s' "${w#*=}"; return 0; }
+  done
+  return 0
+}
+
+_route_wanted() {   # id -> stdout "<class> <effort>": the two values the applier would type.
+  # ONE SPELLING, read by both the cheap pending check and the applier itself —
+  # two copies of "what does this record ask for" is exactly the drift that would
+  # make the tick loop for ever on a field it then declines to type.
+  #
+  # THE CLASS SERVED, NEVER THE INTENDED ONE: a `degraded` stamp means this lane
+  # measured unable to serve `class`, and typing the intended class into the
+  # picker would ask the pane for a model the settle already ruled out (and, on
+  # the fable rung, one the picker does not even list). `default` is a real value
+  # here — the picker's `Default` row — and is what an absent `class` means.
+  #
+  # `auto` IS THE ABSENT-EQUIVALENT for effort (spec §5.1) and is what an absent
+  # `effort` resolves to, so both spell "the lane decides" as one word the
+  # comparison can hold. `_route_effort_for` applies the haiku rule (and its
+  # floored refusal note) so that rule is not said a second time here.
+  local id="$1" cls deg eff
+  cls=$(_route_get "$id" class)
+  deg=$(_route_get "$id" degraded)
+  [[ -n "$deg" ]] && cls="$deg"
+  [[ -n "$cls" ]] || cls=default
+  eff=$(_route_effort_for "$id" "$cls")
+  [[ -n "$eff" ]] || eff=auto
+  printf '%s %s' "$cls" "$eff"
+  return 0
+}
+
+_route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `routeapplied` does not record
+  # REGISTRY READS ONLY. This is the tick's first act on every live session, so
+  # it may not shell into tmux: ~20 sessions x 12 ticks a minute is the load,
+  # and the healthy answer — nothing pending — has to cost a few stats.
+  local id="$1" want cls eff
+  _route_any "$id" || return 1
+  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  [[ "$cls" == "$(_route_applied_get "$id" class)" ]] || return 0
+  [[ "$eff" == "$(_route_applied_get "$id" effort)" ]] || return 0
+  return 1
+}
+
+_route_ack_wait() {   # tmuxname regex -> 0 iff the pane shows the acknowledgement inside the window
+  # THE READ-BACK IS THE MEASUREMENT. A `send-keys` that returns 0 proves tmux
+  # accepted the bytes and nothing more — the TUI may have been mid-repaint, a
+  # dialog may have eaten them, the slash command may have been refused outright
+  # (`Ultracode needs dynamic workflows enabled`, measured verbatim on a lane
+  # launched with `{"enableWorkflows":false}`). So nothing is recorded applied
+  # until Claude Code says so in its own words, and a silent pane is
+  # `apply-unconfirmed` rather than a lie in the registry.
+  local t="$1" re="$2" i
+  for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
+    tmux capture-pane -t "$t" -p 2>/dev/null | grep -qE "$re" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+_route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed
+  # `ultracode` HAS NO SLIDER DELTA and needs none: it is the one level whose
+  # PLAIN form is session-only by construction (D-2810, measured — the ack reads
+  # `(this session only)` and settings.json is byte-identical), because there is
+  # no settings key to save it into. Every other level rides the slider.
+  #
+  # `Left`x7 THEN `Right`xN, and the 7 is not arbitrary: the slider does NOT
+  # wrap (measured), so seven lefts pin the marker at `low` from any starting
+  # position on a six-stop scale and the rights then count from a known origin.
+  # The stops are `low medium high xhigh max`; `ultracode` is the sixth and is
+  # never reached this way.
+  local t="$1" level="$2" n i
+  if [[ "$level" == ultracode ]]; then
+    tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+    _route_ack_wait "$t" "ultracode.*this session only"; return $?
+  fi
+  case "$level" in
+    low) n=0 ;; medium) n=1 ;; high) n=2 ;; xhigh) n=3 ;; max) n=4 ;;
+    *) return 1 ;;   # not in `ROUTE_EFFORTS`' slider vocabulary: unconfirmed, never a guessed key
+  esac
+  tmux send-keys -t "$t" -l "/effort"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+  for ((i = 0; i < 7; i++)); do tmux send-keys -t "$t" Left; sleep 1; done
+  for ((i = 0; i < n; i++)); do tmux send-keys -t "$t" Right; sleep 1; done
+  tmux send-keys -t "$t" -l "s"; sleep 1
+  # BOTH SHAPES ARE TOLERATED. On Opus 5 a conversation that already has turns
+  # gets a second dialog — `Change effort level? … 1. Yes, switch to <level>` —
+  # because the cached prefix has to be re-read; on Fable 5.1 the same two-turn
+  # history showed none (measured, D-2808). Confirm it if it is there.
+  if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
+    tmux send-keys -t "$t" Enter; sleep 1
+  fi
+  _route_ack_wait "$t" "Set effort level to $level.*\(this session only\)"
+}
+
+_route_picker_rows() {   # pane -> one row per line: <n>\t<cursor 0|1>\t<label>\t<description>
+  # THE ONE SANITISER the picker arithmetic depends on, `_pane_ctx_pct`'s role
+  # one seam over: `<n>` is a `[0-9]+` capture and nothing else from the pane
+  # reaches an arithmetic context. Do not add a second guard downstream.
+  #
+  # The measured row shapes, both lanes: `1. Default (recommended)  Sonnet 5 ·
+  # Efficient for routine tasks`, `3. Fable ✔  Fable 5.1 · Most capable…`, and on
+  # the codex lane `2. gpt-5.6-sol ✔  Custom Opus model` — a LABEL, an optional
+  # `✔` marking the current model, then two-or-more spaces, then a DESCRIPTION.
+  # The cursor row carries `❯`. Splitting on the FIRST double space rather than a
+  # greedy match is deliberate: a description may itself contain single spaces
+  # and a greedy label would swallow all of it.
+  local line n cur rest label desc
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*(❯[[:space:]]*)?([0-9]+)\.[[:space:]]+(.*)$ ]] || continue
+    cur=0; [[ -n "${BASH_REMATCH[1]}" ]] && cur=1
+    n="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+    label="${rest%%  *}"
+    if [[ "$label" == "$rest" ]]; then desc=""; else desc="${rest#*  }"; fi
+    desc="${desc#"${desc%%[![:space:]]*}"}"                 # ltrim
+    label="${label%"${label##*[![:space:]]}"}"              # rtrim
+    label="${label%✔}"
+    label="${label%"${label##*[![:space:]]}"}"              # rtrim again, without the tick
+    printf '%s\t%s\t%s\t%s\n' "$n" "$cur" "$label" "$desc"
+  done <<< "$1"
+  return 0
+}
+
+_route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
+  # THE CURSOR IS READ, NEVER ASSUMED. The picker opens on the CURRENT model's
+  # row, not on row 1, and `Up` on row 1 WRAPS to the last row on both lanes
+  # (measured) — so "press Up×N to pin at the top" walks somewhere unpredictable
+  # and then presses `s` on it. The only sound drive is to parse the rows, find
+  # the cursor, find the target, and press the delta.
+  #
+  # WHICH ROW IS THE TARGET differs by backend, because the lanes label their
+  # rows differently. An Anthropic lane labels them by CLASS (`Sonnet`, `Opus`,
+  # `Haiku`, `Fable`, plus `Default (recommended)`), so the first word of the
+  # label is the class's display word — derived by capitalising the class, never
+  # a fifth hand-kept spelling of `ROUTE_CLASSES`. A codex lane labels them by
+  # model ID and puts the class in the DESCRIPTION (`Custom Opus model`), so
+  # that is what is matched there; `default` is the `Default` row on both.
+  #
+  # A CLASS THE PICKER DOES NOT LIST IS NOT A FAILURE OF THIS FUNCTION. `fable`
+  # is offered only while it is already the current model (measured: the same
+  # entitled lane launched `--model opus` lists four rows and no Fable), so a
+  # live change TO fable is a RELAUNCH, not a keystroke. Escape out, answer 2,
+  # and let the tick record it and the settle apply it.
+  local t="$1" cls="$2" w="$3" rows n cur label desc want target=0 curs=0 i
+  tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+  rows=$(_route_picker_rows "$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -12)")
+  if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
+  while IFS=$'\t' read -r n cur label desc; do
+    [[ -n "$n" ]] || continue
+    [[ "$cur" == 1 ]] && curs="$n"
+    if [[ "$want" == Default ]] || _is_anthropic_backend "$w"; then
+      [[ "${label%% *}" == "$want" ]] && target="$n"
+    else
+      [[ "$desc" == *"Custom $want model"* ]] && target="$n"
+    fi
+  done <<< "$rows"
+  # TWO SENTENCES, ONE SLUG — `status-unreadable`'s shape one seam over. "This
+  # picker lists no row for the class" and "this capture carries no cursor row at
+  # all" send an operator to different places, and the remedy for both is the
+  # same (leave it to the settle), so they share the word and differ in the
+  # detail the swap.log line carries.
+  if [[ "$target" == 0 || "$curs" == 0 ]]; then
+    tmux send-keys -t "$t" Escape; sleep 1
+    KS_WHY=no-picker-row
+    if [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
+    else KS_DETAIL="class=$cls"; fi
+    return 2
+  fi
+  if (( target > curs )); then
+    for ((i = curs; i < target; i++)); do tmux send-keys -t "$t" Down; sleep 1; done
+  elif (( curs > target )); then
+    for ((i = target; i < curs; i++)); do tmux send-keys -t "$t" Up; sleep 1; done
+  fi
+  tmux send-keys -t "$t" -l "s"; sleep 1
+  _route_ack_wait "$t" "Set model to .* for this session only"
+}
+
+_route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is still pending
+  # CLASS FIRST, THEN EFFORT, and the order is a measurement: a session-only
+  # effort SURVIVES a model change (D-2811 — `Sonnet 5 with medium effort` after
+  # `/model sonnet`), so applying the effort first and the class second would
+  # still be correct but would pay the model picker's own effort control the
+  # chance to move it. Class first is the order with nothing to re-check.
+  #
+  # NOTHING IS RECORDED APPLIED WITHOUT AN ACKNOWLEDGEMENT, except the one case
+  # where there is nothing to acknowledge: `effort=auto` is spec §5.1's
+  # absent-equivalent and types NOTHING at all — the live level stands until the
+  # next settle composes the argv. Recording it applied is what stops the tick
+  # re-deciding that every 5 seconds.
+  local id="$1" t w want cls eff have rc
+  t=$(_tmux "$id")
+  w=$(_reg_get "$id" wrapper)
+  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  have=$(_route_applied_get "$id" class)
+  if [[ "$cls" != "$have" ]]; then
+    _route_type_model "$t" "$cls" "$w"; rc=$?
+    case "$rc" in
+      0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
+      2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; return 1 ;;
+      *) _route_note "$id" apply-unconfirmed "class=$cls"; return 1 ;;
+    esac
+  fi
+  have=$(_route_applied_get "$id" effort)
+  if [[ "$eff" != "$have" ]]; then
+    if [[ "$eff" == auto ]]; then
+      _route_applied_set "$id" effort auto
+      _route_note_clear "$id"
+    elif _route_type_effort "$t" "$eff"; then
+      _route_applied_set "$id" effort "$eff"
+      _route_note_clear "$id"
+    else
+      _route_note "$id" apply-unconfirmed "effort=$eff"; return 1
+    fi
+  fi
+  return 0
+}
+
+_route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick never fails the loop.
+  # CHEAP WHEN NOTHING IS PENDING, which is the steady state of every session on
+  # the fleet. The registry comparison comes FIRST and returns before any tmux
+  # call at all; only a genuinely pending field pays a pane read.
+  _route_apply_pending "$1" || { _route_note_clear "$1"; return 0; }
+  _pane_for_keystroke "$1" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  _idle_for_keystroke "$1" "$KS_PANE" "" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  _route_apply_now "$1"
+  return 0
+}
+
 # Two readings of the input box from one normalised pane: `_pane_box_draft`
 # keeps `draftOf`'s marker-row contract, while `_pane_box_has_content` asks the
 # safety question every synthesized ccd action needs — whether ANY box row is
@@ -15788,7 +16149,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # keys, both composed below on the Anthropic arm. The settle's keystroke
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
-  local routeflags="" routeenv="" rclass rsub rwf reff inert=""
+  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
     # THE CLASS SERVED (routing spec §5.4, last paragraph; §5.1 `degraded`). The
@@ -15898,26 +16259,31 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # decides — and is the one word `_route_effort_for` can hand back
       # un-transformed for a non-haiku class (Task 7's --settings ruling,
       # controller ruling S1-R8).
-      if [[ "$rwf" == on ]]; then
-        if [[ "$reff" == ultracode ]]; then
-          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true,\"ultracode\":true}'"
-        else
-          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true}'"
-        fi
-      fi
+      # `workflow=off` NOW COMPOSES `{"enableWorkflows":false}` AND STAMPS NO
+      # INERT (slice 4, Task 1 decision b). Slice 1 could not compose the false
+      # key because only the TRUE one had been measured, so `off` composed
+      # nothing and the record said `inert=workflow` rather than claim a state it
+      # had not set. Slice 4 measured it (2026-09-15, Claude Code 2.1.273, a
+      # Fable-entitled lane): the flag is HONOURED and it is a real lever —
+      # `/effort ultracode` is refused verbatim (`Ultracode needs dynamic
+      # workflows enabled`) and `/config` matches no `workflow` row at all, one
+      # row further than the true flag withdraws. Nothing is written to
+      # settings.json on either arm. So the field IS applied now and the inert
+      # stamp would be false. NOT reachable for ultracode: `$rwf` was forced to
+      # `on` above, so an ultracode record never arrives here with `off`.
+      #
+      # ONE `case`, so `--settings` is composed exactly once and always BEFORE
+      # `--effort` — `ccd-route-spawn.test.ts`'s ruled-form test asserts
+      # `--model X --settings Y --` as one contiguous substring.
+      case "$rwf" in
+        on)  if [[ "$reff" == ultracode ]]; then
+               routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true,\"ultracode\":true}'"
+             else
+               routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true}'"
+             fi ;;
+        off) routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":false}'" ;;
+      esac
       [[ -n "$reff" && "$reff" != auto ]] && routeflags="${routeflags:+$routeflags }--effort $reff"
-      # `workflow=off` COMPOSES NOTHING AND SAYS SO (controller ruling S1-R12).
-      # Absence composes nothing here too, so an `off` that composed nothing
-      # would leave the record claiming a state it never set — the spawn would
-      # be byte-identical to one that never named `workflow` at all, and the
-      # lane's own settings.json would still decide. `{"enableWorkflows":false}`
-      # is UNMEASURED (Task 7 measured the true key, not the false one), so it
-      # is not composed on a guess; the honest channel is the one Task 6 already
-      # built for fields that were not applied, and `inert` is by FIELD NAME, so
-      # `workflow` is exactly the word for it. Slice 4 measures the false key and
-      # clears this stamp. NOT for ultracode: `$rwf` was forced to `on` above,
-      # so an ultracode record never reaches this line with `off`.
-      [[ "$rwf" == off ]] && inert="workflow"
     else
       # WHAT IS STAMPED INERT HERE IS `$reff` — the effort AFTER
       # `_route_effort_for`'s haiku filtering, which is the decision and not an
@@ -15930,6 +16296,27 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       [[ "$rwf" == on ]] && inert="${inert:+$inert,}workflow"
     fi
     if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi
+    # THE SETTLE IS AN APPLICATION, and this is it saying so (slice 4, Task 4).
+    # `$REG/<id>.routeapplied` records what THIS spawn composed, so the applier's
+    # tick — which compares the record against this file — finds nothing pending
+    # on a pane that has just come up carrying exactly what the record asked for.
+    # Without it every fresh spawn would be re-typed through the pickers within
+    # five seconds of settling, for no change at all.
+    #
+    # WHAT IS WRITTEN IS WHAT WAS COMPOSED, not what was intended: `$rclass` is
+    # already the class SERVED (a degrade stamped above replaced it) and `$reff`
+    # is already past `_route_effort_for`'s haiku filter. `default` and `auto` are
+    # the words for "nothing was composed and the lane decides", which is what
+    # `_route_wanted` answers for the same record. `subagent` and `workflow` are
+    # omitted when the record is silent about them rather than spelled with a
+    # made-up default — absence is a value here and `off` is not its synonym.
+    rapplied="class=${rclass:-default} effort=${reff:-auto}"
+    _reg_set "$id" routeapplied "$rapplied${rsub:+ subagent=$rsub}${rwf:+ workflow=$rwf}"
+  else
+    # NO RECORD, NOTHING COMPOSED, NOTHING CLAIMED. A leftover `routeapplied`
+    # from a record that has since been removed would make the applier compare
+    # against a file describing a spawn nobody would make again.
+    rm -f -- "$REG/$id.routeapplied"
   fi
   resenv="$resenv${routeenv:+ $routeenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
@@ -17047,7 +17434,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
       live)
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
-        _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
+        _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; _route_apply_check "$id"
         beat=$((beat + tick))
         (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
         ;;

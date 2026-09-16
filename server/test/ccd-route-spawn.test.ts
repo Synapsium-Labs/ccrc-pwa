@@ -108,16 +108,18 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(p2).toContain(`--model opus --settings '{"enableWorkflows":true}' --`);
   });
 
-  it('workflow=off on an Anthropic lane composes NOTHING and stamps inert=workflow (controller ruling S1-R12)', () => {
-    // `off` and absence compose the same argv, so without this stamp the record
-    // claims a state it never set: `{"enableWorkflows":false}` is unmeasured,
-    // and the lane's own settings.json still decides. Slice 4 measures the
-    // false key and clears the stamp.
+  it('workflow=off on an Anthropic lane composes {"enableWorkflows":false} and stamps NO inert (slice 4 measured the false key)', () => {
+    // Slice 1 composed nothing for `off` and stamped `inert=workflow`, because
+    // only the TRUE key had been measured and an unmeasured flag is not composed
+    // on a guess. Slice 4 measured it (2026-09-15, Claude Code 2.1.273): the
+    // false key is HONOURED and is a real lever — `/effort ultracode` is then
+    // refused verbatim and `/config` matches no `workflow` row at all. So the
+    // field IS applied now and the inert stamp would be a false claim.
     seed('myid');
     h.sh(`_reg_set myid class opus; _reg_set myid effort high; _reg_set myid workflow off`);
     const [primary, retry] = spawnBoth('myid');
-    for (const l of [primary, retry]) expect(l).not.toContain('--settings');
-    expect(h.reg('myid', 'inert')).toBe('workflow');
+    for (const l of [primary, retry]) expect(l).toContain(`--model opus --settings '{"enableWorkflows":false}' --effort high`);
+    expect(h.reg('myid', 'inert')).toBeNull();
   });
 
   it('workflow=on on an Anthropic lane stamps no inert — it really was applied', () => {
