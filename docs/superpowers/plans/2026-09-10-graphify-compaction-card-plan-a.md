@@ -3102,8 +3102,9 @@ defect in either direction, and round 14 re-anchored or era-marked each one it m
   passes vacuously. After retargeting, `helper([…complete new argv minus
   --nonce]).stderr` must still contain `--nonce is required` (the `REQUIRED_CARD` loop's message) and
   `--nonce ''` must still return USAGE (the separate nonempty check at `ccd/compact-card.mjs:709`, whose message is `--nonce must be a nonempty string` — a different message from the loop's, so the two assertions do test two different guards).
-  (round 8, I9/M11 corrected the original "ten" count and the
-  `:15`/`:441`/`:500`/`:425`/`:493`/`:781`/`:803` omissions; round 9 corrects round 8's own residual
+  (round 8, I9/M11 corrected the original "ten" count and the omissions at
+  `server/test/compact-card.test.ts:15`/`:441`/`:500`/`:425`/`:493`/`:781`/`:803` — spelled in full because the
+  sentence before this one names `ccd/compact-card.mjs`, and a bare `:N` inherits THAT; round 9 corrects round 8's own residual
   omission of `:772`/`:773`. Both rounds undercounted the same way, by asserting an enumeration complete
   without re-measuring it — so re-measure this list against the file before executing, rather than trusting
   it)), `server/test/ccd-lifecycle-purge.test.ts` (move the
