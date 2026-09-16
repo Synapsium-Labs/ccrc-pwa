@@ -1178,7 +1178,7 @@ The round-8 text bounded the cost to "the ENTIRE compaction lifecycle — card, 
 journal, and lifecycle purge cleanup alike", which composed with §3.4's own "`_reg_purge` acquires/validates
 the stable lock BEFORE any registry mutation" into something far larger than it stated: a permanent,
 fleet-wide failure of `ws-rm`, `ws-reap`, `forget` and `ws-gc --prune`, each of which calls `_reg_purge`
-(`ccd/ccd:5667` in `cmd_ws_rm`, `:11167` in `_ws_reap_tail` under `_ws_reap_locked`, `:11668` in
+(`ccd/ccd:5667` in `cmd_ws_rm`, `:12013` in `_ws_reap_tail` under `_ws_reap_locked`, `:12595` in
 `_ws_gc_prune_row` under `ws-gc --prune`, `:16642` in `cmd_forget`) — three of them only AFTER irreversible
 action. That is ccd's universal registry-destruction path, not the compaction lifecycle. The design does not
 accept that cost, and does not need to.
