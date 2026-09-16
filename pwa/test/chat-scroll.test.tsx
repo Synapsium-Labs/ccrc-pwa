@@ -31,10 +31,13 @@ vi.mock('react-virtuoso', async () => {
 
 const { ChatList } = await import('../src/session/ChatList');
 
+const KEY = 'ccrc:chat-item-height';
+
 afterEach(() => {
   cleanup();
   seen.props = null;
   seen.renders = 0;
+  localStorage.clear();
 });
 
 const NOW = '2026-09-16T02:00:00Z';
@@ -58,6 +61,69 @@ describe('the chat list tells virtuoso how tall a typical item is', () => {
     const h = seen.props?.defaultItemHeight;
     expect(typeof h).toBe('number');
     expect(h as number).toBeGreaterThan(0);
+  });
+
+  // The number that makes the total right is the MEAN, and the mean here is
+  // decided by a handful of giants among a couple of hundred small rows — a
+  // property of what this operator asks for, which no constant in a repository
+  // can know. So the list opens with what this browser last measured.
+  it('opens with what this browser measured last time, not with the fallback', () => {
+    localStorage.setItem(KEY, '240');
+    renderList();
+    expect(seen.props?.defaultItemHeight).toBe(240);
+  });
+
+  it('reads that value ONCE — virtuoso takes it at init, so a later change is noise', () => {
+    localStorage.setItem(KEY, '240');
+    const { rerender } = renderList(50);
+    localStorage.setItem(KEY, '480');
+    rerender(<ChatList id="s" events={events(51)} pending={[]} />);
+    expect(seen.props?.defaultItemHeight).toBe(240);
+  });
+
+  it('feeds the real measured sizes back, and remembers them', () => {
+    renderList();
+    const rendered = (seen.props?.itemsRendered) as ((items: unknown[]) => void) | undefined;
+    expect(typeof rendered).toBe('function');
+
+    // Enough samples to cross the write threshold, all the same height so the
+    // arithmetic is obvious: nothing was remembered before, so the first sample
+    // is taken whole.
+    rendered?.(Array.from({ length: 30 }, (_, index) => ({ index, size: 300, offset: 0 })));
+    expect(Number(localStorage.getItem(KEY))).toBe(300);
+  });
+
+  // Virtuoso reports a size of 0 for an item it has not measured yet; averaging
+  // those in would drag the estimate toward zero on every fast scroll.
+  it('ignores unmeasured items', () => {
+    renderList();
+    const rendered = (seen.props?.itemsRendered) as ((items: unknown[]) => void) | undefined;
+    rendered?.([
+      ...Array.from({ length: 29 }, (_, index) => ({ index, size: 100, offset: 0 })),
+      { index: 29, size: 0, offset: 0 },
+    ]);
+    expect(Number(localStorage.getItem(KEY))).toBe(100);
+  });
+
+  // Virtuoso re-reports the same item on every scroll frame. If each sighting
+  // were a sample, the average would bend toward whatever the reader happened
+  // to park on — so the tall item here is re-reported twenty times and must
+  // still weigh exactly as much as it did on the first frame.
+  it('counts a re-reported item once, however long it sits on screen', () => {
+    renderList();
+    const rendered = (seen.props?.itemsRendered) as ((items: unknown[]) => void) | undefined;
+    const tall = { index: 29, size: 1200, offset: 0 };
+    rendered?.([
+      ...Array.from({ length: 29 }, (_, index) => ({ index, size: 60, offset: 0 })),
+      tall,
+    ]);
+    // (29 x 60 + 1200) / 30 = 98, taken whole because nothing was stored yet.
+    expect(Number(localStorage.getItem(KEY))).toBe(98);
+
+    // Comfortably more sightings than the write threshold, so an accumulator
+    // that counted them would have persisted a much larger average by now.
+    for (let i = 0; i < 60; i++) rendered?.([tall]);
+    expect(Number(localStorage.getItem(KEY))).toBe(98);
   });
 
   // Two properties for two failures. The pixel budget covers ordinary

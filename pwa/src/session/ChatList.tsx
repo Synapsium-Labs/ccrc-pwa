@@ -5,7 +5,7 @@
 // wraps react-virtuoso (sticks to the bottom unless the reader scrolled up —
 // then a "jump to latest" pill); ChatListInner is the same renderer as a
 // plain list, exported for jsdom tests.
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso';
 import type { ChatEvent, MailEnvelope } from '../../../shared/api';
@@ -15,6 +15,7 @@ import { toast } from '../components/Toast';
 import type { PendingAttachment, PendingSend } from '../stores/session';
 import { MailCard } from './MailCard';
 import { MessageBubble, timeOf, type MessageEvent } from './MessageBubble';
+import { meanSize, rememberedHeight, rememberHeight } from './itemHeight';
 import { ToolCard, type ToolResultEvent, type ToolUseEvent } from './ToolCard';
 import './chat.css';
 
@@ -453,27 +454,10 @@ export function ChatListInner({
   );
 }
 
-/**
- * What an unmeasured chat item is assumed to be tall, in px.
- *
- * WITHOUT this, virtuoso measures the FIRST rendered item and uses it as the
- * height of every item it has not measured yet — its own docs call that item
- * the "probe" and warn that "if the first item turns out to be an outlier
- * (very short or tall), the rest of the rendering will be slower, as multiple
- * passes of rendering should happen". Here the probe is the WORST possible
- * choice: `initialTopMostItemIndex` opens the transcript at the end, so the
- * probe is the newest turn — and a chat item ranges from a ~40px collapsed
- * tool card to a 1500px turn carrying two markdown tables. Open on a table and
- * every one of the other items is assumed to be a table: the scrollbar reports
- * a transcript ten times longer than it is, then collapses as the real (short)
- * heights arrive, dragging the scroll position with it.
- *
- * A STARTING ESTIMATE, not a measured median — jsdom reports no heights (the
- * reason `ChatListInner` exists), so this number cannot be derived in a test
- * and has to be checked in a browser. What it must be is CLOSE TO TYPICAL, not
- * exact: its whole job is to stop one outlier from speaking for 50 items.
- */
-const DEFAULT_ITEM_HEIGHT = 96;
+/** How many newly measured items are worth a write to storage. The callback
+ *  below fires on every scroll frame; this keeps that from becoming a
+ *  `localStorage` write on every scroll frame. */
+const PERSIST_EVERY = 25;
 
 /** Open at the newest turn. A module constant, not a per-render object: the
  *  prop is read once, and a fresh identity on every render is a needless
@@ -500,6 +484,29 @@ export function ChatList({
   const virtuoso = useRef<VirtuosoHandle>(null);
   const [atBottom, setAtBottom] = useState(true);
 
+  // WHY A REF AND WHY READ ONCE. Virtuoso takes `defaultItemHeight` when it
+  // initialises; handing it a different number later changes nothing it reads
+  // and only invites it to redo its initial positioning. So the learned value
+  // is frozen for the life of this mount and the NEXT visit gets the benefit.
+  const openingHeight = useRef(rememberedHeight()).current;
+  // Keyed by index, so an item that scrolls past twice is one sample, not two —
+  // averaging repeats would weight the estimate toward whatever the reader
+  // happens to be looking at. Last size wins: a card that expands is taller now
+  // and that is the truth about it.
+  const measured = useRef(new Map<number, number>());
+  const persistedAt = useRef(0);
+
+  const persist = (): void => {
+    const mean = meanSize(measured.current.values());
+    if (mean !== null) rememberHeight(mean);
+    persistedAt.current = measured.current.size;
+  };
+
+  // Leaving the session is the ordinary end of a visit, and the moment the
+  // sample is most complete. It is NOT the only one — a closed tab runs no
+  // cleanup — which is why the callback below also persists as it goes.
+  useEffect(() => () => { if (measured.current.size > 0) persist(); }, []);
+
   return (
     <div className="chat-list">
       <Virtuoso
@@ -523,7 +530,18 @@ export function ChatList({
             </div>
           );
         }}
-        defaultItemHeight={DEFAULT_ITEM_HEIGHT}
+        defaultItemHeight={openingHeight}
+        // The real pixel heights, straight from the component that measured
+        // them. This is the whole self-correction: what a chat item costs is a
+        // property of what this operator asks for, and no constant in a
+        // repository can know it.
+        itemsRendered={(rendered) => {
+          // No filtering here: `meanSize` owns the rule that an unmeasured
+          // item (virtuoso reports size 0) is not a sample, and restating it
+          // at the call site would be a second place for it to drift.
+          for (const item of rendered) measured.current.set(item.index, item.size);
+          if (measured.current.size - persistedAt.current >= PERSIST_EVERY) persist();
+        }}
         // Render well beyond the viewport in both directions. Two properties,
         // because they answer two different failures: the pixel budget covers
         // ordinary scrolling, and the ITEM-COUNT floor covers the case
