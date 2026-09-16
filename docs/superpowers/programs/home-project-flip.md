@@ -131,6 +131,16 @@ cited, never re-minted.
 - **Wave 1 was executed by the coordinator session in its own worktree, on operator ruling 2026-09-16 11:59 UTC** — the fleet's concurrency cap (7/7 on the deployed build, which still counts `awaiting-review`) refused run 65's dispatch twice, and the operator asked for the work to be done in place. Run 65 therefore never dispatched: it is left `planned` for the operator to abandon from the console, and the done-fingerprint below is measured on this branch by the coordinator, not by a dispatched worker. The PR is reviewed exactly as a worker's would be.
 
 ## Carried constraints
+- **PR #129 is an independent implementation of the same flip, by the closed crossrepo programme's worker
+  (`ccrc-pwa-bright-meadow`), opened 2026-09-16 12:14Z on the same operator instruction given to two sessions
+  minutes apart.** Same five code and test files, and the same three departures from Task 6's fence — D-2744's
+  detail body, D-2743's measured run count, the fixture set including the review-body factory — reached without
+  either session seeing the other: the strongest cross-check this wave had. It carries no ledger, no deviation
+  numbers and not the skill prose (D-2868), so #133 is the programme's PR and #129 is superseded once the operator
+  rules; its author agreed in writing (mail 1444) and holds. bright-meadow had taken claim 413 on the five files
+  before editing; this coordinator did not read the claims table before starting. A claim protects only against a
+  peer who reads it, and the operator is not a peer in that table — so an in-place instruction is where the check
+  belongs, before the first edit.
 - **`reconstruct` rebuilds every programme with `homeProject` NULL** (crossrepo ledger, wave 1's drill census).
   The backfill above is exactly as durable as `coord.db`; the backup file is the artifact that would restore
   it. Carrying homes through a rebuild still needs an artifact that proves them — not this programme's work.
