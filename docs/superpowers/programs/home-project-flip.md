@@ -13,7 +13,7 @@ edit it gets.
 ## Waves
 | # | scope | PRs | state |
 |---|-------|-----|-------|
-| 1 | `HOME_PROJECT_LEGACY_ACCEPTED → false`; `server/test/home-project-required.test.ts` red-first then green; the four fixtures Task 6 names plus the census beyond them; the coordinator skill's prose that would otherwise say the omission is still accepted; this ledger's row and one pointer sentence in the crossrepo ledger | — | run 65 opened 2026-09-16, dispatching |
+| 1 | `HOME_PROJECT_LEGACY_ACCEPTED → false`; `server/test/home-project-required.test.ts` red-first then green; the four fixtures Task 6 names plus the census beyond them; the coordinator skill's prose that would otherwise say the omission is still accepted; this ledger's row and one pointer sentence in the crossrepo ledger | — | flip commit `8362148e` on the coordinator's branch `coord/home-project-flip-ledger`; flipped 2026-09-16 on operator ruling D-2867 — legacy_since_deploy = 8, opens_since_deploy = 15, last omission 2026-09-15T07:38:57Z |
 
 ## Measurements
 
@@ -78,6 +78,35 @@ cited, never re-minted.
   if any, sent a legacy-shaped open and had to change. At d6494f1c the two outside the four —
   `auth-gate.test.ts:714` and `auth-passkey.test.ts:2196` — assert the auth gate's verdict, not a `200` open,
   so the expected census is "none"; the worker writes the measured value, not this expectation.
+  **MEASURED (wave 1).** The third `run-routes.test.ts` case is the one named above — `rolls home back when
+  its event cannot be inserted, then writes both facts exactly once on retry` — and it was re-seeded on the
+  store exactly as the backfill case was; its `programHome(...) toBeNull()` precondition and the whole
+  rollback-then-retry branch below it still hold, and the file is green. The two outside the four needed NO
+  change, measured rather than assumed by reading both: `auth-gate.test.ts:714` posts to `/api/runs` with no
+  body at all and asserts only that the GATE does not refuse it — the body-shape guard answers it `400`
+  before the home check is reached, at this base and after the flip alike — and `auth-passkey.test.ts:2196`
+  is a `GET`. Both suites were run after the flip and are green. Beyond those two, the prescribed grep
+  `git grep -n "url: '/api/runs'" server/test` matches no further file (five in all: `auth-gate`,
+  `auth-passkey`, `coord-caps-route`, `home-project-required`, `run-routes`). Measured at the wave's tip,
+  `git grep -ln '/api/runs' server/test` names twenty-three further files. Eleven open runs on the STORE
+  (`openRun(`), whose `openRun` keeps `homeProject` optional — `coord-abandon`, `coord-health`,
+  `coord-items`, `coord-kickoff`, `coord-store`, `fleetws`, `mail-routes`, `name-sweep`, `reclaim-route`,
+  `routes`, `run-signals` — and twelve never open a run at all — `box-token-census`, `ccrc-api`,
+  `coord-pause-route`, `coord-routes-single-file`, `coordinator-skill`, `crossrepo-prose`, `home-project`,
+  `kickoff-route`, `lifecycle-route`, `resume-reclaim-l0`, `reviewer-skill`, `single-definition`. All
+  twenty-three were run for this wave and none changed; all are green except `crossrepo-prose`, red at the
+  tip and on `origin/main` alike on its cap-predicate scan of the untouched `store.ts` (Carried constraints).
+  **The census found a FOURTH edit in `run-routes.test.ts` that neither Task 6 nor this entry predicted, and
+  the URL grep both prescribe could not have found it.** Task 6 states that file has "not one second body
+  literal"; it has one — `REVIEW(workId, over)` at `:3544` at `d6494f1c`, the review-open body factory, which builds its
+  own object rather than spreading `OPEN_BODY` and so did not inherit the `homeProject` added there. A review
+  open is an open like any other: `homeProjectVerdict` decides an absent home by the constant ALONE, never by
+  whether the programme is already known and homed, so with the constant `false` twenty review cases were
+  refused `400` and failed downstream in `markDispatched` on an undefined run id. `homeProject: PROJECT` was
+  added to that factory and the file is green at 211 passed. The product is NOT exposed: the installed skill
+  already sends the field on a review open (`ccd/coordinator-skill/SKILL.md:304`), so this was a fixture gap
+  only. The lesson for the next census: the unit is the BODY, not the injection URL — `git grep "url:
+  '/api/runs'"` finds call sites, and a body factory several hundred lines from one is invisible to it.
 - **D-2070 — decided: this programme's PR IS the flip's own PR.** Nothing rides with it but the suite that
   holds the constant shut, the fixtures the flip forces, the prose the flip falsifies, and the two ledger
   edits. The docs the flip depended on merged as `98236c81` (#100) on 2026-09-15, so the "not before the
@@ -85,7 +114,7 @@ cited, never re-minted.
 - **D-2743 / D-2744 — applied as pre-approved** (crossrepo ledger, coordinator ruling, mail 1111): the run-count
   assertion is `okRuns(w.coord.runs({ includeClosed: true })).length`; the refusal assertion is the `toEqual`
   carrying `detail: 'homeProject is required'` — the shipped route sends that detail
-  (`server/src/coord/routes.ts:1265`, pinned by `home-project.test.ts:50-60`), so Task 6 Step 1's "NO
+  (`server/src/coord/routes.ts:1265` and `home-project.test.ts:50-60`, both at `d6494f1c`, the base the brief measures against), so Task 6 Step 1's "NO
   `detail` HERE" comment is false at this base and is replaced.
 - **The eight NULL homes were backfilled on 2026-09-16 at 10:19:07 UTC by a direct server-box write** — the
   crossrepo ledger's open item, resolved on the operator's ruling in favour of the direct write over a new
@@ -99,6 +128,7 @@ cited, never re-minted.
   Eight rows updated, zero NULL after. No run event records it — there is no run to hang one on — so this
   entry is the record. A box-token-gated route plus a client verb for the same write stays undone: it would be
   a product feature, and nothing today needs it.
+- **Wave 1 was executed by the coordinator session in its own worktree, on operator ruling 2026-09-16 11:59 UTC** — the fleet's concurrency cap (7/7 on the deployed build, which still counts `awaiting-review`) refused run 65's dispatch twice, and the operator asked for the work to be done in place. Run 65 therefore never dispatched: it is left `planned` for the operator to abandon from the console, and the done-fingerprint below is measured on this branch by the coordinator, not by a dispatched worker. The PR is reviewed exactly as a worker's would be.
 
 ## Carried constraints
 - **`reconstruct` rebuilds every programme with `homeProject` NULL** (crossrepo ledger, wave 1's drill census).
