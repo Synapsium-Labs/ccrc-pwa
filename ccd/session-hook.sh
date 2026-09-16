@@ -1615,6 +1615,20 @@ _hook_compact_post() {
   # this run's trigger spliced in. A jq that fails for any reason (a malformed
   # document, unparseable bytes) leaves `norm` set, which is the direction that
   # attributes nothing.
+  #
+  # THE ONE THING `NORMAL_PROVENANCE` DOES NOT COVER, spelled here because it
+  # is a property of the CLAIM and not of the record: `files`. §4's row says a
+  # set any of whose `files[]` entries lacks a non-empty string `path` is
+  # "measured as NO set", and §3.0 lists it as a normalisation trigger — but
+  # `NORMAL_PROVENANCE` validates trigger/scope/agent/transcript/parentLive/
+  # liveAgents/cwd/built and never looks at `files`, and the RECORD has no
+  # `files` member for it to reach. Without this fourth clause a set with valid
+  # provenance and one malformed entry was passed with `--set` and committed
+  # `scope` plus six non-null provenance fields where §4 requires seven nulls;
+  # the predicate accepts that line, so only this decision can refuse it. It is
+  # spelled in the DIRECTION that attributes nothing: anything but a `files`
+  # that is absent, or an array every element of which is an object with a
+  # non-empty string `path`, sets `norm`.
   if [[ -n "$snap" ]]; then
     if (( aged )); then
       norm="null"
@@ -1622,7 +1636,11 @@ _hook_compact_post() {
       norm="ambiguous"
     elif ! jq -e --arg trig "$trig" "$JOURNAL_RECORD_PRED_DEFS"'
             (.overlap == null or .overlap == false)
-            and (. + {trigger: $trig} | NORMAL_PROVENANCE)' "$snap" >/dev/null 2>&1; then
+            and (. + {trigger: $trig} | NORMAL_PROVENANCE)
+            and (.files == null or (.files | type == "array"
+                 and all(.[]; type == "object"
+                              and (.path | type == "string")
+                              and (.path | length > 0))))' "$snap" >/dev/null 2>&1; then
       norm="null"
     fi
   fi
@@ -1881,7 +1899,17 @@ _hook_compact_card() {   # sets CARD_COMPACT; silent on every path
 
 _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   local f="$REG/$id.compactcard" set="$REG/$id.compactset" claim="" head="" nonce="" raw="" line1="" body=""
-  [[ -f "$f" && -r "$f" ]] || return 0
+  # `! -L` IS PART OF WHAT A CARD IS, not an extra (§3.3 step 2: "inspect the
+  # regular/non-symlink card and canonical set"). `-f` DEREFERENCES, so without
+  # it a symlink standing here passes, `mv -f "$f" "$claim"` below renames THE
+  # SYMLINK onto the no-clobber placeholder, the `read` follows it, and a body
+  # that is not a card is emitted whenever the target's first line satisfies
+  # the nonce — while the aged branch below deletes whatever object stands
+  # there. The marker's reading end already argues this exact class in
+  # its own comment, and PreCompact and the PostCompact settlement already
+  # spell it on the set. The two ends of the card contract now spell ONE
+  # definition of what a card IS, as the two ends of the marker already do.
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 0
   command -v find >/dev/null 2>&1 || return 0
   # ITEM 3 in the retained-lock body, ON THE FAR SIDE OF THE FORK (r4 A-M2).
   # `HOOK_LOCK_FD` is the descriptor the caller acquired and still holds; this
@@ -1914,7 +1942,11 @@ _hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
   # (header, line 1), and whether a failed stdin redirection stays silent
   # is shell-and-platform behaviour this box's bash cannot prove for every
   # `sh`/`bash` a fleet box might run. One cheap `[[ ]]` against that risk.
-  [[ -f "$set" && -r "$set" ]] || return 0
+  #
+  # `! -L` here is NOT in that argued-unpinnable class and is pinned with the
+  # card's: §3.3 step 2 names the set beside the card, and a symlink here is
+  # read through for the nonce the marker path is built from.
+  [[ -f "$set" && ! -L "$set" && -r "$set" ]] || return 0
   IFS= read -r -N 4096 head 2>/dev/null < "$set"
   [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]] || return 0
   nonce="${BASH_REMATCH[1]}"
@@ -2213,8 +2245,10 @@ CARD_MAX_CHARS=2400
 # `reaping`) unlinks them with the row: `.compactset` (PreCompact writes it,
 # PostCompact consumes it), `.compactcard` (PreCompact writes it when the tree
 # has a graph the gate would trust; SessionStart(compact) serves it ONCE and
-# deletes it), `.compactions` (the per-session journal PostCompact appends,
-# never read here). That dot-free shape is what `_ws_slug_free`'s FIRST pass
+# deletes it), `.compactions` (the per-session journal PostCompact appends —
+# it copies the existing file into a private stage, re-validates every line it
+# already held and commits by rename, but it never interprets a record or
+# derives state from one). That dot-free shape is what `_ws_slug_free`'s FIRST pass
 # scans and what `_ws_slug_residue` names — the two are widened together, and a
 # comment naming only one of the pair re-creates the half-widening defect in
 # prose — but since D-2605 neither stops there: both take a SECOND pass over

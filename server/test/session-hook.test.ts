@@ -3219,6 +3219,62 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     };
     expect(median(compactTimes) / median(cheapTimes)).toBeLessThan(4);
   });
+
+  // ── §3.3 STEP 2's "REGULAR/NON-SYMLINK CARD AND CANONICAL SET" ────────
+  // The sentence is normative and the serve arm was the one arm that did not
+  // implement it: both of its guards were `[[ -f … && -r … ]]` with no `! -L`,
+  // and `-f` DEREFERENCES. Measured on the shipped arm with exactly this
+  // fixture: a symlink standing at `$REG/<id>.compactcard` passed the guard,
+  // `mv -f "$f" "$claim"` renamed THE SYMLINK onto the no-clobber placeholder,
+  // `IFS= read -r -N` followed it, and the target's body was emitted into the
+  // model's `additionalContext` because the target's first line satisfied the
+  // set's nonce. PreCompact, PostCompact's marker read and the PostCompact
+  // settlement all already ask `-f && ! -L`; this is the two ends of the card
+  // contract spelling ONE definition of what a card IS, as the two ends of the
+  // marker already do.
+  //
+  // SAME-UID-ONLY, which is why it is a hardening and not a boundary: the
+  // fleet is one UNIX user and same-UID is attribution. The sentence is
+  // normative regardless, and every sibling arm implements it.
+  it('A SYMLINK AT THE CANONICAL CARD IS NOT A CARD — not claimed, not read through, not deleted', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    // The planted target: line 1 is the REAL set's nonce, so the only thing
+    // standing between it and the model is the regular-file guard.
+    const target = path.join(home, 'planted-not-a-card');
+    const BODY = 'SECRET-BODY-LINE-that-is-not-a-card';
+    fs.writeFileSync(target, `${nonce}\n${BODY}\n`);
+    const targetBytes = fs.readFileSync(target);
+    fs.rmSync(cardFile());
+    fs.symlinkSync(target, cardFile());
+
+    const out = runFull(compactStart(tree, transcript));
+    expect(out.stderr, 'and the arm is silent about it').toBe('');
+    expect(out.stdout, 'the target\'s body never reaches `additionalContext`').not.toContain(BODY);
+    expect(fs.lstatSync(cardFile()).isSymbolicLink(),
+      'the symlink is neither consumed by the `mv` nor deleted by the aged branch').toBe(true);
+    expect(fs.readFileSync(target), 'and the object it points at is byte-identical').toEqual(targetBytes);
+  });
+
+  it('CONTROL: a REGULAR card at the same pathname, same nonce, still serves and is still consumed', () => {
+    // The discriminator for the guard above: without it, an arm that served
+    // nothing ever would satisfy that test. Same fixture, same body, the only
+    // difference being that the object at the canonical pathname is a regular
+    // file rather than a symlink to one.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const { nonce } = readCard();
+    const BODY = 'SECRET-BODY-LINE-that-is-not-a-card';
+    fs.writeFileSync(cardFile(), `${nonce}\n${BODY}\n`);
+
+    const out = runFull(compactStart(tree, transcript));
+    expect(out.stderr).toBe('');
+    expect(card(out.stdout), 'a regular card at that pathname is served').toContain(BODY);
+    expect(fs.existsSync(cardFile()), 'and consumed — the claim renamed it away').toBe(false);
+  });
 });
 
 // ── D-2605: the permanent stable lock (spec §3.4, "Stable lock") ──────────
@@ -5331,6 +5387,98 @@ describe('the compaction card — PostCompact settlement and the journal (spec �
     // never runs and `type -t printf` still answers `builtin`.
     expect(post).toContain('mv -f "$stage" "$journal"');
     expect(post, 'canonical is never appended to directly').not.toMatch(/>>\s*"\$journal"/);
+  });
+
+  it('the constants block does not say the journal is never READ — PostCompact reads it four ways', () => {
+    // The comment said "`.compactions` (the per-session journal PostCompact
+    // appends, / # never read here)". Measured in the same file,
+    // `_hook_compact_post` opens the journal, copies it into its private
+    // stage, reads the copied bytes back to build the byte-exact prefix, and
+    // re-validates EVERY prior physical line through the stage predicate
+    // before the rename. What the sentence meant — no arm INTERPRETS a record
+    // or derives state from one — is a different claim, and it is the one
+    // README's own block already makes. Both halves are asserted, so neither
+    // an inverted sentence nor a `_hook_compact_post` that stopped reading the
+    // journal can leave this green.
+    const src = fs.readFileSync(HOOK, 'utf8');
+    const post = src.slice(src.indexOf('_hook_compact_post() {'), src.indexOf('_hook_compact_post_abandon() {'));
+    expect(post.match(/"\$journal"/g)?.length ?? 0,
+      '`_hook_compact_post` really does read and write the journal').toBeGreaterThanOrEqual(2);
+    expect(post, 'it opens it for reading').toContain('exec {jfd}<"$journal"');
+    // THE SENTENCE ITSELF, bound to its own subject: a clause naming
+    // `.compactions` may not also say the journal is never read.
+    const comments = src.split('\n').filter((l) => l.startsWith('#')).join(' ');
+    expect(/\.compactions[^.]{0,200}never read/i.test(comments),
+      'no comment says the journal named here is never read').toBe(false);
+    expect(src, 'and the true, narrower statement is the one that stands')
+      .toContain('it never interprets a record or');
+  });
+
+  // ── §4's MALFORMED-`files[]` ROW, MEASURED AS THE RECORD COMMITS IT ─────
+  // §4 states: "the claimed set will not parse, or any `files[]` entry lacks a
+  // non-empty string `path` | measured as NO set — `measure` runs without
+  // `--set`, so `scope`/`cited`/`setSize` **and all six provenance fields**
+  // are null". Only the first disjunct was implemented. The `norm` decision
+  // (`ccd/session-hook.sh:1619-1632`) consults `aged`, `.overlap` and
+  // `NORMAL_PROVENANCE`, and `NORMAL_PROVENANCE` (`ccd/session-hook.sh:2348`)
+  // validates trigger/scope/agent/transcript/parentLive/liveAgents/cwd/built
+  // and never looks at `files` — so a set carrying valid provenance and ONE
+  // malformed entry was passed with `--set` and the record committed
+  // `scope:"main"` with six NON-null provenance fields, which
+  // `JOURNAL_RECORD_PRED` accepts because `NORMAL_PROVENANCE` holds. Nothing
+  // refused it.
+  //
+  // WHY THIS IS A BEHAVIOUR FIXTURE AND NOT A HELPER UNIT TEST. The helper's
+  // own answer is not where the defect lives: `measureCommand` nulls `cited`
+  // and `setSize` on a malformed entry but derives `scope` from the set
+  // independently, and `server/test/compact-card.test.ts` asserts that pair
+  // and stops — the exact pair that is null on the shipped arm. The seven
+  // nulls §4 requires are a property of WHAT THE HOOK PASSES, so only the
+  // committed line can state it.
+  const PROVENANCE = ['cwd', 'built', 'agent', 'transcript', 'parentLive', 'liveAgents'] as const;
+  /** A canonical set that PASSES the provenance grammar on its own — `auto` +
+   *  `main` + agent null + transcript non-empty + parentLive null +
+   *  liveAgents 0 — so `files` is the only thing under test. */
+  const plantSetWithFiles = (tree: string, transcript: string, files: unknown): void => {
+    fs.writeFileSync(setFile(), `${JSON.stringify({
+      v: 1, at: 1, nonce: 'compact-1-2-3-4', scope: 'main', overlap: false, agent: null,
+      transcript, parentLive: null, liveAgents: 0, cwd: tree, built: null, fresh: null,
+      steered: false, files, stats: null,
+    })}\n`);
+  };
+
+  it('A MALFORMED `files[]` ENTRY IS MEASURED AS NO SET — §4\'s seven nulls, on the committed line', () => {
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    plantSetWithFiles(tree, transcript, [{ path: 123 }]);
+    run(postCompact(tree, transcript, SUMMARY, 'auto'));
+    const recs = journal();
+    expect(recs, 'the record still commits — so the assertions below discriminate').toHaveLength(1);
+    expect(recs[0]!['scope'], '§4: measured as NO set, so `scope` is null').toBe(null);
+    expect(recs[0]!['cited'], 'and `cited`').toBe(null);
+    expect(recs[0]!['setSize'], 'and `setSize`').toBe(null);
+    for (const k of PROVENANCE) {
+      expect(recs[0]![k], `and all six provenance fields — ${k}`).toBe(null);
+    }
+  });
+
+  it('CONTROL: the SAME set with a well-formed `files[]` entry still attributes in full', () => {
+    // The discriminator. Without this, the assertion above is satisfied by any
+    // arm that attributes nothing ever, and the `norm` clause under test would
+    // be indistinguishable from a blanket refusal.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript, 'auto'));
+    plantSetWithFiles(tree, transcript, [{ path: 'server/src/pane/statusline.ts' }]);
+    run(postCompact(tree, transcript, SUMMARY, 'auto'));
+    const recs = journal();
+    expect(recs, 'one record').toHaveLength(1);
+    expect(recs[0]!['scope'], 'an ordinary claim keeps its scope').toBe('main');
+    expect(recs[0]!['cwd'], 'and its cwd').toBe(tree);
+    expect(recs[0]!['transcript'], 'and its transcript').toBe(transcript);
+    expect(recs[0]!['liveAgents'], 'and its liveAgents').toBe(0);
+    expect(recs[0]!['setSize'], 'and the set is measured').toBe(1);
   });
 });
 

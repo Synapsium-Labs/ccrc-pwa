@@ -430,6 +430,16 @@ null. Age never gates the claim itself; it gates only what may be attributed. Wi
 implementer building the normalisation from the three cases above passes an aged-but-valid claim with `--set`,
 gets a record whose non-null `scope` `JOURNAL_RECORD_PRED` accepts as ordinary provenance, and §4's row is
 silently unmet — the predicate cannot catch it, so only a behaviour fixture can.
+**A FIFTH TRIGGER, for the same reason and found the same way (whole-branch review, A-I1-NEW):** a claim any of
+whose `files[]` entries is not an object carrying a non-empty string `path` is provenance-INELIGIBLE and runs
+`measure` WITHOUT `--set`, leaving `scope`, `cited`, `setSize` and all six provenance fields null. §4's
+"the claimed set will not parse, or any `files[]` entry lacks a non-empty string `path`" row states the
+outcome and this is the trigger that produces it; without it an implementer building the normalisation from
+the provenance grammar alone passes such a claim with `--set`, because the grammar is about
+trigger/scope/agent/transcript/parentLive/liveAgents/cwd/built and the RECORD has no `files` member at all,
+so nothing downstream can see the malformed entry. `files` absent is not a malformed entry — it is the
+ordinary spelling of a claim the helper wrote without one — and the check is spelled in the direction that
+attributes nothing, so unparseable bytes fall here too.
 
 **Precedence, stated once, for the claim that trips more than one trigger (round 14, A-9).** A claim can be
 both ORIGINALLY AGED and carry `overlap:true`, and the two triggers prescribe different `scope` values
