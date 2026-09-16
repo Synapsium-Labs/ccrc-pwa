@@ -1887,16 +1887,22 @@ community and dependents read out of the same graph — and it MEASURES the comp
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them prints anything new**:
 `PreCompact` decides whose transcript is compacting and publishes the working set, `SessionStart(compact)`
 serves the card once beside the graph card in the single `additionalContext` envelope, and `PostCompact`
-measures the summary and commits the journal line. Nothing reaches the server, the wire or the PWA: there is
-no compaction field on `FleetSession`, no chip, and no hookstate cache. The journal is the whole
-deliverable, and reading it is a later plan's job.
+measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
+the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
+does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
+`purge-mechanism-absent` (`shared/api.ts:5560-5562`), each with an operator sentence of its own at `:5600`,
+`:5608` and `:5621`, which the session History tab renders through `lcRefusalWord`
+(`pwa/src/session/HistoryTab.tsx:17`, `:61`). The journal is the whole deliverable, and reading it is a later
+plan's job.
 
 - **What lands on the fleet box.** Four dot-free registry files per session id, beside the
   `hookstate.json` above, and one dot-leading mutex: `~/.cc-sessions/<id>.compactset` (the working set
   `PreCompact` publishes, consumed by `PostCompact`), `<id>.compactcard` (the card itself — served ONCE and
-  deleted), `<id>.compactions` (the journal `PostCompact` appends and nothing in the hook ever reads back),
-  `<id>.generation` (the row's authorization, below) and `.<id>.compactions.lock` (one permanent mutex per
-  row, deliberately not slug residue). The helper that builds the card is plain node beside the hook,
+  deleted), `<id>.compactions` (the journal `PostCompact` appends — it copies the existing file into a
+  private stage, re-validates every line it already held and commits by rename, but it never interprets a
+  record or derives state from one), `<id>.generation` (the row's authorization, below) and
+  `.<id>.compactions.lock` (one permanent mutex per row, deliberately not slug residue). The helper that
+  builds the card is plain node beside the hook,
   `~/.cc-sessions/compact-card.mjs`, installed by `deploy.sh`'s agent lane and by `ccrc install`, backed up
   by `ccrc update` and removed by `ccrc uninstall` — all four doors, so a box an operator believes is off
   ccrc really is.
@@ -1910,17 +1916,23 @@ deliverable, and reading it is a later plan's job.
   than guessing, and a record it cannot vouch for carries ALL six provenance fields null rather than some
   of them — a partial list is refused outright and the line is never written. Every field is a fact about
   the transcript, so a journal can be audited offline against the transcripts themselves. Nothing in
-  `server/`, `agent/`, `pwa/` or `shared/` reads a `.compactions` file — measured — so `jq` over
-  `~/.cc-sessions/<id>.compactions` on the fleet box is the whole reading interface there is today.
+  `server/src`, `agent/src`, `pwa/src` or `shared/` reads a `.compactions` file — measured — so `jq` over
+  `~/.cc-sessions/<id>.compactions` on the fleet box is the whole reading interface there is today. The
+  scope is SHIPPED SOURCE and the narrowing is the measurement, not a hedge: five files under `server/test`
+  do read or name the artifact, so the wider claim is false where this one is true.
 - **The lock and the generation.** Every compaction-lifecycle mutation runs under that one per-row mutex,
   which is published by a private `mktemp` source plus a POSIX hard link and is NEVER opened at its
   canonical pathname — each holder opens a verified private alias and re-checks the descriptor against the
   canonical inode before it mutates anything. `<id>.generation` is an immutable UUID minted when the row is
   created and exported into the pane's environment as `CCRC_SESSION_GENERATION`; an arm whose copy does not
-  match the row's refuses. Two ordinary states leave a pane without that copy — a row created before this
-  shipped has no generation at all, and a `_spawn_start` that loses the lock fails OPEN and spawns without
-  exporting one rather than wedging a swap. Either way that pane's compaction lifecycle is simply INERT
-  until its next respawn, and `ccd` says so on stderr rather than silently.
+  match the row's refuses. THREE states leave a pane without that copy — a row created before this shipped
+  has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
+  rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
+  to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
+  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:14419-14420`, the `genrc == 1` arm); the
+  generation-absent row and the off-`PATH` box are SILENT — the acquire succeeds or fails without ever
+  reaching that warning — and the absence of the artifacts is the only signal there. Adding the missing
+  warning is a `ccd/ccd` change, which this documentation pass does not make.
 - **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
   hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
   lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
