@@ -4403,9 +4403,79 @@ _check_routing() {
   fi
   rc=0
   if [ -n "$sub" ]; then
-    _dr_warn routing "$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed" \
-      "remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
-    rc=2
+    # THE LIVE-SESSION CENSUS (Task 5). `sub`'s WARN predates the routing
+    # record entirely (S1-R13's own comment above), so it cannot stay a WARN
+    # forever: once every LIVE session already carries a routing record
+    # (`$reg/<id>.class`), the key is no longer inert-by-accident — it is the
+    # only thing still overriding a record that exists. That is the FAIL this
+    # arm was always missing, and it is evaluated ONLY here, because a census
+    # nobody will read if `sub` is empty is a census not worth running.
+    #
+    # THREE ANSWERS, matching `_svc_is_active`'s own three-way shape one level
+    # up: `systemctl --user is-active claude-session@<id>.service` exits 0
+    # (live), 3 (systemd's own "not active" — inactive or failed, a measured
+    # NOT-live), or anything else (the manager did not answer the question at
+    # all). Collapsing the third into the second would let an unreachable bus
+    # or a missing systemctl fabricate the very zero this arm FAILs on — the
+    # false PASS `_svc_is_active`'s own comment names, one severity over. So
+    # `$reg` absent (the SERVER box owns no `~/.cc-sessions` at all — this
+    # doctor also runs there, `_check_pools` above is the same measurement one
+    # check up), no service manager on this box, or an `is-active` that
+    # answers neither 0 nor 3 for some id — each makes the census UNMEASURED,
+    # and the arm stays WARN saying so, never FAIL. A registry that measures
+    # zero LIVE ids at all (present, readable, nothing in it or nothing of it
+    # answers active) is a measured zero exactly the same as a registry full
+    # of recorded live ids — say which, so the FAIL message never reads as a
+    # guess.
+    local reg="$HOME/.cc-sessions" sf id scrc missing=0 shown=0 missing_ids="" \
+      live=0 census=measured why=""
+    if [ ! -d "$reg" ]; then
+      census=unmeasured
+      why="no session registry at $reg (a server box that runs no fleet sessions of its own owns none)"
+    elif ! _have_systemctl; then
+      local _mgr=systemctl; [ "${CCD_OS:-linux}" = darwin ] && _mgr=launchctl
+      census=unmeasured
+      why="$_mgr is not on PATH, so no unit could be asked whether it is live"
+    else
+      for sf in "$reg"/*.uuid; do
+        [ -e "$sf" ] || continue
+        id="${sf##*/}"; id="${id%.uuid}"
+        systemctl --user is-active "claude-session@$id.service" >/dev/null 2>&1; scrc=$?
+        if [ "$scrc" -eq 0 ]; then
+          live=$((live + 1))
+          if [ ! -e "$reg/$id.class" ]; then
+            missing=$((missing + 1))
+            if [ "$shown" -lt 5 ]; then
+              missing_ids="${missing_ids:+$missing_ids }$id"; shown=$((shown + 1))
+            fi
+          fi
+        elif [ "$scrc" -eq 3 ]; then
+          continue   # measured: not live (systemd's own inactive/failed)
+        else
+          census=unmeasured
+          why="systemctl --user is-active answered neither active nor inactive for claude-session@$id.service (exit $scrc)"
+          break
+        fi
+      done
+    fi
+    if [ "$census" = unmeasured ]; then
+      _dr_warn routing "$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed — whether every live session already carries one is unmeasured: $why" \
+        "remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
+      rc=2
+    elif [ "$missing" -gt 0 ]; then
+      _dr_warn routing "$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed — $missing live session(s) carry no routing record yet: $missing_ids" \
+        "remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
+      rc=2
+    else
+      if [ "$live" -eq 0 ]; then
+        _dr_fail routing "an Anthropic lane's settings.json pins CLAUDE_CODE_SUBAGENT_MODEL ($sub) while no live session is running — the key has nothing left to be inert against; remove it" \
+          "remove CLAUDE_CODE_SUBAGENT_MODEL from that lane's settings.json — $reg has no live session for the record to lose to it"
+      else
+        _dr_fail routing "an Anthropic lane's settings.json pins CLAUDE_CODE_SUBAGENT_MODEL ($sub) while every live session carries a routing record — the key overrides the record's subagent field; remove it" \
+          "remove CLAUDE_CODE_SUBAGENT_MODEL from that lane's settings.json — every live session already carries its own record, so the key can only override it"
+      fi
+      return 1
+    fi
   fi
   if [ -n "$unread" ]; then
     _dr_warn routing "could not read settings.json for: $unread" "chmod u+r <home>/settings.json, or check by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"
