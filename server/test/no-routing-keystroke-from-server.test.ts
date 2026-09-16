@@ -3,7 +3,9 @@
 // `/model` after this slice." Task 5 is the last caller that ever typed one
 // of those two commands directly (`SessionScreen.tsx`'s old `pick(command)`),
 // so this is the census that keeps it from creeping back in ANYWHERE under
-// `pwa/src` or `server/src` — not a pin on one file, a scan of every file.
+// `pwa/src`, `server/src` or `shared` (the `.ts` files there are bundled
+// into the PWA AND imported by the server, so a literal planted there would
+// reach both runtimes at once) — not a pin on one file, a scan of every file.
 //
 // TEXT scan, deliberately, `single-definition.test.ts`'s own admission: it
 // catches the copy that looks like the original — a string or template
@@ -24,6 +26,7 @@ const ccrcRoot = path.resolve(here, '..', '..');
 const ROOTS = [
   path.join(ccrcRoot, 'pwa', 'src'),
   path.join(ccrcRoot, 'server', 'src'),
+  path.join(ccrcRoot, 'shared'),
 ];
 
 function sources(dir: string): string[] {
@@ -68,7 +71,7 @@ function scan(files: readonly string[]): Hit[] {
   return hits;
 }
 
-describe('no /effort or /model keystroke literal under pwa/src or server/src', () => {
+describe('no /effort or /model keystroke literal under pwa/src, server/src or shared', () => {
   it('finds nothing — the record is the arbiter, ccd is the one typer', () => {
     const hits = scan(ROOTS.flatMap(sources));
     expect(hits, JSON.stringify(hits, null, 2)).toEqual([]);

@@ -57,6 +57,28 @@ describe('modelOptions', () => {
     expect(modelOptions('claude', null).map((o) => o.label)).not.toContain('GPT-6 Astra');
   });
 
+  it('carries the readback key the read-back effect matches the live model string against', () => {
+    // Same keys the "highlights the live tier" test above matches `active`
+    // against — `readback` IS that key, reused (models.ts's own comment on
+    // `PickOption.readback`) so `SessionScreen`'s read-back effect can tell
+    // when a fleet frame agrees with a queued `class` write without
+    // re-deriving the option list.
+    expect(modelOptions('gpt', null).map((o) => o.readback)).toEqual([
+      'astra', 'sol', 'terra', 'luna',
+    ]);
+    expect(modelOptions('claude', null).map((o) => o.readback)).toEqual([
+      'opus', 'sonnet', 'fable', 'haiku',
+      // Default's readback is the empty string. `SessionScreen`'s `pick`
+      // never consults it for `class=default` — that value clears `queued`
+      // immediately on the 2xx response (absence is not readable, there is
+      // no distinguishing model string to read back), so this key is
+      // populated but structurally unused for that one row. It still has to
+      // be a real string, not undefined, so no caller has to special-case an
+      // absent field on a type that promises one.
+      '',
+    ]);
+  });
+
   it('every row writes a field ROUTE_WRITABLE_FIELDS knows, and never carries a command key', () => {
     for (const wrapper of ['gpt', 'claude']) {
       for (const o of modelOptions(wrapper, null)) {

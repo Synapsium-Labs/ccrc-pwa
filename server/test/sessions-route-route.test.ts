@@ -142,6 +142,11 @@ describe('POST /api/sessions/:id/route (routing spec §5.3, live change from the
   });
 
   it('is NOT in auth/gate.ts EXEMPT (session-gated like /prompt)', () => {
+    // Positive control first: a negatives-only test would pass just the same
+    // against an empty map, or one EXEMPT has been re-keyed under, so prove
+    // the table itself still holds a real entry before trusting the two
+    // absences below.
+    expect(EXEMPT.has('GET /health')).toBe(true);
     expect(EXEMPT.has('POST /api/sessions/:id/route')).toBe(false);
     // The sibling it sits beside, for the contrast — also gated, so this
     // route is not an outlier among the session's own writes.

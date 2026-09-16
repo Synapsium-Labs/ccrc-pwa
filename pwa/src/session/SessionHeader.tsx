@@ -283,12 +283,20 @@ export function SessionHeader({
               what fits comfortably on one. */}
           {hasMeta && (
             <>
-              {model !== null && (
+              {model !== null ? (
               <button type="button" className="metachip metachip--model" onClick={onChangeModel}>
                 <span className="metachip-glyph" aria-hidden="true">🤖</span>
                 <span className="metachip-text">{model}</span>
                 {queuedField === 'class' && <span className="route-queued">queued</span>}
               </button>
+            ) : (
+              // The model chip itself is gated on `model !== null`, so a
+              // queued `class` write on a freshly spawned session (no model
+              // string on the pane yet) would otherwise show no feedback
+              // until read-back clears it. A bare chip, same `route-queued`
+              // class, stands in for the missing model chip in that one
+              // window.
+              queuedField === 'class' && <span className="route-queued">queued</span>
             )}
             <button
               type="button"
