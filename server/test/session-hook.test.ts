@@ -3258,6 +3258,31 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     expect(fs.readFileSync(target), 'and the object it points at is byte-identical').toEqual(targetBytes);
   });
 
+  it('A SYMLINK AT THE CANONICAL SET IS NOT A SET — the nonce is not read through it', () => {
+    // THE SECOND SUBJECT of the same §3.3 step 2 sentence, and it needs its own
+    // fixture: measured, the card-guard fixture above stays GREEN when `! -L`
+    // is deleted from the SET guard alone, because it never reaches that line.
+    // Here the card is an ordinary regular file and the SET is the symlink, so
+    // the only thing between the planted nonce and the served card is the set
+    // guard. Without `! -L` the arm reads the nonce through the link and serves.
+    const tree = cardTree(); plantHelper();
+    const { transcript } = plantSession({ lines: workLines(tree) });
+    run(preCompact(tree, transcript));
+    const setBytes = fs.readFileSync(setFile());
+    const cardBytes = fs.readFileSync(cardFile());
+    const target = path.join(home, 'planted-not-a-set');
+    fs.writeFileSync(target, setBytes);
+    fs.rmSync(setFile());
+    fs.symlinkSync(target, setFile());
+
+    const out = runFull(compactStart(tree, transcript));
+    expect(out.stderr, 'the arm is silent about it').toBe('');
+    expect(out.stdout, 'no card is served off a set read through a symlink')
+      .not.toContain('graphify card — this context');
+    expect(fs.lstatSync(setFile()).isSymbolicLink(), 'and the symlink still stands').toBe(true);
+    expect(fs.readFileSync(cardFile()), 'the card is neither claimed nor consumed').toEqual(cardBytes);
+  });
+
   it('CONTROL: a REGULAR card at the same pathname, same nonce, still serves and is still consumed', () => {
     // The discriminator for the guard above: without it, an arm that served
     // nothing ever would satisfy that test. Same fixture, same body, the only
