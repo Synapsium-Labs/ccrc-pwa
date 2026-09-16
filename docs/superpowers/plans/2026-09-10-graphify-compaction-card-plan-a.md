@@ -2769,8 +2769,8 @@ git commit -m "feat(compact-card): measure the summary the session sees — norm
   new flags is normative (round 9, B-I2/M-8), not left to the implementer:** `--parent-live` accepts exactly
   `true`, `false` or the empty string; `--live-agents` accepts exactly `^[0-9]+$` or the empty string; **empty
   means JSON `null` for both**, which is the hook's own measured encoding (`_hook_compact_scope` leaves
-  `CS_PARENT_LIVE=""`/`CS_LIVE_N=""` at `ccd/session-hook.sh:753` and returns on a manual trigger; `:756`,
-  `:762`) and the one its own initial-set `jq` already decodes at `:880-881`. The helper converts
+  `CS_PARENT_LIVE=""`/`CS_LIVE_N=""` at `ccd/session-hook.sh:753` and returns on a manual trigger; `:765`,
+  `:771`) and the one its own initial-set `jq` already decodes at `:1281-1282`. The helper converts
   exhaustively — empty ⇒ `null`; `true`/`false` ⇒ boolean; `^[0-9]+$` ⇒ integer; **anything else ⇒ a usage
   error (exit 2)**. **`Number(v)` on a possibly-empty value is FORBIDDEN here and must be named as the trap
   in the code's own comment**, because it is this file's established idiom (`:803`,

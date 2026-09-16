@@ -793,8 +793,8 @@ above — always present, so the VALUE, never the flag's presence, encodes null.
 `true`, `false`, or the empty string; `--live-agents` takes exactly a decimal integer matching `^[0-9]+$`, or
 the empty string. **The empty string means JSON `null` for both.** This is not a new convention: it is the
 hook's own, measured — `_hook_compact_scope` initialises `CS_PARENT_LIVE=""`/`CS_LIVE_N=""`
-(`ccd/session-hook.sh:753`), returns on a manual trigger leaving both empty, sets `CS_LIVE_N="$n"` at `:756`
-and `CS_PARENT_LIVE="false"` at `:762`, and the hook's own initial-set `jq` already reads exactly that
+(`ccd/session-hook.sh:753`), returns on a manual trigger leaving both empty, sets `CS_LIVE_N="$n"` at `:765`
+and `CS_PARENT_LIVE="false"` at `:771`, and the hook's own initial-set `jq` already reads exactly that
 encoding back out at `:1281-1282`
 (`parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end)`,
 `liveAgents:(if $ln=="" then null else ($ln|tonumber) end)`). The helper must convert identically and
