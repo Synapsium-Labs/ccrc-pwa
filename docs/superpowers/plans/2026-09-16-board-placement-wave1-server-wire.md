@@ -784,3 +784,50 @@ controller rulings made during execution, not implementer improvisation.
   passes THROUGH it. This also corrected the comment on the guard: for a genuine cycle it changes only
   the call count, and its non-redundant work is the TRANSITIVE self-placement refusal that the
   `ownProject` seed makes possible.
+
+Block D-2875..D-2878 issued 2026-09-16 (floor now 2879), all four Task 3 controller rulings. Three of
+the four are defects in this plan's own Task 3 text, not implementer improvisation.
+
+- **D-2875 — Task 3's Step 4 snippet does not compile, and the helper that replaced it.** The plan
+  prescribed `coord.runs({ includeClosed: true }).runs`. `CoordStore.runs()` returns a UNION —
+  `{ok:true; runs} | {ok:false; kind:'run-unreadable'; detail}` (`server/src/coord/store.ts:263-265`) —
+  whose failure arm has no `.runs`, and `coord` is `CoordStore | undefined` on `assembleFleet` besides.
+  The implementer referred the defect rather than guessing, and wrapped the plan's loop body verbatim
+  in a non-exported `readCoordPlacements` mirroring the same file's `readCurrentAsks`
+  (`server/src/fleet.ts:154-186`): bail when `coord` is absent, `console.warn` naming cause AND
+  consequence on `!ok`, try/catch around a store that throws synchronously on a closed connection.
+  APPROVED. Its degrade is stated in code (`fleet.ts:189-197`): a broken `coord.db` costs every row its
+  placement — falling back to `ownProject` per `boardPlacement`'s total contract — rather than the
+  whole tick. The try/catch arrived pre-pinned: `server/test/push-copy.test.ts:1004-1021` closes the db
+  mid-tick and asserts `tick()` still resolves, and that tick now runs through this helper.
+  NOTED FOR WAVE 2, not fixed here: the wire already has a vocabulary for this condition —
+  `boardProject: null` means "this server did not decide" — and a failed read currently emits a
+  non-null answer identical to `session.project` instead. Emitting null on a failed read would render
+  identically today and keep the field's docstring true, which enumerates two producers of null while
+  routing a third condition to a non-null value. Worth ~4 lines when wave 2 lands a reader.
+
+- **D-2876 — the read this plan prescribed is far too expensive for a 2-second loop.**
+  `runs({includeClosed:true})` HYDRATES every row: ~3 statements each (`itemTally` two,
+  `unreadMailCount` one), a `prLineage` `JSON.parse` per row, plus batch health, over every open run
+  and up to 500 closed. `store.ts:2419-2422` prices it at "~3,000 for one board load" and treats it as
+  an ON-DEMAND board load. This plan moved it onto `FleetWatcher`'s 2000 ms tick and every `/ws/fleet`
+  connect — roughly 200 SQLite statements every 2 s at today's ~64 runs, ~1,500 at the closed clamp, to
+  obtain three columns. Replaced with a narrow `CoordStore` read selecting only `sessionId`, `project`
+  and `coordProject`: one statement, no hydration, no health, no parse. `OpenSibling`
+  (`store.ts:63-71`) is the in-tree precedent for exactly this trade and its reasoning is mirrored.
+
+- **D-2877 — "newest wins" rested on an undeclared cross-module detail.** `fleet.ts:200-205` asserted
+  in prose that runs arrive in `id` order, which is true only because both branches of `runs()` happen
+  to end `ORDER BY r.id` (`store.ts:1987`, `:1997`). That ordering is not declared as a contract in
+  `runs()`'s docstring and nothing reds if it changes: flipping either to `DESC` for an archive view
+  would silently pin the OLDEST coordinator on every placement, with a green suite. The fold now
+  tracks the maximum `run.id` per key instead of relying on arrival order, and a test asserts the same
+  answer when rows arrive reversed — a mechanism rather than a comment.
+
+- **D-2878 — `byProject` was OLDEST-wins while `bySession` was NEWEST-wins, undocumented and against
+  the spec.** `if (!byProject.has(run.project))` keeps the FIRST row per project while the session map
+  keeps the last, and spec §4 keys placement on "the newest run … newest meaning highest `runs.id`".
+  Two consequences: a transitive hop could resolve through an ancient closed run's coordinator, and
+  because the closed half is clamped to the newest 500, *which* row counts as first changes as old
+  rows age out — so the answer drifts forward in jumps rather than being stable. Both maps are now
+  newest-wins, by the same max-id fold as D-2877.
