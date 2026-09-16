@@ -1949,6 +1949,45 @@ describe('ccrc doctor: services knows about the telemetry keepalive timer', () =
   });
 });
 
+describe('ccrc doctor: services knows about the models catalogue timer', () => {
+  // D-2190/D-2191: `ccrc-models.timer` already ships (deploy/systemd/ccrc-models.timer)
+  // but `known` (ccd/ccrc-doctor-checks:812) never named it, so a dead models-refresh
+  // timer read as a silent PASS. Membership in `installed` is gated on the unit FILE
+  // existing, so this fixture case is what proves the fix is not a no-op — measured
+  // RED without the `known` entry (350 passed | 3 skipped either way, D-2191).
+  itLinux('warns — with its OWN consequence — when the models timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-models-timer-');
+    writeUnitFile(home, 'ccrc-models.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-models.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccrc-models.timer is installed but inactive');
+    expect(lines[i]).toContain('catalogue goes stale');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i]).not.toContain('credential is being probed');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccrc-models\.timer$/);
+    // A stopped reading is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-models-timer-ok-');
+    writeUnitFile(home, 'ccrc-models.timer');
+    writeFileSync(join(home, 'fixture-unit-ccrc-models.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccrc-models.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-models-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccrc-models');
+  });
+});
+
 // ── the box's own config file ─────────────────────────────────────────────
 // Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
 // `CCRC_FLEET=remote` with no agent URL or token makes the server print one

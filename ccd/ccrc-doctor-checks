@@ -803,13 +803,26 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
   fi
 }
 
+# THIS FILE RUNS TWO DIFFERENT COVERAGE DESIGNS FOR "is a recurring job actually
+# keeping its promise", and this check is only one of them (D-2193). `known`
+# below (`ccrc.service`, `ccrc-agent.service`, `ccd-cap-scopes.timer`,
+# `ccd-account-health.timer`, `ccd-telemetry-keepalive.timer`,
+# `ccrc-models.timer`) is measured DIRECTLY, by asking systemd/launchd whether
+# the unit is active. Two more units are covered on purpose by a DIFFERENT
+# design that measures the job's EFFECT instead of its activation state, and
+# are deliberately absent from `known`: `_check_graphify`'s census sub-check
+# covers `ccd-graph-sweep.timer` by reading the census artifact the timer
+# PRODUCES (`~/.ccrc/graph-sweep.json`), and `_check_name` covers
+# `ccrc-ddns.timer` by re-measuring the DNS record the timer maintains rather
+# than the timer's own state. `ccd-usage-sweep.timer` is, measured, in
+# NEITHER design — this file asks about it nowhere.
 _check_services() {
   local dir="$CCRC_UNIT_DIR" u st why rc=0
   local -a ok=() installed=()
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -864,13 +877,17 @@ _check_services() {
         # fact exists, so it is a case rather than one shared string.
         #
         # The `*` arm is not decoration: `known` above is the list this file
-        # maintains, and the day a fifth unit joins it, a timer with no sentence
+        # maintains, and the day a seventh unit joins it, a timer with no sentence
         # of its own says something true and vague rather than something
         # confidently wrong about memory caps.
         case "$u" in
           ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
           ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
           ccd-telemetry-keepalive.timer) why="an idle account's ~/.cc-limits reading goes stale, so placement acts on a number nobody is refreshing" ;;
+          # Sentence is claude-OpenClawHetzner's own — the session that reported this gap
+          # (D-2190): "a dead timer means every lane's catalogue goes stale and nothing
+          # says so."
+          ccrc-models.timer) why="a dead timer means every lane's catalogue goes stale and nothing says so" ;;
           *) why="the job it fires is not running" ;;
         esac
         # Unreachable on macOS today (`_inst_units` installs neither timer's
