@@ -7458,3 +7458,32 @@ already falls through `timeout`/`gtimeout` to a bash watcher when neither exists
 owner's question, not mine, and guessing further would hand them a wrong lead. No open run claims #115
 and its author is the operator's own GitHub identity, so this goes up rather than out as mail.
 Costs if wrong: an owner spends one CI read confirming a red they already see.
+
+**2026-09-16 14:4x Z — ROUND 4 DONE (mail 1462) and run 47 is at `awaiting-review`. The wave is
+finished; what remains is a merge decision that is not mine.** Tip `8530fb38`, PR #114. ONE
+comment-only commit, as briefed, and I verified it the same way I verified `7a662dca`:
+`refs/pull/114/head` = `8530fb38`, `origin/main` still `dba672ac` and still an ancestor, one file,
+873 -> 877 lines, non-comment changed lines EMPTY, 97 `expect(` / 27 `it(` on both sides. So round
+3's mutation table still holds. `pools-prose` 27/27 and `tsc --noEmit` exit 0, run by me at the tip.
+
+The dropped verb is EXTRACTS, not READS — the worker took the word from `readerWords`'s own
+docstring rather than inventing one, which is the right instinct. They fixed two more defects in the
+same paragraphs and named both, as the brief allowed: the FORBIDDEN SPELLINGS paragraph read as
+though there were one phrase when there are **five across seven sites**, and the paragraph had been
+left ragged by round 3's patch. I re-counted the sites from `grep -n '\.not\.toMatch'` — seven,
+five distinct phrases — rather than from the header's own wording, which is what was wrong.
+
+**They added two sentences I did not ask for, and I am keeping them.** My ruling on (b) — that a
+forbidden spelling's message stays INSIDE what it measured — now lives in the file beside the
+exposure instead of only in the mail that argued it. That is correct: the file survives, the mail
+does not. My "the file must not grow" meant NO NEW MECHANISM, not a byte count, and I should have
+said so in the brief rather than leaving them to ask.
+
+**HELD AT `awaiting-review` DELIBERATELY.** #114 merges with `gh pr merge --squash --admin` on this
+repo, and an admin bypass over four red legs is the operator's call, not mine — the reds are
+measured-inherited but they are still red. The squash body is hand-written and ready at
+`scratchpad/squash-114.md`, with both `Co-Authored-By` trailers **derived** from
+`gh api .../pulls/114/commits` across all 89 commits rather than remembered
+([[a-hand-written-squash-body-drops-the-trailers]]). Two trailers, no human one to lose this time.
+Costs if wrong: the wave sits one more day; merging it wrongly costs an unreviewable squash on a
+protected branch.
