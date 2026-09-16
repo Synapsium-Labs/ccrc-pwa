@@ -7316,3 +7316,55 @@ so whichever merges second will conflict. That is their call, not mine.
 
 **Consequence for #114:** its three red legs are INHERITED from main, not the wave's. The wave touches no
 `pwa/` file at all (three-dot diff empty), and `test-macos` has failed on main's own last six commits.
+
+### 2026-09-16 12:4x UTC — round 2 re-reviewed: 30 false reds, 7 Criticals, and a RULING THAT DELETES
+
+Two worker mails, both good. **1423** (`finding`) independently diagnosed main's red server leg —
+crossrepo-prose's cap pin broken by #108's SQL change — before my own bisect reached me, proved it three
+ways (byte-identical files, the six-file diff, main failing standing alone), and correctly **refused to
+fix another wave's pin without a brief**, asking for the ruling first. **1432** (`wave-done`) supersedes
+1417 with the real tip `c2f748dd`, both merges done in order, and four red CI legs each measured as
+INHERITED rather than asserted. Run 47 advanced `working → awaiting-review` at that tip (`ok`).
+
+**Answers given (mail 1435).** (1) MOVE the pin, do not restore the predicate — D-2803 was deliberate;
+#131 repins at the derivation, #130 covers contrast, and I took the third copy nobody had as #132. None
+of it is the worker's. (2) **Keep both merges**; a PR that shows green by standing on an older main is
+showing a colour it has not earned. (3) The P1 pin stays.
+
+**THE RE-REVIEW (172 agents, 128 one-change mutations, four worktrees).** 11 of 14 items addressed, 3
+partial; the false greens I named in round 2 are red now. But **30 of 128 mutations are FALSE REDS**, and
+**all seven Criticals are one shape**: a guard reddening the plainest TRUE statement of its own rule.
+`NEGATOR` lacks "nothing", so *"the server decides nothing."* — the shortest true statement of this
+wave's central claim — reds. The `--force` guard reds *"overrides the prompt, never the pool rule"* with
+a message quoting a span containing "never" while saying "with nothing negating it". The fold reds *"A
+malformed tag reads as `malformed`, never as untagged."* The new P1 pin reds the clearest true statement
+of exactly what it protects. G1's arm-selector is a bare word probe, so a COMMENT saying "deliberately
+NOT a class" flips it to the else arm. `uninstallSurface()` is raw bash including comments while the scan
+beside it is comment-stripped, so a comment DOCUMENTING the README claim reds.
+
+**RULING — and the oscillation is MINE, not the worker's.** Round 1 was too narrow (false greens); I
+asked for widening; round 2 is too wide (false reds); both failure modes are now measured at once. That
+is what happens when a regex is asked to decide whether an English sentence is true.
+
+**Corroborated independently on `main` TODAY, from a different wave:** #108 falsified three shipped
+prose copies and the VERBATIM pin over them stayed GREEN, because it compares prose to prose. The one
+guard that fired read `store.ts`. Same lesson, opposite direction
+([[a-prose-pin-against-prose-is-green-while-both-lie]]).
+
+**So: a claim is mechanically holdable only where the prose names something the CODE also names** — a
+constant, a count, a state list, a path, an SQL fragment, a number. Every DERIVED pin in the file works
+and not one produced a false red. Every guard that parses English produced Criticals.
+
+**Round 3 is a DELETION, bounded to two things:** (B) delete `bindsAuthority`, `doesNotFold`,
+`forceIsNotAPoolOverride` and the P1 clause negative together with their vocabularies, replacing each
+with a POSITIVE presence pin whose own message says it is a CHANGE-detector and names the source to
+re-verify against; (C) rewrite the header's four "cannot catch" classes into the one true statement —
+the semantic claims are NOT mechanically held; what is held is that the sentence has not silently
+changed, plus every claim naming a value the code also names. Every DERIVED pin is kept untouched. **No
+new guards, no widening, no paraphrase chase — the file must get SMALLER**, and the worker is told to
+stop and mail me if they find themselves adding a regex alternative.
+
+**Why a third round on a docs wave, recorded because it is a judgment someone may want to overturn:**
+this file is the first prose ratchet in the tree, and the house doctrine will make people copy it.
+Shipping seven Critical false reds inside it teaches the tree that a guard may call the truth false so
+long as it is strict. Costs if wrong: one deletion round, and a file that proves less than it hoped.
