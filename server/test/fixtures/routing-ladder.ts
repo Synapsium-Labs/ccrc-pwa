@@ -112,7 +112,7 @@ export const ROUTING_LADDER_CASES: readonly RoutingLadderCase[] = [
   {
     name: 'demote: opus·high effort steps down to medium',
     kind: 'demote-effort', current: cur('opus', 'high'),
-    want: { kind: 'move', mode: 'escalate', field: 'effort', from: 'high', to: 'medium',
+    want: { kind: 'move', mode: 'demote', field: 'effort', from: 'high', to: 'medium',
       why: 'demoting effort from high to medium' },
   },
   {
@@ -128,7 +128,44 @@ export const ROUTING_LADDER_CASES: readonly RoutingLadderCase[] = [
   {
     name: 'demote: opus class steps down to sonnet, effort reset to high',
     kind: 'demote-class', current: cur('opus', 'high'),
-    want: { kind: 'move', mode: 'escalate', field: 'class', from: 'opus', to: 'sonnet',
+    want: { kind: 'move', mode: 'demote', field: 'class', from: 'opus', to: 'sonnet',
       why: 'demoting class from opus to sonnet and resetting effort to high' },
+  },
+  {
+    name: 'demote: opus·ultracode answers no-effort-rungs — same vocabulary escalate uses',
+    kind: 'demote-effort', current: cur('opus', 'ultracode'),
+    want: { kind: 'no-effort-rungs', why: 'ultracode has no effort rungs; its next rung is a class rung the caller decides' },
+  },
+  {
+    name: 'demote: opus·auto steps down to medium — auto counts as high for the arithmetic',
+    kind: 'demote-effort', current: cur('opus', 'auto'),
+    want: { kind: 'move', mode: 'demote', field: 'effort', from: 'auto', to: 'medium',
+      why: 'demoting effort from auto to medium' },
+  },
+  {
+    name: 'shallow: opus·max with a prior same-kind failure still ceilings — max is the top effort rung',
+    kind: 'shallow', current: cur('opus', 'max'), scope: 'main', prior: 1, lastDemotion: null,
+    want: { kind: 'ceiling', why: 'max is the top effort rung; a shallow failure has no further effort rung' },
+  },
+  {
+    name: 'a subagent cannot receive back an unreversed demotion whose origin was effort max',
+    kind: 'shallow', current: cur('opus', 'xhigh'), scope: 'subagent', prior: 0,
+    lastDemotion: { field: 'effort', from: 'max', to: 'xhigh' },
+    want: { kind: 'ceiling',
+      why: "the unreversed demotion's origin (effort max) is unreachable for a subagent — max effort is forbidden for a subagent" },
+  },
+  {
+    name: 'on main, the same demotion reverses freely — max origin included',
+    kind: 'shallow', current: cur('opus', 'xhigh'), scope: 'main', prior: 0,
+    lastDemotion: { field: 'effort', from: 'max', to: 'xhigh' },
+    want: { kind: 'move', mode: 'reverse-demotion', field: 'effort', from: 'xhigh', to: 'max',
+      why: 'reversing the unreversed demotion (effort max->xhigh) before the ladder applies to this failure' },
+  },
+  {
+    name: 'a subagent cannot receive back an unreversed demotion whose origin class is above the subagent ceiling',
+    kind: 'shallow', current: cur('opus', 'high'), scope: 'subagent', prior: 0,
+    lastDemotion: { field: 'class', from: 'fable', to: 'opus' },
+    want: { kind: 'ceiling',
+      why: "the unreversed demotion's origin (class fable) is unreachable for a subagent — a subagent ladder ends at opus" },
   },
 ];

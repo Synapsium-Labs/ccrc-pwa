@@ -45,15 +45,25 @@ describe('EFFORT_LADDER — ccd/ccd\'s ROUTE_EFFORT_STOPS is its bash mirror', (
 });
 
 describe('shared/routing-ladder.ts is L0 — imports nothing but its two shared/ siblings', () => {
+  const code = () => readFileSync(path.join(root, 'shared/routing-ladder.ts'), 'utf8');
+
   it('imports only ./models.js and ./api.js, never node:*', () => {
-    const src = readFileSync(path.join(root, 'shared/routing-ladder.ts'), 'utf8')
+    const src = code()
       .replace(/\/\*[\s\S]*?\*\//g, (m) => m.replace(/[^\n]/g, ' '))
       .replace(/\/\/[^\n]*/g, (m) => m.replace(/[^\n]/g, ' '));
-    const specifiers = [...src.matchAll(/from\s+'([^']+)';/g)].map((m) => m[1]!);
+    const specifiers = [...src.matchAll(/from\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
     expect(specifiers.length, 'no import specifiers found — the scan is over nothing').toBeGreaterThan(0);
     for (const s of specifiers) {
       expect(s, `shared/routing-ladder.ts imports a node builtin — the PWA bundles this file`).not.toMatch(/^node:/);
     }
     expect(new Set(specifiers)).toEqual(new Set(['./models.js', './api.js']));
+  });
+
+  it('never names a node: specifier anywhere in the source, quoting style notwithstanding', () => {
+    // Whole-source belt (the same shape as pool-rule-core.test.ts:175's poolrule.ts
+    // check) — catches a double-quoted `import ... from "node:fs";` even if the
+    // specifier-scan above were ever narrowed again.
+    expect(code(), 'shared/routing-ladder.ts imports a node builtin — the PWA bundles this file')
+      .not.toMatch(/from\s+['"]node:/);
   });
 });

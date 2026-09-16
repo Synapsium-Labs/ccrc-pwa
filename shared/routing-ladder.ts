@@ -48,7 +48,7 @@ export interface Demotion {
 }
 
 export type RungTarget =
-  | { kind: 'move'; mode: 'escalate' | 'reverse-demotion'; field: 'class' | 'effort'; from: string; to: string; why: string }
+  | { kind: 'move'; mode: 'escalate' | 'demote' | 'reverse-demotion'; field: 'class' | 'effort'; from: string; to: string; why: string }
   | { kind: 'ceiling'; why: string }        // nothing above (the top class at max effort; opus for a subagent at xhigh with max forbidden by the rule)
   | { kind: 'no-effort-rungs'; why: string }; // haiku takes no effort: a shallow failure on haiku is a class rung, handled inside escalate — this arm is for `ultracode`
 
@@ -65,30 +65,38 @@ const effortIndex = (e: EffortRung | 'auto' | 'ultracode'): number => {
   return EFFORT_LADDER.indexOf(e);
 };
 
-/** The class-rung move shared by `kind: 'ceiling'` and the `unclear`
- *  class-aware case on sonnet — same mechanics (one class up, effort reset to
- *  high, a subagent stops at Opus, the top class has nothing above it),
- *  different reason for having been triggered, which `reason` supplies
- *  verbatim. */
-const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reason: string): RungTarget => {
+/** The class-rung move shared by `kind: 'ceiling'`, the `unclear` class-aware
+ *  case on sonnet, and haiku's no-effort-ladder case — same mechanics (one
+ *  class up, read off `CLASSES` by index rather than hand-typed, effort
+ *  reset to high, a subagent stops at `SUBAGENT_CLASS_CEILING`, the top class
+ *  has nothing above it), different reason for having been triggered. `reason`
+ *  supplies that reason verbatim and is composed into the default `why`
+ *  (`"${reason} — escalating to ${next}, effort reset to high"`); a caller
+ *  whose own `why` text does not fit that shape passes `wholeWhy` instead,
+ *  used in place of the composed text on the successful-move arm only. */
+const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reason: string, wholeWhy?: string): RungTarget => {
   const next = CLASSES[classIndex(current.class) + 1];
   if (next === undefined) {
     return { kind: 'ceiling', why: `${current.class} is the top of the class ladder — nothing above it` };
   }
   if (scope === 'subagent' && current.class === SUBAGENT_CLASS_CEILING) {
-    return { kind: 'ceiling', why: 'a subagent ladder ends at opus — nothing past it is ever assigned to a subagent' };
+    return { kind: 'ceiling', why: `a subagent ladder ends at ${SUBAGENT_CLASS_CEILING} — nothing past it is ever assigned to a subagent` };
   }
   return {
     kind: 'move', mode: 'escalate', field: 'class', from: current.class, to: next,
-    why: `${reason} — escalating to ${next}, effort reset to high`,
+    why: wholeWhy ?? `${reason} — escalating to ${next}, effort reset to high`,
   };
 };
 
 /** §3 "Escalation": shallow → effort +1 within the class; ceiling → class +1 (effort reset to 'high'); unclear → effort-first, class-aware:
  *  on sonnet, when the next effort rung would be xhigh or max, the class rung to opus instead (2.5× per token ≈ xhigh, < max). `max` only from
  *  `xhigh` and only when priorSameKind ≥ 1 (a second failed check of the same kind). Any failed check first reverses `lastDemotion` if it is
- *  not yet reversed (mode 'reverse-demotion'); the ladder applies on the NEXT failure. haiku: an effort rung is a class rung to sonnet·high.
- *  `effort: 'auto'` counts as 'high' for the arithmetic (the model's default); 'ultracode' answers no-effort-rungs (its next rung is a class rung the caller decides). */
+ *  not yet reversed (mode 'reverse-demotion'), CLAMPED BY SCOPE — a subagent never receives back an origin rung it could not itself hold (an
+ *  effort of `max`, or a class above `SUBAGENT_CLASS_CEILING`), answering `ceiling` instead; in `main` scope the reversal restores any origin,
+ *  `max` included. The ladder then applies on the NEXT failure. haiku: an effort rung is a class rung to sonnet·high. `effort: 'auto'` counts
+ *  as 'high' for the arithmetic (the model's default); 'ultracode' answers no-effort-rungs (its next rung is a class rung the caller decides).
+ *  Whether a demotion is "not yet reversed" is bookkeeping the CALLER owns (Task 2 derives `lastDemotion` from the run's own event history) —
+ *  this function only decides what a reversal, once handed one, is allowed to restore. */
 export function escalate(
   kind: FailureKind,
   current: RungCurrent,
@@ -97,6 +105,21 @@ export function escalate(
   lastDemotion: Demotion | null,
 ): RungTarget {
   if (lastDemotion !== null) {
+    if (scope === 'subagent' && lastDemotion.field === 'effort' && lastDemotion.from === 'max') {
+      return {
+        kind: 'ceiling',
+        why: `the unreversed demotion's origin (effort max) is unreachable for a subagent — max effort is forbidden for a subagent`,
+      };
+    }
+    if (
+      scope === 'subagent' && lastDemotion.field === 'class' &&
+      classIndex(lastDemotion.from as ModelClass) > classIndex(SUBAGENT_CLASS_CEILING)
+    ) {
+      return {
+        kind: 'ceiling',
+        why: `the unreversed demotion's origin (class ${lastDemotion.from}) is unreachable for a subagent — a subagent ladder ends at ${SUBAGENT_CLASS_CEILING}`,
+      };
+    }
     return {
       kind: 'move', mode: 'reverse-demotion', field: lastDemotion.field,
       from: lastDemotion.to, to: lastDemotion.from,
@@ -112,10 +135,10 @@ export function escalate(
   // ladder at all) and ultracode (no rung above it) opt out before any
   // arithmetic runs.
   if (current.class === 'haiku') {
-    return {
-      kind: 'move', mode: 'escalate', field: 'class', from: 'haiku', to: 'sonnet',
-      why: 'haiku takes no effort; an effort rung on haiku is a class rung to sonnet at high',
-    };
+    return classEscalation(
+      current, scope, '',
+      `haiku takes no effort; an effort rung on haiku is a class rung to ${CLASSES[classIndex(current.class) + 1]} at high`,
+    );
   }
   if (current.effort === 'ultracode') {
     return { kind: 'no-effort-rungs', why: 'ultracode has no effort rungs; its next rung is a class rung the caller decides' };
@@ -145,20 +168,17 @@ export function escalate(
   };
 }
 
-/** §3 "Demotion": one rung down on the named field; never below low / haiku (the mechanical floor); a class rung down resets effort to 'high'.
- *  `RungTarget.mode` has two literals — `'escalate'` (a fresh move) and
- *  `'reverse-demotion'` (undoing a STORED demotion, `escalate()`'s own arm
- *  above) — and a demotion is neither an escalation nor a reversal of one, so
- *  a successful demote() reports `mode: 'escalate'`: the generic "this is a
- *  freshly computed move, not a restore of something remembered" tag, which
- *  is what both of demote()'s own moves are. */
+/** §3 "Demotion": one rung down on the named field; never below low / haiku (the mechanical floor); a class rung down resets effort to 'high'. */
 export function demote(current: RungCurrent, field: 'class' | 'effort'): RungTarget | { kind: 'floor'; why: string } {
   if (field === 'effort') {
+    if (current.effort === 'ultracode') {
+      return { kind: 'no-effort-rungs', why: 'ultracode has no effort rungs; its next rung is a class rung the caller decides' };
+    }
     const idx = effortIndex(current.effort);
     if (idx <= 0) return { kind: 'floor', why: 'low is the mechanical floor for effort' };
     const prev = EFFORT_LADDER[idx - 1]!;
     return {
-      kind: 'move', mode: 'escalate', field: 'effort', from: current.effort, to: prev,
+      kind: 'move', mode: 'demote', field: 'effort', from: current.effort, to: prev,
       why: `demoting effort from ${current.effort} to ${prev}`,
     };
   }
@@ -166,7 +186,7 @@ export function demote(current: RungCurrent, field: 'class' | 'effort'): RungTar
   if (idx <= 0) return { kind: 'floor', why: 'haiku is the mechanical floor for class' };
   const prev = CLASSES[idx - 1]!;
   return {
-    kind: 'move', mode: 'escalate', field: 'class', from: current.class, to: prev,
+    kind: 'move', mode: 'demote', field: 'class', from: current.class, to: prev,
     why: `demoting class from ${current.class} to ${prev} and resetting effort to high`,
   };
 }
