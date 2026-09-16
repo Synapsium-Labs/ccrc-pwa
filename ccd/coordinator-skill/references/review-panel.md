@@ -49,9 +49,10 @@ export const meta = {
   description: 'Held-out handoff review: three Opus lenses, three Sonnet refuters per finding, majority deciding',
   phases: [{ title: 'Lenses' }, { title: 'Refute' }],
 }
-// args: { repo, base, tip, plan, spec, wave } — repo is the WORKER's worktree (read-only for
-// every agent), base..tip the handoff commit range, plan and spec the documents the wave is
-// measured against, wave the ledger's wave number (for labels only).
+// args: { repo, base, tip, plan, spec, wave } — repo is the REVIEWER's own worktree, checked out
+// at ${A.tip} (reviewer clause 4); read-only for every agent. base..tip is the handoff commit
+// range, plan and spec the documents the wave is measured against, wave the ledger's wave number
+// (for labels only).
 const A = args
 const RANGE = `${A.base}..${A.tip}`
 const READ_ONLY = `Work in ${A.repo}. Read only: never edit, commit, stash, checkout or run a build there. Cite every claim as file:line at ${A.tip}.`

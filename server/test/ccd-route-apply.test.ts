@@ -275,7 +275,10 @@ describe('route --apply (routing spec §5.3 live change; slice 1 keystrokes D-28
     // the remedy differs: nothing was typed, so there is no pane to go and look at and no
     // acknowledgement was ever possible. The narrowed constant is how the arm is reached —
     // `_route_get` validates `effort` against `ROUTE_EFFORTS`, so no registry value can.
-    const out = h.sh(`${TMUX_STUB} ROUTE_EFFORT_STOPS="low medium"; _route_type_effort demo-tmux high; echo "rc=$? why=$KS_WHY"`);
+    // The first argument is the SESSION ID, not a tmux name (ruling S4-R14): the typers
+    // derive their target through `_tmux` so `ccd-account-pane.test.ts`'s auth-pane scan
+    // can see it derive. Nothing is typed on this arm, so the key log is empty either way.
+    const out = h.sh(`${TMUX_STUB} ROUTE_EFFORT_STOPS="low medium"; _route_type_effort ${ID} high; echo "rc=$? why=$KS_WHY"`);
     expect(out).toContain('rc=2');
     expect(out).toContain('why=no-slider-stop');
     expect(keys()).toEqual([]);

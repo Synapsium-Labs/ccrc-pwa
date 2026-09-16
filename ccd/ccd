@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ca3dd29aec7fce821837271368ba8719adfa5d7fa186d384ef848bf137a04c81
+# ccrc:generated 1 sha256=5cb19f9400adab71d6cfd00abb94d20367254b1e7920db97fa3ef1477c563251
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2227,8 +2227,18 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 142
-# invocations across 118 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 150
+# invocations across 126 non-comment lines.
+#
+# THE LAST MOVE WAS ROUTING SLICE 4's, and naming it is what stops the next
+# reader hunting for a merge that did not happen: the applier and its registry
+# bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
+# `_route_applied_get`, `_route_try_bump`, `_route_retry_ok`, and the keystroke
+# predicates `_idle_for_keystroke`/`_auto_compact_check` extracted beside them)
+# together with the `--route` argv writers (`cmd_route`'s field read and
+# `_route_argv_write`'s) added eight net call sites through this same fold, and
+# the sentence above was re-measured on the merged tree with the census test's
+# own scanner rather than counted by hand (controller ruling S4-R14).
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -15758,7 +15768,17 @@ _route_ack_wait() {   # tmuxname regex -> 0 iff the pane shows the acknowledgeme
   return 1
 }
 
-_route_escape() {   # tmuxname — leave the pane as we found it after an unacknowledged sequence
+_route_escape() {   # id — leave the pane as we found it after an unacknowledged sequence
+  # THE TARGET IS DERIVED HERE, FROM THE REGISTRY ID, and that is the whole
+  # reason this function takes an id rather than the tmux name its callers
+  # already hold (controller ruling S4-R14). `ccd-account-pane.test.ts` reads
+  # every key-sending call in this file and requires each target to be `$t` or
+  # `$(_tmux "$id")`, because `_tmux` can only ever name `cc-<id>` — so no ccd
+  # typer can reach an auth pane (`cc-auth-<id>`), whose whole safety property is
+  # that nothing types into it. A bare `"$1"` here would be a literal target as
+  # far as that scan is concerned, and a caller one refactor away could hand it
+  # any pane name at all.
+  #
   # CONTROLLER RULING S4-R9. A `send-keys` that is never acknowledged has one of
   # two shapes and both leave something OPEN: the slider is still up, or the
   # `Change effort level?` dialog is, or the model picker is. Returning 1 with
@@ -15771,11 +15791,12 @@ _route_escape() {   # tmuxname — leave the pane as we found it after an unackn
   # ONCE, not until-clear. One `Escape` closes each of the three shapes measured
   # (D-2808, D-2811 and the slice-4 picker probe); a loop would be a second,
   # unmeasured claim, and pressing Escape at a bare prompt is a no-op anyway.
-  tmux send-keys -t "$1" Escape; sleep 1
+  local t; t=$(_tmux "$1")
+  tmux send-keys -t "$t" Escape; sleep 1
   return 0
 }
 
-_route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop
+_route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop
   # `ultracode` HAS NO SLIDER DELTA and needs none: it is the one level whose
   # PLAIN form is session-only by construction (D-2810, measured — the ack reads
   # `(this session only)` and settings.json is byte-identical), because there is
@@ -15791,12 +15812,16 @@ _route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed | 2 
   # as the first, and the kind that rots quietly: a stop inserted in the middle
   # of the measured order would leave every level above it pointing one row low,
   # and the only symptom is a pane running the wrong effort.
-  local t="$1" level="$2" n i
+  # The ID, not the tmux name (ruling S4-R14, and `_route_escape`'s own note):
+  # every target this function presses a key into is `_tmux`'s answer, so the
+  # auth-pane scan in `ccd-account-pane.test.ts` can see it derive.
+  local id="$1" level="$2" t n i
+  t=$(_tmux "$id")
   local -a stops=()
   if [[ "$level" == ultracode ]]; then
     tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
     _route_ack_wait "$t" "ultracode.*this session only" && return 0
-    _route_escape "$t"; return 1
+    _route_escape "$id"; return 1
   fi
   read -r -a stops <<< "$ROUTE_EFFORT_STOPS"
   n=-1
@@ -15820,7 +15845,7 @@ _route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed | 2 
     tmux send-keys -t "$t" Enter; sleep 1
   fi
   _route_ack_wait "$t" "Set effort level to $level.*\(this session only\)" && return 0
-  _route_escape "$t"; return 1
+  _route_escape "$id"; return 1
 }
 
 _route_picker_rows() {   # pane -> one row per line: <n>\t<cursor 0|1>\t<label>\t<description>
@@ -15851,7 +15876,7 @@ _route_picker_rows() {   # pane -> one row per line: <n>\t<cursor 0|1>\t<label>\
   return 0
 }
 
-_route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
+_route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
   # THE CURSOR IS READ, NEVER ASSUMED. The picker opens on the CURRENT model's
   # row, not on row 1, and `Up` on row 1 WRAPS to the last row on both lanes
   # (measured) — so "press Up×N to pin at the top" walks somewhere unpredictable
@@ -15871,7 +15896,9 @@ _route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirm
   # entitled lane launched `--model opus` lists four rows and no Fable), so a
   # live change TO fable is a RELAUNCH, not a keystroke. Escape out, answer 2,
   # and let the tick record it and the settle apply it.
-  local t="$1" cls="$2" w="$3" rows n cur label desc want target=0 curs=0 i
+  # The ID, not the tmux name — `_route_type_effort`'s note, same reason.
+  local id="$1" cls="$2" w="$3" t rows n cur label desc want target=0 curs=0 i
+  t=$(_tmux "$id")
   tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
   rows=$(_route_picker_rows "$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -12)")
   if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
@@ -15890,7 +15917,7 @@ _route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirm
   # same (leave it to the settle), so they share the word and differ in the
   # detail the swap.log line carries.
   if [[ "$target" == 0 || "$curs" == 0 ]]; then
-    _route_escape "$t"
+    _route_escape "$id"
     KS_WHY=no-picker-row
     if [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
     else KS_DETAIL="class=$cls"; fi
@@ -15903,7 +15930,7 @@ _route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirm
   fi
   tmux send-keys -t "$t" -l "s"; sleep 1
   _route_ack_wait "$t" "Set model to .* for this session only" && return 0
-  _route_escape "$t"; return 1
+  _route_escape "$id"; return 1
 }
 
 _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is still pending
@@ -15929,13 +15956,12 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   # (`_route_try_bump`, ruling S4-R7): `apply-unconfirmed`, `no-picker-row` and
   # `no-slider-stop` are the three, and they are exactly the ones that can be
   # PERMANENT. The idle predicate's refusals never reach this function.
-  local id="$1" t w want cls eff have rc
-  t=$(_tmux "$id")
+  local id="$1" w want cls eff have rc
   w=$(_reg_get "$id" wrapper)
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   have=$(_route_applied_get "$id" class)
   if [[ -n "$cls" && "$cls" != "$have" ]]; then
-    _route_type_model "$t" "$cls" "$w"; rc=$?
+    _route_type_model "$id" "$cls" "$w"; rc=$?
     case "$rc" in
       0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
       2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
@@ -15948,7 +15974,7 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
     else
-      _route_type_effort "$t" "$eff"; rc=$?
+      _route_type_effort "$id" "$eff"; rc=$?
       case "$rc" in
         0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
         # rc 2 is `no-slider-stop` — a level with no stop on the measured slider

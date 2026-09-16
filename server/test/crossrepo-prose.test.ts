@@ -200,8 +200,13 @@ describe('README: cross-repo programmes', () => {
 
   it('states the measured cap predicates, not a workspace-to-slot equivalence', () => {
     const s = crossSection();
-    expect(STORE, 'the running cap no longer counts dispatched non-terminal rows')
-      .toContain("dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')");
+    // #108 moved the state vocabulary out of this query and into
+    // `INACTIVE_RUN_STATES_SQL` (store.ts:425, built from `IDLE_RUN_STATES` +
+    // `TERMINAL_RUN_STATES`), so the ground is the TEMPLATE TEXT — the shape the
+    // worker-arm predicate below is asserted in, for the same reason.
+    expect(STORE, "the running cap no longer counts dispatched non-terminal rows"
+      + " — its predicate is not 'dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}'")
+      .toContain('dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}');
     expect(STORE, 'the daily cap no longer counts rows dispatched inside its rolling window')
       .toContain('dispatchedAt IS NOT NULL AND dispatchedAt > ?');
     expect(s, 'the section still equates two held workspaces with two running-worker slots')

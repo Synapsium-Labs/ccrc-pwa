@@ -558,6 +558,34 @@ export const INHERITED_GROUNDS = {
     under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
     why: "the history bar's legend — `reading history…`, and the sentence a failed read says — sits inside .term-histbar (TerminalDrawer.tsx), whose own background is the well lifted 12% toward the ink. It sets no background of its own and its selector names no ancestor, so no route could ground it; the same shape as .code-block-lang on .code-block-bar. Naming --bg-well instead would flatter the ratio by measuring pixels that are not behind it",
   },
+  'chat.css .compaction-raw': {
+    under: ['var(--bg-surface)'],
+    why: "the raw body of a `system` compaction card is rendered as `<pre class=\"compaction-body compaction-raw\">` INSIDE the card (MessageBubble.tsx:285), and .compaction-body paints nothing — the ground is .compaction's own `background: var(--bg-surface)` (chat.css:1223), the same ground .compaction-head is registered against in GROUNDS. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  'chat.css .task-card-glyph': {
+    under: ['var(--bg-surface)'],
+    why: "the clock glyph sits in .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:39-40), which paints `background: var(--bg-surface)` (chat.css:1286) — the same ground .task-card-toggle is registered against. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  'chat.css .task-card-status': {
+    under: ['var(--bg-surface)'],
+    why: "the status chip is the last cell of .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:46); its own `border` is the whole fill it has, so the pixels behind its ink are the card's `background: var(--bg-surface)` (chat.css:1286)",
+  },
+  'chat.css .task-card-status--ok': {
+    under: ['var(--bg-surface)'],
+    why: "the done tone of that same chip (TaskCard.tsx:29, applied beside .task-card-status), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
+  },
+  'chat.css .task-card-status--bad': {
+    under: ['var(--bg-surface)'],
+    why: "the failed tone of that same chip (TaskCard.tsx:30), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
+  },
+  'chat.css .task-card-field dt': {
+    under: ['var(--bg-surface)'],
+    why: "the field NAME of a task card's definition list: <dt> inside .task-card-field inside .task-card-fields inside <article class=\"task-card\"> (TaskCard.tsx:63-67). Neither list level paints anything, so the ground is the card's `background: var(--bg-surface)` (chat.css:1286)",
+  },
+  'chat.css .task-card-field dd': {
+    under: ['var(--bg-surface)'],
+    why: "the field VALUE beside that name (TaskCard.tsx:68), on the same task-card ground (chat.css:1286). It scrolls inside its own box but paints no background of its own, so the card is still what is behind the ink",
+  },
   'fleet.css .proj-archived-body .sess-line:not(.sess-line--active) .sess-label': {
     under: ['var(--bg-surface)'],
     why: 'the past-tense signal for an archived row is an ink STEP on the label, not element opacity (see the note above the rule). Its ground is the project card. :not(.sess-line--active) is load-bearing — the selected row inverts to background: var(--ink-primary), where --ink-secondary reads 1.81 dark / 2.24 light',
