@@ -44,16 +44,35 @@ earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
 
 Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62**.
 
-**Run 66 is a coordinator error, and it needs an operator act.** Probing whether the DEPLOYED server
-supports `kind:'review'` runs, this session used `POST /api/runs` — a MUTATING route — as the probe.
-The server ignored the unknown `kind`/`reviews` fields and created an ordinary work run, and
-`openRun`'s conflict arm overwrote the PROGRAMME TITLE to `probe`. Run 66 cannot be retired from
-here: `close` refuses it `not-dispatched` (it was never dispatched) and `advance` does not reach
-`failed`. `POST /api/runs/:id/abandon` is the route, one of the four deliberately ungated operator
-doors, and `ccrc-api`'s closed table does not expose it. The title is restored at wave 3's run-open,
-which passes a title anyway. **The lesson is the general one: a write route is never a probe.** The
-read that would have answered it for free is `GET /api/runs` — a row carrying no `kind` field is a
-pre-#108 server.
+**Run 66 is a coordinator error, and it needs an operator act — for a STRONGER reason than this
+paragraph first gave.** Probing whether the DEPLOYED server supports `kind:'review'` runs, this
+session used `POST /api/runs` — a MUTATING route — as the probe. The server ignored the unknown
+`kind`/`reviews` fields and created an ordinary work run, and `openRun`'s conflict arm overwrote the
+PROGRAMME TITLE to `probe`. Run 66 cannot be retired from here: `close` refuses it `not-dispatched`
+(it was never dispatched) and `advance` does not reach `failed`.
+
+`POST /api/runs/:id/abandon` is the route, and `close.ts`'s abandon arm DOES reach a `planned` run —
+its own comment lists "the `not-dispatched` refusal below: a `planned` run with no session" among the
+preconditions the arm skips. So the state machine is not the obstacle.
+
+**The obstacle is the AUTH GATE, and it is deliberate.** An earlier version of this paragraph said the
+blocker was that `ccrc-api`'s closed table does not expose the verb. That is true and irrelevant:
+called directly, the route answers **401 `{"ok":false,"error":"unauthenticated","verdict":"no-session"}`**
+(measured 2026-09-16 on this box). The four doors are ungated against the BOX TOKEN only. With
+`CCRC_AUTH` armed they still sit behind the session gate, and `auth/gate.ts`'s NOT-EXEMPT note says
+exactly why, about exactly this session:
+
+> "That argument is about the box token specifically and does not transfer: they are the OPERATOR's
+> doors, the operator is the one holding a session, and **a session cookie is precisely the credential
+> the coordinator does not have.** Gating them here strengthens D-282 rather than reversing it."
+
+So this is not a missing client verb to route around — **a coordinator that could abandon its own
+wedged run is the thing the design refuses.** Any future coordinator reading this should stop at the
+401 rather than look for another transport. The operator taps it in the PWA (the two-tap confirm in
+the run sheet); the title is restored at wave 3's run-open, which passes a title anyway.
+
+**The lesson is the general one: a write route is never a probe.** The read that would have answered
+it for free is `GET /api/runs` — a row carrying no `kind` field is a pre-#108 server.
 
 ### Wave 2 review — the panel, and the guard that stopped being able to fail (2026-09-16)
 
@@ -91,6 +110,37 @@ unanchored targets". It does not reproduce — the tree gains ONE new target con
 `_pane_measurable`. Measured independently here: 25 `_tmux` uses, 19 of them `-t` targets. The error
 direction is the dangerous one, because **wave 3 is the anchoring wave and sizes directly from those
 two sentences**: a worker expecting a `-t cc-` scan that over-reds would build one that under-covers.
+
+### main is GREEN again, and wave 2's PR is unblocked (2026-09-16)
+
+`main` was red on **three independent breaks from three different merged PRs**, and a PR inherits them
+because a `pull_request` run builds `refs/pull/N/merge` — so every open PR in this programme read as
+its own failure. They are all gone:
+
+| break | from | cleared by |
+|---|---|---|
+| cap predicate's stale SQL-literal guard (`test (server)`) | #108 | **#131** `d6d62587` |
+| seven `chat.css` rules with a colour and no ground (`test (pwa)`) | #89 | **#131** `d6d62587` |
+| `exec /usr/bin/timeout` in both delegating shims (`test-macos`) | #115 | **#130** `f27c8a86` |
+
+**#130 opened carrying all three and merged carrying one.** #131 landed the first two independently
+while it sat, so the branch was rebuilt on `25d60061` with only what main still lacked. Its contrast
+half is the better fix and it is the one on main: it registers the seven through `INHERITED_GROUNDS`
+rather than grandfathering them, so the colour is still read from the stylesheet and a retint
+re-measures. Two sessions reaching the same two diagnoses independently is worth noting — **check
+whether a repo-wide red is already being fixed before rebuilding it.**
+
+The one that was left is a real portability defect, not a stale pin: macOS ships no `timeout` at
+`/usr/bin`, so the shim exec'd nothing and the probe read rc 127 where the case asserts 124. Resolved
+once at module scope, trying `timeout` then `gtimeout`, by ABSOLUTE path — it cannot be spelled bare,
+because the shim dir is first on `PATH` and a bare `timeout` would re-exec the shim. A platform with
+no system `timeout` cannot exercise a DELEGATING shim at all, so those two cases now `skip` rather
+than assert something weaker: a skip is visible in the report, a loosened assertion is not.
+
+**PR #117 (wave 2) was never red on its own account.** Its two failing legs were `test (server)` and
+`test-macos` — precisely main's remaining two at the time its run was built. Both were re-run against
+the repaired base once `f27c8a86` landed. Nothing on the worker branch changed and nothing should:
+`436d773d` is final under run 62's claim.
 
 ### Wave 2 ACCEPTED — round 3 verified, and the residue wave 3 carries (2026-09-16)
 
