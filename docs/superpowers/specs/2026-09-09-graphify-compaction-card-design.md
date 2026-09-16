@@ -2382,7 +2382,8 @@ This spec yields **three plans at two explicit seams**, each independently usefu
   a box on which nobody compacted. The fleet in question is Linux throughout, so this is a portability
   residual rather than a live one, but it is not a zero.
 - **A compaction that outlives `COMPACT_CARD_MAX_AGE` can have its journal line attributed to a SUCCESSOR's
-  set.** The overlap check is young-only (`find "$set" -mmin "-$mins"`, `ccd/session-hook.sh:1235`; §3.1 item 5
+  set.** The overlap check is young-only (`find "$REG" -maxdepth 1 … -mmin "-$mins"`,
+  `ccd/session-hook.sh:1235`; §3.1 item 5
   reads an unconsumed set younger than the window as `ambiguous`). So if compaction A's canonical set has aged
   past the window while A's PostCompact has still not fired, a successor PreCompact B sees no young set and no
   young claim, publishes its own set with `overlap:false` and FULL provenance over A's, and proceeds. A's
