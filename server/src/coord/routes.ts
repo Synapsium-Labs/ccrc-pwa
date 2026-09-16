@@ -132,7 +132,12 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
-    case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
+    // distinction it received (`route: <why>[ <field>]`, present only for the
+    // malformed-route refusal), so its PRESENCE rides the wire exactly as
+    // this member carries it — never `''` standing in for "nothing to say".
+    case 'bad-request':
+      return reply.code(400).send({ ok: false, error: 'bad-request', ...(r.detail === undefined ? {} : { detail: r.detail }) });
     // `detail` rides along unconditionally — it is a distinction this adapter
     // RECEIVED (which of the two sizes, and by how much), and the sender cannot
     // recompute it: the brief they hold is not the body the cap measured. The
@@ -1335,7 +1340,7 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
       // The one place a wrapper becomes a directory, called from L4 where the
@@ -1344,7 +1349,7 @@ export function registerCoordRoutes(
       // `./coord/db.js` and a value import would drag the store's module graph
       // into a policy module (D-1015).
       configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
-    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
+    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
     return sendDispatchOutcome(reply, outcome);
   });
 

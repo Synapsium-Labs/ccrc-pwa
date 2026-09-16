@@ -7,7 +7,7 @@ import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -19,8 +19,9 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  MAIL_BODY_MAX_BYTES, ROUTE_WRITABLE_FIELDS, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, parseRouteFields,
+  spawnVerdict,
+  type RouteFields, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readWorkerSkillState } from '../skillstate.js';
 
@@ -105,7 +106,11 @@ export type DispatchOutcome =
       skillState: SkillState }
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; kind: 'bad-request' }
+  /** `detail` is PRESENT only for the malformed-`route` refusal (routing spec
+   *  §5.3, slice 4: `route: <why>[ <field>]`) — every other `bad-request` on
+   *  this union carries none, so the field distinguishes by presence rather
+   *  than an empty string standing in for "nothing to say". */
+  | { ok: false; kind: 'bad-request'; detail?: string }
   /** `detail` is the operator's own arithmetic, and it exists because the cap
    *  no longer measures the thing the sender is holding: the mail is
    *  `WORKER_KICKOFF_PREFIX + brief`, so a brief AT the cap refuses and
@@ -165,7 +170,7 @@ export type DispatchOutcome =
  * looked at).
  */
 export async function dispatchRun(
-  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
+  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
 ): Promise<DispatchOutcome> {
   const coord = deps.coord;
   const read = coord.run(id);
@@ -246,6 +251,31 @@ export async function dispatchRun(
     }
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
+
+  // Routing spec 2026-09-14 §5.3 (slice 4, Task 3). Validated HERE, beside
+  // `brief`/`items`'s own shape checks and BEFORE the hold/pause/cap reads
+  // below — the same D-46 ordering rule they follow: a malformed body is the
+  // cheapest refusal there is, so it must land before anything is counted,
+  // spawned or held.
+  //
+  // `undefined` (the parameter's own default, so an OMITTED fifth argument
+  // and an explicit `route: undefined` read identically) is NOT "no routing":
+  // it means the caller never asked, and `routeFields` stays `null` through
+  // every branch below — the argv this run sends is byte-for-byte what it was
+  // before this parameter existed. An empty `{}` DOES reach `parseRouteFields`
+  // (it is a real, distinct value — a caller who parsed a route body and it
+  // named no fields) but its parse can only ever yield zero keys, which
+  // collapses to the identical `null` below: there is nothing to flag and
+  // nothing to omit an event about.
+  let routeFields: RouteFields | null = null;
+  if (route !== undefined) {
+    const parsed = parseRouteFields(route);
+    if (!parsed.ok) {
+      return { ok: false, kind: 'bad-request',
+        detail: `route: ${parsed.why}` + (parsed.field === undefined ? '' : ` ${parsed.field}`) };
+    }
+    routeFields = Object.keys(parsed.route).length > 0 ? parsed.route : null;
+  }
 
   // The complete hold is known from the persisted run. Validate it after the
   // cheaper untrusted-body checks retain their existing precedence, but before
@@ -361,7 +391,20 @@ export async function dispatchRun(
     // operator's own add. `null` — an older ccd, no `actor-flags-v1` — composes
     // the bare argv that shipped before, token for token; the residual that
     // makes THIS change AGENT-FIRST is stated on `wsAddWorker`'s docstring.
-    const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec);
+    //
+    // ROUTING (routing spec §5.3, slice 4, Task 3): gated on `ROUTE_ARGV_CAP`,
+    // the ARGV-PARSING capability — a DIFFERENT token from the `ROUTE_CAP`
+    // the wave N≥2 arm below gates the `ccd route` VERB on, because the two
+    // are different parse paths on the box and can ship one without the
+    // other. `routeFields === null` (the caller never asked, or asked for
+    // nothing) sends the identical bare argv regardless of the cap, so an
+    // absent token never fires the omission event for a wave that carried no
+    // routing to omit.
+    if (routeFields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-argv-cap');
+    }
+    const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec,
+      capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null);
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
@@ -665,6 +708,41 @@ export async function dispatchRun(
   }
   const holdRes = await deps.runCcd(holdArgv);
   if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
+
+  // Routing spec 2026-09-14 §5.3 (slice 4, Task 3): wave N≥2 writes the
+  // record through the VERB, never the argv above — no ccd verb can spawn
+  // fresh into an already-existing workspace (D-1), so a routing change
+  // reaches a resumed worker only by calling `ccd route` on its session, one
+  // field per call, in `ROUTE_WRITABLE_FIELDS` order. `resumed` scopes this
+  // to the resume arm only: a fresh wave-1 spawn already carried its routing
+  // on the `ws-add` argv above and reaches this point with `resumed ===
+  // false`, and `routeFields === null` (nothing was asked) skips both the
+  // loop and the omission event below — there is nothing to write and
+  // nothing to have omitted.
+  //
+  // AFTER the hold, BEFORE the `/clear`: the hold is this dispatch's own
+  // claim on the workspace and does not depend on what gets routed, while
+  // the `/clear` is the point past which a refusal here would discard a
+  // context nothing has yet told the worker is fresh — writing first is what
+  // keeps a refused route from stranding a cleared, brief-less pane. A
+  // refusal on the k-th field returns `fleetFailed` immediately: the run
+  // stays `planned`, the `/clear` never fires, and the fields already
+  // written stay written — ccd's own repeated-field guard refuses within ONE
+  // argv, not across separate calls, so a partial write here is exactly what
+  // a retried dispatch overwrites, never a state this function must unwind.
+  if (resumed && routeFields !== null) {
+    if (!capSupported(deps.fleetState, ROUTE_CAP)) {
+      coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-v1-cap');
+    } else {
+      for (const f of ROUTE_WRITABLE_FIELDS) {
+        const v = routeFields[f];
+        if (v === undefined) continue;
+        const routeRes = await deps.runCcd(
+          CCD_ARGV.route(sessionId, f, v, sweepDec(deps.fleetState, `run:${id} dispatch`)));
+        if (!routeRes.ok) return { ok: false, kind: 'fleetFailed', stderr: routeRes.stderr };
+      }
+    }
+  }
 
   // R7 continued: the injected `/clear` itself, now placed AFTER the hold
   // above rather than before it — the only piece that moved. `resumed` is

@@ -4569,6 +4569,71 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
 }
 
 /**
+ * The routing record's WRITABLE fields, in write order (routing spec
+ * 2026-09-14 §5.3, slice 4). `ccdargv.ts`'s `routeFlags` walks this exact
+ * array to build `--route field=value` pairs, so a field this array omits can
+ * never reach the wire and a field it lists can never be spelled a second way
+ * — ONE list, imported everywhere a caller needs the vocabulary rather than
+ * retyped (`single-definition.test.ts` scans for a hand-written sibling).
+ *
+ * `degraded` and `inert` are ccd's OWN fields (routing spec §5.2) and are
+ * deliberately absent: nothing on the wire ever sets them, so a body naming
+ * either is `unknown-field`, the same refusal an unrecognised word gets.
+ */
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact'] as const;
+export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
+export type RouteFields = Partial<Record<RouteField, string>>;
+
+/** `parseRouteFields`'s own byte cap — the SAME 32 bytes `_route_valid` on the
+ *  box enforces per value, measured the same way (`_route_argv_check`
+ *  counts bytes, not characters). Refusing early on an oversize value here
+ *  saves the round trip; ccd's own check is still the authority. */
+const ROUTE_VALUE_MAX_BYTES = 32;
+
+/** ccd's own refusal grammar for a bad `--route`/`--set` pair, mirrored here
+ *  so a malformed body never reaches the fleet: a blank value, or one
+ *  carrying a control character (`_route_valid`'s `*[[:cntrl:]]*` case). */
+const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+
+/**
+ * SHAPE only — known keys, non-empty strings, no control characters, ≤ 32
+ * bytes each. The VALUES themselves (is `opus` a real class? is `high` a real
+ * effort rung?) are ccd's to refuse (`_route_valid` on the box), never
+ * duplicated here: this function's whole job is to keep a malformed body from
+ * reaching the fleet at all, not to pre-validate ccd's own vocabulary.
+ *
+ * `why` is `not-object` for a body that is not a plain object at all (an
+ * array, a primitive, `null`); `unknown-field`/`bad-value` name the offending
+ * `field` — two conditions a caller must be able to tell apart, so they never
+ * collapse onto one bare `false`.
+ */
+export type RouteFieldsParse =
+  | { ok: true; route: RouteFields }
+  | { ok: false; why: 'not-object' | 'unknown-field' | 'bad-value'; field?: string };
+
+export function parseRouteFields(v: unknown): RouteFieldsParse {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    return { ok: false, why: 'not-object' };
+  }
+  const route: RouteFields = {};
+  for (const [field, value] of Object.entries(v as Record<string, unknown>)) {
+    if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field)) {
+      return { ok: false, why: 'unknown-field', field };
+    }
+    if (typeof value !== 'string' || value.length === 0 || ROUTE_CONTROL_CHAR_RE.test(value)
+        // `TextEncoder`, not `.length`: a web global, not `node:*` — L0 may
+        // use it, and `.length` counts UTF-16 units, which would let a
+        // multi-byte value slip under a cap measured in bytes everywhere else
+        // in this file (`WORK_ITEM_TITLE_MAX`'s own reasoning).
+        || new TextEncoder().encode(value).length > ROUTE_VALUE_MAX_BYTES) {
+      return { ok: false, why: 'bad-value', field };
+    }
+    route[field as RouteField] = value;
+  }
+  return { ok: true, route };
+}
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT

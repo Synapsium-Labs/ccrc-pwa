@@ -1,5 +1,5 @@
 import type { FleetState } from './fleetstate.js';
-import type { StopSurface } from '../../shared/api.js';
+import { ROUTE_WRITABLE_FIELDS, type RouteFields, type StopSurface } from '../../shared/api.js';
 
 declare const CcdArgvBrand: unique symbol;
 
@@ -107,6 +107,32 @@ const decFlags = (dec: ActorFlags | null): readonly string[] =>
        ...(dec.reason === null ? [] : ['--reason', dec.reason])];
 
 /**
+ * `decFlags`' own `--actor`/`--reason` half, WITHOUT `--surface` — for
+ * `route`, the one dec-carrying verb below that never touches a pane and
+ * whose real parser (`cmd_route`, `ccd/ccd`) has no `--surface` case at all.
+ * See `CCD_ARGV.route`'s own docstring for the measurement that makes this a
+ * SEPARATE function rather than a third argument to `decFlags`.
+ */
+const actorReasonFlags = (dec: ActorFlags | null): readonly string[] =>
+  dec === null || dec === undefined
+    ? []
+    : ['--actor', dec.actor, ...(dec.reason === null ? [] : ['--reason', dec.reason])];
+
+/**
+ * The `--route field=value` flags for a wave's initial spawn (routing spec
+ * 2026-09-14 §5.3, slice 4). `null` — the same "this box might not understand
+ * the flag yet" contract `decFlags` above carries for `ActorFlags | null` —
+ * contributes NOTHING, byte for byte the argv that shipped before this slice;
+ * an EMPTY `{}` is a real, distinct value from `null` (it means the caller
+ * parsed a route body and it named no fields) and also contributes nothing,
+ * since there is nothing to flag. Walked in `ROUTE_WRITABLE_FIELDS` order,
+ * never `Object.entries`' insertion order, so the wire shape does not depend
+ * on which order a caller happened to set object keys in.
+ */
+const routeFlags = (r: RouteFields | null): string[] =>
+  r === null ? [] : ROUTE_WRITABLE_FIELDS.flatMap((f) => (r[f] === undefined ? [] : ['--route', `${f}=${r[f]}`]));
+
+/**
  * The session's own device label as an `--actor` value.
  *
  * TWO CONDITIONS, TWO WORDS, TWO NAMESPACES. `null` means the gate measured no
@@ -179,12 +205,20 @@ export function sweepDec(
  * `CcdArgv` that `Deps.runCcd` demands.
  */
 export const CCD_ARGV = {
-  start:     (w: string, p: string, wd?: string) => argv(['start', w, p, ...(wd ? [wd] : [])]),
+  /** `route` is a FOURTH, OPTIONAL argument, not a fifth positional — flags
+   *  LEAD (the `swapCross` rule two entries down: a trailing flag on an old
+   *  ccd's exact-arity parse binds as the workdir or slides into it), and the
+   *  defaulted `null` keeps this builder's call shape unchanged everywhere it
+   *  already fires, so `whitelist-subset.test.ts`'s enumeration needs no
+   *  update for a sample that still passes two or three arguments. */
+  start:     (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+               argv(['start', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   /** `enable` is `start` plus the systemd enable, and it is what
    *  `POST /api/sessions` sends unless the body says `enable: false`. It is a
    *  separate entry because the two words are separate grants in the agent's
    *  list, and because layer 3 fails if a grant nothing builds is left over. */
-  enable:    (w: string, p: string, wd?: string) => argv(['enable', w, p, ...(wd ? [wd] : [])]),
+  enable:    (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+               argv(['enable', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   /** `start`/`enable` with the crossing declared — see `swapCross` below for
    *  why the flag leads and why these are separate entries. */
   startCross:  (w: string, p: string, wd?: string) => argv(['start', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
@@ -241,7 +275,11 @@ export const CCD_ARGV = {
    *  gate that should stop it reaching an old box at all; this is the second
    *  lock. */
   swapCross: (id: string, w: string) => argv(['swap', '--cross-pool', id, w]),
-  wsAdd:     (p: string) => argv(['ws-add', p]),
+  /** `route`, defaulted `null`: the PWA's ordinary add, from an operator who
+   *  may have tapped a routing picker before creating the workspace — the
+   *  `start`/`enable` rule above for the same reason (flags lead, the
+   *  default keeps every existing call site's argv unchanged). */
+  wsAdd:     (p: string, route: RouteFields | null = null) => argv(['ws-add', ...routeFlags(route), p]),
   /** The dispatch path's ws-add: a dispatched program worker spawns WITHOUT
    *  --remote-control (the 2026-08-13 ruling, task #37) — declared at
    *  creation, the only moment worker-ness is known (`hold` is written after
@@ -286,7 +324,21 @@ export const CCD_ARGV = {
    *  against the real binary rather than argued: `ccdargv-dec-parity.test.ts`
    *  derives this builder into its probe set FROM this table and runs the verb
    *  in a fixture HOME. */
-  wsAddWorker: (p: string, dec: ActorFlags | null) => argv(['ws-add', '--no-rc', p, ...decFlags(dec)]),
+  /**
+   * `route`, appended after `dec` (routing spec §5.3, slice 4): the dispatch
+   * path's ONE writer besides the standing `ws-hold`/`ws-release` pair, and
+   * the ONLY place a wave's routing reaches ccd on the SAME call that mints
+   * the workspace, rather than a second `ccd route` round trip a wave-1
+   * worker's pane does not exist to receive yet. `routeFlags` sits BETWEEN
+   * `--no-rc` and `p` — the same leading-flags position every builder above
+   * uses, never trailing after `decFlags`, where an old ccd's exact-arity
+   * parse would read a `--route` token as the actor/reason value it expects
+   * there. `null` (an old ccd, no `route-argv-v1`) composes the bare argv
+   * this builder shipped before this slice, token for token — the residual
+   * `dispatch.ts`'s own call site states is which capability gates it.
+   */
+  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null) =>
+                 argv(['ws-add', '--no-rc', ...routeFlags(route), p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
@@ -351,9 +403,34 @@ export const CCD_ARGV = {
    *  picks a field and a value, and `field`/`value` reach ccd UNVALIDATED —
    *  `_route_valid` on the box is the authority and refuses before writing.
    *  No `--apply` form exists in this slice: the coordinator never types into
-   *  another session's pane, and the server's own apply path is slice 4's. */
-  route: (id: string, field: string, value: string) =>
-           argv(['route', '--session', id, '--set', `${field}=${value}`]),
+   *  another session's pane, and the server's own apply path is slice 4's.
+   *
+   *  `dec`, defaulted `null` (slice 4, Task 3): the wave N≥2 dispatch path is
+   *  an unattended lane calling this on a coordinator's behalf, exactly
+   *  `wsAddWorker`'s reason for carrying one — so it spends the SAME
+   *  `dispatchDec` measurement dispatch.ts already takes once and threads
+   *  through its hold, rather than a second, silently-uncredited write in the
+   *  journal. `null` (no `actor-flags-v1`) composes the bare argv this
+   *  builder always sent.
+   *
+   *  `actorReasonFlags`, NOT `decFlags` (measured deviation from this task's
+   *  own brief, which specified `decFlags`): `cmd_route`'s own usage line
+   *  (`ccd/ccd`) is `--session <id> --set <field>=<value>... [--actor <text>]
+   *  [--reason <text>]` — there never was a `--surface` case, because this
+   *  verb never touches a pane the way the five workspace verbs and `ws-add`
+   *  do, and `ccdargv-dec-parity.test.ts` runs the real binary and proves it:
+   *  `--surface agent` falls through `cmd_route`'s `*) die "$usage"` arm.
+   *  Sending it would be exactly the defect class that suite exists to catch
+   *  (D-410, this file's own long comment on `wsAddWorker`) — a flag that
+   *  reads right in this table and dies on the fleet. `actorReasonFlags`
+   *  carries `--actor`/`--reason` only, which `cmd_route` does parse; using a
+   *  DIFFERENT name from `decFlags` is also what keeps this builder OUT of
+   *  `ccdargv-dec-parity.test.ts`'s derived set, correctly — that suite's "six"
+   *  is `actor-flags-v1`'s own five workspace verbs plus `ws-add`'s D-410
+   *  extension, a contract this verb was never given and must not silently
+   *  inherit. */
+  route: (id: string, field: string, value: string, dec: ActorFlags | null = null) =>
+           argv(['route', '--session', id, '--set', `${field}=${value}`, ...actorReasonFlags(dec)]),
 } as const;
 
 /**
@@ -413,6 +490,19 @@ export const POOLS_CAP = 'pools-v1';
  *  decision, in slice 4: whether dispatch may pass a wave's routing on the
  *  `ws-add` argv — absent, the flag is OMITTED, the actor-flags-v1 shape. */
 export const ROUTE_CAP = 'route-v1';
+
+/** The `ccd caps` token that says this box parses `--route field=value` on
+ *  `ws-add`/`start`/`enable` (routing spec 2026-09-14 §5.3, slice 4). Spelled
+ *  ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo
+ *  route-argv-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, held equal by that test's `toContain` line. It
+ *  gates ONE decision, distinct from `ROUTE_CAP` above: whether the SPAWNING
+ *  argv itself may carry `--route` — `ROUTE_CAP` gates the separate `ccd
+ *  route` verb a wave N≥2 dispatch calls AFTER a workspace already exists.
+ *  Two capabilities because a box can ship one implementation before the
+ *  other: `_route_argv_check` (this token) and `cmd_route` (`ROUTE_CAP`) are
+ *  different parse paths in `ccd/ccd`, landed in separate commits. */
+export const ROUTE_ARGV_CAP = 'route-argv-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string
