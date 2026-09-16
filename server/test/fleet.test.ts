@@ -1261,6 +1261,46 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     );
     expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBe('closed-wave-coordinator');
   });
+
+  // Task 3 fix round 2 (Important 1, upgraded from Minor — Global Constraints:
+  // "every new guard ships WITH a test that goes RED when the guard is
+  // deleted or mutated"). `coordPlacementStamps`'s `WHERE coordProject IS NOT
+  // NULL` was executed by every test above but pinned by none of them: delete
+  // it and this whole file stays green, because every OTHER test's newer run
+  // (if any) either has no coordProject either (both null, no divergence) or
+  // IS the stamped one. This is the one shape that tells them apart — a
+  // SESSION with an OLDER stamped run and a NEWER unstamped one. Without the
+  // WHERE clause, the newer row's `coordProject` reads as SQL NULL cast
+  // straight through the unsafe `as unknown as {...coordProject: string}[]`
+  // (`store.ts:2056`) into `foldCoordPlacements`'s max-id fold, which has no
+  // reason to distrust its own type and overwrites `bySession` with that
+  // `null` — reintroducing the exact wave-boundary bounce `includeClosed:
+  // true` exists to prevent, just from the opposite direction (a stamp
+  // disappearing forward in time instead of backward).
+  it('an older STAMPED run is not shadowed by a newer UNSTAMPED one on the same session — pins `WHERE coordProject IS NOT NULL`', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker8', 'claude', {
+      project: 'demo-worker8-project', hold: 'program:agent-evals wave:2/2',
+    });
+    const coord = mkCoord();
+    const stampedRun = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker8',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'real-coordinator',
+    }) as { id: number };
+    coord.bindSession(stampedRun.id, 'demo-worker8');
+    // Opened AFTER (higher id — "newer"), but no coordProject given at all.
+    const unstampedRun = coord.openRun({
+      program: 'agent-evals', title: 'wave 2', project: 'demo-worker8',
+      wave: 2, waveOf: 2, claimedBy: 'demo-coordinator',
+    }) as { id: number };
+    coord.bindSession(unstampedRun.id, 'demo-worker8');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker8')!.boardProject).toBe('real-coordinator');
+  });
 });
 
 // Task 3, fix round 1 (Important 3+4): the fold itself, exercised directly

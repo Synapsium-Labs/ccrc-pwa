@@ -67,6 +67,37 @@ describe('CoordStore: runs', () => {
     expect(row!.coordProject).toBeNull();
   });
 
+  // Task 3 fix round 2 (Important 2): `coordPlacementStamps` shipped with no
+  // store-level test at all.
+  describe('CoordStore.coordPlacementStamps', () => {
+    it('returns a stamp only for runs whose coordProject is set, id/sessionId/project carried verbatim', () => {
+      const s = store();
+      const stamped = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
+      s.bindSession(stamped.id, 'demo-worker');
+      openRun(s, { wave: 2 }); // unstamped — must not appear at all
+      expect(s.coordPlacementStamps()).toEqual({
+        ok: true,
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', project: 'ccrc-pwa', coordProject: 'intake-platform' }],
+      });
+    });
+
+    // The whole reason this read includes closed runs at all
+    // (`fleet.ts`'s `readCoordPlacements`, and `fleet.test.ts`'s own
+    // end-to-end "CLOSED run stamp still places the session" pin) — this is
+    // the SAME fact, pinned one seam closer to the SQL that actually decides
+    // it, so a change to this method's own WHERE clause reds HERE first.
+    it("a CLOSED run's stamp remains visible — the wave-boundary guarantee, pinned at the store seam", () => {
+      const s = store();
+      const stamped = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
+      s.bindSession(stamped.id, 'demo-worker');
+      expect(s.advance(stamped.id, 'failed', 'test-close').ok).toBe(true);
+      expect(s.coordPlacementStamps()).toEqual({
+        ok: true,
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', project: 'ccrc-pwa', coordProject: 'intake-platform' }],
+      });
+    });
+  });
+
   it('refuses a second coordinator rather than arbitrating', () => {
     // spec:291-292 — one coordinator per program; `claimedBy` exists so a
     // second one REFUSES.
@@ -241,22 +272,28 @@ describe('CoordStore: runs', () => {
 
     /** Plant a `runs` row whose named column is wider than the JavaScript safe
      *  domain — the idiom `rejects an unsafe persisted id on an idempotent
-     *  retry` above already uses, generalised over which column carries it. */
+     *  retry` above already uses, generalised over which column carries it.
+     *  `coordProject` defaults to the column's own NULL — every pre-existing
+     *  caller omits it and gets exactly the row it always got — and is here
+     *  ONLY so `coordPlacementStamps`'s own refusal test (fix round 2) can
+     *  plant a row its `WHERE coordProject IS NOT NULL` filter will not
+     *  itself exclude before `persistedInt` ever sees the unsafe id. */
     const plantUnsafe = (s: CoordStore, column: 'id' | 'wave' | 'waveOf',
-                         over: { sessionId?: string } = {}): void => {
+                         over: { sessionId?: string; coordProject?: string } = {}): void => {
       const now = Date.now();
       s.db.prepare(
         'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?)',
       ).run('wide', 'Wide', now, 'active', null);
       s.db.prepare(
-        'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt) ' +
-        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        'INSERT INTO runs (id, program, wave, waveOf, project, sessionId, state, claimedBy, openedAt, coordProject) ' +
+        'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
       ).run(
         column === 'id' ? UNSAFE : 7,
         'wide',
         column === 'wave' ? UNSAFE : 1,
         column === 'waveOf' ? UNSAFE : 5,
         'ccrc-pwa', over.sessionId ?? null, 'planned', 'ccrc-pwa-coordinator', now,
+        over.coordProject ?? null,
       );
     };
 
@@ -304,6 +341,27 @@ describe('CoordStore: runs', () => {
         ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
       });
       expect(s.openRunsForSession('demo-nobody')).toEqual({ ok: true, siblings: [] });
+    });
+
+    // Task 3 fix round 2 (Important 2): `coordPlacementStamps` had this same
+    // ladder's `persistedInt` all-or-failure arm executed by NOTHING — mirrors
+    // `openRunsForSession`'s test immediately above, the precedent
+    // `coordPlacementStamps`'s own docstring cites. `coordProject` MUST be set
+    // on the planted row (unlike `openRunsForSession`'s plant above it), or
+    // this method's own `WHERE coordProject IS NOT NULL` filter would exclude
+    // the row before `persistedInt` ever ran on its id — a refusal this test
+    // would then be pinning nothing.
+    it('coordPlacementStamps() refuses an unrepresentable id, and answers [] when nothing is stamped', () => {
+      const s = store();
+      plantUnsafe(s, 'id', { sessionId: 'demo-alpha', coordProject: 'intake-platform' });
+      expect(s.coordPlacementStamps()).toEqual({
+        ok: false, kind: 'run-unreadable', detail: 'run id is not a positive safe integer',
+      });
+      // An unstamped-only store (no `coordProject` anywhere) is not the same
+      // condition as an EMPTY store, but both answer the same shape: `{ok:
+      // true, stamps: []}`, never `run-unreadable` for a store with nothing to
+      // refuse.
+      expect(store().coordPlacementStamps()).toEqual({ ok: true, stamps: [] });
     });
   });
 
