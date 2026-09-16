@@ -34,9 +34,16 @@ afterEach(() => { h.cleanup(); });
  *  throws on non-zero, and it gives back no status. Nothing may wrap the
  *  snippet — `$( )` or `( )` would demote the `exit` and the assertion would
  *  pass either way (`ccd-spawn-split.test.ts`'s rule). */
-const shStatus = (snippet: string): { status: number; out: string } => {
+const shStatus = (snippet: string, boundSec?: number): { status: number; out: string } => {
+  // `boundSec` puts a WALL CLOCK around the snippet, for the one assertion that
+  // is about a loop terminating at all: ccd runs under `set -uo pipefail` with
+  // no `-e`, so a `--route` arm that shifted before it read its value would
+  // shift nothing and spin for ever — and a spinning test is a hung suite, not
+  // a failure. `timeout` exits 124, which is not the 1 those cases assert.
+  const bash = ['bash', '-c', `source "${CCD}"; exec 2>&1; ${snippet}`];
+  const argv = boundSec === undefined ? bash : ['timeout', String(boundSec), ...bash];
   try {
-    const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; ${snippet}`],
+    const out = execFileSync(argv[0]!, argv.slice(1),
       { encoding: 'utf8', cwd: h.home,
         env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
     return { status: 0, out };
@@ -54,6 +61,19 @@ const composed = (line: string): string => {
   return m![1]!;
 };
 const routeRows = (): Record<string, unknown>[] => eventsOf(h.home, 'route');
+const swapLines = (): string[] => {
+  const p = path.join(h.home, '.cc-sessions', 'swap.log');
+  return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter((l) => l !== '') : [];
+};
+/** The `route <id>: <field> <old> -> <new>` lines `_route_argv_write` appends,
+ *  timestamp stripped. THE JOURNAL IS NOT THIS FILE: `_lc_done` writes a JSON
+ *  row and this writes a line of prose, and an assertion on one says nothing
+ *  about the other — deleting the `echo` leaves every journal assertion in this
+ *  file green. `_route_degrade`'s lines say `degrade <id>:`, so this counts one
+ *  writer and not the other. */
+const routeLog = (id: string): string[] =>
+  swapLines().filter((l) => l.includes(` route ${id}: `))
+    .map((l) => l.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d /, ''));
 const record = (id: string): (string | null)[] =>
   ['class', 'effort', 'subagent', 'workflow'].map((f) => h.reg(id, f));
 
@@ -90,9 +110,74 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     expect(decOf(rows[0]!)).toMatchObject({ actor: 'ws-add', reason: 'argv' });
     expect(rows[0]!['detail']).toBe('class: ∅ -> opus');
     expect(rows[1]!['detail']).toBe('effort: ∅ -> high');
+    // ONE swap.log LINE PER FIELD, in argv order, carrying the actor and the
+    // reason. Nothing else in this file can see this writer.
+    expect(routeLog(id)).toEqual([
+      `route ${id}: class ∅ -> opus [actor=ws-add] (argv)`,
+      `route ${id}: effort ∅ -> high [actor=ws-add] (argv)`,
+    ]);
     // The record is written at the MINT, above the spawn, so the very first
     // pane already carries it — not the second settle.
     expect(composed(newSessions()[0]!)).toContain('--model opus');
+  });
+
+  it('--route AFTER the positional binds the same row — the strip loop is positionless (the D-410 shape the dispatch argv already uses)', () => {
+    // `run-routes.test.ts` and `whitelist-subset.test.ts` both compose
+    // `ws-add --no-rc <project> --surface agent --actor '…'`, so the flag AFTER
+    // the positional is the shape the dispatcher really sends. Every other case
+    // in this file puts `--route` first, which is the shape that could pass
+    // while the real one bound `--route` as the project (D-410, one flag left).
+    h.sh(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc demo --route class=opus --route effort=high`);
+    const id = 'demo-quiet-mesa';
+    expect(h.reg(id, 'class')).toBe('opus');
+    expect(h.reg(id, 'effort')).toBe('high');
+    expect(h.reg(id, 'project')).toBe('demo');
+    expect(routeRows()).toHaveLength(2);
+  });
+
+  it('--route as the FINAL token refuses with the usage line rather than hanging', () => {
+    // The arity check is what makes this a refusal. Without it `shift 2` past
+    // the end of argv shifts nothing and this loop never terminates, so the
+    // call is bounded by a wall clock: a hang answers 124, not 1.
+    const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc demo --route`, 20);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('usage: ccd ws-add');
+    expect(r.out).toContain('[--route <field>=<value>]...');
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'))).toBe(false);
+  });
+
+  it('a field given TWICE is refused before anything is minted — placement and the record can never disagree', () => {
+    // `_route_argv_class` answers with the FIRST `class=` pair and decides the
+    // LANE; `_route_argv_write` writes every pair and the LAST one wins the
+    // RECORD. Accepting this argv places a session by `opus` and records
+    // `haiku` — a lane chosen for a class the session's own record denies.
+    const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route class=opus --route class=haiku demo`);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('--route class given twice — one value per field; nothing was touched');
+    expect(record('demo-quiet-mesa')).toEqual([null, null, null, null]);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'))).toBe(false);
+    expect(newSessions()).toHaveLength(0);
+    expect(swapLines().filter((l) => l.includes(' route '))).toEqual([]);
+  });
+
+  it('--actor refuses a control character, so the swap.log line it reaches VERBATIM cannot be forged', () => {
+    // `--actor` is free-form caller text and `_route_argv_write` interpolates it
+    // raw into `[actor=$actor]`; `$REG/swap.log` is writable by every session on
+    // the box. A newline in it appends a second, forged `route …` audit line —
+    // which is why `cmd_route` refuses the same bytes (controller ruling S1-R4).
+    const wt = h.sh('echo "$WORKTREES_ROOT"');
+    const forged = 'route other: class ∅ -> fable [actor=y] (argv)';
+    const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --actor $'x\n2026-01-01 00:00:00 ${forged}' --route class=opus demo`);
+    expect(r.status).toBe(1);
+    expect(r.out).toContain('ws-add: --actor must not contain control characters');
+    // Before ANY mint: no worktree, no row, no pane — and no log line at all,
+    // forged or honest.
+    expect(fs.existsSync(path.join(wt, 'demo', 'quiet-mesa'))).toBe(false);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-mesa.uuid'))).toBe(false);
+    expect(record('demo-quiet-mesa')).toEqual([null, null, null, null]);
+    expect(newSessions()).toHaveLength(0);
+    expect(swapLines().filter((l) => l.includes('route other:'))).toEqual([]);
+    expect(swapLines().filter((l) => l.includes(' route '))).toEqual([]);
   });
 
   it('a bad value dies BEFORE the worktree, the row or the pane exist, naming the field and the byte count, never the bytes', () => {
@@ -143,6 +228,14 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
     // UNMEASURED and nobody degrades on a fabricated fact — the intended class
     // is what the first spawn composes.
     expect(h.reg(id, 'degraded')).toBeNull();
+    // FOUR swap.log lines, one per field of the row, all four naming the
+    // default rather than an argv.
+    expect(routeLog(id)).toEqual([
+      `route ${id}: class ∅ -> fable [actor=spawn] (coordinator row (default))`,
+      `route ${id}: effort ∅ -> ultracode [actor=spawn] (coordinator row (default))`,
+      `route ${id}: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))`,
+      `route ${id}: workflow ∅ -> on [actor=spawn] (coordinator row (default))`,
+    ]);
     expect(composed(newSessions()[0]!))
       .toContain(`--model fable --settings '{"enableWorkflows":true,"ultracode":true}' --effort ultracode`);
   });
@@ -175,6 +268,32 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     expect(h.reg('claude-demo', 'subagent')).toBe('haiku');
     expect(h.reg('claude-demo', 'class')).toBeNull();
     expect(routeRows()).toHaveLength(2);
+  });
+
+  it('start and enable WRITE --route on a session that ALREADY has a row — the pairs are never silently discarded', () => {
+    // The overloaded seam this closes: `cmd_start` validated the pairs at the
+    // top and wrote them only on the minting arm, so `ccd enable --route
+    // class=opus claude demo` against an existing session printed nothing,
+    // journaled nothing, wrote nothing and exited 0. "You named fields" and
+    // "you named none" are two conditions and a caller handles them
+    // differently, so they must not answer alike (controller ruling S4-R3).
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=sonnet claude demo`);
+    expect(h.reg('claude-demo', 'class')).toBe('sonnet');
+    expect(routeRows()).toHaveLength(1);
+
+    h.sh(`${START_SPAWNLESS} cmd_enable --route class=opus claude demo`);
+    expect(h.reg('claude-demo', 'class')).toBe('opus');
+    const rows = routeRows();
+    expect(rows).toHaveLength(2);
+    expect(decOf(rows[1]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    // THE OLD VALUE IS READ AND RENDERED, exactly as `cmd_route` renders it —
+    // an audit row that said `∅ -> opus` here would claim a first write that
+    // did not happen and hide the value it replaced.
+    expect(rows[1]!['detail']).toBe('class: sonnet -> opus');
+    expect(routeLog('claude-demo')).toEqual([
+      'route claude-demo: class ∅ -> sonnet [actor=start] (argv)',
+      'route claude-demo: class sonnet -> opus [actor=start] (argv)',
+    ]);
   });
 
   it('start refuses a bad value before the registry row exists', () => {
@@ -281,17 +400,35 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     const verb = bodyOf('cmd_route');
     const only = argv.filter((l) => !verb.includes(l) && !verb.includes(undiverge(l)));
     // The census: the signature, the loop over `$@` (`cmd_route` loops over its
-    // collected `--set`s), the well-formedness check that names THIS flag, and
-    // the return. A new arm on one side only shows up here and reds.
+    // collected `--set`s), the well-formedness check that names THIS flag, the
+    // given-twice refusal, and the return. A new arm on one side only shows up
+    // here and reds.
+    //
+    // FIVE, NOT FOUR — moved in fix round 2 by the given-twice guard (controller
+    // ruling S4-R4), which is deliberately argv-only. `cmd_route` cannot make
+    // this refusal and must not: its `--set` pairs feed ONE consumer, the write
+    // loop, where last-wins is a coherent answer. Here the same argv feeds two —
+    // `_route_argv_class` reads the FIRST `class=` and picks the LANE while the
+    // write loop's LAST one wins the RECORD — so a repeat is two answers to one
+    // question. The signature line moved with it (`seen=""`), which is why the
+    // count is five rather than four plus one.
     expect(only).toEqual([
-      `local kv f v rc cls="" eff=""`,
+      `local kv f v rc cls="" eff="" seen=""`,
       `for kv in "$@"; do`,
       `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
+      `_route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "`,
       `return 0`,
     ]);
     const dies = only.filter((l) => l.includes('die '));
-    expect(dies).toHaveLength(1);
-    // Same sentence, each flag spelled as the caller typed it.
+    expect(dies).toHaveLength(2);
+    // The well-formedness refusal is the SAME sentence on both sides, each flag
+    // spelled as the caller typed it...
     expect(verb).toContain(dies[0]!.replace('--route', '--set'));
+    // ...and the second has no counterpart at all, by the argument above. Said
+    // as an assertion so that "no counterpart" stays a measurement: the day
+    // `cmd_route` grows its own given-twice arm, this reds and somebody has to
+    // decide whether the two are still allowed to differ.
+    expect(dies[1]).toContain('given twice');
+    expect(verb.some((l) => l.includes('given twice'))).toBe(false);
   });
 });

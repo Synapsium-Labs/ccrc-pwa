@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2fe651725f85e9b4c0369fb63d0abe842eb171dac09aa71723925da43415438f
+# ccrc:generated 1 sha256=378eaa8815fc025157920863f278051f904f9c98897b1b4b293aa70dd7e7e2df
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4947,6 +4947,17 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # refusal still lands where nothing has been created yet.
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    # THE SAME REFUSAL `cmd_route` MAKES, for the same reason (controller ruling
+    # S1-R4, extended to this verb by S4-R2). This verb's `--actor` reaches
+    # `$REG/swap.log` VERBATIM through `_route_argv_write`'s `[actor=$actor]`,
+    # and that file is writable by every session on the box, so a newline in it
+    # writes a second, forged `route <id>: …` audit line — the exact shape
+    # `cmd_route` refuses. The journal arm needs no guard (`_lc_json` encodes);
+    # the log line is the hole. Refused HERE, above `_route_argv_check` and
+    # above every mint, so a forged actor leaves the box as it found it.
+    case "$lc_actor" in
+      *[[:cntrl:]]*) die "ws-add: --actor must not contain control characters" ;;
+    esac
     _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
   fi
   # ABOVE THE PROJECT POSITIONAL, AND THAT IS THE POINT — earlier than the disk
@@ -14792,12 +14803,23 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
   # the worktree, the branch, the registry row and the pane — so a coordinator
   # that composed a bad argv gets a refusal and an untouched box, never a
   # half-made workspace nobody asked for.
-  local kv f v rc cls="" eff=""
+  local kv f v rc cls="" eff="" seen=""
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"
     f="${kv%%=*}"; v="${kv#*=}"
     _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
     [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # ONE VALUE PER FIELD, and this refusal has NO counterpart in `cmd_route`
+    # (controller ruling S4-R4) — it is the one place the two validators are
+    # allowed to differ in ARMS rather than wording, because only this side
+    # feeds two consumers that read the same argv differently:
+    # `_route_argv_class` answers with the FIRST `class=` pair and decides
+    # PLACEMENT, `_route_argv_write` writes every pair and the LAST one wins
+    # the record. `--route class=opus --route class=haiku` therefore placed by
+    # `opus` and recorded `haiku` — a session whose lane was chosen for a class
+    # its own record denies. Refused instead of ranked: neither answer is more
+    # right than the other, and nothing was minted yet.
+    _route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "
     # THREE ANSWERS, THREE SENTENCES — `cmd_route`'s rule, and its reasoning
     # applies here unchanged: an unreadable vocabulary is not the caller's value
     # being wrong, and folding the two tells an operator with a good `haiku` to
@@ -14819,15 +14841,31 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
 }
 
 _route_argv_write() {   # id actor reason k=v... — write validated fields (the row exists), one route row + one log line each
-  # THE PREVIOUS VALUE IS `∅` AND IS NOT READ, unlike `cmd_route`'s: every caller
-  # here has just minted the row, so there is nothing to read and a read would
-  # only invent a second answer for a field that has none.
-  local id="$1" actor="$2" reason="$3" kv f v; shift 3
+  # THE PREVIOUS VALUE IS READ, AND RENDERED EXACTLY AS `cmd_route` RENDERS IT
+  # (controller ruling S4-R3). The first cut printed `∅` unconditionally, on the
+  # argument that every caller had just minted the row — true then, false as of
+  # this round: `cmd_start`'s revival arm writes `--route` pairs against a
+  # record that already exists, and a hard-coded `∅` there would journal a
+  # first-write that did not happen and hide the value it replaced. `∅` is now
+  # the ABSENT case of the same three-condition read, so the mint arm's rows are
+  # byte-identical to what it wrote before.
+  #
+  # `_route_get`, not `_route_peek`: this read happens on a path that is about
+  # to WRITE, so an unrecognised standing value is a fact the journal should
+  # carry a note about — the opposite of `cmd_route`'s pair check, which may
+  # `die` before touching anything (its own comment argues that side).
+  # An unrecognised value is rendered as a byte COUNT, never its bytes: the file
+  # is writable by any session on the box and a multi-line value would forge
+  # log lines.
+  local id="$1" actor="$2" reason="$3" kv f v raw old; shift 3
   for kv in "$@"; do
     f="${kv%%=*}"; v="${kv#*=}"
+    raw=$(_reg_get "$id" "$f" 2>/dev/null)
+    old=$(_route_get "$id" "$f")
+    if [[ -n "$raw" && -z "$old" ]]; then old="<$(_route_bytes "$raw") bytes, unrecognised>"; fi
     _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
-    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ∅ -> $v"
-    echo "$(date '+%F %T') route $id: $f ∅ -> $v [actor=$actor] ($reason)" >> "$REG/swap.log"
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
+    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v [actor=$actor] ($reason)" >> "$REG/swap.log"
   done
 }
 
@@ -16593,22 +16631,33 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
-  # ── THE ROUTING RECORD, ON A SESSION BEING MINTED AND NEVER ON A REVIVAL ────
-  # `$regw` empty is this verb's own "this row did not exist" proxy — the same
-  # one the pool policy above uses, with the same caveat stated there. A REVIVAL
-  # must write nothing: the record belongs to the session, `ccd route` is the
-  # verb that edits it, and re-seeding a default over a coordinator's considered
-  # fields at every restart would make the record mean nothing.
+  # ── THE ROUTING RECORD: THE ARGV ALWAYS, THE DEFAULT ONLY AT A MINT ─────────
+  # TWO CONDITIONS, TWO ARMS (controller ruling S4-R3). The first cut wrote
+  # NEITHER on a revival, so `ccd enable --route class=opus claude demo` on a
+  # session that already had a row validated the pair, wrote nothing, journaled
+  # nothing, printed nothing and exited 0 — a request the operator watched
+  # succeed and that changed no byte. That is the overloaded seam this tree
+  # forbids: "you named fields" and "you named none" are not the same act.
+  #
+  # NAMED PAIRS ARE WRITTEN WHETHER THE ROW IS NEW OR OLD. They were validated
+  # at the top of this verb, before either positional form was resolved, and
+  # `_route_argv_write` reads the standing value so the row it journals says
+  # what it replaced. This is `ccd route`'s write reached through the verb the
+  # operator was already typing; the record still belongs to the session.
+  #
+  # THE DEFAULT IS STILL MINT-ONLY. `$regw` empty is this verb's own "this row
+  # did not exist" proxy — the same one the pool policy above uses, with the
+  # same caveat stated there — and re-seeding the coordinator row over a
+  # coordinator's considered fields at every restart would make the record mean
+  # nothing.
   #
   # `start` is the actor on both arms, including the one `cmd_enable` reaches:
   # that verb forwards the pairs here rather than parsing them twice, and its own
   # `enable` lifecycle row already records that boot-persistence was asked for.
-  if [[ -z "$regw" ]]; then
-    if (( ${#route[@]} )); then
-      _route_argv_write "$id" start argv "${route[@]}"
-    else
-      _route_seed_default "$id" "$wrapper"
-    fi
+  if (( ${#route[@]} )); then
+    _route_argv_write "$id" start argv "${route[@]}"
+  elif [[ -z "$regw" ]]; then
+    _route_seed_default "$id" "$wrapper"
   fi
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
   # already pinned home to this wrapper, so the marker's account clause is

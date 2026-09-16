@@ -56,6 +56,16 @@ const plantSweep = (estimates: Record<string, number>): void => {
     Object.entries(estimates).map(([k, v]) => [k, { fableShare: { estimate: v } }]));
   fs.writeFileSync(path.join(sw, 'latest.json'), JSON.stringify({ finishedAt, perAccount }));
 };
+/** The `route <id>: <field> <old> -> <new>` lines `_route_argv_write` appends to
+ *  `$REG/swap.log`, timestamp stripped. The journal rows below are a DIFFERENT
+ *  writer (`_lc_done`, JSON), so no assertion on them can see this one;
+ *  `_route_degrade`'s line says `degrade <id>:` and is not counted here. */
+const routeLog = (id: string): string[] => {
+  const p = path.join(h.home, '.cc-sessions', 'swap.log');
+  return (fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n') : [])
+    .filter((l) => l.includes(` route ${id}: `))
+    .map((l) => l.replace(/^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d /, ''));
+};
 const tagPool = (project: string, pool: string): void => {
   const dir = path.join(h.home, '.cc-sessions', 'pools');
   fs.mkdirSync(dir, { recursive: true });
@@ -200,5 +210,14 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     expect(rows).toHaveLength(5);
     expect(decOf(rows[0]!)).toMatchObject({ actor: 'spawn', reason: 'coordinator row (default)' });
     expect(rows[4]!['detail']).toBe('degraded: ∅ -> opus');
+    // FOUR log lines, one per field of the row — the writer the journal
+    // assertions above cannot see. The degrade's own line is `degrade <id>:`
+    // and is deliberately outside this filter.
+    expect(routeLog(id)).toEqual([
+      `route ${id}: class ∅ -> fable [actor=spawn] (coordinator row (default))`,
+      `route ${id}: effort ∅ -> ultracode [actor=spawn] (coordinator row (default))`,
+      `route ${id}: subagent ∅ -> sonnet [actor=spawn] (coordinator row (default))`,
+      `route ${id}: workflow ∅ -> on [actor=spawn] (coordinator row (default))`,
+    ]);
   });
 });
