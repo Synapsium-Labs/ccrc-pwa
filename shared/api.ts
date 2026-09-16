@@ -6925,8 +6925,23 @@ export type PaneHistoryReply =
 
 /**
  * The narrowest pane width at which the fleet's phrase-matching readers may be
- * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down and the mail
- * lane holds — a narrow pane is UNMEASURED, not idle.
+ * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down — a narrow
+ * pane is UNMEASURED, not idle.
+ *
+ * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only consumer. Measured
+ * 2026-09-16: `grep -rn 'READER_MIN_COLS' server/src pwa/src agent/src shared/*.ts`
+ * returns exactly one hit — this declaration. In particular the server's mail
+ * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
+ * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
+ * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —
+ * a phrase match (`AUTO_CONTINUE_RE`) with no width measurement anywhere on that
+ * path. The failure direction is the dangerous one: on a pane below this width
+ * Claude Code's own limit-recovery line WRAPS, the phrase is no longer on one
+ * row, `autoContinueArmed` answers false, the hold does NOT fire, and the server
+ * types into a pane whose auto-continue was armed — cancelling it. An earlier
+ * version of this docstring said "and the mail lane holds"; nothing shipped ever
+ * made that true. Teaching that lane this floor is a deliberate later widening,
+ * not something to infer from this constant's existence.
  *
  * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
  * line at the terminal width before tmux ever stores the row. This tree cannot

@@ -464,7 +464,12 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
   // `typecheck-tests.test.ts` compiles all of `server/test/` under
   // `test/tsconfig.tests.json`. (In `agent/test/` it would be a pin that cannot
   // fail; `whitelist-structural.test.ts`'s header says why.)
-  it('winSize`s mode vocabulary is closed at the TYPE — a third word never reaches ccd', () => {
+  // THE TITLE SAYS ONLY WHAT THIS MEASURES (fix round 2). It read "… a third
+  // word never reaches ccd", which is the one thing the body then shows is
+  // false: the argv IS allowed by the whitelist, and what refuses `latest` is
+  // the TYPE on the server side and ccd's own `case` on the box — not this
+  // table. The disclosure below was always honest; the title was not.
+  it('winSize`s mode vocabulary is closed at the TYPE — and the GRANT does not close it', () => {
     // @ts-expect-error 'latest' is not a member of the union, and must not be.
     const forced: readonly string[] = CCD_ARGV.winSize('demo-quiet-basin', 'latest');
     // DISCLOSED, not implied: the agent's grant does NOT constrain the mode —

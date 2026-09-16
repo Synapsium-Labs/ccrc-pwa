@@ -292,14 +292,19 @@ export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 
  *  IT RETURNS, so nothing below it in the stub runs for the width query — and
  *  that is why WHERE it is spread decides whether the query is LOGGED.
  *  RE-MEASURED 2026-09-16 by walking the text between each `tmux() {` and its
- *  arm and asking whether `ccd-calls` appears in it: of the 50 sites (this
- *  constant plus its two siblings below), **24 LOG** the width query and 26 do
- *  not. An earlier draft of this paragraph said 15/35 — it counted only the
- *  recordings on the SAME LINE as the arm and missed the 9 that sit on the
- *  PRECEDING line of a multi-line stub, which log it just the same. No
- *  assertion in this repo turns on either, but a new one that counts calls
- *  should know which shape its fixture has — and
- *  `ccd-reader-standdown.test.ts`'s once-per-loop case is one that does. */
+ *  arm and asking whether `ccd-calls` appears in it: there are **48** spread
+ *  sites across `server/test/` (33 `WIDE_PANE`, 8 `WIDE_PANE_IF_UP`, 7
+ *  `DEAD_PANE`), and they split **24 LOG / 24 do not** — every
+ *  `WIDE_PANE_IF_UP` and `DEAD_PANE` site logs, and 9 of the 33 `WIDE_PANE`
+ *  ones do. Two earlier drafts of this paragraph were wrong in the same
+ *  direction and for different reasons: 15/35 counted only the recordings on
+ *  the SAME LINE as the arm, missing the 9 that sit on the PRECEDING line of a
+ *  multi-line stub and log it just the same; 24/26 then fixed the LOG half but
+ *  left a 50-site total that counts two sites that are not there. The
+ *  load-bearing figure is the 24. No assertion in this repo turns on either
+ *  half, but a new one that counts calls should know which shape its fixture
+ *  has — and `ccd-reader-standdown.test.ts`'s once-per-loop case is one that
+ *  does. */
 export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
 
 /** `WIDE_PANE` for a fixture that MODELS LIVENESS, and the reason it has to

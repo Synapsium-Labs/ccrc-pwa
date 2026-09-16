@@ -41,8 +41,8 @@ const TMUX_DEAD = 'tmux() { return 1; };';
  *  back empty because the record goes to the file, not to stdout.
  *
  *  `list-panes` is recorded too, and that is not decoration: without it a guard
- *  that measured the WRONG pane — `_pane_measurable "$t"` rather than
- *  `"${t#cc-}"`, so `cc-cc-demo` — still stands down here, because these stubs
+ *  that measured the WRONG pane — `_pane_measurable "$t"` rather than the
+ *  stripped `"$id"`, so `cc-cc-demo` — still stands down here, because these stubs
  *  answer the width query whatever target it names. The recorded target is what
  *  separates "it measured" from "it measured the right thing". */
 const panesRecording = (...rows: string[]): string =>
@@ -221,13 +221,29 @@ describe('the two stand-downs outside the phrase population', () => {
     expect(out).toContain(`pane is under ${READER_MIN_COLS} columns, skipped /effort`);
     expect(out, 'a pane too narrow to read is a pane too narrow to type into')
       .not.toContain('send-keys');
-    // THE TARGET, because the message alone does not pin it. Measured in Step
-    // 7's mutation 5: with the guard deleted this case still reports no
-    // `send-keys`, since the widened `_pane_auto_continue_armed` one line below
-    // answers ARMED on the same unmeasurable pane and returns first. So the
-    // message and THIS are what the guard has; and the id must be the tmux name
-    // with `cc-` stripped, or `_pane_measurable` rebuilds it as `cc-cc-demo`
-    // and measures a session that does not exist.
+    // THE ASSERTIONS ABOVE ARE STRONGER THAN THIS PLACE USED TO CLAIM. The
+    // paragraph that stood here said that with the guard deleted the case
+    // "still reports no `send-keys`", because the widened
+    // `_pane_auto_continue_armed` one line below would answer ARMED on the same
+    // unmeasurable pane and return first — so only the MESSAGE pinned the
+    // guard. Both halves are false. The mechanism half was falsified by this
+    // branch's own commit 73c27283, which removed that call's `id` argument and
+    // did not sweep the justification: with no id it is the plain phrase
+    // classifier over an EMPTY capture, and it answers NOT armed.
+    //
+    // RE-MEASURED 2026-09-16, on a COPY of `ccd/ccd` with the guard line
+    // deleted and this exact stub: stderr empty, and the recorded calls are
+    // `capture-pane -t cc-demo -p`, `capture-pane -t cc-demo -p -e`,
+    // `send-keys -t cc-demo -l /effort ultracode`, `send-keys -t cc-demo Enter`.
+    // The control (shipped tree) records the width query alone. So deleting
+    // this guard reds BOTH assertions above — the message and the `send-keys`
+    // — not neither.
+    //
+    // WHAT THE TWO BELOW ADD is the thing neither of those can see: WHICH pane
+    // was measured. The stubs answer the width query whatever target it names,
+    // so a guard that measured `$t` rather than the stripped id stands down
+    // here just the same — and `_pane_measurable` would rebuild it as
+    // `cc-cc-demo`, a session that does not exist.
     expect(out, 'the guard measured a pane').toContain('-t cc-demo');
     expect(out, '`cc-` stripped once, not twice').not.toContain('cc-cc-demo');
   });
@@ -309,9 +325,21 @@ const POPULATION: Record<string, GuardSpec> = {
 interface Site { fn: string; line: number; text: string }
 
 /** Every line that MATCHES a phrase inside a grep, with the function it sits
- *  in. Whole-line comments are stripped first — `ccd/ccd` quotes
- *  `grep -q "esc to interrupt"` inside prose at lines 14702 and 15765, and a
- *  scan that counted those would demand guards for sentences. */
+ *  in. Whole-line comments are stripped first: `ccd/ccd` quotes
+ *  `grep -q "esc to interrupt"` inside PROSE in exactly two places —
+ *  `_auto_compact_check`'s window argument ("… then matches a stale banner
+ *  further up (a false mid-turn…") and `_redrive_after_spawn`'s "PANE WINDOW
+ *  IS `tail -8`" block — and a scan that counted those would demand guards for
+ *  sentences.
+ *
+ *  ANCHORED BY CONTENT, NOT BY LINE NUMBER, and that is a correction rather
+ *  than a preference: these two were cited here as 14702 and 15765, which were
+ *  right on the pre-merge parent and wrong the moment this branch merged
+ *  `origin/main` (+111 — they are 14813 and 15876 as of 2026-09-16, and the
+ *  merge alone will move them again). The second was the dangerous one: 15765
+ *  now lands on a real typing line, so the citation read as a live claim about
+ *  the wrong kind of line. This plan's own D-2778 exists because ccd citations
+ *  rot; a scan's own docstring should not add two more. */
 function sites(): Site[] {
   const lines = readFileSync(CCD, 'utf8').split('\n');
   const out: Site[] = [];
@@ -337,7 +365,13 @@ function bodyBefore(fn: string, line: number): string[] {
   const start = lines.findIndex((l) => new RegExp(`^${fn}\\(\\)\\s*\\{`).test(l));
   expect(start, `ccd/ccd no longer defines ${fn}() at column 0 — re-anchor this scan`)
     .toBeGreaterThanOrEqual(0);
-  let close = lines.findIndex((l, i) => i > start && l === '}');
+  // `/^\}/`, NOT `l === '}'`: an exact compare skips a closing brace carrying a
+  // trailing space or a `\r`, `close` falls through to the NEXT function's brace
+  // (or to EOF), and the walk-into-a-later-function failure this bound exists to
+  // close is silently back. Measured 2026-09-16 on `ccd/ccd`: `grep -c '^}'` and
+  // `grep -c '^}$'` both answer 237, so this widening changes nothing today and
+  // costs nothing.
+  let close = lines.findIndex((l, i) => i > start && /^\}/.test(l));
   if (close === -1) close = lines.length;
   return lines.slice(start + 1, Math.min(line - 1, close));
 }
@@ -359,8 +393,13 @@ describe('every phrase-matching reader stands down first (mutation tripwire)', (
     for (const s of sites().filter((x) => x.fn === fn)) {
       expect(
         bodyBefore(fn, s.line).some((l) => !/^\s*#/.test(l) && spec.guard.test(stripComment(l))),
+        // THE EXPECTED SHAPE IS PART OF THE MESSAGE. Without it a legitimate
+        // REWORD of a guard — which is what this row most often catches — reads
+        // as "you deleted the guard", and the reader has to open two files to
+        // find out which. `spec.guard` is the thing that actually decided.
         `${fn} (ccd/ccd:${s.line}) matches a calibration phrase with no _pane_measurable guard of the `
-        + `pinned shape ahead of it in the same function:\n    ${s.text}`,
+        + `pinned shape ahead of it in the same function.\n    phrase site:     ${s.text}`
+        + `\n    shape required:  ${spec.guard}`,
       ).toBe(true);
     }
   });
@@ -397,8 +436,9 @@ describe('the phrase literals themselves are NOT changed (F11)', () => {
     // `auto-continue-armed.test.ts`'s cross-copy pin. This is a WHOLE-FILE
     // toContain, so it proves each literal exists SOMEWHERE — counted:
     // `grep -q "esc to interrupt"` (that exact substring) occurs on 8 lines
-    // total, six of them the census's own real sites and two the whole-line
-    // prose comments at 14702/15765 that quote it — not that every site in
+    // total — re-measured 2026-09-16 — six of them the census's own real sites
+    // and two the whole-line prose comments `sites()` above names by their
+    // CONTENT (line numbers here rotted once already) — not that every site in
     // `sites()` still carries it verbatim; that job belongs to `sites()`'s
     // own `PHRASES.some((p) => raw.includes(p))` filter (fix round 1
     // finding 5: the title here now says only what this checks).

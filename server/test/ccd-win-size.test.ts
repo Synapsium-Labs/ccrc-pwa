@@ -6,7 +6,30 @@
 // verbs, `set-option` not among them. A `['tmux','set-option']` prefix would
 // permit setting ANY tmux option on any target, because prefix matching leaves
 // every later token unconstrained. Wrapping the one option in a ccd verb keeps
-// the grant two tokens wide and puts the validation on the box.
+// the GRANT two tokens wide and puts the validation on the box.
+//
+// WHAT THE TABLE ENFORCES IS THE SPELLING AT `args[0]`, NOT THE CAPABILITY, and
+// this header claimed the stronger thing until fix round 2. `isExecAllowed`
+// matches a granted prefix and leaves every later token free, and tmux parses a
+// bare `;` ARGV ELEMENT as its own command separator with no shell involved.
+// Measured 2026-09-16:
+//   isExecAllowed('tmux', ['has-session','-t','x',';','set-option','-g',
+//                          'window-size','manual'])              -> ALLOW
+//   isExecAllowed('tmux', ['set-option','-g','window-size','manual']) -> REFUSE
+// and on a private `-L` socket that first argv really does run both commands:
+// `show-options -g window-size` went `latest` -> `manual`.
+//
+// IT IS NOT REACHABLE FROM THE PWA, and that is a property of the CALL
+// CONVENTION rather than of the table: every tmux argv in `server/src/exec.ts`
+// is a literal token array, and the wire-supplied values land as SINGLE tokens
+// (`target(id)` is one token, `sendLiteral`'s text is the one token after
+// `-l`). Measured on the same socket: `send-keys -t <s> -l ';'` and
+// `send-keys -t <s> -l '; set-option -g window-size manual'` both leave the
+// global at `latest`, and a `;` inside a `resize-window -x` value is refused
+// `width invalid`. A `;` only separates when it is its own argv element, and
+// nothing on the wire can add one. Hardening `isExecAllowed` is deliberately
+// NOT this wave's work — it is the single function gating the whole
+// PWA→fleet path — so what this file says about it is now what it does.
 //
 // AND THE VALIDATION IS NOT THE ID CLASS ALONE (D-2780, fix round 1). `-t` is an
 // fnmatch PATTERN resolved to a unique match, not a session name, so a perfectly
@@ -87,10 +110,16 @@ describe('ccd win-size', () => {
     // server's `resize-window` pin overrides it. What is refused here is
     // reaching back for `latest` when UN-pinning.
     expect(calls().join('\n')).not.toContain('window-size latest');
-    // NEVER GLOBAL. `set-option` with no `-t` writes the server-wide default and
-    // resizes all ~20 live sessions at once. Anchored, not merely present: a
-    // bare `-t cc-demo-quiet-basin` is a PATTERN, so "scoped" would be a claim
-    // this assertion could not make before D-2780.
+    // ALWAYS `-t`. The reason stated here was that `set-option` with no `-t`
+    // "writes the server-wide default and resizes all ~20 live sessions at
+    // once". Re-measured 2026-09-16 (tmux 3.4, private `-L` socket, three
+    // detached sessions): `tmux set-option window-size smallest` -> rc 0,
+    // `show-options -g window-size` STILL `latest`, the two siblings untouched,
+    // no session resized. Both halves were wrong. The real hazard is the same
+    // class this branch fixed: it mutates ONE WINDOW NOBODY NAMED — whichever
+    // session tmux calls current. Anchored, not merely present: a bare
+    // `-t cc-demo-quiet-basin` is a PATTERN, so "scoped" would be a claim this
+    // assertion could not make before D-2780.
     for (const c of calls()) {
       if (c.includes('set-option')) expect(c).toContain('-t =cc-demo-quiet-basin:');
     }
@@ -145,18 +174,37 @@ describe('ccd win-size', () => {
     //   resize-window -t '=cc-demo:'                   -> rc 1 can't find session
     //   resize-window -t '=cc-demo-quiet-basin:'       -> rc 0
     //   set-option    -t '=cc-oth*:'                   -> rc 1 no such window
-    // The trailing `:` is the WINDOW target: measured against an EXISTING
-    // session, `set-option -t '=cc-demo-quiet-basin'` fails `no such window`
-    // while the colon form succeeds. `resize-window` accepts both, and is
-    // spelled with the colon anyway so the two mutating arms carry ONE target
-    // form between them. `has-session` takes a SESSION target and gets no colon.
+    //
+    // THE TRAILING `:` IS LOAD-BEARING, NOT COSMETIC. This place said
+    // `resize-window` "accepts both" forms and carried the colon for symmetry.
+    // That was measured against an EXACT name — where both forms are safe —
+    // and it is the one case D-2780 is not about. Re-measured 2026-09-16
+    // against a PREFIX, private `-L` socket holding ONLY `cc-demo-quiet-basin`:
+    //   resize-window -t '=cc-demo'  -x 199 -y 44 -> rc 0, and
+    //                                                cc-demo-quiet-basin
+    //                                                BECAME 199x44
+    //   resize-window -t '=cc-demo:' -x 177 -y 33 -> rc 1 can't find session
+    // For a WINDOW target `=` only binds with the colon present. Drop the colon
+    // from the pin arm and D-2780 is LIVE again — a wrong-session resize at
+    // rc 0. `has-session` takes a SESSION target and gets no colon; it is the
+    // one command for which `=` alone binds.
     h.sh(`${TMUX_OK} cmd_win_size --session demo-quiet-basin --mode smallest`);
     h.sh(`${TMUX_OK} cmd_win_size --session demo-quiet-basin --mode canonical`);
     const targets = calls().map((c) => /\s-t\s(\S+)/.exec(c)?.[1] ?? null);
     // Anti-vacuity: two runs, each a probe plus one mutation. Without this the
     // loop below passes over an empty list if the verb ever stops calling tmux.
     expect(targets, 'two runs must produce four -t targets').toHaveLength(4);
-    for (const t of targets) expect(t).toMatch(/^=cc-demo-quiet-basin:?$/);
+    // PER COMMAND, BECAUSE THE COLON IS NOT OPTIONAL ON THE MUTATING ARMS. A
+    // single `/^=cc-demo-quiet-basin:?$/` over all four accepts a colon-less
+    // MUTATION target, which is the live D-2780 defect measured above — this
+    // case, whose whole declared job is the anchor, could not see it, and only
+    // the whole-sequence pins in the two cases above reddened on a colon-less
+    // mutant. Split so each arm is held to the form its own tmux command needs.
+    for (const c of calls()) {
+      const t = /\s-t\s(\S+)/.exec(c)?.[1] ?? null;
+      if (c.includes('has-session')) expect(t, c).toMatch(/^=cc-demo-quiet-basin$/);
+      else expect(t, c).toMatch(/^=cc-demo-quiet-basin:$/);
+    }
   });
 
   it('refuses a malformed argv by its own sentence, and runs nothing', () => {

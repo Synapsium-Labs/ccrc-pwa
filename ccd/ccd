@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f54cedc77966eb60998bd8c159c8ccdcb5e74f0b2b7e899e200a25ece7a23d1a
+# ccrc:generated 1 sha256=82ff0222edcdb1dc83d31f36510214493244becbeb8284111661eca2f29fa55a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2211,8 +2211,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 142
-# invocations across 118 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 143
+# invocations across 119 non-comment lines.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -2420,13 +2420,15 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # #70 added `compactnote` and `compactskip` while this round rewrote the
   # paragraph around them, so both sides were right and the cardinal belonged
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
-  # up — the same discipline this paragraph is about.
-  # The 36: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # up — the same discipline this paragraph is about. The drawer wave then added
+  # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
+  # floors), re-measured the same way: 38.
+  # The 38: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `reaping`, `setup`, `spawn`, `started`, `stopped`, `stranded`,
+  # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -5325,11 +5327,26 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # under READER_MIN_COLS, so no gate was read and no live marker was confirmed.
   # That is not "the spawn failed", and OUTSIDE the set it is the exact hazard the block
   # above `_spawn_start` measures: a code no caller tests, printing a SUCCESS
-  # line over a spawn nothing confirmed. MEASURED before this line existed: in a
-  # fixture whose tmux refuses every verb, `ccd ws-add` answered rc 0 with its
-  # `workspace <id> …` line (`ccdargv-dec-parity.test.ts` caught it); with the
-  # line, rc 6 and no success line. `_spawn_settle`'s own `6)` arm names the
-  # remedy; this rung is what keeps the verb from claiming otherwise.
+  # line over a spawn nothing confirmed.
+  #
+  # THE EVIDENCE SENTENCE THAT STOOD HERE DESCRIBED THE PRE-FIX TREE, and it
+  # contradicted the ordering paragraph directly above it. It said that in a
+  # fixture whose tmux refuses every verb `ccd ws-add` answers rc 6. It does
+  # not, and cannot, now that rc 6 sits BELOW the liveness probe. Re-measured
+  # 2026-09-16, by sourcing this file into a fixture HOME and calling
+  # `_accept_first_run_prompts cc-demo 0` under `tmux() { return 1; }`: the
+  # answer is rc 3 — the `has-session` debounce refuses before the width is
+  # ever queried. `ccdargv-dec-parity.test.ts`'s own ws-add probe answers 3 for
+  # the same reason (measured through that file's harness, same date). rc 6
+  # needs a LIVE `has-session` AND a narrow pane together, which only a steered
+  # fixture produces (`ccd-reader-standdown.test.ts`'s rc-6 describe).
+  #
+  # THE ENROLMENT IS STILL NECESSARY, and it is argued from the code rather
+  # than from that fixture: `_accept_first_run_prompts` can return 6, this `if`
+  # is the only thing between a non-zero settle and the `workspace <id> …`
+  # success line below, and a 6 outside the set would print it.
+  # `_spawn_settle`'s own `6)` arm names the remedy; this rung is what keeps
+  # the verb from claiming otherwise.
   if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
@@ -6672,8 +6689,12 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   #     state `exec.ts`'s `resize-window` leaves, not the state a fresh session
   #     is in. The 220x50 half was always true; the `manual` half was not.
   #     The server does NOT depend on this arm: its own pin is the already-granted
-  #     `tmux resize-window`, which works against an agent of any age. This arm is
-  #     for an operator on the box and for ccd's own use.
+  #     `tmux resize-window`, which works against an agent of any age. Its callers
+  #     are an operator typing the verb on the box and the agent's `win-size`
+  #     grant — NOT ccd itself, which is what this line claimed until fix round 2.
+  #     Measured 2026-09-16: `grep -n 'cmd_win_size' ccd/ccd` answers exactly two
+  #     lines, this definition and the dispatcher's own `win-size)` arm. No ccd
+  #     function calls it.
   #
   # EXACT-MATCH TARGETS (`=`), NEVER A BARE `cc-<id>`, AND NEVER GLOBAL. Two
   # separate hazards, and the first one convicted the first version of this verb
@@ -6684,22 +6705,52 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   #     window-size smallest` -> rc 0 and `cc-demo-quiet-basin` takes it;
   #     `resize-window -t cc-demo -x 200 -y 40` -> rc 0 and that real session
   #     becomes 200x40; `-t 'cc-oth*'` -> rc 0 and `cc-other-session` takes it.
-  #     On this box that is `cc-seven-ccrc` landing on `cc-seven-ccrc-pwa` among
-  #     ~20 live sessions. So the liveness refusal below CANNOT FIRE for a
+  #     THE SHAPE, AND DELIBERATELY NO NAMES: live session ids on this fleet
+  #     share long prefixes and differ only in a final syllable, so an id that
+  #     names NO session is routinely a unique PREFIX of one that is live —
+  #     which is the whole hazard. (An earlier draft gave a concrete pair here
+  #     as a live-box measurement. It was fabricated and wrapper-shaped, not
+  #     session-shaped, and this file ships publicly: no shipped source names an
+  #     account or a session.) So the liveness refusal below CANNOT FIRE for a
   #     well-formed id that is a unique prefix of a live session, and the verb
   #     would mutate a window nobody named. The id class does not help: the
   #     hazard is built from the characters it already admits.
-  #   • `set-option` with no `-t` AT ALL writes the SERVER-WIDE default and
-  #     re-sizes every live session on this box at once.
+  #   • `set-option` with no `-t` AT ALL mutates ONE WINDOW NOBODY NAMED —
+  #     whichever session tmux calls current. The claim that stood here was that
+  #     it "writes the SERVER-WIDE default and re-sizes every live session at
+  #     once"; both halves are false. Re-measured 2026-09-16, tmux 3.4, private
+  #     `-L` socket, three detached sessions: `tmux set-option window-size
+  #     smallest` → rc 0; `show-options -g window-size` STILL reads `latest`, so
+  #     the server default is NOT written; the two other sessions keep
+  #     `window-size latest`; and NO session is resized. Exactly one window took
+  #     the option. That is the same class the `=` anchor above closes — a
+  #     mutation of a target nobody named — which is reason enough to always
+  #     pass `-t`, and it is the reason this verb states rather than the one it
+  #     used to.
   # `=` is tmux's exact-match prefix and closes the first: `=cc-demo` -> rc 1
   # `can't find session`, `=cc-demo-quiet-basin` -> rc 0, `=cc-oth*:` -> rc 1
-  # `no such window`. The TRAILING `:` is the window target the two mutating
-  # commands take — measured against an EXISTING session, `set-option -t
-  # '=cc-demo-quiet-basin'` fails `no such window` while the colon form
-  # succeeds. `resize-window` accepts both forms; it is spelled with the colon
-  # anyway so the two mutating arms carry ONE target form between them rather
-  # than two that must be remembered apart. `has-session` takes a SESSION
-  # target, so it gets `=$t` with no colon.
+  # `no such window`.
+  #
+  # THE TRAILING `:` IS LOAD-BEARING, NOT COSMETIC. The sentence this replaces
+  # said `resize-window` "accepts both forms" and that the colon was spelled
+  # "anyway", for tidiness. That was measured against an EXACT name, where both
+  # spellings are indeed safe — and it is exactly the case D-2780 is not about.
+  # Re-measured 2026-09-16 against a PREFIX, tmux 3.4, private `-L` socket
+  # holding ONLY `cc-demo-quiet-basin`:
+  #
+  #     target                      has-session  set-option         resize-window
+  #     `=cc-demo`   (prefix)       rc 1         rc 1 no such win   rc 0  <- RESIZED cc-demo-quiet-basin
+  #     `=cc-demo:`  (prefix)       rc 1         rc 1 no such win   rc 1 can't find session
+  #     `=cc-demo-quiet-basin`      rc 0         rc 1 no such win   rc 0
+  #     `=cc-demo-quiet-basin:`     rc 0         rc 0               rc 0
+  #
+  # For a WINDOW target, `=` only binds when the colon is present. Drop the
+  # colon from the `resize-window` arm below and D-2780 is LIVE AGAIN: a
+  # validated id that is a unique prefix of a live session resizes THAT session,
+  # at rc 0, silently. `set-option` needs the colon against an exact name too
+  # (row 3), so the colon is not optional on either mutating arm — it is the
+  # anchor, not its spelling. `has-session` takes a SESSION target and gets
+  # `=$t` with no colon; it is the one command for which `=` alone binds.
   #
   # `aggressive-resize` is deliberately left alone — measured a no-op for a
   # one-window session, which every cc-* session is.
@@ -13826,6 +13877,45 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   (( w >= READER_MIN_COLS ))
 }
 
+_pane_narrow_note() {   # id site — say ONCE per COMPACT_NOTE_FLOOR that a tick stood down BLIND.
+  # WHY A NOTE AT ALL, AND WHY THESE TWO SITES. §6.3's stand-down was silent at
+  # exactly the two places where silence costs the most. `_auto_swap_check`'s
+  # guard is the FIRST statement after its locals, so on a narrow pane the whole
+  # tick returns: no rescue of a limit-blocked session — and no strand mark
+  # either, because `_tick_strand_undecidable`'s only call sites are BELOW that
+  # guard. A session that wedged while a drawer was open was therefore neither
+  # rescued nor flagged, with nothing written anywhere; and `ccd win-size --mode
+  # smallest` is precisely what creates that pane. `_auto_stale_check`'s guard
+  # is the same silence one rung earlier. Every OTHER §6.3 stand-down already
+  # speaks — `_compact_note … pane-narrow`, `_accept_first_run_prompts`' rc 6 and
+  # `_spawn_settle`'s sentence for it, `_inject_spawn_effort`'s stderr, and
+  # `_redrive_after_spawn`'s own `$REG/swap.log` line, whose shape this copies.
+  #
+  # FLOORED, AND THE FLOOR IS NOT OPTIONAL. This runs on the 5s supervise tick,
+  # per session. Unfloored that is 12 lines a minute per session and ~240 across
+  # the fleet into `$REG/swap.log` — an append-only file a human reads. That is
+  # D-2013's own measurement and the reason COMPACT_NOTE_FLOOR exists, so the
+  # floor is REUSED rather than re-chosen: same file, same tick, same budget of
+  # one line per session per window.
+  #
+  # ONE ANCHOR PER SITE, NOT ONE SHARED ANCHOR. `_auto_stale_check` runs BEFORE
+  # `_auto_swap_check` on the same tick, so a shared anchor would let the stale
+  # lane's line silence the swap lane's for the whole window — and the swap lane
+  # is the consequential one. The field is a bare epoch, `_compact_note`'s
+  # `compactnote` half and nothing else: WHEN WE LAST SAID IT OUT LOUD. There is
+  # no marker half, because there is only ever one reason.
+  local id="$1" site="$2" now nts
+  now=$(date +%s)
+  # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]`, so `&&` short-circuits
+  # before the arithmetic ever sees a torn or hand-edited field — D-299's class,
+  # the shape `_compact_note` and `_strand_mark` both use.
+  nts=$(_reg_get "$id" "${site}narrownote")
+  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
+  _reg_set "$id" "${site}narrownote" "$now"
+  echo "$(date '+%F %T') $site-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"
+  return 0
+}
+
 _pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
   # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
@@ -13926,7 +14016,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # every five seconds (D-2361).
   local id="$1" t pane now last
   t=$(_tmux "$id")
-  _pane_measurable "$id" || return 0   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
+  _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   _pane_limit_stale "$pane" || return 0
@@ -14017,7 +14107,13 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
   # §6.3: a relocation is a restart that re-drives, and the only thing standing
   # between it and a running turn is the `esc to interrupt` match further down.
-  _pane_measurable "$id" || return 0
+  #
+  # AND IT LEAVES A TRACE, because this guard is the first statement after the
+  # locals: everything this tick does — the rescue AND `_tick_strand_undecidable`,
+  # whose only call sites are below — is skipped here, so without the note a
+  # wedged session on a narrow pane is neither rescued nor marked, and nothing
+  # anywhere says why. `_pane_narrow_note` carries the floor; see its header.
+  _pane_measurable "$id" || { _pane_narrow_note "$id" swap; return 0; }
   # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
   # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
   # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
@@ -15737,7 +15833,7 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # reject note) — its return value is never typed, so nothing unrecognised
   # reaches a keystroke because nothing recognised does either.
   local t="$1" id="${1#cc-}" level
-  _pane_measurable "${t#cc-}" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
+  _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
   if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
     return 0

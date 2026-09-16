@@ -408,9 +408,31 @@ export const EXEC_WHITELIST = {
     // a granted prefix unconstrained, so `['tmux','set-option']` would permit
     // setting ANY option on ANY target of the shared server — and `set` is that
     // command's own alias (`tmux list-commands` on tmux 3.4 prints `set-option
-    // (set)` and `set-window-option (setw)`), so the refusal has to be of the
-    // capability rather than of a spelling — `whitelist-subset.test.ts` pins
-    // the granted tmux verbs EXACTLY for that reason. Wrapping the
+    // (set)` and `set-window-option (setw)`), which is why
+    // `whitelist-subset.test.ts` pins the granted tmux verbs EXACTLY rather
+    // than refusing one spelling of one of them.
+    //
+    // WHAT THIS TABLE ENFORCES IS THE SPELLING AT `args[0]`, NOT THE
+    // CAPABILITY, and the sentence that stood here claimed the stronger thing.
+    // `isExecAllowed` compares a granted PREFIX and leaves every later token
+    // free, and tmux treats a bare `;` ARGV ELEMENT as its own command
+    // separator with no shell involved. Measured 2026-09-16:
+    // `isExecAllowed('tmux', ['has-session','-t','x',';','set-option','-g',
+    // 'window-size','manual'])` returns TRUE, and on a private `-L` socket
+    // that argv really runs both commands — `show-options -g window-size`
+    // went `latest` -> `manual`.
+    //
+    // WHAT KEEPS IT UNREACHABLE IS THE CALL CONVENTION, not this table. Every
+    // tmux argv in `server/src/exec.ts` is a literal token array, and each
+    // wire-supplied value lands as a SINGLE token (`target(id)`, and
+    // `sendLiteral`'s text in the one slot after `-l`), so nothing on the wire
+    // can contribute a `;` of its own: measured on the same socket, both
+    // `send-keys -t <s> -l ';'` and `send-keys -t <s> -l '; set-option -g
+    // window-size manual'` leave the global at `latest`, and a `;` inside a
+    // `resize-window -x` value is refused `width invalid`. Hardening
+    // `isExecAllowed` is OUT of this wave's scope by ruling — it is the single
+    // function gating the whole PWA→fleet path, and changing it after the
+    // reviews had run would ship an unreviewed change to it. Wrapping the
     // one option this program needs in a ccd verb keeps the mutation two tokens
     // wide and puts the validation on the box, where `cmd_win_size` re-states
     // `shared/roster.ts`'s ID_RE as a bash class and enforces it BEFORE any
