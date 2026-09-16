@@ -1,7 +1,13 @@
 // Model + effort option lists for the session pickers. Wrapper-aware: the gpt
 // overflow lane maps the Anthropic aliases onto Codex tiers via the ccgpt env —
 // opus/sonnet/haiku onto GPT-5.6 Sol/Terra/Luna, and fable onto GPT-6 Astra.
-// `/model <alias>` and `/effort <level>` set directly (no picker needed).
+//
+// Routing spec 2026-09-14 §5.3, slice 4, Task 5: a tap no longer sends
+// `/model <alias>` or `/effort <level>` — it writes the routing record
+// through `POST /api/sessions/:id/route` (`SessionScreen.tsx`'s `pick`) and
+// ccd types it, session-only keystrokes. `no-routing-keystroke-from-server
+// .test.ts` is the census that keeps a slash-command literal out of this
+// file (and every other one under `pwa/src`/`server/src`) for good.
 //
 // D-2015: the fable alias on that lane used to name a deliberate sentinel
 // (`ccrc-unavailable-fable`) so `/model fable` failed loudly rather than
@@ -10,11 +16,22 @@
 // `~/.claude-gpt/settings.json`'s `env` block, and SETTINGS WINS: Claude Code
 // Object.assigns settings env over the process environment at runtime. Both are
 // box tooling outside this repo; this list only has to agree with them.
+import type { RouteField } from '../../../shared/api';
 
 export interface PickOption {
   label: string;
   sublabel?: string;
-  command: string; // slash command sent to the session, e.g. "/model opus"
+  /** The routing record write a tap on this row performs — ONE field, ONE
+   *  value, `api.route(id, field, value)`'s own argument pair. */
+  route: { field: RouteField; value: string };
+  /** The lowercase key `active` already matches the live pane string on
+   *  (`row`'s own `key` argument below) — reused so `SessionScreen`'s
+   *  read-back check can tell when the fleet frame agrees with a QUEUED
+   *  `class` write without re-deriving the option list. Unconsulted for an
+   *  `effort` row (that read-back compares `live.effort`/`live.ultracode`
+   *  directly), but always populated so no caller has to special-case an
+   *  absent field on a type that promises one. */
+  readback: string;
   active: boolean; // matches the session's current model/effort
 }
 
@@ -22,14 +39,16 @@ export interface PickOption {
  *  ("Opus 5 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
  *  doesn't defeat the highlight.
  *
- *  Labels are the family's CURRENT latest (the `/model <alias>` command sends a
- *  bare family alias, which the harness auto-resolves to the newest in that
- *  family — `opus` → Opus 5 on Anthropic API as of CC v2.1.219+). Bump a label
- *  when a family's newest name changes; the alias itself never needs touching. */
+ *  Labels are the family's CURRENT latest (the routing record's `class` value
+ *  is the bare family alias, which the harness auto-resolves to the newest in
+ *  that family — `opus` → Opus 5 on Anthropic API as of CC v2.1.219+). Bump a
+ *  label when a family's newest name changes; the alias itself never needs
+ *  touching. */
 export function modelOptions(wrapper: string, current: string | null): PickOption[] {
   const c = (current ?? '').toLowerCase();
   const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => ({
-    label, sublabel, command: `/model ${alias}`, active: key !== '' && c.includes(key),
+    label, sublabel, route: { field: 'class', value: alias }, readback: key,
+    active: key !== '' && c.includes(key),
   });
   if (wrapper === 'gpt') {
     return [
@@ -50,26 +69,30 @@ export function modelOptions(wrapper: string, current: string | null): PickOptio
 
 /** Effort chooser rows. Ultracode is xhigh + workflow orchestration (a super-
  *  mode, not a level) and is invalid on the gpt lane, so it's offered only for
- *  Anthropic wrappers. */
+ *  Anthropic wrappers. Ultracode is still the `effort` field's own value
+ *  (`{effort: 'ultracode'}`) — there is no separate routing field for it. */
 export function effortOptions(
   wrapper: string,
   effort: string | null,
   ultracode: boolean,
 ): PickOption[] {
   const e = (effort ?? '').toLowerCase();
+  const level = (label: string, value: string, active: boolean): PickOption =>
+    ({ label, route: { field: 'effort', value }, readback: value, active });
   const opts: PickOption[] = [
-    { label: 'Low', command: '/effort low', active: e === 'low' },
-    { label: 'Medium', command: '/effort medium', active: e === 'medium' },
-    { label: 'High', command: '/effort high', active: e === 'high' },
-    { label: 'Xhigh', command: '/effort xhigh', active: e === 'xhigh' && !ultracode },
-    { label: 'Max', command: '/effort max', active: e === 'max' },
-    { label: 'Auto', command: '/effort auto', active: e === 'auto' },
+    level('Low', 'low', e === 'low'),
+    level('Medium', 'medium', e === 'medium'),
+    level('High', 'high', e === 'high'),
+    level('Xhigh', 'xhigh', e === 'xhigh' && !ultracode),
+    level('Max', 'max', e === 'max'),
+    level('Auto', 'auto', e === 'auto'),
   ];
   if (wrapper !== 'gpt') {
     opts.splice(4, 0, {
       label: 'Ultracode',
       sublabel: 'xhigh + workflow orchestration',
-      command: '/effort ultracode',
+      route: { field: 'effort', value: 'ultracode' },
+      readback: 'ultracode',
       active: ultracode,
     });
   }

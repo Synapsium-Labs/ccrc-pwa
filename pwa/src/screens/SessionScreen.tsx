@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault } from '../../../shared/api';
+import { substrateFault, type RouteField } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -28,7 +28,7 @@ import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
 import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions } from '../lib/models';
+import { modelOptions, effortOptions, type PickOption } from '../lib/models';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -90,6 +90,38 @@ export function SessionScreen({
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
+  // A routing write in flight, until the fleet frame reads it back — or 60s
+  // pass with no confirmation (routing spec §5.3, slice 4, Task 5). `readback`
+  // rides along so the read-back effect below never has to re-derive the
+  // option list that produced this write.
+  const [queued, setQueued] = useState<{ field: RouteField; value: string; readback: string } | null>(null);
+  const queuedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearQueuedTimer = (): void => {
+    if (queuedTimer.current !== null) {
+      clearTimeout(queuedTimer.current);
+      queuedTimer.current = null;
+    }
+  };
+  useEffect(() => clearQueuedTimer, []);
+
+  // The read-back half: a fleet frame that agrees with a queued write clears
+  // it (and the timeout that would otherwise clear it at 60s with the
+  // unconfirmed toast). `effort` compares the live level directly (or
+  // `live.ultracode` for the `ultracode` value, since that is a separate
+  // boolean on the wire, not an effort string); `class` compares the queued
+  // row's `readback` key against the live model string the same loose way
+  // `modelOptions`' own `active` highlight already does.
+  useEffect(() => {
+    if (queued === null) return;
+    const agrees = queued.field === 'effort'
+      ? (queued.value === 'ultracode' ? live?.ultracode === true : live?.effort === queued.value)
+      : (live?.model ?? '').toLowerCase().includes(queued.readback);
+    if (agrees) {
+      clearQueuedTimer();
+      setQueued(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued, live?.effort, live?.ultracode, live?.model]);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -214,16 +246,33 @@ export function SessionScreen({
 
   const openTerminal = (): void => setTerminalOpen(true);
 
-  // Model / effort are one-tap: the chooser sheets send `/model <alias>` or
-  // `/effort <level>` directly (a context-window switch surfaces its own
-  // confirm through DialogSheet).
+  // Model / effort are one-tap: the chooser sheets write the routing record
+  // (`api.route`) and ccd types it into the pane, session-only keystrokes —
+  // never a slash command sent straight from here (a context-window switch
+  // still surfaces its own confirm through DialogSheet).
   const changeModel = (): void => setPicker('model');
   const changeEffort = (): void => setPicker('effort');
-  const pick = async (command: string): Promise<void> => {
+  const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
+    clearQueuedTimer();
+    setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
     try {
-      await api.prompt(id, command);
+      await api.route(id, o.route.field, o.route.value);
+      // Neither value leaves a mark the pane can read back — `auto` clears no
+      // slider position it can be measured against, and `default` is what the
+      // wrapper falls back to with no distinguishing model string of its own.
+      // Absence, not a lie, so the 2xx response IS the confirmation.
+      if ((o.route.field === 'effort' && o.route.value === 'auto')
+          || (o.route.field === 'class' && o.route.value === 'default')) {
+        setQueued(null);
+        return;
+      }
+      queuedTimer.current = setTimeout(() => {
+        setQueued(null);
+        toast('Routing queued; the pane has not confirmed it yet');
+      }, 60_000);
     } catch (err) {
+      setQueued(null);
       toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
     }
   };
@@ -264,6 +313,7 @@ export function SessionScreen({
         onBack={() => navigate('/')}
         onChangeModel={changeModel}
         onChangeEffort={changeEffort}
+        queuedField={queued?.field ?? null}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
@@ -401,7 +451,7 @@ export function SessionScreen({
         eyebrow="model"
         title="Choose a model"
         options={modelOptions(live?.wrapper ?? wrapperFromId, live?.model ?? null)}
-        onPick={(c) => void pick(c)}
+        onPick={(o) => void pick(o)}
       />
       <PickSheet
         open={picker === 'effort'}
@@ -409,7 +459,7 @@ export function SessionScreen({
         eyebrow="effort"
         title="Reasoning effort"
         options={effortOptions(live?.wrapper ?? wrapperFromId, live?.effort ?? null, live?.ultracode ?? false)}
-        onPick={(c) => void pick(c)}
+        onPick={(o) => void pick(o)}
       />
       <SwapSheet
         // `home: null` — not `wrapper`. With no live row there is no home

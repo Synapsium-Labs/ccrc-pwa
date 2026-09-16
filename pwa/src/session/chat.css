@@ -148,6 +148,19 @@ button.metachip:active {
 .metachip--branch .metachip-text {
   max-width: 22ch;
 }
+/* Routing spec §5.3, slice 4, Task 5: a small badge beside the model/effort
+   text while a write is queued, waiting for the pane to read it back. Same
+   tokens `.metachip--ultra` already uses for an inline accent state — no new
+   component, no new palette entry. */
+.route-queued {
+  flex: none;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--edge-subtle));
+  background: var(--accent-tint);
+  border-radius: var(--r-full);
+  padding: 1px 6px;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+}
 
 /* Account chip — mono name first, hue second, against the screen-scoped
    account accent (the [data-acct] rebinding in tokens.css). */

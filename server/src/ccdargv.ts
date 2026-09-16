@@ -443,6 +443,28 @@ export const CCD_ARGV = {
   route: (id: string, field: string, value: string, dec: ActorFlags | null = null) =>
            argv(['route', '--session', id, '--set', `${field}=${value}`, ...actorReasonFlags(dec)]),
 
+  /** The LIVE-CHANGE form of `route` above (routing spec 2026-09-14 §5.3,
+   *  slice 4, Task 5): `--apply` asks `cmd_route` to type the field into the
+   *  session's own pane, session-only keystrokes, once the write itself has
+   *  landed — never a second verb, since `cmd_route --apply` is one argv, one
+   *  write, one (conditional) keystroke. The PWA's pickers are the one caller
+   *  in this slice; `route`/`routeSet` stay the record-only writers a
+   *  dispatch or a CLI caller reaches for when nobody is watching the pane.
+   *
+   *  `actorReasonFlags`, not `decFlags`, for exactly `route`'s own reason
+   *  directly above: `cmd_route`'s usage line has no `--surface` case, and
+   *  `ccdargv-dec-parity.test.ts` proves it by running the real binary.
+   *  Sending `--surface` here would die on the box the same way it would on
+   *  `route`'s bare form.
+   *
+   *  ONE field per call, matching the picker that is this slice's only
+   *  caller (a tap sets exactly one control) — `routeSet`'s multi-field,
+   *  all-or-nothing atomicity is not needed here and `POST
+   *  /api/sessions/:id/route` never builds more than one `--set` pair. */
+  routeApply: (id: string, field: string, value: string, dec: ActorFlags | null = null) =>
+                argv(['route', '--session', id, '--set', `${field}=${value}`, '--apply',
+                      ...actorReasonFlags(dec)]),
+
   /** EVERY field in ONE argv (fix round 2, finding #3 / controller ruling
    *  S4-R5). `route` above writes a single field and stays for slice 5's
    *  picker, which sets exactly one; this entry is what a MULTI-field writer
@@ -569,14 +591,15 @@ export const ROUTE_ARGV_CAP = 'route-argv-v1';
  *  actor-flags-v1 shape: the record still lands and the next settle applies it,
  *  which is why omission is a DELAY rather than a loss.
  *
- *  NO CONSUMER YET, and that is deliberate rather than an oversight: slice 4's
- *  ccd arm ships the verb and the token, and the server arm that reaches for
- *  `capSupported(state, ROUTE_APPLY_CAP)` is a later task. The constant exists
- *  now because the constraint it satisfies is about DRIFT — three spellings
- *  held equal from the moment the token is advertised, not from the moment the
- *  server first asks about it. The `toContain` line in `ccd-archive.test.ts` is
- *  what makes that equality measured; without this constant the token was the
- *  one entry in that list bound to nothing. */
+ *  ITS FIRST CONSUMER is `POST /api/sessions/:id/route` (Task 5): the route
+ *  handler's `capSupported(deps.fleetState, ROUTE_APPLY_CAP)` gate, 501 when
+ *  absent — a picker tap on a box whose ccd predates `--apply` gets a loud
+ *  refusal, never a write the pane will never see. Between the token's
+ *  advertisement (this ccd arm) and that consumer landing, the constant's
+ *  whole job was the DRIFT constraint — three spellings held equal from the
+ *  moment the token is advertised, not from the moment the server first asks
+ *  about it. The `toContain` line in `ccd-archive.test.ts` is what makes that
+ *  equality measured. */
 export const ROUTE_APPLY_CAP = 'route-apply-v1';
 
 /**

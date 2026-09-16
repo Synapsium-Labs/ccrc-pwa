@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import { modelOptions, effortOptions } from '../src/lib/models';
+import { ROUTE_WRITABLE_FIELDS } from '../../shared/api';
+import { modelOptions, effortOptions, type PickOption } from '../src/lib/models';
 
 /**
  * The session pickers' one pin. `modelOptions` is wrapper-aware — the gpt
@@ -8,6 +9,11 @@ import { modelOptions, effortOptions } from '../src/lib/models';
  * (and settings WINS: Claude Code Object.assigns settings env over the process
  * environment at runtime).
  *
+ * Routing spec 2026-09-14 §5.3, slice 4, Task 5: a row no longer carries a
+ * slash `command` — it carries the routing record write a tap performs
+ * (`route: {field, value}`), which `SessionScreen`'s `pick` sends through
+ * `POST /api/sessions/:id/route`.
+ *
  * D-2015: the `fable` alias on that lane used to name a loud sentinel
  * (`ccrc-unavailable-fable`) because the lane had only three tiers. The Codex
  * catalogue now offers `gpt-6-astra`, the alias names it, and the picker has to
@@ -15,14 +21,15 @@ import { modelOptions, effortOptions } from '../src/lib/models';
  * which is exactly the knowledge a phone-first console exists to remove.
  */
 describe('modelOptions', () => {
-  const commands = (w: string, cur: string | null = null) => modelOptions(w, cur).map((o) => o.command);
+  const routes = (w: string, cur: string | null = null) =>
+    modelOptions(w, cur).map((o: PickOption) => `${o.route.field}=${o.route.value}`);
 
   it('offers the gpt lane four tiers, astra on the fable alias', () => {
-    expect(commands('gpt')).toEqual([
-      '/model fable',
-      '/model opus',
-      '/model sonnet',
-      '/model haiku',
+    expect(routes('gpt')).toEqual([
+      'class=fable',
+      'class=opus',
+      'class=sonnet',
+      'class=haiku',
     ]);
     expect(modelOptions('gpt', null).map((o) => o.label)).toEqual([
       'GPT-6 Astra',
@@ -33,20 +40,30 @@ describe('modelOptions', () => {
   });
 
   it('never offers a bare "Default" on the gpt lane', () => {
-    // `/model default` resolves through ANTHROPIC_MODEL, which the wrapper owns;
-    // offering it would present a row whose meaning the console cannot state.
-    expect(commands('gpt')).not.toContain('/model default');
+    // Routing to `class=default` resolves through ANTHROPIC_MODEL, which the
+    // wrapper owns; offering it would present a row whose meaning the
+    // console cannot state.
+    expect(routes('gpt')).not.toContain('class=default');
   });
 
-  it('leaves the Anthropic lanes untouched', () => {
-    expect(commands('claude')).toEqual([
-      '/model opus',
-      '/model sonnet',
-      '/model fable',
-      '/model haiku',
-      '/model default',
+  it('leaves the Anthropic lanes untouched, ending in class=default', () => {
+    expect(routes('claude')).toEqual([
+      'class=opus',
+      'class=sonnet',
+      'class=fable',
+      'class=haiku',
+      'class=default',
     ]);
     expect(modelOptions('claude', null).map((o) => o.label)).not.toContain('GPT-6 Astra');
+  });
+
+  it('every row writes a field ROUTE_WRITABLE_FIELDS knows, and never carries a command key', () => {
+    for (const wrapper of ['gpt', 'claude']) {
+      for (const o of modelOptions(wrapper, null)) {
+        expect(ROUTE_WRITABLE_FIELDS as readonly string[], o.label).toContain(o.route.field);
+        expect('command' in o, o.label).toBe(false);
+      }
+    }
   });
 
   it('highlights the live tier from the statusline display name, and only that one', () => {
@@ -66,7 +83,20 @@ describe('modelOptions', () => {
 
 describe('effortOptions', () => {
   it('withholds ultracode from the gpt lane and offers it everywhere else', () => {
-    expect(effortOptions('gpt', 'high', false).map((o) => o.command)).not.toContain('/effort ultracode');
-    expect(effortOptions('claude', 'high', false).map((o) => o.command)).toContain('/effort ultracode');
+    expect(effortOptions('gpt', 'high', false).map((o) => o.label)).not.toContain('Ultracode');
+    expect(effortOptions('claude', 'high', false).map((o) => o.label)).toContain('Ultracode');
+  });
+
+  it('every row writes the effort field, ultracode included, and Auto writes effort=auto', () => {
+    for (const wrapper of ['gpt', 'claude']) {
+      for (const o of effortOptions(wrapper, null, false)) {
+        expect(o.route.field, o.label).toBe('effort');
+        expect('command' in o, o.label).toBe(false);
+      }
+    }
+    expect(effortOptions('claude', null, false).find((o) => o.label === 'Auto')?.route)
+      .toEqual({ field: 'effort', value: 'auto' });
+    expect(effortOptions('claude', null, false).find((o) => o.label === 'Ultracode')?.route)
+      .toEqual({ field: 'effort', value: 'ultracode' });
   });
 });

@@ -1,7 +1,8 @@
 // A tappable chooser sheet — one-tap model / effort selection. Rows reuse the
 // dialog `.opt` chrome; the active row wears the ❯ + a filled dot. Tapping
-// sends the row's slash command to the session (a context-window switch then
-// surfaces its own confirm dialog through DialogSheet).
+// hands the whole row back to the caller, which writes the routing record
+// (a context-window switch then surfaces its own confirm dialog through
+// DialogSheet).
 import type { ReactNode } from 'react';
 import { Sheet } from '../components/Sheet';
 import type { PickOption } from '../lib/models';
@@ -13,7 +14,7 @@ export interface PickSheetProps {
   eyebrow: string;
   title: string;
   options: PickOption[];
-  onPick: (command: string) => void;
+  onPick: (option: PickOption) => void;
 }
 
 export function PickSheet({ open, onClose, eyebrow, title, options, onPick }: PickSheetProps): ReactNode {
@@ -22,10 +23,10 @@ export function PickSheet({ open, onClose, eyebrow, title, options, onPick }: Pi
       <div className="opts">
         {options.map((o) => (
           <button
-            key={o.command}
+            key={`${o.route.field}=${o.route.value}`}
             type="button"
             className={o.active ? 'opt opt--selected' : 'opt'}
-            onClick={() => onPick(o.command)}
+            onClick={() => onPick(o)}
           >
             <span className="opt-glyph" aria-hidden="true">{o.active ? '❯' : ''}</span>
             <span className="opt-body">

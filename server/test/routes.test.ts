@@ -252,6 +252,7 @@ describe('knownId route census', () => {
 
     expect(requestGates).toEqual([
       { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/route', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
@@ -269,8 +270,8 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(17);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(13);
+    expect(requestGates).toHaveLength(18);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(14);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');

@@ -81,6 +81,11 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // writes any; N calls would half-apply), and it is enumerated separately so
   // the repeated-`--set` shape cannot hide behind its single-field sibling.
   routeSet: ['demo-quiet-basin', { class: 'opus', effort: 'high' }],
+  // The live-change form (slice 4, Task 5): same `['route','--session']`
+  // grant as `route`/`routeSet` above, `--apply` is a trailing token and
+  // trailing tokens are unconstrained by the agent's prefix, so no new grant
+  // is needed — this sample proves the flagged shape still crosses it.
+  routeApply: ['demo-quiet-basin', 'effort', 'high', null],
 };
 
 /**
@@ -383,6 +388,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     // the sample object's own key order, which happens to agree here; the
     // out-of-order case is pinned in `dispatch-route.test.ts`.
     routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
+    routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {

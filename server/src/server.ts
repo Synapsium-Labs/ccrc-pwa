@@ -26,8 +26,8 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor, stopSurfaceSupported,
-         verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor,
+         stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -1495,7 +1495,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 17 request-id routes (13 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
   // fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
@@ -1554,6 +1554,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * The PWA pickers' write, LIVE (routing spec 2026-09-14 §5.3, slice 4, Task
+   * 5). A tap on the model or effort sheet no longer types `/model <alias>`
+   * or `/effort <level>` into the pane directly — it writes ONE field of the
+   * routing record and asks ccd to apply it, session-only keystrokes, once
+   * the write itself has landed. `no-routing-keystroke-from-server.test.ts`
+   * is the census that keeps a slash command from creeping back into this
+   * file or `pwa/src`.
+   *
+   * Session-gated like `/prompt` directly above (NOT in `auth/gate.ts`'s
+   * `EXEMPT` table) — a picker tap is exactly as human-driven as a typed
+   * prompt, and `sessions-route-route.test.ts` pins the absence.
+   *
+   * `{field, value}`, one pair, never the multi-field `{route: {...}}` body
+   * the operator's own spawn/dispatch doors take (`parseOperatorRoute`
+   * above): the picker taps ONE control, and `routeApply` builds ONE `--set`.
+   * `parseRouteFields` is reused for its SHAPE guard only — built from the
+   * single named field so its `Object.keys(...).length !== 1` arm can never
+   * see more than the one key this body can produce, defensive against the
+   * function's own general contract rather than reachable from this route.
+   *
+   * 501 `unsupported`, never a silent drop, when the box has not advertised
+   * `route-apply-v1` — the operator tapped a live control and would otherwise
+   * see `{ok:true}` for a write nobody applied (`parseOperatorRoute`'s own
+   * docstring makes the same argument for the spawn-time `--route`).
+   */
+  app.post('/api/sessions/:id/route', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
+    const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
+    if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    const [field, value] = Object.entries(parsed.route)[0] as [string, string];
+    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
 
   /**

@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -534,6 +534,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),
+    /** `POST /api/sessions/:id/route` — the model/effort pickers' write
+     *  (routing spec 2026-09-14 §5.3, slice 4, Task 5). ONE field, ONE value:
+     *  the picker taps a single control, and the record is the arbiter, never
+     *  a slash command typed straight into the pane — see `prompt` above,
+     *  which stays exactly that for the operator's own composer text. */
+    route: (id: string, field: RouteField, value: string) => post(`${sid(id)}/route`, { field, value }),
     /** `POST /api/sessions/:id/kickoff` — queues the coordinator kickoff as
      *  DURABLE system mail instead of typing it into the pane (program-leverage
      *  wave 4). Deliberately adjacent to `prompt`, because the pair is the
