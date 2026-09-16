@@ -7518,7 +7518,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // anchors that were TRUE at the base: 78 of them. Every one was repaired by
     // METHOD (1) — a shift PROVEN by byte-equality, the base's cited block
     // located byte-identically in the tip file — never by arithmetic, and
-    // never inside a FROZEN task section. 117 references moved that way.
+    // never inside a FROZEN task section. 133 references moved that way, and
+    // the figure is a SUM OF THREE MEASURED PASSES rather than a count typed
+    // once: 99 by the pass that required the anchor to have been anchored at
+    // the base, 18 by a second pass driven by the audit's OWN failure set (a
+    // reference can be exempt by sub-rule A, or its quotation mis-paired, and
+    // then the first pass declines while the audit still reports it), and 16
+    // by hand where the base block occurs more than once in the tip file and
+    // only the enclosing function decides which copy is the referent. One
+    // further anchor was WIDENED rather than moved — §3.3's compliance
+    // sentence names two statements and cited only the first line of the two.
     //
     // THE SPECIFICITY FLOOR is the rule change, and it is the narrowest one
     // that closes the measured hole: an ellipsis-part must be >= 8 non-space
