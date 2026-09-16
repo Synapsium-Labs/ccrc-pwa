@@ -373,10 +373,32 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
   — so this is hardening, not a defect."* The premise is measured false. `/ws/pty/:id` takes its id
   from `req.params` (`server.ts:1515`) and **validates it nowhere** before `spawnPty(id, cols,
   rows)` — so the "caller encodes a registry id" guarantee lived entirely in a caller that does not
-  provide it. `pty.ts:18` then spawns `tmux attach -t cc-<id>` unanchored, and `cc-ccrc-pwa`
-  prefix-matches at least three live sessions today, nondeterministically. `tmux attach` is a full
-  interactive terminal with keystroke injection, which makes it the worst of the eight sites, not a
+  provide it. `pty.ts:18` then spawns `tmux attach -t cc-<id>` unanchored. `tmux attach` is a full
+  interactive terminal with keystroke injection, which makes it the worst of these sites, not a
   peer of `send`.
+  **CORRECTION 2026-09-16, and it sharpens the hazard rather than dissolving it.** The sentence
+  that stood here — *"`cc-ccrc-pwa` prefix-matches at least three live sessions today,
+  nondeterministically"* — is measured FALSE, and D-2780 on the wave-2 branch already had it right
+  while this entry, written the same day, did not. Measured on a private tmux 3.4 socket:
+
+  | target | result |
+  |---|---|
+  | unique prefix (`cc-al` → only `cc-alpha-one`) | **rc 0, resolves silently to the wrong session** |
+  | ambiguous prefix (`cc-beta` → two matches) | `can't find session`, **rc 1 — it REFUSES** |
+  | fnmatch (`cc-*-two`) | **rc 0, the pattern is INTERPRETED** |
+  | anchored (`=cc-al`) | refused — the anchor defeats both |
+
+  So `cc-ccrc-pwa` against three live `cc-ccrc-pwa-*` sessions **refuses**; there is no
+  nondeterminism anywhere in this mechanism. The two live vectors are (a) an id that is a UNIQUE
+  prefix of exactly one live session, which resolves silently, and (b) an id containing `*` or `?`.
+  **(b) is the sharper one and it is caller-controlled rather than accidental** — and
+  `server/src/clip.ts`'s `isSafeSessionId`, which wave 3's plan pins as the remedy for
+  `/ws/pty/:id`, rejects only empty/`.`/`..`/`/`/`\`/NUL and **permits `*` and `?`**. It is a path
+  validator standing where a tmux-target validator is needed. `agent/src/pty.ts`'s
+  `/^[A-Za-z0-9_-]+$/` is the shape that actually closes it.
+  **This is the programme's own defect class, committed by the coordinator in the act of reversing a
+  ruling** — a sentence whose claim the tree measures false. It is recorded rather than quietly
+  edited, for the same reason the reversal above is.
   **Scope of the reversal, stated so it is not over-read:** the live box is armed, so the upgrade is
   authenticated, and no shipped PWA path passes a non-session id — today's blast radius is an
   operator hand-typing a truncated id into the wrong terminal. It becomes an authorization defect
