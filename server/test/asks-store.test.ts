@@ -15,7 +15,8 @@ describe('the asks table', () => {
   it('is still present after schema version 10 adds the cross-repo columns', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    expect(COORD_SCHEMA_VERSION).toBe(10);
+    // Bumped to 11 by migration 11, runs.kind/runs.reviews (design 2026-09-14 §5.1).
+    expect(COORD_SCHEMA_VERSION).toBe(11);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([

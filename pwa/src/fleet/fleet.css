@@ -2242,6 +2242,13 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 .run-row .run-crossing-glyph { color: var(--ink-tertiary); }
+.run-row .run-kind {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-kind-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }

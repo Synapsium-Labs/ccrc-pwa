@@ -792,16 +792,16 @@ cd ~/ccrc/agent && npm ci && npm run build \
   # means this line is never reached if the build failed.
   stamp_build
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-session-hooks.sh'
-  # The two SKILLS are the FIFTH and SIXTH artifacts ccrc ships to the fleet
-  # host (ccd, notify.sh, session-hook.sh + its installer, and now these two).
-  # Each rides the same four lines for the same reasons. The TREE rides rsync
-  # --delete so a reference file deleted in git is deleted on the box too — a
-  # stale reference is prose a model will still follow, and prose is read whole
-  # on the next open, so tree-level atomicity is not load-bearing for it. The
-  # INSTALLER is different: it gets EXECUTED, which is exactly the class
-  # install_atomic exists for — a deploy dying between scp and chmod must not
-  # leave a half-written script that the next deploy (or a curious operator)
-  # runs.
+  # The three SKILLS are the FIFTH, SIXTH and SEVENTH artifacts ccrc ships to
+  # the fleet host (ccd, notify.sh, session-hook.sh + its installer, and now
+  # these three). Each rides the same four lines for the same reasons. The
+  # TREE rides rsync --delete so a reference file deleted in git is deleted
+  # on the box too — a stale reference is prose a model will still follow,
+  # and prose is read whole on the next open, so tree-level atomicity is not
+  # load-bearing for it. The INSTALLER is different: it gets EXECUTED, which
+  # is exactly the class install_atomic exists for — a deploy dying between
+  # scp and chmod must not leave a half-written script that the next deploy
+  # (or a curious operator) runs.
   "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/coordinator-skill'
   rsync -az --delete -e "${SSH[*]}" ccd/coordinator-skill/ "$BOX":.cc-sessions/coordinator-skill/
   install_atomic ccd/install-coordinator-skill.sh .cc-sessions/install-coordinator-skill.sh 755
@@ -825,11 +825,26 @@ cd ~/ccrc/agent && npm ci && npm run build \
   rsync -az --delete -e "${SSH[*]}" ccd/worker-skill/ "$BOX":.cc-sessions/worker-skill/
   install_atomic ccd/install-worker-skill.sh .cc-sessions/install-worker-skill.sh 755
   "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-worker-skill.sh'
-  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER both
-  # roster-reading skill arms above (spec §B: its SRC is the INSTALLED
+  # THE REVIEWER SKILL SHIPS THIRD (design 2026-09-14 §8). Like the worker's,
+  # its SKILL.md carries no references of its own and points a live reviewer at
+  # the coordinator's installed tree by relative path, so it lands after that
+  # lane for the worker's reason. server/test/install-reviewer-skill.test.ts
+  # pins the order against both run lines above.
+  #
+  # Like the notes above, this comment deliberately does NOT spell this
+  # skill's directory name with a trailing slash:
+  # `server/test/install-reviewer-skill.test.ts` locates the rsync by the
+  # FIRST line in the arm containing that spelling, and a comment that did
+  # would shadow the real invocation.
+  "${SSH[@]}" "$BOX" 'mkdir -p ~/.cc-sessions/reviewer-skill'
+  rsync -az --delete -e "${SSH[*]}" ccd/reviewer-skill/ "$BOX":.cc-sessions/reviewer-skill/
+  install_atomic ccd/install-reviewer-skill.sh .cc-sessions/install-reviewer-skill.sh 755
+  "${SSH[@]}" "$BOX" 'bash ~/.cc-sessions/install-reviewer-skill.sh'
+  # graphify Task 10 (O3/O6b): the assembled-SRC skill installer, AFTER all
+  # three roster-reading skill arms above (spec §B: its SRC is the INSTALLED
   # package, never vendored, which is what makes it a plain `install_atomic` +
-  # remote run rather than the rsync-a-tree-then-run shape its two neighbours
-  # need).
+  # remote run rather than the rsync-a-tree-then-run shape its three
+  # neighbours need).
   #
   # R-8 (fix round, F1): GATED on ~/.ccrc/graphify.pin existing on the box —
   # `install-graphify-skill.sh` exits 1 with "no pin" when the venv engine

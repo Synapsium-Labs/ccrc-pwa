@@ -100,6 +100,7 @@ describe('GET /api/coord/caps', () => {
     const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
       wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
     coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
+    expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
     expect((await getCaps(app)).json().usage).toEqual({ running: 1, dispatchedIn24h: 1 });
   });
 });
