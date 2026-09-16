@@ -21,8 +21,20 @@ Wave 1 is independently valuable and safe with nothing after it. Wave 3 may merg
 DOES nothing until wave 2 is on the fleet box: it un-pins only through a verb gated on
 `capSupported(state,'win-size-v1')`, which answers false on no evidence.
 
-**Deviation block: sixteen numbers from `D-2766`** (allocated once at run-open 2026-09-14; floor now
-2782). A number is NAMED here only once it is assigned and defined in a plan — the unassigned tail
+**Deviation block: sixteen numbers from `D-2766`** (allocated at run-open 2026-09-14), **extended
+2026-09-16 by eight more starting at 2859** (the floor was 2859 and is now 2867; numbers written bare
+here for the reason the next paragraph gives). Of the extension, four are assigned — 2859 the grant
+rationale's falsified id-provenance, 2860 rc 6 joined at the four call sites that test the set by
+value, 2861 the wide-pane fixture arm across ~50 stubs in 14 suites, 2862 the `pty.ts` reversal above
+— and four run unassigned to 2866.
+
+**The under-sizing was a coordinator estimate error, and it is a ruling, not a deviation.** Sixteen
+was a guess: wave 1 spent nine and wave 2 spent seven before task 5 even began. A deviation records a
+departure from a plan or brief, and no plan instructed a block size — so this is recorded here rather
+than burning a number on it. The lesson for waves 3 and 4: **mint per RUN at run-open** (clause 10's
+actual shape) rather than once per programme, and size against the measured ~10-per-wave, not against
+a feeling. Extending mid-wave is the coordinator's act — never the worker's, whatever the worker can
+reach; a worker that mints is the D-2338 shape. A number is NAMED here only once it is assigned and defined in a plan — the unassigned tail
 is deliberately not spelled as a `D-` token, because `deviation-refs.test.ts` requires every tracked
 ref to be ledgered and an unspent one would red it for the life of the programme. Every wave draws from this block and defines each number in the same act as using it. A worker
 never calls the allocator mid-wave (coordinator clause 10); it names the departure in its wave-done
@@ -351,10 +363,30 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
   proved `main` dies too — node-pty accepts a NUL in argv, so main's close handler fires the
   identical stack. **The live box runs `CCRC_FLEET=remote`, whose `createRunner` catches every
   failure, so the live server is unaffected on both refs.** Its own item against main.
-- **`=cc-${id}` exact-match targeting** (`exec.ts:74`) would close tmux target-pattern matching
-  across eight pre-existing call sites for one character. No confused deputy exists today — the
-  only caller encodes a registry id, and an operator who can hand-write `cc-*` already has
-  `POST /api/sessions/:id/send` — so this is hardening, not a defect. A later wave.
+- **`=cc-${id}` exact-match targeting** (`exec.ts:74`, and seven more sites) — **RULING REVERSED
+  2026-09-16, deviation 2862 (written bare: its entry lands in wave 2's plan on the worker's branch,
+  and `deviation-refs.test.ts` reds any tracked `D-` ref whose definition is not in THIS tree —
+  wave 4's reconcile converts it). This is a DEFECT, not hardening, and wave 3 owns it as its first
+  item.**
+  What this bullet said until now: *"No confused deputy exists today — the only caller encodes a
+  registry id, and an operator who can hand-write `cc-*` already has `POST /api/sessions/:id/send`
+  — so this is hardening, not a defect."* The premise is measured false. `/ws/pty/:id` takes its id
+  from `req.params` (`server.ts:1515`) and **validates it nowhere** before `spawnPty(id, cols,
+  rows)` — so the "caller encodes a registry id" guarantee lived entirely in a caller that does not
+  provide it. `pty.ts:18` then spawns `tmux attach -t cc-<id>` unanchored, and `cc-ccrc-pwa`
+  prefix-matches at least three live sessions today, nondeterministically. `tmux attach` is a full
+  interactive terminal with keystroke injection, which makes it the worst of the eight sites, not a
+  peer of `send`.
+  **Scope of the reversal, stated so it is not over-read:** the live box is armed, so the upgrade is
+  authenticated, and no shipped PWA path passes a non-session id — today's blast radius is an
+  operator hand-typing a truncated id into the wrong terminal. It becomes an authorization defect
+  in the team edition, and it is a footgun now. **Why wave 2 did not fix it:** its ledger was fixed
+  at dispatch, and the honest repair is the systemic one D-2781 declared — all eight sites plus a
+  guard that reds on a bare `-t cc-` target. One site patched would leave seven and no guard, which
+  is correcting the instance instead of the claim.
+  **How it was caught:** the wave-2 worker measured it and reported it unprompted, after declaring
+  D-2781's class and then looking for further instances. That is the second time this programme's
+  worker has overturned its coordinator with a measurement (the first was the F4 reversal).
 - **No byte cap and no compression on the pane/history response.** `-S -N` is a START OFFSET, not
   a size cap, so `PANE_HISTORY_LINES` never was a byte bound (measured: `-S -1951`, `-S -2000` and
   `-S -100000` return byte-identical payloads). A real cap must bound the RESPONSE. This wave moves
@@ -402,6 +434,13 @@ operator sign-off: **the mandatory `opus@xhigh` security lens IS its review**, a
 at PR review like any other change. The lens therefore carries the whole weight — its brief says so
 explicitly. (b) Wave 1's merge goes through the ruleset's admin bypass rather than a non-author
 review; that is the operator's call and this session does not take it.
+
+**Wave 3's FIRST item is now fixed, before its plan is touched: the systemic `=cc-<id>` targeting
+fix.** All eight sites, plus a guard that reds on a bare `-t cc-` target, plus id validation at
+`/ws/pty/:id` — which today validates nothing, and is what falsified the ruling above. Do not let
+wave 3 patch `pty.ts` alone: one site of eight with no guard is correcting the instance instead of
+the claim. Wave 3's plan currently says nothing about this; amend it at run-open, and mint wave 3's
+block in that same act.
 
 Wave 2 is the AGENT-FIRST one: it ships to the fleet host before any server that calls it, and its
 first task is the `READER_MIN_COLS` measurement (wrap-ansi over Claude Code's status-line shapes at
