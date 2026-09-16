@@ -1836,10 +1836,13 @@ strictly AFTER this early, unconditional journal emission, under the same stable
 worth stating is "capture-then-emit-early, deletion follows," not "emit-after-success." The
 `ccd-lifecycle-purge.test.ts:37`/`:99`/`:115` source-order pin moves in the same commit as any Task 9 edit to
 `_reg_purge`'s body, the same treatment round 6 correctly gave `session-hook.test.ts:2467`. **Its four
-callers must branch on the result — a CODE CHANGE Task 9 builds in all four, not a shipped property:**
-measured, none of the four reads `_reg_purge`'s status today (`cmd_ws_rm` at `ccd/ccd:5667`, `_ws_reap_tail`
-at `:12013`, `_ws_gc_prune_row` at `:11668`, `cmd_forget` at `:16642`, each falling straight through to an
-unconditional terminal fact), and `_reg_purge` has no failing path to report yet either. **Three of them
+callers must branch on the result — a CODE CHANGE Task 9 builds in all four, not a shipped property, and
+Task 9 HAS built it (re-measured this round):** each of the four reads the status into its own variable —
+`_rm_prc` in `cmd_ws_rm` (`ccd/ccd:5667`), `_rt_prc` in `_ws_reap_tail` (`:12013`), `_pr_prc` in
+`_ws_gc_prune_row` (`:12595`) and `_fg_prc` in `cmd_forget` (`:16642`) — and each renders the value through
+`_compact_lock_why_remedy` (`ccd/ccd:1933`) rather than falling straight through to an unconditional
+terminal fact. Before that build none of the four read the status and `_reg_purge` had no failing path to
+report; the sentence that stood here said so in the present tense, and this replaces it. **Three of them
 report differently from round 5's text:** `cmd_ws_rm`,
 `_ws_reap_locked`, and `cmd_forget` each call `_reg_purge` only AFTER irreversible action (worktree, session,
 branch, clips, or supervisor teardown has already happened), so a lock miss there cannot mean "nothing

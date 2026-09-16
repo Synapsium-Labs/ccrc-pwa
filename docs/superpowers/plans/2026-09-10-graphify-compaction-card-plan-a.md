@@ -2803,10 +2803,13 @@ git commit -m "feat(compact-card): measure the summary the session sees — norm
   optional member documents an input this code reads and never an output it writes.
 - Modify: `ccd/ccd` — row-generation initialization, `_spawn_start` primary/retry environments and FD
   boundaries, `_reg_purge`, exact cleanup, **the THREE post-action `_reg_purge` callers `cmd_ws_rm`
-  (`:4896`), `_ws_reap_tail` (`:11167`) and `cmd_forget` (`:15555`)** — round 12 named only the dead-reg arm's
-  status branch as a change to BUILD, while these three were described in the present indicative; measured,
-  none of the four reads `_reg_purge`'s status today, each falling straight through to an unconditional
-  `_lc_done`/success echo, so all four branches are code this task writes (round 13, B-I1) — **and
+  (`_rm_prc`, `ccd/ccd:5667`), `_ws_reap_tail` (`_rt_prc`, `:12013`) and `cmd_forget` (`_fg_prc`,
+  `:16642`)** — round 12 named only the dead-reg arm's status branch as a change to BUILD, while these three
+  were described in the present indicative; BEFORE Task 9 none of the four read `_reg_purge`'s status, each
+  falling straight through to an unconditional `_lc_done`/success echo, so all four branches are code this
+  task writes (round 13, B-I1) — Task 9 has since built all four, and the anchors above are the LANDED call
+  sites, which this replaces the pre-Task-9 numbers with so that this list and the spec's own
+  implementation-status paragraph name the same lines — **and
   `_lc_refuse`'s own neighbourhood (`ccd/ccd:3345-3374`, `_lc_fail` through `_lc_refuse`), where Task 9 adds
   the new non-fatal `_lc_refuse_return <act> <id> <tx> <token> <detail> [k v]…` emitter** that emits the `refused`
   fact and RETURNS (round 13, A-I4/A-I5/B-I3; the controller's ruling named the neighbourhood as `:2754-2790`,
