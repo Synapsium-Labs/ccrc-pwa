@@ -7268,3 +7268,51 @@ over a sentence that is now correct.
 whole-wave consistency — four opus mutation agents in four fresh disposable worktrees (`r2-mut1..4`),
 two refuters per finding, one critic. The mutation briefs hunt **false reds first**: round 2 widened
 four regexes to kill false greens, and widening is how false reds are born.
+
+### 2026-09-16 12:xx UTC — MAIN IS RED, and the server leg is my own #108's doing
+
+The round-2 re-review is in, but a bigger fact came out of measuring PR #114's CI: **three of `main`'s
+own legs are failing**, and one of them is mine.
+
+**Bisected by pulling each main commit's job conclusions** (not inferred):
+
+| main commit | server | pwa |
+|---|---|---|
+| `98236c81` (#100) | pass | pass |
+| **`d8aebba3` (#108 — mine)** | **FAIL** | pass |
+| `f6be1fef` (#113) | fail | pass |
+| **`d6494f1c` (#89)** | fail | **FAIL** |
+| `dba672ac` (#109) | fail | fail |
+
+**The server failure is `crossrepo-prose.test.ts` → "states the measured cap predicates"**, asserting
+`store.ts` contains the literal `dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')`. D-2803
+replaced that literal with the derived `INACTIVE_RUN_STATES_SQL`. **That file did not exist at #108's
+base `47eff69a`** — it arrived with #100, which merged after #108's last green run and before #108
+itself. Two branches, each green, colliding in a tree neither author ran
+([[a-merge-is-a-tree-nobody-ran]], [[a-task-scoped-suite-list-misses-the-pins-in-other-files]]).
+
+**And the defect is larger than a stale pin: D-2803 falsified PROSE in three more shipped places** —
+`ccd/coordinator-skill/SKILL.md:399`, `references/wave-lifecycle.md:104`, and the VERBATIM pin over both
+at `coordinator-skill.test.ts:1663`. That trio stays GREEN because the pin compares **prose against
+prose**: all three agree with each other and none agrees with `store.ts`. The one that fired is the one
+that reads `store.ts`. [[tests-pin-shape-not-effect]], measured.
+
+**I mis-read the live fleet from those very sentences this morning** — counting run 64 at
+`awaiting-review` against the cap — which is the defect's cost observed rather than argued.
+
+**Fixed as PR #132** (`fix/cap-prose-coordinator-skill`, `072c9ead`): the three copies corrected to
+"concurrency counts dispatched runs in an ACTIVE state", with the reason and D-2803 named in the skill
+text so the next reader gets the history and not just the rule. `coordinator-skill` 137/137;
+`install-coordinator-skill`, `ccrc-install`, `single-definition`, `deviation-refs`, `worker-skill`
+342 passed / 18 skipped. Two further pins anchored on text the rewrite moved were re-anchored
+deliberately, not loosened, and the pinned daily-budget clause is preserved verbatim.
+**AGENT FIRST** — it ships to the fleet host and no server half depends on it.
+
+**Deliberately NOT fixed by me:** `README.md` and `crossrepo-prose.test.ts` carry the same falsehood and
+were already taken by **#131** and **#130** before I got there. #132 touches neither file, so it
+conflicts with neither. I commented on #131 confirming the diagnosis, naming the third copy, explaining
+why its own gate could not have caught it — and flagging that #130 and #131 both edit the same two files,
+so whichever merges second will conflict. That is their call, not mine.
+
+**Consequence for #114:** its three red legs are INHERITED from main, not the wave's. The wave touches no
+`pwa/` file at all (three-dot diff empty), and `test-macos` has failed on main's own last six commits.
