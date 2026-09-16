@@ -159,11 +159,22 @@ It lives on `ProjectRow`, not on `FleetSession`, because that is where it is **t
 project's main checkout, it is a fact about the project. On a session it would assert something about
 that workspace's own clone that nothing measured.
 
-**Source.** `CcdPrLine` already carries `{ project, repo, … }` per workspace and `server/src/prstate.ts:257`
-copies the repo into `PrView.facts` and drops the rest. Every workspace that could ever be a moved row
-already has its repo measured, because the sweep runs over workspaces — the only unmeasured projects
-are ones with no workspaces, which can never contribute a moved row. **No new ccd verb, no new agent
-round trip**: retain the `(project → repo)` pairs the sweep already sees.
+**Source.** `CcdPrLine` already carries `{ project, repo, … }` per workspace. Every workspace that could
+ever be a moved row already has its repo measured, because the sweep runs over workspaces — the only
+unmeasured projects are ones with no workspaces, which can never contribute a moved row. **No new ccd
+verb, no new agent round trip**: retain the `(project → repo)` pairs the sweep already sees.
+
+**The retention seam is `server/src/watch.ts:3227`**, `this.prStates.set(line.id, phaseFor(line))` —
+where a `CcdPrLine` carrying `repo` collapses into a `PrState` that has none (verified: `PrState`'s only
+occurrence of "repo" is inside a comment). **`server/src/prstate.ts:257` is NOT the seam**: it *keeps*
+the repo, landing it on `PrView.facts.repo` for the PR sheet. A change made there has edited the wrong
+place and retained nothing.
+
+**`absent` and `unmeasured` are told apart by one reason, not guessed.** The only proof of `absent` is
+`CcdPrFailure.reason === 'no-remote'`, which is what `_gh_repo_slug`'s failure produces. Every other
+member of `PrReason` — `timeout`, `offline`, `unauthenticated`, `rate-limit`, `unsupported`, `agent-down`,
+`error`, `unavailable`, `truncated`, `merge-unproven`, `branch-drift` — is `unmeasured`. The mapping is
+derived from `PR_REASON_MAP`, never hand-listed, so a new reason cannot silently become `absent`.
 
 ## 6. The board
 
