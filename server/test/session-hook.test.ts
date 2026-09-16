@@ -7158,13 +7158,59 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // pinned by Task 11's own audit, whose Step 1 instruction is to preserve
     // it. So the execution of Task 10 and the freeze of Task 10 cannot both be
     // satisfied, and this map is where that shows.
+    //
+    // TASK 11 PAYS THE DEBT DOWN, 206 -> 70, AND EVERY ENTRY IS A
+    // RE-MEASUREMENT. D-2758 parks this debt here and the task closes what it
+    // can. Two methods, in this order, and nothing was moved by any other:
+    //   (1) SHIFT PROVEN BY BYTE-EQUALITY. For each reference, the newest
+    //       commit at which it stood in a neighbourhood carrying its own
+    //       clause's longest quoted token AND was TRUE there; that commit's
+    //       cited bytes; a UNIQUE byte-identical block in the tip file. 121
+    //       references moved that way.
+    //   (2) A REFERENT MEASURED BY NAME, where (1) could not run because the
+    //       bytes changed rather than moved — the three shipped
+    //       `command -v flock` guards, the four `_reg_purge` call sites,
+    //       `_reg_purge`'s own loop and tail, `_ws_slug_free`/`_ws_slug_residue`,
+    //       `cmd_ws_add`'s refusal, `cmd_forget`'s verdict/kill pair, and in
+    //       the hook `_hook_write_atomic`, the two PreCompact `find` calls, the
+    //       aged-card `find`, the set-building `jq -cn` and the blank line
+    //       before the PreCompact banner. 51 more.
+    // METHOD (1) PRODUCED SEVEN FALSE REPAIRS and they were WITHDRAWN rather
+    // than kept: audited by asking whether the block now cited is byte-equal
+    // to the block the old anchor named at the chain base 8e457995, seven had
+    // landed on a COMMENT — the automatically chosen base carried a comment at
+    // those lines and the clause's token happened to occur in it. A reference
+    // pointing at the wrong line is worse than one pointing at a line that
+    // moved, so those seven carry their original numbers again and are counted
+    // in the 70 below.
+    //
+    // WHAT THE 70 ARE, and why none of them is repairable HERE. Two classes,
+    // and the second is the larger:
+    //   HISTORICAL — the clause's subject is the PRE-Task-9 tree. `ccd/ccd`'s
+    //     `:11665-11670`/`:11669`/`:11670` (fifteen references) say the ws-gc
+    //     dead-reg arm "never reads `_reg_purge`'s status"; Task 9 BUILT that
+    //     branch (`ccd/ccd:12595`), so the referent is gone and re-anchoring
+    //     would point a sentence about the old code at the new code — the
+    //     defect this audit exists to find. Same for the deleted rollback
+    //     family (`ccd/session-hook.sh:792-842`, `:795`, `:802`, `:899`), the
+    //     legacy claim producer (`:952`), the helper's deleted slot block
+    //     (`ccd/compact-card.mjs:433-560`) and its corrected `measureCommand`
+    //     docstring (`:726`, `:726-728`).
+    //   QUOTATIONLESS — the anchor is now CORRECT and the clause quotes prose
+    //     rather than source, so the premise cannot be satisfied at any line:
+    //     `ccd/ccd:5059`, `:7568`, `:11025` sit in a clause whose quotations
+    //     are `ws-add`, `ws-restore` and `ws-reap`. Repairing those is a
+    //     QUOTATION change, not an anchor change, and it is left rather than
+    //     made, because the sentences are the spec's own argument and Task 11
+    //     owns the spec for landed status only.
+    // Both classes are named per reference in Task 11's report.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 134,
-      'ccd/session-hook.sh': 43,
-      'ccd/compact-card.mjs': 7,
-      'server/test/ccd-workspaces.test.ts': 7,
-      'server/test/ccd-ws-reap.test.ts': 7,
-      'server/test/compact-card.test.ts': 6,
+      'ccd/ccd': 39,
+      'ccd/session-hook.sh': 15,
+      'ccd/compact-card.mjs': 4,
+      'server/test/ccd-workspaces.test.ts': 5,
+      'server/test/ccd-ws-reap.test.ts': 4,
+      'server/test/compact-card.test.ts': 1,
       'ccd/ccrc': 1,
       'deploy/deploy.sh': 1,
     });
@@ -7173,7 +7219,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(206);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(70);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -7237,17 +7283,22 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const set = r.failures.map(refKey);
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
-        // Task 9's own list: stale by construction, the debt D-2758 parks in
-        // Task 11, and eleven of these are already inside the 206 above.
-        'ccd/session-hook.sh:744',
+        // Task 9's own list: the debt D-2758 parks in Task 11, RE-MEASURED
+        // there. FIVE of its eleven were re-anchored and now pass
+        // (`ccd/session-hook.sh:744` -> `:753`, `ccd/ccd:2756-2785` ->
+        // `:3345-3374`, `:2766` -> `:3355`, `:2784` -> `:3373`, `:4355-4357` ->
+        // `:5077-5079`). A SIXTH was re-anchored correctly and still reports:
+        // `ccd/ccd:2782` -> `:3371` really is the `shift 4` line, but the
+        // sentence boundary falls between that quotation's opening backtick and
+        // the reference, so the clause this pass sees carries none of its
+        // tokens — a clause-splitting artifact, not a wrong anchor. The rest
+        // are HISTORICAL: the helper's deleted slot block, its corrected
+        // `measureCommand` docstring, and the two hook comments the task's own
+        // prose quotes back at itself.
         'ccd/compact-card.mjs:433-560',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
-        'ccd/ccd:2756-2785',
-        'ccd/ccd:2782',
-        'ccd/ccd:2766',
-        'ccd/ccd:2784',
-        'ccd/ccd:4355-4357',
+        'ccd/ccd:3371',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
         // Task 10's list: FOUR of the five its two `- Modify:` bullets carry,
@@ -7255,7 +7306,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // two bullets and resolves SEVEN references in all (measured, Task 11):
         // the two in its `- NOT modified` sub-list pass on merit, so three of
         // the seven survive and `deploy/deploy.sh:560` is the only survivor
-        // among the five the `- Modify:` bullets carry.
+        // among the five the `- Modify:` bullets carry. All four are inside the
+        // 24,688-byte freeze, so Task 11 could not repair them either.
         'deploy/deploy.sh:629',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
