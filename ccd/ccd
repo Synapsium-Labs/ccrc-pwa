@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=829f23d9b47086ee5362046b9ddd47fbb24aab2ecfc6a8c817746bc921c687e5
+# ccrc:generated 1 sha256=74ef6135c351a95fcdbfefd79986b062e360e348db5dddada9c4dba7597ac2ee
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13878,9 +13878,10 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   # HOLDS rather than releases, answering ARMED on an unmeasurable pane, because
   # a cancelled continuation cannot be un-cancelled. One rc, two directions,
   # chosen by the caller and never collapsed here. (A line-count locator stood
-  # here once; this wave's own next commit moved the function it counted to and
-  # the count went stale uncaught — naming the function instead of a distance
-  # is what keeps this claim from rotting the same way again.)
+  # here once. It survived five commits, broke at the sixth when a new function
+  # was inserted between the two, moved again after that, and was caught only by
+  # review — naming the function instead of a distance is what keeps this claim
+  # from rotting the same way again.)
   local rows w
   rows=$(tmux list-panes -t "$(_tmux "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
   w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")

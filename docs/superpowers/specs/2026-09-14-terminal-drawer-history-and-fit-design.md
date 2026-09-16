@@ -197,8 +197,9 @@ ccd win-size --session <id> --mode smallest|canonical
   clients attached and re-latches `manual`, which IS the pinned state §3 wants. **The server does
   not depend on this arm**: its own pin (§5.1, §7.3) is the already-granted `tmux resize-window`,
   which works against an agent of any age. Its callers are an operator typing the verb on the box
-  and the agent's `win-size` grant — NOT ccd itself (measured 2026-09-16: no ccd function calls
-  own use (a `ccd` that pins a session it just spawned needs no server).
+  and the agent's `win-size` grant — NOT ccd itself. Measured 2026-09-16, `cmd_win_size` has no
+  ccd caller at all: the earlier wording here ("and for ccd's own use — a `ccd` that pins a session
+  it just spawned needs no server") described a caller that does not exist.
 - Advertised in `cmd_caps` as `win-size-v1`, and the cap is the proof of BOTH halves of this wave —
   the verb and §6.3's stand-down ship in one ccd, so a server that sees the cap knows the readers on
   that box already yield to a narrow pane. The server gates on `capSupported(state, 'win-size-v1')`

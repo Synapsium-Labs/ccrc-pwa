@@ -37,8 +37,11 @@ import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { READER_MIN_COLS } from '../../shared/api.js';
 
 /** The width query answered NARROW — one column under the calibration floor — for a
- *  stub that otherwise refuses every other tmux verb, so nothing past the guard is
- *  silently exercised. */
+ *  stub that answers NOTHING to every other tmux verb. Note what that is and is not:
+ *  a bash `case` with no matching arm exits 0 with empty stdout, so other verbs are
+ *  silently SUCCESSFUL-but-empty, not refused. That is sufficient here — the guard
+ *  reads this query's output and nothing past it is reached — but a test that needs a
+ *  real refusal must say `return 1` in a default arm rather than rely on this. */
 const NARROW_PANE = `tmux() { case "$1" in list-panes) printf '%s\\n' '1 ${READER_MIN_COLS - 1}' ;; esac; };`;
 
 const swapLog = (h: CcdHarness): string => {
