@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=378eaa8815fc025157920863f278051f904f9c98897b1b4b293aa70dd7e7e2df
+# ccrc:generated 1 sha256=8953158c43786b57d7cdb848184219be3405ec8898259efb306fae3366a5d6b7
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -15076,29 +15076,28 @@ _compact_note_clear() {   # id — the compactor is no longer declining, so the 
   return 0
 }
 
-_auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
-  # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
-  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+# ── THE KEYSTROKE PREDICATE, ONE COPY (routing slice 4, Task 4) ──────────────
+# The compactor asked two questions before it typed anything: can this pane be
+# READ at all, and is the session at a clean IDLE turn boundary? Slice 4's
+# applier needs the identical two questions before it types `/effort` or
+# `/model`, and a second copy of them would drift — most dangerously at
+# `auto-continue`, where a stray keystroke cancels a limit wait a session is
+# sitting out on its own (D-2229).
+#
+# So they are ONE pair of functions with `_auto_compact_check` as their first
+# caller: EXTRACTED, not reimplemented. Every word, every sentence and every
+# ORDER below is the compactor's own, and `ccd-auto-compact.test.ts` — written
+# against the inline shape and untouched by this extraction — is the pin that
+# says so.
+#
+# THE ANSWER IS THREE GLOBALS, not one string. `KS_PANE` carries the capture the
+# caller then reads for itself (the compactor's `ctx` segment, the applier's
+# picker), and `KS_WHY`/`KS_DETAIL` carry the refusal's SLUG and its SENTENCE
+# apart — D-2013's split, and the reason the slug is stable enough to compare
+# while the sentence stays free to carry measured numbers.
+_pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 with `KS_WHY` one of
+  # pane-unreadable / pane-blank / auto-continue and `KS_DETAIL` its sentence.
   #
-  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
-  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
-  # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
-  # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
-  # this session at all" or "this session is over its threshold and we are declining anyway" —
-  # the two shapes that were silent, and the second is the one that matters.
-  [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t
-  now=$(date +%s)
-  last=$(_reg_get "$id" lastcompact)
-  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
-  # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
-  # outright on the premise that "a swap landing already compacted from summary". It records a
-  # FLAG instead, and the premise is tested against the pane's own context reading below, once
-  # there is a reading to test it with. The arithmetic stays exactly where it was, on one
-  # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
-  # table pins that shape, and D-299's short-circuit is the reason it must not be split.
-  lastswap=$(_reg_get "$id" lastswap)
-  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
   # D-2013/D-2014 — THREE CONDITIONS, THREE REASONS, AND THE FIRST TWO ARE MEASURED RATHER THAN
   # NAMED. "tmux could not be asked" (dead pane, wedged server — the context is UNMEASURED and the
   # remedy is to go look at the substrate) is a different fact from "tmux answered and the pane is
@@ -15118,24 +15117,32 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # refusal — the session never compacts), and `grep -q "❯"` matches an older prompt line while a
   # dialog is up, which is how `/compact` gets typed into a menu. KEEP THE PIPELINE ON ONE LINE;
   # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
-  #
-  # The third is `no-ctx-segment`: the pane was read fine and its statusline does not publish the
-  # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
-  # 3 of 19 panes are in that state, and nothing anywhere said so.
+  local id="$1" prc pane
+  KS_PANE=""; KS_WHY=""; KS_DETAIL=""
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
-  [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
-  [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
-  _pane_auto_continue_armed "$pane" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
-  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
-  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
-  # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
-  # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
-  # constant, which says exactly what 80%+ does and does not establish about the landing.
-  (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
-    && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
+  [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
+  [[ -n "$pane" ]] || { KS_WHY=pane-blank; KS_DETAIL="tmux capture-pane rc=0, empty capture"; return 1; }
+  _pane_auto_continue_armed "$pane" && { KS_WHY=auto-continue; KS_DETAIL="Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 1; }
+  KS_PANE="$pane"
+  return 0
+}
+
+_idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean idle turn boundary;
+  # 1 with `KS_WHY` one of mid-turn / no-prompt / no-pane-pid / status-unreadable /
+  # not-idle / quiet-unmeasured / not-quiet / drafting and `KS_DETAIL` its sentence.
+  #
+  # `ctxnote` IS THE CALLER'S OWN MEASUREMENT, spliced into the sentences rather
+  # than measured here: the compactor passes `ctx ${pct}%` and gets back byte for
+  # byte the details it used to build inline, while the applier — which has no
+  # context reading to offer and no business taking one — passes the empty string
+  # and the `${ctxnote:+…}` arms collapse the separator with it. One template,
+  # two callers, and neither has to know the other's vocabulary.
+  local id="$1" pane="$2" ctxnote="${3:-}" now wrapper spid sf st sua t
+  KS_WHY=""; KS_DETAIL=""
+  now=$(date +%s)
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
-  echo "$pane" | grep -q "esc to interrupt" && { _compact_note "$id" mid-turn "ctx ${pct}%"; return 0; }
-  echo "$pane" | grep -q "❯" || { _compact_note "$id" no-prompt "ctx ${pct}%"; return 0; }
+  echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
+  echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
@@ -15146,7 +15153,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # wrong config directory, and the file may be absent or carry no `status` token. Every one of
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
-  [[ -n "$spid" ]] || { _compact_note "$id" no-pane-pid "tmux list-panes named no pane pid, ctx ${pct}%"; return 0; }
+  [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
@@ -15180,28 +15187,82 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # DANGLING SYMLINK is not absence, and reporting it as "no status in" would
   # send the operator looking for a file that is not the problem.
   if [[ ! -e "$sf" && ! -L "$sf" ]]; then
-    _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0
+    KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1
   elif [[ ! -f "$sf" ]]; then
-    _compact_note "$id" status-unreadable "not a regular file: $sf, ctx ${pct}%"; return 0
+    KS_WHY=status-unreadable; KS_DETAIL="not a regular file: $sf${ctxnote:+, $ctxnote}"; return 1
   fi
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || { _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0; }
-  [[ "$st" == "idle" ]] || { _compact_note "$id" not-idle "status=$st ctx ${pct}%"; return 0; }
+  [[ -n "$st" ]] || { KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1; }
+  [[ "$st" == "idle" ]] || { KS_WHY=not-idle; KS_DETAIL="status=$st${ctxnote:+ $ctxnote}"; return 1; }
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
   # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition). Same
   # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
   # `=~ ^[0-9]+$` (was `-n`) is also the D-299 guard on the operand the next line evaluates.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ "$sua" =~ ^[0-9]+$ ]] || { _compact_note "$id" quiet-unmeasured "no statusUpdatedAt in $sf, ctx ${pct}%"; return 0; }
+  [[ "$sua" =~ ^[0-9]+$ ]] || { KS_WHY=quiet-unmeasured; KS_DETAIL="no statusUpdatedAt in $sf${ctxnote:+, $ctxnote}"; return 1; }
   [[ $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] \
-    || { _compact_note "$id" not-quiet "ctx ${pct}%"; return 0; }
+    || { KS_WHY=not-quiet; KS_DETAIL="$ctxnote"; return 1; }
   # Don't clobber a half-typed message in the input box. `-e`: the reader needs
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
   t=$(_tmux "$id")
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
-    && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
+    && { KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1; }
+  return 0
+}
+
+_auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
+  # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
+  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  #
+  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
+  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
+  # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
+  # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
+  # this session at all" or "this session is over its threshold and we are declining anyway" —
+  # the two shapes that were silent, and the second is the one that matters.
+  [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
+  local id="$1" now last lastswap fromswap=0 pane pct wrapper t
+  now=$(date +%s)
+  last=$(_reg_get "$id" lastcompact)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
+  # outright on the premise that "a swap landing already compacted from summary". It records a
+  # FLAG instead, and the premise is tested against the pane's own context reading below, once
+  # there is a reading to test it with. The arithmetic stays exactly where it was, on one
+  # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
+  # table pins that shape, and D-299's short-circuit is the reason it must not be split.
+  lastswap=$(_reg_get "$id" lastswap)
+  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
+  # THE PANE READ AND THE IDLE READ ARE `_pane_for_keystroke`/`_idle_for_keystroke` (slice 4,
+  # Task 4), the two halves of this function the applier needed word for word. The refusal words,
+  # their order and their sentences are unchanged — `$KS_WHY` is the slug this function used to
+  # pass `_compact_note` as a literal and `$KS_DETAIL` is the sentence it used to build inline,
+  # with `ctx ${pct}%` handed to the second call so every one of its details renders exactly as
+  # it did. WHAT STAYS HERE is everything BETWEEN them — `no-ctx-segment`, the threshold clear
+  # and `post-swap` — because those are the compactor's own arithmetic and not a keystroke
+  # question at all, and because keeping them between the two calls is what makes a
+  # below-threshold mid-turn pane record nothing, exactly as before.
+  _pane_for_keystroke "$id" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  pane="$KS_PANE"
+  # `no-ctx-segment` is the THIRD condition of the pane read and it stayed behind with the
+  # arithmetic that needs it: the pane was read fine and its statusline does not publish the
+  # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
+  # 3 of 19 panes are in that state, and nothing anywhere said so.
+  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
+  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
+  # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
+  # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
+  # constant, which says exactly what 80%+ does and does not establish about the landing.
+  (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
+    && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
+  _idle_for_keystroke "$id" "$pane" "ctx ${pct}%" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  # `wrapper` is read again here rather than carried out of the predicate: it is the log line
+  # below that wants it, and a predicate that answered a second value through a global would be
+  # a wider contract than "is this pane typeable" for one string.
+  wrapper=$(_reg_get "$id" wrapper)
+  t=$(_tmux "$id")
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
