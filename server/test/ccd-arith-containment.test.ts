@@ -47,6 +47,18 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     // The structural row below reds either way, which is why it did not catch it.
     // Stubs keep the rest of the tick inert; the payload fires (or not) at the
     // cooldown line, which is reached before any swap decision.
+    //
+    // THIS IS THE ONLY ONE OF THE FOUR `WIDE_PANE` SPREADS BELOW THAT IS
+    // LOAD-BEARING BY THIS ARGUMENT (review round 3, S17): the other three
+    // (`_auto_compact_check` x2, `_spawn_start`) were widened in the same
+    // commit with no before/after table of their own. Re-measured: both
+    // `_auto_compact_check` arithmetic sites sit ABOVE its own
+    // `_pane_measurable` guard, and `_spawn_start` calls no
+    // `_pane_measurable` at all — a bare `tmux(){ :; }` could not have
+    // short-circuited any of the three, so those spreads are prophylactic
+    // (harmless, consistent with the stub every OTHER ccd fixture now
+    // answers) rather than required by this file's own threat model. Say so
+    // at each rather than let the claim above read as if it covered all four.
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid home claude;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-swap\")]';"
@@ -59,6 +71,11 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
 
   it('_auto_compact_check does not evaluate a payload planted in lastcompact', () => {
     const h = makeCcdHarness('arith-compact');
+    // PROPHYLACTIC, NOT LOAD-BEARING (S17): this function's arithmetic sites
+    // sit ABOVE its own `_pane_measurable` guard, so a bare `tmux(){ :; }`
+    // could not have short-circuited this case either way — unlike the
+    // `_auto_swap_check` case above, nothing here was measured to depend on
+    // WIDE_PANE. Kept for stub consistency with the rest of this file.
     h.sh(
       " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-compact\")]';"
       + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
@@ -71,6 +88,8 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     const h = makeCcdHarness('arith-compact-swap');
     // lastcompact left unset so the lastcompact gate falls through to the
     // lastswap gate — the second arithmetic site inside the same function.
+    // PROPHYLACTIC, NOT LOAD-BEARING (S17) — see the note on the case above;
+    // this is the same function's other arithmetic site, also above the guard.
     h.sh(
       " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-compactswap\")]';"
       + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
@@ -84,6 +103,9 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     // wrapper/workdir/uuid non-empty so the `incomplete registry` die does not
     // fire first; tmux stubbed so the fromswap line is
     // reached and nothing real spawns. mode=new avoids the resume settle.
+    // PROPHYLACTIC, NOT LOAD-BEARING (S17): `_spawn_start` calls no
+    // `_pane_measurable` at all, so WIDE_PANE here changes nothing about this
+    // guard's threat model — kept for stub consistency only.
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid workdir "$HOME"; _reg_set myid uuid u1;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-spawn\")]';"

@@ -270,9 +270,17 @@ const PHRASES = ['esc to interrupt', 'continuing automatically', 'continuing sho
  *  is parameter expansion, not a comment — that `#` sits mid-word, right
  *  after `1` — so a naive `line.split('#')[0]` truncates that guard's own
  *  `return` and reds the UNMUTATED file (measured; fix round 1 finding 1).
- *  Verified against all seven live guard lines: three carry a real trailing
- *  comment (space then `#`, stripped), four carry none, and this is the only
- *  one with a `#` that is not a comment start (mid-word, left alone). */
+ *  Verified against every live `_pane_measurable` guard line the POPULATION
+ *  census below actually WALKS via `bodyBefore` — which is not every guard
+ *  line in the tree: `_redrive_after_spawn` carries a second guard, argued in
+ *  `ccd/ccd`'s own comment above it, that sits AFTER every phrase site in
+ *  that function, so this scan never reaches it either (the same structural
+ *  blindness S1/S14 name for the census itself). Of the ones this scan does
+ *  walk, some carry a real trailing comment (space then `#`, stripped), the
+ *  rest carry none, and this is the only one with a `#` that is not a
+ *  comment start (mid-word, left alone). Re-run the split against the tree
+ *  rather than trusting a count here — restating one is exactly what went
+ *  stale four times in one wave (S7, review round 3). */
 function stripComment(l: string): string {
   return l.replace(/(^|\s)#.*$/, '$1');
 }

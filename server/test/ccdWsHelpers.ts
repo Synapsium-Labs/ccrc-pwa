@@ -282,8 +282,11 @@ export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 
  *
  *  Every fixture that spreads this models an ORDINARY, full-width pane, so the
  *  active row answers 200 columns. A fixture that means to model a NARROW
- *  drawer answers its own rows instead — `ccd-reader-standdown.test.ts` is the
- *  one that does, and it defines its own `tmux` rather than using this.
+ *  drawer answers its own rows instead, defining its own `tmux` rather than
+ *  using this — `ccd-reader-standdown.test.ts`'s once-per-loop case does, and
+ *  so does `ccd-pane-narrow-note.test.ts`'s `NARROW_PANE` (drawer wave 2); do
+ *  not assume that is the full set, the same way the spread-site split below
+ *  stopped being trustworthy as a fixed count.
  *
  *  `$*`, NEVER `$1`, is the discriminator: `list-panes` is ONE verb carrying
  *  two formats, and `_auto_compact_check`'s `-F '#{pane_pid}'` must keep the
@@ -291,20 +294,21 @@ export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 
  *
  *  IT RETURNS, so nothing below it in the stub runs for the width query — and
  *  that is why WHERE it is spread decides whether the query is LOGGED.
- *  RE-MEASURED 2026-09-16 by walking the text between each `tmux() {` and its
- *  arm and asking whether `ccd-calls` appears in it: there are **48** spread
- *  sites across `server/test/` (33 `WIDE_PANE`, 8 `WIDE_PANE_IF_UP`, 7
- *  `DEAD_PANE`), and they split **24 LOG / 24 do not** — every
- *  `WIDE_PANE_IF_UP` and `DEAD_PANE` site logs, and 9 of the 33 `WIDE_PANE`
- *  ones do. Two earlier drafts of this paragraph were wrong in the same
- *  direction and for different reasons: 15/35 counted only the recordings on
- *  the SAME LINE as the arm, missing the 9 that sit on the PRECEDING line of a
- *  multi-line stub and log it just the same; 24/26 then fixed the LOG half but
- *  left a 50-site total that counts two sites that are not there. The
- *  load-bearing figure is the 24. No assertion in this repo turns on either
- *  half, but a new one that counts calls should know which shape its fixture
- *  has — and `ccd-reader-standdown.test.ts`'s once-per-loop case is one that
- *  does. */
+ *  RE-DERIVE, DO NOT TRUST A COUNT WRITTEN HERE. Walking the text between
+ *  each `tmux() {` and its arm and asking whether `ccd-calls` appears in it
+ *  splits `WIDE_PANE`/`WIDE_PANE_IF_UP`/`DEAD_PANE` spread sites into ones
+ *  that LOG and ones that do not: every `WIDE_PANE_IF_UP` and `DEAD_PANE`
+ *  site logs, and only SOME of the `WIDE_PANE` ones do. This paragraph used
+ *  to state a fixed total and split, and kept being wrong at the next edit to
+ *  `server/test/` — most recently when `ccd-arith-containment.test.ts` grew
+ *  more `WIDE_PANE` spreads (review round 3, S8) and nobody swept the
+ *  sentence that named a total. Removing the digits rather than re-fixing
+ *  them again is this repo's own range-rule shape applied here: a fixed
+ *  count in prose is stale the moment the next test file changes, so nothing
+ *  is asserted that a future edit would silently falsify. No assertion in
+ *  this repo turns on either half, but a new one that counts calls should
+ *  re-run the walk above against the CURRENT tree rather than read a number
+ *  off this comment. */
 export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
 
 /** `WIDE_PANE` for a fixture that MODELS LIVENESS, and the reason it has to

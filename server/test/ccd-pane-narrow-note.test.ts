@@ -18,22 +18,47 @@
 // implementations below passing that file unchanged. This file is additive, not a
 // replacement.
 //
-// MEASURED 2026-09-16 — every property has a mutant that reds IT, and the shipped
-// tree is the control. A property with no mutant that reds is not pinned, it is
-// merely green, which is the defect this file exists to end:
-//   mutant                                      | what reds
-//   delete both `_pane_narrow_note` call sites  | (a) 2/2 — the two call-site tests
-//   delete the `COMPACT_NOTE_FLOOR` guard line  | (b) "does not speak again"
-//   `[[ -n "$said" ]] && return 0` (never re-opens) | (b) "speaks again once passed"
-//   `${site}narrownote` -> shared `narrownote`  | (c) 2/2 — the per-site tests
-// Each mutant reds ONLY the property it breaks; the shipped tree is 6/6 green. The
-// two floor mutants are the reason (b) is listed as proven rather than assumed: the
-// first fix round pinned (b) and never mutated it, so its green said nothing.
+// ROUND 3 (S2/S5/S3): the round-2 mutation table below was honest as far as it went,
+// but its own call-site tests match the swap.log STRING rather than the CALL — two
+// wrong implementations were fully green against it: (i) moving the call OUT of the
+// guard branch, so a WIDE pane gets a narrow note too; (ii) inlining an unfloored copy
+// of the log line at the call site with the call itself deleted, so the tick path
+// never goes through the floor at all. And its floor-VALUE tests derive their backdate
+// FROM `COMPACT_NOTE_FLOOR` itself, which bounds a mutated comparison from above only
+// — an 18-second floor passed both. Four more cases below close those three gaps.
 //
-// Fixture HOME only, with the `WIDE_PANE` idiom's narrow counterpart spread into a
-// `tmux()` stub — an uncontained `list-panes` reads the operator's LIVE server.
+// MEASURED 2026-09-16 (round 2) and re-measured 2026-09-16 (round 3, this file plus
+// `ccd-arith-containment.test.ts`'s structural row) — every property has a mutant that
+// reds IT, and the shipped tree is green throughout. A property with no mutant that
+// reds is not pinned, it is merely green, which is the defect this file exists to end.
+// A mutant that removes shared machinery (the floor guard itself, or the per-site
+// split) legitimately reds more than one case — that is not noise, it is every case
+// that actually depends on the thing removed — so this table names ALL of what reds,
+// not just the row's own headline case:
+//   mutant                                                | what reds
+//   delete both `_pane_narrow_note` call sites            | the 2 call-site tests (a), AND "the floor holds on the tick path too" (throws: no line was ever written to read)
+//   delete the `COMPACT_NOTE_FLOOR` guard line            | "does not speak again" (b), "the floor holds on the tick path too", "R2: still silent 5s BEFORE", AND the arith-containment structural row (the anchor line is gone)
+//   `[[ -n "$said" ]] && return 0` (never re-opens)        | "speaks again once passed" (b), AND the arith-containment structural row (the line no longer carries `$((now - said))`/`COMPACT_NOTE_FLOOR`)
+//   `${site}narrownote` -> shared `narrownote`            | the 2 per-site tests (c), AND "R2: still silent 5s BEFORE" (the backdate lands on a field the mutated code never reads, so `said` is empty and the guard cannot suppress)
+//   move the call OUT of the guard branch (fires WIDE too)| ONLY R1 "a WIDE-pane tick writes no narrow note"
+//   inline an unfloored copy, call deleted, at the swap site | ONLY "the floor holds on the tick path too" — the call-site tests stay green because the inlined TEXT is byte-identical
+//   `-lt "$((COMPACT_NOTE_FLOOR / 100))"` (an 18s floor)  | ONLY R2 "still silent 5s BEFORE the floor expires" — the constant's token stays on the line, so the structural row still matches
+//   `COMPACT_NOTE_FLOOR=18` (the constant's own literal shrunk) | ONLY "the floor constant itself is at least 1800s" — R2 derives its backdate from this same shrunk constant, so it cannot see this mutant; that is the reason the ratchet exists as a SEPARATE case
+// The two round-2 floor mutants are the reason (b)'s EXISTENCE is proven rather than
+// assumed; R2 and the literal ratchet are what proves the floor's VALUE rather than
+// only its presence — R2 catches a mutated COMPARISON (the constant's own token stays
+// on the line), the ratchet catches a mutated ASSIGNMENT.
+//
+// Fixture HOME only. `makeCcdHarness`'s `sh` runs every snippet through
+// `ghContainedEnv(..., {tmux: true})`, which plants a poisoned `tmux` on PATH ahead of
+// anything real and answers every verb with a bare refusal (exit 97) — so even WITHOUT
+// a bash `tmux()` stub here, `list-panes` cannot reach the operator's live server; it
+// would just make every case in this file exercise the unmeasurable stand-down instead
+// of the property it means to test. The bash-function stub (bash resolves functions
+// before PATH) is what lets a case answer a SPECIFIC width rather than a blanket
+// refusal — that is what it is for, not containment, which the harness already owns.
 import { describe, it, expect } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, WIDE_PANE, type CcdHarness } from './ccdWsHelpers.js';
 import { READER_MIN_COLS } from '../../shared/api.js';
 
 /** The width query answered NARROW — one column under the calibration floor — for a
@@ -67,6 +92,42 @@ describe('_pane_narrow_note call sites (S2/S8a): deleting either must red', () =
   });
 });
 
+describe('_pane_narrow_note fires ONLY through the guard branch, never on a WIDE pane (S2/S5, round 3)', () => {
+  it('R1: a WIDE-pane tick writes no narrow note', () => {
+    // Closes the wrong implementation S2 measured green: moving the
+    // `_pane_narrow_note` call OUT of the `_pane_measurable "$id" || { ... }`
+    // branch so it fires unconditionally. Under that mutant every 5s supervise
+    // tick on an ordinary WIDE pane would append a narrow-note line — this is
+    // the case that catches it, driven through the real tick function rather
+    // than a direct call.
+    const h = makeCcdHarness('narrownote-wide-');
+    h.sh(
+      '_reg_set myid wrapper claude; _reg_set myid home claude;'
+      + ' _home_for(){ echo claude; }; _swap_target(){ return 1; };'
+      + ` _dispatch_swap(){ :; }; tmux(){ ${WIDE_PANE} :; };`
+      + ' _auto_swap_check myid || :');
+    expect(swapLog(h), 'a 200-column pane produced a narrow-note line — the call is not gated on the guard')
+      .not.toMatch(/swap-skip myid: pane is under/);
+    h.cleanup();
+  });
+
+  it('the floor holds on the tick path too — a second _auto_swap_check call inside the window still writes ONE line', () => {
+    // Closes the OTHER wrong implementation S5 measured green: inlining an
+    // UNFLOORED copy of the swap-skip log line at the call site with the
+    // `_pane_narrow_note` call itself deleted. Both round-2 floor tests
+    // (below) call `_pane_narrow_note` directly, so neither can tell a floored
+    // call from an unfloored inline echo that happens to produce the same
+    // text — this drives the SAME floor through the real tick entrypoint,
+    // twice, inside one window.
+    const h = makeCcdHarness('narrownote-tickfloor-');
+    const log = h.sh(`${NARROW_PANE} _auto_swap_check myid; _auto_swap_check myid; cat "$REG/swap.log"`);
+    const lines = log.trim().split('\n').filter((l) => l.includes('swap-skip'));
+    expect(lines, 'two tick calls inside the floor window wrote two lines — the tick path is not floored')
+      .toHaveLength(1);
+    h.cleanup();
+  });
+});
+
 describe('_pane_narrow_note is FLOORED by COMPACT_NOTE_FLOOR (S2/S8b)', () => {
   it('a second call in the same window does not speak again', () => {
     const h = makeCcdHarness('narrownote-floor-');
@@ -87,6 +148,43 @@ describe('_pane_narrow_note is FLOORED by COMPACT_NOTE_FLOOR (S2/S8b)', () => {
       + ' _pane_narrow_note myid swap; cat "$REG/swap.log"');
     expect(log, 'a stale anchor still suppressed the note — the floor never re-opens')
       .toMatch(/swap-skip myid: pane is under \d+ columns/);
+    h.cleanup();
+  });
+});
+
+describe('the floor PINS A VALUE, not just an existence (S3, round 3)', () => {
+  // The two tests above bound a mutated comparison from ABOVE only: case 1
+  // makes two calls in the same second, so any floor greater than zero
+  // passes it, and case 2 backdates by `COMPACT_NOTE_FLOOR + 5`, so any floor
+  // narrower than that passes it too. An 18-second floor sits inside that gap
+  // and both stayed green under it (measured). The two cases below close it.
+  it('R2: still silent 5s BEFORE the floor expires', () => {
+    // Backdates by `COMPACT_NOTE_FLOOR - 5` — five seconds SHORT of the real
+    // window — and asserts silence. A comparison mutated to a much narrower
+    // effective floor (e.g. dividing the constant at the point of use) sees
+    // this backdate as long past its own shrunk window and speaks anyway,
+    // reddening this case, while the derivation keeps the case true if the
+    // constant is ever re-tuned for a real reason.
+    const h = makeCcdHarness('narrownote-floor-tight-');
+    h.sh('_reg_set myid swapnarrownote $(( $(date +%s) - (COMPACT_NOTE_FLOOR - 5) )); _pane_narrow_note myid swap');
+    expect(swapLog(h), 'a floor five seconds short of the real constant still spoke — the comparison is narrower than COMPACT_NOTE_FLOOR')
+      .toBe('');
+    h.cleanup();
+  });
+
+  it("the floor constant itself is at least 1800s — a literal ratchet, not derived from the comparison it guards", () => {
+    // R2 above derives its backdate FROM `$COMPACT_NOTE_FLOOR` as read out of
+    // the very shell whose constant a mutant could shrink, so it cannot tell
+    // apart a shrunk ASSIGNMENT (`COMPACT_NOTE_FLOOR=18`) from the real one —
+    // both would still pass R2, because R2's own backdate shrinks with it.
+    // This pins the assignment directly, against a literal: D-2013's stated
+    // budget (one line per session per window against a 5s tick) is the
+    // reason the floor exists at all, and it is not honoured by a window
+    // measured in tens of seconds.
+    const h = makeCcdHarness('narrownote-floor-ratchet-');
+    const floor = Number(h.sh('echo "$COMPACT_NOTE_FLOOR"'));
+    expect(floor, "COMPACT_NOTE_FLOOR's own assignment shrank below D-2013's budget floor")
+      .toBeGreaterThanOrEqual(1800);
     h.cleanup();
   });
 });

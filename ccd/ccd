@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=74ef6135c351a95fcdbfefd79986b062e360e348db5dddada9c4dba7597ac2ee
+# ccrc:generated 1 sha256=4278bdf7e9750cc35b6e5977e37b6dbcd707f10033589279a84c134f7e1e6108
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -16022,8 +16022,11 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # gone narrow in the meantime. But its NEGATIVE answer is not "auto-continue armed" —
   # that would be `_pane_auto_continue_armed`'s own inverted answer to the SAME
   # unmeasurable pane, naming a cause (Claude Code's own recovery timer) this line never
-  # detected. Logged as its own sentence so swap.log asserts only what was measured.
-  _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
+  # detected. Logged as its own sentence — distinct wording from this same
+  # function's TOP-OF-FUNCTION guard above the wait loop, so swap.log can tell
+  # "never wide enough to redrive at all" from "went narrow during the
+  # REDRIVE_WAIT_S wait" instead of collapsing both to one line.
+  _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane went under ${READER_MIN_COLS} columns during the redrive wait (§6.3)" >> "$REG/swap.log"; return 0; }
   _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
