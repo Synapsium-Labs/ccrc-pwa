@@ -168,6 +168,15 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
     { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
+    // Routing slice 4, controller ruling S4-R7: `routetries` (`<n> <epoch>`) is the
+    // applier's bounded-retry counter and BOTH of its tokens are arithmetic operands —
+    // the attempt count against `ROUTE_RETRY_MAX`, the epoch against
+    // `ROUTE_RETRY_BACKOFF`, and the count again when it is incremented. Same threat
+    // model as every row above: one writer (`_route_try_bump`, from `$(date +%s)` and its
+    // own arithmetic), no wire route, a torn or hand-edited registry field.
+    { fn: '_route_try_bump (routetries increment)', anchors: ['$((n + 1))', 'else n=1'],           arith: '$((' },
+    { fn: '_route_retry_ok (attempt cap)',          anchors: ['-ge "$ROUTE_RETRY_MAX"'],           arith: '-ge' },
+    { fn: '_route_retry_ok (backoff)',              anchors: ['$((now - ts))', 'ROUTE_RETRY_BACKOFF'], arith: '$((' },
   ];
   // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
   // premise (#69 review round 4). The comment here said "the seven sites are all

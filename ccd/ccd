@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=0dff1571f580f7dca1b31e5941a9b897a2347b7c67584f7e77f8ab7281b3d920
+# ccrc:generated 1 sha256=92e823251a8129c2a7d398d9385f4360fa09842bc9359652f7ee648c4b2881be
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1095,6 +1095,16 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
+# THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
+# live pane — not a re-listing of `ROUTE_EFFORTS` for its own sake). The ORDER is
+# the measured fact and it is what `_route_type_effort` counts `Right` presses
+# against, so this list may not be derived from `ROUTE_EFFORTS` by stripping
+# words: that vocabulary is a SET whose order carries no claim, and two of its
+# words are not stops at all — `auto` is the absent-equivalent (nothing is
+# typed) and `ultracode` has no slider row (its plain form is session-only by
+# construction, D-2810). A level that is not a stop is `no-slider-stop`, its own
+# refusal word, never a guessed key.
+ROUTE_EFFORT_STOPS="low medium high xhigh max"
 ROUTE_WORKFLOWS="on off"
 ROUTE_INERTABLE="effort workflow"
 ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / route-skip notes for one
@@ -1107,6 +1117,20 @@ ROUTE_ACK_WAIT=5                # seconds `_route_ack_wait` polls the pane (one 
                                 # `/model`. The keystrokes land in under a second on a live pane; this
                                 # is the budget for a TUI mid-repaint, not for a session to become idle
                                 # — that question was already answered by `_idle_for_keystroke`.
+ROUTE_RETRY_BACKOFF=600         # seconds between two attempts to apply the SAME pending field to the
+                                # same session (controller ruling S4-R7). The applier types into a LIVE
+                                # pane, so an attempt that is never acknowledged — `/effort ultracode`
+                                # on a lane launched `{"enableWorkflows":false}`, a class the picker
+                                # does not list — is not free the way a skipped log line is: at the 5s
+                                # tick it would re-type twelve times a minute for ever. `_route_note`'s
+                                # floor bounds the swap.log LINE and nothing else.
+ROUTE_RETRY_MAX=3               # attempts at one pending field before the applier gives up and says so
+                                # (`apply-gave-up`). Three because the conditions this bounds are
+                                # PERMANENT ones — a refused slash command, an absent picker row — and
+                                # the transient ones (mid-turn, drafting, a session sitting out a limit)
+                                # are refused by the idle predicate and never counted as attempts at all.
+                                # The counter is cleared by any `cmd_route` write, by the settle's own
+                                # `routeapplied` stamp, and by the pending set becoming empty.
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -6847,6 +6871,14 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
     echo "set $id $f=$v"
   done
+  # THE OPERATOR ASKED FOR SOMETHING ELSE, SO THE BUDGET RESETS (ruling S4-R7).
+  # `routetries` counts attempts at ONE pending field; a write to this session
+  # changes what is pending — or re-states it deliberately, which is an operator
+  # saying "try again" — so a counter measured against the old record may not
+  # keep the new one from ever reaching the pane. Before the `--apply` gate, not
+  # after: the coordinator's plain form writes the record the tick will apply,
+  # and it must not inherit a spent budget either.
+  _route_tries_clear "$id"
   (( apply )) || return 0
   # THE SETTLE-APPLIED FIELDS ARE RECORDED AT WRITE TIME. `workflow`, `subagent`
   # and `compact` have no keystroke — they are an argv `--settings` key, an env
@@ -15074,18 +15106,33 @@ _route_peek() {   # id field -> stdout the VALIDATED value, or nothing. PURE: no
   _route_valid "$f" "$v" && printf '%s' "$v"
   return 0
 }
-_route_effort_for() {   # id class -> stdout the effort to apply. Haiku 4.5 takes no effort
+_route_effort_for() {   # id class [quiet] -> stdout the effort to apply. Haiku 4.5 takes no effort
   # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
   # refused here with its own note and nothing is typed. `auto` is spec
   # §5.1's ABSENT-equivalent — haiku+auto types nothing and notes nothing,
   # same as haiku+absent; only haiku+a LEVEL is the refused pair (controller
   # ruling S1-R5, matched by `cmd_route`'s own pair check above).
-  local id="$1" cls="$2" e
-  e=$(_route_get "$id" effort)
+  #
+  # `quiet` IS A THIRD ARGUMENT AND NOT A SECOND FUNCTION (controller ruling
+  # S4-R9). The rule this applies is one rule; a peek-shaped copy of it beside
+  # this one is the drift that makes a gate and an applier disagree about the
+  # same record. What `quiet` removes is the WRITING, all of it: the journal
+  # read becomes `_route_peek` (no `route-reject`/`route-unmeasured` line, no
+  # floor marker) and the pair refusal becomes silent. Omitting the argument
+  # leaves every existing caller byte-for-byte what it was — the settle and
+  # `cmd_caps`' journaling read still say everything they said.
+  #
+  # WHO ASKS QUIETLY: `_route_wanted`, which runs on the 5s supervise tick for
+  # every live session. A tick may not write, and this used to: a haiku+level
+  # record left a `routenotepair` floor marker and a `route-refuse` line the
+  # first time the applier's own gate looked at it.
+  local id="$1" cls="$2" quiet="${3:-}" e
+  if [[ "$quiet" == quiet ]]; then e=$(_route_peek "$id" effort); else e=$(_route_get "$id" effort); fi
   if [[ "$cls" == haiku && "$e" == auto ]]; then
     e=""
   elif [[ "$cls" == haiku && -n "$e" ]]; then
-    _route_pair_note "$id"; e=""
+    [[ "$quiet" == quiet ]] || _route_pair_note "$id"
+    e=""
   fi
   printf '%s' "$e"
   return 0
@@ -15413,41 +15460,174 @@ _route_applied_get() {   # id field -> stdout the recorded value, or nothing. Al
   return 0
 }
 
+_route_inert_has() {   # <inert list> field -> 0 iff the comma list names the field
+  # ONE READER OF THE `inert` VOCABULARY for every consumer of the stamp. The
+  # list is a comma-separated set of FIELD NAMES drawn from `ROUTE_INERTABLE`
+  # (`_route_valid`'s `inert` arm), so membership is a word test and never a
+  # substring one: `*effort*` would also match a future `noeffort`.
+  local list="$1" f="$2"
+  _route_word_in "$f" "${list//,/ }"
+}
+
 _route_wanted() {   # id -> stdout "<class> <effort>": the two values the applier would type.
   # ONE SPELLING, read by both the cheap pending check and the applier itself —
   # two copies of "what does this record ask for" is exactly the drift that would
   # make the tick loop for ever on a field it then declines to type.
   #
+  # AN ABSENT FIELD IS AN EMPTY WORD, AND THAT IS NOT `default`/`auto`
+  # (controller ruling S4-R8). Three conditions, three answers: the field is
+  # ABSENT (nothing is pending for it and nothing is ever typed for it), or it
+  # carries the explicit word `default`/`auto` (the picker's `Default` row; the
+  # lane decides the level), or it carries a real value. Collapsing the first two
+  # is what made a live session carrying only `compact=off` get `/model` + Enter
+  # + `s` on the first tick, overriding a model a human had picked by hand. The
+  # settle has always drawn the same line — `[[ -n "$rclass" && "$rclass" !=
+  # default ]]` composes no `--model` for either, but it composes nothing for an
+  # absent class the way it composes nothing for `default`, and now says so in
+  # its `routeapplied` stamp too.
+  #
   # THE CLASS SERVED, NEVER THE INTENDED ONE: a `degraded` stamp means this lane
   # measured unable to serve `class`, and typing the intended class into the
   # picker would ask the pane for a model the settle already ruled out (and, on
-  # the fable rung, one the picker does not even list). `default` is a real value
-  # here — the picker's `Default` row — and is what an absent `class` means.
+  # the fable rung, one the picker does not even list).
   #
-  # `auto` IS THE ABSENT-EQUIVALENT for effort (spec §5.1) and is what an absent
-  # `effort` resolves to, so both spell "the lane decides" as one word the
-  # comparison can hold. `_route_effort_for` applies the haiku rule (and its
-  # floored refusal note) so that rule is not said a second time here.
+  # AN INERT FIELD IS NOT WANTED AT ALL (controller ruling S4-R9). `inert` is the
+  # settle's own statement that this lane could not apply the field; a tick that
+  # then typed it would contradict the record on disk, and the `routeapplied`
+  # stamp beside it would claim a state nobody set. `class` is never inert —
+  # `ROUTE_INERTABLE` has no word for it — so only the effort arm asks.
+  #
+  # IT WRITES NOTHING. Five registry READS and no write: `_route_peek` for
+  # `class` and `degraded` and `inert`, and `_route_effort_for … quiet`, which is
+  # a sixth read (`effort`) through the same pure reader. That is the whole
+  # contract this function owes `_route_apply_pending`, which runs on every live
+  # session every five seconds.
   local id="$1" cls deg eff
-  cls=$(_route_get "$id" class)
-  deg=$(_route_get "$id" degraded)
+  cls=$(_route_peek "$id" class)
+  deg=$(_route_peek "$id" degraded)
   [[ -n "$deg" ]] && cls="$deg"
-  [[ -n "$cls" ]] || cls=default
-  eff=$(_route_effort_for "$id" "$cls")
-  [[ -n "$eff" ]] || eff=auto
+  eff=$(_route_effort_for "$id" "$cls" quiet)
+  _route_inert_has "$(_route_peek "$id" inert)" effort && eff=""
   printf '%s %s' "$cls" "$eff"
   return 0
 }
 
-_route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `routeapplied` does not record
-  # REGISTRY READS ONLY. This is the tick's first act on every live session, so
-  # it may not shell into tmux: ~20 sessions x 12 ticks a minute is the load,
-  # and the healthy answer — nothing pending — has to cost a few stats.
+_route_pending_word() {   # id -> "<field>=<value>" for the FIRST field the applier would type, or nothing
+  # THE ONE PLACE "is this field pending" is decided, so the cheap gate, the
+  # applier and the give-up note can never disagree about WHICH field is stuck.
+  # Class first, then effort — `_route_apply_now`'s own order (D-2811).
   local id="$1" want cls eff
-  _route_any "$id" || return 1
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
-  [[ "$cls" == "$(_route_applied_get "$id" class)" ]] || return 0
-  [[ "$eff" == "$(_route_applied_get "$id" effort)" ]] || return 0
+  [[ -n "$cls" && "$cls" != "$(_route_applied_get "$id" class)" ]] && { printf 'class=%s' "$cls"; return 0; }
+  [[ -n "$eff" && "$eff" != "$(_route_applied_get "$id" effort)" ]] && { printf 'effort=%s' "$eff"; return 0; }
+  return 0
+}
+
+_route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `routeapplied` does not record
+  # REGISTRY READS ONLY, AND THAT IS NOW TRUE (controller ruling S4-R9; it was
+  # not, and the comment here said it was — `_route_wanted` reached
+  # `_route_effort_for`, which could leave a `routenotepair` marker and a
+  # `route-refuse` line on a tick). The reads: `_route_any`'s seven `-e` stats,
+  # then `_route_wanted`'s four (`class`, `degraded`, `effort`, `inert`) and one
+  # or two `_route_applied_get`s. This is the tick's first act on every live
+  # session — ~20 sessions x 12 ticks a minute — so the healthy answer, nothing
+  # pending, has to cost a few stats and no tmux at all.
+  local id="$1"
+  _route_any "$id" || return 1
+  [[ -n "$(_route_pending_word "$id")" ]] && return 0
+  return 1
+}
+
+_route_apply_seed() {   # id -> 0 iff it SEEDED `routeapplied` this tick (the caller then returns)
+  # A RECORD THAT PREDATES THE APPLIER IS NOT AN UNAPPLIED RECORD (controller
+  # ruling S4-R8). Every routing record on this fleet was applied by its last
+  # settle's argv — that is what `_spawn_start` composes — but until slice 4
+  # nothing WROTE that down, so a session whose record was set before this code
+  # shipped carries no `routeapplied` file at all. Typing on first sight would
+  # drive the picker on every such session at once, for no change: the pane is
+  # already running what the record asks for.
+  #
+  # So the first tick that finds a record with no stamp WRITES THE STAMP FROM THE
+  # SERVED VALUES AND TYPES NOTHING, and says so in one swap.log line. From the
+  # next tick on the file exists and the ordinary comparison decides — a
+  # DIVERGENT write after the seed (`ccd route --set effort=high`) is pending and
+  # is typed at the next idle tick, which is the whole point of seeding rather
+  # than suppressing.
+  #
+  # WHAT IS SEEDED IS WHAT `_route_wanted` ANSWERS, not the record's raw fields:
+  # the class SERVED (a `degraded` stamp wins), the effort past the haiku filter,
+  # and nothing at all for a field that is absent or named in `inert`. Written
+  # any other way the seed would itself leave something pending.
+  [[ -e "$REG/$1.routeapplied" ]] && return 1
+  local id="$1" want cls eff sub wf cmp words=""
+  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  [[ -n "$cls" ]] && words="class=$cls"
+  [[ -n "$eff" ]] && words="${words:+$words }effort=$eff"
+  # `_route_peek`, not `_route_get`: the seed runs on a supervise tick and a tick
+  # writes no journal line (the rule `_route_apply_pending` states above).
+  sub=$(_route_peek "$id" subagent); [[ -n "$sub" ]] && words="${words:+$words }subagent=$sub"
+  wf=$(_route_peek "$id" workflow)
+  _route_inert_has "$(_route_peek "$id" inert)" workflow || { [[ -n "$wf" ]] && words="${words:+$words }workflow=$wf"; }
+  cmp=$(_route_peek "$id" compact); [[ -n "$cmp" ]] && words="${words:+$words }compact=$cmp"
+  _reg_set "$id" routeapplied "$words"
+  echo "$(date '+%F %T') routeapplied-seeded $id: $words (record predates the applier)" >> "$REG/swap.log"
+  return 0
+}
+
+_route_tries_clear() {   # id — drop the bounded-retry counter (controller ruling S4-R7)
+  # THREE THINGS CLEAR IT and they are the three that make a further attempt
+  # MEAN something again: a `cmd_route` write to this session (the operator
+  # changed what is being asked for, with or without `--apply`), the settle's own
+  # `routeapplied` stamp (a fresh spawn composed the record into the argv, so
+  # whatever the pane refused is moot), and the pending set becoming empty.
+  [[ -e "$REG/$1.routetries" ]] && rm -f -- "$REG/$1.routetries"
+  return 0
+}
+
+_route_try_bump() {   # id — count ONE attempt that reached the pane and was not acknowledged
+  # WHAT COUNTS AS AN ATTEMPT is exactly the set of refusals that came back FROM
+  # THE PANE — `apply-unconfirmed`, `no-picker-row`, `no-slider-stop`. A refusal
+  # from `_pane_for_keystroke`/`_idle_for_keystroke` (mid-turn, drafting, an
+  # occupied box, a session sitting out a usage limit) never gets here: nothing
+  # was typed, the condition is transient by construction, and counting it would
+  # exhaust the budget on a session that was simply busy.
+  local id="$1" rec n now
+  now=$(date +%s)
+  rec=$(_reg_get "$id" routetries 2>/dev/null)
+  n="${rec%% *}"
+  if [[ "$n" =~ ^[0-9]+$ ]]; then n=$((n + 1)); else n=1; fi
+  _reg_set "$id" routetries "$n $now"
+  return 0
+}
+
+_route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller ruling S4-R7)
+  # THE FLOOR BOUNDS THE LOG LINE; THIS BOUNDS THE KEYSTROKES. `_route_note`'s
+  # `ROUTE_NOTE_FLOOR` makes a standing refusal quiet, which is a different thing
+  # from making it cheap: before this, a permanently unapplyable field — `/effort
+  # ultracode` on a lane launched `{"enableWorkflows":false}`, which Claude Code
+  # refuses verbatim, or `class=fable` on a lane whose picker lists no Fable row —
+  # re-entered the applier every 5s and typed a whole key sequence into a live
+  # pane twelve times a minute, for ever, silently after the first note. Worse,
+  # the class arm's early return starved the effort arm, so a stuck class also
+  # meant an effort that never landed.
+  #
+  # THREE ANSWERS, NOT TWO: never attempted (type), inside the backoff (wait,
+  # silently — the note for this condition was already written by the attempt
+  # that set the counter), and at the cap (say `apply-gave-up` once per floor
+  # and type nothing until something clears the counter).
+  local id="$1" rec n ts now
+  rec=$(_reg_get "$id" routetries 2>/dev/null)
+  [[ -n "$rec" ]] || return 0
+  n="${rec%% *}"; ts="${rec##* }"
+  now=$(date +%s)
+  # D-299: BOTH TOKENS ARE GUARDED `=~ ^[0-9]+$` FIRST inside each `[[ ]]`, so a
+  # torn or hand-edited counter never reaches an arithmetic context (`$REG` is
+  # writable by any session on this box — attribution, not authentication). And
+  # because neither guarded line can then fire, the third drops the unreadable
+  # counter rather than wedging the applier on bytes it cannot read.
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge "$ROUTE_RETRY_MAX" ]] && { _route_note "$id" apply-gave-up "$(_route_pending_word "$id") after $n attempts"; return 1; }
+  [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && $((now - ts)) -ge "$ROUTE_RETRY_BACKOFF" ]] && return 0
+  [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ ]] || { _route_tries_clear "$id"; return 0; }
   return 1
 }
 
@@ -15467,7 +15647,24 @@ _route_ack_wait() {   # tmuxname regex -> 0 iff the pane shows the acknowledgeme
   return 1
 }
 
-_route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed
+_route_escape() {   # tmuxname — leave the pane as we found it after an unacknowledged sequence
+  # CONTROLLER RULING S4-R9. A `send-keys` that is never acknowledged has one of
+  # two shapes and both leave something OPEN: the slider is still up, or the
+  # `Change effort level?` dialog is, or the model picker is. Returning 1 with
+  # the UI standing hands the next actor a pane where a plain keystroke — the
+  # compactor's `/compact`, a nudge, a human — lands inside a picker instead of
+  # the prompt. And nothing downstream can tell: `_idle_for_keystroke`'s
+  # `grep -q ❯` cannot distinguish a picker's cursor row from the prompt, so the
+  # pane reads IDLE while it is nothing of the kind.
+  #
+  # ONCE, not until-clear. One `Escape` closes each of the three shapes measured
+  # (D-2808, D-2811 and the slice-4 picker probe); a loop would be a second,
+  # unmeasured claim, and pressing Escape at a bare prompt is a no-op anyway.
+  tmux send-keys -t "$1" Escape; sleep 1
+  return 0
+}
+
+_route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop
   # `ultracode` HAS NO SLIDER DELTA and needs none: it is the one level whose
   # PLAIN form is session-only by construction (D-2810, measured — the ack reads
   # `(this session only)` and settings.json is byte-identical), because there is
@@ -15476,17 +15673,30 @@ _route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed
   # `Left`x7 THEN `Right`xN, and the 7 is not arbitrary: the slider does NOT
   # wrap (measured), so seven lefts pin the marker at `low` from any starting
   # position on a six-stop scale and the rights then count from a known origin.
-  # The stops are `low medium high xhigh max`; `ultracode` is the sixth and is
-  # never reached this way.
+  #
+  # N IS THE LEVEL'S POSITION IN `ROUTE_EFFORT_STOPS`, DERIVED (controller ruling
+  # S4-R9). The `case` that used to sit here — `low) n=0 ;; medium) n=1 ;; …` —
+  # was a second hand-kept enumeration of the effort vocabulary in the same file
+  # as the first, and the kind that rots quietly: a stop inserted in the middle
+  # of the measured order would leave every level above it pointing one row low,
+  # and the only symptom is a pane running the wrong effort.
   local t="$1" level="$2" n i
+  local -a stops=()
   if [[ "$level" == ultracode ]]; then
     tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
-    _route_ack_wait "$t" "ultracode.*this session only"; return $?
+    _route_ack_wait "$t" "ultracode.*this session only" && return 0
+    _route_escape "$t"; return 1
   fi
-  case "$level" in
-    low) n=0 ;; medium) n=1 ;; high) n=2 ;; xhigh) n=3 ;; max) n=4 ;;
-    *) return 1 ;;   # not in `ROUTE_EFFORTS`' slider vocabulary: unconfirmed, never a guessed key
-  esac
+  read -r -a stops <<< "$ROUTE_EFFORT_STOPS"
+  n=-1
+  for ((i = 0; i < ${#stops[@]}; i++)); do [[ "${stops[i]}" == "$level" ]] && { n="$i"; break; }; done
+  # A LEVEL WITH NO STOP IS ITS OWN CONDITION, not `apply-unconfirmed`. Nothing
+  # is typed, so there is no pane to go and look at, and no Escape to press.
+  if (( n < 0 )); then
+    KS_WHY=no-slider-stop
+    KS_DETAIL="effort=$level is not one of the measured slider stops ($ROUTE_EFFORT_STOPS)"
+    return 2
+  fi
   tmux send-keys -t "$t" -l "/effort"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
   for ((i = 0; i < 7; i++)); do tmux send-keys -t "$t" Left; sleep 1; done
   for ((i = 0; i < n; i++)); do tmux send-keys -t "$t" Right; sleep 1; done
@@ -15498,7 +15708,8 @@ _route_type_effort() {   # tmuxname level -> 0 acknowledged | 1 unconfirmed
   if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
     tmux send-keys -t "$t" Enter; sleep 1
   fi
-  _route_ack_wait "$t" "Set effort level to $level.*\(this session only\)"
+  _route_ack_wait "$t" "Set effort level to $level.*\(this session only\)" && return 0
+  _route_escape "$t"; return 1
 }
 
 _route_picker_rows() {   # pane -> one row per line: <n>\t<cursor 0|1>\t<label>\t<description>
@@ -15568,7 +15779,7 @@ _route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirm
   # same (leave it to the settle), so they share the word and differ in the
   # detail the swap.log line carries.
   if [[ "$target" == 0 || "$curs" == 0 ]]; then
-    tmux send-keys -t "$t" Escape; sleep 1
+    _route_escape "$t"
     KS_WHY=no-picker-row
     if [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
     else KS_DETAIL="class=$cls"; fi
@@ -15580,7 +15791,8 @@ _route_type_model() {   # tmuxname class wrapper -> 0 acknowledged | 1 unconfirm
     for ((i = target; i < curs; i++)); do tmux send-keys -t "$t" Up; sleep 1; done
   fi
   tmux send-keys -t "$t" -l "s"; sleep 1
-  _route_ack_wait "$t" "Set model to .* for this session only"
+  _route_ack_wait "$t" "Set model to .* for this session only" && return 0
+  _route_escape "$t"; return 1
 }
 
 _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is still pending
@@ -15595,29 +15807,47 @@ _route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is s
   # absent-equivalent and types NOTHING at all — the live level stands until the
   # next settle composes the argv. Recording it applied is what stops the tick
   # re-deciding that every 5 seconds.
+  #
+  # AN ABSENT FIELD IS NEVER TYPED (controller ruling S4-R8) and NEITHER IS AN
+  # INERT ONE (S4-R9): `_route_wanted` answers an EMPTY word for both, and the
+  # `-n` on each arm below is what turns that word into "nothing to do here".
+  # This is not the same as `default`/`auto`, which are real values the record
+  # states and which each have their own no-keystroke handling.
+  #
+  # EVERY REFUSAL THAT CAME BACK FROM THE PANE COUNTS AS AN ATTEMPT
+  # (`_route_try_bump`, ruling S4-R7): `apply-unconfirmed`, `no-picker-row` and
+  # `no-slider-stop` are the three, and they are exactly the ones that can be
+  # PERMANENT. The idle predicate's refusals never reach this function.
   local id="$1" t w want cls eff have rc
   t=$(_tmux "$id")
   w=$(_reg_get "$id" wrapper)
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   have=$(_route_applied_get "$id" class)
-  if [[ "$cls" != "$have" ]]; then
+  if [[ -n "$cls" && "$cls" != "$have" ]]; then
     _route_type_model "$t" "$cls" "$w"; rc=$?
     case "$rc" in
       0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
-      2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; return 1 ;;
-      *) _route_note "$id" apply-unconfirmed "class=$cls"; return 1 ;;
+      2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
+      *) _route_note "$id" apply-unconfirmed "class=$cls"; _route_try_bump "$id"; return 1 ;;
     esac
   fi
   have=$(_route_applied_get "$id" effort)
-  if [[ "$eff" != "$have" ]]; then
+  if [[ -n "$eff" && "$eff" != "$have" ]]; then
     if [[ "$eff" == auto ]]; then
       _route_applied_set "$id" effort auto
       _route_note_clear "$id"
-    elif _route_type_effort "$t" "$eff"; then
-      _route_applied_set "$id" effort "$eff"
-      _route_note_clear "$id"
     else
-      _route_note "$id" apply-unconfirmed "effort=$eff"; return 1
+      _route_type_effort "$t" "$eff"; rc=$?
+      case "$rc" in
+        0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
+        # rc 2 is `no-slider-stop` — a level with no stop on the measured slider
+        # (S4-R9). Its own refusal word rather than `apply-unconfirmed`, because
+        # the remedy is different: nothing was typed at all and no acknowledgement
+        # was ever possible, so an operator reading `apply-unconfirmed` would go
+        # looking at a pane that never saw a keystroke.
+        2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
+        *) _route_note "$id" apply-unconfirmed "effort=$eff"; _route_try_bump "$id"; return 1 ;;
+      esac
     fi
   fi
   return 0
@@ -15627,7 +15857,20 @@ _route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick
   # CHEAP WHEN NOTHING IS PENDING, which is the steady state of every session on
   # the fleet. The registry comparison comes FIRST and returns before any tmux
   # call at all; only a genuinely pending field pays a pane read.
-  _route_apply_pending "$1" || { _route_note_clear "$1"; return 0; }
+  #
+  # FOUR GATES, IN THIS ORDER, and the order is the whole design:
+  #   1. nothing pending — clear the marker AND the retry counter, return.
+  #   2. a record with no `routeapplied` file at all — SEED it from the served
+  #      values and type nothing (S4-R8): the record predates the applier and the
+  #      pane is already running what its last settle composed.
+  #   3. the bounded retry (S4-R7) — a field that has been refused by the pane
+  #      `ROUTE_RETRY_MAX` times, or refused inside `ROUTE_RETRY_BACKOFF`, does
+  #      not get typed again this tick. This is BEFORE the pane read on purpose:
+  #      a session that has given up should not even be captured.
+  #   4. the idle predicate, whose refusals are notes and never attempts.
+  _route_apply_pending "$1" || { _route_note_clear "$1"; _route_tries_clear "$1"; return 0; }
+  _route_apply_seed "$1" && return 0
+  _route_retry_ok "$1" || return 0
   _pane_for_keystroke "$1" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
   _idle_for_keystroke "$1" "$KS_PANE" "" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
   _route_apply_now "$1"
@@ -16306,17 +16549,39 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # WHAT IS WRITTEN IS WHAT WAS COMPOSED, not what was intended: `$rclass` is
     # already the class SERVED (a degrade stamped above replaced it) and `$reff`
     # is already past `_route_effort_for`'s haiku filter. `default` and `auto` are
-    # the words for "nothing was composed and the lane decides", which is what
-    # `_route_wanted` answers for the same record. `subagent` and `workflow` are
-    # omitted when the record is silent about them rather than spelled with a
-    # made-up default — absence is a value here and `off` is not its synonym.
-    rapplied="class=${rclass:-default} effort=${reff:-auto}"
-    _reg_set "$id" routeapplied "$rapplied${rsub:+ subagent=$rsub}${rwf:+ workflow=$rwf}"
+    # real words the record can state — the picker's `Default` row, "the lane
+    # decides the level" — and they are written when the record states them.
+    #
+    # AN ABSENT FIELD IS OMITTED, NOT SPELLED `default`/`auto` (controller ruling
+    # S4-R8). The three conditions are distinct and `_route_wanted` now answers
+    # all three the same way this stamp writes them, which is what keeps the two
+    # comparable: a record that never mentioned `class` composed no `--model` and
+    # claims no class. `subagent` and `workflow` were already treated this way.
+    #
+    # AND EVERY FIELD THE `inert` STAMP NAMES IS OMITTED TOO (controller ruling
+    # S4-R9). Written unconditionally, this line put `effort=high` beside
+    # `inert=effort` on a non-Anthropic lane — two records of the same spawn
+    # contradicting each other, because `--effort`/`--settings` are composed only
+    # on the Anthropic arm above while the stamp claimed them on both. The
+    # sentence this comment opens with is true again: what is written is what was
+    # composed. `_route_wanted` skips the same fields, so an inert field is
+    # neither claimed applied nor typed.
+    rapplied="${rclass:+class=$rclass}"
+    _route_inert_has "$inert" effort   || rapplied="${rapplied:+$rapplied }${reff:+effort=$reff}"
+    rapplied="${rapplied% }"
+    [[ -n "$rsub" ]] && rapplied="${rapplied:+$rapplied }subagent=$rsub"
+    _route_inert_has "$inert" workflow || { [[ -n "$rwf" ]] && rapplied="${rapplied:+$rapplied }workflow=$rwf"; }
+    _reg_set "$id" routeapplied "$rapplied"
+    # THE RETRY COUNTER DIES WITH THE SPAWN IT COUNTED (ruling S4-R7): whatever
+    # the old pane refused to be typed, this argv composed, so the next tick's
+    # comparison is against a fresh fact and deserves fresh attempts.
+    _route_tries_clear "$id"
   else
     # NO RECORD, NOTHING COMPOSED, NOTHING CLAIMED. A leftover `routeapplied`
     # from a record that has since been removed would make the applier compare
     # against a file describing a spawn nobody would make again.
     rm -f -- "$REG/$id.routeapplied"
+    _route_tries_clear "$id"
   fi
   resenv="$resenv${routeenv:+ $routeenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"

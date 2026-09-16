@@ -44,16 +44,37 @@ const keys = (): string[] => {
 };
 const pane = (text: string): void => { fs.writeFileSync(path.join(h.home, 'pane.txt'), text); };
 const after = (key: string, text: string): void => { fs.writeFileSync(path.join(h.home, `pane-after-${key}.txt`), text); };
+const swapLog = (): string => {
+  const f = path.join(h.home, '.cc-sessions', 'swap.log');
+  return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+};
 const seed = (id: string, wrapper = 'claude'): void => {
   h.sh(`_reg_set ${id} wrapper ${wrapper}
         _reg_set ${id} workdir '${h.home}'
         _reg_set ${id} uuid ${UUID}`);
 };
-const plantIdle = (): void => {
-  const dir = path.join(h.sh('_cfg_dir claude').trim(), 'sessions');
+const plantIdle = (wrapper = 'claude'): void => {
+  const dir = path.join(h.sh(`_cfg_dir ${wrapper}`).trim(), 'sessions');
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(path.join(dir, '4242.json'), JSON.stringify({ status: 'idle', statusUpdatedAt: Date.now() - 120_000 }));
 };
+/** `makeCcdHarness` plants a binary only for the roster's home-able ids; `gpt` — the test
+ *  roster's non-Anthropic lane — needs its own (`ccd-route-degrade.test.ts`'s `install()`). */
+const install = (w: string): void => {
+  fs.writeFileSync(path.join(h.home, '.local', 'bin', w), '#!/bin/sh\n', { mode: 0o755 });
+};
+
+/** A ccd constant read OUT OF THE SOURCE rather than re-typed: these two decide how many
+ *  real keystrokes a permanently-refused field costs, so a copy here would go on passing
+ *  against a driver whose budget had been widened. Same source-slicing idiom this file
+ *  already uses on `_auto_compact_check`'s body. */
+const constOf = (name: string): string => {
+  const m = new RegExp(`^${name}=([0-9]+)`, 'm').exec(fs.readFileSync(CCD, 'utf8'));
+  if (!m) throw new Error(`ccd/ccd no longer defines ${name}= at column 0 — re-anchor this test`);
+  return m[1]!;
+};
+const BACKOFF = constOf('ROUTE_RETRY_BACKOFF');
+const MAX = Number(constOf('ROUTE_RETRY_MAX'));
 
 describe('_route_apply_check: the pending field waits for an idle pane and then lands', () => {
   beforeEach(() => {
@@ -112,6 +133,25 @@ describe('the settle stamps what it COMPOSED, so a fresh spawn is never re-typed
     h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
     expect(h.reg(ID, 'routeapplied')).toBeNull();
   });
+
+  it('a NON-Anthropic lane: routeapplied carries the degraded class ALONE, beside inert=effort,workflow — and the next tick types nothing', () => {
+    // CONTROLLER RULING S4-R9. `--effort` and `--settings` are composed only on the
+    // Anthropic arm, but the stamp used to be written unconditionally — so a gpt-lane
+    // spawn wrote `routeapplied effort=high` NEXT TO `inert=effort`, two records of the
+    // same spawn contradicting each other. The docstring over that write says "WHAT IS
+    // WRITTEN IS WHAT WAS COMPOSED"; this is what makes that true again. `_route_wanted`
+    // skips the same fields, so an inert field is neither claimed applied nor typed.
+    install('gpt');
+    seed(ID, 'gpt'); plantIdle('gpt');
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} effort high; _reg_set ${ID} workflow on`);
+    h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start ${ID} resume 2>/dev/null`);
+    expect(h.reg(ID, 'inert')).toBe('effort,workflow');
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');   // the rung SERVED: fable is unservable by backend
+
+    pane(IDLE_PANE);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual([]);
+  });
 });
 
 describe('structural: the tick is wired in, and the predicate was EXTRACTED rather than copied', () => {
@@ -134,6 +174,142 @@ describe('structural: the tick is wired in, and the predicate was EXTRACTED rath
     expect(body.join('\n')).toContain('_idle_for_keystroke "$id"');
     expect(body.filter((l) => l.includes('tmux capture-pane')),
       'the compactor re-grew a capture of its own — the predicate is extracted, not copied').toEqual([]);
+  });
+});
+
+describe('a record that PREDATES the applier is SEEDED, never typed on sight (controller ruling S4-R8)', () => {
+  beforeEach(() => { seed(ID); plantIdle(); pane(IDLE_PANE); });
+
+  it('(a) a record with no class and no effort is NOTHING PENDING — no keystroke, ever', () => {
+    // AN ABSENT FIELD IS NOT `default`/`auto`. `_route_wanted` used to answer `default` for
+    // an absent `class`, so a live session carrying one settle-applied field and nothing
+    // else got `/model` + Enter + `s` on its very first tick — overriding a model a human
+    // had picked by hand, on a record that never mentioned a class.
+    //
+    // Both spellings of the ruling's example are here: `compact=off`, which
+    // `_route_valid`'s compact arm REFUSES (that field's vocabulary is a 10–100
+    // percentage, so this is what a torn or hand-edited field looks like), and
+    // `compact=80`, which it admits. Neither may reach the picker, and for the same reason.
+    //
+    // AND WITH AND WITHOUT A `routeapplied` FILE, which is not belt and braces: the seeding
+    // gate below would ALSO answer "types nothing" on the no-file half, so that half alone
+    // is green against a `_route_wanted` that has gone back to answering `default` for an
+    // absent class. The half that already carries a stamp is the one that measures the
+    // absence rule, and the `class=` assertion is what catches a seed inventing one.
+    for (const v of ['off', '80']) {
+      for (const stamped of [false, true]) {
+        h.sh(`_reg_set ${ID} compact ${v}`);
+        if (stamped) h.sh(`_reg_set ${ID} routeapplied "compact=${v}"`);
+        h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+        expect(keys(), `compact=${v}, stamped=${stamped}`).toEqual([]);
+        expect(h.reg(ID, 'routeapplied') ?? '', `compact=${v}, stamped=${stamped}`).not.toContain('class=');
+      }
+    }
+  });
+
+  it('(b) a full record with NO routeapplied file: the file appears with the SERVED words, one swap.log line, and no tmux call at all', () => {
+    // Every routing record on this fleet was applied by its last settle's argv — that is
+    // what `_spawn_start` composes — but nothing WROTE that down until slice 4. So the
+    // first tick to meet such a record states what the pane is already running and types
+    // nothing. The words are `_route_wanted`'s, not the record's raw fields: the class
+    // SERVED (`degraded` wins), the effort past the haiku filter.
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} degraded opus; _reg_set ${ID} effort xhigh;`
+      + ` _reg_set ${ID} subagent sonnet; _reg_set ${ID} workflow on`);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus effort=xhigh subagent=sonnet workflow=on');
+    expect(fs.existsSync(path.join(h.home, 'tmux-calls')),
+      'the seeding tick reached tmux — a record that predates the applier must be written down, not typed').toBe(false);
+    expect(swapLog()).toMatch(
+      new RegExp(`routeapplied-seeded ${ID}: class=opus effort=xhigh subagent=sonnet workflow=on \\(record predates the applier\\)`));
+  });
+
+  it('(c) the seed is not a suppression: a DIVERGENT write after it is pending, and lands at the next idle tick', () => {
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} effort xhigh`);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus effort=xhigh');
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high`);   // the coordinator's form: no --apply
+    expect(keys()).toEqual([]);
+    after('s', ACK_EFFORT('high'));
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual(['-l /effort', 'Enter', 'Left', 'Left', 'Left', 'Left', 'Left', 'Left', 'Left', 'Right', 'Right', '-l s']);
+    expect(h.reg(ID, 'routeapplied')).toContain('effort=high');
+  });
+
+  it('the tick WRITES NOTHING while it decides: a haiku+level record leaves no routenotepair and no route-refuse line', () => {
+    // CONTROLLER RULING S4-R9. `_route_apply_pending`'s "REGISTRY READS ONLY" was not true:
+    // it reached `_route_effort_for`, whose haiku+level arm writes a `route-refuse` line
+    // and a floor marker. That is a WRITE on the 5-second tick of every live session, and
+    // it burns the field's own note floor so the next real spawn stays silent about the
+    // same bad pairing. The gate now reads through `_route_effort_for … quiet`.
+    h.sh(`_reg_set ${ID} class haiku; _reg_set ${ID} effort high; _reg_set ${ID} routeapplied "class=haiku"`);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routenotepair')).toBeNull();
+    expect(swapLog()).not.toContain('route-refuse');
+    expect(keys()).toEqual([]);
+  });
+});
+
+describe('the bounded retry: a field the PANE refuses is tried ROUTE_RETRY_MAX times, ROUTE_RETRY_BACKOFF apart (ruling S4-R7)', () => {
+  // THE DEFECT THIS BOUNDS. `_route_note`'s floor makes a standing refusal QUIET; it does
+  // not make it cheap. `/effort ultracode` on a lane launched `{"enableWorkflows":false}`
+  // is refused verbatim by Claude Code, and `class=fable` on a lane whose picker lists no
+  // Fable row can never be acknowledged — and before this, either one re-entered the
+  // applier every 5 s and typed a whole key sequence into a LIVE pane twelve times a
+  // minute, for ever, silently after the first note. The pane here never shows an ack.
+  beforeEach(() => {
+    seed(ID); plantIdle(); pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} effort high; _reg_set ${ID} routeapplied "class=opus effort=xhigh"`);
+  });
+  const age = (n: number): void => { h.sh(`_reg_set ${ID} routetries "${n} $(( $(date +%s) - ${BACKOFF} ))"`); };
+
+  it('(a) an unacknowledged apply and three ticks inside the backoff type ONE sequence in total', () => {
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    const one = keys().length;
+    expect(one).toBeGreaterThan(0);
+    expect(h.reg(ID, 'routetries')).toMatch(/^1 \d+$/);
+    for (let i = 0; i < 3; i++) h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toHaveLength(one);
+  });
+
+  it('(b) past ROUTE_RETRY_BACKOFF the same record is attempted a second time', () => {
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    const one = keys().length;
+    age(1);   // the counter's epoch is the only input, so the clock is moved rather than waited on
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toHaveLength(one * 2);
+    expect(h.reg(ID, 'routetries')).toMatch(/^2 \d+$/);
+  });
+
+  it('(c) at ROUTE_RETRY_MAX the applier gives up IN ITS OWN WORDS and types nothing more', () => {
+    age(MAX);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual([]);
+    expect(h.reg(ID, 'routeskip')).toMatch(/^\d+ apply-gave-up$/);
+    expect(swapLog()).toMatch(new RegExp(`route-skip ${ID}: apply-gave-up \\(effort=high after ${MAX} attempts\\)`));
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual([]);
+  });
+
+  it('(d) a cmd_route write clears the counter — the operator asked for something, so the budget resets', () => {
+    age(MAX);
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high`);   // no --apply: the record alone
+    expect(h.reg(ID, 'routetries')).toBeNull();
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()[0]).toBe('-l /effort');
+  });
+
+  it('(e) a mid-turn refusal is NOT an attempt — the idle predicate never spends the budget', () => {
+    // The transient conditions (mid-turn, drafting, an occupied box, a session sitting out
+    // a usage limit) type nothing at all, so counting them would exhaust the budget on a
+    // session that was merely busy and then refuse to apply a perfectly good record.
+    pane(MID_TURN_PANE);
+    for (let i = 0; i < 5; i++) h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual([]);
+    expect(h.reg(ID, 'routetries')).toBeNull();
+    expect(h.reg(ID, 'routeskip')).toMatch(/mid-turn/);
+    pane(IDLE_PANE); after('s', ACK_EFFORT('high'));
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toContain('effort=high');
   });
 });
 
