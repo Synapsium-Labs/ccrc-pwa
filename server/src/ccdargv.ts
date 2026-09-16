@@ -442,6 +442,45 @@ export const CCD_ARGV = {
    *  inherit. */
   route: (id: string, field: string, value: string, dec: ActorFlags | null = null) =>
            argv(['route', '--session', id, '--set', `${field}=${value}`, ...actorReasonFlags(dec)]),
+
+  /** EVERY field in ONE argv (fix round 2, finding #3 / controller ruling
+   *  S4-R5). `route` above writes a single field and stays for slice 5's
+   *  picker, which sets exactly one; this entry is what a MULTI-field writer
+   *  must use, and the difference is not stylistic.
+   *
+   *  `cmd_route` (`ccd/ccd`) validates EVERY `--set` pair — the `--set` token
+   *  arity, the `field=value` shape, the field's membership, the ccd-only
+   *  `degraded`/`inert` refusal, `_route_valid`'s vocabulary lookup — and
+   *  then the class/effort pair check, ALL before its write loop touches the
+   *  registry. One argv therefore has a real atomicity guarantee: a refusal
+   *  leaves the record exactly as it found it. N SEPARATE calls forfeit it —
+   *  call 1 commits `class=haiku` to disk, call 2 dies on the pair check, and
+   *  the caller is left holding a half-applied record it never asked for and
+   *  cannot see. The pair check in particular is cross-call by design (ccd's
+   *  own comment: "the PAIR is refused whether it arrives in one call or
+   *  across two"), which is exactly what makes a per-field loop able to write
+   *  the first half of a pair the second half will be refused for.
+   *
+   *  Walked in `ROUTE_WRITABLE_FIELDS` order, NEVER `Object.keys(fields)` —
+   *  `routeFlags`' own rule one screen up: the wire shape must not depend on
+   *  which order a caller happened to set object keys in.
+   *
+   *  ZERO FIELDS THROWS. `cmd_route` refuses an argv with no `--set` at all
+   *  (`[[ -n "$id" && ${#sets[@]} -gt 0 ]] || die "$usage"`), so building one
+   *  is a programming error by the caller, not a runtime condition any route
+   *  can reach from a body: `routeFieldsOrNull` (`shared/api.ts`) collapses an
+   *  empty parse to `null` before a caller ever gets here, and a `null` route
+   *  means "don't call this". Throwing says so at the seam that knows, rather
+   *  than shipping a guaranteed-502 argv to the fleet. */
+  routeSet: (id: string, fields: RouteFields, dec: ActorFlags | null = null) => {
+    const pairs = ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined);
+    if (pairs.length === 0) {
+      throw new Error('CCD_ARGV.routeSet: no fields to set — ccd route refuses an argv with no --set pair');
+    }
+    return argv(['route', '--session', id,
+                 ...pairs.flatMap((f) => ['--set', `${f}=${fields[f]}`]),
+                 ...actorReasonFlags(dec)]);
+  },
 } as const;
 
 /**

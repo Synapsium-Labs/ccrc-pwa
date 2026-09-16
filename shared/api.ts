@@ -4648,6 +4648,43 @@ export function parseRouteFields(v: unknown): RouteFieldsParse {
 }
 
 /**
+ * The ONE spelling of a route refusal's `detail` string (routing spec §5.3,
+ * slice 4, fix round 2, finding #2 / controller ruling S4-R6). Two callers
+ * refuse a malformed `route` body in two different CURRENCIES — `server.ts`'s
+ * operator doors reply 400 with a `detail` field, `dispatch.ts` returns a
+ * typed `DispatchOutcome` carrying one — and that divergence is deliberate
+ * and stays at the call sites. The GRAMMAR of the sentence is not a
+ * divergence: it was written out twice, character for character, and a
+ * reworded `why` on one side would have silently produced two dialects of
+ * the same refusal. It lives here, beside the parse whose fields it renders.
+ *
+ * The `field`-less arm is real: `not-object` names no field (there was no
+ * object to have one), so appending an empty suffix is the honest rendering
+ * rather than the word `undefined`.
+ */
+export function routeParseDetail(p: Extract<RouteFieldsParse, { ok: false }>): string {
+  return `route: ${p.why}` + (p.field === undefined ? '' : ` ${p.field}`);
+}
+
+/**
+ * The ONE spelling of "a parsed route that named no field is the same thing
+ * as no route at all" (fix round 2, finding #2 / S4-R6), the second verbatim
+ * duplicate between `server.ts` and `dispatch.ts`.
+ *
+ * `{}` PARSES FINE — it is a real, distinct value from "never asked", meaning
+ * a caller handed up a route body that named nothing — but every downstream
+ * consumer treats it identically to `null`: `routeFlags(null)` and
+ * `routeFlags({})` both contribute zero tokens, there is no capability to
+ * gate on a flag that will never be sent, and there is no omission to
+ * journal. Collapsing the two HERE is therefore not an adapter narrowing a
+ * distinction it received — nothing downstream can act on the difference —
+ * and doing it in one place keeps both callers' `null` meaning the same word.
+ */
+export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
+  return Object.keys(r).length > 0 ? r : null;
+}
+
+/**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
  * `POST /api/runs/:id/dispatch`, `POST /api/runs/:id/close` and
  * `POST /api/runs/:id/advance` (`server/src/coord/routes.ts`) THAT IS NOT

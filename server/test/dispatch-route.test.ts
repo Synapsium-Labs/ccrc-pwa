@@ -15,7 +15,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { Runner } from '../src/exec.js';
-import { ACTOR_FLAGS_CAP, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 import { configDirFor } from '../src/config.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -169,6 +169,59 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     expect(clearIdx, 'no /clear send-keys call found').toBeGreaterThan(-1);
     expect(routeIdx, 'the route verb must precede the /clear injection').toBeLessThan(clearIdx);
     expect(h.events()).not.toContain('route-omitted:no-route-v1-cap');
+  });
+
+  it('wave N>=2, two fields: EXACTLY ONE route argv, every --set pair in ROUTE_WRITABLE_FIELDS order, before the /clear', async () => {
+    // FIX ROUND 2, finding #3 (controller ruling S4-R5). This was a loop of
+    // one `ccd route` call per field, which forfeited the guarantee
+    // `cmd_route` gives: it validates EVERY pair — shape, field membership,
+    // `_route_valid`, and the class/effort pair check — before its write loop
+    // touches the registry, so a refusal leaves the record untouched. Across
+    // two calls it does not: `{class:'haiku', effort:'high'}` wrote
+    // `class=haiku`, then died on the pair check, and dispatch returned
+    // `fleetFailed` over a half-applied record. ONE argv is the fix, and
+    // "exactly one" is the thing this case pins.
+    //
+    // THE KEYS ARE DELIBERATELY OUT OF ORDER (finding #1, folded in here):
+    // `effort` is written first in the body and `class` must still lead on the
+    // wire, because the pairs are walked over `ROUTE_WRITABLE_FIELDS`, not
+    // `Object.keys(fields)`. Mutating `routeSet` to iterate the body's own
+    // keys reds this line.
+    const h = await harness({ wave: 2, sessionId: 'demo-existing-pair' });
+    const out = await h.dispatch({ effort: 'high', class: 'opus' });
+    expect(out).toMatchObject({ ok: true, resumed: true, clearedAt: expect.any(Number) });
+    const routes = h.calls.filter((c) => c[0] === 'route');
+    expect(routes).toEqual([[
+      'route', '--session', 'demo-existing-pair',
+      '--set', 'class=opus', '--set', 'effort=high',
+      '--actor', `run:${h.runId} dispatch`,
+    ]]);
+    const clearIdx = h.calls.findIndex((c) => c[0] === 'send-keys' && c.includes('-l') && c.includes('/clear'));
+    expect(clearIdx, 'no /clear send-keys call found').toBeGreaterThan(-1);
+    expect(h.calls.indexOf(routes[0]!), 'the one route argv must precede the /clear').toBeLessThan(clearIdx);
+  });
+
+  it('wave N>=2, two fields refused: fleetFailed, no /clear, and only the ONE argv was ever sent', async () => {
+    // The refusal half of the same guarantee. Nothing here can observe ccd's
+    // registry (the runner is a double), but it can observe the thing that
+    // MAKES the guarantee true on a real box: there is one argv to refuse, so
+    // there is no second call whose refusal could follow a first call's write.
+    const h = await harness({ wave: 2, sessionId: 'demo-pair-refused', fail: new Set(['route']) });
+    const out = await h.dispatch({ effort: 'high', class: 'haiku' });
+    expect(out).toMatchObject({ ok: false, kind: 'fleetFailed', stderr: 'route failed' });
+    expect(h.calls.filter((c) => c[0] === 'route')).toHaveLength(1);
+    expect(h.calls.some((c) => c[0] === 'send-keys' && c.includes('/clear'))).toBe(false);
+    const row = h.coord.run(h.runId);
+    expect(row.ok && row.run?.state).toBe('planned');
+  });
+
+  it('CCD_ARGV.routeSet refuses to build an argv with no --set pair at all', () => {
+    // `cmd_route` dies on `${#sets[@]} -gt 0`, so a zero-field argv is a
+    // guaranteed 502 — a programming error at the seam that knows, never a
+    // body-reachable condition (`routeFieldsOrNull` collapses `{}` to `null`
+    // long before this). Pinned so the throw cannot be quietly softened into
+    // an argv the fleet refuses.
+    expect(() => CCD_ARGV.routeSet('demo-quiet-basin', {})).toThrow(/no fields to set/);
   });
 
   it('wave N>=2, without route-v1: no route call fires, the omission is journaled, and /clear still proceeds', async () => {

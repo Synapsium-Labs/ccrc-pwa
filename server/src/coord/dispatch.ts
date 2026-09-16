@@ -19,8 +19,8 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, ROUTE_WRITABLE_FIELDS, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, parseRouteFields,
-  spawnVerdict,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, parseRouteFields,
+  routeFieldsOrNull, routeParseDetail, spawnVerdict,
   type RouteFields, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readWorkerSkillState } from '../skillstate.js';
@@ -271,10 +271,14 @@ export async function dispatchRun(
   if (route !== undefined) {
     const parsed = parseRouteFields(route);
     if (!parsed.ok) {
-      return { ok: false, kind: 'bad-request',
-        detail: `route: ${parsed.why}` + (parsed.field === undefined ? '' : ` ${parsed.field}`) };
+      // `routeParseDetail`/`routeFieldsOrNull` (`shared/api.ts`, fix round 2
+      // finding #2): the refusal GRAMMAR and the empty-object collapse were
+      // written out verbatim here and in `server.ts`'s `parseOperatorRoute`.
+      // What legitimately differs between the two sites — a typed
+      // `DispatchOutcome` here, a 400/501 reply there — stays here.
+      return { ok: false, kind: 'bad-request', detail: routeParseDetail(parsed) };
     }
-    routeFields = Object.keys(parsed.route).length > 0 ? parsed.route : null;
+    routeFields = routeFieldsOrNull(parsed.route);
   }
 
   // The complete hold is known from the persisted run. Validate it after the
@@ -712,35 +716,45 @@ export async function dispatchRun(
   // Routing spec 2026-09-14 §5.3 (slice 4, Task 3): wave N≥2 writes the
   // record through the VERB, never the argv above — no ccd verb can spawn
   // fresh into an already-existing workspace (D-1), so a routing change
-  // reaches a resumed worker only by calling `ccd route` on its session, one
-  // field per call, in `ROUTE_WRITABLE_FIELDS` order. `resumed` scopes this
-  // to the resume arm only: a fresh wave-1 spawn already carried its routing
-  // on the `ws-add` argv above and reaches this point with `resumed ===
-  // false`, and `routeFields === null` (nothing was asked) skips both the
-  // loop and the omission event below — there is nothing to write and
-  // nothing to have omitted.
+  // reaches a resumed worker only by calling `ccd route` on its session.
+  // `resumed` scopes this to the resume arm only: a fresh wave-1 spawn
+  // already carried its routing on the `ws-add` argv above and reaches this
+  // point with `resumed === false`, and `routeFields === null` (nothing was
+  // asked) skips both the call and the omission event below — there is
+  // nothing to write and nothing to have omitted.
+  //
+  // ONE ARGV, EVERY PAIR (fix round 2, finding #3 / controller ruling S4-R5).
+  // This was a loop of one `CCD_ARGV.route` call per field, and that forfeited
+  // the guarantee `cmd_route` is built to give: the verb validates every
+  // `--set` pair — shape, field membership, `_route_valid`'s vocabulary, and
+  // the class/effort pair check — BEFORE its write loop touches the registry,
+  // so a refusal leaves the record untouched. Across N calls that is simply
+  // not true: `{class:'haiku', effort:'high'}` wrote `class=haiku` on call 1
+  // and died on the pair check on call 2, leaving a half-applied record and a
+  // `fleetFailed` return that says nothing about which half landed. One
+  // `CCD_ARGV.routeSet` argv restores it — either every pair is written or
+  // none is, and the pairs ride in `ROUTE_WRITABLE_FIELDS` order regardless of
+  // the body's own key order.
   //
   // AFTER the hold, BEFORE the `/clear`: the hold is this dispatch's own
   // claim on the workspace and does not depend on what gets routed, while
   // the `/clear` is the point past which a refusal here would discard a
   // context nothing has yet told the worker is fresh — writing first is what
   // keeps a refused route from stranding a cleared, brief-less pane. A
-  // refusal on the k-th field returns `fleetFailed` immediately: the run
-  // stays `planned`, the `/clear` never fires, and the fields already
-  // written stay written — ccd's own repeated-field guard refuses within ONE
-  // argv, not across separate calls, so a partial write here is exactly what
-  // a retried dispatch overwrites, never a state this function must unwind.
+  // refusal returns `fleetFailed` immediately: the run stays `planned`, the
+  // `/clear` never fires, and the record is exactly what it was before this
+  // dispatch — nothing for this function to unwind.
   if (resumed && routeFields !== null) {
     if (!capSupported(deps.fleetState, ROUTE_CAP)) {
       coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-v1-cap');
     } else {
-      for (const f of ROUTE_WRITABLE_FIELDS) {
-        const v = routeFields[f];
-        if (v === undefined) continue;
-        const routeRes = await deps.runCcd(
-          CCD_ARGV.route(sessionId, f, v, sweepDec(deps.fleetState, `run:${id} dispatch`)));
-        if (!routeRes.ok) return { ok: false, kind: 'fleetFailed', stderr: routeRes.stderr };
-      }
+      // `routeFields !== null` is exactly `routeFieldsOrNull`'s own guarantee
+      // that at least one field is set, which is `routeSet`'s precondition —
+      // the throw it carries is unreachable from this call site by
+      // construction, not by luck.
+      const routeRes = await deps.runCcd(
+        CCD_ARGV.routeSet(sessionId, routeFields, sweepDec(deps.fleetState, `run:${id} dispatch`)));
+      if (!routeRes.ok) return { ok: false, kind: 'fleetFailed', stderr: routeRes.stderr };
     }
   }
 

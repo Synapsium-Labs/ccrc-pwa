@@ -71,7 +71,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
-  parseRouteFields, programKickoffVerdict, type RouteFields,
+  parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 
 /**
@@ -1931,14 +1931,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (route === undefined) return { reply: null, route: null };
     const parsed = parseRouteFields(route);
     if (!parsed.ok) {
+      // `routeParseDetail` (`shared/api.ts`, fix round 2 finding #2): the
+      // refusal GRAMMAR is shared with `dispatch.ts`, which spelled the same
+      // template string out verbatim. The CURRENCY is not — a 400 reply here,
+      // a typed `DispatchOutcome` there — and that stays at each call site.
       return { reply: reply.code(400).send({ ok: false, error: 'bad-request',
-        detail: `route: ${parsed.why}` + (parsed.field === undefined ? '' : ` ${parsed.field}`) }) };
+        detail: routeParseDetail(parsed) }) };
     }
     // An empty `{}` names no field — `wsAdd`/`wsAddWorker`'s reason for
     // treating it as `routeFlags(null)` would anyway: there is nothing to gate
     // the 501 on, so it is never spent asking whether the box can parse a flag
-    // this call was never going to send.
-    const fields = Object.keys(parsed.route).length > 0 ? parsed.route : null;
+    // this call was never going to send. `routeFieldsOrNull` is that collapse,
+    // shared with `dispatch.ts` for the same reason the grammar above is.
+    const fields = routeFieldsOrNull(parsed.route);
     if (fields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
       return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
     }
