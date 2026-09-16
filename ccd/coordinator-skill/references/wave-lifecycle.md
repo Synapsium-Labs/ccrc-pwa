@@ -86,7 +86,7 @@ run row's own `wave`.
 ## 2 — Dispatch a wave
 
 `POST /api/runs/:id/dispatch`
-`{"brief":"<the wave brief, prose>","items":["<title>", …]}`
+`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…"}}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
 
@@ -169,6 +169,24 @@ cap) answers `error:'bad-request'` (400) before anything is listed, spawned or
 held: the run is untouched, still `planned`. Omitting `items`, or sending
 `[]`, is legal and means this wave declared no ledger — the board renders `—`
 rather than `0/0`.
+
+**`route` — the wave's placement, not a request.** `"route"` is an optional
+object of the FIVE writable fields — `class`, `effort`, `subagent`,
+`workflow`, `compact` — whose vocabularies `references/routing-matrix.md`
+spells out; that matrix is what you derive it from (clause 13), never a
+taste call made at dispatch time. The server carries it to `ccd`: on wave
+1's `ws-add` argv for a fresh spawn, and for wave N ≥ 2 — a resumed
+workspace, never a fresh one — through the routing verb instead, as ONE
+argv carrying every pair (validated together before anything is written),
+placed after the hold and before the `/clear`. An old `ccd` that cannot
+take it is never blocked on: the server journals the omission instead and
+moves on, as `route-omitted:no-route-argv-cap` (wave 1's argv path) or
+`route-omitted:no-route-v1-cap` (wave N ≥ 2's verb path) — two DIFFERENT
+run events because the two are different parse paths that can ship one
+without the other. Omitting `route` sends the identical bare argv it
+always has. The brief still names the routing in prose (clause 13) — this
+object is what carries that placement to the fleet, never a replacement
+for saying so.
 
 **The ledger is fixed at dispatch.** No route adds an item to a dispatched
 run, so `total` never grows and the tally can never move backwards. Work
@@ -688,6 +706,13 @@ slice 2 it also answers `waveDoneMails` (how many `wave-done` mails the worker s
 and `signals` — the two signal lines off the LAST of them, or `null` when there are none (§4
 above). `error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt;
 `error:'bad-request'` (400) means the id is not an integer.
+
+```
+"$API" runs signals <run id>
+```
+
+answers the holds, the swap count, the refused-close count, `waveDoneMails` and the two signal
+lines off the last of them — every field this section names, off one call.
 
 It writes nothing — the refused-close count it reports is the row `POST /api/runs/:id/close` already
 recorded when it refused you, not a new judgement about the worker. And nothing it reports licenses

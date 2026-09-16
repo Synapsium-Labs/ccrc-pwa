@@ -246,7 +246,10 @@ not after.
    THAT places the hold immediately.)
 2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief AND the
    wave's declared ledger: the body is `{"brief": "<prose>", "items":
-   ["<title>", …]}`, at most 32 titles of at most 200 UTF-8 bytes each. The
+   ["<title>", …], "route": {…}}`, at most 32 titles of at most 200 UTF-8
+   bytes each. `route` is the object clause 13's placement derives, carried
+   on this same call (`references/wave-lifecycle.md` §2 has its shape and
+   its two omission events). The
    brief is prose the server never reads; the items are the machine-readable
    half of the same wave plan, and **they must agree** — the board's tally is
    built from the items, so a brief naming five units of work beside three

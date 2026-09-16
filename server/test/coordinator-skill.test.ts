@@ -486,6 +486,28 @@ describe('the coordinator skill: linkage', () => {
     expect(`${skill}\n${lifecycle}`).toMatch(/brief[\s\S]{0,400}?the server never reads/i);
   });
 
+  it('documents route beside brief and items on the dispatch body (routing slice 4, Task 7)', () => {
+    // `route` rides the SAME dispatch call as `brief` and `items` — a
+    // coordinator reading only one of these two files must still see all
+    // three keys named together, or it writes a body missing one.
+    const lifecycle = refs('wave-lifecycle.md');
+    expect(lifecycle).toContain(
+      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…"}}');
+    expect(skill).toContain('{"brief": "<prose>", "items":\n   ["<title>", …], "route": {…}}');
+    // The routing clause is 13 on the merged tree (R1) — the review-run clause
+    // is 12, and this sentence must not renumber that one.
+    expect(skill).toContain("`route` is the object clause 13's placement derives");
+    // The §2 `route` paragraph itself: the five writable fields, the
+    // wave-1-argv/wave-N-verb split, and the two omission events — this is
+    // the sentence the mutation check (Step 5) deletes to prove this pin
+    // reds without it.
+    expect(lifecycle).toContain(
+      "**`route` — the wave's placement, not a request.**");
+    expect(lifecycle).toContain('`class`, `effort`, `subagent`,\n`workflow`, `compact`');
+    expect(lifecycle).toContain('route-omitted:no-route-argv-cap');
+    expect(lifecycle).toContain('route-omitted:no-route-v1-cap');
+  });
+
   it('names POST /api/runs/:id/items after the re-measurement, never before', () => {
     const lifecycle = refs('wave-lifecycle.md');
     const settle = lifecycle.indexOf('POST /api/runs/:id/items');

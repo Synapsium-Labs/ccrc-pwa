@@ -202,6 +202,7 @@ describe('the closed route table', () => {
     [['runs', 'close', '12'], 'POST', '/api/runs/12/close'],
     [['runs', 'items', '12'], 'POST', '/api/runs/12/items'],
     [['runs', 'items-list', '12'], 'GET', '/api/runs/12/items'],
+    [['runs', 'signals', '12'], 'GET', '/api/runs/12/signals'],
     [['mail', 'list'], 'GET', '/api/mail'],
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
@@ -246,8 +247,8 @@ describe('the closed route table', () => {
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
     //
-    // Twenty-two since the bounded ask list/answer/release operations landed.
-    expect(keys).toHaveLength(22);
+    // Twenty-three since `runs.signals` (D-2842's carry) landed.
+    expect(keys).toHaveLength(23);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -255,6 +256,7 @@ describe('the closed route table', () => {
     const WORDS: Record<number, string> = {
       15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
+      23: 'twenty-three',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();

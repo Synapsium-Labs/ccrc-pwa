@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, twenty-two rows, and nothing else.
+#   * The route comes from ROUTES below, twenty-three rows, and nothing else.
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
 #     request is built — refused, never escaped and sent.
@@ -73,7 +73,7 @@ REG="$HOME/.cc-sessions"
 SAFE_RE='^[A-Za-z0-9_-]+$'
 
 # METHOD|path|needs-id|comma-separated query keys this row accepts (or `-`).
-# Twenty-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Twenty-three rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -92,6 +92,11 @@ declare -A ROUTES=(
   # coordinator reached the settle call with four titles and no ids, guessed 1,
   # and was refused `unknown-item`.
   [runs.items-list]='GET|/api/runs/{id}/items|yes|-'
+  # Speed/quality signals re-measured off this run's own rows (paired holds,
+  # swap count, wave-done mail count, the two signal lines off the last of
+  # them) — a measurement, never a dial (D-2842's carry). Read-only, like the
+  # row above.
+  [runs.signals]='GET|/api/runs/{id}/signals|yes|-'
   # `--program` joins through `runs.program`; `--to` and `--program` are
   # MUTUALLY EXCLUSIVE — exactly one, both or neither is a 400 (D-2057;
   # routes.ts's own `(to === null) === (program === null)` guard, not
