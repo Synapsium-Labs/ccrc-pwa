@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bb7e9e944f6a1f550cc521b4a7d0f3fc71160121e1e75618141b64cb1d8349d6
+# ccrc:generated 1 sha256=192fce5d47a846e28c83be1d3c40782fd72e839b2e36327ed4676c046ac42788
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1679,10 +1679,10 @@ _account_measured() {
 # the general per-lane kill-switch, not a second mechanism beside it.
 _gpt_enabled() { _account_ok gpt; }
 _codex_lane_status() {   # human-readable state of ONE Codex lane (for `ccd ls`)
-  # PARAMETERISED 2026-09-14, was `_gpt_status` with `gpt` written in five
-  # places. The footer it feeds described one lane by name while the roster had
-  # carried two Codex lanes since 2026-09-10, so `gpt2` — which at the time of
-  # this change was the lane actually holding sessions — had no line at all.
+  # PARAMETERISED 2026-09-14, was named _gpt_status — unbackticked because that
+  # function no longer exists. `gpt` was written in five places; the footer it
+  # feeds described one lane by name while the roster had carried two Codex lanes
+  # since 2026-09-10, so `gpt2` — the lane then holding sessions — had no line.
   #
   # The prose below is Codex's own usage story ("Codex weekly cap", the 5h
   # cooldown, ccgpt-usage's JSON shape), which is a fact about THAT backend and
