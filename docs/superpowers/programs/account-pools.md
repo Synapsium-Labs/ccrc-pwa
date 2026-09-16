@@ -7487,3 +7487,47 @@ measured-inherited but they are still red. The squash body is hand-written and r
 ([[a-hand-written-squash-body-drops-the-trailers]]). Two trailers, no human one to lose this time.
 Costs if wrong: the wave sits one more day; merging it wrongly costs an unreviewable squash on a
 protected branch.
+
+## 2026-09-16 23:1x UTC — WAVE 6 IS MERGED. #114 is `03ecda65`. The close is one fast-forward away, and the reason is mine.
+
+**Operator authorised the merges and `--admin` where needed. Three PRs went in, in dependency order,
+each with its trailers DERIVED from its own commits rather than remembered.**
+
+| PR | on main | what it was |
+|---|---|---|
+| #130 | `f27c8a86` | the LAST red on `main`: `test-macos` failed on a hard-coded `/usr/bin/timeout` inside the test's own shim — macOS ships none at that path, so the shim exec'd nothing and the probe read 127 where the case asserts 124. **This is the cause I refused to guess at this morning, and my one guess was wrong**: I had supposed 127 meant "no `timeout` binary", which `_plat_timeout`'s own `timeout`/`gtimeout` fallback (`ccd:353`) rules out. The defect was one layer up, in the fixture. Its author measured it properly and the fix SKIPS rather than weakens where no system `timeout` exists. |
+| #132 | `451750f6` | my own repair of the three prose copies D-2803 falsified. Trial-merged onto the new `main` first and its three skill suites run green (327 tests) before I merged. |
+| #114 | `03ecda65` | **wave 6.** All FOUR required legs green — `test (server)`, `test (pwa)`, `test (agent)`, `build-pwa`. `test-macos` and `probe-macos` are NOT required (read off the branch protection, not assumed). |
+
+**#131 and #133 had landed while I was away**, and #131 fixed BOTH inherited reds — the cap-predicate
+guard and the pwa contrast census — so by the time I arrived `main` was green except `test-macos`. I
+did not take that on trust: I read main's own per-leg conclusions at `25d60061` before acting.
+
+**I updated both PR branches onto the new `main` before merging** (`PUT /pulls/N/update-branch`),
+because a PR green by standing on an older `main` shows a colour it has not earned — my own ruling
+from this morning. Both went green on the real tree, and I verified #114's updated head LOCALLY too:
+348 tests across `pools-prose`, `coordinator-skill`, `crossrepo-prose`, `readme-holds` and
+`single-definition`.
+
+**THE CLOSE THEN REFUSED, AND THE CAUSE IS THAT UPDATE.** Verbatim:
+`error: pr-regressed`, `detail: the claim names PR #114, the branch is bound to #95`.
+
+`ccd`'s `is_ours` (`ccd:4064`) binds a workspace to a PR by exactly one test — the PR's `headRefOid`
+must be **reachable from the local branch tip**. `update-branch` moved `origin/ws/clear-meadow` to
+`b8d28127`, a merge commit GitHub authored, while the worker's LOCAL branch stayed at `8530fb38`.
+Measured by hand: `merge-base --is-ancestor b8d28127 8530fb38` is NO — #114's head is a DESCENDANT —
+while #95's head `175668b0` IS reachable, so the sweep bound wave 4's PR. `.prnumber` reads 95 while
+`.prhistory`'s last line is `{"pr": 114, …, "phase": "open"}`.
+
+**Ruling: mail the worker the refusal verbatim and ask for the fast-forward (mail 1534). I do not fix
+it myself.** `8530fb38` is an ancestor of `b8d28127`, so `git merge --ff-only b8d28127` in their
+workspace is a clean fast-forward with no content change; the next `pr-state` sweep then re-binds
+`.prnumber` to 114/merged and the close goes through. Writing into another session's git refs, or
+hand-editing `.prnumber`, would be a coordinator changing fleet state outside the API — clause 1,
+and the registry field has exactly one writer. Costs if wrong: one round-trip on a wave that is
+already merged and correct.
+
+**THE LESSON, and it is new: a coordinator-side `update-branch` breaks the workspace-to-PR binding.**
+Either the WORKER merges `main` and pushes — which is what I should have asked for — or whoever runs
+`update-branch` accepts that a fast-forward must follow before the run can close. Nothing warned me;
+the binding is not wrong about anything it measured, it is measuring a tip I moved out from under it.
