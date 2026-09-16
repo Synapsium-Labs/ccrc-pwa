@@ -293,7 +293,8 @@ In `ccd/ccd`, directly after the `STALE_PRESS_COOLDOWN=120` line (line 999), ins
 ```bash
 # The narrowest pane width at which THIS FILE'S phrase-matching readers may be
 # trusted (spec §6.3). Below it `_pane_measurable` answers 1 and every site that
-# would type stands down: a narrow pane wraps "esc to interrupt" between words,
+# would type stands down: a narrow pane cannot be RELIED ON to keep
+# "esc to interrupt" on one line,
 # and a wrapped phrase reads as SILENCE to grep, which is the 2026-09-08
 # five-session incident's shape.
 #
@@ -999,7 +1000,8 @@ Create `server/test/ccd-reader-standdown.test.ts`:
 ```ts
 // The readers stand down below the calibration width (spec §6.3).
 //
-// A pane narrower than READER_MIN_COLS wraps "esc to interrupt" between words,
+// A pane narrower than READER_MIN_COLS cannot be RELIED ON to keep
+// "esc to interrupt" on one line,
 // and grep cannot match across the newline it never presents (F11). Every ccd
 // reader that decides to TYPE on the strength of a phrase match therefore fails
 // OPEN on a narrow pane — a wrapped busy line reads as idle and ccd types
@@ -1679,6 +1681,10 @@ Every entry here is a departure the pre-flight scan measured against `origin/mai
 It is deferred rather than patched because the honest repair is the systemic one D-2781 declared — every site that builds a `cc-<id>` target, plus a guard that reds on a bare `-t cc-` — and patching this one site would leave the rest and no guard, which is fixing the instance instead of the claim. It is wave 3's first item, with its own mutation table.
 
 This entry also RECORDS A REVERSED RULING rather than silently updating one. The programme's carried constraints held that no confused-deputy risk existed at this seam, on the stated ground that "the only caller encodes a registry id". D-2859 falsifies that premise: the caller validates nothing, so the guarantee lived entirely in a caller that does not provide it. The ruling was overturned by measurement, not by argument.
+
+- **D-2863** — **this plan's own prescribed comment text states a wrapping claim that is false over a 50-column band, and the shipped source deliberately says something else.** Two of the code blocks above told the implementer to write, verbatim, that "a narrow pane wraps `esc to interrupt` between words" — the `_pane_measurable` bash header (Task 4 Step 3) and the `ccd-reader-standdown.test.ts` file header (Task 4 Step 1). Measured against this plan's OWN Task 1 derivation, that is false for every width from 70 to 119: the widest attested carrier needs 69 columns, so across a 50-column band the phrase sits on one line and the readers stand down anyway. The constant is not wrong — 120 is deliberately conservative, buying room for one status segment more than the sample carries (69 + 37 = 106) — but the REASON given for standing down at 119 was not the true one, and it was stated three times in shipped files plus twice here.
+
+The shipped source now says "cannot be RELIED ON to sit on one line", which is both true and the actual argument: below the calibration width the phrase is not *guaranteed* to be intact, and a reader that types on a phrase it cannot trust is the 2026-09-08 failure. Task 1's `READER_MIN_COLS` comment (`ccd/ccd`) carried the false form outright and was corrected in the same round. The plan's two blocks are corrected in place above so a later wave copying them does not re-introduce it; this entry exists because a reader diffing the shipped comments against this plan would otherwise read the divergence as the implementer ignoring its brief. It was the brief that was wrong.
 
 Two facts the scan checked and did NOT have to deviate on, recorded because a reviewer will want to know they were measured rather than assumed: Task 5's `POPULATION` table is exactly right against this tree (ten live phrase-carrying `grep` lines across the seven named functions, with the two prose mentions the plan warns about at 14499 and 15523 correctly excluded by the `/^\s*#/` filter), and the id class Task 2 enforces is `shared/roster.ts`'s `ID_RE` verbatim (`/^[a-z][a-z0-9-]{0,31}$/`, the same literal `cmd_account_pane` already carries, with the same `die "bad id: $id"` sentence).
 
