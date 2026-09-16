@@ -105,10 +105,21 @@ X" fact, it is already maintained, and releasing it is an explicit act. This nee
 hold reason string**: `held !== null` is the gate and `coord.db` supplies the coordinator, so the
 no-parsing rule survives intact.
 
-**The coordinator's project is stamped on the run at open time**, where the server already knows it —
+**The coordinator's project is stamped on the run whenever the coordinator is DECIDED** — at open,
+and again on a reclaim — where the server already knows it —
 never re-derived from a live read of the coordinator's registry record. This is R6: a worker keeps its
 placement when the coordinator is archived, removed or unmeasurable, and stays bracketed under a
 coordinator that is visibly dead, which is the truth. One additive column.
+
+**Widened 2026-09-16 (D-2924) — this said "at open time", and that was too narrow.** §7 requires
+that a reclaim move every worker of a programme at once, because the programme genuinely has a new
+coordinator. An open-time-only stamp cannot deliver it: `reclaimProgram` rewrites `claimedBy` while
+the stamp keeps naming the displaced coordinator, so workers stay on a card whose coordinator is gone
+until the next wave opens — days, possibly. The two columns on one row would also disagree about who
+the coordinator is, which matters directly now that the hop is keyed on `claimedBy`. The stamp is
+therefore taken at every point the coordinator is decided, by the same measured read, with absence
+leaving it null rather than guessing. This does NOT reach the dead-coordinator case §7 protects: there
+nothing decides a new coordinator, so nothing restamps and the placement correctly stays put.
 
 **Transitive, with a bounded resolver — and the hop is SESSION-keyed, not project-keyed.** If C1
 coordinates C2 and C2 coordinates W, resolving one hop puts C2 on C1's card while W lands on C2's
@@ -143,7 +154,7 @@ them is never left reconciling §4 against §5:
 |---|---|---|
 | 1 | `FleetSession.boardProject` | wire field, additive |
 | 2 | `ProjectRow.repo` | wire field, additive |
-| 3 | the coordinator's project, stamped on the run at open time (§4) | `coord.db` column + one `user_version` migration |
+| 3 | the coordinator's project, stamped whenever the coordinator is decided (§4) | `coord.db` column + one `user_version` migration |
 
 **`FLEET_PROTO` stays 1** — that is a statement about the two *wire* fields. The third is a schema
 migration and is governed by `coord.db`'s own rule: migrations refuse to start rather than open empty.
