@@ -98,6 +98,20 @@ export const WS_ADD_REAL_SPAWN = `
   sleep() { :; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
+    # Section 6.3's width query, SPELLED OUT rather than reusing the
+    # WIDE_PANE_IF_UP constant: that constant is declared LOWER DOWN in this
+    # module, and a template literal at module scope reading it would be a TDZ
+    # ReferenceError at import. (No backticks anywhere in this comment either
+    # — it lives inside a template literal, and one would end the string.)
+    # Same shape, same reason: answer the width from the SAME pane-up file this
+    # stub answers has-session from.
+    #
+    # MEASURED both ways on cmd_ws_add through this stub: with the line,
+    # 'tmux send-keys -t cc-<id> -l /effort ultracode' is recorded, as it was
+    # before this wave; without it, _inject_spawn_effort stands down and no
+    # /effort keystroke happens at all — silently, since no case here asserts
+    # either way.
+    case "$*" in *pane_active*) [[ -e "\$HOME/pane-up" ]] || return 1; echo "1 200"; return 0 ;; esac
     case "\$1" in
       new-session)  : > "\$HOME/pane-up" ;;
       kill-session) rm -f "\$HOME/pane-up" ;;
@@ -277,14 +291,39 @@ export const ghPoisonAt = (home: string): string[] => readLines(path.join(home, 
  *
  *  IT RETURNS, so nothing below it in the stub runs for the width query — and
  *  that is why WHERE it is spread decides whether the query is LOGGED.
- *  Measured: 15 of the 50 sites sit after a stub's LEADING
- *  `echo "tmux $*" >> "$HOME/ccd-calls"`, so those fixtures log it like any
- *  other call; the other 35 are the stub's first statement, and where such a
- *  stub records inside a `case` arm instead the width query returns before
- *  that arm and never reaches `$HOME/ccd-calls`. No assertion in this repo
- *  turns on either, but a new one that counts calls should know which shape
- *  its fixture has. */
+ *  RE-MEASURED 2026-09-16 by walking the text between each `tmux() {` and its
+ *  arm and asking whether `ccd-calls` appears in it: of the 50 sites (this
+ *  constant plus its two siblings below), **24 LOG** the width query and 26 do
+ *  not. An earlier draft of this paragraph said 15/35 — it counted only the
+ *  recordings on the SAME LINE as the arm and missed the 9 that sit on the
+ *  PRECEDING line of a multi-line stub, which log it just the same. No
+ *  assertion in this repo turns on either, but a new one that counts calls
+ *  should know which shape its fixture has — and
+ *  `ccd-reader-standdown.test.ts`'s once-per-loop case is one that does. */
 export const WIDE_PANE = 'case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac;';
+
+/** `WIDE_PANE` for a fixture that MODELS LIVENESS, and the reason it has to
+ *  exist: a stub cannot answer `has-session` from `$HOME/pane-up` and report a
+ *  200-column ACTIVE pane for that same session in the same breath. Real tmux
+ *  cannot produce that pair — `list-panes -t cc-nope` exits 1 on a session that
+ *  is not there — and a fixture that produces it is not teaching the stub a
+ *  fact, it is teaching it a CONTRADICTION. Measured: the contradiction is what
+ *  kept `ccd-spawn-verdict`'s rc-3 / `spawn rc 3` pins green while the tree
+ *  answered 6.
+ *
+ *  So this one answers the width query from the SAME file the stub answers
+ *  `has-session` from. `SPAWN_MAKES_PANE=0` ("new-session returns, no pane is
+ *  ever there") therefore reaches `_pane_measurable` as a refusal, exactly as
+ *  it reaches `has-session` as one. */
+export const WIDE_PANE_IF_UP =
+  'case "$*" in *pane_active*) [[ -e "$HOME/pane-up" ]] || return 1; echo "1 200"; return 0 ;; esac;';
+
+/** The width query REFUSED, for a stub whose `has-session` always fails: that
+ *  fixture's session does not exist, and `tmux list-panes` against a session
+ *  that does not exist exits 1. The same contradiction as `WIDE_PANE_IF_UP`
+ *  guards against, in the fixtures that model a dead pane unconditionally
+ *  rather than through a file. */
+export const DEAD_PANE = 'case "$*" in *pane_active*) return 1 ;; esac;';
 
 export interface CcdHarness {
   home: string;

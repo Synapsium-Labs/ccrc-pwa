@@ -99,7 +99,7 @@ describe('_pane_hard_blocked', () => {
 // The two classifiers above are pure and correctly wired into ccd's OWN test
 // suite already — but nothing until here drove the functions that actually
 // CONSUME `_pane_login_screen`. A tmux/sleep stub in the ccd-archive idiom
-// (`tmux() { ${WIDE_PANE} case "$1" in ...; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; }`)
+// (`tmux() { <WIDE_PANE arm> case "$1" in ...; *) echo "tmux $*" >> "$HOME/ccd-calls" ;; esac; }`)
 // makes `_accept_first_run_prompts` and `_spawn` run to completion in
 // milliseconds against a fixture pane, with every keystroke ccd would have
 // sent to a real terminal landing in `$HOME/ccd-calls` instead.

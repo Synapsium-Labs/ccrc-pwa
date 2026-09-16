@@ -12,7 +12,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { CCD, ghContainedEnv, makeCcdHarness, WS_ADD_REAL_SPAWN, type CcdHarness, WIDE_PANE, DEAD_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-split-'); });
@@ -48,7 +48,7 @@ const shStatus = (snippet: string, env: NodeJS.ProcessEnv = {}): { status: numbe
 const TMUX = `sleep() { :; };
   tmux() {
     echo "tmux $*" >> "$HOME/ccd-calls"
-    ${WIDE_PANE}
+    ${WIDE_PANE_IF_UP}
     case "$1" in
       new-session)  : > "$HOME/pane-up" ;;
       kill-session) rm -f "$HOME/pane-up" ;;
@@ -69,7 +69,7 @@ const TMUX = `sleep() { :; };
 const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
-      ${WIDE_PANE}
+      ${WIDE_PANE_IF_UP}
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
         has-session)  [[ -e "$HOME/pane-up" ]] ;;
@@ -498,7 +498,7 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
 
   it('does NOT retry a `new` spawn — there is nothing to fall back to', () => {
     seed('myid');
-    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "$1" in has-session) return 1 ;; esac; };
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
           _spawn_start myid new`);
     expect(newSessions()).toHaveLength(1);
   });
@@ -508,7 +508,7 @@ describe('_spawn_start: the --resume fallback a monotone `started` owes', () => 
     // rc 3 is the honest verdict; a loop here would spend the whole window
     // minting panes nobody watches.
     seed('myid');
-    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "$1" in has-session) return 1 ;; esac; };
+    h.sh(`sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${DEAD_PANE} case "$1" in has-session) return 1 ;; esac; };
           _spawn_start myid resume 2>/dev/null`);
     expect(newSessions()).toHaveLength(2);
   });

@@ -32,7 +32,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { chmodSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, type CcdHarness, WIDE_PANE, WIDE_PANE_IF_UP } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-rc-flag-'); });
@@ -335,7 +335,7 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
   const TMUX = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
-      ${WIDE_PANE}
+      ${WIDE_PANE_IF_UP}
       case "$1" in
         new-session)  : > "$HOME/pane-up" ;;
         kill-session) rm -f "$HOME/pane-up" ;;
@@ -350,7 +350,7 @@ describe('the per-session rc field (the 2026-08-13 ruling, task #37)', () => {
   const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
-      ${WIDE_PANE}
+      ${WIDE_PANE_IF_UP}
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
         has-session)  [[ -e "$HOME/pane-up" ]] ;;

@@ -948,7 +948,7 @@ describe('cmd_swap\'s CCD_SWAP_AUTO strand filter (§5.8.4) — a sound filter, 
 });
 
 /** Everything `cmd_start`/`cmd_ensure` reach that must not leave the fixture.
- *  `_alive` is forced false: WS_ADD's `tmux() { ${WIDE_PANE} :; }` returns 0 for
+ *  `_alive` is forced false: WS_ADD's `tmux() { :; }` returns 0 for
  *  `has-session`, which would send every case down the already-running no-op. */
 const START_STUBS = `${WS_ADD} _alive() { return 1; }; _have_systemctl() { return 1; };`;
 

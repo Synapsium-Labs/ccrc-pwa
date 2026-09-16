@@ -89,6 +89,19 @@ describe('_pane_measurable', () => {
     expect(rc(`${panes('1')} _pane_measurable demo`), 'short row').toBe(1);
   });
 
+  it('rejects a width the ARITHMETIC would accept — the regex has its own reason', () => {
+    // THE OTHER FOUR UNMEASURABLE ROWS PIN THIS LINE FOR THE WRONG REASON.
+    // Delete `[[ "$w" =~ ^[0-9]+$ ]] || return 1` and `w=wide` reaches
+    // `(( w >= READER_MIN_COLS ))`, where bash reads a bare word as a VARIABLE
+    // NAME: unset, and `set -u` makes that fatal — the case reds at rc 2, on an
+    // exit, not on an answer. `+120` is the shape that separates the two: the
+    // regex rejects it (`+` is outside the class) while arithmetic accepts it
+    // as 120, so without the guard the function answers MEASURABLE on bytes it
+    // never validated, and reds here with `expected 0 to be 1`.
+    expect(rc(`${panes('1 +120')} _pane_measurable demo`), 'a signed width is not a width').toBe(1);
+    expect(rc(`${panes('1 0x80')} _pane_measurable demo`), 'nor is a hex literal').toBe(1);
+  });
+
   it('targets cc-<id>, through _tmux', () => {
     const out = h.sh(
       'tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 1; };'
@@ -134,6 +147,50 @@ describe('_pane_auto_continue_armed holds when it cannot measure', () => {
 // `POPULATION` and neither would red when deleted. These two cases are their
 // mechanism, and the Global Constraint that every guard ships with a test that
 // reds on its deletion is what requires them.
+describe('rc 6 is a LIVE pane too narrow to read \u2014 never a session that is not there', () => {
+  /** `has-session` steered by $ALIVE, `list-panes` answering a NARROW active
+   *  pane, `capture-pane` silent. The pair is the point: a real tmux cannot
+   *  report a 200-column active pane for a session `has-session` denies, and
+   *  the width query against a session that is not there EXITS 1 \u2014 which is
+   *  indistinguishable, at `_pane_measurable`, from "too narrow". */
+  const steered = (rows: string): string =>
+    'sleep() { :; }; tmux() { case "$1" in'
+    + ' has-session) return "${ALIVE:-0}" ;;'
+    + ` list-panes) printf '%s\\n' ${JSON.stringify(rows)} ;;`
+    + " capture-pane) printf '' ;; esac; };";
+
+  it('a LIVE session whose pane is narrow earns 6', () => {
+    expect(rc(`${steered(`1 ${NARROW}`)} _accept_first_run_prompts cc-demo 0`)).toBe(6);
+  });
+
+  it('a session that NEVER CAME UP still earns 3, not 6', () => {
+    // THE ORDER IS THE GUARD. With the width measured ahead of the liveness
+    // probe, `tmux list-panes -t cc-nope` exits 1, `_pane_measurable` answers
+    // 1, and a dead session was told to "close the terminal drawer" while
+    // rc 3's own recovery sentence ("clear $REG/<id>.started first") became
+    // unreachable. Two conditions an operator handles differently must not
+    // collapse onto one code.
+    expect(rc(`${steered(`1 ${NARROW}`)} ALIVE=1 _accept_first_run_prompts cc-nope 0`)).toBe(3);
+    // …and it is the LIVENESS that decides, not the width: a dead session with
+    // a wide answer is rc 3 too, so this case cannot pass by measuring width.
+    expect(rc(`${steered(`1 ${WIDE}`)} ALIVE=1 _accept_first_run_prompts cc-nope 0`)).toBe(3);
+  });
+
+  it('measures the width ONCE, not once per gate-loop pass', () => {
+    // SPAWN_GATE_TRIES passes over a live, WIDE, markerless pane: the loop runs
+    // to its cap and answers 4, and exactly ONE list-panes went out. Re-measuring
+    // per pass would fork one per iteration for a decision that cannot change.
+    const out = h.sh(
+      'sleep() { :; }; tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "$1" in'
+      + ` has-session) return 0 ;; list-panes) printf '%s\\n' "1 ${WIDE}" ;;`
+      + " capture-pane) printf '' ;; esac; };"
+      + ' SPAWN_GATE_TRIES=5; _accept_first_run_prompts cc-demo 0; echo "rc=$?"');
+    expect(out).toContain('rc=4');
+    expect(h.calls().filter((c) => c.includes('pane_active')), 'one width query for the whole loop')
+      .toHaveLength(1);
+  });
+});
+
 describe('the two stand-downs outside the phrase population', () => {
   it('_spawn_settle names rc 6 to the operator (edit 4g)', () => {
     // `_accept_first_run_prompts` answers 6 — "I stood down, I did not decide" —
