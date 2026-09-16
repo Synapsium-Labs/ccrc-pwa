@@ -1420,10 +1420,17 @@ conclusion, so they are recorded here rather than allocated).
 - Task 5 Step 5 measured 20 `accounts.json` hits at `2b15144e`; there are now **30**. The conclusion is
   unchanged — only `config.ts` carried the claim, and `fleetstate.ts:76-90` and
   `shared/agent-protocol.ts:36-44` already stated the true version.
-- Every line citation in the File-structure table has shifted. The two README arrows are
-  BASE-RELATIVE — they name where the passage sits at the base `47eff69a`, BEFORE this wave's own
-  ~190-line insertion moves it — so both numbers are needed to read them: README 806-808 → 890-892 at
-  the base, 915 at this wave's head; README 2088-2097 → 2578-2589 at the base, 2760 at its head. The
-  other two are outside the insertion and hold at the head as written: `config.ts` 197-201 → 192-219,
-  `ccd/ccd` 3546-3551 → 4579+ (untouched by this diff). Everything was located by content, never by
-  line number — which is the only reason the arrows being stale costs nothing.
+- Every line citation in the File-structure table has shifted. **The two README arrows below are
+  BASE-RELATIVE** — each names where the passage sits at the base `47eff69a`, and NO head number is
+  quoted for them, because this branch moves both on nearly every commit and a second rotting number
+  is worse than one: README 806-808 → **890-892**, README 2088-2097 → **2578-2587** (a 10-line
+  paragraph mapping to 10 lines; the earlier spelling 2578-2589 over-reached by two into the
+  `**Restore**` block that follows). The cause is not one insertion, and an earlier version of this
+  entry said it was: the first arrow is moved only by this wave's EARLIER hunks, since the pools
+  section is inserted after it; the second is moved by those hunks AND the section. The other two
+  arrows are outside both and hold as written: `config.ts` 197-201 → **191-218**, the `loadRoster`
+  docstring exactly — `/**` at 191, ` */` at 218, with 219 the `function loadRoster(` signature the
+  File-structure row explicitly excludes as code (191-218 supersedes both 197-208 and the 192-219 this
+  entry briefly carried, which ran one line past the comment into that signature); `ccd/ccd`
+  3546-3551 → **4579+** (untouched by this diff). Everything was located by content, never by line
+  number — which is the only reason an arrow going stale costs nothing.

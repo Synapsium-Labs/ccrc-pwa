@@ -1003,7 +1003,13 @@ ls ~/.cc-sessions/pools/                        # every tag on the box, in one l
 
 The file holds one token matching `^[a-z][a-z0-9-]{0,31}$`, and the reader
 answers one of four words — `named <n>` for a usable tag, `untagged` when there
-is no file at all, and `unreadable` or `malformed` for a file nobody can use.
+is no file at all, `malformed` for a file whose contents are not one legal token,
+and `unreadable` when the reader cannot decide at all. Read that last one
+carefully: four of its six arms are DIRECTORY-level — an unsearchable `$REG`, a
+`pools/` that is a dangling symlink, not a directory, or not searchable — and
+they fire while the project's own tag file is perfectly good, so `chmod 0600
+~/.cc-sessions/pools` reads `unreadable` for every project on the box. The remedy
+is on the directory, not on the file.
 Anything but that token — two words, an uppercase letter, a directory in its
 place, a file the reader cannot open — is `malformed` or `unreadable`, and
 **neither is ever quietly downgraded to untagged**: on a tag nobody can read,
@@ -1077,10 +1083,11 @@ mismatched accounts sit behind a **show other pools** disclosure in the swap
 sheet, and picking one there is what sets the flag; a plain pick posts the body
 it always did, and a mismatch comes back `409` with the sentence naming both
 pools. Every crossing writes a per-session marker, and that marker is what stops
-the pool machinery undoing the crossing on the next tick; `swap --cross-pool`
-also writes a `cross-pool` line to `swap.log`, while `prefer --cross-pool`
-records the crossing in the lifecycle journal and `start --cross-pool` writes the
-marker alone. It is deliberately narrow. `swap --cross-pool` moves the session and
+the pool machinery undoing the crossing on the next tick. What each verb ADDS to
+that marker differs, which matters if you audit crossings from one record rather
+than the other: `swap --cross-pool` writes BOTH a `cross-pool` line in `swap.log`
+and a `dec.crosspool` act in the lifecycle journal; `prefer --cross-pool` writes
+the journal act and no log line; `start --cross-pool` writes the marker alone. It is deliberately narrow. `swap --cross-pool` moves the session and
 leaves its home alone, so when home recovers the session returns home exactly as
 it does after any manual swap today — and that return is a move off the crossed
 account, which ends the crossing (`crosspool-ended`). To stay crossed through a

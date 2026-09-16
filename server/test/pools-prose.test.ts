@@ -32,6 +32,38 @@
 //      author could not see the constraint, so every message states the
 //      constraint rather than the regex (the round's M-4 ruling: a comment in
 //      README would be a request; the red is the mechanism).
+//
+// WHAT THESE GUARDS CANNOT CATCH — read this before trusting one.
+//
+// Every guard below is a RATCHET over prose, not a proof about it. Round 2 put
+// 73 one-change mutations through the file and the four classes that walk past
+// it are structural, not oversights: chasing them with more regex makes the
+// suite slower without making it honest. They are named here because a header
+// that overclaims is the same defect as prose that overclaims — which is the
+// subject of this entire file.
+//
+//   A. CLOSED VERB VOCABULARY. `AUTHORITY_VERB`, `FOLD` and `OVERRIDE_WORD` are
+//      lists of surface forms. "The server CHOOSES THE ACCOUNT and writes the
+//      tag", "an unreadable tag BECOMES untagged" — a synonym or an inflection
+//      outside the list is invisible. Each list grows only when a measurement
+//      says so, never speculatively.
+//   B. EXACT-LITERAL SUBJECT. `bindsAuthority` finds the literal `the server`.
+//      A bolded subject (`the **server**`), a renamed one, or a pronoun in a
+//      following sentence ("It decides every placement") is not seen at all —
+//      and bold is this document's dominant idiom.
+//   C. THE NEGATOR IS NOT SCOPED TO ITS CLAUSE. The guards require a negator
+//      somewhere between the subject and the verb, not inside the verb's own
+//      clause. "The server never refuses a swap; it decides the pool" passes:
+//      the first clause's "never" licenses the second. A sentence with two
+//      clauses and one true negative is the hole.
+//   D. A TEXTUAL WINDOW, NOT A RESOLVED PATH. `poolWritesInSource` reads 200
+//      characters of comment-stripped source after a write call and asks whether
+//      a pools path is spelled there. It cannot follow a variable: a path built
+//      three lines earlier, or passed in as an argument, is not seen.
+//
+// What follows from that: a GREEN here is evidence, never proof. When one of
+// these sentences changes, read the source it describes — do not let the suite
+// read it for you.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
@@ -75,7 +107,17 @@ const flat = (text: string): string => text.replace(/\s+/g, ' ');
  *  passage, so a sentence is one line by the time it is matched. */
 const sentencesOf = (text: string): string[] => text.split(/(?<=[.:])\s+/);
 
-const NEGATOR = /\b(never|not|no|nor|neither)\b/i;
+/** CLAUSES, for the guards that can be scoped that tightly. A sentence that
+ *  PARTITIONS something — "swap writes X; prefer writes Y; start writes Z" —
+ *  carries several claims, and a per-sentence attribution check reds on the
+ *  whole of it for a term that belongs to one clause. (The negator guards below
+ *  are NOT clause-scoped; class C in the header says so.) */
+const clausesOf = (text: string): string[] => text.split(/\s*[;—]\s*/);
+
+// A concessive "not only / not merely / not just" ASSERTS the thing it appears
+// to deny ("`--force` is not only a pool override" says it IS one), so it must
+// not count as a negator anywhere in this file.
+const NEGATOR = /\b(never|not|no|nor|neither)\b(?!\s+(only|merely|just|solely))/i;
 
 /** THE AUTHORITY CLAIM, BOUND TO ITS SUBJECT.
  *
@@ -115,10 +157,19 @@ const bindsAuthority = (where: string, sentence: string): void => {
  *  untagged" green, same defect. Widened toward the claim, and negation-aware
  *  for the same reason `bindsAuthority` is: the TRUE sentence says "neither is
  *  ever quietly downgraded to untagged", which the bare pattern would red. */
-const FOLD = /\b(reads?|treated|falls? back|defaults?|downgrad\w+|counts? as)\b[^.]{0,40}\buntagged\b/gi;
+const FOLD = /\b(reads?|treats?|treated|falls? back|defaults?|downgrad\w+|counts? as|folds? into|becomes?)\b[^.]{0,40}\buntagged\b/gi;
+/** The undecidable states, which are what the fold has to be ABOUT. Round 2
+ *  measured the false red this closes: "the reader reads the file and returns
+ *  untagged when absent" is a true sentence about the ABSENT case, and the bare
+ *  40-char window reddened it. A fold is only a fold when one of these is its
+ *  subject, so the scan starts at the state rather than at the sentence. */
+const UNDECIDABLE = /\b(unreadable|malformed|undecidable)\b/i;
 const doesNotFold = (where: string, sentence: string): void => {
-  for (const m of sentence.matchAll(FOLD)) {
-    expect(sentence.slice(0, m.index!),
+  const u = UNDECIDABLE.exec(sentence);
+  if (!u) return;
+  const after = sentence.slice(u.index!);
+  for (const m of after.matchAll(FOLD)) {
+    expect(after.slice(0, m.index!),
       `${where}: an undecidable tag is folded into untagged ("${m[0].trim()}") with nothing ` +
       'negating it. `unreadable` and `malformed` are NOT `untagged` — on a tag nobody can read, ' +
       `nobody decides. Sentence: "${sentence.trim()}"`)
@@ -139,6 +190,41 @@ const noUnqualifiedOverride = (where: string, section: string): void => {
         + 'override. `ccd start`/`swap`/`prefer` override the -disabled gate, never the pool rule '
         + `— that takes --cross-pool. Sentence: "${s.trim()}"`)
         .toMatch(/--cross-pool/);
+    }
+  }
+};
+
+/** `--force` IS NOT A POOL OVERRIDE — negation-aware, like every other guard.
+ *
+ *  Round 1 wrote this one as a bare negative, the single guard in the file with
+ *  no negator test, and round 2 measured what that costs: the plainest TRUE
+ *  statement of the rule this wave exists to teach — "`--force` does not
+ *  override the pool rule; that takes `--cross-pool`." — REDDENED, and the
+ *  message told its author their true sentence was the defect. A guard that
+ *  calls the truth false is worse than no guard: it misinforms with the repo's
+ *  authority.
+ *
+ *  Both word orders now count, because "a pool override" reads as naturally as
+ *  "overrides the pool" and only the verb-first spelling was caught. The flag's
+ *  own name is masked first: `--cross-pool` literally contains "cross" and
+ *  "pool", so every true sentence naming both flags would otherwise match. */
+const OVERRIDE_WORD = String.raw`(cross(es|ing)?|overrid\w+|bypass\w*|ignor\w+|defeats?)`;
+const POOL_OVERRIDE_CLAIM = new RegExp(
+  String.raw`\b${OVERRIDE_WORD}\b[^.]{0,30}\bpool\b|\bpool\b[^.]{0,20}\b${OVERRIDE_WORD}\b`, 'gi');
+const forceIsNotAPoolOverride = (where: string, section: string): void => {
+  for (const sentence of sentencesOf(flat(section))) {
+    const i = sentence.indexOf('--force');
+    if (i < 0) continue;
+    const probe = sentence.replace(/--cross-pool/g, '<<FLAG>>');
+    const j = probe.indexOf('--force');
+    const after = probe.slice(j + '--force'.length);
+    for (const m of after.matchAll(POOL_OVERRIDE_CLAIM)) {
+      expect(after.slice(0, m.index!),
+        `${where}: \`--force\` is described as a pool override ("${m[0].trim()}") with nothing `
+        + 'negating it. `--force` means ONE thing — accept the transcript loss a swap costs. '
+        + 'Crossing a pool is a separate decision with its own flag, and the two compose. '
+        + `Sentence: "${sentence.trim()}"`)
+        .toMatch(NEGATOR);
     }
   }
 };
@@ -170,21 +256,76 @@ const tsFilesUnder = (rel: string): string[] => {
   return out;
 };
 
-/** THE SERVER-NEVER-WRITES CLAIM, GROUNDED OVER THE SERVER.
- *  The old grounding scanned `server/src/pools.ts` alone — a 325-line READER
- *  module — so adding a `writeFileSync(…/pools/<project>)` to the tag route in
- *  `server.ts` left the claim green. The claim's surface is the whole server. */
-const poolWritesInServer = (): string[] => {
+/** TS source with its comments removed, so a scan below measures CODE. Round 2
+ *  measured the cost of skipping this: a comment reading "Unrelated to
+ *  ~/.cc-sessions/pools/, which this process never touches", placed beside an
+ *  unrelated `mkdirSync`, reddened three tests with a message asserting the
+ *  server writes the marker — a guard naming a cause its own evidence denies. */
+const codeOf = (text: string): string =>
+  text.replace(/\/\*[\s\S]*?\*\//g, ' ').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+
+/** THE NEVER-WRITES CLAIM, GROUNDED OVER BOTH PROCESSES THAT COULD BREAK IT.
+ *
+ *  Round 1 scanned `server/src/pools.ts` alone — a READER module — so a write in
+ *  `server.ts` was green. Round 2 found two more holes in the widened version and
+ *  both are closed here:
+ *    - the 200-char window matched a NEIGHBOURHOOD, so a comment or an
+ *      identifier like `poolsWire` counted as a write. It now has to be a PATH:
+ *      the shipped `POOLS_DIR_NAME` constant, or `pools` inside a string or
+ *      template literal. That also CLOSES the natural spelling the old scan
+ *      missed — `path.join(registryDir, POOLS_DIR_NAME, project)`.
+ *    - README says "the agent's write root is unchanged" in the same breath, and
+ *      nothing read `agent/src`. The agent is the process that actually holds a
+ *      write root on the fleet box, so it is the half a coder would break first. */
+const POOL_WRITE_ROOTS = ['server/src', 'agent/src'] as const;
+const poolWritesInSource = (): string[] => {
   const hits: string[] = [];
-  for (const rel of tsFilesUnder('server/src')) {
-    const text = read(rel);
-    for (const m of text.matchAll(
-      /\b(writeFileSync|writeFile|appendFileSync|appendFile|unlinkSync|rmSync|renameSync|mkdirSync)\b/g)) {
-      const window = text.slice(m.index!, m.index! + 200);
-      if (/pools/i.test(window)) hits.push(`${rel}: ${m[1]!} … ${window.split('\n')[0]!.trim()}`);
+  for (const rootRel of POOL_WRITE_ROOTS) {
+    for (const rel of tsFilesUnder(rootRel)) {
+      const text = codeOf(read(rel));
+      for (const m of text.matchAll(
+        /\b(writeFileSync|writeFile|appendFileSync|appendFile|unlinkSync|rmSync|renameSync|mkdirSync)\b/g)) {
+        const window = text.slice(m.index!, m.index! + 200);
+        if (/POOLS_DIR_NAME|['"`][^'"`]*pools[^'"`]*['"`]/i.test(window)) {
+          hits.push(`${rel}: ${m[1]!} … ${window.split('\n')[0]!.trim()}`);
+        }
+      }
     }
   }
   return hits;
+};
+
+/** THE UNINSTALL SURFACE: `cmd_uninstall` PLUS every `_uninst_*` helper it
+ *  delegates to, the helper names DERIVED from the body rather than listed.
+ *
+ *  Round 1 narrowed a whole-file negative over an ~11,900-line CLI down to
+ *  `cmd_uninstall`'s own body — and round 2 measured that this traded a false
+ *  RED for a structural false GREEN: that body is PURE DELEGATION, eight calls
+ *  and no removal code at all, so the claim it grounds could never be falsified
+ *  inside it. Every registry removal lives in `_uninst_cc_sessions`, defined
+ *  outside the old slice.
+ *
+ *  The terminator is `case "$VERB" in`, the file's single dispatch opener and a
+ *  DISTINCTIVE literal — not the `'\n}'` the first fix used, which is exactly
+ *  the generic terminator this file's own header forbids: one column-0 brace
+ *  inside an embedded awk or node program (this file has several) truncates the
+ *  slice, and every negative below it then passes over text that was cut away.
+ *  `cmd_uninstall` is the last `cmd_` in the file, so opener → dispatch covers
+ *  the verb and all eight helpers and excludes the verb table itself. */
+const uninstallSurface = (): string => {
+  const ccrc = read('ccd/ccrc');
+  const region = passage('ccrc, the uninstall surface', ccrc,
+    'cmd_uninstall() {', '\ncase "$VERB" in', 1000);
+  const called = [...new Set([...region.matchAll(/\b_uninst_[a-z_]+\b/g)].map((m) => m[0]))];
+  expect(called.length, 'cmd_uninstall no longer delegates — re-decide what this scan covers')
+    .toBeGreaterThanOrEqual(5);
+  // The scope is only honest if every helper the verb calls is DEFINED in the
+  // region being scanned. If one moves out, this says so instead of going quiet.
+  for (const h of called) {
+    expect(region, `${h} is called by cmd_uninstall but defined outside the scanned region`)
+      .toContain(`${h}() {`);
+  }
+  return region;
 };
 
 /** Every symbol the generator actually writes into `accounts.sh`, read off its
@@ -201,16 +342,22 @@ const emittedNames = (): string[] => {
   return names;
 };
 
-/** The four words `_project_pool_state` actually answers, read off its own body
- *  rather than listed here. The old check hardcoded THREE of the four and
- *  grounded them only in the function's EXISTENCE. Comment lines are dropped
- *  first: one of them contains `echo pool-a > pools/demo` as an example. */
+/** The four words `_project_pool_state` answers, EXTRACTED from its own body and
+ *  then RATCHETED against a literal — and the docstring says both halves on
+ *  purpose, because round 2 caught the earlier one claiming more than the code
+ *  does. The extraction is what the prose is checked against; the literal is a
+ *  tripwire, so renaming a token in ccd AND in README together still reds and
+ *  asks a human to re-decide. It does NOT silently follow the source. Comment
+ *  lines are dropped first: one contains `echo pool-a > pools/demo` as an
+ *  example, and an extraction that swallowed it would be over the wrong set. */
 const readerWords = (): string[] => {
   const body = passage('ccd, _project_pool_state', ccd(),
     '_project_pool_state() {', '\n# An account is a legal AUTOMATIC destination', 400);
   const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   const words = [...new Set([...code.matchAll(/\becho\s+"?([a-z]+)/g)].map((m) => m[1]!))];
-  expect(words.sort(), 'the four-word reader changed its vocabulary — re-decide the prose that quotes it')
+  expect(words.sort(),
+    'the four-word reader changed its vocabulary. This literal is a RATCHET, not a follower: ' +
+    're-decide the prose that quotes it, then update this list in the same commit')
     .toEqual(['malformed', 'named', 'unreadable', 'untagged']);
   return words;
 };
@@ -238,14 +385,19 @@ const groundedInShippedMechanism = (): void => {
   expect(ccd(), 'the four-word reader is gone').toMatch(/_project_pool_state\(\)/);
   expect(read('server/src/pools.ts'), 'the server no longer spells the directory once')
     .toMatch(/POOLS_DIR_NAME = 'pools'/);
-  expect(poolWritesInServer(),
-    'the server now writes something under the pools directory — the prose says it never writes the marker')
+  expect(poolWritesInSource(),
+    'a write whose path names the pools directory appeared in server/src or agent/src — the prose ' +
+    'says the server never writes the marker and the agent\'s write root is unchanged')
     .toEqual([]);
 };
 
 describe('README: manual placement is not a blanket override (spec §11 row 52)', () => {
   it('no longer says the manual verbs bypass the gate entirely', () => {
+    // Over BOTH sections. Narrowing `placementSection()` to fix its attribution
+    // (M-3) also narrowed this literal's reach: the sentence planted in the
+    // pools section was red before that change and green after it.
     expect(flat(placementSection())).not.toMatch(/bypasses the gate entirely/);
+    expect(flat(poolsSection())).not.toMatch(/bypasses the gate entirely/);
   });
 
   it('does not claim a manual verb bypasses placement policy, in a wider set of phrasings', () => {
@@ -339,11 +491,24 @@ describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
     // this section REJECTS, and the namespace footgun CLAUDE.md calls
     // non-negotiable — and the suite stayed green.
     const s = flat(poolsSection());
-    const rule = sentencesOf(s).find((x) => /a project is tagged by/.test(x));
-    expect(rule, 'the rule sentence ("a project is tagged by …") is gone').toBeDefined();
-    expect(rule!,
-      'the rule sentence names a home other than the registry subdirectory. The tag lives at '
-      + '~/.cc-sessions/pools/<project>; $REG/<project>.<x> collides with session `<wrapper>-<project>`')
+    const all = sentencesOf(s);
+    const at = all.findIndex((x) => /a project is tagged by/.test(x));
+    expect(at, 'the rule sentence ("a project is tagged by …") is gone').toBeGreaterThan(-1);
+    // The WINDOW is the rule sentence plus the one after it. Round 2 measured the
+    // false red this closes: splitting the rule across two true sentences — "…a
+    // one-token file on the fleet host. That file is `~/.cc-sessions/pools/…`." —
+    // reddened, with a message about a wrong home in text that named no home.
+    const window = all.slice(at, at + 2).join(' ');
+    // And the two failures are told apart, because they send an editor to
+    // different places: naming the REJECTED home is a defect, naming none is a
+    // reflow that moved the path more than one sentence away.
+    expect(window,
+      'the rule names the REJECTED home. The tag lives at ~/.cc-sessions/pools/<project>; '
+      + '$REG/<project>.<x> collides with session `<wrapper>-<project>`')
+      .not.toMatch(/\$REG\/<project>\./);
+    expect(window,
+      'the rule sentence and the one after it name no home at all — say where the tag lives '
+      + 'within one sentence of stating the rule (~/.cc-sessions/pools/<project>)')
       .toContain('~/.cc-sessions/pools/<project>');
     for (const sentence of sentencesOf(s)) {
       if (/\btagged by\b|\bthe tag lives\b/.test(sentence)) {
@@ -375,6 +540,13 @@ describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
     expect(s).toMatch(/never places/);
     expect(s).toMatch(/never writes the marker/);
     for (const sentence of sentencesOf(s)) bindsAuthority('README, the account-pools section', sentence);
+    // BOTH sections. The claim's surface is the document, not one heading: the
+    // same false sentence planted nine lines ABOVE the pools heading — in the
+    // disabled-marker section, where the manual-verb override argument already
+    // lives — was green.
+    for (const sentence of sentencesOf(flat(placementSection()))) {
+      bindsAuthority('README, the disabled-marker section', sentence);
+    }
     groundedInShippedMechanism();
   });
 
@@ -391,8 +563,7 @@ describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
     // `pools/` reddened it with a message blaming the uninstaller — and README
     // rollout step 3 promises a doctor `pools` check, so that collision is
     // scheduled rather than hypothetical.
-    const uninstall = passage('ccrc, cmd_uninstall', read('ccd/ccrc'), 'cmd_uninstall() {', '\n}', 200);
-    expect(uninstall,
+    expect(uninstallSurface(),
       'ccrc uninstall now names pools/ — the README claim that it leaves the tag standing is false')
       .not.toMatch(/pools/);
   });
@@ -450,19 +621,8 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     const s = flat(poolsSection());
     expect(s).toContain('--cross-pool');
     expect(s).toContain('--force');
-    for (const sentence of sentencesOf(s)) {
-      if (!/--force/.test(sentence)) continue;
-      // The flag's OWN spelling contains "cross" and "pool", so mask it before
-      // matching or every true sentence that mentions both flags reds. Widened
-      // past "crosses a pool": "overrides the pool rule" is the same false claim
-      // and used to pass.
-      const probe = sentence.replace(/--cross-pool/g, '<<FLAG>>');
-      expect(probe,
-        '`--force` is described as a pool override. It means ONE thing — accept the transcript '
-        + 'loss a swap costs. Crossing a pool is a separate decision with its own flag, and the '
-        + `two compose. Sentence: "${sentence.trim()}"`)
-        .not.toMatch(/\b(cross(es|ing)?|overrid\w+|bypass\w*|ignor\w+|defeats?)\b[^.]{0,30}\bpool\b/i);
-    }
+    forceIsNotAPoolOverride('README, the account-pools section', s);
+    forceIsNotAPoolOverride('README, the disabled-marker section', placementSection());
     expect(s, 'the swap/prefer split (spec §14 O1) is the thing operators get wrong')
       .toMatch(/prefer --cross-pool/);
     expect(s, 'automatic moves never cross — the sentence that keeps ruling 8 honest')
@@ -470,6 +630,26 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     // Grounded: the marker and its end-of-life log verb.
     expect(ccd()).toMatch(/crosspool/);
     expect(ccd(), 'the crossing no longer ends with a logged reason').toMatch(/crosspool-ended/);
+    // WHICH VERB WRITES THE LOG LINE. This seam has now minted a falsehood twice
+    // — first "every crossing writes a `cross-pool` line" (true of one verb of
+    // four), then a repair whose "while" put the journal act on prefer's side
+    // when swap writes one too. Grounded in the single writer, and guarded per
+    // sentence so neither error can come back: only `swap` adds the swap.log
+    // line, and all three write the marker.
+    const logWriters = [...ccd().matchAll(/^\s*echo .*cross-pool \$id.*swap\.log/gm)];
+    expect(logWriters.length,
+      'ccd no longer has exactly one `cross-pool` swap.log writer — re-decide which verbs the '
+      + 'README says write that line')
+      .toBe(1);
+    for (const sentence of sentencesOf(s)) for (const clause of clausesOf(sentence)) {
+      if (/`(prefer|start) --cross-pool`/.test(clause)) {
+        expect(clause,
+          'a `cross-pool` swap.log line is attributed to `prefer` or `start`. ccd writes that line '
+          + 'in exactly one place, inside `cmd_swap`; prefer records the crossing in the lifecycle '
+          + `journal and start writes the marker alone. Clause: "${clause.trim()}"`)
+          .not.toMatch(/swap\.log/);
+      }
+    }
   });
 
   it('names the skew states an operator can see, and the six rollout steps', () => {
@@ -478,10 +658,14 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     // 502 stay literals because they are ccd-cap and ccd-failure answers this
     // section attributes to no single line.
     const { mismatch, unreadable } = refusalCodes();
-    expect(s, `the section never mentions ${mismatch}, which is what refusePool answers a mismatch with`)
-      .toContain(mismatch);
-    expect(s, `the section never mentions ${unreadable}, which is what refusePool answers an unreadable tag with`)
-      .toContain(unreadable);
+    // BESIDE ITS OWN NAME, for the reason the cooldowns two describes up carry
+    // the same rule: a bare `toContain` let the two codes cover for each other,
+    // so moving the mismatch arm 409 -> 503 stayed green on the 503 already in
+    // the prose while README went on calling a mismatch 409.
+    expect(s, `the prose does not say ${mismatch} beside \`pool-mismatch\` — that is what refusePool answers`)
+      .toMatch(new RegExp(mismatch + '[^.]{0,20}pool-mismatch'));
+    expect(s, `the prose does not say ${unreadable} beside the unreadable-tag case — that is what refusePool answers`)
+      .toMatch(new RegExp(unreadable + '[^.]{0,40}(tag cannot be read|unreadable)'));
     for (const code of ['501', '502']) {
       expect(s, `the skew table never mentions ${code}`).toContain(code);
     }
@@ -651,6 +835,10 @@ describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () =
     // bullet's own TITLE says "`ccd` is the authority", and inverting the body
     // (server decides and writes) used to leave this green.
     for (const sentence of sentencesOf(b)) bindsAuthority('CLAUDE.md, the account-pools bullet', sentence);
+    // The bullet states the --force distinction too, and `toContain('--cross-pool')`
+    // above only measures that the flag's NAME appears — inverting the sentence to
+    // "`--cross-pool` is just `--force` with a pool override" left it green.
+    forceIsNotAPoolOverride('CLAUDE.md, the account-pools bullet', b);
     for (const sentence of sentencesOf(b)) doesNotFold('CLAUDE.md, the account-pools bullet', sentence);
   });
 
@@ -669,6 +857,18 @@ describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () =
         'the bullet implies a ratchet holds real pool names out of the tree. topology-clean has no '
         + 'pool class, so nothing scans for them — say so, or add the class and change this sentence.')
         .toMatch(/NOTHING scans for|no pool class|by hand/i);
+    } else {
+      // THE OTHER ARM, and it is the point. Without it this guard goes VACUOUS
+      // the day somebody adds the class — the comment above promised it would
+      // red then, and a one-armed `if` cannot. That is the guard-names-a-cause-
+      // it-cannot-detect defect sitting inside the fix for that very defect.
+      expect(b,
+        'topology-clean now HAS a pool class, so the bullet must stop saying nothing scans for pool '
+        + 'names and cite the suite that does')
+        .toMatch(/topology-clean/);
+      expect(b,
+        'topology-clean now HAS a pool class — the bullet still says nothing scans for pool names')
+        .not.toMatch(/NOTHING scans for|no pool class/i);
     }
   });
 
@@ -679,9 +879,12 @@ describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () =
   });
 
   it("keeps CLAUDE.md's README size claim within 100 lines of the real file", () => {
-    // This wave had to hand-bump it 2485 → 2890, which is the evidence it goes
-    // stale. `oss-metadata` allows 10% (±289 lines here); this is the tighter
-    // ratchet, and it lives beside the prose that moved.
+    // This wave had to hand-bump this figure on EVERY round — the fix round and
+    // the main merge each moved README again — which is the evidence it goes
+    // stale, and why the ratchet lives beside the prose that moves it. No number
+    // is quoted here on purpose: a comment naming the very figure this assertion
+    // exists to keep honest went stale within one commit the first time.
+    // `oss-metadata` allows 10%; this is the tighter, closer ratchet.
     const claimed = /README\.md` \(~?([0-9,]+) lines\)/.exec(read('CLAUDE.md'));
     expect(claimed, 'CLAUDE.md no longer states the README size').not.toBeNull();
     const said = Number(claimed![1]!.replace(/,/g, ''));
