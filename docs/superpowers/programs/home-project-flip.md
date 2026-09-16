@@ -13,7 +13,7 @@ edit it gets.
 ## Waves
 | # | scope | PRs | state |
 |---|-------|-----|-------|
-| 1 | `HOME_PROJECT_LEGACY_ACCEPTED → false`; `server/test/home-project-required.test.ts` red-first then green; the four fixtures Task 6 names plus the census beyond them; the coordinator skill's prose that would otherwise say the omission is still accepted; this ledger's row and one pointer sentence in the crossrepo ledger | — | flip commit `8362148e` on the coordinator's branch `coord/home-project-flip-ledger`; flipped 2026-09-16 on operator ruling D-2867 — legacy_since_deploy = 8, opens_since_deploy = 15, last omission 2026-09-15T07:38:57Z |
+| 1 | `HOME_PROJECT_LEGACY_ACCEPTED → false`; `server/test/home-project-required.test.ts` red-first then green; the four fixtures Task 6 names plus the census beyond them; the coordinator skill's prose that would otherwise say the omission is still accepted; this ledger's row and one pointer sentence in the crossrepo ledger | #133 | flip commit `8362148e` on the coordinator's branch `coord/home-project-flip-ledger`; flipped 2026-09-16 on operator ruling D-2867 — legacy_since_deploy = 8, opens_since_deploy = 15, last omission 2026-09-15T07:38:57Z |
 
 ## Measurements
 
