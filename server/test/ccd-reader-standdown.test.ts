@@ -18,7 +18,8 @@
 // harness's PATH poison — an uncontained `list-panes` reads the operator's LIVE
 // server.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { readFileSync } from 'node:fs';
+import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { READER_MIN_COLS } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -229,5 +230,110 @@ describe('the two stand-downs outside the phrase population', () => {
     // and measures a session that does not exist.
     expect(out, 'the guard measured a pane').toContain('-t cc-demo');
     expect(out, '`cc-` stripped once, not twice').not.toContain('cc-cc-demo');
+  });
+});
+
+// --- THE POPULATION SCAN ---
+//
+// The behaviour cases above prove `_pane_measurable` works. This proves it is
+// CALLED — at every site, by construction rather than by anyone remembering.
+// It is this repo's whole-population mutation tripwire (`ccd-arith-containment
+// .test.ts`'s shape): the population is fixed and enumerated, each entry names
+// the function and how many phrase-carrying greps it holds, and dropping a
+// guard turns that function's row red whether or not a payload test happens to
+// walk that path.
+
+/** The four phrases every stand-down exists for (spec §1, §6.3). */
+const PHRASES = ['esc to interrupt', 'continuing automatically', 'continuing shortly', 'Enter to confirm'];
+
+/** Function name -> how many LIVE `grep` lines in it carry one of the phrases.
+ *  Measured against ccd/ccd at the wave-2 baseline. Adding a phrase grep to a
+ *  new function, or to one of these, reds the census below until this table and
+ *  that function's guard both move. */
+const POPULATION: Record<string, number> = {
+  _pane_auto_continue_armed: 1,
+  _session_hard_blocked: 1,
+  _auto_stale_check: 1,
+  _auto_swap_check: 1,
+  _auto_compact_check: 1,
+  _accept_first_run_prompts: 3,
+  _redrive_after_spawn: 2,
+};
+
+interface Site { fn: string; line: number; text: string }
+
+/** Every line that MATCHES a phrase inside a grep, with the function it sits
+ *  in. Whole-line comments are stripped first — `ccd/ccd` quotes
+ *  `grep -q "esc to interrupt"` inside prose at lines 14702 and 15765, and a
+ *  scan that counted those would demand guards for sentences. */
+function sites(): Site[] {
+  const lines = readFileSync(CCD, 'utf8').split('\n');
+  const out: Site[] = [];
+  let fn = '';
+  lines.forEach((raw, i) => {
+    const def = /^([A-Za-z_][A-Za-z0-9_]*)\(\)\s*\{/.exec(raw);
+    if (def) fn = def[1]!;
+    if (/^\s*#/.test(raw)) return;
+    if (!raw.includes('grep')) return;
+    if (!PHRASES.some((p) => raw.includes(p))) return;
+    out.push({ fn, line: i + 1, text: raw.trim() });
+  });
+  return out;
+}
+
+/** The lines between a function's `name() {` and `line`, exclusive. */
+function bodyBefore(fn: string, line: number): string[] {
+  const lines = readFileSync(CCD, 'utf8').split('\n');
+  const start = lines.findIndex((l) => new RegExp(`^${fn}\\(\\)\\s*\\{`).test(l));
+  expect(start, `ccd/ccd no longer defines ${fn}() at column 0 — re-anchor this scan`)
+    .toBeGreaterThanOrEqual(0);
+  return lines.slice(start + 1, line - 1);
+}
+
+describe('every phrase-matching reader stands down first (mutation tripwire)', () => {
+  it('the census is exactly the enumerated population — anti-vacuity', () => {
+    // Without this, deleting a guard AND its grep together would pass, and so
+    // would a scan whose regex silently stopped matching anything.
+    const found = sites();
+    const counted: Record<string, number> = {};
+    for (const s of found) counted[s.fn] = (counted[s.fn] ?? 0) + 1;
+    expect(counted, 'a phrase grep moved, appeared or vanished — update POPULATION and its guard together')
+      .toEqual(POPULATION);
+    expect(found.length).toBe(Object.values(POPULATION).reduce((a, b) => a + b, 0));
+  });
+
+  it.each(Object.keys(POPULATION))('%s calls _pane_measurable before it matches a phrase', (fn) => {
+    for (const s of sites().filter((x) => x.fn === fn)) {
+      expect(
+        bodyBefore(fn, s.line).some((l) => !/^\s*#/.test(l) && l.includes('_pane_measurable')),
+        `${fn} (ccd/ccd:${s.line}) matches a calibration phrase with no _pane_measurable guard ahead `
+        + `of it in the same function:\n    ${s.text}`,
+      ).toBe(true);
+    }
+  });
+
+  it('_pane_measurable is defined exactly once, and reads the width it claims to', () => {
+    const src = readFileSync(CCD, 'utf8');
+    expect(src.split('\n').filter((l) => /^_pane_measurable\(\)\s*\{/.test(l)))
+      .toHaveLength(1);
+    const body = src.slice(src.indexOf('_pane_measurable() {'));
+    const end = body.indexOf('\n}\n');
+    const fn = body.slice(0, end);
+    expect(fn, 'the probe must select the ACTIVE pane (F7)').toContain('#{pane_active}');
+    expect(fn, 'the probe must read the width, not the height').toContain('#{pane_width}');
+    expect(fn, 'the comparison must be against the derived constant').toContain('READER_MIN_COLS');
+  });
+});
+
+describe('the phrase literals themselves are NOT changed (F11)', () => {
+  it('ccd still greps the four phrases verbatim', () => {
+    // Spec §6.3 is explicit that the regexes stay as they are and the guard is
+    // what changes. A "fix" that widened `esc\s+to\s+interrupt` would still not
+    // match across the newline grep never presents, and it would silently break
+    // `auto-continue-armed.test.ts`'s cross-copy pin.
+    const src = readFileSync(CCD, 'utf8');
+    expect(src).toContain('grep -qiE "continuing automatically|continuing shortly"');
+    expect(src).toContain('grep -q "esc to interrupt"');
+    expect(src).toContain('grep -q "Enter to confirm"');
   });
 });
