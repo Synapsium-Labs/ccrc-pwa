@@ -110,10 +110,26 @@ never re-derived from a live read of the coordinator's registry record. This is 
 placement when the coordinator is archived, removed or unmeasurable, and stays bracketed under a
 coordinator that is visibly dead, which is the truth. One additive column.
 
-**Transitive, with a bounded resolver.** If C1 coordinates C2 and C2 coordinates W, resolving one hop
-puts C2 on C1's card while W lands on C2's *project's* card, where its parent is not. Resolution
-therefore walks to the root coordinator. Nothing server-side prevents a cycle, so the walk is
-hop-capped and stops on revisit, falling back to own project.
+**Transitive, with a bounded resolver — and the hop is SESSION-keyed, not project-keyed.** If C1
+coordinates C2 and C2 coordinates W, resolving one hop puts C2 on C1's card while W lands on C2's
+card, where its parent is not. Resolution therefore walks to the root coordinator. Nothing
+server-side prevents a cycle, so the walk is hop-capped and stops on revisit, falling back to own
+project.
+
+**Corrected 2026-09-16 (D-2921) — this paragraph originally said the walk hops from project to
+project, and that is not a well-formed question.** "Which project coordinates project P" has no
+answer: a project does not have a coordinator, a RUN does, and `runs.project` is the WORKER's project
+(it is what `POST /api/runs`' `project-mismatch` rung compares `sessionProject(sessionId)` against).
+Keying the hop on it makes `byProject[P] === P` for every project that hosts an ordinary
+same-repo programme — which for a busy project is always — and since the resolver seeds its visited
+set with `ownProject`, the very first hop then trips the cycle guard and returns `ownProject`. The
+cross-repo worker renders flat on its own card: the exact defect §1 measured against live run 58.
+
+The hop is therefore from a SESSION to the session that coordinates it: given a session id, answer
+that session's own newest stamp. This also collapses the resolver's two inputs into one lookup — the
+first hop and every later hop are the same question asked of a different session — so the run must
+carry the coordinator's session id alongside its project, and the visited set ranges over session ids,
+where the self-check and the cycle check are exact rather than approximate.
 
 **Every degenerate case lands the row on its own card, never nowhere:** no run, no coordinator, the
 coordinator is the session itself, or the resolver bailed.
