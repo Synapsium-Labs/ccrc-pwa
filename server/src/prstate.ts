@@ -1,4 +1,4 @@
-import type { PrChecks, PrReason, PrState, PrView, TaskItem } from '../../shared/api.js';
+import type { PrChecks, PrReason, PrState, PrView, ProjectRepoWire, TaskItem } from '../../shared/api.js';
 import { isPrReason, UNCHECKED_PR } from '../../shared/api.js';
 
 /** One row of `gh pr list --json …`, as `ccd pr-state` re-emits it — plus the
@@ -207,6 +207,20 @@ export function phaseFor(line: CcdPrLine): PrState {
   if (row.state === 'MERGED') return { ...common, phase: 'unknown', reason: 'merge-unproven' };
   if (row.state === 'CLOSED') return { ...common, phase: 'closed' };
   return { ...common, phase: row.isDraft === true ? 'draft' : 'open' };
+}
+
+/** The repo cell for one project, from what the sweep measured about it.
+ *
+ * `absent` has EXACTLY ONE proof — `no-remote`, which is what `_gh_repo_slug`'s
+ * failure produces. Every other `PrReason` means the question was not answered,
+ * not that the answer is "none". The other reasons are NOT listed here: they
+ * are whatever `PR_REASON_MAP` holds that is not `no-remote`, so a reason added
+ * later cannot silently start claiming a project has no repository. */
+export function repoCellFor(
+  m: { slug?: string; reason?: PrReason | null },
+): ProjectRepoWire {
+  if (m.slug !== undefined && m.slug !== '') return { state: 'named', slug: m.slug };
+  return m.reason === 'no-remote' ? { state: 'absent' } : { state: 'unmeasured' };
 }
 
 // `UNCHECKED` was the third copy of this literal (integration finding 6),

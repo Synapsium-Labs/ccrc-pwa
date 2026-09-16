@@ -19,7 +19,10 @@ import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { mkTmp } from './tmpHelpers.js';
 import type { FleetIO } from '../src/io.js';
-import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import type { ProjectPlacement, ProjectPoolWire, ProjectRepoWire } from '../../shared/api.js';
+import { PR_REASONS } from '../../shared/api.js';
+import { repoCellFor } from '../src/prstate.js';
+import type { FleetWatcher } from '../src/watch.js';
 
 let home: string;
 let projectsRoot: string;
@@ -36,14 +39,25 @@ const POOLED = {
 
 const dead: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
 
-const open = async (io: FleetIO = localIO): Promise<FastifyInstance> => {
+const open = async (io: FleetIO = localIO, watcher?: FleetWatcher): Promise<FastifyInstance> => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });
   const a = await buildServer({
     cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io, queue: new KeyedQueue(),
-  });
+  }, undefined, watcher);
   await a.ready();
   return a;
 };
+
+/** A minimal watcher double — same idiom as `lifecycle.test.ts`'s `makeApp`:
+ *  only the two methods this route actually calls, cast rather than
+ *  constructed, so the test exercises the ROUTE's use of
+ *  `currentProjectRepos()` without paying for a real sweep. */
+const withRepos = (repos: Record<string, ProjectRepoWire>): FleetWatcher =>
+  ({
+    currentReadiness: () => undefined,
+    currentProjectRepos: () => new Map(Object.entries(repos)),
+    stop: () => {},
+  } as unknown as FleetWatcher);
 
 const rows = async (a: FastifyInstance): Promise<Record<string, { pool: ProjectPoolWire; placement: ProjectPlacement }>> => {
   const res = await a.inject({ method: 'GET', url: '/api/projects' });
@@ -209,5 +223,41 @@ describe('GET /api/projects — pool and placement per row', () => {
     app = await open();
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(res.json().projected).toEqual({ wrapper: 'claude-a', score: 10 });
+  });
+});
+
+describe('GET /api/projects — the repo cell', () => {
+  it('a project whose repo was measured carries a named cell', async () => {
+    app = await open(localIO, withRepos({ demo: { state: 'named', slug: 'acme/demo' } }));
+    const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;
+    const row = rows.find((r: { name: string }) => r.name === 'demo');
+    expect(row.repo).toEqual({ state: 'named', slug: 'acme/demo' });
+  });
+
+  it('a project with no usable origin reads absent, never unmeasured', async () => {
+    // driven by CcdPrFailure.reason === 'no-remote'
+    expect(repoCellFor({ reason: 'no-remote' })).toEqual({ state: 'absent' });
+  });
+
+  it('every OTHER PrReason reads unmeasured — derived from PR_REASON_MAP, never hand-listed', () => {
+    for (const reason of PR_REASONS.filter((r) => r !== 'no-remote')) {
+      expect(repoCellFor({ reason })).toEqual({ state: 'unmeasured' });
+    }
+  });
+
+  it('a project absent from the measured map reads unmeasured, never absent', async () => {
+    // No workspaces is the ordinary case the sweep enumerates: `quiet-basin`
+    // here has none, and `demo`'s own cell must not leak into it either.
+    app = await open(localIO, withRepos({ demo: { state: 'named', slug: 'acme/demo' } }));
+    const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;
+    const row = rows.find((r: { name: string }) => r.name === 'quiet-basin');
+    expect(row.repo).toEqual({ state: 'unmeasured' });
+  });
+
+  it('an empty-string slug is not a name — reads unmeasured, never named', () => {
+    // `_gh_repo_slug` emitting '' is not the same fact as it emitting nothing:
+    // `repoCellFor`'s guard is `!== undefined && !== ''`, and only the second
+    // half of that conjunct is exercised by the other cases here.
+    expect(repoCellFor({ slug: '' })).toEqual({ state: 'unmeasured' });
   });
 });

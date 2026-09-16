@@ -70,7 +70,7 @@ import {
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
+  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
   programKickoffVerdict,
 } from '../../shared/api.js';
 
@@ -2075,9 +2075,20 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const pool = poolFor(poolsRead, p.name);
       return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
     };
+    // A project the sweep has not reached reads `unmeasured`, NOT `absent`.
+    // That includes every project with no workspaces — the sweep enumerates
+    // workspaces — and saying `absent` there would claim a measurement that
+    // never happened about four projects on this fleet that genuinely have no
+    // origin, making the true answer and the unasked question the same value.
+    const repos = watcher?.currentProjectRepos() ?? new Map<string, ProjectRepoWire>();
+    const repoCell = (p: ProjectRow): Pick<ProjectRow, 'repo'> =>
+      ({ repo: repos.get(p.name) ?? { state: 'unmeasured' } });
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
-      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p) })) };
+      return {
+        ...listed,
+        projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p) })),
+      };
     }
     const coord = deps.coord;
     return {
@@ -2095,7 +2106,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         } catch {
           floor = 'unmeasurable';
         }
-        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p) };
+        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p) };
       }),
     };
   });

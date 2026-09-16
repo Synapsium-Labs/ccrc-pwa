@@ -838,3 +838,64 @@ describe('the merged lane\'s surviving rungs choose the SENTENCE', () => {
     w.stop();
   });
 });
+
+// Task 4 (board placement wave 1): the sweep RETAINS `(project → repo)` instead
+// of discarding it at `this.prStates.set(line.id, phaseFor(line))`. Every test
+// above already exercises that call without ever looking at the repo it drops,
+// so a regression there would be invisible to this file without these.
+describe('the sweep retains the measured repo, not just the PR phase', () => {
+  it('a full line carries its repo into currentProjectRepos() as a named cell', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+    w.stop();
+  });
+
+  it('a whole-repo failure of no-remote reads absent, never unmeasured', async () => {
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const failure = JSON.stringify({ phase: 'unknown', reason: 'no-remote' });
+    const w = new FleetWatcher(testDeps(home, runnerFor(failure, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'absent' }));
+    w.stop();
+  });
+
+  it('a whole-repo failure of any OTHER reason reads unmeasured, never absent', async () => {
+    const home = seed(['demo-quiet-basin']);
+    const calls: string[][] = [];
+    const failure = JSON.stringify({ phase: 'unknown', reason: 'timeout' });
+    const w = new FleetWatcher(testDeps(home, runnerFor(failure, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'unmeasured' }));
+    w.stop();
+  });
+
+  // Mutation-sweep shape, same reasoning as "the swept state reaches the
+  // wire, not just currentPrStates()" above: a route-level test that builds
+  // its OWN watcher double (as `projects-route-placement.test.ts` does for
+  // the named-cell case) never calls `sweepPr` at all, so it cannot catch a
+  // regression at the actual drop site. This one runs a real tick and reads
+  // the real route off it.
+  it('GET /api/projects carries the swept repo, not a stale or absent one', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const deps = testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls));
+    const watcher = new FleetWatcher(deps, new Bus(), 10_000);
+    const app = await buildServer(deps, new Bus(), watcher);
+    try {
+      await watcher.tick();
+      await vi.waitFor(() => expect(watcher.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+      const res = await app.inject({ method: 'GET', url: '/api/projects' });
+      const body = res.json() as { projects: { name: string; repo?: { state: string } }[] };
+      expect(body.projects.find((p) => p.name === 'demo')?.repo).toEqual({ state: 'named', slug: 'o/r' });
+    } finally {
+      watcher.stop();
+      await app.close();
+    }
+  });
+});

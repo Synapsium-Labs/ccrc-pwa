@@ -1792,7 +1792,26 @@ export interface ProjectRow {
   readiness?: ProjectReadiness | null;
   pool?: ProjectPoolWire;
   placement?: ProjectPlacement;
+  repo?: ProjectRepoWire;
 }
+
+/**
+ * What a project's REPOSITORY was measured to be — `_gh_repo_slug` of the
+ * project's main checkout, carried on the project row.
+ *
+ * THREE states, and no reader may fold one into another. `absent` is a
+ * MEASUREMENT — the project has no usable origin, which four projects on this
+ * fleet genuinely do not — while `unmeasured` says no measurement happened.
+ * Folding them would paint "this project has no repository" over a timeout.
+ *
+ * The label renders only on `named`. `absent` is deliberately NOT split into
+ * "no origin" and "unrecognized remote": a renderer treats them identically and
+ * `PrKeycap.tsx`'s no-remote sentence already owns that distinction.
+ */
+export type ProjectRepoWire =
+  | { state: 'named'; slug: string }
+  | { state: 'absent' }
+  | { state: 'unmeasured' };
 
 /**
  * What a project's pool tag (`~/.cc-sessions/pools/<project>` on the fleet box)

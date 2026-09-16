@@ -8,7 +8,7 @@ import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
 import { CCD_ARGV, verbSupported, sweepDec } from './ccdargv.js';
-import { isFullLine, parsePrLines, phaseFor, type CcdPrFailure } from './prstate.js';
+import { isFullLine, parsePrLines, phaseFor, repoCellFor, type CcdPrFailure } from './prstate.js';
 import { liveSessionStatus, readLiveState } from './livestate.js';
 import { readHookState, type HookState } from './hookstate.js';
 import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
@@ -23,7 +23,7 @@ import { ASK_ANSWERING_MAX_MS, ASK_GRACE_MS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   CoordStatus, Dialog, FleetSession, HookAsk, HookAskQuestion, LifecycleHealth, MailGate, NotifyEvent,
-  ProjectPoolsWire, PrState, RunSummary, SessionStatus, SessionUsage, TaskProgress,
+  ProjectPoolsWire, ProjectRepoWire, PrState, RunSummary, SessionStatus, SessionUsage, TaskProgress,
 } from '../../shared/api.js';
 // ONE LINE, deliberately: `single-definition.test.ts` scans for `UNCHECKED_PR`
 // arriving from shared/api on a single import line, and a prettier multi-line
@@ -445,6 +445,10 @@ export class FleetWatcher {
   private lastTaskSweep = 0;
   /** Last-swept PR state per SESSION id. */
   private prStates = new Map<string, PrState>();
+  /** Last-measured repo cell per PROJECT — retained, not derived, from what
+   *  `sweepPr` already reads off `CcdPrLine.repo` / `CcdPrFailure.reason` for
+   *  `GET /api/projects`. See `repoCellFor` (prstate.ts) for the fold. */
+  private readonly projectRepos = new Map<string, ProjectRepoWire>();
   /** Last-read hook state per session id (the fifth lane) — rebuilt every
    *  tick, same cadence as dialog detection: `readHookState` is a single
    *  local JSON read per session, cheap enough not to need its own slower
@@ -730,6 +734,13 @@ export class FleetWatcher {
    *  minutes late. Same reasoning as currentPending(). */
   currentPrStates(): Map<string, PrState> {
     return new Map(this.prStates);
+  }
+
+  /** Last-measured repo cell per project, for `GET /api/projects`. Same
+   *  reasoning as `currentPrStates()`'s own copy: a caller must not be able to
+   *  mutate this watcher's internal map through what it hands back. */
+  currentProjectRepos(): Map<string, ProjectRepoWire> {
+    return new Map(this.projectRepos);
   }
 
   /** Last-read hook state — passed into a one-shot fleet assembly (REST +
@@ -3207,7 +3218,16 @@ export class FleetWatcher {
         // `branch` is one broken session, and §6's "Partial sweep" row promises
         // its seven siblings keep their own answers.
         const failure = lines.find((l) => !('id' in l)) as CcdPrFailure | undefined;
-        if (failure !== undefined) { this.backoffPr(project, now, failure.reason, records); continue; }
+        if (failure !== undefined) {
+          // D-2883: the plan's own snippet here read `failure.project`, which
+          // does not exist on `CcdPrFailure` (`{ phase: 'unknown'; reason }` —
+          // no `project` field; it speaks for the whole repo precisely because
+          // it carries none). The project this failure is ABOUT is the loop's
+          // own `project`, already in scope.
+          this.projectRepos.set(project, repoCellFor({ reason: failure.reason }));
+          this.backoffPr(project, now, failure.reason, records);
+          continue;
+        }
         this.prBackoff.delete(project);
         for (const line of lines) {
           if (!isFullLine(line)) {
@@ -3225,6 +3245,12 @@ export class FleetWatcher {
             continue;
           }
           this.prStates.set(line.id, phaseFor(line));
+          // RETAINED, not derived: `line.repo` is `_gh_repo_slug` of this
+          // project's main checkout, already measured by this same sweep and
+          // until now dropped here — `phaseFor` returns a `PrState`, which has
+          // no repo field. This is the seam; `prstate.ts`'s `prView` KEEPS the
+          // repo for the PR sheet and is NOT where retention belongs.
+          this.projectRepos.set(line.project, repoCellFor({ slug: line.repo }));
         }
       }
       this.sweepMerged(records);

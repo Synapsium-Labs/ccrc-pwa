@@ -831,3 +831,20 @@ the four are defects in this plan's own Task 3 text, not implementer improvisati
   because the closed half is clamped to the newest 500, *which* row counts as first changes as old
   rows age out — so the answer drifts forward in jumps rather than being stable. Both maps are now
   newest-wins, by the same max-id fold as D-2877.
+
+D-2883 issued 2026-09-16, Task 4's own defect — the same class as D-2875.
+
+- **D-2883 — Task 4's Step 4 snippet does not compile: `failure.project` does not exist.**
+  The plan's whole-repo-failure retention line reads `this.projectRepos.set(failure.project,
+  repoCellFor({ reason: failure.reason }))`, but `CcdPrFailure` is `{ phase: 'unknown'; reason }`
+  (`server/src/prstate.ts:48`) — it carries no `project` field, precisely because it speaks for the
+  whole repo rather than one session and so names none. The project this failure is ABOUT is the
+  enclosing loop's own `project` (`server/src/watch.ts`'s `for (const project of projects)`), already
+  in scope at the call site. Referred rather than guessed, and the fix is a one-identifier swap:
+  `this.projectRepos.set(project, repoCellFor({ reason: failure.reason }))`. Caught by TDD before it
+  could ship — `tsc --noEmit` on the brief's literal text fails with TS2339 ("Property 'project' does
+  not exist on type 'CcdPrFailure'"). Mutation-tested alongside the rest of Task 4's retention wiring:
+  deleting this line (restoring the pre-Task-4 seam) reds `pr-sweep.test.ts`'s two whole-repo-failure
+  cases (`no-remote` → absent, every other reason → unmeasured); the full-line retention two lines
+  below it is pinned the same way and, additionally, by `GET /api/projects carries the swept repo`, an
+  end-to-end test that runs a real sweep rather than a route-level watcher double.
