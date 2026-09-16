@@ -734,18 +734,23 @@ no control characters>", ...one of...}`:
   ladder runs off the degraded class, never the record's own).
 - `"demote":"class"|"effort"` — walk `demote()`, one rung down, never below the mechanical floor.
 - `"field":"class"|"effort"|"subagent"|"workflow"|"compact"`, `"value":"<string>"` — the
-  coordinator's own judgement, written as given; ccd validates the value, not this door.
+  coordinator's own judgement; this door checks only SHAPE (non-empty, no control characters,
+  <= 32 bytes) — ccd's `_route_valid` is the sole authority on whether the value is a legal
+  member of that field's own vocabulary.
 
 Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind"}}`, `mode`
 one of `escalate`/`demote`/`reverse-demotion`/`manual`. Refusals: `no-session` (the target has no
-session id on this run), `no-record` (the registry has no `.class`/`.effort` to walk from),
-`registry-unreadable` (transient — one of the three registry files is listed but unreadable),
-`run-closed` (the run is not `dispatched`/`working`/`awaiting-review`), `ceiling`/`floor`/
-`no-effort-rungs` (the ladder, or the degraded-record guard, has nowhere to move this request to
-— an answer, not an error), `unsupported` (501, the fleet host predates `route-v1`), `fleetFailed`
-(502, ccd refused the write — no run event is recorded on a refusal). Any failed check reverses
-the run's own last unreversed demotion before the ladder applies to the new failure — that
-bookkeeping is derived from the run's event trail, not sent by the caller.
+session id on this run), `no-record` (the registry has no `.class`/`.effort` file to walk from),
+`unrouteable-record` (`.class`/`.effort`/`.degraded` IS present and readable but its content is
+not a legal rung — a stray ccd value like `class=default`, or a torn/never-written field — refused
+here rather than silently resolved to the ladder's bottom rung), `registry-unreadable` (transient
+— one of the three registry files is listed but unreadable), `run-closed` (the run is not
+`dispatched`/`working`/`awaiting-review`), `ceiling`/`floor`/`no-effort-rungs` (the ladder, or the
+degraded-record guard, has nowhere to move this request to — an answer, not an error),
+`unsupported` (501, the fleet host predates `route-v1`), `fleetFailed` (502, ccd refused the write
+— no run event is recorded on a refusal). Any failed check reverses the run's own last unreversed
+demotion before the ladder applies to the new failure — that bookkeeping is derived from the run's
+event trail, not sent by the caller.
 
 ## Build 9 — peers, claims, deviations (wave 7 surface)
 

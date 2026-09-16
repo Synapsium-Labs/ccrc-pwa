@@ -10,8 +10,8 @@ import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
-import { escalate, demote, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
-import type { ModelClass } from '../../../shared/models.js';
+import { escalate, demote, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
+import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
@@ -34,7 +34,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_WRITABLE_FIELDS, ROUTE_CONTROL_CHAR_RE,
+  FAILURE_KINDS, ROUTE_WRITABLE_FIELDS, ROUTE_CONTROL_CHAR_RE, parseRouteFields,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -1719,8 +1719,10 @@ export function registerCoordRoutes(
    * `lastDemotion` from this run's OWN event trail (S5-R2: that bookkeeping
    * is this door's, not the ladder's), and answer whatever `escalate()`/
    * `demote()` answers. `field`+`value` is the coordinator's own judgement —
-   * no registry read, no ladder call, `value` reaches ccd unvalidated (ccd's
-   * `_route_valid` is the authority).
+   * no registry read, no ladder call, `value` is SHAPE-checked by
+   * `parseRouteFields` (fix round 1, finding #3 — the same guard the picker's
+   * sibling route reuses) and then reaches ccd unvalidated on VOCABULARY
+   * (ccd's `_route_valid` is that authority).
    *
    * The run-event/response `mode` is DERIVED from `RungTarget.mode` (S5-R1) —
    * `RouteMode` is that type plus `'manual'` — never a second, hand-typed
@@ -1771,14 +1773,22 @@ export function registerCoordRoutes(
       }
       demoteField = body.demote;
     } else {
-      if (typeof body.field !== 'string' || !(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(body.field)) {
-        return badRequest('field must be one of ' + ROUTE_WRITABLE_FIELDS.join('/'));
+      // The same `{field, value}` SHAPE guard the sibling `POST
+      // /api/sessions/:id/route` (server.ts:1722) already reuses `parseRouteFields`
+      // for — known field, non-empty, no control characters, <= 32 bytes
+      // (`ROUTE_VALUE_MAX_BYTES`). ccd's own `_route_valid` carries no
+      // control-character or length arm at all (`ROUTE_CONTROL_CHAR_RE`'s own
+      // docstring), so this door is the only barrier on shape; a manual
+      // `value` that skipped it would reach `CCD_ARGV.route` unbounded and
+      // could poison the `route:<mode>:<field>:<from>-><to>:<kind>` event
+      // string this door later parses back off its own history.
+      const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
+      if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
+        return badRequest(!parsed.ok ? `field/value invalid: ${parsed.why}` : 'field and value are required');
       }
-      if (typeof body.value !== 'string' || body.value.length === 0) {
-        return badRequest('value must be a non-empty string');
-      }
-      manualField = body.field;
-      manualValue = body.value;
+      const [field, value] = Object.entries(parsed.route)[0] as [RouteField, string];
+      manualField = field;
+      manualValue = value;
     }
 
     return coordMutex.run(async () => {
@@ -1828,8 +1838,41 @@ export function registerCoordRoutes(
         if (!degradedRead.ok && degradedRead.reason === 'unreadable') {
           return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'degraded' });
         }
+
+        // Fix round 1, finding #1: a PRESENT, READABLE registry field is not
+        // automatically a LEGAL rung. `classIndex`/`effortIndex`
+        // (`shared/routing-ladder.ts`) resolve rungs by `indexOf`, so an
+        // out-of-vocabulary value yields -1 and `CLASSES[-1+1]`/
+        // `EFFORT_LADDER[-1+1]` silently reads the FLOOR rather than
+        // refusing — reachable with a LEGAL ccd value, not just corruption:
+        // `ccd/ccd`'s `ROUTE_CLASSES` includes `default` ("no override"),
+        // which passes `_route_valid` and is stored verbatim, and a torn or
+        // never-written field trims to `''` (`fieldMeasured`'s own
+        // whitespace-collapse). Both are refused here as `unrouteable-record`
+        // — a condition distinct from `no-record` (the record EXISTS, it is
+        // only unroutable) — before either value is cast into the ladder's
+        // domain types.
+        if (!(CLASSES as readonly string[]).includes(classRead.content)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'class', detail: `not a routable class: ${JSON.stringify(classRead.content)}` });
+        }
+        const EFFORT_VALUES: readonly string[] = [...EFFORT_LADDER, 'auto', 'ultracode'];
+        if (!EFFORT_VALUES.includes(effortRead.content)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'effort', detail: `not a routable effort: ${JSON.stringify(effortRead.content)}` });
+        }
+        // An ABSENT `.degraded` means no degrade (brief's own contract,
+        // handled above by `!degradedRead.ok`). A PRESENT but blank one — the
+        // same torn/never-written shape as `class`/`effort` above — is
+        // treated the same way, not as a garbage class: empty content is the
+        // established "cleared" reading `fieldMeasured`'s own docstring gives
+        // `.branch`/`.hold`/`.substrate`, so it degrades to "no override"
+        // rather than to the empty string the unvalidated cast used to leave
+        // it as. Anything else present must be a real class or the record is
+        // unrouteable.
+        if (degradedRead.ok && degradedRead.content !== '' && !(CLASSES as readonly string[]).includes(degradedRead.content)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'degraded', detail: `not a routable class: ${JSON.stringify(degradedRead.content)}` });
+        }
         const rawClass = classRead.content as ModelClass;
-        const degraded = degradedRead.ok ? (degradedRead.content as ModelClass) : null;
+        const degraded = degradedRead.ok && degradedRead.content !== '' ? (degradedRead.content as ModelClass) : null;
         const servedClass = degraded ?? rawClass;
         const current: RungCurrent = {
           class: servedClass,

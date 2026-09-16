@@ -5377,6 +5377,22 @@ export interface RunSummary {
  *  would have to widen this read to the session lineage — none does today
  *  (S2-R1). */
 
+export interface RunSignals {
+  readonly runId: number;
+  readonly dispatchedAt: number | null;
+  readonly closedAt: number | null;
+  readonly finalState: 'done' | 'failed' | null;
+  readonly wallMs: number | null;
+  readonly holdMs: number;
+  readonly swaps: number;
+  readonly excludedUnmeasured: boolean;
+  readonly activeMs: number | null;
+  readonly closeRefusals: number;
+  readonly firstSubmission: boolean | null;
+  readonly waveDoneMails: number;
+  readonly signals: WaveDoneSignals | null;
+}
+
 /**
  * `POST /api/runs/:id/route`'s wire body (routing spec 2026-09-14, slice 5,
  * Task 2) — the coordinator's door onto the escalation/demotion ladders
@@ -5425,6 +5441,17 @@ export type RouteMode = 'escalate' | 'demote' | 'reverse-demotion' | 'manual';
  *                         session id on this run
  *   no-record           — the target session's registry has no `.class` or
  *                         `.effort` file to walk the ladder from
+ *   unrouteable-record  — `.class`/`.effort`/`.degraded` IS present and
+ *                         readable, but its content is not a legal vocabulary
+ *                         member (`CLASSES`/`EFFORT_LADDER` ∪ `auto`/
+ *                         `ultracode`) — a DIFFERENT condition than `no-record`
+ *                         (which means no file at all): the record exists, it
+ *                         is only unroutable. Fix round 1, finding #1: ccd's
+ *                         `ROUTE_CLASSES` legally accepts `default` (folded to
+ *                         "no override" only inside ccd itself) and a torn/
+ *                         empty write trims to `''` — neither is a rung this
+ *                         ladder's index lookup may silently resolve to -1
+ *                         (the floor) for
  *   registry-unreadable — one of `.class`/`.effort`/`.degraded` is listed but
  *                         unreadable — transient, not a fact about the record
  *   run-closed          — the run is not in `dispatched`/`working`/
@@ -5443,28 +5470,12 @@ export type RouteMode = 'escalate' | 'demote' | 'reverse-demotion' | 'manual';
  * entry's coincidental tolerance.
  */
 export const RUN_ROUTE_REFUSE_CODES = [
-  'no-session', 'no-record', 'registry-unreadable', 'run-closed',
+  'no-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
   'ceiling', 'floor', 'no-effort-rungs',
 ] as const;
 export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];
 export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
   return typeof v === 'string' && (RUN_ROUTE_REFUSE_CODES as readonly string[]).includes(v);
-}
-
-export interface RunSignals {
-  readonly runId: number;
-  readonly dispatchedAt: number | null;
-  readonly closedAt: number | null;
-  readonly finalState: 'done' | 'failed' | null;
-  readonly wallMs: number | null;
-  readonly holdMs: number;
-  readonly swaps: number;
-  readonly excludedUnmeasured: boolean;
-  readonly activeMs: number | null;
-  readonly closeRefusals: number;
-  readonly firstSubmission: boolean | null;
-  readonly waveDoneMails: number;
-  readonly signals: WaveDoneSignals | null;
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the

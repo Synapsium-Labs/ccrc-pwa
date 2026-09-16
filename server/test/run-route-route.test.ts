@@ -314,4 +314,91 @@ describe('POST /api/runs/:id/route', () => {
     expect(res.json()).toEqual({ ok: false, error: 'registry-unreadable', file: 'effort' });
     expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
   });
+
+  // Fix round 1, finding #1: a registry field can be PRESENT and READABLE
+  // and still not be a legal rung — `classIndex`/`effortIndex` resolve by
+  // `indexOf`, so an unvalidated cast into `ModelClass`/`RungCurrent['effort']`
+  // lets an out-of-vocabulary value silently resolve to -1+1 (the FLOOR)
+  // instead of being refused. `.class = 'default'` is not corruption: ccd's
+  // own `ROUTE_CLASSES` legally accepts `default` as "no override" and
+  // stores it verbatim (`ccd/ccd:1207`, `:13834`), so it is a real, reachable
+  // registry state this door must refuse rather than silently demote.
+
+  it('409s unrouteable-record on a .class of "default" (a legal ccd value outside CLASSES) rather than escalating to the floor', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w8'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w8');
+    seed(home, sid, { class: 'default', effort: 'high' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'ceiling' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false, error: 'unrouteable-record', field: 'class', detail: 'not a routable class: "default"',
+    });
+    // Critically: no --set class=haiku (the bug this finding named — an
+    // out-of-vocabulary class resolving to the bottom rung).
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
+  it('409s unrouteable-record on an empty (torn/never-written) .effort file rather than treating it as a legal rung', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w9'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w9');
+    seed(home, sid, { class: 'opus', effort: '' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false, error: 'unrouteable-record', field: 'effort', detail: 'not a routable effort: ""',
+    });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
+  it('an empty (torn/never-written) .degraded file is treated as no degrade, not as a garbage served class', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w10'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w10');
+    seed(home, sid, { class: 'opus', effort: 'high', degraded: '' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow' },
+    });
+  });
+
+  // Fix round 1, finding #3: the manual `field`+`value` write now goes
+  // through `parseRouteFields`, the same shape guard the sibling
+  // `POST /api/sessions/:id/route` (server.ts:1722) already reuses — a
+  // control character or an over-32-byte value is `bad-request`, not
+  // forwarded unbounded to `CCD_ARGV.route`.
+
+  it('400s a manual value carrying a control character rather than forwarding it to ccd', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w11'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id } = await dispatchedRun(w.app, 'demo-w11');
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: 'bad\nvalue' });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+  });
+
+  it('400s a manual value over the 32-byte shape cap rather than forwarding it to ccd', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w12'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id } = await dispatchedRun(w.app, 'demo-w12');
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'compact', value: 'x'.repeat(40) });
+    expect(res.statusCode).toBe(400);
+    expect(res.json()).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+  });
 });
