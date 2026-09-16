@@ -219,11 +219,45 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    // CLAIMED_BY is never seeded: the registry has no `.uuid` for it.
+    // CLAIMED_BY is never seeded: `<claimedBy>.project` does not exist, so
+    // `fieldMeasured` answers `{ ok: false, reason: 'absent' }`.
     const res = await postOpen(app, { ...OPEN_BODY, claimedBy: CLAIMED_BY });
     expect(res.statusCode).toBe(200);
     const id = (res.json() as { id: number }).id;
     expect(okRun(w.coord.run(id))?.coordProject).toBeNull();
+  });
+
+  it('leaves the stamp null — never the session id, never the empty string — when .project is ' +
+     'unreadable or present-but-empty (fix round 1, Important finding)', async () => {
+    // `SessionRecord.project`'s `project ?? id` default (`registry.ts`'s
+    // `buildRecord`) would otherwise reach this PERMANENT, never-backfilled
+    // stamp as if it were a measurement (D-2342): an unreadable `.project`
+    // collapses to the session id there, and nullish coalescing does not
+    // catch an empty string either. The route must read `.project` MEASURED
+    // instead, through `fieldMeasured`, and treat both failure shapes the
+    // same as absence.
+    const home = mkTmp('ccrc-runs-');
+    const EMPTY_PROJECT_COORD = 'ccrc-pwa-coordinator-empty';
+    seed(home, CLAIMED_BY, { project: 'intake-platform' });   // present, but reads UNREADABLE below
+    seed(home, EMPTY_PROJECT_COORD, { project: '' });         // present, zero bytes
+    const io = unreadableField(CLAIMED_BY, 'project');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { io }); app = w.app;
+
+    const unreadableRes = await postOpen(app, { ...OPEN_BODY, program: 'unreadable-project', claimedBy: CLAIMED_BY });
+    expect(unreadableRes.statusCode).toBe(200);
+    const unreadableId = (unreadableRes.json() as { id: number }).id;
+    const unreadableRow = okRun(w.coord.run(unreadableId));
+    expect(unreadableRow?.coordProject).toBeNull();
+    expect(unreadableRow?.coordProject).not.toBe(CLAIMED_BY);
+
+    const emptyRes = await postOpen(
+      app, { ...OPEN_BODY, program: 'empty-project', claimedBy: EMPTY_PROJECT_COORD });
+    expect(emptyRes.statusCode).toBe(200);
+    const emptyId = (emptyRes.json() as { id: number }).id;
+    const emptyRow = okRun(w.coord.run(emptyId));
+    expect(emptyRow?.coordProject).toBeNull();
+    expect(emptyRow?.coordProject).not.toBe('');
   });
 
   it('maps the store seam\'s oversized open hold to 413 without narrowing its detail', async () => {
@@ -1185,14 +1219,16 @@ describe('POST /api/runs/:id/dispatch', () => {
      async () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing');
-    // Call 1 is `POST /api/runs`' own coordinator-project stamp read
-    // (Task 1); it succeeds (CLAIMED_BY is unseeded, so this reads as
-    // absent, not unlistable, and stamps nothing). Call 2 is the
-    // pause-marker's own read, which also succeeds. Call 3 — this route's
-    // own registry read for the resumed session — is the one that fails;
-    // nothing else in this branch touches `io.readdir` before it.
+    // Succeeds on the pause-marker's own read (call 1), fails on the very
+    // next one — this route's own registry read for the resumed session
+    // (call 2) — never a third: nothing else in this branch touches
+    // `io.readdir` before either of those two. `POST /api/runs`' own
+    // coordinator-project stamp read (Task 1) does NOT count against this:
+    // it reads `<claimedBy>.project` through `fieldMeasured`, a FILE read
+    // (`io.readFileMeasured`), never `io.readdir` — this fixture only
+    // overrides the latter.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
     const { run, calls } = makeRunner(home);
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' }))
@@ -1321,15 +1357,16 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     seed(home, 'demo-existing', { project: 'other-project' });
     const { run } = makeRunner(home);
-    // Call 1 is `POST /api/runs`' own coordinator-project stamp read
-    // (Task 1); CLAIMED_BY is unseeded, so it reads as absent and succeeds.
-    // A blanket `unlistableIO` for dispatch's OWN reads would fail the PAUSE
-    // check (dispatch's first readdir) and answer `paused`, never reaching
-    // this arm at all — so this scopes the failure to the THIRD read, the
-    // resumed session's own registry listing, the same idiom the wave-N>=2
-    // `registry-unmeasurable` case above this one already uses.
+    // A blanket `unlistableIO` fails the PAUSE check (dispatch's own first
+    // readdir, before anything is counted) and answers `paused`, never
+    // reaching this arm at all — so this scopes the failure to the SECOND
+    // read, the resumed session's own registry listing, the same idiom the
+    // wave-N>=2 `registry-unmeasurable` case above this one already uses.
+    // `POST /api/runs`' own coordinator-project stamp read (Task 1) does NOT
+    // count against this: it reads `<claimedBy>.project` through
+    // `fieldMeasured`, a FILE read, never `io.readdir`.
     let n = 0;
-    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 3 ? null : localIO.readdir(p); } };
+    const io: FleetIO = { ...localIO, readdir: async (p) => { n += 1; return n === 2 ? null : localIO.readdir(p); } };
     const w = await openApp(home, run, { io }); app = w.app;
     const opened = await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing' });
     expect(opened.statusCode).toBe(200);

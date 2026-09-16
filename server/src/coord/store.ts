@@ -78,9 +78,12 @@ export interface OpenSibling {
 /** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
  *  material `RunSummary`'s own docstring says is "deliberately absent" from
  *  the wire shape — "neither small nor something that changes on every
- *  frame." Shared by `GET /api/runs` (`coord/routes.ts`) and the `runs` WS
- *  frame's own emitter (`watch.ts`'s `emitRuns`, Task 10) rather than each
- *  holding its own copy of the strip. */
+ *  frame." Also strips `coordProject` (migration 11, Task 1): the
+ *  coordinator's project, stamped for the board-placement policy to read
+ *  server-side, and NOT one of that design's two wire additions — see
+ *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
+ *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
+ *  rather than each holding its own copy of the strip. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
   return summary;

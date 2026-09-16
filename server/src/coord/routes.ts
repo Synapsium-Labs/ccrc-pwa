@@ -4,7 +4,7 @@ import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
 import {
-  UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured, readSessionRecord,
+  UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
 } from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
@@ -1223,9 +1223,18 @@ export function registerCoordRoutes(
     // which reads the runs table and so answers only for a session that has
     // been a worker. Measured over all 64 runs in history: no session has ever
     // been both, so `sessionProject(claimedBy)` is null for every coordinator.
-    // An unreadable or absent record leaves the stamp off; absence permits.
-    const coordRec = await readSessionRecord(deps.io, deps.cfg, claimedBy);
-    const coordProject = coordRec.found ? coordRec.record.project : undefined;
+    //
+    // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
+    // whose `project ?? id` collapsing default (`registry.ts`'s
+    // `buildRecord`) would otherwise reach this permanent stamp as if it
+    // were a measurement (D-2342, the same reason `dispatch.ts`'s
+    // `project-mismatch` rung reads `.project` this way instead of through a
+    // built record). An unreadable field, an absent field, and a present but
+    // EMPTY field all leave the stamp off — `undefined`, never a guess —
+    // because the stamp is written once and never backfilled: absence
+    // permits, but a wrong value never heals.
+    const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, claimedBy, 'project');
+    const coordProject = projectRead.ok && projectRead.content !== '' ? projectRead.content : undefined;
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
@@ -1844,7 +1853,8 @@ export function registerCoordRoutes(
 
   /**
    * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
-   * (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`).
+   * (spec:225-227). Strips `prLineage` and `coordProject` on the way out
+   * (`toRunSummary`).
    *
    * EXEMPT FROM THE SESSION GATE, AND AUTHENTICATED HERE INSTEAD — the
    * `GET /api/auth/status` pattern, for a reason no task-level review could
