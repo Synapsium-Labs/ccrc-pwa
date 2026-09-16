@@ -59,8 +59,18 @@ describe('homeProjectVerdict', () => {
     expect(arm, "the `required` arm sends no `detail`").not.toBeNull();
   });
 
-  it('is shipped in the legacy generation — and this is the line wave 3 changes', () => {
-    expect(HOME_PROJECT_LEGACY_ACCEPTED).toBe(true);
+  it('is shipped with the legacy generation CLOSED — the line wave 3 deferred and the waiver moved', () => {
+    // Flipped against a measured trail, not the calendar. Spec §3 F2 dates this
+    // by seven consecutive days with zero `legacy-home-project` events; that
+    // window never cleared on its own (ten events, the last 2026-09-15T07:38:57Z,
+    // six of them from one coordinator running stale skill text), and the
+    // operator waived the remainder once the emitter was measured closed
+    // fleet-wide. The waiver is the deviation and carries its own number in the
+    // home-project-flip programme ledger; it is named there rather than here
+    // because a D-ref in tracked source whose definition is on an unmerged
+    // branch reds `deviation-refs.test.ts` for every tree that does not yet
+    // carry it. The value below is the act.
+    expect(HOME_PROJECT_LEGACY_ACCEPTED).toBe(false);
   });
 });
 

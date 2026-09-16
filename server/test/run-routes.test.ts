@@ -49,6 +49,12 @@ const sourcesUnder = (dir: string): string[] =>
   });
 
 const PROJECT = 'demo';
+/** The programme's home project. Since the legacy flip `POST /api/runs`
+ *  REFUSES an open that carries none, so this rides the shared body rather than
+ *  being added test by test. The three tests below that need a NULL stored home
+ *  can no longer reach that state through the route at all, and seed it through
+ *  the store instead. */
+const HOME_PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
 // Review findings 3/10/27: the coordinator write routes are now box-token
 // gated, the same gate `mail-routes.test.ts`'s own `TOKEN` constant already
@@ -57,7 +63,7 @@ const CLAIMED_BY = 'ccrc-pwa-coordinator';
 const TOKEN = 'f'.repeat(64);
 
 const OPEN_BODY = { program: 'build4', title: 'Transcript surface', project: PROJECT,
-  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY };
+  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY, homeProject: HOME_PROJECT };
 
 /** A full registry row — same field set `hold-gate.test.ts`'s own `seed`
  *  writes, so a fixture session reads exactly like a real ccd one. */
@@ -612,8 +618,16 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const first = await postOpen(app);                       // legacy: no homeProject
-    expect(first.statusCode).toBe(200);
+    // SEEDED THROUGH THE STORE, not the route. Before the flip this line was
+    // `postOpen(app)` with no `homeProject` — the legacy accept branch, which
+    // left the column NULL. That branch is gone, so the route can no longer
+    // produce the state this test needs as its premise. `openRun`'s
+    // `homeProject` is optional at the STORE seam and stays so (rows with a NULL
+    // home exist in the wild and still backfill), so the premise is seeded there
+    // and the behaviour under test — the backfill write and its event — still
+    // runs through the route exactly as before.
+    w.coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: CLAIMED_BY });
     expect(w.coord.programHome('build4')).toBeNull();
     const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
     expect(second.statusCode).toBe(200);
@@ -626,7 +640,10 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    expect((await postOpen(app)).statusCode).toBe(200);
+    // Seeded through the store for the reason given in the backfill test above:
+    // the flip removed the route's only path to a NULL stored home.
+    w.coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: CLAIMED_BY });
     expect(w.coord.programHome('build4')).toBeNull();
 
     w.coord.db.exec(`
@@ -667,19 +684,14 @@ describe('POST /api/runs', () => {
     expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
   });
 
-  it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
-    const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
-    const w = await openApp(home, run); app = w.app;
-    const res = await postOpen(app);
-    expect(res.statusCode).toBe(200);
-    // NOTHING IS GUESSED INTO THE COLUMN — that is what makes the backfill above
-    // possible instead of a collision.
-    expect(w.coord.programHome('build4')).toBeNull();
-    expect(res.json()).toMatchObject({ ledgerRepo: null, ledgerAbsPath: null });
-    const id = (res.json() as { id: number }).id;
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
-  });
+  // DELETED BY THE FLIP: 'accepts an absent homeProject during the legacy
+  // generation, records it, and leaves the column NULL'. The accept branch it
+  // drove is gone, so the test could only have been greened by asserting the
+  // opposite of what it was written to prove. What replaced it: the refusal is
+  // pinned through the route by `home-project-required.test.ts`, and the pure
+  // `required` verdict by `home-project.test.ts`. The `legacy-home-project`
+  // event itself keeps its meaning for the rows already written — this suite
+  // simply no longer has a way to write a new one.
 
   it('refuses a present-but-empty homeProject as a malformed body, before anything is opened or homed', async () => {
     const home = mkTmp('ccrc-runs-');
@@ -3542,8 +3554,17 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     return { w, workId: opened.id };
   };
   const REVIEW = (workId: number, over: Record<string, unknown> = {}) =>
+    // `homeProject` is required on a REVIEW open exactly as on a work open: the
+    // route runs one body validation for both kinds, and an absent home is
+    // decided by the legacy constant alone — never by whether the programme is
+    // known, even though a review's own programme demonstrably has a home
+    // already. This helper builds its body rather than spreading `OPEN_BODY`, so
+    // it did not inherit the field and every review test 400'd on the flip.
+    // The shipped coordinator skill already sends it here
+    // (`ccd/coordinator-skill/SKILL.md:304`), so this was a fixture gap and not
+    // a product one.
     ({ program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: workId,
-       claimedBy: CLAIMED_BY, ...over });
+       claimedBy: CLAIMED_BY, homeProject: HOME_PROJECT, ...over });
 
   it('dispatches a review run with the REVIEWER kickoff prefix, and a work run with the worker one', async () => {
     const home = mkTmp('ccrc-runs-');

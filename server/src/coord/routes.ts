@@ -254,19 +254,32 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 
 /**
  * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
- * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
- * live coordinator has redeployed and the field is required.
+ * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` — as it
+ * now is — once every live coordinator has redeployed and the field is required.
  *
- * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
- * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
- * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
+ * HOW IT ACTUALLY FLIPPED, which is not what §3 F2 prescribed. The spec's
+ * criterion is MEASURED, not judged: zero `legacy-home-project` rows in
+ * `run_events` over seven consecutive days. That window never cleared. It was
+ * measured at ten events, the last 2026-09-15T07:38:57Z, six of them from a
+ * single coordinator running skill text that predated the fix — so the trailing
+ * window kept resetting on evidence of a cause that had already been closed.
+ * What was measured instead, and what the operator waived the remainder
+ * against — the waiver carries its own number in the home-project-flip
+ * programme ledger — is this: the emitter is shut fleet-wide (every wrapper
+ * HOME carries a coordinator skill that sends the field), and the refusal this
+ * flip produces is one legible `400` that the coordinator's own installed
+ * reference already documents.
+ * Read that as the precedent it is — a waiver argued from a trail, not a
+ * criterion quietly restated to fit the day it shipped.
+ *
+ * The idiom is the box token's own — accepted-and-warned as `'legacy'` for
  * one generation (`coord/token.ts`, `server.ts`), then removed.
  *
  * Read ONCE, at the single call site below, and passed as an argument to
  * `homeProjectVerdict` rather than read inside it — which is what makes the
  * OTHER branch testable before it ships. `home-project.test.ts` drives both.
  */
-export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+export const HOME_PROJECT_LEGACY_ACCEPTED = false;
 
 /** What the open route must DO about the body's `homeProject` and the
  *  programme's stored one. SIX answers, none folded into another: `write` and
