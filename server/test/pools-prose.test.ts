@@ -54,9 +54,10 @@
 //      `agent/src` and the uninstall surface are negatives, and the single
 //      `cross-pool` writer in `swap.log` is an exact count (`toBe(1)`) — a
 //      second writer reds it. `readerWords` is a RATCHET, not a follower: it
-//      the reader's four words and compares them to a literal here, so renaming
-//      a word in ccd AND in the prose together still reds and asks a human.
-//      Each states its own reach in its own docstring; read that, not this list.
+//      EXTRACTS the reader's four words and compares them to a literal here, so
+//      renaming a word in ccd AND in the prose together still reds and asks a
+//      human. Each states its own reach in its own docstring; read that list,
+//      not this one.
 //
 //   2. QUOTED, via `unchanged()`. The canonical sentence, asserted to be still
 //      present word for word. These hold that the sentence has not silently
@@ -65,18 +66,21 @@
 //      red is a REQUEST to go and read the source, never a verdict on the new
 //      wording.
 //
-//   3. FORBIDDEN SPELLINGS. A handful of `not.toMatch` over one exact phrase,
-//      recording a decision the prose must not walk back: `bypasses the gate
-//      entirely`, `$REG/<project>.` inside the rule sentence, `ships the same
-//      accounts.json to both boxes`, `pools` anywhere in the uninstall surface —
-//      and one more that runs only on the other arm, `NOTHING scans for|no pool
-//      class`, once `topology-clean` grows a pool class. THESE CAN STILL RED ON
-//      A TRUE SENTENCE — one that quotes the forbidden
-//      phrase in order to DENY it ("never at `$REG/<project>.pool`") reds,
-//      measured. The exposure is narrow and the remedy is cheap: say it another
-//      way, or change the guard in the same commit. It is named here rather than
-//      fixed because a phrase nobody may write is the one thing a literal CAN
-//      hold, and losing it would leave the rejected homes unguarded.
+//   3. FORBIDDEN SPELLINGS. FIVE phrases across seven sites, each a `not.toMatch`
+//      over one exact spelling, recording a decision the prose must not walk
+//      back: `bypasses the gate entirely` (both sections), `$REG/<project>.`
+//      inside the rule sentence (twice), `pools` anywhere in the uninstall
+//      surface, `ships the same accounts.json to both boxes`, and one that runs
+//      only on the other arm — `NOTHING scans for|no pool class`, once
+//      `topology-clean` grows a pool class. THESE CAN STILL RED ON A TRUE
+//      SENTENCE: one that quotes the forbidden phrase in order to DENY it
+//      ("never at `$REG/<project>.pool`") reds, measured. The exposure is narrow
+//      and the remedy is cheap — say it another way, or change the guard in the
+//      same commit. It is named here rather than fixed because a phrase nobody
+//      may write is the one thing a literal CAN hold, and the message stays
+//      inside what it measured: it reports that the string is present, which it
+//      is, and why the string is forbidden, which is true whatever the sentence
+//      around it says. Losing them would leave the rejected homes unguarded.
 //
 // THE SEMANTIC CLAIMS IN THESE PASSAGES ARE NOT MECHANICALLY HELD. Whether "the
 // server never writes the marker" is true of this tree is settled by reading
