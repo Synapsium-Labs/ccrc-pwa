@@ -15,41 +15,64 @@
 // the length check is a lower bound a truncated passage still clears, and every
 // negative assertion then passes over text that was cut away.
 //
-// HISTORY, BECAUSE IT DECIDES THE SHAPE BELOW.
+// HISTORY, BECAUSE IT DECIDES THE SHAPE BELOW. The rounds are numbered off the
+// commits, not off memory: `git log --oneline -- server/test/pools-prose.test.ts`.
 //
-// Round 1 pinned claims as free-floating substrings — `toMatch(/never places/)`
-// with no subject bound to it. The reviewer inverted "ccd decides; the server
-// refuses" in BOTH documents and the suite stayed 25/25 green.
+// The ORIGINAL file (26413403) pinned claims as free-floating substrings —
+// `toMatch(/never places/)` with no subject bound to it. Fix round 1 found that
+// a full inversion of BOTH documents stayed 25/25 green.
 //
-// Round 2 answered that with guards that PARSED THE ENGLISH: a subject bound to
-// a closed verb list, a negator required between the two, a fold vocabulary, an
-// override vocabulary. They caught every inversion — and reddened seven TRUE
-// sentences, among them "the server decides nothing.", the shortest true
-// statement of this feature's central claim, each with a message telling its
-// author that the truth was the defect.
+// FIX ROUND 1 (7bac1727) answered with guards that PARSED THE ENGLISH: a subject
+// bound to a closed verb list, a negator required between the two, a fold
+// vocabulary. FIX ROUND 2 (43b7e931) widened them and added a fourth, the
+// override vocabulary.
 //
-// Round 3 deleted them. A guard that calls a true sentence false misinforms with
-// the repo's authority, which is worse than a claim nobody holds — and the
-// oscillation between the two failures is not a tuning problem. It is what
-// happens when a regex is asked to decide whether an English sentence is true.
+// They caught the literal inversions the reviewers ran — not every inversion:
+// one-word inversions survived them by falling outside a vocabulary (`FOLD` had
+// no "folds into", so flipping CLAUDE.md's only fold sentence was green 27/27),
+// and a true negator anywhere in a two-clause sentence licensed a false second
+// clause. What they DID do reliably was red seven TRUE sentences, among them
+// "the server decides nothing.", the shortest true statement of this feature's
+// central claim, each with a message telling its author the truth was the defect.
+//
+// FIX ROUND 3 (this file) deleted all of them. A guard that calls a true sentence
+// false misinforms with the repo's authority, which is worse than a claim nobody
+// holds — and the oscillation between the two failures is not a tuning problem.
+// It is what happens when a regex is asked to decide whether a sentence is true.
 //
 // WHAT THIS FILE HOLDS, AND WHAT IT DOES NOT — read this before trusting a green.
 //
-// Two kinds of assertion live here and they prove different things.
+// THREE kinds of assertion live here and they prove different things.
 //
-//   DERIVED pins read a value out of the SOURCE and compare the prose to it:
-//   `ACCOUNT_KEYS`, the symbols `generate.mjs` emits, the four words
-//   `_project_pool_state` echoes, the two cooldown constants, the codes
-//   `refusePool` sends, the single `cross-pool` writer in `swap.log`, the README
-//   line count, the write-call scan over `server/src` and `agent/src`, the
-//   uninstall surface. These hold a CLAIM: move the number, path or name in the
-//   code and the prose goes red on the thing that moved. They are the mechanism.
+//   1. DERIVED. Read a value out of the SOURCE, then check the prose against it:
+//      `ACCOUNT_KEYS`, the symbols `generate.mjs` emits, the two cooldown
+//      constants, the codes `refusePool` sends, the README line count. Move the
+//      number or name in the code and the prose goes red on the thing that
+//      moved. These hold a CLAIM. Three more read the source ALONE and assert a
+//      negative over it — the write-call scan across `server/src` and
+//      `agent/src`, the uninstall surface, the single `cross-pool` writer in
+//      `swap.log` — and `readerWords` is a RATCHET, not a follower: it extracts
+//      the reader's four words and compares them to a literal here, so renaming
+//      a word in ccd AND in the prose together still reds and asks a human.
+//      Each states its own reach in its own docstring; read that, not this list.
 //
-//   LITERAL pins quote a canonical sentence and assert it is still there, via
-//   `unchanged()`. They hold that the sentence has not silently CHANGED. They
-//   cannot tell whether whatever replaced it is true: a rewrite that is false
-//   reds exactly as loudly as a rewrite that is better, so that red is a REQUEST
-//   to go and read the source, never a verdict on the new wording.
+//   2. QUOTED, via `unchanged()`. The canonical sentence, asserted to be still
+//      present word for word. These hold that the sentence has not silently
+//      CHANGED. They cannot tell whether whatever replaced it is true: a rewrite
+//      that is false reds exactly as loudly as a rewrite that is better, so that
+//      red is a REQUEST to go and read the source, never a verdict on the new
+//      wording.
+//
+//   3. FORBIDDEN SPELLINGS. A handful of `not.toMatch` over one exact phrase,
+//      recording a decision the prose must not walk back: `bypasses the gate
+//      entirely`, `$REG/<project>.` inside the rule sentence, `ships the same
+//      accounts.json to both boxes`, `pools` anywhere in the uninstall surface.
+//      THESE CAN STILL RED ON A TRUE SENTENCE — one that quotes the forbidden
+//      phrase in order to DENY it ("never at `$REG/<project>.pool`") reds,
+//      measured. The exposure is narrow and the remedy is cheap: say it another
+//      way, or change the guard in the same commit. It is named here rather than
+//      fixed because a phrase nobody may write is the one thing a literal CAN
+//      hold, and losing it would leave the rejected homes unguarded.
 //
 // THE SEMANTIC CLAIMS IN THESE PASSAGES ARE NOT MECHANICALLY HELD. Whether "the
 // server never writes the marker" is true of this tree is settled by reading
@@ -121,23 +144,6 @@ const unchanged = (where: string, text: string, literal: string, source: string)
     .toContain(literal);
 };
 
-/** "A manual verb overrides X" has to say what it does NOT override. Run over
- *  BOTH prose sections: narrowing `placementSection()` to fix its attribution
- *  (it used to swallow the pools section whole, so a red there named a heading
- *  180 lines away) would otherwise have left the pools section unguarded. */
-const noUnqualifiedOverride = (where: string, section: string): void => {
-  for (const s of sentencesOf(flat(section))) {
-    if (/\b(bypass(es|ed)?|ignor(es|ed)?|overrides?)\b/i.test(s)
-        && /`ccd (start|swap|prefer)`/.test(s)) {
-      expect(s,
-        `${where}: a manual verb is described as overriding without naming what it does NOT `
-        + 'override. `ccd start`/`swap`/`prefer` override the -disabled gate, never the pool rule '
-        + `— that takes --cross-pool. Sentence: "${s.trim()}"`)
-        .toMatch(/--cross-pool/);
-    }
-  }
-};
-
 const placementSection = (): string =>
   // Terminated at the pools section, not at `### Login screens`: the pools
   // section sits BETWEEN the two, so the old terminator made this passage a
@@ -185,7 +191,14 @@ const codeOf = (text: string): string =>
  *      missed — `path.join(registryDir, POOLS_DIR_NAME, project)`.
  *    - README says "the agent's write root is unchanged" in the same breath, and
  *      nothing read `agent/src`. The agent is the process that actually holds a
- *      write root on the fleet box, so it is the half a coder would break first. */
+ *      write root on the fleet box, so it is the half a coder would break first.
+ *
+ *  WHAT IT STILL CANNOT SEE, kept here because the header used to carry it and
+ *  a limit that loses its home stops being measured: the window runs FORWARD
+ *  200 characters from the write call, so it cannot follow a variable. The
+ *  inline spelling `writeFileSync(path.join(reg, POOLS_DIR_NAME, p), x)` is
+ *  caught; the same write split over two lines — the path built first, or
+ *  passed in as an argument — is not. */
 const POOL_WRITE_ROOTS = ['server/src', 'agent/src'] as const;
 const poolWritesInSource = (): string[] => {
   const hits: string[] = [];
@@ -203,6 +216,27 @@ const poolWritesInSource = (): string[] => {
   }
   return hits;
 };
+
+/** Bash with its comments removed. A `#` opens a comment only when it is
+ *  unquoted AND at the start of a line or preceded by whitespace, so `${v#pat}`
+ *  and `"a # b"` survive. Round 3 measured why the line-leading strip it
+ *  replaces was not enough: `local reg="$HOME/.cc-sessions"   # never touches
+ *  pools/` is the trailing style the region already uses, and it reddened the
+ *  uninstall scan with a message saying uninstall names pools/. What this still
+ *  cannot see is a heredoc body or a `$'...'` string; neither appears in the
+ *  scanned region, and a future one would have to be argued here. */
+const bashCode = (text: string): string => text.split('\n').map((line) => {
+  let sq = false;
+  let dq = false;
+  for (let i = 0; i < line.length; i += 1) {
+    const c = line[i]!;
+    if (c === '\\' && dq) { i += 1; continue; }
+    if (c === "'" && !dq) sq = !sq;
+    else if (c === '"' && !sq) dq = !dq;
+    else if (c === '#' && !sq && !dq && (i === 0 || /\s/.test(line[i - 1]!))) return line.slice(0, i);
+  }
+  return line;
+}).join('\n');
 
 /** THE UNINSTALL SURFACE: `cmd_uninstall` PLUS every `_uninst_*` helper it
  *  delegates to, the helper names DERIVED from the body rather than listed.
@@ -222,16 +256,16 @@ const poolWritesInSource = (): string[] => {
  *  `cmd_uninstall` is the last `cmd_` in the file, so opener → dispatch covers
  *  the verb and all eight helpers and excludes the verb table itself.
  *
- *  Bash comments are dropped first, the same way `readerWords` drops them and
- *  `codeOf` drops the TypeScript ones: round 3 measured a comment DOCUMENTING
- *  this very claim ("uninstall never names `pools/`") reddening the assertion
- *  with a message saying uninstall names pools/. The scan is about CODE — a
- *  comment cannot delete a directory. */
+ *  Bash comments are dropped first, through `bashCode`, the way `codeOf` drops
+ *  the TypeScript ones: round 3 measured a comment DOCUMENTING this very claim
+ *  ("uninstall never names `pools/`") reddening the assertion with a message
+ *  saying uninstall names pools/, both line-leading and trailing. The scan is
+ *  about CODE — a comment cannot delete a directory. */
 const uninstallSurface = (): string => {
   const ccrc = read('ccd/ccrc');
   const raw = passage('ccrc, the uninstall surface', ccrc,
     'cmd_uninstall() {', '\ncase "$VERB" in', 1000);
-  const region = raw.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  const region = bashCode(raw);
   const called = [...new Set([...region.matchAll(/\b_uninst_[a-z_]+\b/g)].map((m) => m[0]))];
   expect(called.length, 'cmd_uninstall no longer delegates — re-decide what this scan covers')
     .toBeGreaterThanOrEqual(5);
@@ -316,14 +350,19 @@ describe('README: manual placement is not a blanket override (spec §11 row 52)'
     expect(flat(poolsSection())).not.toMatch(/bypasses the gate entirely/);
   });
 
-  it('does not claim a manual verb bypasses placement policy, in a wider set of phrasings', () => {
-    // The literal above is one spelling of the claim. This is the claim itself:
-    // any sentence that names a manual verb AND an overriding word has to say
-    // what it does NOT override, or it is the same overclaim reworded. Checked
-    // over the pools section too, so a planted overclaim is caught wherever it
-    // lands and is reported against the section it is actually in.
-    noUnqualifiedOverride('README, the disabled-marker section', placementSection());
-    noUnqualifiedOverride('README, the account-pools section', poolsSection());
+  it('quotes the sentence that qualifies the override', () => {
+    // This was `noUnqualifiedOverride`, a per-sentence scan for an overriding
+    // word beside a manual verb that demanded `--cross-pool` in the same
+    // sentence. Round 3 measured what that costs: "`ccd swap` never overrides
+    // the pool rule." — true, and the plainest statement of the rule — reddened,
+    // with a message telling its author to name what it does not override.
+    // Same shape as the four the ruling deleted, so it goes the same way.
+    unchanged('README, the disabled-marker section', flat(placementSection()),
+      'Manual placement (`ccd start`, `ccd swap`, `ccd prefer`) overrides the **disabled** gate — '
+      + 'naming a wrapper by hand is an operator override by construction — but it is not a blanket '
+      + 'override of every placement rule, because all three verbs refuse a target whose pool '
+      + 'disagrees with the project\'s unless you pass `--cross-pool`',
+      'ccd/ccd — `cmd_start`, `cmd_swap` and `cmd_prefer` all take `--cross-pool`');
   });
 
   it('names the flag a crossing actually takes, and ccd actually has it', () => {
@@ -625,16 +664,15 @@ describe('server/src/config.ts: the roster is SEEDED once per box (D-1687)', () 
 
   it('no longer claims deploy ships the same accounts.json to both boxes', () => {
     expect(doc()).not.toMatch(/ships? the same `accounts\.json` to both boxes/);
-    // The claim, not just its spelling: no sentence may pair the deploy with
-    // both boxes as if one file reached them.
-    for (const s of sentencesOf(doc())) {
-      if (/\bdeploy\b/.test(s) && /both boxes/.test(s)) {
-        expect(s,
-          'the docstring describes one file reaching two boxes. `ship_roster` seeds a MISSING '
-          + `accounts.json and never overwrites, so each box's copy is hand-owned. Sentence: "${s.trim()}"`)
-          .toMatch(/seed|never overwrit|hand-owned/i);
-      }
-    }
+    // The sentence that replaced it is QUOTED. The scan that stood here demanded
+    // a fixed vocabulary of any sentence pairing `deploy` with `both boxes`, so
+    // "The deploy never puts one `accounts.json` on both boxes." — true, and a
+    // denial of the very claim — reddened for not using one of three words.
+    unchanged('config.ts, the loadRoster docstring', doc(),
+      'It is NOT that the two boxes hold one file: `ship_roster` (`deploy/deploy.sh`) seeds '
+      + '`~/.ccrc/accounts.json` only when the box has none and never overwrites it afterwards, so '
+      + 'each box\'s copy is hand-owned and the two can differ',
+      'deploy/deploy.sh — `ship_roster`\'s create-if-missing guard');
   });
 
   it('names the seed that actually ships it, and deploy.sh still behaves that way', () => {
@@ -711,18 +749,15 @@ describe('deploy.sh + README: the divergent banner between the two lanes is EXPE
     // than merely reassuring.
     expect(lane, 'the note does not name the second lane that clears it')
       .toMatch(/deploy\/deploy\.sh/);
-    // And it must not re-tell the falsehood this round removed: the server lane
-    // does not COPY a roster to the other box, it restarts the server against
-    // this box's own hand-owned accounts.json.
-    for (const sentence of sentencesOf(flat(lane))) {
-      if (/server lane/.test(sentence)) {
-        expect(sentence,
-          'the server lane is described as shipping or copying a roster to the other box. It does '
-          + 'not: `ship_roster` seeds a MISSING accounts.json only, and the server lane restarts the '
-          + `server against THIS box's own copy. Sentence: "${sentence.trim()}"`)
-          .not.toMatch(/ships? the same roster|copies the roster|ships? this roster/i);
-      }
-    }
+    // The sentence that says what the server lane does NOT do is QUOTED. The
+    // negative that stood here fired on the phrase however it was used, so
+    // writing the guard's own explanation into the comment reddened it. The
+    // `#` prefixes come off first, the way the config.ts docstring drops its
+    // ` * ` — otherwise the literal would have to carry comment punctuation.
+    unchanged('deploy.sh, the agent lane roster block', flat(lane.replace(/^\s*#\s?/gm, '')),
+      'The server lane clears it by restarting the server on this build against this box\'s own '
+      + 'accounts.json — it never OVERWRITES a roster',
+      'deploy/deploy.sh — `ship_roster` and the server lane below it');
   });
 
   it('README says the same thing where it states the ordering rule', () => {
@@ -732,21 +767,17 @@ describe('deploy.sh + README: the divergent banner between the two lanes is EXPE
     expect(p, 'the ordering paragraph does not name the transient the two lanes produce')
       .toMatch(/divergent/);
     // What differs between the lanes is the PROJECTION, not the two
-    // `accounts.json` files: on a code-only deploy they are byte-identical and
-    // the fleet host simply has the new emitter's output.
-    for (const sentence of sentencesOf(p)) {
-      if (/divergent|between the two lanes/.test(sentence)) {
-        expect(sentence,
-          'the transient is attributed to the two ROSTERS differing. On a code-only deploy they are '
-          + 'identical — what differs is the two PROJECTIONS, because one box has the new emitter. '
-          + `Sentence: "${sentence.trim()}"`)
-          .not.toMatch(/the boxes' rosters differ|the two rosters differ/i);
-      }
-    }
+    // `accounts.json` files. QUOTED, because the negative that stood here reds
+    // on the clearest true statement of that distinction — one that denies the
+    // forbidden phrase in the same sentence.
+    unchanged('README, the deploy ordering paragraph', p,
+      'between the two lanes the two boxes PROJECT different `accounts.sh` — the fleet host\'s is '
+      + 'regenerated by the new emitter while this server still runs the old one',
+      'server/src/fleetstate.ts — `rosterAgreement` compares the PROJECTIONS');
   });
 });
 
-describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () => {
+describe('CLAUDE.md: the account-pools bullet is GROUNDED where it can be, QUOTED where it cannot', () => {
   const RAW_BULLET: [string, string] = ['- **Account pools', '\n## Coordination (Build 7) invariants'];
   const bullet = (): string =>
     flat(passage('CLAUDE.md, the account-pools bullet', read('CLAUDE.md'), ...RAW_BULLET));
@@ -760,9 +791,9 @@ describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () =
     expect(b, 'the four-word reader is the only reader').toMatch(/_project_pool_state/);
     expect(b, 'the three per-id fields purge with the row').toMatch(/purge with the row/i);
     expect(b, 'fixture pool names, so nobody types a real one').toMatch(/pool-a/);
-    // The three claims this bullet exists for are QUOTED, for the reason the
-    // README describes above are: each of them was reddened in its TRUE form by a
-    // regex asked to decide whether it was true.
+    // The three claims this bullet exists for are QUOTED, for the same reason the
+    // README pins above are: each was reddened in its TRUE form by a regex asked
+    // to decide whether it was true.
     unchanged('CLAUDE.md, the account-pools bullet', b,
       'the server REFUSES (409/503), FORECASTS and composes the wire, and '
       + '**never places a session or writes the marker**',
