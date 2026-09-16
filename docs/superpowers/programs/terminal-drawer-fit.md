@@ -13,7 +13,7 @@ scrollback it exists to render.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7` | **MERGED 2026-09-15** |
-| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | — | **dispatched 2026-09-15** (run 62, 6 items) |
+| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) @ `436d773d` | **review COMPLETE, ACCEPTED 2026-09-16** (run 62; six findings carried to wave 3) |
 | **3 (NEW)** | **anchored tmux targeting `=cc-<id>:` — all four constructions, plus the ingress predicate** | **AGENT-FIRST** | — | planned (operator ruling 2026-09-16) |
 | 4 | the deliberate un-pin under a measured fit guard (was wave 3) | server | — | planned |
 | 5 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile (was wave 4) | docs | — | planned |
@@ -91,6 +91,102 @@ unanchored targets". It does not reproduce — the tree gains ONE new target con
 `_pane_measurable`. Measured independently here: 25 `_tmux` uses, 19 of them `-t` targets. The error
 direction is the dangerous one, because **wave 3 is the anchoring wave and sizes directly from those
 two sentences**: a worker expecting a `-t cc-` scan that over-reds would build one that under-covers.
+
+### Wave 2 ACCEPTED — round 3 verified, and the residue wave 3 carries (2026-09-16)
+
+**The bounded commitment, and its discharge.** Round 3's ruling (mail 1458) said in terms: "Round
+three is the last full round I will ask for. If the next panel still finds the class reproduced, I
+take what remains as wave-3 entries and accept the wave with them recorded." The final panel — 4
+lenses, 3 refuters per finding, 22 agents, none died — **did** find the class reproduced, three
+times. So the wave is accepted and the residue is carried. There is no fourth round.
+
+**What round 3 actually delivered, verified independently rather than read.** Two lenses reproduced
+the worker's mutation table in their own isolated trees, one mutant at a time, control first:
+
+- **All six claimed mutants reproduce**, and each reds **only** the case its table names. Control at
+  `436d773d` is 84/84 green across the four suites.
+- **All eight rows of the header table in `ccd-pane-narrow-note.test.ts` are true**, including every
+  `ONLY` scope and every "AND the arith-containment structural row" clause.
+- **The S3 pair genuinely closes its gap.** R2 pins the COMPARISON (effective floor > constant − 5);
+  the literal ratchet pins the ASSIGNMENT (>= 1800) against a value read straight out of ccd's shell.
+  Composed they bound the floor from both sides, and no shrinking mutant was found that passes both.
+- **The S1/S14 stub is not vacuous** — `_pane_measurable` is the only thing on that path issuing a
+  `pane_active` argv, so the counter does reach the post-wait guard.
+- None of the six reds by import crash or by a scanner losing a line it needs. In every case the
+  failing assertion is the semantic one.
+
+That is real work and it is why the wave is acceptable: **the shipped behaviour is correct and the
+new pins do what they claim.** What remains is coverage one function away, and prose.
+
+**THE RESIDUE — six entries, wave 3 owns them.** Each was measured, not argued.
+
+1. **The stale lane is pinned only by its log STRING.** Round 3 closed two wrong implementations for
+   the swap lane. Applying the same two at `_auto_stale_check`'s call site leaves the whole suite
+   green: moving the note OUT of the guard branch (an ordinary 200-column pane then writes
+   `stale-skip … pane is under 120 columns` on every 5s tick — false on its face), and inlining an
+   unfloored copy with the call deleted (the D-2013 floor the header calls NOT OPTIONAL is gone from
+   that lane at ~12 lines/min/session). **The fix closed the two NAMED instances, not the class** —
+   which is this programme's own delete-by-shape rule, failed by the round that applied it. ~12 lines,
+   mirroring the cases already in the file.
+2. **The post-wait guard can lose its `return 0` and stay green.** The S1/S14 case's
+   `expect(sendKeys()).toEqual([])` is satisfied by a DOWNSTREAM mechanism, so a log-only statement
+   that falls through passes. swap.log then carries BOTH sentences, the second being
+   `redrive-skip … auto-continue armed` — the exact false cause the comment directly above that line
+   forbids. Remedy: assert over the whole log (one `redrive-skip` line, and no `auto-continue armed`).
+3. **The top-of-function sentence is pinned by nothing.** Round 3's own new comment claims the two
+   redrive-skip sentences are deliberately distinct "instead of collapsing both to one line".
+   Rewording the top-of-function line to be byte-identical to the post-wait one — the precise collapse
+   the comment says it prevents — is fully green. Only one side of the distinction is pinned.
+4. **The replacement for the deleted cardinal is itself a false mechanism claim.** Found independently
+   by three lenses. The plan now says the call-site count "lives in exactly one executable place —
+   `POPULATION`". Measured in this tree at `436d773d`: `POPULATION`'s `count` is **phrase-carrying grep
+   lines per function** (1+1+1+1+1+3+2 = 10 across 7 rows), never `_pane_measurable` call sites, of
+   which there are **9 across 8 functions** — `_pane_auto_continue_armed` 13946, `_session_hard_blocked`
+   13999, `_auto_stale_check` 14040, `_auto_swap_check` 14137, `_auto_compact_check` 14938,
+   `_accept_first_run_prompts` 15270, `_inject_spawn_effort` 15857, `_redrive_after_spawn` 16003 **and**
+   16029. `POPULATION` has no row for `_inject_spawn_effort`, and its guard regex runs against
+   `bodyBefore`, so within `_redrive_after_spawn` it sees only the first guard. **Two of the nine are
+   invisible to it, so it does not red when they are dropped** — and the same commit's own
+   `stripComment` docstring says so about one of them. Ruling 5 killed a stale number and replaced it
+   with a false claim about where the number lives, one line later.
+5. **`ccd-reader-standdown.test.ts`'s "THE TWO SITES THE POPULATION SCAN CANNOT SEE" names a function
+   that has no guard.** It says `_spawn_settle` and `_inject_spawn_effort`. Measured: `_spawn_settle`
+   contains **zero** `_pane_measurable` references — the guard edit 4g aimed at it was relocated into
+   `_accept_first_run_prompts` (the departure recorded as deviation 2866), which **is** a `POPULATION`
+   row. The genuinely uncovered pair is `_inject_spawn_effort` and `_redrive_after_spawn`'s post-wait
+   guard. The header went stale the moment the relocation landed and nothing swept it.
+6. **Smaller prose, same shape.** The `WIDE_PANE` docstring names a WIDE-pane fixture as an example of
+   one modelling a NARROW drawer; the sweep commit mints a fresh bare cardinal ("THE ONLY ONE OF THE
+   FOUR `WIDE_PANE` SPREADS") in the very commit whose docs half deletes cardinals; two line citations
+   in the file-table row round 3 edited have rotted.
+
+**TWO FINDINGS REFUTED HERE, by measurement, so wave 3 does not chase them.**
+
+- **"A third D-299 arithmetic site sits BELOW `_auto_compact_check`'s guard."** It does not. The two
+  registry-value sites (14906 `lastcompact`, 14914 `lastswap`) are both above the guard at 14938, as
+  round 3 says. The comparisons below it operate on `pct`, and `_pane_ctx_pct` ends
+  `grep -oE '[0-9]+' | head -1`, so that value is digits by construction and cannot carry a payload.
+  Round 3's label is correct.
+- **"A `D-A..D-B` range survives beside the bullet forbidding ranges."** The surviving range is
+  `(D-2775..D-2778)` and **all four are DEFINED in that plan**, so it seals no unissued band — which is
+  the entire hazard the rule exists for. What is real is smaller: the bullet states the rule
+  ABSOLUTELY while the text applies it only to unassigned tails. Wave 3 narrows the sentence; it does
+  not remove the range.
+
+**The worker asked whether the anchored cardinals should go too. They stay.** Ruling 5 was aimed at
+the UNANCHORED kind — a bare digit about a population that grows under you. An entry that names its
+own members ("four callers — `cmd_ws_add`, `cmd_ws_restore`, `cmd_start`, `cmd_ensure`") carries its
+own proof: a reader counts the list, and an edit that adds a fifth makes the list wrong in a way that
+is visible at the point of reading. That is the same distinction as a D-block written as a range
+versus one written as entries. Its judgement here was right and it was right to ask rather than strip
+blind.
+
+**Why this is accepted rather than sent back a fourth time.** Every item above is a coverage gap or a
+false sentence — not a defect in shipped behaviour, which the panel measured as correct on every
+claim round 3 makes for it. Three rounds have each closed their named instances and reproduced the
+class one seam over; a fourth would be the same trade. Wave 3 is AGENT-FIRST and touches `ccd/` and
+these same test files, so it can carry all six honestly and in one place, with the measurements above
+already done.
 
 ### The review protocol changed mid-wave, and is not deployed
 
