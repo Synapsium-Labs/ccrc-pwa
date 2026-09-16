@@ -3236,10 +3236,7 @@ export class FleetWatcher {
           // the repo itself, so it is dropped whenever a real cell (`named` or
           // `absent`) already exists: a repo slug is effectively immutable,
           // and a `gh` timeout says nothing about it either way.
-          const repoNow = repoCellFor({ reason: failure.reason });
-          if (repoNow.state !== 'unmeasured' || !this.projectRepos.has(project)) {
-            this.projectRepos.set(project, repoNow);
-          }
+          this.retainRepo(project, repoCellFor({ reason: failure.reason }));
           this.backoffPr(project, now, failure.reason, records);
           continue;
         }
@@ -3265,7 +3262,15 @@ export class FleetWatcher {
           // until now dropped here — `phaseFor` returns a `PrState`, which has
           // no repo field. This is the seam; `prstate.ts`'s `prView` KEEPS the
           // repo for the PR sheet and is NOT where retention belongs.
-          this.projectRepos.set(line.project, repoCellFor({ slug: line.repo }));
+          //
+          // D-2922: keyed on the LOOP's `project`, never `line.project`.
+          // `parsePrLines` casts a full line straight through
+          // (`v as unknown as CcdPrLine`, `prstate.ts`), so `line.project` is
+          // whatever ccd wrote and had exactly one reader in the tree — this
+          // statement. The loop's own `project` is what `ccd pr-state
+          // --project` was CALLED with, which is the same argument the failure
+          // arm above already uses for the same reason.
+          this.retainRepo(project, repoCellFor({ slug: line.repo }));
         }
       }
       this.sweepMerged(records);
@@ -3275,6 +3280,25 @@ export class FleetWatcher {
       // replaced it — `lastPrSweep` gating makes two starts in the same
       // millisecond impossible, so the timestamp is a sufficient identity.
       if (this.prSweepStartedAt === mySweep) this.prSweepStartedAt = 0;
+    }
+  }
+
+  /**
+   * The ONE keep-last rule both writing arms of `sweepPr` obey (D-2884, made
+   * structural by D-2922): `unmeasured` says "no measurement happened", which
+   * is false once one has, so it is written only when the project has no cell
+   * yet. `named` and `absent` are measurements and always land — a repo slug
+   * can change and a remote can genuinely be removed between sweeps.
+   *
+   * A METHOD, not a convention repeated at two call sites: "all three arms
+   * agree" was true only as long as both spellings happened to match, and the
+   * full-line arm's spelling did not. The third arm (`!res.ok`, the agent
+   * being down) deliberately writes nothing at all, which is this same rule's
+   * conclusion for a read that never reached the repo.
+   */
+  private retainRepo(project: string, cell: ProjectRepoWire): void {
+    if (cell.state !== 'unmeasured' || !this.projectRepos.has(project)) {
+      this.projectRepos.set(project, cell);
     }
   }
 

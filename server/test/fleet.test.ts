@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { assembleFleet, foldCoordPlacements, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
+import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
@@ -10,7 +10,7 @@ import type { HookState } from '../src/hookstate.js';
 import { ASK_OPERATOR_PRINCIPAL, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore, type CoordPlacementStamp } from '../src/coord/store.js';
+import { CoordStore } from '../src/coord/store.js';
 import { ASK_HELD_CHIP_MAX_MS } from '../src/askwindow.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
@@ -1111,7 +1111,10 @@ describe('the ask chip (Task 19)', () => {
 //   - `stamped: bySession.get(r.id) ?? null` -> `stamped: null`
 //   - `stamped: bySession.get(r.id) ?? null` -> `stamped: byProject.get(r.id) ?? null`
 //   - `held: r.held !== null` -> `held: true`
-// Each test below names the mutation it kills.
+// Each test below names the mutation it kills. D-2921 replaced the two ports
+// with one SESSION-keyed `stampOf`, so the second mutation's modern spelling is
+// `sessionId: r.id` -> `sessionId: r.project` and the first's is the port
+// returning null — both still killed here, by the same fixtures.
 describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
   const mkCoord = (): CoordStore =>
     new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
@@ -1159,27 +1162,28 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('new-coordinator');
   });
 
-  it('`bySession` and `byProject` are not interchangeable — kills the swap at the `stamped:` read', async () => {
+  it('the lookup is keyed on the SESSION id, never the project — kills `sessionId: r.project`', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
     // The session's OWN project is deliberately NOT its id — every OTHER
-    // fixture in this file leaves `project` defaulted to the session id,
-    // which would let `byProject` (keyed on project names) accidentally
-    // answer a lookup keyed on the session's id and hide exactly the bug
-    // this test exists to catch.
+    // fixture in this file leaves `project` defaulted to the session id, which
+    // would let a lookup keyed on the PROJECT accidentally answer a lookup
+    // keyed on the session's id and hide exactly the bug this test exists to
+    // catch.
     seedSession(home, 'demo-worker3', 'claude', {
       project: 'demo-worker3-project', hold: 'program:agent-evals wave:1/1',
     });
     const coord = mkCoord();
-    // Stamps `byProject.get('demo-worker3-project')` only — never bound to a
-    // session, so it contributes nothing to `bySession`.
-    coord.openRun({
+    // A run whose WORK is in this session's own project and which is bound to
+    // a DIFFERENT session. Pre-D-2921 it was the `byProject` entry that shadowed
+    // the right answer; now it is simply another session's stamp, and the only
+    // way it can reach this row is a lookup keyed on the wrong thing.
+    const foreign = coord.openRun({
       program: 'other-programme', title: 'unrelated', project: 'demo-worker3-project',
       wave: 1, waveOf: 1, claimedBy: 'other-coordinator', coordProject: 'byproject-answer',
-    });
-    // Stamps `bySession.get('demo-worker3')` via a run whose OWN `project`
-    // is unrelated, so it contributes nothing to `byProject` under any key
-    // this session's id or own project could look up.
+    }) as { id: number };
+    coord.bindSession(foreign.id, 'demo-worker3-project');
+    // This session's OWN stamp, via a run whose `project` is unrelated.
     const sessionRun = coord.openRun({
       program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'bysession-answer',
@@ -1189,10 +1193,10 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
       localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
       undefined, undefined, undefined, undefined, undefined, undefined, coord,
     );
-    // The CORRECT read is `bySession`. Swapping it for `byProject` at the
-    // `stamped:` call site would look up `byProject.get('demo-worker3')` (the
-    // SESSION id) — nothing is keyed that — and fall back to the session's
-    // own project instead of 'bysession-answer'.
+    // The CORRECT key is `r.id`. Handing `boardPlacement` `sessionId: r.project`
+    // instead would find the foreign session's stamp — which is deliberately
+    // keyed under this project's NAME — and place the row on
+    // 'byproject-answer'.
     expect(fleet.find((x) => x.id === 'demo-worker3')!.boardProject).toBe('bysession-answer');
   });
 
@@ -1222,8 +1226,8 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     });
     const coord = mkCoord();
     // A run exists and is stamped, but names a DIFFERENT session —
-    // 'demo-worker5' is never `bindSession`-ed, so `bySession` has no entry
-    // for it at all.
+    // 'demo-worker5' is never `bindSession`-ed, so the stamp table has no
+    // entry for it at all.
     const run = coord.openRun({
       program: 'agent-evals', title: 'wave 1', project: 'other-project',
       wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'not-this-one',
@@ -1272,9 +1276,9 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
   // SESSION with an OLDER stamped run and a NEWER unstamped one. Without the
   // WHERE clause, the newer row's `coordProject` reads as SQL NULL cast
   // straight through the unsafe `as unknown as {...coordProject: string}[]`
-  // (`store.ts:2056`) into `foldCoordPlacements`'s max-id fold, which has no
-  // reason to distrust its own type and overwrites `bySession` with that
-  // `null` — reintroducing the exact wave-boundary bounce `includeClosed:
+  // (`store.ts`'s `as unknown as`) into `foldCoordPlacements`'s max-id fold,
+  // which has no reason to distrust its own type and overwrites the session's
+  // stamp with that `null` — reintroducing the wave-boundary bounce `includeClosed:
   // true` exists to prevent, just from the opposite direction (a stamp
   // disappearing forward in time instead of backward).
   it('an older STAMPED run is not shadowed by a newer UNSTAMPED one on the same session — pins `WHERE coordProject IS NOT NULL`', async () => {
@@ -1301,28 +1305,101 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     );
     expect(fleet.find((x) => x.id === 'demo-worker8')!.boardProject).toBe('real-coordinator');
   });
-});
 
-// Task 3, fix round 1 (Important 3+4): the fold itself, exercised directly
-// and DB-free. `coordPlacementStamps`'s `ORDER BY id` means a real read
-// through `CoordStore` can never arrive out of order, so the only way to
-// prove the fold does not LEAN on that order (rather than merely working
-// under it, which the pre-fix-round version also did, since SQLite always
-// obliged) is to feed it one stamp list twice — forwards and reversed — and
-// check the two answers are identical.
-describe('foldCoordPlacements is order-independent (fix round 1, findings 3+4)', () => {
-  it('yields the identical answer whether the newest-id stamp arrives first, last, or in the middle', () => {
-    const stamps: CoordPlacementStamp[] = [
-      { id: 5, sessionId: 'worker-a', project: 'proj-a', coordProject: 'oldest' },
-      { id: 9, sessionId: 'worker-a', project: 'proj-a', coordProject: 'newest' },
-      { id: 7, sessionId: 'worker-a', project: 'proj-a', coordProject: 'middle' },
-    ];
-    const forward = foldCoordPlacements(stamps);
-    const reversed = foldCoordPlacements([...stamps].reverse());
-    expect(forward.bySession.get('worker-a')).toBe('newest');
-    expect(reversed.bySession.get('worker-a')).toBe('newest');
-    expect(forward.coordOf('proj-a')).toBe('newest');
-    expect(reversed.coordOf('proj-a')).toBe('newest');
+  // ------------------------------------------------------------------
+  // FINAL WHOLE-BRANCH REVIEW, Critical 1 (D-2921). The two fixtures the
+  // reviewer measured, and the one shape every fixture above deliberately
+  // cannot express: the stamped COORDINATOR's project is ALSO a project that
+  // hosts an ordinary same-repo programme, so a project-keyed hop table has an
+  // entry under it. Every other case in this block keeps the two disjoint.
+  // ------------------------------------------------------------------
+
+  it('a cross-repo worker still boards on its coordinator when that coordinator project ALSO hosts an ordinary programme', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'ct-worker', 'claude', {
+      project: 'custom-tools', hold: 'program:qdrant wave:10/10',
+    });
+    const coord = mkCoord();
+    // The cross-repo worker: work in custom-tools, coordinator in ccrc-pwa.
+    const crossRepo = coord.openRun({
+      program: 'qdrant', title: 'wave 10', project: 'custom-tools',
+      wave: 10, waveOf: 10, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
+    }) as { id: number };
+    coord.bindSession(crossRepo.id, 'ct-worker');
+    // ANY ordinary ccrc-pwa programme — a worker in ccrc-pwa coordinated from
+    // ccrc-pwa. Under a PROJECT-keyed hop this makes coordOf('ccrc-pwa') ===
+    // 'ccrc-pwa', which trips the `seen` guard and scatters the row home.
+    const sameRepo = coord.openRun({
+      program: 'board-placement', title: 'wave 1', project: 'ccrc-pwa',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-swift-mesa-coordinator', coordProject: 'ccrc-pwa',
+    }) as { id: number };
+    coord.bindSession(sameRepo.id, 'ccrc-pwa-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'ct-worker')!.boardProject).toBe('ccrc-pwa');
+  });
+
+  // The end-to-end pin on `claimedBy`'s carriage from the SQL to the walk: a
+  // chain is the only shape whose answer depends on the second hop, so nulling
+  // `claimedBy` anywhere between `coordPlacementStamps`' SELECT and
+  // `foldCoordPlacements`' entry reds here. Without it that column is pinned
+  // only at the store seam and in the fold's own unit test.
+  it('walks a chain through a coordinator that is ITSELF a worker, to the root', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'chain-worker', 'claude', {
+      project: 'leaf-project', hold: 'program:leaf wave:1/1',
+    });
+    const coord = mkCoord();
+    // W is coordinated by `mid-session`, whose own project is `mid-project`.
+    const leaf = coord.openRun({
+      program: 'leaf', title: 'wave 1', project: 'leaf-project',
+      wave: 1, waveOf: 1, claimedBy: 'mid-session', coordProject: 'mid-project',
+    }) as { id: number };
+    coord.bindSession(leaf.id, 'chain-worker');
+    // …and `mid-session` is itself a worker, coordinated from `root-project`.
+    const mid = coord.openRun({
+      program: 'trunk', title: 'wave 1', project: 'mid-project',
+      wave: 1, waveOf: 1, claimedBy: 'root-session', coordProject: 'root-project',
+    }) as { id: number };
+    coord.bindSession(mid.id, 'mid-session');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    // 'mid-project' if `claimedBy` is lost anywhere on the way to the walk.
+    expect(fleet.find((x) => x.id === 'chain-worker')!.boardProject).toBe('root-project');
+  });
+
+  it('a worker is never lifted onto a card that never coordinated it', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'ct-worker2', 'claude', {
+      project: 'custom-tools', hold: 'program:qdrant wave:10/10',
+    });
+    const coord = mkCoord();
+    // This worker's coordinator lives in intake-platform.
+    const mine = coord.openRun({
+      program: 'qdrant', title: 'wave 10', project: 'custom-tools',
+      wave: 10, waveOf: 10, claimedBy: 'intake-platform-keen-meadow', coordProject: 'intake-platform',
+    }) as { id: number };
+    coord.bindSession(mine.id, 'ct-worker2');
+    // An UNRELATED programme whose WORK happens in intake-platform, coordinated
+    // from ccrc-pwa. A project-keyed hop reads this as "ccrc-pwa coordinates
+    // intake-platform" and walks the row one card too far.
+    const unrelated = coord.openRun({
+      program: 'intake-thing', title: 'wave 1', project: 'intake-platform',
+      wave: 1, waveOf: 1, claimedBy: 'ccrc-pwa-amber-summit', coordProject: 'ccrc-pwa',
+    }) as { id: number };
+    coord.bindSession(unrelated.id, 'intake-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'ct-worker2')!.boardProject).toBe('intake-platform');
   });
 });
 

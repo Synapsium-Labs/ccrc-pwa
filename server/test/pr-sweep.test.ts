@@ -901,6 +901,70 @@ describe('the sweep retains the measured repo, not just the PR phase', () => {
     w.stop();
   });
 
+  // FINAL WHOLE-BRANCH REVIEW, Minor 3 (D-2922). Two one-line defects in the
+  // full-line retention arm, both about trusting a field the parser never
+  // validated. `parsePrLines` casts a full line through
+  // `v as unknown as CcdPrLine` (`prstate.ts`), so `line.project` and
+  // `line.repo` are whatever ccd wrote — and `line.project` had exactly one
+  // reader in the whole tree, this arm.
+  it('keys the retained cell on the LOOP\'s project, never the line\'s own', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    // ccd emits a line naming a project that is not the one this sweep asked
+    // about. The enclosing `for (const project of projects)` is authoritative
+    // — it is what `ccd pr-state --project` was CALLED with.
+    const lying = mergedLine('demo-quiet-basin').replace('"project":"demo"', '"project":"not-demo"');
+    expect(lying).toContain('not-demo');          // anti-vacuity: the fixture really lies
+    const w = new FleetWatcher(testDeps(home, runnerFor(lying, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+    // …and nothing was invented under the name the line made up.
+    expect(w.currentProjectRepos().has('not-demo')).toBe(false);
+    w.stop();
+  });
+
+  it('a full line with no repo never downgrades a named cell — the same keep-last rule as the failure arm', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const w = new FleetWatcher(testDeps(home, runnerFor(mergedLine('demo-quiet-basin'), calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' }));
+
+    // A full line — `rows` and `id` are both there, so it is not a failure —
+    // carrying an EMPTY repo. Today's ccd cannot emit this; the server is
+    // nonetheless trusting an unvalidated field to uphold a rule D-2884 made
+    // the other two arms enforce, so the rule is made structural rather than
+    // contingent on ccd's current behaviour.
+    const noRepo = mergedLine('demo-quiet-basin').replace('"repo":"o/r"', '"repo":""');
+    expect(noRepo).toContain('"repo":""');        // anti-vacuity
+    (w as unknown as { deps: { runCcd: unknown } }).deps.runCcd =
+      testDeps(home, runnerFor(noRepo, calls)).runCcd;
+    (w as unknown as { lastPrSweep: number }).lastPrSweep = 0;
+    await w.tick();
+    // The second sweep really ran and really parsed a full line — without this
+    // the assertion below could be a no-op tick.
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'named', slug: 'o/r' });
+    w.stop();
+  });
+
+  // A project with NO cell yet still learns `unmeasured` from such a line —
+  // the `|| !this.projectRepos.has(project)` half of the rule, which a
+  // keep-last test alone cannot reach.
+  it('writes unmeasured for a repo-less line when the project has no cell at all', async () => {
+    const home = seed(['demo-quiet-basin']);
+    liveIdle(home);
+    const calls: string[][] = [];
+    const noRepo = mergedLine('demo-quiet-basin').replace('"repo":"o/r"', '"repo":""');
+    const w = new FleetWatcher(testDeps(home, runnerFor(noRepo, calls)), new Bus(), 10_000);
+    await w.tick();
+    await vi.waitFor(() => expect(w.currentPrStates().get('demo-quiet-basin')?.phase).toBe('merged'));
+    expect(w.currentProjectRepos().get('demo')).toEqual({ state: 'unmeasured' });
+    w.stop();
+  });
+
   // Mutation-sweep shape, same reasoning as "the swept state reaches the
   // wire, not just currentPrStates()" above: a route-level test that builds
   // its OWN watcher double (as `projects-route-placement.test.ts` does for

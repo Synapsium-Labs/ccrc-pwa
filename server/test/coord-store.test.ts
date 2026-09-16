@@ -70,14 +70,14 @@ describe('CoordStore: runs', () => {
   // Task 3 fix round 2 (Important 2): `coordPlacementStamps` shipped with no
   // store-level test at all.
   describe('CoordStore.coordPlacementStamps', () => {
-    it('returns a stamp only for runs whose coordProject is set, id/sessionId/project carried verbatim', () => {
+    it('returns a stamp only for runs whose coordProject is set, id/sessionId/claimedBy carried verbatim', () => {
       const s = store();
       const stamped = openRun(s, { coordProject: 'intake-platform' }) as { id: number };
       s.bindSession(stamped.id, 'demo-worker');
       openRun(s, { wave: 2 }); // unstamped — must not appear at all
       expect(s.coordPlacementStamps()).toEqual({
         ok: true,
-        stamps: [{ id: stamped.id, sessionId: 'demo-worker', project: 'ccrc-pwa', coordProject: 'intake-platform' }],
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'intake-platform' }],
       });
     });
 
@@ -93,7 +93,7 @@ describe('CoordStore: runs', () => {
       expect(s.advance(stamped.id, 'failed', 'test-close').ok).toBe(true);
       expect(s.coordPlacementStamps()).toEqual({
         ok: true,
-        stamps: [{ id: stamped.id, sessionId: 'demo-worker', project: 'ccrc-pwa', coordProject: 'intake-platform' }],
+        stamps: [{ id: stamped.id, sessionId: 'demo-worker', claimedBy: 'ccrc-pwa-coordinator', coordProject: 'intake-platform' }],
       });
     });
   });
@@ -1937,7 +1937,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
   it('rewrites the TERMINAL run too, so the next wave stops being refused (R1)', () => {
     const s = store();
     const ids = fiveWaves(s);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: true, program: 'build4', runIds: ids, from: DEAD });
     // The closed wave-1 row is the whole assertion: it is the id both readers
     // reach first, and a rewrite that skipped it leaves them on the corpse.
@@ -1947,6 +1947,45 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     expect(openRun(s, { wave: 6, waveOf: 6, claimedBy: LIVE })).toMatchObject({ state: 'planned' });
   });
 
+  // FINAL WHOLE-BRANCH REVIEW, Important 2 (D-2922). `claimedBy` and
+  // `coordProject` are two facts about ONE coordinator, and this statement used
+  // to rewrite only the first — leaving every row of the program pointing at
+  // the DISPLACED coordinator's project. Spec section 7: "Reclaim moves every
+  // worker of a programme at once, because the programme genuinely has a new
+  // coordinator. That is correct and is allowed to happen."
+  it('restamps coordProject alongside claimedBy, across the whole program', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    for (const id of ids) {
+      s.db.prepare('UPDATE runs SET coordProject = ? WHERE id = ?').run('old-coord-project', id);
+    }
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, 'new-coord-project'))
+      .toMatchObject({ ok: true });
+    const rows = okRuns(s.runs({ includeClosed: true }));
+    expect(ids.map((id) => rows.find((r) => r.id === id)!.coordProject))
+      .toEqual(['new-coord-project', 'new-coord-project', 'new-coord-project',
+                'new-coord-project', 'new-coord-project']);
+  });
+
+  it('nulls the stamp when the heir\'s project could not be measured — absence never guesses', () => {
+    const s = store();
+    const ids = fiveWaves(s);
+    for (const id of ids) {
+      s.db.prepare('UPDATE runs SET coordProject = ? WHERE id = ?').run('old-coord-project', id);
+    }
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
+    const rows = okRuns(s.runs({ includeClosed: true }));
+    // NULL, not the displaced coordinator's project: `boardPlacement` reads a
+    // null stamp as "place this row at home", which is the honest degenerate.
+    // Keeping the old value would leave the board asserting a coordinator the
+    // store has just recorded as displaced.
+    expect(ids.map((id) => rows.find((r) => r.id === id)!.coordProject))
+      .toEqual([null, null, null, null, null]);
+  });
+
+  // The claimedBy-NULL skip is the one rung that must NOT be restamped either:
+  // a reconstructed row names no coordinator, so it is not this reclaim's to
+  // move — the WHERE clause governs both columns or neither.
   it('leaves a reconstructed row NULL rather than inventing a claimant for it (D-12)', () => {
     const s = store();
     const ids = fiveWaves(s);
@@ -1955,7 +1994,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     // exists to SKIP those rows. Written with the store's own handle, the shape
     // this file already uses at :67 for a row no public method can produce.
     s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[2]!);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: true, program: 'build4', runIds: [ids[0]!, ids[1]!, ids[3]!, ids[4]!], from: DEAD });
     expect(okRun(s.run(ids[2]!))!.claimedBy).toBeNull();
     expect(s.runEvents(ids[2]!)).toEqual([]);     // and no trail invented for it either
@@ -1965,7 +2004,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     const s = store();
     const ids = fiveWaves(s);
     const at = 1_777_000_123_456;
-    s.reclaimProgram(ids[4]!, LIVE, at);
+    s.reclaimProgram(ids[4]!, LIVE, at, null);
     for (const id of ids) {
       const mine = s.runEvents(id).filter((e) => e.causedBy === 'operator');
       expect(mine.length).toBe(1);
@@ -1985,7 +2024,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     const s = store();
     const ids = fiveWaves(s);
     const before = ids.flatMap((id) => s.runEvents(id)).length;
-    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000, null))
       .toEqual({ ok: true, program: 'build4', runIds: [], from: DEAD });
     expect(ids.flatMap((id) => s.runEvents(id)).length).toBe(before);
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
@@ -1994,10 +2033,10 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
   it('refuses an id no run carries, and a run whose claimant is NULL — writing nothing either way', () => {
     const s = store();
     const ids = fiveWaves(s);
-    expect(s.reclaimProgram(ids[4]! + 999, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]! + 999, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: false, kind: 'unknown-run' });
     s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(ids[4]!);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null))
       .toEqual({ ok: false, kind: 'no-claimant' });
     // The refusal returned BEFORE the UPDATE: the other four rows are untouched.
     expect(okRun(s.run(ids[0]!))!.claimedBy).toBe(DEAD);
@@ -2013,7 +2052,7 @@ describe('CoordStore.reclaimProgram — the whole program, in one transaction', 
     // because nothing else in this store can be made to fail on demand.
     const patched = s as unknown as { recordRunEvent: () => void };
     patched.recordRunEvent = () => { throw new Error('attribution failed'); };
-    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('attribution failed');
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toThrow('attribution failed');
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
   });
 });
@@ -2087,7 +2126,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([d]);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, d).toId).toBe(LIVE);
     // Repointed, NOT parked: the delivery is still exactly as outstanding as it
@@ -2104,7 +2143,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // Identical in every way to arm (a)'s row except `mail.toId`, which is the
     // only column that distinguishes "sent to the chair" from "sent to you".
     const d = queue(s, { toId: DEAD, runId: ids[3]! }, DEAD);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
     expect(del(s, d)).toMatchObject({ toId: DEAD, state: 'queued' });
   });
 
@@ -2119,7 +2158,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // cannot pass by moving nothing at all.
     const live = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, acked)).toMatchObject({ toId: DEAD, state: 'acked' });
     expect(del(s, parked)).toMatchObject({ toId: DEAD, state: 'rejected' });
@@ -2136,7 +2175,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // be a guess on a door whose whole discipline is refusing to guess. The inner
     // JOIN drops it; this pins that as a decision rather than an accident.
     const d = queue(s, { toId: 'coordinator', runId: null }, DEAD);
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
     // Not repointed AND not cancelled: it is not a kickoff either.
     expect(del(s, d)).toMatchObject({ toId: DEAD, state: 'queued', lastError: null });
     // …and it is still visible to the party who CAN tell which program it meant.
@@ -2224,7 +2263,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
       .toEqual([...parked].sort((a, b) => a - b));
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The park is UNTOUCHED — this is a new delivery, not a reopen, and arm
     // (c)'s sentence stands exactly as it was written.
@@ -2283,7 +2322,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const mailId = s.delivery(parked)!.mailId;
     s.db.prepare('UPDATE mail SET kind = ? WHERE id = ?').run('not-a-kind', mailId);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     const heir = s.outstandingMailFor(LIVE);
     expect(heir.map((m) => m.id)).toEqual([mailId]);
@@ -2354,7 +2393,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId).sort((a, b) => a - b))
       .toEqual([mine, literal, noRun, sibling].sort((a, b) => a - b));
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     const heir = s.outstandingMailFor(LIVE);
     expect(heir.map((m) => m.id)).toEqual([s.delivery(mine)!.mailId]);
@@ -2391,7 +2430,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     expect(s.outstandingMailFor(DEAD).map((m) => m.deliveryId)).toEqual([toDead]);
     expect(s.outstandingMailFor(OTHER).map((m) => m.deliveryId)).toEqual([toOther]);
 
-    const r = s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000);
+    const r = s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null);
     expect(r).toMatchObject({ ok: true });
 
     // ONE new delivery, for ONE mail — the heir is not told the same thing twice.
@@ -2417,7 +2456,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const dead = s.queueDelivery(mail.id, DEAD, 'envelope rendered once, at queue time').id;
     s.rejectDelivery(dead, 'undeliverable', 'recipient session is stopped');
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The repoint moved the outstanding row; the park was left; and NO third row
     // was minted, because the heir can already read that message.
@@ -2443,7 +2482,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const parked = parkRendered(s, 'coordinator', ids[3]!, 'recipient session is stopped');
     expect(okRun(s.run(ids[3]!))!.unreadMail).toBe(1);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The heir really did get the report…
     expect(s.outstandingMailFor(LIVE).map((m) => m.id)).toEqual([s.delivery(parked)!.mailId]);
@@ -2458,7 +2497,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const patched = s as unknown as { requeueAbandonedMail: () => void };
     patched.requeueAbandonedMail = () => { throw new Error('requeue failed'); };
 
-    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('requeue failed');
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toThrow('requeue failed');
 
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
     expect(del(s, parked).toId).toBe(DEAD);
@@ -2473,7 +2512,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const mine = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
     const theirs = queue(s, { toId: 'coordinator', runId: other }, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, mine).toId).toBe(LIVE);
     // The sibling program still names DEAD as its own coordinator — this door
@@ -2492,7 +2531,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const report = queue(s, { toId: 'coordinator', runId: ids[3]! }, DEAD);
     const k = kickoff(s, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     // The report moved and was NOT parked by the cancel.
     expect(del(s, report)).toMatchObject({ toId: LIVE, state: 'queued', lastError: null });
@@ -2524,7 +2563,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // after: that count is `m.runId = ?`-scoped and a kickoff names no run.
     expect(okRun(s.run(ids[4]!))!.unreadMail).toBe(0);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(s.outstandingMailFor(DEAD)).toEqual([]);
     expect(s.outstandingMailFor(LIVE)).toEqual([]);
@@ -2544,11 +2583,11 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     // A `to` that already holds the chair displaces nobody: `moved` is empty, so
     // the mail half never runs at all and the current coordinator's own unread
     // kickoff survives the operator re-typing the id the board already shows.
-    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000))
+    expect(s.reclaimProgram(ids[4]!, DEAD, 1_777_000_000_000, null))
       .toMatchObject({ ok: true, runIds: [] });
     expect(del(s, mine).state).toBe('queued');
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
     expect(del(s, mine).state).toBe('rejected');
     // The heir's own kickoff is the one message that must survive: it is what
     // told this session to take the chair it is now taking.
@@ -2567,7 +2606,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
       { fromId: WORKER, toId: DEAD, runId: null, subject: PROGRAM_KICKOFF_SUBJECT }, DEAD);
     const real = kickoff(s, DEAD);
 
-    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toMatchObject({ ok: true });
+    expect(s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toMatchObject({ ok: true });
 
     expect(del(s, peer).state).toBe('queued');
     expect(del(s, real).state).toBe('rejected');
@@ -2586,7 +2625,7 @@ describe('CoordStore.reclaimProgram — the mail follows the chair (D-1141/D-114
     const patched = s as unknown as { repointCoordinatorMail: () => void };
     patched.repointCoordinatorMail = () => { throw new Error('repoint failed'); };
 
-    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000)).toThrow('repoint failed');
+    expect(() => s.reclaimProgram(ids[4]!, LIVE, 1_777_000_000_000, null)).toThrow('repoint failed');
 
     expect(ids.map((id) => okRun(s.run(id))!.claimedBy)).toEqual([DEAD, DEAD, DEAD, DEAD, DEAD]);
     expect(del(s, report).toId).toBe(DEAD);

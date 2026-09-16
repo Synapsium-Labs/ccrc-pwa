@@ -54,9 +54,9 @@ describe('ask store methods', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
     // `reclaimProgram` takes the RUN id, not the program slug — the store's
-    // real signature (`reclaimProgram(runId, to, at)`), not the brief's
+    // real signature (`reclaimProgram(runId, to, at, null)`), not the brief's
     // illustrative `('prog', 'coord-2', ...)`.
-    s.reclaimProgram(run.id, 'coord-2', Date.now());
+    s.reclaimProgram(run.id, 'coord-2', Date.now(), null);
     expect(s.parentOfSession('child-1')).toBe('coord-2');
   });
 

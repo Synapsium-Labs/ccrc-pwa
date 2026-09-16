@@ -879,3 +879,60 @@ controller rulings on findings the task review raised against this plan's own St
   `absent` means no usable origin was found at the path the sweep looked at, never "this project has
   no repository" — and names the conditions `no-remote` folds together, so no renderer may spell the
   stronger sentence. Carried for a later agent-first wave.
+
+Block D-2921..D-2923 issued 2026-09-16 (floor now 2924) for the FINAL WHOLE-BRANCH review's fix wave —
+findings that live BETWEEN tasks, which the four task-scoped reviews structurally could not see.
+D-2921's own definition is the spec correction committed at `c1622e71`
+(`docs/superpowers/specs/2026-09-16-board-placement-and-repo-label-design.md` §4); the two below are
+defined here.
+
+- **D-2922 — two writes that each named only half of one fact.** The number covers the reclaim restamp
+  and the full-line repo-retention arm, because both are the same defect: a statement that rewrites one
+  column of a pair whose members only mean anything together.
+
+  *Reclaim.* `CoordStore.reclaimProgram`'s `UPDATE runs SET claimedBy = ? WHERE program = ? AND
+  claimedBy IS NOT NULL` moved the chair and left `coordProject` naming the DISPLACED coordinator, so
+  every worker of a reclaimed programme kept boarding on the dead coordinator's card until wave N+1
+  opened — days, on a real programme. Spec §7 rules this move CORRECT and required: "Reclaim moves every
+  worker of a programme at once, because the programme genuinely has a new coordinator. That is correct
+  and is allowed to happen." It is NOT the dead-coordinator case the open-time stamp exists for (there,
+  keeping the placement is right), and it left two columns of one row disagreeing about who the
+  coordinator is — which matters directly now that D-2921 keys the hop on `claimedBy`. FIXED: the
+  UPDATE names both columns under one WHERE, and `reclaimRun` measures the heir's project through
+  `fieldMeasured(deps.io, cfg.registryDir, to, 'project')` — the same read `POST /api/runs` makes for
+  the open-time stamp, at the other moment a coordinator is DECIDED. Unreadable, absent and empty all
+  leave the stamp NULL rather than guessing, and NULL beats the stale value: a null stamp places the row
+  at home, while the old value would have the board assert a coordinator this very statement retired.
+  Not a contradiction of §4's "stamped at open time, never re-derived from a live read of the
+  coordinator's registry record": that rule forbids re-deriving on every READ, which is what keeps a
+  worker bracketed under a visibly dead coordinator. `coordProject` is now a REQUIRED fourth parameter
+  of `reclaimProgram`, so no caller can reach that statement without deciding — the store never reads
+  the registry and never guesses.
+
+  *The repo sweep.* `watch.ts`'s full-line arm read `this.projectRepos.set(line.project,
+  repoCellFor({ slug: line.repo }))`. `line.project` came through `parsePrLines`' unvalidated
+  `v as unknown as CcdPrLine` cast (`prstate.ts`) and had exactly one reader in the tree — that
+  statement; the enclosing loop's own `project` is what `ccd pr-state --project` was CALLED with, which
+  is the argument the failure arm's own D-2883 comment twenty lines above already makes. And the write
+  was unconditional, so a full line with a missing `repo` folded to `unmeasured` and overwrote a good
+  `named` cell — exactly what D-2884 ruled against for the failure arm. Today's ccd cannot emit that
+  line, but the server was trusting an unvalidated field to uphold a rule it now enforces elsewhere.
+  FIXED: the keep-last rule is a single private method, `FleetWatcher.retainRepo`, called by both
+  writing arms, so "all three arms agree" is structural rather than contingent on ccd's behaviour.
+
+- **D-2923 — two docstrings that ship as wire contract were false, and a third buried its own operative
+  sentence.** `shared/api.ts`'s `ProjectRow` said "There is no `null` rung for any of the three: this
+  build measures on every request", asserted of `repo` when Task 4 extended it. `repo` is RETAINED, not
+  measured per request: it is whatever `FleetWatcher.projectRepos` last held, written by a 120 s
+  `sweepPr` and longer under backoff. The conclusion survives — the `null` rung really is unnecessary —
+  but the stated REASON was wrong for the member it was extended to cover, so the two are now given
+  separately. `FleetSession.boardProject` said `null` means "THIS SERVER DID NOT DECIDE — an older peer,
+  or a snapshot revived from a build predating the field", enumerating exactly two producers; there is a
+  third condition, and it does not reach the field as null: `readCoordPlacements`' `!ok`/throw degrade
+  (`server/src/fleet.ts`) emits a NON-NULL `boardProject` equal to `project`, so a reader cannot tell
+  "measured, belongs at home" from "could not measure". Deferring that BEHAVIOUR to wave 2 is already
+  ruled (D-2875); shipping a docstring that denies the condition is not, because the docstring is the
+  wire contract this wave ships. It now states the third condition and points at D-2875 for the remedy.
+  Finally `ProjectRepoWire` had grown to ~30 lines on a three-member union with the one sentence a wave-2
+  renderer needs — `absent` is never "this project has no repository" — buried mid-paragraph. It now
+  leads, and the paragraph that argued it follows as the argument for it.

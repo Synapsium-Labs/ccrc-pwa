@@ -363,7 +363,21 @@ export interface FleetSession {
    *  predating the field — and the single reader falls back to `project`. Those
    *  two conditions collapse deliberately: a caller does the identical thing
    *  with both. What is NOT folded is "placed elsewhere" vs "placed home",
-   *  which a reader gets from `boardProject !== project` and needs no field. */
+   *  which a reader gets from `boardProject !== project` and needs no field.
+   *
+   *  A THIRD condition exists and does NOT reach this field as `null`, which is
+   *  a gap in what the wire can say rather than a third meaning for it: when
+   *  the server's placement read fails — `coordPlacementStamps` refusing, or
+   *  `node:sqlite` throwing on a closed connection or a lock race — every row
+   *  degrades to a NON-NULL `boardProject` equal to its own `project`
+   *  (`readCoordPlacements`, `server/src/fleet.ts`). A reader therefore cannot
+   *  tell "this server measured, and this row belongs at home" from "this
+   *  server could not measure at all". It renders identically today and is
+   *  recorded as wave 2's ~4 lines (D-2875): emit `null` on a failed read,
+   *  which is the vocabulary this field already has for exactly that. Stated
+   *  here because this docstring IS the wire contract, and a contract that
+   *  enumerates two producers while a third exists is false whatever the
+   *  renderer happens to do with it (D-2923). */
   boardProject: string | null;
 }
 
@@ -1784,10 +1798,17 @@ export interface ProjectReadiness extends ReadinessFacts {
  * reader must render NOTHING for it — never `{state:'untagged'}` or
  * `{state:'unmeasured'}`, either of which would flag every project on the box
  * as un-tagged/unlabeled the day before the feature ships (account pools,
- * spec §5.4.5, §5.9; the repo cell, board placement wave 1). There is no
- * `null` rung for any of the three: this build measures on every request,
- * and their states already contain "we could not read it" (`unreadable`/
- * `malformed` for `pool`; `unmeasured` for `repo`).
+ * spec §5.4.5, §5.9; the repo cell, board placement wave 1).
+ *
+ * There is no `null` rung for any of the three, but NOT for one reason
+ * (D-2923). `pool` and `placement` are measured on every request. `repo` is
+ * RETAINED: it is whatever `FleetWatcher.projectRepos` last held, written by a
+ * 120 s `sweepPr` and longer under backoff, so a present `repo` can be minutes
+ * old and a reader must not treat it as a reading taken just now. What makes
+ * the `null` rung unnecessary in both cases is the same: the states already
+ * contain "we could not read it" — `unreadable`/`malformed` for `pool`,
+ * `unmeasured` for `repo`, which is also the value a project that has never
+ * been swept carries.
  */
 export interface ProjectRow {
   name: string;
@@ -1802,19 +1823,24 @@ export interface ProjectRow {
  * What a project's REPOSITORY was measured to be — `_gh_repo_slug` of the
  * project's main checkout, carried on the project row.
  *
+ * **A RENDERER MUST NEVER SPELL `absent` AS "THIS PROJECT HAS NO
+ * REPOSITORY".** It means no usable origin was found AT THE PATH THE SWEEP
+ * LOOKED AT, and nothing more. That is the one sentence a wave-2 renderer
+ * needs from this type, so it leads (D-2923 — it was buried mid-paragraph
+ * below, which is where a renderer stops reading).
+ *
  * THREE states, and no reader may fold one into another. `absent` is a
- * MEASUREMENT — the project has no usable origin, which four projects on this
- * fleet genuinely do not — while `unmeasured` says no measurement happened.
- * Folding them would paint "this project has no repository" over a timeout.
+ * MEASUREMENT — no usable origin at the path checked, which four projects on
+ * this fleet genuinely have — while `unmeasured` says no measurement happened.
+ * Folding them would paint a claim about the repository over a timeout.
  *
  * The label renders only on `named`. `absent` is deliberately NOT split into
  * "no origin" and "unrecognized remote": a renderer treats them identically and
  * `PrKeycap.tsx`'s no-remote sentence already owns that distinction.
  *
- * `absent` IS NOT A CLAIM ABOUT THE PROJECT'S EXISTENCE IN GIT (coordinator
- * ruling, fix round 1, Important 2) — it means no usable origin was found AT
- * THE PATH THE SWEEP LOOKED AT (`$PROJECTS_ROOT/$project`, the argument
- * `_gh_repo_slug` is given). `_gh_repo_slug` (`ccd/ccd`) returns its one
+ * Why the leading sentence is bounded that way (coordinator ruling, fix round
+ * 1, Important 2). The path the sweep looks at is `$PROJECTS_ROOT/$project`,
+ * the argument `_gh_repo_slug` is given. `_gh_repo_slug` (`ccd/ccd`) returns its one
  * failure for `no-remote` on at least two upstream conditions this type does
  * not, and must not, distinguish: (1) the path is a git checkout with no
  * `origin` remote configured, and (2) `git -C "$1"` cannot use the path AT
@@ -1828,9 +1854,8 @@ export interface ProjectRow {
  * workdir entirely and measure `absent` for a project that has a perfectly
  * good repository elsewhere. Fixing that is a `ccd`/registry-path question,
  * not a wire question, and is out of this wave's scope (agent-first would
- * change the deploy order); this docstring exists so wave 2's renderer never
- * spells `absent` as "this project has no repository" — only as "no usable
- * origin was found at the path the sweep checked".
+ * change the deploy order); the sentence at the top of this docstring is what
+ * stands in for the fix until then.
  */
 export type ProjectRepoWire =
   | { state: 'named'; slug: string }

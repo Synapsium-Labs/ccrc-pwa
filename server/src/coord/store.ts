@@ -3,6 +3,10 @@ import { tx } from './db.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
+// D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
+// policy — the house port pattern. This read exists to feed that policy and
+// nothing else, so the shape it returns is the policy's to define.
+import type { CoordPlacementStamp } from './placement.js';
 import type { LedgerLog } from './ledgerlog.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
@@ -75,18 +79,19 @@ export interface OpenSibling {
   id: number; program: string; wave: number; waveOf: number | null;
 }
 
-/** The four columns `fleet.ts`'s `boardPlacement` port supply needs from a
- *  run, and nothing else — `OpenSibling`'s own reasoning above, restated for
- *  this consumer: hydrating a whole run (`itemTally`, `unreadMailCount`,
- *  batch health, a `prLineage` JSON parse) to answer "which project does
- *  this run's coordinator belong to" would drag all of that through a
- *  decision that turns on three strings and an id. `id` rides along
- *  specifically so the caller can fold newest-wins by comparing ids rather
- *  than trusting this query's own row order — `coordPlacementStamps`'s own
- *  docstring below. */
-export interface CoordPlacementStamp {
-  id: number; sessionId: string | null; project: string; coordProject: string;
-}
+/** The columns `boardPlacement`'s port supply needs from a run, and nothing
+ *  else — `OpenSibling`'s own reasoning above, restated for this consumer:
+ *  hydrating a whole run (`itemTally`, `unreadMailCount`, batch health, a
+ *  `prLineage` JSON parse) to answer "who coordinates this session, and where
+ *  do they live" would drag all of that through a decision that turns on three
+ *  strings and an id.
+ *
+ *  DECLARED BY THE CONSUMER (`coord/placement.ts`), re-exported here so the
+ *  store's own result type reads in one place. D-2921 also dropped `project`
+ *  from it: that column is the WORKER's project, the policy no longer keys
+ *  anything on it, and a field nobody reads is an invitation to key on it
+ *  again — which is the defect that number was spent on. */
+export type { CoordPlacementStamp };
 
 /** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
  *  material `RunSummary`'s own docstring says is "deliberately absent" from
@@ -1038,7 +1043,7 @@ export class CoordStore {
    * fetches. Re-rendering it here would trade a true historical line for a
    * violation of the one rule the mail body has.
    */
-  reclaimProgram(runId: number, to: string, at: number): ReclaimProgramResult {
+  reclaimProgram(runId: number, to: string, at: number, coordProject: string | null): ReclaimProgramResult {
     return tx(this.db, () => {
       const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
         .get(runId) as { program: string; claimedBy: string | null } | undefined;
@@ -1056,8 +1061,29 @@ export class CoordStore {
         'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
         'AND claimedBy != ? ORDER BY id',
       ).all(run.program, to) as { id: number; claimedBy: string }[];
-      this.db.prepare('UPDATE runs SET claimedBy = ? WHERE program = ? AND claimedBy IS NOT NULL')
-        .run(to, run.program);
+      // D-2922: `claimedBy` and `coordProject` move TOGETHER, under one WHERE.
+      // They are two facts about the same coordinator — who holds the chair,
+      // and which card that chair's workers render on — and rewriting only the
+      // first left every row of the program boarding on the coordinator this
+      // statement had just displaced, until wave N+1 opened (days, on a real
+      // programme). Spec section 7 rules this move CORRECT: "Reclaim moves
+      // every worker of a programme at once, because the programme genuinely
+      // has a new coordinator."
+      //
+      // NOT a contradiction of section 4's "stamped at open time, never
+      // re-derived from a live read of the coordinator's registry record":
+      // that rule forbids re-deriving a placement on every READ, so a worker
+      // keeps its card when its coordinator dies. This writes at the other
+      // moment the coordinator is DECIDED. The stamp still never chases a
+      // live record.
+      //
+      // `coordProject` is the caller's MEASUREMENT or null — the store does not
+      // read the registry and does not guess. Null over the displaced
+      // coordinator's project is deliberate: a null stamp places the row at
+      // home (`boardPlacement`'s own contract), while the stale value would
+      // have the board assert a coordinator this very statement retired.
+      this.db.prepare('UPDATE runs SET claimedBy = ?, coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL')
+        .run(to, coordProject, run.program);
       for (const m of moved) {
         // One `at` for N rows (D-1134): the operator acted once, and a trail that
         // reads five clock samples describes five acts.
@@ -2018,7 +2044,7 @@ export class CoordStore {
    * `runs({includeClosed:true})`'s narrow sibling, for `fleet.ts`'s
    * `readCoordPlacements` alone. `runs()` prices a full read at "~3,000 [SQL
    * statements] for one [on-demand] board load" (this docstring's own
-   * estimate, `:2419-2422` below) — `itemTally` (two statements),
+   * estimate, `:2521-2524` below) — `itemTally` (two statements),
    * `unreadMailCount` (one), batch health and a `prLineage` JSON parse, PER
    * ROW, over every open run and up to 500 closed. That is an on-demand-load
    * price. `readCoordPlacements` runs on `FleetWatcher`'s 2s tick and every
@@ -2027,11 +2053,21 @@ export class CoordStore {
    * and `openCoordinatorIds` above make the identical trade for the identical
    * reason.
    *
+   * `claimedBy` rides in the SAME row as `coordProject` (D-2921), never as a
+   * second read: they are two facts about one coordinator, and the walk that
+   * consumes them is a chain of "who coordinates THIS session" — whose answer
+   * is a project (where the row renders) and a session id (the next question).
+   * Splitting them would let a stamp and a claimant disagree about which
+   * coordinator a run has. `runs.project` is deliberately NOT selected: it is
+   * the WORKER's project — the column `POST /api/runs`' `project-mismatch`
+   * rung compares `sessionProject(sessionId)` against — and keying a hop on it
+   * is the defect D-2921 repairs.
+   *
    * `WHERE coordProject IS NOT NULL` is pushed into SQL, not left to the
    * caller: an unstamped run can never change a placement (`boardPlacement`'s
-   * own contract — `stamped: null` degrades to `ownProject`), so filtering it
-   * out here is strictly narrower than filtering it out in `fleet.ts`, at no
-   * cost to correctness.
+   * own contract — a session whose lookup answers null degrades to
+   * `ownProject`), so filtering it out here is strictly narrower than filtering
+   * it out in `fleet.ts`, at no cost to correctness.
    *
    * Closed runs stay visible (same `includeClosed:true` shape as `runs()`,
    * same `closedLimit` clamp) — DELIBERATE, not a narrowing this method may
@@ -2039,26 +2075,26 @@ export class CoordStore {
    * cards at the close-then-open wave boundary (Task 3's own brief).
    *
    * `id` rides CAST to TEXT and proven by `persistedInt`, D-2545's reason:
-   * `fleet.ts`'s fold uses it to pick the NEWEST stamp per key regardless of
-   * which order these rows arrive in — this method still orders by `id` for
-   * determinism, but that ordering is not a contract the caller may rely on
-   * (`fleet.ts`'s own ruling). ALL-OR-FAILURE on an unrepresentable id, the
+   * `foldCoordPlacements` (`coord/placement.ts`) uses it to pick the NEWEST
+   * stamp per session regardless of which order these rows arrive in — this
+   * method still orders by `id` for determinism, but that ordering is not a
+   * contract the caller may rely on (that fold's own ruling). ALL-OR-FAILURE on an unrepresentable id, the
    * same rule `openRunsForSession` follows: a partial stamp set is how a
    * session's card could silently jump to the wrong coordinator.
    */
   coordPlacementStamps(closedLimit?: number): CoordPlacementStampsResult {
     const n = clampMailLimit(closedLimit ?? 500);
     const rows = this.db.prepare(
-      'SELECT CAST(id AS TEXT) AS idText, sessionId, project, coordProject FROM runs ' +
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, coordProject FROM runs ' +
       "WHERE coordProject IS NOT NULL AND (state NOT IN ('done','failed') OR id IN " +
       "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?)) " +
       'ORDER BY id',
-    ).all(n) as unknown as { idText: string; sessionId: string | null; project: string; coordProject: string }[];
+    ).all(n) as unknown as { idText: string; sessionId: string | null; claimedBy: string | null; coordProject: string }[];
     const stamps: CoordPlacementStamp[] = [];
     for (const r of rows) {
       const id = persistedInt(r.idText, 'run id');
       if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
-      stamps.push({ id: id.value, sessionId: r.sessionId, project: r.project, coordProject: r.coordProject });
+      stamps.push({ id: id.value, sessionId: r.sessionId, claimedBy: r.claimedBy, coordProject: r.coordProject });
     }
     return { ok: true, stamps };
   }

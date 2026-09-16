@@ -14,11 +14,13 @@ import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
-import type { AskRow, CoordPlacementStamp, CoordStore } from './coord/store.js';
+import type { AskRow, CoordStore } from './coord/store.js';
 // Task 3: the pure board-placement decision (Task 2) — this file supplies its
-// two ports (`stamped`, `coordOf`) from a `coord.db` read, boardPlacement.ts
-// itself imports nothing from here.
-import { boardPlacement } from './coord/placement.js';
+// ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
+// nothing from here. D-2921 moved the fold that BUILDS that port into
+// placement.ts too: it is the same pure decision, and holding half of it here
+// in L3 is what let the two halves disagree about what the hop is keyed on.
+import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
@@ -185,70 +187,17 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
   }
 }
 
-/** The two ports `boardPlacement` needs, built by `foldCoordPlacements` /
- *  handed back empty by `readCoordPlacements`'s guards below. Named so both
- *  can share one return type rather than repeating the object shape. */
-interface CoordPlacementPorts {
-  coordOf: (project: string) => string | null;
-  bySession: Map<string, string>;
-}
-
-const emptyCoordPlacements = (): CoordPlacementPorts => ({ coordOf: () => null, bySession: new Map() });
-
-/**
- * PURE fold from a flat stamp list to `boardPlacement`'s two ports —
- * `byProject` (which project coordinates a given project — the transitive
- * hops, project-keyed, exposed as `coordOf`) and `bySession` (the stamp on a
- * session's OWN newest run — the first hop, session-keyed).
- *
- * NEWEST-WINS, ORDER-INDEPENDENT (fix round 1, findings 3+4). The original
- * cut folded by ARRIVAL order: `bySession` overwrote on every hit (newest
- * won only because `coord.runs`'s `ORDER BY r.id` happened to hold) while
- * `byProject` kept only the FIRST hit (oldest wins — wrong per spec §4, and
- * silently order-dependent the same way: with the closed-run clamp, "which
- * row is first" drifts in jumps as old rows age out). Neither `runs()` nor
- * `coordPlacementStamps` documents ordering as a CONTRACT nothing reds if it
- * changes, so this fold does not rely on it: `newestProjectId`/
- * `newestSessionId` track the highest `run.id` folded into each key so far,
- * and a map entry is only replaced when a STRICTLY higher id arrives — a
- * plain `Map<string,string>` cannot tell "this key already has a stamp"
- * from "this key has the RIGHT stamp", which is what those side tables add.
- * Correct regardless of the order `stamps` arrives in, which is exactly what
- * `fleet.test.ts`'s reverse-order test proves by running this function
- * twice over one list, forwards and reversed, and asserting an identical
- * result — something no test through the real DB can exercise, since a real
- * read always arrives in one direction (`coordPlacementStamps`'s `ORDER BY
- * id`, kept for determinism, not as a contract this fold leans on).
- *
- * Exported for that direct, DB-free pin.
- */
-export function foldCoordPlacements(stamps: readonly CoordPlacementStamp[]): CoordPlacementPorts {
-  const byProject = new Map<string, string>();
-  const bySession = new Map<string, string>();
-  const newestProjectId = new Map<string, number>();
-  const newestSessionId = new Map<string, number>();
-  for (const stamp of stamps) {
-    if (stamp.sessionId !== null) {
-      const seen = newestSessionId.get(stamp.sessionId);
-      if (seen === undefined || stamp.id > seen) {
-        newestSessionId.set(stamp.sessionId, stamp.id);
-        bySession.set(stamp.sessionId, stamp.coordProject);
-      }
-    }
-    const seenP = newestProjectId.get(stamp.project);
-    if (seenP === undefined || stamp.id > seenP) {
-      newestProjectId.set(stamp.project, stamp.id);
-      byProject.set(stamp.project, stamp.coordProject);
-    }
-  }
-  return { coordOf: (project: string): string | null => byProject.get(project) ?? null, bySession };
-}
+/** `boardPlacement`'s empty port: nothing stamped, so every row goes home.
+ *  Handed back by `readCoordPlacements`'s guards below — a dark box, an empty
+ *  registry, a refused or throwing read. */
+const emptyCoordPlacements = (): StampLookup => () => null;
 
 /**
  * Task 3's own batched, guarded read — the `boardPlacement` port supply,
  * built ONCE per assembly (never per row, which would be O(rows x hops)
  * `coord.db` queries), by handing `coordPlacementStamps`' rows to the pure
- * `foldCoordPlacements` above. Same guard shape as `readCurrentAsks` right
+ * `foldCoordPlacements` (`coord/placement.ts`, L1 — D-2921 moved it there, to
+ * sit beside the walk it feeds). Same guard shape as `readCurrentAsks` right
  * above: `coord` is absent on a dark box and in every pre-Task-3 test, and
  * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
  * race — either way this degrades to "nothing stamped", never throws out of
@@ -271,7 +220,7 @@ export function foldCoordPlacements(stamps: readonly CoordPlacementStamp[]): Coo
  * alone would bounce every worker between cards at the close-then-open wave
  * boundary, one of the four defects this design exists to end.
  */
-function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): CoordPlacementPorts {
+function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): StampLookup {
   if (!coord || sessionCount === 0) return emptyCoordPlacements();
   try {
     const read = coord.coordPlacementStamps();
@@ -515,7 +464,7 @@ export async function assembleFleet(
   // Task 3: ONE pass over the stamped runs, reused by every row below — see
   // `readCoordPlacements`'s own docstring for why this is batched rather than
   // a per-row query.
-  const { coordOf, bySession } = readCoordPlacements(coord, recs.length);
+  const stampOf = readCoordPlacements(coord, recs.length);
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
@@ -662,12 +611,12 @@ export async function assembleFleet(
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
-      // Task 3: which CARD this row renders on. `stamped` is session-keyed
-      // (this session's OWN newest run), `coordOf` is project-keyed (the
-      // transitive hops) — both built ONCE above, outside this per-row map.
+      // Task 3: which CARD this row renders on. ONE port, SESSION-keyed
+      // (D-2921) — the walk starts at this row's own id and every later hop
+      // asks the same question of the coordinator it just reached. Built ONCE
+      // above, outside this per-row map.
       boardProject: boardPlacement({
-        sessionId: r.id, ownProject: r.project, held: r.held !== null,
-        stamped: bySession.get(r.id) ?? null, coordOf,
+        sessionId: r.id, ownProject: r.project, held: r.held !== null, stampOf,
       }),
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
