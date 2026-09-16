@@ -408,11 +408,13 @@ session's workspace belongs to — at the open, and again at the dispatch resume
 the open ever let one through.
 
 **What a crossing costs, so a cap refusal reads as arithmetic rather than a
-fault.** The cap rule is exact: concurrency counts dispatched non-terminal runs,
-not held workspaces. A terminal producer retained on a hold and a planned
-undispatched consumer consume no running-worker slot, while each actual dispatch
-still consumes daily budget and a dispatched non-terminal consumer consumes one
-concurrency slot. `cap-concurrency`
+fault.** The cap rule is exact: concurrency counts dispatched runs in an ACTIVE
+state, not held workspaces and not merely non-terminal ones. A terminal producer
+retained on a hold and a planned undispatched consumer consume no running-worker
+slot, and neither does a run parked IDLE at `awaiting-review`, `merging` or
+`closing` — it gives its slot back without closing (D-2803) — while each actual
+dispatch still consumes daily budget and a dispatched run consumes one
+concurrency slot for as long as it stays active. `cap-concurrency`
 or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
 exactly as you would for any other run.
 

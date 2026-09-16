@@ -196,9 +196,16 @@ export function configDirFor(cfg: CcrcConfig, wrapper: string): string | undefin
  *
  * In remote fleet mode this still reads the LOCAL box's copy, unconditionally
  * — the server may run on a different machine from the accounts it manages
- * (that is the production topology), but deploy ships the same
- * `accounts.json` to both boxes, so there is no agent round-trip to make
- * here and no FleetIO indirection to add.
+ * (that is the production topology). It is NOT that the two boxes hold one
+ * file: `ship_roster` (`deploy/deploy.sh`) seeds `~/.ccrc/accounts.json` only
+ * when the box has none and never overwrites it afterwards, so each box's copy
+ * is hand-owned and the two can differ — which is precisely why
+ * `rosterAgreement` (`server/src/fleetstate.ts`) compares the generated
+ * projections continuously and the PWA banners `divergent`. What follows from
+ * that is the opposite of an argument for an agent round-trip: THIS box's
+ * roster is the one this server serves, answers `GET /api/accounts` from and
+ * builds argv against, so reading it locally is reading the right file, and a
+ * FleetIO indirection here would silently swap in the OTHER box's answer.
  *
  * Throws `RosterError` — never returns a partial or empty roster — when the
  * file is missing, unreadable, not valid JSON, or fails `parseRoster`'s
