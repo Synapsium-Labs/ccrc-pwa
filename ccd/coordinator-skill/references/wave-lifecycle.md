@@ -744,8 +744,9 @@ session id on this run), `no-record` (the registry has no `.class`/`.effort` fil
 `unrouteable-record` (`.class`/`.effort`/`.degraded` IS present and readable but its content is
 not a legal rung — a stray ccd value like `class=default`, or a torn/never-written field — refused
 here rather than silently resolved to the ladder's bottom rung), `registry-unreadable` (transient
-— one of the three registry files is listed but unreadable), `run-closed` (the run is not
-`dispatched`/`working`/`awaiting-review`), `ceiling`/`floor`/`no-effort-rungs` (the ladder, or the
+— one of the three registry files is listed but unreadable), `run-closed` (the run is in a
+TERMINAL state — `done` or `failed`; every other state, including `unknown` and `planned`, is
+routable and refuses later on its true reason), `ceiling`/`floor`/`no-effort-rungs` (the ladder, or the
 degraded-record guard, has nowhere to move this request to — an answer, not an error),
 `unsupported` (501, the fleet host predates `route-v1`), `fleetFailed` (502, ccd refused the write
 — no run event is recorded on a refusal). Any failed check reverses the run's own last unreversed

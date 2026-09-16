@@ -170,6 +170,61 @@ describe('POST /api/runs/:id/route', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'run-closed' });
   });
 
+  it('409s run-closed on a failed run', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id } = await dispatchedRun(w.app, 'demo-fresh');
+    w.coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(id);
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'x', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'run-closed' });
+  });
+
+  // Review finding #6, controller ruling S5-R4: the routable set is DERIVED
+  // as "every RunState NOT in TERMINAL_RUN_STATES", not a hand-typed
+  // three-state list — `unknown` (an ACTIVE state that holds a dispatch
+  // slot, `shared/api.ts`'s `ACTIVE_RUN_STATES`) and `merging` (an IDLE
+  // state) both PASS this gate, unlike the old inline
+  // `['dispatched','working','awaiting-review']`, which would have refused
+  // both as `run-closed`.
+
+  it('a run in state unknown passes the state gate (proceeds to the next gate, here a successful escalation)', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w15'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w15');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+    w.coord.db.prepare("UPDATE runs SET state = 'unknown' WHERE id = ?").run(id);
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, applied: { mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh' } });
+  });
+
+  it('a run in state merging passes the state gate (proceeds to the next gate, here a successful escalation)', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w16'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w16');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+    w.coord.db.prepare("UPDATE runs SET state = 'merging' WHERE id = ?").run(id);
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, applied: { mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh' } });
+  });
+
+  it('a planned run (never dispatched) passes the state gate and refuses no-session, not run-closed', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const opened = (await postOpen(w.app)).json() as { id: number };
+    const res = await postRoute(w.app, opened.id, { target: 'worker', why: 'x', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'no-session' });
+  });
+
   it('409s no-session on a dispatched run with no sessionId for target worker', async () => {
     const home = mkTmp('ccrc-route-');
     const { run } = makeRunner(home);
@@ -193,6 +248,72 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'x', kind: 'shallow' });
     expect(res.statusCode).toBe(501);
     expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
+  });
+
+  // Review finding #7: four declared refusal codes had no test — the whole
+  // generic ladder-refusal arm (`floor`/`no-effort-rungs`) and both
+  // `no-record` absent arms. Each asserts the WHOLE body (the mutation this
+  // finding names is `error: target.kind` -> `'ceiling'`, or dropping
+  // `detail: target.why`, either of which only a whole-body assertion catches).
+
+  it('409s floor when demoting effort already at the mechanical floor (low)', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w17'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w17');
+    seed(home, sid, { class: 'opus', effort: 'low' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'too slow already', demote: 'effort' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'floor', detail: 'low is the mechanical floor for effort' });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
+  it('409s no-effort-rungs on a kind escalation for a session at ultracode', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w18'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w18');
+    seed(home, sid, { class: 'opus', effort: 'ultracode' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({
+      ok: false, error: 'no-effort-rungs',
+      detail: 'ultracode has no effort rungs; its next rung is a class rung the caller decides',
+    });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
+  it('409s no-record naming class when the session has no .class file at all', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w19'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    // dispatchedRun's own `seed` (in makeRunner's `ws-add` stub) writes no
+    // `class`/`effort` file — this is that absent-record state as-is.
+    const { id } = await dispatchedRun(w.app, 'demo-w19');
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'no-record', field: 'class' });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
+  it('409s no-record naming effort when .class exists but .effort does not', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w20'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w20');
+    seed(home, sid, { class: 'opus' }); // no `effort` override — no `.effort` file at all
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'no-record', field: 'effort' });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
   });
 
   it('kind: shallow on a worker at opus·high escalates effort to xhigh, one run event', async () => {
@@ -263,6 +384,60 @@ describe('POST /api/runs/:id/route', () => {
     // The stubbed ccd never rewrites the registry file, so `.effort` still
     // reads 'high' — proving `lastDemotion` is read from the run's OWN event
     // trail, never from a re-read of the record.
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow' },
+    });
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:reverse-demotion:effort:medium->high:shallow');
+  });
+
+  // Review finding #8, controller ruling S5-R5: a `route:manual:<field>:`
+  // event on the DEMOTED field clears `lastDemotion` — the manual write
+  // superseded the demotion, so the next failure must not "reverse" a rung
+  // that is gone. A manual write on some OTHER field leaves a standing
+  // demotion untouched.
+
+  it('a manual write on the demoted field clears lastDemotion — the next failure is a plain ladder escalation, not a reversal of a superseded demotion', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w13'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w13');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+
+    const demoted = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
+    expect(demoted.statusCode).toBe(200);
+
+    const manual = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'effort', value: 'high' });
+    expect(manual.statusCode).toBe(200);
+
+    // The stubbed ccd never rewrites the registry, so `.effort` still reads
+    // its original 'high' — the point of this test is that the manual event
+    // clears `lastDemotion`, so this call reaches the PLAIN escalate arm
+    // (which reads `.effort` fresh) instead of the reversal arm (which
+    // would answer purely off the now-superseded `lastDemotion` bookkeeping
+    // regardless of what `.effort` says).
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow' },
+    });
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:effort:high->xhigh:shallow');
+  });
+
+  it('a manual write on a different field leaves a standing demotion in place — it still reverses on the next failure', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w14'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w14');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+
+    const demoted = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
+    expect(demoted.statusCode).toBe(200);
+
+    const manual = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'class', value: 'sonnet' });
+    expect(manual.statusCode).toBe(200);
+
     const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({

@@ -34,11 +34,28 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_WRITABLE_FIELDS, ROUTE_CONTROL_CHAR_RE, parseRouteFields,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, parseRouteFields, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
 } from '../../../shared/api.js';
+
+/**
+ * `POST /api/runs/:id/route`'s routable run states (review finding #6,
+ * controller ruling S5-R4): every `RunState` NOT in `TERMINAL_RUN_STATES`
+ * (`shared/api.ts`) — DERIVED, not a hand-typed three-state list, so
+ * `run-closed` means "terminal" and nothing else. This makes `unknown` (an
+ * ACTIVE state that holds a dispatch slot — `shared/api.ts`'s
+ * `ACTIVE_RUN_STATES`) routable: a row in `unknown` proceeds past this gate
+ * and refuses later on its true reason (typically `no-session`, since a
+ * newer-build row this build cannot name is unlikely to carry a session id
+ * this build understands either). Module level, not re-allocated per
+ * request, and visible to `run-states.test.ts`'s partition census the way an
+ * inline `const` inside the handler never was.
+ */
+const ROUTABLE_RUN_STATES: readonly RunState[] = RUN_STATES.filter(
+  (s) => !(TERMINAL_RUN_STATES as readonly string[]).includes(s),
+);
 
 /**
  * One coordinator-wide async mutex, serialising the WRITE routes' bodies
@@ -1797,8 +1814,7 @@ export function registerCoordRoutes(
       const run = read.run;
       if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
 
-      const OPEN_RUN_STATES: readonly RunState[] = ['dispatched', 'working', 'awaiting-review'];
-      if (!OPEN_RUN_STATES.includes(run.state)) {
+      if (!ROUTABLE_RUN_STATES.includes(run.state)) {
         return reply.code(409).send({ ok: false, error: 'run-closed', detail: `run is ${run.state}` });
       }
 
@@ -1884,6 +1900,16 @@ export function registerCoordRoutes(
         // yet followed by a `route:reverse-demotion:` detail. Walked in
         // order, so a later reverse-demotion or a later demote always wins
         // over an earlier one.
+        //
+        // Fix round 2, finding #8, ruling S5-R5: a manual write on the
+        // DEMOTED field also clears `lastDemotion` — the coordinator's own
+        // judgement superseded the demotion, so the next escalation must not
+        // "reverse" a rung the record no longer carries. A manual write on
+        // some OTHER field leaves a standing demotion alone (it never
+        // touched that field). Without this, `demote effort high->medium`
+        // then `manual field:effort value:max` then a failure would answer
+        // `reverse-demotion medium->high` and walk the session DOWN from
+        // `max` using a `from` that was never current.
         const events = coord.runEvents(id);
         let lastDemotion: Demotion | null = null;
         let priorSameKind = 0;
@@ -1895,6 +1921,8 @@ export function registerCoordRoutes(
           if (evMode === 'demote') {
             lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
           } else if (evMode === 'reverse-demotion') {
+            lastDemotion = null;
+          } else if (evMode === 'manual' && lastDemotion !== null && evField === lastDemotion.field) {
             lastDemotion = null;
           }
           if (hasKind && evMode === 'escalate' && evKind === kind) {

@@ -5437,37 +5437,65 @@ export type RouteMode = 'escalate' | 'demote' | 'reverse-demotion' | 'manual';
  * fifth route's vocabulary gets its own union rather than silently widening
  * one whose docstring would then be lying about its own membership.
  *
- *   no-session          — the resolved target (worker/coordinator) carries no
- *                         session id on this run
- *   no-record           — the target session's registry has no `.class` or
- *                         `.effort` file to walk the ladder from
- *   unrouteable-record  — `.class`/`.effort`/`.degraded` IS present and
- *                         readable, but its content is not a legal vocabulary
- *                         member (`CLASSES`/`EFFORT_LADDER` ∪ `auto`/
- *                         `ultracode`) — a DIFFERENT condition than `no-record`
- *                         (which means no file at all): the record exists, it
- *                         is only unroutable. Fix round 1, finding #1: ccd's
- *                         `ROUTE_CLASSES` legally accepts `default` (folded to
- *                         "no override" only inside ccd itself) and a torn/
- *                         empty write trims to `''` — neither is a rung this
- *                         ladder's index lookup may silently resolve to -1
- *                         (the floor) for
- *   registry-unreadable — one of `.class`/`.effort`/`.degraded` is listed but
- *                         unreadable — transient, not a fact about the record
- *   run-closed          — the run is not in `dispatched`/`working`/
- *                         `awaiting-review`
- *   ceiling             — the ladder (or the degraded-record guard) has
- *                         nothing above the current rung to move to
- *   floor               — `demote()` is already at the mechanical floor
- *   no-effort-rungs     — the target is at `ultracode`, which has no effort
- *                         rung of its own (the caller's job to pick a class)
+ * Fix round 2, finding #4: this union is NOT the route's complete answer
+ * set — it is only the subset of NEW kebab-case tokens
+ * `mail-routes.test.ts`'s scanner needed admitted (its regex matches only
+ * `[a-z]+(-[a-z]+)+`, i.e. lowercase words joined by at least one hyphen).
+ * Three of the route's own words are already declared in OTHER unions and
+ * so never needed a home here (`unknown-run`, `run-unreadable`,
+ * `bad-request`); two never match the scanner's regex at all (`unsupported`
+ * has no hyphen; `fleetFailed` is camelCase, not kebab). The route's FULL
+ * answer set — status code and word, for a client author who wants a
+ * decoder covering everything this door can send:
+ *
+ *   400 bad-request         — malformed body: bad `target`/`why`/manual
+ *                             field-value shape, or not exactly one of
+ *                             kind/demote/field+value
+ *   404 unknown-run         — no run with this id
+ *   503 run-unreadable      — `coord.run(id)` could not read the row
+ *   409 run-closed          — the run is not in a ROUTABLE state — every
+ *                             `RunState` outside `TERMINAL_RUN_STATES`
+ *                             (S5-R4; `shared/api.ts`), so `unknown` and
+ *                             every IDLE state route THROUGH this gate
+ *   409 no-session          — the resolved target (worker/coordinator)
+ *                             carries no session id on this run
+ *   501 unsupported         — the fleet does not report `route-v1`
+ *   409 no-record           — the target session's registry has no `.class`
+ *                             or `.effort` file to walk the ladder from
+ *   409 unrouteable-record  — `.class`/`.effort`/`.degraded` IS present and
+ *                             readable, but its content is not a legal
+ *                             vocabulary member (`CLASSES`/`EFFORT_LADDER` ∪
+ *                             `auto`/`ultracode`) — a DIFFERENT condition
+ *                             than `no-record` (which means no file at
+ *                             all): the record exists, it is only
+ *                             unroutable. Fix round 1, finding #1: ccd's
+ *                             `ROUTE_CLASSES` legally accepts `default`
+ *                             (folded to "no override" only inside ccd
+ *                             itself) and a torn/empty write trims to `''`
+ *                             — neither is a rung this ladder's index
+ *                             lookup may silently resolve to -1 (the floor)
+ *                             for
+ *   503 registry-unreadable — one of `.class`/`.effort`/`.degraded` is
+ *                             listed but unreadable — transient, not a
+ *                             fact about the record
+ *   409 ceiling              — the ladder (or the degraded-record guard)
+ *                             has nothing above the current rung to move to
+ *   409 floor                — `demote()` is already at the mechanical
+ *                             floor
+ *   409 no-effort-rungs      — the target is at `ultracode`, which has no
+ *                             effort rung of its own (the caller's job to
+ *                             pick a class)
+ *   502 fleetFailed          — the `route` verb itself refused (stderr in
+ *                             the body); NO run event is recorded
+ *   200 ok:true              — `{ applied: { session, mode, field, from,
+ *                             to, kind } }`
  *
  * `run-closed` collides, in SPELLING ONLY, with `store.ts`'s unrelated
  * `releaseClaimsForRun` `endedBy` forensic value the scanner's `NOT_CODES`
  * already allowlists — two different vocabularies that happen to share one
- * English phrase; declared here too so this union stays the honest, complete
- * list of what this route can send, rather than leaning on that unrelated
- * entry's coincidental tolerance.
+ * English phrase; declared here too so a reader of THIS union's own
+ * members never needs to lean on that unrelated entry's coincidental
+ * tolerance.
  */
 export const RUN_ROUTE_REFUSE_CODES = [
   'no-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
