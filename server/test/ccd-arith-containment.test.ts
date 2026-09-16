@@ -31,19 +31,27 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 describe('arithmetic-injection containment (D-299): no swept site evaluates a torn field', () => {
   it('_auto_swap_check does not evaluate a payload planted in lastswap', () => {
     const h = makeCcdHarness('arith-swap');
     // A torn or hand-edited `lastswap` is the threat model — not a wire caller.
+    // WIDE_PANE IS LOAD-BEARING, NOT DECORATION. `_pane_measurable` is the first
+    // statement after `_auto_swap_check`'s locals; the cooldown arithmetic this
+    // case exists for is far below it. With a bare `tmux(){ :; }` the stub answers
+    // nothing to `pane_active`, the guard stands the tick down, and the payload
+    // line is never reached — so the case passes because nothing ran.
+    // Measured 2026-09-16, mutating the cooldown to `-n "$last"`:
+    //   bare stub  -> this case GREEN (vacuous); WIDE_PANE -> this case RED.
+    // The structural row below reds either way, which is why it did not catch it.
     // Stubs keep the rest of the tick inert; the payload fires (or not) at the
     // cooldown line, which is reached before any swap decision.
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid home claude;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-swap\")]';"
       + ' _home_for(){ echo claude; }; _swap_target(){ return 1; };'
-      + ' _dispatch_swap(){ :; }; tmux(){ :; };'
+      + ` _dispatch_swap(){ :; }; tmux(){ ${WIDE_PANE} :; };`
       + ' _auto_swap_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-swap'))).toBe(false);
     h.cleanup();
@@ -53,7 +61,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     const h = makeCcdHarness('arith-compact');
     h.sh(
       " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-compact\")]';"
-      + ' tmux(){ :; }; _pane_ctx_pct(){ :; };'
+      + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compact'))).toBe(false);
     h.cleanup();
@@ -65,7 +73,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     // lastswap gate — the second arithmetic site inside the same function.
     h.sh(
       " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-compactswap\")]';"
-      + ' tmux(){ :; }; _pane_ctx_pct(){ :; };'
+      + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compactswap'))).toBe(false);
     h.cleanup();
@@ -79,7 +87,7 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid workdir "$HOME"; _reg_set myid uuid u1;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-spawn\")]';"
-      + ' tmux(){ :; };'
+      + ` tmux(){ ${WIDE_PANE} :; };`
       + ' _spawn_start myid new || :');
     expect(existsSync(path.join(h.home, 'PWNED-spawn'))).toBe(false);
     h.cleanup();
