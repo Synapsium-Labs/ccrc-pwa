@@ -7159,7 +7159,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // it. So the execution of Task 10 and the freeze of Task 10 cannot both be
     // satisfied, and this map is where that shows.
     //
-    // TASK 11 PAYS THE DEBT DOWN, 206 -> 70, AND EVERY ENTRY IS A
+    // TASK 11 PAYS THE DEBT DOWN, 206 -> 69, AND EVERY ENTRY IS A
     // RE-MEASUREMENT. D-2758 parks this debt here and the task closes what it
     // can. Two methods, in this order, and nothing was moved by any other:
     //   (1) SHIFT PROVEN BY BYTE-EQUALITY. For each reference, the newest
@@ -7182,9 +7182,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // those lines and the clause's token happened to occur in it. A reference
     // pointing at the wrong line is worse than one pointing at a line that
     // moved, so those seven carry their original numbers again and are counted
-    // in the 70 below.
+    // in the 69 below.
     //
-    // WHAT THE 70 ARE, and why none of them is repairable HERE. Two classes,
+    // WHAT THE 69 ARE, and why none of them is repairable HERE. Two classes,
     // and the second is the larger:
     //   HISTORICAL — the clause's subject is the PRE-Task-9 tree. `ccd/ccd`'s
     //     `:11665-11670`/`:11669`/`:11670` (fifteen references) say the ws-gc
@@ -7205,7 +7205,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     owns the spec for landed status only.
     // Both classes are named per reference in Task 11's report.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 39,
+      'ccd/ccd': 38,
       'ccd/session-hook.sh': 15,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-workspaces.test.ts': 5,
@@ -7219,7 +7219,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(70);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(69);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
