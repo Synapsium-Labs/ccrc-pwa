@@ -289,9 +289,31 @@ const minimalPath = (omit: string[]): string => {
   return bin;
 };
 /** A stub on the fixture PATH: `timeout` that records its argv and execs the
- *  rest, or `node` that fails / prints garbage. */
+ *  rest, or `node` that fails / prints garbage.
+ *
+ *  `timeout` IS INVOKED TWICE PER HOOK RUN, and a stub that does not know that
+ *  is a barrier in the wrong place. BEFORE the `case "$event"`, the hook
+ *  resolves `timeout`/`gtimeout` into `$hooktmo` and asks
+ *  `"$hooktmo" 2 tmux display-message -p '#S'` — the bound on the one tmux
+ *  question every hook event asks, which exists because a wedged tmux server
+ *  answers nothing and never returns. That is invocation ONE, and it happens
+ *  before the compaction arms are reached at all; the helper's
+ *  `_hook_timeout "$COMPACT_HELPER_TIMEOUT" node …` is invocation TWO. So a
+ *  stub body that asserts hookstate, plants a sibling verdict, or takes the
+ *  row's lock fires first against a hook that has not started its arm — and an
+ *  `exit` there leaves `$tname` empty, which ends the run before anything is
+ *  written. `HELPER_ONLY` below is the prologue that makes such a stub a
+ *  barrier around the HELPER invocation alone. */
 const stub = (name: string, body: string): void =>
   fs.writeFileSync(path.join(home, 'bin', name), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+/** The prologue that narrows a `timeout`/`gtimeout` stub to the helper call:
+ *  any other bounded command — in practice the tmux question above — is run
+ *  BOUNDLESS and unobserved, which costs nothing here because the fixture
+ *  `tmux` is an instant `echo`. Both helper invocations (`card` from
+ *  PreCompact, `measure` from PostCompact) name `$COMPACT_HELPER`, i.e.
+ *  `.cc-sessions/compact-card.mjs`, so one pattern covers the arms and nothing
+ *  else; a stub that RECORDS its argv therefore records the helper's only. */
+const HELPER_ONLY = 'case "$*" in *compact-card.mjs*) ;; *) shift; exec "$@" ;; esac';
 /** The three compaction payloads, with the keys 2.1.266 sends (measured
  *  2026-09-09: PreCompact `custom_instructions|cwd|hook_event_name|prompt_id|
  *  session_id|transcript_path|trigger`; PostCompact the same with
@@ -2672,7 +2694,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
 
   it('the helper runs through `timeout` with the constant, and the argv is the spec\'s', () => {
     const tree = cardTree(); plantHelper();
-    stub('timeout', 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"');
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/timeout-argv"; shift; exec "$@"'].join('\n'));
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
     const argv = fs.readFileSync(path.join(home, 'timeout-argv'), 'utf8');
@@ -2689,6 +2711,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     const tree = cardTree(); plantHelper();
     const original = path.join(home, 'hook-before-helper.compactset');
     stub('timeout', [
+      HELPER_ONLY,
       'state="$HOME/.cc-sessions/demo-quiet-basin.hookstate.json"',
       'test "$(jq -r .state "$state")" = working || exit 91',
       `cp "$HOME/.cc-sessions/demo-quiet-basin.compactset" "${original}"`,
@@ -2716,7 +2739,7 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
   return 127
 }`);
     const tree = cardTree(); plantHelper();
-    stub('gtimeout', 'printf \'%s\\n\' "$*" > "$HOME/gtimeout-argv"; shift; exec "$@"');
+    stub('gtimeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/gtimeout-argv"; shift; exec "$@"'].join('\n'));
     const bin = minimalPath(['timeout']);
     fs.copyFileSync(path.join(home, 'bin', 'gtimeout'), path.join(bin, 'gtimeout'));
     fs.chmodSync(path.join(bin, 'gtimeout'), 0o755);
@@ -3618,6 +3641,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // reaches the overlap rule.
     const sibling = '{"v":1,"at":9,"nonce":"compact-9-9-9-9","scope":"ambiguous","agent":null,"transcript":null,"parentLive":null,"liveAgents":null,"cwd":null,"built":null,"fresh":null,"steered":false,"files":null,"stats":null}\n';
     stub('timeout', [
+      HELPER_ONLY,
       'shift; "$@"; rc=$?',
       `printf '%s' ${sh(sibling)} > "$HOME/.cc-sessions/demo-quiet-basin.compactset"`,
       'rm -f "$HOME/.cc-sessions/demo-quiet-basin.compactcard"',
@@ -3635,7 +3659,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     const { transcript } = plantSession({ lines: workLines(tree) });
     // Record the argv the hook actually built, then run the real helper under
     // it — so this is the shipped call site, not a reconstruction of it.
-    stub('timeout', ['printf \'%s\\n\' "$*" > "$HOME/helper-argv"', 'shift; exec "$@"'].join('\n'));
+    stub('timeout', [HELPER_ONLY, 'printf \'%s\\n\' "$*" > "$HOME/helper-argv"', 'shift; exec "$@"'].join('\n'));
     run(preCompact(tree, transcript));
     const argv = fs.readFileSync(path.join(home, 'helper-argv'), 'utf8');
     expect(argv).toContain('--set-stage ');
@@ -4279,6 +4303,7 @@ describe('the compaction card — option A, the staging-only helper (spec §3.1 
     // the stub silently produced no file at all under it, which would have
     // read as "the child never ran" rather than as a broken fixture.
     stub('timeout', [
+      HELPER_ONLY,
       'exec 9<>"$HOME/.cc-sessions/.demo-quiet-basin.compactions.lock" 2>/dev/null || { echo noopen > "$HOME/child-lock"; shift; exec "$@"; }',
       'if flock -w 1 9; then echo got > "$HOME/child-lock"; else echo blocked > "$HOME/child-lock"; fi',
       'exec 9>&-',
