@@ -14,7 +14,7 @@ import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.
 import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
-import type { AskRow, CoordStore } from './coord/store.js';
+import type { AskRow, CoordPlacementStamp, CoordStore } from './coord/store.js';
 // Task 3: the pure board-placement decision (Task 2) — this file supplies its
 // two ports (`stamped`, `coordOf`) from a `coord.db` read, boardPlacement.ts
 // itself imports nothing from here.
@@ -185,52 +185,105 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
   }
 }
 
+/** The two ports `boardPlacement` needs, built by `foldCoordPlacements` /
+ *  handed back empty by `readCoordPlacements`'s guards below. Named so both
+ *  can share one return type rather than repeating the object shape. */
+interface CoordPlacementPorts {
+  coordOf: (project: string) => string | null;
+  bySession: Map<string, string>;
+}
+
+const emptyCoordPlacements = (): CoordPlacementPorts => ({ coordOf: () => null, bySession: new Map() });
+
+/**
+ * PURE fold from a flat stamp list to `boardPlacement`'s two ports —
+ * `byProject` (which project coordinates a given project — the transitive
+ * hops, project-keyed, exposed as `coordOf`) and `bySession` (the stamp on a
+ * session's OWN newest run — the first hop, session-keyed).
+ *
+ * NEWEST-WINS, ORDER-INDEPENDENT (fix round 1, findings 3+4). The original
+ * cut folded by ARRIVAL order: `bySession` overwrote on every hit (newest
+ * won only because `coord.runs`'s `ORDER BY r.id` happened to hold) while
+ * `byProject` kept only the FIRST hit (oldest wins — wrong per spec §4, and
+ * silently order-dependent the same way: with the closed-run clamp, "which
+ * row is first" drifts in jumps as old rows age out). Neither `runs()` nor
+ * `coordPlacementStamps` documents ordering as a CONTRACT nothing reds if it
+ * changes, so this fold does not rely on it: `newestProjectId`/
+ * `newestSessionId` track the highest `run.id` folded into each key so far,
+ * and a map entry is only replaced when a STRICTLY higher id arrives — a
+ * plain `Map<string,string>` cannot tell "this key already has a stamp"
+ * from "this key has the RIGHT stamp", which is what those side tables add.
+ * Correct regardless of the order `stamps` arrives in, which is exactly what
+ * `fleet.test.ts`'s reverse-order test proves by running this function
+ * twice over one list, forwards and reversed, and asserting an identical
+ * result — something no test through the real DB can exercise, since a real
+ * read always arrives in one direction (`coordPlacementStamps`'s `ORDER BY
+ * id`, kept for determinism, not as a contract this fold leans on).
+ *
+ * Exported for that direct, DB-free pin.
+ */
+export function foldCoordPlacements(stamps: readonly CoordPlacementStamp[]): CoordPlacementPorts {
+  const byProject = new Map<string, string>();
+  const bySession = new Map<string, string>();
+  const newestProjectId = new Map<string, number>();
+  const newestSessionId = new Map<string, number>();
+  for (const stamp of stamps) {
+    if (stamp.sessionId !== null) {
+      const seen = newestSessionId.get(stamp.sessionId);
+      if (seen === undefined || stamp.id > seen) {
+        newestSessionId.set(stamp.sessionId, stamp.id);
+        bySession.set(stamp.sessionId, stamp.coordProject);
+      }
+    }
+    const seenP = newestProjectId.get(stamp.project);
+    if (seenP === undefined || stamp.id > seenP) {
+      newestProjectId.set(stamp.project, stamp.id);
+      byProject.set(stamp.project, stamp.coordProject);
+    }
+  }
+  return { coordOf: (project: string): string | null => byProject.get(project) ?? null, bySession };
+}
+
 /**
  * Task 3's own batched, guarded read — the `boardPlacement` port supply,
  * built ONCE per assembly (never per row, which would be O(rows x hops)
- * `coord.db` queries). Same guard shape as `readCurrentAsks` right above:
- * `coord` is absent on a dark box and in every pre-Task-3 test, and
+ * `coord.db` queries), by handing `coordPlacementStamps`' rows to the pure
+ * `foldCoordPlacements` above. Same guard shape as `readCurrentAsks` right
+ * above: `coord` is absent on a dark box and in every pre-Task-3 test, and
  * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
  * race — either way this degrades to "nothing stamped", never throws out of
  * `assembleFleet`, so a broken coord.db costs every row its placement
  * (falls back to `ownProject`, per `boardPlacement`'s own total contract)
- * rather than the whole tick.
+ * rather than the whole tick. `sessionCount === 0` (an empty registry) also
+ * skips the read entirely — `readCurrentAsks`'s own `childIds.length === 0`
+ * short-circuit, restated here: no row exists to spend the answer on.
  *
- * `byProject` : which project coordinates a given project (the transitive
- *               hops, project-keyed — `coordOf`).
- * `bySession` : the stamp on a session's OWN newest run (the first hop,
- *               session-keyed). Runs arrive in `id` order (`coord.runs`'s own
- *               `ORDER BY r.id`), so a later `set` on the same session
- *               overwrites an earlier one and "newest wins" holds without a
- *               sort.
+ * Fix round 1: this used to call `coord.runs({includeClosed:true})`, which
+ * hydrates every row (`itemTally`, `unreadMailCount`, batch health, a
+ * `prLineage` JSON parse) to obtain three columns — priced at "~3,000 [SQL
+ * statements] for one [on-demand] board load" (`store.ts`), paid here every
+ * 2s tick and every `/ws/fleet` connect instead. `coord.coordPlacementStamps`
+ * is the narrow sibling built for this one caller (`store.ts`'s own
+ * docstring), no hydration, `coordProject IS NOT NULL` pushed into SQL.
  *
- * `includeClosed: true` is deliberate: a placement keyed on open runs alone
- * would bounce every worker between cards at the close-then-open wave
+ * `includeClosed: true` is deliberate (`coordPlacementStamps` always
+ * includes closed runs, up to its own clamp): a placement keyed on open runs
+ * alone would bounce every worker between cards at the close-then-open wave
  * boundary, one of the four defects this design exists to end.
  */
-function readCoordPlacements(coord: CoordStore | undefined): {
-  coordOf: (project: string) => string | null;
-  bySession: Map<string, string>;
-} {
-  const byProject = new Map<string, string>();
-  const bySession = new Map<string, string>();
-  if (coord) {
-    try {
-      const read = coord.runs({ includeClosed: true });
-      if (!read.ok) {
-        console.warn(`ccrc-server: coord.runs refused while computing board placement — ${read.detail} — placements degrade to ownProject`);
-      } else {
-        for (const run of read.runs) {
-          if (run.coordProject === null) continue;
-          if (run.sessionId !== null) bySession.set(run.sessionId, run.coordProject);  // newest wins
-          if (!byProject.has(run.project)) byProject.set(run.project, run.coordProject);
-        }
-      }
-    } catch (err) {
-      console.warn(`ccrc-server: coord.runs failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — placements degrade to ownProject`);
+function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): CoordPlacementPorts {
+  if (!coord || sessionCount === 0) return emptyCoordPlacements();
+  try {
+    const read = coord.coordPlacementStamps();
+    if (!read.ok) {
+      console.warn(`ccrc-server: coordPlacementStamps refused while computing board placement — ${read.detail} — placements degrade to ownProject`);
+      return emptyCoordPlacements();
     }
+    return foldCoordPlacements(read.stamps);
+  } catch (err) {
+    console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — placements degrade to ownProject`);
+    return emptyCoordPlacements();
   }
-  return { coordOf: (project: string): string | null => byProject.get(project) ?? null, bySession };
 }
 
 /**
@@ -462,7 +515,7 @@ export async function assembleFleet(
   // Task 3: ONE pass over the stamped runs, reused by every row below — see
   // `readCoordPlacements`'s own docstring for why this is batched rather than
   // a per-row query.
-  const { coordOf, bySession } = readCoordPlacements(coord);
+  const { coordOf, bySession } = readCoordPlacements(coord, recs.length);
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive

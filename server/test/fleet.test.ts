@@ -2,7 +2,7 @@ import { describe, it, expect, vi } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { loadConfig } from '../src/config.js';
-import { assembleFleet, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
+import { assembleFleet, foldCoordPlacements, hookAskSummary, idHomeWrapper, liveStatus } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
 import type { Statusline } from '../src/pane/statusline.js';
@@ -10,7 +10,7 @@ import type { HookState } from '../src/hookstate.js';
 import { ASK_OPERATOR_PRINCIPAL, type PrState } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
 import { openCoordDb } from '../src/coord/db.js';
-import { CoordStore } from '../src/coord/store.js';
+import { CoordStore, type CoordPlacementStamp } from '../src/coord/store.js';
 import { ASK_HELD_CHIP_MAX_MS } from '../src/askwindow.js';
 import { mkTmp } from './tmpHelpers.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
@@ -1100,6 +1100,189 @@ describe('the ask chip (Task 19)', () => {
     expect(fleet.every((x) => x.ask === null)).toBe(true);
     expect(warnSpy.mock.calls.filter(([line]) => String(line).includes('currentAsksFor')).length).toBe(1);
     warnSpy.mockRestore();
+  });
+});
+
+// Task 3, fix round 1 (Important 1): the central computation this task
+// exists for — `boardProject`, as `assembleFleet` actually computes it off a
+// real `CoordStore` — had ZERO coverage. This file never named the token, so
+// no deep-equal caught it incidentally, and all three of these mutations to
+// `fleet.ts`'s row literal shipped GREEN before this block existed:
+//   - `stamped: bySession.get(r.id) ?? null` -> `stamped: null`
+//   - `stamped: bySession.get(r.id) ?? null` -> `stamped: byProject.get(r.id) ?? null`
+//   - `held: r.held !== null` -> `held: true`
+// Each test below names the mutation it kills.
+describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
+  const mkCoord = (): CoordStore =>
+    new CoordStore(openCoordDb(path.join(mkTmp('ccrc-coord-'), '.ccrc', 'coord.db')));
+  const dead = new Tmux(async () => ({ code: 1, stdout: '', stderr: '' }));
+  const NOW_S = 1784600000;
+
+  it('a stamped, held session boards on its COORDINATOR project, not its own — kills `stamped` forced to a constant', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker', 'claude', { hold: 'program:agent-evals wave:1/2' });
+    const coord = mkCoord();
+    const opened = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'intake-platform',
+    }) as { id: number };
+    coord.bindSession(opened.id, 'demo-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('intake-platform');
+  });
+
+  it('newest wins when two runs stamp the same session with different coordinators', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker', 'claude', { hold: 'program:agent-evals wave:2/2' });
+    const coord = mkCoord();
+    const first = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker',
+      wave: 1, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'old-coordinator',
+    }) as { id: number };
+    coord.bindSession(first.id, 'demo-worker');
+    // Wave 2's run is opened before wave 1 closes (the coordinator protocol's
+    // own shape) — its higher autoincrement id is what "newest" means here.
+    const second = coord.openRun({
+      program: 'agent-evals', title: 'wave 2', project: 'demo-worker',
+      wave: 2, waveOf: 2, claimedBy: 'demo-coordinator', coordProject: 'new-coordinator',
+    }) as { id: number };
+    coord.bindSession(second.id, 'demo-worker');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker')!.boardProject).toBe('new-coordinator');
+  });
+
+  it('`bySession` and `byProject` are not interchangeable — kills the swap at the `stamped:` read', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    // The session's OWN project is deliberately NOT its id — every OTHER
+    // fixture in this file leaves `project` defaulted to the session id,
+    // which would let `byProject` (keyed on project names) accidentally
+    // answer a lookup keyed on the session's id and hide exactly the bug
+    // this test exists to catch.
+    seedSession(home, 'demo-worker3', 'claude', {
+      project: 'demo-worker3-project', hold: 'program:agent-evals wave:1/1',
+    });
+    const coord = mkCoord();
+    // Stamps `byProject.get('demo-worker3-project')` only — never bound to a
+    // session, so it contributes nothing to `bySession`.
+    coord.openRun({
+      program: 'other-programme', title: 'unrelated', project: 'demo-worker3-project',
+      wave: 1, waveOf: 1, claimedBy: 'other-coordinator', coordProject: 'byproject-answer',
+    });
+    // Stamps `bySession.get('demo-worker3')` via a run whose OWN `project`
+    // is unrelated, so it contributes nothing to `byProject` under any key
+    // this session's id or own project could look up.
+    const sessionRun = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'bysession-answer',
+    }) as { id: number };
+    coord.bindSession(sessionRun.id, 'demo-worker3');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    // The CORRECT read is `bySession`. Swapping it for `byProject` at the
+    // `stamped:` call site would look up `byProject.get('demo-worker3')` (the
+    // SESSION id) — nothing is keyed that — and fall back to the session's
+    // own project instead of 'bysession-answer'.
+    expect(fleet.find((x) => x.id === 'demo-worker3')!.boardProject).toBe('bysession-answer');
+  });
+
+  it('an unheld-but-stamped session reads its own project — kills `held: r.held !== null` forced to `true`', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    // No `hold:` extra — this workspace is NOT held.
+    seedSession(home, 'demo-worker4', 'claude', { project: 'demo-worker4-project' });
+    const coord = mkCoord();
+    const run = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'unrelated-project',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'should-be-ignored',
+    }) as { id: number };
+    coord.bindSession(run.id, 'demo-worker4');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker4')!.boardProject).toBe('demo-worker4-project');
+  });
+
+  it('a held-but-unstamped session reads its own project too', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker5', 'claude', {
+      project: 'demo-worker5-project', hold: 'program:agent-evals wave:1/1',
+    });
+    const coord = mkCoord();
+    // A run exists and is stamped, but names a DIFFERENT session —
+    // 'demo-worker5' is never `bindSession`-ed, so `bySession` has no entry
+    // for it at all.
+    const run = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'other-project',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'not-this-one',
+    }) as { id: number };
+    coord.bindSession(run.id, 'someone-else');
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker5')!.boardProject).toBe('demo-worker5-project');
+  });
+
+  // The whole reason `coordPlacementStamps`/`readCoordPlacements` pass
+  // `includeClosed: true` rather than the active-only shape: a placement
+  // keyed on open runs alone would bounce a worker off its coordinator's
+  // card the instant the wave that stamped it closes, until the NEXT wave's
+  // run opens. The hold file (not the run's own state) is what says this
+  // workspace is still claimed.
+  it('a CLOSED run stamp still places the session — the wave-boundary guarantee `includeClosed:true` exists for', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker6', 'claude', {
+      project: 'demo-worker6-project', hold: 'program:agent-evals wave:1/1',
+    });
+    const coord = mkCoord();
+    const run = coord.openRun({
+      program: 'agent-evals', title: 'wave 1', project: 'demo-worker6',
+      wave: 1, waveOf: 1, claimedBy: 'demo-coordinator', coordProject: 'closed-wave-coordinator',
+    }) as { id: number };
+    coord.bindSession(run.id, 'demo-worker6');
+    expect(coord.advance(run.id, 'failed', 'test-close').ok).toBe(true);
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBe('closed-wave-coordinator');
+  });
+});
+
+// Task 3, fix round 1 (Important 3+4): the fold itself, exercised directly
+// and DB-free. `coordPlacementStamps`'s `ORDER BY id` means a real read
+// through `CoordStore` can never arrive out of order, so the only way to
+// prove the fold does not LEAN on that order (rather than merely working
+// under it, which the pre-fix-round version also did, since SQLite always
+// obliged) is to feed it one stamp list twice — forwards and reversed — and
+// check the two answers are identical.
+describe('foldCoordPlacements is order-independent (fix round 1, findings 3+4)', () => {
+  it('yields the identical answer whether the newest-id stamp arrives first, last, or in the middle', () => {
+    const stamps: CoordPlacementStamp[] = [
+      { id: 5, sessionId: 'worker-a', project: 'proj-a', coordProject: 'oldest' },
+      { id: 9, sessionId: 'worker-a', project: 'proj-a', coordProject: 'newest' },
+      { id: 7, sessionId: 'worker-a', project: 'proj-a', coordProject: 'middle' },
+    ];
+    const forward = foldCoordPlacements(stamps);
+    const reversed = foldCoordPlacements([...stamps].reverse());
+    expect(forward.bySession.get('worker-a')).toBe('newest');
+    expect(reversed.bySession.get('worker-a')).toBe('newest');
+    expect(forward.coordOf('proj-a')).toBe('newest');
+    expect(reversed.coordOf('proj-a')).toBe('newest');
   });
 });
 

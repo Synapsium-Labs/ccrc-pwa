@@ -75,6 +75,19 @@ export interface OpenSibling {
   id: number; program: string; wave: number; waveOf: number | null;
 }
 
+/** The four columns `fleet.ts`'s `boardPlacement` port supply needs from a
+ *  run, and nothing else — `OpenSibling`'s own reasoning above, restated for
+ *  this consumer: hydrating a whole run (`itemTally`, `unreadMailCount`,
+ *  batch health, a `prLineage` JSON parse) to answer "which project does
+ *  this run's coordinator belong to" would drag all of that through a
+ *  decision that turns on three strings and an id. `id` rides along
+ *  specifically so the caller can fold newest-wins by comparing ids rather
+ *  than trusting this query's own row order — `coordPlacementStamps`'s own
+ *  docstring below. */
+export interface CoordPlacementStamp {
+  id: number; sessionId: string | null; project: string; coordProject: string;
+}
+
 /** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
  *  material `RunSummary`'s own docstring says is "deliberately absent" from
  *  the wire shape — "neither small nor something that changes on every
@@ -266,6 +279,10 @@ export type RunsReadResult =
 
 export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
+export type CoordPlacementStampsResult =
+  | { ok: true; stamps: CoordPlacementStamp[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
 export type AskReadResult =
@@ -1995,6 +2012,55 @@ export class CoordStore {
       "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[]);
+  }
+
+  /**
+   * `runs({includeClosed:true})`'s narrow sibling, for `fleet.ts`'s
+   * `readCoordPlacements` alone. `runs()` prices a full read at "~3,000 [SQL
+   * statements] for one [on-demand] board load" (this docstring's own
+   * estimate, `:2419-2422` below) — `itemTally` (two statements),
+   * `unreadMailCount` (one), batch health and a `prLineage` JSON parse, PER
+   * ROW, over every open run and up to 500 closed. That is an on-demand-load
+   * price. `readCoordPlacements` runs on `FleetWatcher`'s 2s tick and every
+   * `/ws/fleet` connect, so paying it there would be roughly 200-1,500
+   * statements every couple of seconds to obtain three columns — `OpenSibling`
+   * and `openCoordinatorIds` above make the identical trade for the identical
+   * reason.
+   *
+   * `WHERE coordProject IS NOT NULL` is pushed into SQL, not left to the
+   * caller: an unstamped run can never change a placement (`boardPlacement`'s
+   * own contract — `stamped: null` degrades to `ownProject`), so filtering it
+   * out here is strictly narrower than filtering it out in `fleet.ts`, at no
+   * cost to correctness.
+   *
+   * Closed runs stay visible (same `includeClosed:true` shape as `runs()`,
+   * same `closedLimit` clamp) — DELIBERATE, not a narrowing this method may
+   * drop: a placement keyed on open runs alone would bounce a worker between
+   * cards at the close-then-open wave boundary (Task 3's own brief).
+   *
+   * `id` rides CAST to TEXT and proven by `persistedInt`, D-2545's reason:
+   * `fleet.ts`'s fold uses it to pick the NEWEST stamp per key regardless of
+   * which order these rows arrive in — this method still orders by `id` for
+   * determinism, but that ordering is not a contract the caller may rely on
+   * (`fleet.ts`'s own ruling). ALL-OR-FAILURE on an unrepresentable id, the
+   * same rule `openRunsForSession` follows: a partial stamp set is how a
+   * session's card could silently jump to the wrong coordinator.
+   */
+  coordPlacementStamps(closedLimit?: number): CoordPlacementStampsResult {
+    const n = clampMailLimit(closedLimit ?? 500);
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, project, coordProject FROM runs ' +
+      "WHERE coordProject IS NOT NULL AND (state NOT IN ('done','failed') OR id IN " +
+      "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?)) " +
+      'ORDER BY id',
+    ).all(n) as unknown as { idText: string; sessionId: string | null; project: string; coordProject: string }[];
+    const stamps: CoordPlacementStamp[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
+      stamps.push({ id: id.value, sessionId: r.sessionId, project: r.project, coordProject: r.coordProject });
+    }
+    return { ok: true, stamps };
   }
 
   /**
