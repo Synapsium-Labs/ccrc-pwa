@@ -136,3 +136,41 @@ the worker will derive Part D's census itself rather than carry a total out of t
 `POST /api/runs` once programme `home-project-flip` deploys (peer mail 1405). ccd-queue's stored home was
 backfilled to `ccrc-pwa` this morning; run 42 is already open so the flip cannot strand it, but a
 successor wave's open must carry `"homeProject":"ccrc-pwa"` by hand.
+
+## 2026-09-16 23:0x UTC — RUN 42 IS DISPATCHED. The blocker was already gone, and not by anything I did.
+
+**`sessionId: ccrc-pwa-bright-canyon`, fresh spawn (`resumed:false`), `briefQueued:true`.** The
+standing position said dispatch the moment `capsUsage().running` measures below the limit. It does,
+and it has for hours — the dispatch route's own cap check is the measurement, and it passed.
+
+**WHY IT WAS ALREADY UNBLOCKED, measured rather than assumed.** This ledger has said since the 15th
+that the real blocker was one server deploy of #108's cap change. **That deploy has happened** — not
+as a deploy of `main`, which is why nobody noticed. Both boxes report build `97ceb87b` on ref
+`ws/ccrc-token-optimization-strategy` (server `/health` and `ccd version`, built 15:42 and 15:49 UTC
+today): **PR #116's unmerged branch**, which is based on `main` at `dba672ac` and therefore CONTAINS
+#108. I did not infer that from ancestry alone — I read the deployed tree's own source:
+`git show 97ceb87b:server/src/coord/store.ts` line 2717 is
+`state NOT IN ${INACTIVE_RUN_STATES_SQL}`, the D-2803 narrowing. So the live server has been
+counting only dispatched ACTIVE runs since 15:49.
+
+Running at dispatch time, by that formula: **4 of 7** — runs 59, 64 and 67 `working` and 68
+`dispatched`. Runs 47 and 62 sit at `awaiting-review` and are IDLE, which is exactly the change that
+freed the slot; 42, 65 and 66 were `planned` and never counted.
+
+**A standing position whose condition nobody owned went stale in the other direction.** The ledger
+recorded "one server deploy frees this" and surfaced it to the operator for days. The deploy arrived
+from a different programme, for its own reasons, and satisfied the condition silently. Nothing
+re-measured it until now. That is the same defect as the original — the condition had a measurement
+and no owner — and the remedy is the same: re-measure a standing condition on every wake, never carry
+its last reading forward.
+
+**The brief gained one paragraph before dispatch and nothing else.** Clause 13 wants the wave's
+routing named, so the brief now places this wave on the matrix's *worker executing a spec\'d plan*
+row — main loop Opus at `high`, workflow mode OFF, Sonnet `high` implementers, an Opus `high`
+per-task reviewer, Haiku scouts — and says so in prose because **the server has no reader for a
+`route` object on `main`** (no `RunRoute`, no route parser anywhere in `shared/` or `server/src` at
+`f27c8a86`); that shipped in #116\'s branch, which is deployed but unmerged. Sending `route` would
+have been journalled as omitted. Brief 6220 bytes against the 8090 ceiling, 25 items against 32.
+
+**Costs if wrong:** the wave runs a rung low and a fix round corrects it; the cap refusal, had I
+misread it, would have refused the dispatch outright rather than overcommitting the box.
