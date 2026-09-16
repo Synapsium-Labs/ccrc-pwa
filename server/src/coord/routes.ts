@@ -253,20 +253,28 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 }
 
 /**
- * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
- * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
- * live coordinator has redeployed and the field is required.
+ * THE LEGACY GENERATION, as one constant (design §3 F2), and the switch that
+ * ends it. `true` ACCEPTED an absent `homeProject` on `POST /api/runs` and
+ * recorded a `legacy-home-project` run event, leaving the programme row's home
+ * NULL; `false` refuses the open `400 bad-request` with
+ * `detail: 'homeProject is required'` (D-2349, D-2744).
  *
- * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
- * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
- * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
- * one generation (`coord/token.ts`, `server.ts`), then removed.
+ * FLIPPED TO `false` on operator ruling D-2867, the spec's seven-day criterion
+ * waived: 8 of the 15 opens since the 2026-09-14 deploy omitted the field, the
+ * last at 2026-09-15T07:38:57Z — the trail is in
+ * `docs/superpowers/programs/home-project-flip.md`'s `## Measurements`. Both
+ * branches of `homeProjectVerdict` stay in the tree and both stay tested
+ * (`home-project.test.ts`) — this is a value change, never a deletion. The
+ * ROUTE's `legacy` arm below is now unreachable, since the only
+ * `legacyAccepted` the route ever passes is this constant; it stays as the
+ * record of what `true` did.
  *
  * Read ONCE, at the single call site below, and passed as an argument to
- * `homeProjectVerdict` rather than read inside it — which is what makes the
- * OTHER branch testable before it ships. `home-project.test.ts` drives both.
+ * `homeProjectVerdict` rather than read inside it — which is what keeps the
+ * OTHER branch testable after the flip as it was before it.
+ * `home-project.test.ts` drives both.
  */
-export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+export const HOME_PROJECT_LEGACY_ACCEPTED = false;
 
 /** What the open route must DO about the body's `homeProject` and the
  *  programme's stored one. SIX answers, none folded into another: `write` and
@@ -1256,12 +1264,13 @@ export function registerCoordRoutes(
     }
     if (homeVerdict.kind === 'required') {
       // Its OWN sentence (D-2349), not the body-shape guard's bare
-      // `bad-request` 36 lines up: two conditions whose remedies differ —
-      // "your JSON is
-      // malformed" versus "this build requires a home" — must not reach the
-      // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
-      // true; the day wave 3 flips the constant, this is the one refusal the
-      // flip exists to produce. Pinned by `home-project.test.ts`'s scan.
+      // `bad-request` above: "your JSON is malformed" and "this build
+      // requires a home" have different remedies and must not reach the
+      // caller as one value. LIVE since 2026-09-16 (D-2867): every
+      // otherwise well-formed open with no `homeProject` gets this — a
+      // malformed body still gets the shape guard's answer first, a session
+      // bound elsewhere `409 project-mismatch`. Pinned by
+      // `home-project.test.ts`'s scan and `home-project-required.test.ts`.
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
 
@@ -1285,11 +1294,12 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
 
-    // The backfill and the legacy acceptance are RECORDED, not merely done:
-    // wave 3's flip is dated by `run_events` showing zero `legacy-home-project`
-    // rows over seven consecutive days, and a fact nothing wrote down cannot
-    // date anything. `recordRunEvent` writes `fromState === toState`, so the
-    // notify lane skips it and no push impersonates a transition.
+    // The backfill is RECORDED, not merely done — and the legacy acceptance
+    // was too, while the constant was `true`, which is what let the flip be
+    // dated from `run_events` at all (it was ruled early instead, D-2867; the
+    // trail is in `docs/superpowers/programs/home-project-flip.md`).
+    // `recordRunEvent` writes `fromState === toState`, so the notify lane
+    // skips it and no push impersonates a transition.
     if (homeVerdict.kind === 'backfill') {
       tx(coord.db, () => {
         coord.setProgramHome(programSlug, homeVerdict.home);

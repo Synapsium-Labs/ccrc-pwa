@@ -356,7 +356,7 @@ describe('POST /api/coord/caps', () => {
     const opening = app.inject({ method: 'POST', url: '/api/runs',
       headers: { 'x-ccrc-mail-token': TOKEN },
       payload: { program: 'p', title: 'P', project: 'demo', wave: 1, waveOf: 8,
-                 claimedBy: 'the-coordinator', sessionId: 'the-worker' } });
+                 claimedBy: 'the-coordinator', sessionId: 'the-worker', homeProject: 'demo' } });
 
     // PREMISE 1 — THE HOLD IS REACHED AT ALL, and it fails FAST if it is not
     // (D-1228). `POST /api/runs` has three early returns before `runCcd` — a 400
