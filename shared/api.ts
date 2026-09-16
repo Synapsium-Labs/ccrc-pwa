@@ -7,7 +7,6 @@
 // `parseRoster` is what validates and auto-assigns it; `RosterWire` below only
 // carries it.
 import type { Hue } from './roster.js';
-import type { RungTarget } from './routing-ladder.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -5397,11 +5396,60 @@ export interface RunRouteBody {
 }
 
 /**
- * The run-event/response word for a `route` door call. DERIVED from
- * `RungTarget`'s own `mode` (S5-R1: one source, no handler-level respelling)
- * plus `'manual'` for a `field`+`value` write the ladder never sees.
+ * The run-event/response word for a `route` door call — `RungTarget.mode`'s
+ * own three words (`shared/routing-ladder.ts`) plus `'manual'` for a
+ * `field`+`value` write the ladder never sees (S5-R1: the door derives the
+ * WORD it uses from `RungTarget.mode` at the call site, one source; this
+ * type is a respelling, not a derived one — `api.ts` is L0 and
+ * `peers-claims-l0.test.ts` pins it to its own single import
+ * (`import type { Hue } from './roster.js'`), so importing
+ * `routing-ladder.ts` here, even type-only, is not available. Kept in sync
+ * with `RungTarget['mode']` by hand; a mismatch would be a compile error at
+ * `routes.ts`'s own call site, which assigns a `RungTarget.mode` value into
+ * a `RouteMode`-typed local).
  */
-export type RouteMode = Extract<RungTarget, { kind: 'move' }>['mode'] | 'manual';
+export type RouteMode = 'escalate' | 'demote' | 'reverse-demotion' | 'manual';
+
+/**
+ * EIGHTH typed refusal union, admitted to `mail-routes.test.ts`'s kebab
+ * scanner through this exported guard rather than `NOT_CODES` — the
+ * standing reason every sibling union there gives: a guard accepts a member
+ * added later and still rejects a typo'd one. `POST /api/runs/:id/route`'s
+ * own refusals, checked together with the other seven and never merged: a
+ * route refusal is a run-scoped write like `RunRefuseCode`'s four routes,
+ * but that union's own docstring scopes itself to those four by name, so a
+ * fifth route's vocabulary gets its own union rather than silently widening
+ * one whose docstring would then be lying about its own membership.
+ *
+ *   no-session          — the resolved target (worker/coordinator) carries no
+ *                         session id on this run
+ *   no-record           — the target session's registry has no `.class` or
+ *                         `.effort` file to walk the ladder from
+ *   registry-unreadable — one of `.class`/`.effort`/`.degraded` is listed but
+ *                         unreadable — transient, not a fact about the record
+ *   run-closed          — the run is not in `dispatched`/`working`/
+ *                         `awaiting-review`
+ *   ceiling             — the ladder (or the degraded-record guard) has
+ *                         nothing above the current rung to move to
+ *   floor               — `demote()` is already at the mechanical floor
+ *   no-effort-rungs     — the target is at `ultracode`, which has no effort
+ *                         rung of its own (the caller's job to pick a class)
+ *
+ * `run-closed` collides, in SPELLING ONLY, with `store.ts`'s unrelated
+ * `releaseClaimsForRun` `endedBy` forensic value the scanner's `NOT_CODES`
+ * already allowlists — two different vocabularies that happen to share one
+ * English phrase; declared here too so this union stays the honest, complete
+ * list of what this route can send, rather than leaning on that unrelated
+ * entry's coincidental tolerance.
+ */
+export const RUN_ROUTE_REFUSE_CODES = [
+  'no-session', 'no-record', 'registry-unreadable', 'run-closed',
+  'ceiling', 'floor', 'no-effort-rungs',
+] as const;
+export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];
+export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
+  return typeof v === 'string' && (RUN_ROUTE_REFUSE_CODES as readonly string[]).includes(v);
+}
 
 export interface RunSignals {
   readonly runId: number;

@@ -722,6 +722,31 @@ a different dispatch: it exists so a wave's speed and cost can be read AFTER the
 worker re-cut, re-ordered or leaned on because a counter moved is a wave steered by a number that
 was only ever meant to describe it.
 
+## The routing door — escalation, demotion, and manual overrides
+
+`POST /api/runs/:id/route` is the ONLY way the coordinator changes a run's session onto a
+different rung of the class/effort ladders (routing spec 2026-09-14 §5.3, slice 5) — never
+`ccd route` directly (clause 1). Body: `{"target":"worker"|"coordinator","why":"<1..400 bytes,
+no control characters>", ...one of...}`:
+
+- `"kind":"shallow"|"ceiling"|"unclear"` — walk `escalate()` (`references/routing-matrix.md`'s
+  own Escalation paragraph) off the target session's SERVED class/effort (a degraded lane's
+  ladder runs off the degraded class, never the record's own).
+- `"demote":"class"|"effort"` — walk `demote()`, one rung down, never below the mechanical floor.
+- `"field":"class"|"effort"|"subagent"|"workflow"|"compact"`, `"value":"<string>"` — the
+  coordinator's own judgement, written as given; ccd validates the value, not this door.
+
+Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind"}}`, `mode`
+one of `escalate`/`demote`/`reverse-demotion`/`manual`. Refusals: `no-session` (the target has no
+session id on this run), `no-record` (the registry has no `.class`/`.effort` to walk from),
+`registry-unreadable` (transient — one of the three registry files is listed but unreadable),
+`run-closed` (the run is not `dispatched`/`working`/`awaiting-review`), `ceiling`/`floor`/
+`no-effort-rungs` (the ladder, or the degraded-record guard, has nowhere to move this request to
+— an answer, not an error), `unsupported` (501, the fleet host predates `route-v1`), `fleetFailed`
+(502, ccd refused the write — no run event is recorded on a refusal). Any failed check reverses
+the run's own last unreversed demotion before the ladder applies to the new failure — that
+bookkeeping is derived from the run's event trail, not sent by the caller.
+
 ## Build 9 — peers, claims, deviations (wave 7 surface)
 
 The protocol prose for these routes lands with the build-9 skill wave (coordinator clause 10,
