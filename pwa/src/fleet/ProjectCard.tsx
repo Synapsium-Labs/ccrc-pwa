@@ -247,10 +247,19 @@ export function ProjectCard({
   const headroom = forecast ? 100 - forecast.score : null;
   const placeableNames = poolLabelList(roster, pool);
   const measuredNone = placement.kind === 'measured' && placement.placement.kind === 'none';
+  // The THIRD meaning of `none` (D-2854): the row was fetched with a class
+  // and every eligible lane measured unservable for it. Only a `?class=`
+  // fetch can ever carry this — today's fleet-screen fetch never does — so
+  // an ordinary card never takes this branch and reads exactly as before.
+  const measuredNoneClass = placement.kind === 'measured' && placement.placement.kind === 'none'
+    ? placement.placement.class
+    : undefined;
   const legacyNone = placement.kind === 'legacy' && legacySafe && projected === null;
   const addLabel = forecast
     ? `New workspace on ${group.project} — ${accountLabel(roster, forecast.wrapper)}, ${headroom}% free`
-    : measuredNone || legacyNone
+    : measuredNoneClass !== undefined
+      ? `New workspace on ${group.project} — no lane can serve ${measuredNoneClass}`
+      : measuredNone || legacyNone
       ? poolName === null
         ? placeableNames === ''
           ? `New workspace on ${group.project} — all disabled`

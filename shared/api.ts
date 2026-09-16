@@ -3191,7 +3191,14 @@ export interface ProjectedHome {
  */
 export type ProjectPlacement =
   | { kind: 'projected'; wrapper: string; score: number }
-  | { kind: 'none'; pool: string | null }
+  /** `class` rides this arm only when the request that produced it named one
+   *  (`GET /api/projects?class=`) — the third meaning of `projectHome`'s own
+   *  `null` (D-2854): every eligible lane MEASURED UNSERVABLE for that class,
+   *  told apart on the wire from the untagged-pool and empty-pool `none`s an
+   *  older caller already knows. Absent, not `undefined` written out, so an
+   *  older reader that has never heard of a class sees exactly the shape it
+   *  always has. */
+  | { kind: 'none'; pool: string | null; class?: string }
   | { kind: 'unmeasurable' };
 
 /**

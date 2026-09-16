@@ -467,14 +467,27 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
     // the server had already stopped sending (D-1028).
-    projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
+    /** `cls` appends `?class=` only when given (routing spec, slice 4, Task 6)
+     *  — an ordinary fetch (the fleet screen, this sheet's own project list)
+     *  asks nothing and gets the byte-identical class-blind answer; only a
+     *  caller that means to forecast one class's placement sends it. */
+    projects: (cls?: string) => getJson<{ roots: string[]; projects: ProjectRow[] }>(
+      cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
+    ),
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
      *  start keeps the parsed request shape it sent before pools existed —
      *  no key an older server does not know, and a flag that only ever means
-     *  "yes" never needs to travel saying "no". */
-    createSession: ({ crossPool, ...rest }: {
+     *  "yes" never needs to travel saying "no". `route` rides the same rule:
+     *  present only when the sheet's routing row set at least one field, so
+     *  an ordinary start's body is unchanged from before that row existed. */
+    createSession: ({ crossPool, route, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
-    }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
+      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow'>, string>>;
+    }) => post('/api/sessions', {
+      ...rest,
+      ...(crossPool === true ? { crossPool: true } : {}),
+      ...(route !== undefined && Object.keys(route).length > 0 ? { route } : {}),
+    }),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
     workspaceAdd: (project: string): Promise<void> =>
       post(`/api/projects/${encodeURIComponent(project)}/workspaces`),

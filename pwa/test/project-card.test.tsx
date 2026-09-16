@@ -808,6 +808,16 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
       .toBeInTheDocument();
   });
 
+  it('names the class rather than the pool when a `?class=` read measures every lane unservable for it (routing slice 4, Task 6)', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={null}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b', class: 'fable' } }}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: 'New workspace on demo — no lane can serve fable' }))
+      .toBeInTheDocument();
+  });
+
   it('uses the project placement over a truthy out-of-pool global projection (D-2643)', () => {
     const placement: ProjectPlacementRead = {
       kind: 'measured',

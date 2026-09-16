@@ -11,6 +11,8 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
+import { readSharesMeasured } from './shares.js';
+import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
   poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
@@ -2006,7 +2008,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that arm means "not swept yet" and nothing else. Same shape of reasoning
   // as D-1024: the arm is kept because a build that could not express it could
   // never report the day it becomes reachable.
-  app.get('/api/projects', async () => {
+  app.get('/api/projects', async (req, reply) => {
+    // `?class=` (routing spec, slice 4, Task 6): the placement FORECAST by
+    // class, so a caller can ask "who could take this project running that
+    // class of model today" rather than only the class-blind default.
+    // Validated BEFORE any read — a bad value is refused, never silently
+    // treated as `default` — and `default` (or an absent query) takes the
+    // pre-slice-4 path with no shares read at all, so the answer stays
+    // byte-identical to what this route has always sent.
+    const q = req.query as { class?: unknown };
+    let cls: ModelClass | 'default' = 'default';
+    // Absent entirely (no key at all) is the ONLY silent case — an empty
+    // `?class=` is present and outside the vocabulary just as much as a
+    // misspelled one, so it is refused rather than quietly read as `default`.
+    if (q.class !== undefined) {
+      if (typeof q.class === 'string' && (q.class === 'default' || (CLASSES as readonly string[]).includes(q.class))) {
+        cls = q.class as ModelClass | 'default';
+      } else {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'class: not in the vocabulary' });
+      }
+    }
     const listed = await listProjects(deps.io, deps.cfg);
     // The pool half, composed HERE and never inside `listProjects`: that is the
     // fleet read (a readdir of the projects root unioned with registry
@@ -2022,9 +2043,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
     const limits = await readLimits(deps.io, deps.cfg);
+    // ONE shares read for the whole request, exactly the way `limits` above
+    // is one `readLimits` for every row — and skipped entirely for the
+    // default class, so a caller that never asked for a class never pays for
+    // a read whose answer it could not use.
+    const shares = cls === 'default' ? { kind: 'absent' as const } : await readSharesMeasured(deps.io, deps.cfg.registryDir);
+    const nowS = Math.floor(Date.now() / 1000);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
-      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, cls, shares, nowS) };
     };
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {

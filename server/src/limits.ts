@@ -329,10 +329,20 @@ export function projectHome(
  */
 export function projectPlacement(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
+  nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectPlacement {
   if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
-  const home = projectHome(roster, limits, pool);
-  if (home === null) return { kind: 'none', pool: pool.state === 'tagged' ? pool.name : null };
+  const home = projectHome(roster, limits, pool, cls, shares, nowS);
+  if (home === null) {
+    const notPlaceable = { kind: 'none' as const, pool: pool.state === 'tagged' ? pool.name : null };
+    // The trailing three parameters default so a caller that never passes a
+    // class gets the pre-slice-4 answer byte for byte (`projectHome`'s own
+    // rule, mirrored here): `class` only rides the wire when a caller asked
+    // for one, so an older reader that has never heard of it sees exactly
+    // the shape it always has.
+    return cls === 'default' ? notPlaceable : { ...notPlaceable, class: cls };
+  }
   return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }
 

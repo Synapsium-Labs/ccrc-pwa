@@ -2,7 +2,7 @@
 // so the split runs the other way round from SwapSheet's: which projects may
 // this account take. Same disclosure, same rule, same wire flag.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ProjectRow, RosterWire } from '../../shared/api';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
 import { api } from '../src/lib/api';
@@ -228,5 +228,66 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     ]);
     fireEvent.change(await screen.findByLabelText('Search projects'), { target: { value: 'zzz' } });
     expect(screen.getByText('No project matches "zzz"')).toBeInTheDocument();
+  });
+});
+
+describe('the optional routing row (routing slice 4, Task 6)', () => {
+  it('renders only at step 2', async () => {
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+    expect(screen.queryByLabelText('Class')).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect(await screen.findByLabelText('Class')).toBeInTheDocument();
+    expect(screen.getByLabelText('Effort')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workflows')).toBeInTheDocument();
+  });
+
+  it('leaves every select unset and posts no `route` key at all', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+    }));
+  });
+
+  it('Opus + High posts `route: { class: "opus", effort: "high" }`', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    fireEvent.change(screen.getByLabelText('Class'), { target: { value: 'opus' } });
+    fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+      route: { class: 'opus', effort: 'high' },
+    }));
+  });
+
+  it('offers no Ultracode rung on the gpt account\'s Effort select', async () => {
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^gpt/ }));
+    const effortSelect = await screen.findByLabelText('Effort');
+    expect(within(effortSelect).queryByText('Ultracode')).not.toBeInTheDocument();
+  });
+
+  it('shows the coordinator-row note under the row', async () => {
+    await openAtStepTwo([]);
+    expect(await screen.findByText(
+      "Unset fields take the coordinator row (Fable · ultracode, Sonnet subagents, workflows on). "
+      + "If the account can't serve the class today, ccd starts one rung down and restores it when it can.",
+    )).toBeInTheDocument();
   });
 });

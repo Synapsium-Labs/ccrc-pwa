@@ -488,6 +488,24 @@ describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
     expect(projectPlacement(cfg.roster, { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off },
       { state: 'untagged' })).toEqual({ kind: 'none', pool: null });
   });
+
+  it('the `none` arm carries `class` only when the caller named one (routing slice 4, Task 6, D-2854)', () => {
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const off = { ...L(1, 1), disabled: true };
+    const limits = { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off };
+    // No class asked (the pre-slice-4 default): the pre-existing shape, no
+    // `class` key at all — an older reader must see exactly what it always has.
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }))
+      .toEqual({ kind: 'none', pool: null });
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }), 'class')).toBe(false);
+    // A class asked, and every lane disabled regardless of it: the same `none`,
+    // now naming the class that was asked about.
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, 'fable'))
+      .toEqual({ kind: 'none', pool: null, class: 'fable' });
+    // `default` asked EXPLICITLY is the same as no class at all — it is the
+    // class-blind path, not a fifth class.
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }, 'default'), 'class')).toBe(false);
+  });
 });
 
 // ── §4.6: the two placement implementations agree about TELEMETRY, not only
