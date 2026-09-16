@@ -11,6 +11,27 @@ import { CCD, ghContainedEnv, harnessBin } from './ccdWsHelpers.js';
 // guard with a two-holder list.
 const CCD_DIR = process.env.D2764_DIR ?? path.dirname(CCD);
 
+// THE SYSTEM `timeout`, RESOLVED ONCE AND BY ABSOLUTE PATH. Two cases below plant a
+// shim named `timeout` on PATH and have it DELEGATE to the real one; they cannot
+// spell `timeout` to do that (the shim dir is first on PATH, so it would re-exec
+// itself), and they must not spell `/usr/bin/timeout` either — that hard-code is
+// what reddened `test-macos` from af2486b6 (PR #115) onward, because macOS ships no
+// `timeout` at that path, so the shim exec'd nothing and the probe read rc 127 where
+// the case asserts 124. GNU coreutils installs it as `gtimeout` on macOS, so try
+// both. Resolved HERE, at module scope, because at this point PATH is still the
+// runner's own — inside a case it is not.
+const REAL_TIMEOUT: string | null = (() => {
+  for (const candidate of ['timeout', 'gtimeout']) {
+    const r = spawnSync('sh', ['-c', `command -v ${candidate}`], { encoding: 'utf8' });
+    if (r.status === 0 && r.stdout.trim() !== '') return r.stdout.trim();
+  }
+  return null;
+})();
+// A platform with NO system `timeout` cannot exercise a DELEGATING shim at all — the
+// subject of both cases is what `_plat_timeout` reads back from a real parser. Skip
+// rather than weaken: a skip is visible in the report, a loosened assertion is not.
+const itDelegating = REAL_TIMEOUT === null ? it.skip : it;
+
 function body(file: string, name: string): string {
   const src = readFileSync(path.join(CCD_DIR, file), 'utf8');
   const m = new RegExp(`${name}\\(\\) \\{[^\\n]*\\n([\\s\\S]*?)\\n\\}`).exec(src);
@@ -98,10 +119,10 @@ describe('D-2764', () => {
     expect(r.rc).toBe('124');
     expect(r.ms, 'the deadline waited out the grace on a child that honoured TERM').toBeLessThan(3000);
   });
-  it('a hostile binary that refuses -k never sees it, and never leaks its rc', () => {
+  itDelegating('a hostile binary that refuses -k never sees it, and never leaks its rc', () => {
     const bin = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-hostile-'));
     writeFileSync(path.join(bin, 'timeout'),
-      '#!/usr/bin/env bash\nprintf \'%s\\n\' "$*" >> "$LOG"\ncase "$1" in -*) exit 1 ;; esac\nexec /usr/bin/timeout "$@"\n');
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$*" >> "$LOG"\ncase "$1" in -*) exit 1 ;; esac\nexec ${REAL_TIMEOUT} "$@"\n`);
     chmodSync(path.join(bin, 'timeout'), 0o755);
     const r = drive('ccd', '_plat_timeout',
       `export LOG=@HOME@/argv\n@SHIM@ 1 sleep 30 >/dev/null 2>&1\nprintf %s "$?"`, `${bin}:${process.env.PATH}`);
@@ -110,7 +131,7 @@ describe('D-2764', () => {
     expect(argv[0]).toBe('-k 1 1 printf ccd-k-ok');
     expect(argv.slice(1).filter((l) => l.includes('-k')), `argv: ${JSON.stringify(argv)}`).toEqual([]);
   });
-  it('a binary that SWALLOWS -k and exits 0 is not read as supporting it', () => {
+  itDelegating('a binary that SWALLOWS -k and exits 0 is not read as supporting it', () => {
     // WHY THE PROBE BELIEVES BYTES AND NOT AN EXIT CODE. A wrapper that
     // no-ops an unknown flag answers 0 having never run the command; an
     // rc-only probe reads that as support, passes `-k` to every real call and
@@ -119,7 +140,7 @@ describe('D-2764', () => {
     // the command can print these bytes.
     const bin = mkdtempSync(path.join(tmpdir(), 'ccd-d2764-swallow-'));
     writeFileSync(path.join(bin, 'timeout'),
-      '#!/usr/bin/env bash\ncase "$1" in -*) exit 0 ;; esac\nexec /usr/bin/timeout "$@"\n');
+      `#!/usr/bin/env bash\ncase "$1" in -*) exit 0 ;; esac\nexec ${REAL_TIMEOUT} "$@"\n`);
     chmodSync(path.join(bin, 'timeout'), 0o755);
     const r = drive('ccd', '_plat_timeout',
       `@SHIM@ 1 bash -c 'sleep 6; : > @HOME@/answered' >/dev/null 2>&1\nprintf %s "$?"`,
