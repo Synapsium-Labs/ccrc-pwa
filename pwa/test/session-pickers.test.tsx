@@ -166,6 +166,71 @@ describe('session pickers write the routing record', () => {
     await waitFor(() => expect(screen.queryByText('queued')).not.toBeInTheDocument());
   });
 
+  it('a read-back that lands while the write is still in flight leaves no orphan timer (fix round 1, finding 1)', async () => {
+    vi.useFakeTimers();
+    let resolveRoute: (() => void) | undefined;
+    route.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveRoute = resolve; }));
+    try {
+      const { fleet } = renderScreen();
+      openEffortSheet();
+      fireEvent.click(screen.getByRole('button', { name: /^High/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('queued')).toBeInTheDocument();
+
+      // The fleet frame (e.g. `route --apply`'s own pane keystroke) reads
+      // the value back WHILE the HTTP request is still unresolved.
+      updateLive(fleet, { effort: 'high' });
+      expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+      // The write resolves after the read-back already cleared it.
+      await act(async () => { resolveRoute?.(); await Promise.resolve(); });
+
+      // The orphaned timer must not fire the false "not confirmed" toast for
+      // a write that already confirmed.
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.queryByText('Routing queued; the pane has not confirmed it yet')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('a second pick before the first resolves cancels the first timer instead of leaking it (fix round 1, finding 1)', async () => {
+    vi.useFakeTimers();
+    try {
+      let resolveFirst: (() => void) | undefined;
+      route.mockImplementationOnce(() => new Promise<void>((resolve) => { resolveFirst = resolve; }));
+      renderScreen();
+      openEffortSheet();
+      fireEvent.click(screen.getByRole('button', { name: /^High/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('queued')).toBeInTheDocument();
+
+      // A second pick lands before the first HTTP request resolves. `Low`,
+      // not `Medium` — the live fixture already carries `effort: 'medium'`,
+      // which would satisfy the read-back effect immediately and confound
+      // this test's own measurement of the timer, not the write.
+      route.mockResolvedValueOnce(undefined);
+      openEffortSheet();
+      fireEvent.click(screen.getByRole('button', { name: /^Low/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(route).toHaveBeenLastCalledWith(ID, 'effort', 'low');
+
+      // The first write resolves after being superseded.
+      await act(async () => { resolveFirst?.(); await Promise.resolve(); });
+
+      // Only ONE timer should be live: the second pick's. Advancing past 60s
+      // without a read-back fires exactly one unconfirmed toast, not a stray
+      // one from the abandoned first pick clearing the second's badge early.
+      await act(async () => { await vi.advanceTimersByTimeAsync(59_000); });
+      expect(screen.getByText('queued')).toBeInTheDocument();
+      await act(async () => { await vi.advanceTimersByTimeAsync(1_000); });
+      expect(screen.queryByText('queued')).not.toBeInTheDocument();
+      expect(screen.getAllByText('Routing queued; the pane has not confirmed it yet')).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('after 60s with no read-back, queued clears with the unconfirmed toast', async () => {
     vi.useFakeTimers();
     try {

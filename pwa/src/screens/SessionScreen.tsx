@@ -254,24 +254,38 @@ export function SessionScreen({
   const changeEffort = (): void => setPicker('effort');
   const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
+    // The timer is installed in the SAME statement sequence as `setQueued`,
+    // before the `await` below (fix round 1, finding 1) — not after the
+    // write resolves. A fleet frame (or `route --apply`'s own pane keystroke)
+    // can read the write back WHILE the HTTP request is still in flight, and
+    // the read-back effect's `clearQueuedTimer()` has to find a real timer at
+    // that moment or the resumed continuation below installs a fresh one for
+    // a write that is already confirmed — a false 60s "not confirmed" toast.
+    // Installing it here also means this call's own leading
+    // `clearQueuedTimer()` always cancels a PRIOR pick's real timer, never a
+    // not-yet-installed one, so a fast second tap can no longer leak the
+    // first pick's handle.
     clearQueuedTimer();
     setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
+    queuedTimer.current = setTimeout(() => {
+      setQueued(null);
+      toast('Routing queued; the pane has not confirmed it yet');
+    }, 60_000);
     try {
       await api.route(id, o.route.field, o.route.value);
       // Neither value leaves a mark the pane can read back — `auto` clears no
       // slider position it can be measured against, and `default` is what the
       // wrapper falls back to with no distinguishing model string of its own.
-      // Absence, not a lie, so the 2xx response IS the confirmation.
+      // Absence, not a lie, so the 2xx response IS the confirmation. The
+      // timer installed above must be cancelled here too, or it outlives its
+      // own confirmation and fires the false toast 60s later.
       if ((o.route.field === 'effort' && o.route.value === 'auto')
           || (o.route.field === 'class' && o.route.value === 'default')) {
+        clearQueuedTimer();
         setQueued(null);
-        return;
       }
-      queuedTimer.current = setTimeout(() => {
-        setQueued(null);
-        toast('Routing queued; the pane has not confirmed it yet');
-      }, 60_000);
     } catch (err) {
+      clearQueuedTimer();
       setQueued(null);
       toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
     }
