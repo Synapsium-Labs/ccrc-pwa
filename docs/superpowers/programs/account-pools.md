@@ -7093,3 +7093,68 @@ must not raise the budget silently — report it and I rule. Costs if wrong: one
 **1286**, subject `fix-round`, body 8084 bytes of 8192, first line the lens-A report path, both reports
 as artifacts. Review worktree `scratchpad/review-wave6` restored clean at `d06b6103` by lens B; it will
 be re-pointed at the fix tip for the scoped re-review.
+
+### 2026-09-15 19:2x – 2026-09-16 09:4x UTC — fix round 1 landed, re-reviewed by workflow, fix round 2 (mail 1385)
+
+The session was restarted mid-wait (account swap); everything below was re-measured after it, not carried.
+
+**Fix round 1 = `7bac1727`, one commit, one push.** Second wave-done (mail 1293) re-measured: branch tip
+= `origin/ws/clear-meadow` = PR #114 head, six CI legs green, `git diff --stat origin/main HEAD -- ccd/`
+still empty. Advanced `working → awaiting-review` with the worker's fingerprint unchanged; the server's
+re-measurement answered `ok`.
+
+**The re-review was a workflow, 108 agents, 6.8M tokens:** 26 per-finding verifiers (sonnet, one per
+round-1 finding), 2 lenses (opus — new-prose truth, whole-wave consistency), 3 mutation agents (opus,
+one disposable worktree each, 73 one-change mutations), 2 refuters per new finding (sonnet), 1
+completeness critic (opus). **25 of 26 prior findings ADDRESSED, 1 partial; both lenses APPROVE WITH
+FIXES; 36 new findings survived BOTH refuters** (13 Important, 23 Minor). Artifact:
+`scratchpad/review-wave6-round2.md` (448 lines, every survivor + three mutation tables + the refuted set).
+
+**What the round-1 fix earned.** The Critical is closed — the CLAUDE.md bullet no longer credits
+`topology-clean` with a pool class it does not have — and the prose corrections all hold against source:
+the three-use server sentence with its phone-tap clause, the strand row's NEW-ccd/pre-deploy split, hue
+as the third optional key, the rosterAgreement rewrite. The pin suite went 25 → 27 assertions and the
+round-1 false greens (plain inversion of the authority claim in both documents, the rejected marker
+home, the reworded fold, `--force` as an override, the size claim, the one-way projection, the
+server-side marker write, the cooldown collision) are all RED now, re-measured here.
+
+**What it did not.** Five things I measured myself before ruling:
+1. **The A-I2 fix minted a new falsehood at the seam it repaired.** README:1079-1083 partitions the three
+   verbs with a "while" that puts journalling on `prefer`'s side — but `cmd_swap` journals too
+   (`lc_cross=(dec.crosspool 1)` → `_lc_done swap`). The `swap.log` LINE is what prefer lacks, not the
+   journal. This is [[refute-your-own-fix-before-pushing]] exactly: the fix round reproduced its own class.
+2. **Three FALSE REDS, each telling an author their true sentence is the defect.** The plainest true
+   statement of the rule this wave teaches — "`--force` does not override the pool rule; that takes
+   `--cross-pool`" — REDS, because that guard got no negation-awareness while the authority binder one
+   describe away did. A true two-sentence rewrite of the rule sentence REDS with a message that
+   misdescribes the text it read. And the never-writes scan is a 200-character textual WINDOW, so an
+   unrelated comment mentioning the pools path near any write reds three tests.
+3. **The pin closing the only Critical is ONE-ARMED** — `if (!scans) { … }` with no else, under a comment
+   promising "this reds the day someone adds the class and forgets to". Adding the class makes it
+   vacuous. The guard-names-a-cause-it-cannot-detect defect, inside the fix for C1.
+4. **The `cmd_uninstall` scope went from too wide to unable to bite.** Measured: `ccd/ccrc:11268-11323`,
+   whose removal work is EIGHT delegations to `_uninst_*` helpers defined at 11334+, outside the slice. A
+   pools removal would live in `_uninst_cc_sessions`, which the scan cannot see.
+5. **Two citations the fix made worse.** `config.ts` "197-201 → 192-219" is wrong at both ends (the
+   docstring is 191-218; 219 is code) and the first review had measured that row CORRECT — the fix
+   changed a right citation into a wrong one, in the note whose whole job is correcting citations.
+
+**RULING — where the chase stops, and what replaces it.** The mutation agents also proved the authority
+binder misses a paraphrase (`chooses the account`, `writing the marker`), a bolded or pronoun subject,
+and an indirect path write. I am NOT asking for those. **A prose regex is a RATCHET, not a proof**, and an
+unbounded chase makes the suite slower without making it honest. Instead the file's HEADER must name what
+its guards structurally cannot catch — closed verb vocabulary, exact-literal subject, a negator not
+scoped to its clause, a textual window rather than a resolved path. A test header that overclaims is the
+same defect as prose that overclaims, and this one currently claims more than its code does. Costs if
+wrong: a future editor trusts a guard further than it reaches — which the header will now forbid.
+
+**RULING — closed by measurement, no work:** the critic's typecheck gap (`test (server)` DOES run
+`typecheck-tests.test.ts` and is SUCCESS on `7bac1727`; the reviewer simply could not run it in a
+checkout carrying only `server/node_modules`), and the D-number orphan gap (I issued D-2827..D-2829 from
+the allocator myself). **RULING — no numbers for round 2:** every item is a correction to text this wave
+already owns or to a pin it already ships; nothing here is a departure from the plan. Costs if wrong: a
+later reader mints one.
+
+**Mechanism (D-2824) again:** `advance 47 → working`, then `status` mail **1385**, subject `fix-round`,
+body 7257 bytes of 8192, first line the artifact path. Run 47 is `working`; PRs #108, #113 and #114 all
+still MERGEABLE and blocked on the approval only the operator gives.
