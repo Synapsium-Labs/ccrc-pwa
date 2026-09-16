@@ -756,19 +756,24 @@ vanishing: assert the exact multiset of fork-creating commands between the acqui
 list as built, so adding or deleting ANY child there reds, not only a third `find`. **The multiset is stated
 PER SCENARIO, because several members are branch-conditional and no single run produces all of them.** The
 UNCONDITIONAL subset every **PUBLISHING** run of the section produces is: two `find` (`:862`, `:869`), the
-`at=$(_hook_epoch_ms)` substitution (`:871`), the `jq -cn` (`:875`), and `_hook_write_atomic`'s publishing
+`at=$(_hook_epoch_ms)` substitution (`:1262`), the `jq -cn` (`:1275`), and `_hook_write_atomic`'s publishing
 `mv -f` (`:799`) — plus, once Task 9 builds them, the generation-read `link` and its alias-unlink.
-**The `find`, `_hook_epoch_ms` and `jq -cn` numbers in that enumeration are on the PRE-Task-9 tree
-`8e457995` this section was written against and are superseded there (this round):** Task 9 rewrote both
-`find` invocations, so no tip line is byte-identical to either and re-pointing them would falsify their
-quotations. `_hook_write_atomic`'s own lines ARE cited at the tip throughout this paragraph, because
-that function moved bodily and every line cited from it is byte-provable there. **"Every
+**THE TWO `find` NUMBERS ALONE in that enumeration are on the PRE-Task-9 tree `8e457995` this section was
+written against and are superseded there (round 14, A-M3 narrowed this disclosure from three families to
+two):** Task 9 rewrote both `find` invocations, so no tip line is byte-identical to either and re-pointing
+them would falsify their quotations. Every OTHER line in the enumeration is cited AT THE TIP and byte-proven
+there against `8e457995`, each a UNIQUE byte-identical block: `at=$(_hook_epoch_ms)` `:871` → `:1262`, the
+`jq -cn` `:875` → `:1275`, the ambiguous-card `rm -f "$cardf"` `:865` → `:1241`, and `_hook_write_atomic`'s
+publishing `mv -f` `:782` → `:799`. Its printf-failure arm is the one line here that moved by NAME rather
+than by bytes: base `:781` has no byte-identical tip line, because Task 9's nonce parameter shifted the
+written value from `"$2"` to `"$3"`, so `:798` is the same arm re-measured rather than the same bytes
+relocated. **"Every
 PUBLISHING run", not "every run" (round 13, A-M9):** measured, `_hook_write_atomic`'s printf-failure arm
 (`ccd/session-hook.sh:798`) runs `rm -f "$tmp"; return 1` and NEVER reaches the `mv -f` at `:799`, so on the
 write-failure branch this list's last member is absent — the mirror of the error the paragraph warns about
 two sentences on. Both required scenarios below are publishing runs, so the subset holds for each. The
 CONDITIONAL members are named with the branch that produces each, and are asserted only in a run that takes
-it: the ambiguous-card `rm -f "$cardf"` (`:865`) fires only when `CS_SCOPE` is `ambiguous`, and that arm
+it: the ambiguous-card `rm -f "$cardf"` (`:1241`) fires only when `CS_SCOPE` is `ambiguous`, and that arm
 releases at step 8 and never opens the second section; `_hook_write_atomic`'s failure-path `rm -f`
 (`:798`, `:799`) only on a write failure. The redundant-canonical-alias unlink is NOT a member — it is
 WITHDRAWN (D-2756, §3.1 item 5) and `_hook_compact_pre` performs no `-ef` test to condition it on.
