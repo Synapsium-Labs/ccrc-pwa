@@ -4429,7 +4429,18 @@ _check_routing() {
     # guess.
     local reg="$HOME/.cc-sessions" sf id scrc missing=0 shown=0 missing_ids="" \
       live=0 census=measured why=""
-    if [ ! -d "$reg" ]; then
+    # `$reg` UNSEARCHABLE IS NOT `$reg` ABSENT, and the absence branch below
+    # cannot tell them apart — the same D-1848 shape `_check_pools` above
+    # already guards against on its own registry read, checked FIRST here for
+    # the identical reason: `-d "$reg"` on a mode-000 directory still answers
+    # TRUE (stat needs search on the PARENT, not on the dir itself), so `for
+    # sf in "$reg"/*.uuid` below would silently match nothing and this census
+    # would read a present-but-unlistable registry as a measured zero — the
+    # exact fabricated zero this arm exists not to FAIL on.
+    if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -x "$reg" ] || [ ! -r "$reg" ]; }; then
+      census=unmeasured
+      why="$reg is not a searchable, readable directory, so no id under it could be enumerated"
+    elif [ ! -d "$reg" ]; then
       census=unmeasured
       why="no session registry at $reg (a server box that runs no fleet sessions of its own owns none)"
     elif ! _have_systemctl; then

@@ -6334,6 +6334,30 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(line, 'the reason, in these words').toContain('unmeasured');
     expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
   });
+  it.skipIf(process.getuid?.() === 0)(
+    'routing: the subagent-key WARN says unmeasured when the registry exists but cannot be searched — never fabricates a zero (fix round 1, finding #1)', () => {
+      // THE SAME D-1848 SHAPE `_check_pools` already guards on its own read of
+      // this registry, one level up: `[ -d "$reg" ]` on a mode-000 directory
+      // still answers TRUE (stat needs search on the PARENT, not on the dir
+      // itself), so `for sf in "$reg"/*.uuid` would silently match nothing and
+      // a present-but-unlistable registry would read as a measured zero — the
+      // exact fabricated zero this arm exists not to FAIL on. Skipped as root:
+      // root searches any directory, so the fixture cannot be built.
+      const home = routingBox('ccrc-doctor-routing-subagent-reg-unsearchable-');
+      writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+      plantSession(home, 'sess-a', { live: true, recorded: false });
+      const reg = join(home, '.cc-sessions');
+      chmodSync(reg, 0o000);
+      try {
+        const out = runDoctor(home).stdout;
+        const line = lineFor(out, 'routing');
+        expect(line, out).toMatch(/^WARN routing: /);
+        expect(line, 'the reason, in these words').toContain('unmeasured');
+        expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
+      } finally {
+        chmodSync(reg, 0o755);
+      }
+    });
   it('routing: PASSES regardless of the live-session census when no lane pins the subagent key', () => {
     // The census is cheap by construction: it is evaluated only when `sub` is
     // non-empty. Proven here by an `is-active` that would otherwise WARN
