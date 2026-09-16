@@ -11,6 +11,9 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import {
+  armEventDetail, parseArmEventDetail, parseRouteEventDetail, routeEventDetail,
+} from '../../shared/api.js';
 
 afterEach(removeTmpFixtures);
 
@@ -29,9 +32,9 @@ function seedRun(coord: CoordStore): number {
 }
 
 describe('CoordStore.runSignals — arm and routing (routing spec §6, slice 5)', () => {
-  it('a run with no arm/route events answers arm: null, routing: [], routingUnparsed: 0', () => {
+  it('a run with no arm/route events answers arm: null, armUnparsed: 0, routing: [], routingUnparsed: 0', () => {
     const coord = open(); const id = seedRun(coord);
-    expect(coord.runSignals(id)).toMatchObject({ arm: null, routing: [], routingUnparsed: 0 });
+    expect(coord.runSignals(id)).toMatchObject({ arm: null, armUnparsed: 0, routing: [], routingUnparsed: 0 });
   });
 
   it('an arm: event and two route: events answer both, in order, with the event rows\' own at/causedBy', () => {
@@ -70,5 +73,50 @@ describe('CoordStore.runSignals — arm and routing (routing spec §6, slice 5)'
     coord.recordRunEvent(id, 'coordinator', 'arm:class=opus effort=high', 1_000_000);
     coord.recordRunEvent(id, 'coordinator', 'arm:class=sonnet', 1_100_000);
     expect(coord.runSignals(id)!.arm).toEqual({ class: 'opus', effort: 'high' });
+  });
+
+  // Fix round 2, finding #2, controller ruling S5-R9: `arm: null` must not
+  // collapse "no routing was seeded" with "the arm event could not be
+  // parsed" — `armUnparsed` is the field that tells them apart.
+  it('a malformed first arm: row followed by a well-formed one: arm is the second, armUnparsed: 1', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.recordRunEvent(id, 'coordinator', 'arm:bogus', 1_000_000);
+    coord.recordRunEvent(id, 'coordinator', 'arm:class=opus effort=high', 1_100_000);
+    const s = coord.runSignals(id)!;
+    expect(s.arm).toEqual({ class: 'opus', effort: 'high' });
+    expect(s.armUnparsed).toBe(1);
+  });
+
+  it('a run with no arm rows answers arm: null, armUnparsed: 0', () => {
+    const coord = open(); const id = seedRun(coord);
+    coord.recordRunEvent(id, 'coordinator', 'route:escalate:effort:medium->high:shallow', 1_000_000);
+    const s = coord.runSignals(id)!;
+    expect(s.arm).toBeNull();
+    expect(s.armUnparsed).toBe(0);
+  });
+});
+
+// Fix round 2, finding #4, controller ruling S5-R8: a grammar with a parser
+// in `shared/api.ts` gets a formatter beside it, round-tripped — a mutation
+// to either side's separator reds these.
+describe('armEventDetail / routeEventDetail round-trip their own parsers (shared/api.ts)', () => {
+  it('armEventDetail(f) parses back to f — a two-field object', () => {
+    const f = { class: 'opus', effort: 'high' } as const;
+    expect(parseArmEventDetail(armEventDetail(f))).toEqual(f);
+  });
+
+  it('armEventDetail(f) parses back to f — a five-field object', () => {
+    const f = { class: 'opus', effort: 'high', subagent: 'sonnet', workflow: 'haiku', compact: 'on' } as const;
+    expect(parseArmEventDetail(armEventDetail(f))).toEqual(f);
+  });
+
+  it('routeEventDetail(e) parses back to e — an escalate event', () => {
+    const e = { mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow' } as const;
+    expect(parseRouteEventDetail(routeEventDetail(e))).toEqual(e);
+  });
+
+  it('routeEventDetail(e) parses back to e — a manual event', () => {
+    const e = { mode: 'manual', field: 'class', from: '?', to: 'sonnet', kind: 'manual' } as const;
+    expect(parseRouteEventDetail(routeEventDetail(e))).toEqual(e);
   });
 });

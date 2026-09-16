@@ -5407,10 +5407,23 @@ export interface RunSignals {
   readonly firstSubmission: boolean | null;
   readonly waveDoneMails: number;
   readonly signals: WaveDoneSignals | null;
-  /** The fields the dispatcher seeded onto this run's FIRST `arm:` event
-   *  (routing spec §6) — `null` for an old run or a dispatch that carried no
-   *  routing at all. Parsed by `parseArmEventDetail`. */
+  /** The fields the dispatcher seeded onto this run's FIRST WELL-FORMED
+   *  `arm:` event (routing spec §6), parsed by `parseArmEventDetail` — `null`
+   *  for an old run, a dispatch that carried no routing at all, OR a run
+   *  whose `arm:` rows are all malformed (fix round 2, finding #2,
+   *  controller ruling S5-R9). That last case is NOT the same fact as the
+   *  first two — "no routing was seeded" and "an arm event exists but could
+   *  not be parsed" are two conditions a reader handles differently — and
+   *  `armUnparsed` is what tells them apart: `arm === null && armUnparsed
+   *  === 0` is the former, `arm === null && armUnparsed > 0` is the latter. */
   readonly arm: RouteFields | null;
+  /** The count of malformed `arm:` rows this run's trail carries BEFORE its
+   *  first well-formed one (0 when there is no arm row, or the first one
+   *  parses) — see `arm`'s own docstring for why this must not collapse
+   *  into `arm === null`. Rows after the first well-formed `arm:` are never
+   *  read at all (§6's first-wins rule), so they are never counted here
+   *  either. */
+  readonly armUnparsed: number;
   /** Every `route:` event this run's trail carries, in order. A malformed
    *  detail is skipped here and counted in `routingUnparsed`, never thrown —
    *  a run with a non-empty `routing` changed routing mid-flight, which is
@@ -5442,14 +5455,7 @@ export interface RunRouteBody {
  * The run-event/response word for a `route` door call — `RungTarget.mode`'s
  * own three words (`shared/routing-ladder.ts`) plus `'manual'` for a
  * `field`+`value` write the ladder never sees (S5-R1: the door derives the
- * WORD it uses from `RungTarget.mode` at the call site, one source; this
- * type is a respelling, not a derived one — `api.ts` is L0 and
- * `peers-claims-l0.test.ts` pins it to its own single import
- * (`import type { Hue } from './roster.js'`), so importing
- * `routing-ladder.ts` here, even type-only, is not available. Kept in sync
- * with `RungTarget['mode']` by hand; a mismatch would be a compile error at
- * `routes.ts`'s own call site, which assigns a `RungTarget.mode` value into
- * a `RouteMode`-typed local).
+ * WORD it uses from `RungTarget.mode` at the call site, one source).
  *
  * `ROUTE_MODES` is the RUNTIME list this type derives from (S5-R6, this
  * task): before, the four words were spelled twice — this union, hand-typed,
@@ -5457,6 +5463,16 @@ export interface RunRouteBody {
  * added to one and not the other would compile and parse silently wrong.
  * One list now, and `parseRouteEventDetail`'s regex alternation is BUILT
  * from it.
+ *
+ * `RungTarget['mode']` now derives from THIS type too (fix round 2, finding
+ * #5): `api.ts` is L0 and `peers-claims-l0.test.ts` pins it to its own
+ * single import line, so this file cannot import `routing-ladder.ts` even
+ * type-only — but the direction the other way is open, and
+ * `routing-ladder.ts` already imports `type { FailureKind } from './api.js'`
+ * for `escalate()`'s own `kind` parameter. `RungTarget.mode` rides the same
+ * import line, spelled `Exclude<RouteMode, 'manual'>` — the ladder itself
+ * never produces a manual move — so there is now exactly one place the
+ * three/four words are enumerated, not two kept in sync by hand.
  */
 export const ROUTE_MODES = ['escalate', 'demote', 'reverse-demotion', 'manual'] as const;
 export type RouteMode = (typeof ROUTE_MODES)[number];
@@ -5490,6 +5506,20 @@ export function parseRouteEventDetail(detail: string): {
 }
 
 /**
+ * Format a `route:<mode>:<field>:<from>-><to>:<kind|manual>` run-event
+ * detail — `parseRouteEventDetail`'s round-trip partner (fix round 2,
+ * finding #4, controller ruling S5-R8: a grammar with a parser in this file
+ * gets a formatter beside it too, so a writer never hand-builds the string
+ * a reader elsewhere has to parse back). The door (`routes.ts`) calls this
+ * instead of its own template literal.
+ */
+export function routeEventDetail(e: {
+  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual';
+}): string {
+  return `route:${e.mode}:${e.field}:${e.from}->${e.to}:${e.kind}`;
+}
+
+/**
  * Parse an `arm:<field>=<value> …` run-event detail — the dispatcher's own
  * write (`dispatch.ts`, routing spec §6 "Arms": the fields it actually
  * seeded onto a wave, recorded only once the fleet act that carried them
@@ -5517,6 +5547,20 @@ export function parseArmEventDetail(detail: string): RouteFields | null {
     fields[field as RouteField] = value;
   }
   return fields;
+}
+
+/**
+ * Format an `arm:<field>=<value> …` run-event detail — `parseArmEventDetail`'s
+ * round-trip partner (fix round 2, finding #4, controller ruling S5-R8).
+ * `ROUTE_WRITABLE_FIELDS` order regardless of the caller's own key order —
+ * the same rule `routeFlags` (`ccdargv.ts`) applies for the identical
+ * reason: the wire shape must not depend on `Object.keys` insertion order.
+ * The dispatcher (`dispatch.ts`) calls this instead of its own
+ * `armWords` helper, whose body moved here.
+ */
+export function armEventDetail(fields: RouteFields): string {
+  return `arm:${ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined)
+    .map((f) => `${f}=${fields[f]}`).join(' ')}`;
 }
 
 /**

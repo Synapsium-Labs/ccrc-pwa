@@ -86,7 +86,7 @@ describe('CoordStore.runSignals', () => {
       runId: id, dispatchedAt: 1_000_000, closedAt: 1_600_000, finalState: 'done',
       wallMs: 600_000, holdMs: 30_000, swaps: 1, excludedUnmeasured: true, activeMs: 570_000,
       closeRefusals: 0, firstSubmission: true, waveDoneMails: 0, signals: null,
-      arm: null, routing: [], routingUnparsed: 0,
+      arm: null, armUnparsed: 0, routing: [], routingUnparsed: 0,
     });
   });
 

@@ -2129,28 +2129,52 @@ export class CoordStore {
   /** Routing spec 2026-09-14 §6 "Arms" — this run's OWN event trail, parsed
    *  into the writer's `arm:`/`route:` vocabulary (`parseArmEventDetail`/
    *  `parseRouteEventDetail`, `shared/api.ts`). Read-only, callable on its
-   *  own so `runSignals` never has to walk `runEvents` a second time for a
-   *  caller that only wants the routing trail.
+   *  own so a caller that only wants the routing trail can get it without
+   *  reaching for `runSignals`' whole shape. Delegates to the private
+   *  `routingFromEvents` (fix round 2, finding #3) so `runSignals`, which
+   *  already holds this run's `runEvents(runId)` result, can compute the
+   *  same trail from that ARRAY rather than this method re-issuing the
+   *  identical SELECT a second time per `runSignals` call. */
+  runRoutingEvents(runId: number): { arm: RouteFields | null; armUnparsed: number; routing: RoutingEvent[]; routingUnparsed: number } {
+    return this.routingFromEvents(this.runEvents(runId));
+  }
+
+  /** The actual walk `runRoutingEvents` and `runSignals` share (fix round 2,
+   *  finding #3) — takes an already-fetched `runEvents(runId)` array so
+   *  neither caller issues the SELECT twice.
    *
-   *  `arm` is the FIRST `arm:` event's fields, by position in the trail —
-   *  not re-tried on a later `arm:` event if the first one fails to parse,
-   *  since a dispatcher-written `arm:` is never malformed in practice and a
-   *  damaged first one is itself a fact worth reporting as `null` rather
-   *  than papering over with a later row. `routing` is every `route:` event
-   *  in order; a detail that starts `route:` but does not parse is skipped
-   *  and counted in `routingUnparsed`, never thrown — the same
-   *  never-crash-the-signals contract `runSignals` keeps everywhere else. */
-  runRoutingEvents(runId: number): { arm: RouteFields | null; routing: RoutingEvent[]; routingUnparsed: number } {
-    const events = this.runEvents(runId);
+   *  `arm` is the FIRST WELL-FORMED `arm:` event's fields, by position in
+   *  the trail (fix round 2, finding #2, controller ruling S5-R9): a
+   *  malformed `arm:` row no longer collapses to the same `null` a run with
+   *  NO arm at all reports — two conditions a reader handles differently
+   *  ("no routing was seeded" vs "the arm event could not be parsed") must
+   *  not share a value. Every malformed `arm:` row encountered before the
+   *  first well-formed one is counted in `armUnparsed`; once a well-formed
+   *  `arm:` is found, later `arm:` rows are ignored entirely (a
+   *  dispatcher-written `arm:` is never rewritten by design — §6's
+   *  first-wins rule — so nothing after the first well-formed one is worth
+   *  reading). A trail with no well-formed `arm:` row at all answers
+   *  `arm: null, armUnparsed: <every malformed arm: row seen>`.
+   *
+   *  `routing` is every `route:` event in order; a detail that starts
+   *  `route:` but does not parse is skipped and counted in
+   *  `routingUnparsed`, never thrown — the same never-crash-the-signals
+   *  contract `runSignals` keeps everywhere else. */
+  private routingFromEvents(
+    events: { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[],
+  ): { arm: RouteFields | null; armUnparsed: number; routing: RoutingEvent[]; routingUnparsed: number } {
     let arm: RouteFields | null = null;
-    let sawArm = false;
+    let armFound = false;
+    let armUnparsed = 0;
     const routing: RoutingEvent[] = [];
     let routingUnparsed = 0;
     for (const e of events) {
       if (e.detail === null) continue;
-      if (!sawArm && e.detail.startsWith('arm:')) {
-        sawArm = true;
-        arm = parseArmEventDetail(e.detail);
+      if (!armFound && e.detail.startsWith('arm:')) {
+        const parsed = parseArmEventDetail(e.detail);
+        if (parsed === null) { armUnparsed++; continue; }
+        arm = parsed;
+        armFound = true;
         continue;
       }
       if (e.detail.startsWith('route:')) {
@@ -2159,7 +2183,7 @@ export class CoordStore {
         routing.push({ at: e.at, causedBy: e.causedBy, ...parsed });
       }
     }
-    return { arm, routing, routingUnparsed };
+    return { arm, armUnparsed, routing, routingUnparsed };
   }
 
   /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
@@ -2263,7 +2287,7 @@ export class CoordStore {
       "SELECT body FROM mail WHERE runId = ? AND fromId = ? AND kind = 'status' AND subject = ? ORDER BY id",
     ).all(runId, run.sessionId, WAVE_DONE_SUBJECT) as { body: string }[];
     const last = waveDone[waveDone.length - 1];
-    const routingInfo = this.runRoutingEvents(runId);
+    const routingInfo = this.routingFromEvents(events);
     return {
       runId, dispatchedAt, closedAt, finalState, wallMs, holdMs, swaps, excludedUnmeasured,
       activeMs: wallMs === null ? null : Math.max(0, wallMs - holdMs),
@@ -2271,7 +2295,8 @@ export class CoordStore {
       firstSubmission: finalState === 'done' ? closeRefusals === 0 : null,
       waveDoneMails: waveDone.length,
       signals: last === undefined ? null : parseWaveDoneSignals(last.body),
-      arm: routingInfo.arm, routing: routingInfo.routing, routingUnparsed: routingInfo.routingUnparsed,
+      arm: routingInfo.arm, armUnparsed: routingInfo.armUnparsed,
+      routing: routingInfo.routing, routingUnparsed: routingInfo.routingUnparsed,
     };
   }
 

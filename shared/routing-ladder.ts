@@ -15,7 +15,7 @@
 // `node:*`, no `fs`, no clock, no reply — because the PWA bundles it
 // directly, the way `shared/poolrule.ts` and `shared/serviceability.ts` do.
 import { CLASSES, type ModelClass } from './models.js';
-import type { FailureKind } from './api.js';
+import type { FailureKind, RouteMode } from './api.js';
 
 /** The five effort rungs a routing decision walks, in slider order (D-2808's
  *  own comment on `ROUTE_EFFORT_STOPS`). `auto` and `ultracode` are
@@ -48,7 +48,7 @@ export interface Demotion {
 }
 
 export type RungTarget =
-  | { kind: 'move'; mode: 'escalate' | 'demote' | 'reverse-demotion'; field: 'class' | 'effort'; from: string; to: string; why: string }
+  | { kind: 'move'; mode: Exclude<RouteMode, 'manual'>; field: 'class' | 'effort'; from: string; to: string; why: string }
   | { kind: 'ceiling'; why: string }        // nothing above (the top class at max effort; opus for a subagent at xhigh with max forbidden by the rule)
   | { kind: 'no-effort-rungs'; why: string }; // haiku takes no effort: a shallow failure on haiku is a class rung, handled inside escalate — this arm is for `ultracode`
 

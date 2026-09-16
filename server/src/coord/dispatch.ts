@@ -19,7 +19,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, ROUTE_WRITABLE_FIELDS, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, parseRouteFields,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, parseRouteFields,
   routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
   type CoordCaps, type CoordCapsUsage, type RouteFields, type RunKind, type RunRefuseCode,
   type RunState, type SkillState, type SpawnVerdict,
@@ -205,14 +205,6 @@ export function capsMeasured(coord: CoordStore): {
     : null;
   return { caps, usage, overConcurrency };
 }
-
-/** The `arm:` run-event's own words (routing spec §6 "Arms") — the seeded
- *  fields, `ROUTE_WRITABLE_FIELDS` order regardless of the caller's own key
- *  order, mirroring `routeFlags`'s (`ccdargv.ts`) rule for the exact same
- *  reason: the wire shape must not depend on `Object.keys` insertion order.
- *  `parseArmEventDetail` (`shared/api.ts`) is this string's own reader. */
-const armWords = (fields: RouteFields): string =>
-  ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined).map((f) => `${f}=${fields[f]}`).join(' ');
 
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
@@ -584,7 +576,7 @@ export async function dispatchRun(
     // with different routing — records no arm here at all, leaving the
     // first-wins reader (`runRoutingEvents`) nothing false to latch onto.
     if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
-      coord.recordRunEvent(id, 'coordinator', `arm:${armWords(routeFields)}`);
+      coord.recordRunEvent(id, 'coordinator', armEventDetail(routeFields));
     }
   } else {
     // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
@@ -832,7 +824,7 @@ export async function dispatchRun(
       // routing spec §6 "Arms": the `arm:` record, the wave-N sibling of the
       // wave-1 arm's own — recorded only once the `route` verb itself
       // succeeded, never on the refusal above.
-      coord.recordRunEvent(id, 'coordinator', `arm:${armWords(routeFields)}`);
+      coord.recordRunEvent(id, 'coordinator', armEventDetail(routeFields));
     }
   }
 
