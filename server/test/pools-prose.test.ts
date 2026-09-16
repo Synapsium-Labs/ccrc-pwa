@@ -18,9 +18,10 @@
 // HISTORY, BECAUSE IT DECIDES THE SHAPE BELOW. The rounds are numbered off the
 // commits, not off memory: `git log --oneline -- server/test/pools-prose.test.ts`.
 //
-// The ORIGINAL file (26413403) pinned claims as free-floating substrings —
-// `toMatch(/never places/)` with no subject bound to it. Fix round 1 found that
-// a full inversion of BOTH documents stayed 25/25 green.
+// The file as fix round 1 FOUND it (created at faf0f8f7, last touched before the
+// round at 26413403, 25 tests) pinned claims as free-floating substrings —
+// `toMatch(/never places/)` at two sites with no subject bound to either. A full
+// inversion of BOTH documents stayed 25/25 green.
 //
 // FIX ROUND 1 (7bac1727) answered with guards that PARSED THE ENGLISH: a subject
 // bound to a closed verb list, a negator required between the two, a fold
@@ -48,10 +49,11 @@
 //      `ACCOUNT_KEYS`, the symbols `generate.mjs` emits, the two cooldown
 //      constants, the codes `refusePool` sends, the README line count. Move the
 //      number or name in the code and the prose goes red on the thing that
-//      moved. These hold a CLAIM. Three more read the source ALONE and assert a
-//      negative over it — the write-call scan across `server/src` and
-//      `agent/src`, the uninstall surface, the single `cross-pool` writer in
-//      `swap.log` — and `readerWords` is a RATCHET, not a follower: it extracts
+//      moved. These hold a CLAIM. Three more assert over the SOURCE alone, with
+//      no prose on the other side: the write-call scan across `server/src` and
+//      `agent/src` and the uninstall surface are negatives, and the single
+//      `cross-pool` writer in `swap.log` is an exact count (`toBe(1)`) — a
+//      second writer reds it. `readerWords` is a RATCHET, not a follower: it
 //      the reader's four words and compares them to a literal here, so renaming
 //      a word in ccd AND in the prose together still reds and asks a human.
 //      Each states its own reach in its own docstring; read that, not this list.
@@ -66,8 +68,10 @@
 //   3. FORBIDDEN SPELLINGS. A handful of `not.toMatch` over one exact phrase,
 //      recording a decision the prose must not walk back: `bypasses the gate
 //      entirely`, `$REG/<project>.` inside the rule sentence, `ships the same
-//      accounts.json to both boxes`, `pools` anywhere in the uninstall surface.
-//      THESE CAN STILL RED ON A TRUE SENTENCE — one that quotes the forbidden
+//      accounts.json to both boxes`, `pools` anywhere in the uninstall surface —
+//      and one more that runs only on the other arm, `NOTHING scans for|no pool
+//      class`, once `topology-clean` grows a pool class. THESE CAN STILL RED ON
+//      A TRUE SENTENCE — one that quotes the forbidden
 //      phrase in order to DENY it ("never at `$REG/<project>.pool`") reds,
 //      measured. The exposure is narrow and the remedy is cheap: say it another
 //      way, or change the guard in the same commit. It is named here rather than
@@ -78,8 +82,9 @@
 // server never writes the marker" is true of this tree is settled by reading
 // `ccd` and `server/src`, not by running this file. A claim is mechanically
 // holdable only where the prose names something the CODE also names — a
-// constant, a count, a state list, a path, a number. Everything else is quoted,
-// and is quoted precisely so that changing it cannot be quiet.
+// constant, a count, a state list, a path, a number. Everything that is neither
+// derived nor a forbidden spelling is QUOTED, and is quoted precisely so that
+// changing it cannot be quiet.
 //
 // So: a green here is evidence about EDITS, never proof about TRUTH. When one of
 // these sentences changes, read the source it describes — do not let the suite
