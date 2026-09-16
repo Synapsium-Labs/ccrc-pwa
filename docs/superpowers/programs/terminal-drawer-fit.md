@@ -44,6 +44,71 @@ earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
 
 Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62**.
 
+**Run 66 is a coordinator error, and it needs an operator act.** Probing whether the DEPLOYED server
+supports `kind:'review'` runs, this session used `POST /api/runs` — a MUTATING route — as the probe.
+The server ignored the unknown `kind`/`reviews` fields and created an ordinary work run, and
+`openRun`'s conflict arm overwrote the PROGRAMME TITLE to `probe`. Run 66 cannot be retired from
+here: `close` refuses it `not-dispatched` (it was never dispatched) and `advance` does not reach
+`failed`. `POST /api/runs/:id/abandon` is the route, one of the four deliberately ungated operator
+doors, and `ccrc-api`'s closed table does not expose it. The title is restored at wave 3's run-open,
+which passes a title anyway. **The lesson is the general one: a write route is never a probe.** The
+read that would have answered it for free is `GET /api/runs` — a row carrying no `kind` field is a
+pre-#108 server.
+
+### Wave 2 review — the panel, and the guard that stopped being able to fail (2026-09-16)
+
+**3/3 lenses, none unverified. 18 findings, 15 survived three refuters each, 0 unexamined.** Run 62
+stays at `awaiting-review`; findings went back as mail 1438 with a 32 KB artifact.
+
+**The finding that justifies the panel:** wave 2's own `_pane_measurable` stand-down, placed as the
+first statement in `_auto_swap_check`, made `ccd-arith-containment.test.ts`'s D-299 arithmetic-
+injection payload case **unable to fail**. Measured on both trees with a one-line mutant:
+
+| tree | shipped | mutant |
+|---|---|---|
+| `origin/main` | green | **REDS** — the control fires |
+| `ws/plain-basin` | green | **still green** — the guard cannot fail |
+
+The tick returns at the width guard and the arithmetic line is never reached. The `WIDE_PANE` sweep
+covered 48 sites across 14 suites and missed this file, the fifteenth. **This is exactly the
+alternative the wave's own deviation 2861 rejected** — "a guard that cannot fail, D-2774's shape one level
+up" — landing in the one file the wave also edited to add a case. A security containment test was
+silently disarmed by a correctness fix, and only a mutation table could see it.
+
+**The other four MAJORs** were: a whole new mechanism (`_pane_narrow_note`) shipped with three
+argued properties and no mechanism pinning any of them, outside the plan's six tasks and outside the
+ledger (**deviation 2864**); three prescribed claims measured false and rewritten in shipped source while
+only their sibling deviation 2863 was ledgered (**deviation 2865**); deviation 2860's evidence falsified by a later commit on
+its own branch and corrected in the source comment but not in the entry that justifies the change;
+and a relocated guard yielding rc 3 where the plan's edit text yields rc 6 (**deviation 2866**). That spends
+the block; wave 3 mints its own at run-open. (The three are written BARE here for the reason the
+deviation-block paragraph gives: their entries land in wave 2's plan on the worker's branch, and
+`deviation-refs.test.ts` reds any tracked `D-` ref whose definition is not in the same tree. Measured
+both ways again on this commit — red as `D-` tokens, green bare.)
+
+**One correction this review forced on THIS ledger.** D-2781/deviation 2862 say Task 4 "added eight more
+unanchored targets". It does not reproduce — the tree gains ONE new target construction, inside
+`_pane_measurable`. Measured independently here: 25 `_tmux` uses, 19 of them `-t` targets. The error
+direction is the dangerous one, because **wave 3 is the anchoring wave and sizes directly from those
+two sentences**: a worker expecting a `-t cc-` scan that over-reds would build one that under-covers.
+
+### The review protocol changed mid-wave, and is not deployed
+
+PR #108 landed main's **clause 12** — "a verified `wave-done` is READ by a review run, never by this
+session… this session does not read the diff itself" — replacing the held-out panel with a dispatched
+`kind:'review'` run and a `ccrc-reviewer` skill. Measured on this box: the deployed server carries no
+`kind` field on any run row (pre-#108), and `~/.claude/skills/` has `ccrc-coordinator` and
+`ccrc-worker` only — **no `ccrc-reviewer`**. So the protocol exists in the tree and not on the fleet.
+Wave 2's review therefore ran as the held-out panel, which is the same shape — independent readers,
+coordinator rules — and this is recorded so a later reader does not read it as clause 12 ignored.
+**Wave 5 owns: deploy #108's review lane, then this programme's reviews become review runs.**
+
+Also measured, and worth a look from whoever owns the fleet lane: this session's installed
+coordinator skill went BACKWARDS during the wave — `references/review-panel.md` and
+`routing-matrix.md` were present at 14:05 on 2026-09-15 and are gone now, and `wave-lifecycle.md`
+shrank from 57454 to 55130 bytes. Something redeployed the box from an older ref than the one it
+carried.
+
 **The spec, the four plans and this ledger merged as [#102](https://github.com/Synapsium-Labs/ccrc-pwa/pull/102)
 → `7a91bcf1`, 2026-09-15.** That is what retires D-2772's constraint: the plans are on `main`, so a
 worker from wave 2 on CAN carry an inline `D-N` comment in source and have
