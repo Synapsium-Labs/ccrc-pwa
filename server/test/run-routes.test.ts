@@ -57,7 +57,7 @@ const CLAIMED_BY = 'ccrc-pwa-coordinator';
 const TOKEN = 'f'.repeat(64);
 
 const OPEN_BODY = { program: 'build4', title: 'Transcript surface', project: PROJECT,
-  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY };
+  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY, homeProject: PROJECT };
 
 /** A full registry row — same field set `hold-gate.test.ts`'s own `seed`
  *  writes, so a fixture session reads exactly like a real ccd one. */
@@ -612,8 +612,12 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    const first = await postOpen(app);                       // legacy: no homeProject
-    expect(first.statusCode).toBe(200);
+    // Seeded on the STORE, not through the route: after the flip a route open
+    // with no `homeProject` is refused outright, so the route itself can no
+    // longer produce "a known programme whose home is still NULL" — only the
+    // store's own `openRun`, whose `homeProject` stays optional, still can.
+    w.coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: CLAIMED_BY });
     expect(w.coord.programHome('build4')).toBeNull();
     const second = await postOpen(app, { ...OPEN_BODY, wave: 2, homeProject: 'demo' });
     expect(second.statusCode).toBe(200);
@@ -626,7 +630,11 @@ describe('POST /api/runs', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    expect((await postOpen(app)).statusCode).toBe(200);
+    // Seeded on the STORE for the same reason as the backfill case above: the
+    // route can no longer open a programme whose home is NULL, and this case's
+    // whole subject is the backfill branch that such a programme makes reachable.
+    w.coord.openRun({ program: 'build4', title: 'Transcript surface', project: PROJECT,
+      wave: 1, waveOf: 3, claimedBy: CLAIMED_BY });
     expect(w.coord.programHome('build4')).toBeNull();
 
     w.coord.db.exec(`
@@ -665,20 +673,6 @@ describe('POST /api/runs', () => {
     // A SECOND code, not `project-mismatch`: the two conditions are handled
     // differently by the caller, and a seam may not collapse them.
     expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
-  });
-
-  it('accepts an absent homeProject during the legacy generation, records it, and leaves the column NULL', async () => {
-    const home = mkTmp('ccrc-runs-');
-    const { run } = makeRunner(home);
-    const w = await openApp(home, run); app = w.app;
-    const res = await postOpen(app);
-    expect(res.statusCode).toBe(200);
-    // NOTHING IS GUESSED INTO THE COLUMN — that is what makes the backfill above
-    // possible instead of a collision.
-    expect(w.coord.programHome('build4')).toBeNull();
-    expect(res.json()).toMatchObject({ ledgerRepo: null, ledgerAbsPath: null });
-    const id = (res.json() as { id: number }).id;
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('legacy-home-project');
   });
 
   it('refuses a present-but-empty homeProject as a malformed body, before anything is opened or homed', async () => {
@@ -1423,9 +1417,11 @@ describe('POST /api/runs/:id/dispatch', () => {
     const menuPane = '❯ 1. Yes\n  2. No\n  ──────────────\nEnter to select\n';
     const { run, calls } = makeRunner(home, { panes: [menuPane] });
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, wave: 2, sessionId: 'demo-existing2', homeProject: 'demo' }))
       .json() as { id: number };
     const res = await postDispatch(app, opened.id);
@@ -1545,9 +1541,11 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home, { wsAddCreates: ['demo-fresh4'] });
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // break the exact `runEvents()` array asserted below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     await postDispatch(app, opened.id);
     expect(w.coord.runEvents(opened.id)).toEqual([
@@ -1565,9 +1563,11 @@ describe('POST /api/runs/:id/dispatch', () => {
     const home = mkTmp('ccrc-runs-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-fresh5'] });
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // inflate the exact `runEvents().length` assertion below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const first = await postDispatch(app, opened.id);
     expect(first.statusCode).toBe(200);
@@ -3015,9 +3015,11 @@ describe('POST /api/runs/:id/dispatch — the declared ledger (spec §3.1)', () 
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);
     const w = await openApp(home, run); app = w.app;
-    // Pre-existing test given an explicit `homeProject` (fix round 1, finding
-    // 1): a bare OPEN_BODY now records a `legacy-home-project` row and would
-    // break the exact `runEvents()` === [] assertion below (Task 4, §3 F2).
+    // Explicit `homeProject` kept from fix round 1, finding 1; `OPEN_BODY` now
+    // carries it too and the route's legacy accept arm is unreachable with the
+    // constant `false`, so no open can record a `legacy-home-project` row and
+    // this override is belt-and-braces, not load-bearing (the exact
+    // `runEvents()` assertion below is what it once protected).
     const opened = (await postOpen(app, { ...OPEN_BODY, homeProject: 'demo' })).json() as { id: number };
     const real = w.coord.addWorkItem.bind(w.coord);
     let n = 0;
@@ -3541,9 +3543,15 @@ describe('POST /api/runs kind:review (design 2026-09-14 §5.1)', () => {
     expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
     return { w, workId: opened.id };
   };
+  // The SECOND body literal in this file — it does not spread `OPEN_BODY`, so
+  // the `homeProject` added there does not reach it, and a review open is an
+  // open like any other: `homeProjectVerdict` decides an absent home by the
+  // constant ALONE, never by whether the programme is already known and homed
+  // (`home-project.test.ts`, "decided by the constant ALONE"). Once the
+  // constant reads `false` a review open without this field is refused 400.
   const REVIEW = (workId: number, over: Record<string, unknown> = {}) =>
     ({ program: OPEN_BODY.program, title: 'Review wave 1', kind: 'review', reviews: workId,
-       claimedBy: CLAIMED_BY, ...over });
+       claimedBy: CLAIMED_BY, homeProject: PROJECT, ...over });
 
   it('dispatches a review run with the REVIEWER kickoff prefix, and a work run with the worker one', async () => {
     const home = mkTmp('ccrc-runs-');

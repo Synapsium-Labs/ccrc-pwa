@@ -381,9 +381,9 @@ brief, resolve the home checkout separately as `homeRepoRoot`, keep the tracked
 plan path as `planRepoPath` under `docs/superpowers/plans/` with no leading slash,
 and name the full 40-hex commit as `planSha`. A later open naming a different home is
 refused `home-mismatch` with `by:` the stored value — the fix is your body, never
-the server. (An open with no `homeProject` at all is still accepted for one
-deploy generation and recorded as a `legacy-home-project` run event, with the
-column left NULL rather than guessed. You never omit it.)
+the server. (An open with no `homeProject` at all is refused
+`400 bad-request` with `detail: 'homeProject is required'` — the legacy
+generation that accepted it ended 2026-09-16. You never omit it.)
 
 **Reuse `sessionId` ONLY when the next wave stays in the same project.** Step 6
 above says so itself: its **Same project:** arm — same `sessionId`, same
