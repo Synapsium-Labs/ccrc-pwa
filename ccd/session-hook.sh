@@ -654,9 +654,25 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   local ok='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   [ -n "$tp" ] || return 0
-  d=$(dirname -- "$tp") || return 0
+  # THE PARENT AND GRANDPARENT ARE TAKEN BY PARAMETER EXPANSION, NOT `dirname`.
+  # Two reasons, and the first is the contract above this function: a `dirname`
+  # fork is an EXTERNAL, and on a PATH that does not carry one it writes
+  # `dirname: command not found` to the hook's stderr — which is not silent, and
+  # this function runs on every SessionStart including compact, so that line
+  # lands in the middle of the compaction arms' own silence (measured: two
+  # `minimalPath` fixtures went red on exactly that stderr, and `dirname` is not
+  # in that helper's tool list). A `2>/dev/null` would hide the noise; the
+  # expansion removes the fork. The second is cost — two fewer subshells per
+  # SessionStart across ~20 live sessions.
+  #
+  # THE `*/*` GUARD IS THE DIFFERENCE BETWEEN THE TWO SPELLINGS, and it decides
+  # nothing this function did not already decide: a `transcript_path` with no
+  # slash in it is the relative payload the comment below calls "shaped any
+  # other way", and both spellings answer it by doing nothing — `dirname` would
+  # say `.`, whose own parent can never end in `/projects`.
+  case "$tp" in */*) d=${tp%/*} ;; *) return 0 ;; esac
   [ -d "$d" ] || return 0
-  projects=$(dirname -- "$d") || return 0
+  case "$d" in */*) projects=${d%/*} ;; *) return 0 ;; esac
   # The harness's layout, ASSERTED rather than assumed: a transcript lives at
   # `<config dir>/projects/<slug>/<uuid>.jsonl`, so its grandparent is the
   # `projects` directory this home files every pair under. A payload shaped
