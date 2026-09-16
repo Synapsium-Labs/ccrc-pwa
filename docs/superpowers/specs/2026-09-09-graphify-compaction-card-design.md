@@ -1651,7 +1651,7 @@ Every integer requirement explicitly uses `floor == .`.
 
 **Under D-2605 the input is the retained claim FD or its FD-derived private snapshot, never a reopened canonical path** (§3.4, Settlement). The `cited` row's "computed from the set file alone, no graph needed" is about the DOCUMENT, not about which pathname delivered it: the point it makes is that citation resolution needs no graph, so a journal line stays interpretable long after the graph has moved on.
 
-**Where each of these is pinned, measured on the shipped tests** (so the prose above is a restatement of a mechanism, not a new promise): normalisation at `server/test/compact-card.test.ts:688-692` ("normalises as the harness does: the FIRST `<analysis>` dropped, `<summary>` REPLACED by a `Summary:` line, blank runs collapsed, trimmed"); the heading regex's tolerance of `#`, `**`, case and a trailing colon at `:833-840`, with both `3. Files and Code Sections:` and its `**`-wrapped spelling exercised and the null-when-absent leg at `:839`; the fence rule and the unmatched opener at `:842-871` (`fences` 0 on an inline triple-backtick, 1 on a real pair, 0 on an unpaired opener), and the complete backtick-fence grammar — indentation, opener width, info strings, whitespace-only closers — at `:873-895`; citation boundaries and within-set suffix uniqueness at **`:897-931`**, three blocks: the base rule at `:897-904` (a bare basename scores 0, an ambiguous 2-segment suffix scores 0), the full-path-vs-suffix left-boundary distinction at `:906-927` (`:921` credits a unique suffix beginning immediately after `/`, `:923` refuses it when the right boundary is a PATH character — `src/watch.tsx`, where the `x` continues the token; a NON-path right boundary is what credits a match, as the `cited` row states — and `:926` refuses `nota/b/c.ts` against an ambiguous set), and the two-segment full-path guard at `:929-931`; null-vs-0 and null-vs-`main` at `:949-951` and `:959-968`; and `files: []` ⇒ `cited: 0`/`setSize: 0` at `:969`. Round 1 deleted the prose and left every one of these green, which is exactly why no suite went red and no round noticed.
+**Where each of these is pinned, measured on the shipped tests** (so the prose above is a restatement of a mechanism, not a new promise): normalisation at `server/test/compact-card.test.ts:688-692` ("normalises as the harness does: the FIRST `<analysis>` dropped, `<summary>` REPLACED by a `Summary:` line, blank runs collapsed, trimmed"); the heading regex's tolerance of `#`, `**`, case and a trailing colon at `:694-701`, with both `3. Files and Code Sections:` and its `**`-wrapped spelling exercised and the null-when-absent leg at `:700`; the fence rule and the unmatched opener at `:703-732` (`fences` 0 on an inline triple-backtick, 1 on a real pair, 0 on an unpaired opener), and the complete backtick-fence grammar — indentation, opener width, info strings, whitespace-only closers — at `:734-756`; citation boundaries and within-set suffix uniqueness at **`:758-792`**, three blocks: the base rule at `:758-765` (a bare basename scores 0, an ambiguous 2-segment suffix scores 0), the full-path-vs-suffix left-boundary distinction at `:767-788` (`:782` credits a unique suffix beginning immediately after `/`, `:784` refuses it when the right boundary is a PATH character — `src/watch.tsx`, where the `x` continues the token; a NON-path right boundary is what credits a match, as the `cited` row states — and `:787` refuses `nota/b/c.ts` against an ambiguous set), and the two-segment full-path guard at `:790-792`; null-vs-0 and null-vs-`main` at `:810-812` and `:820-829`; and `files: []` ⇒ `cited: 0`/`setSize: 0` at `:830`. Round 1 deleted the prose and left every one of these green, which is exactly why no suite went red and no round noticed.
 
 The validator consumes one raw string through `jq -Rse`, not an array. It accepts only empty content or content
 ending in exactly the line structure below: a nonempty journal has a terminal LF, and after splitting it removes
@@ -2102,20 +2102,20 @@ is fixtures-only and has no such step; Task 9 has none either; and the eighth he
 prose), so each item below is quoted as the plan spells it, with the behaviour it pins beside it:
 
 - the `**`-wrapped heading spelling — plan `:2708`, "In `filesSectionChars`, drop `(?:\*\*)?` → the `**`
-  spelling goes red"; the behaviour is pinned at `server/test/compact-card.test.ts:833-840`, which exercises
+  spelling goes red"; the behaviour is pinned at `server/test/compact-card.test.ts:694-701`, which exercises
   `3. Files and Code Sections:` and its `**`-wrapped form;
 - null rather than 0 without a set — plan `:2707`, "In `measureCommand`, make `cited: paths ? … : 0` → the
   null-vs-0 case goes red"; pinned at `server/test/compact-card.test.ts:810-812` plus `:820-829`;
 - normalisation of raw summary text — plan `:2705`, "Add the `g` flag to the `<analysis>` regex → the first
   test goes red (the second block is gone)", the mutation that keeps `<analysis>` exclusion honest; pinned at
-  `server/test/compact-card.test.ts:827-831`;
+  `server/test/compact-card.test.ts:688-692`;
 - the empty working set — plan `:1914`, "In `cardCommand`, move `writeAtomic(o.set, …)` below
   `if (files.length === 0) return EXIT.EMPTY;` → `an empty working set writes the set with files []` goes
   red"; pinned at `server/test/compact-card.test.ts:830`, where `files: []` is measured as a KNOWN empty set
   (`setSize: 0`/`cited: 0`, never null) rather than a missing one — which is the same fact §4's row states as
   "helper exit 3: the set stands with `files: []` and no card-stage".
 
-The fence rule and its unmatched opener are pinned at `server/test/compact-card.test.ts:842-871`, with the
+The fence rule and its unmatched opener are pinned at `server/test/compact-card.test.ts:703-732`, with the
 complete fence grammar at `:734-756`, and the citation boundary and within-set suffix-uniqueness rules at
 `:758-792`. **No string in this paragraph is presented as a row name of a table in another file**: every
 quotation above is either the plan item it names, verbatim, or a token of the test it points at — which is
