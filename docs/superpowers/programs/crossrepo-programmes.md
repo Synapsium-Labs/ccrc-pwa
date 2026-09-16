@@ -306,4 +306,4 @@ the required-`homeProject` refusal body assertion is the `toEqual` carrying
 `detail: 'homeProject is required'` (D-2744). D-2070 — whether the flip commit rides this wave's own
 PR or gets cherry-picked onto its own — is decided then, not here.
 
-The wave-2 agent-lane deploy the flip's gate depended on landed 2026-09-14; the window it restarted clears no earlier than 2026-09-21T11:34:24Z — see Carried constraints (E1).
+The wave-2 agent-lane deploy the flip's gate depended on landed 2026-09-14; the window it restarted clears no earlier than 2026-09-21T11:34:24Z — see Carried constraints (E1). The flip shipped as programme `home-project-flip` (ledger `docs/superpowers/programs/home-project-flip.md`) on 2026-09-16, on an operator ruling recorded there (D-2867).

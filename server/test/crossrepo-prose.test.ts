@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RUN_REFUSE_CODES } from '../../shared/api.js';
+import { IDLE_RUN_STATES, RUN_REFUSE_CODES, TERMINAL_RUN_STATES } from '../../shared/api.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
@@ -200,19 +200,29 @@ describe('README: cross-repo programmes', () => {
 
   it('states the measured cap predicates, not a workspace-to-slot equivalence', () => {
     const s = crossSection();
-    // #108 moved the state vocabulary out of this query and into
-    // `INACTIVE_RUN_STATES_SQL` (store.ts:425, built from `IDLE_RUN_STATES` +
-    // `TERMINAL_RUN_STATES`), so the ground is the TEMPLATE TEXT — the shape the
-    // worker-arm predicate below is asserted in, for the same reason.
-    expect(STORE, "the running cap no longer counts dispatched non-terminal rows"
-      + " — its predicate is not 'dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}'")
+    // PIN THE DERIVATION, NOT A HAND-WRITTEN LIST. This assertion used to spell
+    // `('done','failed')` inline, which went red the moment PR #108 narrowed the
+    // predicate from "non-terminal" to "active" — correctly, and the README said
+    // the old thing for a day. The store now builds the list from
+    // `IDLE_RUN_STATES ∪ TERMINAL_RUN_STATES`, so this pins that it is BUILT
+    // rather than retyped, and the membership assertion below pins what the two
+    // lists mean. A spelling pin would have to be re-edited by every change to
+    // either list; this one only reds when the derivation itself is broken.
+    expect(STORE, 'the running cap no longer counts dispatched rows by a DERIVED inactive list')
       .toContain('dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}');
+    expect(STORE, 'INACTIVE_RUN_STATES_SQL is no longer built from the two shared lists')
+      .toMatch(/const INACTIVE_RUN_STATES_SQL =[^\n]*IDLE_RUN_STATES[^\n]*TERMINAL_RUN_STATES/);
+    expect([...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].slice().sort(),
+      'the states excluded from the running cap are no longer idle ∪ terminal')
+      .toEqual(['awaiting-review', 'closing', 'done', 'failed', 'merging', 'planned']);
     expect(STORE, 'the daily cap no longer counts rows dispatched inside its rolling window')
       .toContain('dispatchedAt IS NOT NULL AND dispatchedAt > ?');
     expect(s, 'the section still equates two held workspaces with two running-worker slots')
       .not.toMatch(/two concurrency slots/i);
-    expect(s, 'the section does not say concurrency counts dispatched non-terminal runs')
-      .toMatch(/concurrency[\s\S]{0,180}?dispatched[\s\S]{0,100}?non-terminal runs/i);
+    expect(s, 'the section does not say concurrency counts dispatched runs in an ACTIVE state')
+      .toMatch(/concurrency[\s\S]{0,180}?dispatched runs in\s*\n?an ACTIVE state/i);
+    expect(s, 'the section does not say an IDLE run gives its slot back without closing')
+      .toMatch(/IDLE[\s\S]{0,120}?gives its slot back without closing/i);
     expect(s, 'the section does not say a planned undispatched consumer uses no running slot')
       .toMatch(/planned[\s\S]{0,80}?undispatched[\s\S]{0,100}?no running-worker slot/i);
     expect(s, 'the section does not say a terminal retained producer uses no running slot')

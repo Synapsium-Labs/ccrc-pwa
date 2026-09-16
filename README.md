@@ -1588,8 +1588,11 @@ card gains an `abroad` line, one sentence per wave working elsewhere
 ("`<program>` wave 2/3 in `<other project>`").
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
-and no per-programme cap. Running-worker concurrency counts dispatched,
-non-terminal runs; it does not count held workspaces. A terminal producer whose
+and no per-programme cap. Running-worker concurrency counts dispatched runs in
+an ACTIVE state — `dispatched`, `working`, `unknown` — and not merely
+non-terminal ones, so a run parked IDLE at `awaiting-review`, `merging` or
+`closing` gives its slot back without closing; it does not count held
+workspaces. A terminal producer whose
 workspace remains retained uses no running-worker slot, and a planned,
 undispatched consumer uses no running-worker slot. Each actual producer or
 consumer dispatch still consumes the rolling daily dispatch budget. A

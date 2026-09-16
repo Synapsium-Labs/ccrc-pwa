@@ -19,8 +19,14 @@ import { ACTOR_FLAGS_CAP, ROUTE_CAP } from '../src/ccdargv.js';
 const PROJECT = 'demo';
 const CLAIMED_BY = 'ccrc-pwa-coordinator';
 const TOKEN = 'f'.repeat(64);
+// `homeProject` carried on every open (merge of origin/main f27c8a86): the
+// legacy generation that accepted an open without one ended 2026-09-16
+// (`HOME_PROJECT_LEGACY_ACCEPTED === false`, D-2867), so a bare body is now
+// refused `400 bad-request`. This file's opens are SETUP for the routing door,
+// never a claim about the home-project rule — it is `run-routes.test.ts`'s own
+// `OPEN_BODY`, which main amended the same way.
 const OPEN_BODY = { program: 'build4', title: 'Routing door', project: PROJECT,
-  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY };
+  wave: 1, waveOf: 3, claimedBy: CLAIMED_BY, homeProject: PROJECT };
 
 /** The same registry seed `run-routes.test.ts` uses for a `ws-add`-created
  *  session — copied rather than imported (that file's `seed` is not

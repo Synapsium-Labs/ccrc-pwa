@@ -41,8 +41,9 @@ wave-1 open that adopts a workspace the operator made by hand.
 programme now stores, and `ledgerAbsPath` is ONLY that home's programme ledger by
 ABSOLUTE path. It is not the home repository root, it is not the plan path, and a
 coordinator must not derive either from it. Both response fields are `null` while
-the programme stores no home. The server tolerates an absent `homeProject` for one
-deploy generation and records that it did; send it on every open anyway. A
+the programme stores no home. The server refuses an open with no `homeProject`
+outright, `400 bad-request` with `detail: 'homeProject is required'` — the
+legacy generation that tolerated it ended 2026-09-16; send it on every open. A
 programme that stores no home takes the FIRST home any open sends — first writer
 wins, recorded as `home-project-backfilled` on that run — and nothing in the API
 can change it afterwards: a later open sending a different value is refused
