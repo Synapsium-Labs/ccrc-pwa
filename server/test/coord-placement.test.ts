@@ -46,4 +46,23 @@ describe('boardPlacement', () => {
       ...base, stamped: 'a', coordOf: (p) => `${p}+`,
     })).toBe('custom-tools');
   });
+
+  it('resolves a chain exactly as long as the hop cap', () => {
+    const chain: Record<string, string> = { a: 'b', b: 'c', c: 'd' };   // 4th call returns null
+    expect(boardPlacement({ ...base, stamped: 'a', coordOf: (p) => chain[p] ?? null })).toBe('d');
+  });
+
+  it('falls back on a chain one hop past the cap', () => {
+    const chain: Record<string, string> = { a: 'b', b: 'c', c: 'd', d: 'e' };
+    expect(boardPlacement({ ...base, stamped: 'a', coordOf: (p) => chain[p] ?? null }))
+      .toBe('custom-tools');
+  });
+
+  it('stops ON REVISIT rather than walking to the cap', () => {
+    const cycle: Record<string, string> = { a: 'b', b: 'a' };
+    let calls = 0;
+    const coordOf = (p: string): string | null => { calls++; return cycle[p] ?? null; };
+    expect(boardPlacement({ ...base, stamped: 'a', coordOf })).toBe('custom-tools');
+    expect(calls).toBe(2);   // the revisit is detected on the second call, not after MAX_HOPS
+  });
 });
