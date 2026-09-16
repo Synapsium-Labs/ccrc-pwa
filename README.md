@@ -1892,7 +1892,7 @@ the PWA: there is no compaction field on `FleetSession`, no chip, and no hooksta
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
 `purge-mechanism-absent` (`shared/api.ts:5560-5562`), each with an operator sentence of its own at `:5600`,
 `:5608` and `:5621`, which the session History tab renders through `lcRefusalWord`
-(`pwa/src/session/HistoryTab.tsx:17`, `:61`). The journal is the whole deliverable, and reading it is a later
+(`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
 - **What lands on the fleet box.** Four dot-free registry files per session id, beside the

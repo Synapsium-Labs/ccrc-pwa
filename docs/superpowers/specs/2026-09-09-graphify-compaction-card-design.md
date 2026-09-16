@@ -1931,7 +1931,7 @@ preserves generation until last; safe reuse mints a fresh generation.
 (`ccd/ccd:4629-4640` and `:4665-4674`), and `cmd_ws_add`'s refusal interpolates the second into the message
 the first triggers. **Re-quoted to the LANDED template (this round), because the brace form this paragraph
 used to quote is the one the round-10 ruling below deleted:** the shipped refusal is
-`|| die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"` (`ccd/ccd:5078-5079`) — a
+`die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"` (`ccd/ccd:5078-5079`) — a
 plain list rooted once. The argument is unchanged by the re-quote. Widening one alone makes `_ws_slug_free`
 refuse on a private-family residue that `_ws_slug_residue` structurally cannot see, so the operator receives
 `slug in use: <slug> — in $REG:` with nothing after the colon: a refusal naming no file. That falsifies the
