@@ -171,11 +171,29 @@ describe('compact-card.mjs ships', () => {
     // sailed through 8/8 GREEN — the remaining three matches even kept the
     // non-vacuity guard satisfied. A dependency is a dependency in whatever
     // shape it is written, so the ban is on the `from '…'` specifier wherever
-    // it occurs, plus the two loads that carry no `from` at all.
+    // it occurs, plus the loads that carry no `from` at all.
     const imports = [...src.matchAll(/\bfrom\s+['"]([^'"]+)['"]/g)].map((m) => m[1]!);
     expect(imports.length, 'the helper still imports something').toBeGreaterThan(0);
     for (const i of imports) expect(i, `${i} is not a node:* module`).toMatch(/^node:/);
     expect(/\brequire\s*\(/.test(src), 'a CommonJS require() escapes the import scan').toBe(false);
     expect(/(?<![.\w])import\s*\(/.test(src), 'a dynamic import() escapes the import scan').toBe(false);
+    // AND THE THIRD DOOR, WHICH IS A `node:` SPECIFIER (wb T10-M1). The three
+    // clauses above are each true of
+    // `import { createRequire } from 'node:module'; createRequire(import.meta.url)('lodash')`:
+    // the specifier IS `node:`, `createRequire` has no word boundary before
+    // the `R` so `\brequire\s*\(` does not match it, and there is no dynamic
+    // `import(`. MEASURED in a throwaway copy: the helper took an npm
+    // dependency that way and this file stayed 8/8 GREEN. The only backstop
+    // was indirect and does not hold — `compact-card.test.ts` imports the
+    // helper, so an UNRESOLVABLE specifier reds there, but a package that
+    // resolves from `server/node_modules` resolves fine under vitest and
+    // fails only on the fleet box, which is the one place with no
+    // `node_modules` at all. `createRequire` has no legitimate use in a file
+    // whose whole contract is plain node beside the hook, so it is banned
+    // outright rather than pattern-matched on its call shape.
+    expect(/createRequire/.test(src), 'createRequire is a require() the import scan cannot see').toBe(false);
+    expect(/process\.binding\s*\(/.test(src), 'and process.binding is another').toBe(false);
+    expect(imports.includes('node:module'),
+      'node:module is the door createRequire comes through and the helper has no use for it').toBe(false);
   });
 });
