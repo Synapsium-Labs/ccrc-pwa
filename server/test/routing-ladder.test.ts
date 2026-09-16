@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { FAILURE_KINDS } from '../../shared/api.js';
 import { EFFORT_LADDER, escalate, demote } from '../../shared/routing-ladder.js';
 import { ROUTING_LADDER_CASES } from './fixtures/routing-ladder.js';
 
@@ -20,6 +21,13 @@ describe('the routing ladder — one fixture table over escalate() and demote()'
       expect(got).toEqual(c.want);
     });
   }
+
+  it('covers every FailureKind at least once — the table measures the vocabulary, not just three hand-picked words', () => {
+    const kindsInTable = new Set(ROUTING_LADDER_CASES.map((c) => c.kind));
+    for (const kind of FAILURE_KINDS) {
+      expect(kindsInTable.has(kind), `no fixture row exercises FailureKind '${kind}'`).toBe(true);
+    }
+  });
 });
 
 describe('EFFORT_LADDER — ccd/ccd\'s ROUTE_EFFORT_STOPS is its bash mirror', () => {

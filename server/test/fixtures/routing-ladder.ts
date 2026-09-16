@@ -13,11 +13,12 @@
 // — `scope`, `prior` and `lastDemotion` are meaningless for a demote row and
 // left at their defaults.
 import type { ModelClass } from '../../../shared/models.js';
+import type { FailureKind } from '../../../shared/api.js';
 import type { Demotion, RungCurrent, RungTarget } from '../../../shared/routing-ladder.js';
 
 export interface RoutingLadderCase {
   name: string;
-  kind: 'shallow' | 'ceiling' | 'unclear' | 'demote-class' | 'demote-effort';
+  kind: FailureKind | 'demote-class' | 'demote-effort';
   current: RungCurrent;
   scope?: 'main' | 'subagent';
   prior?: number;
