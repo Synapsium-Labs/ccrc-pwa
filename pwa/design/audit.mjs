@@ -518,6 +518,47 @@ export const SELF_GROUNDED_EXEMPT = {
  *  is hand-written (a parser cannot recover it); the COLOUR is read from the
  *  stylesheet, so retinting the rule re-measures it. */
 export const INHERITED_GROUNDS = {
+  // ── the task card and the compaction card (PR #89) ──────────────────────
+  // Seven rules that set a colour and paint no ground. Their hosts DO paint
+  // one — `.task-card` and `.compaction` both set `background: var(--bg-surface)`
+  // — but neither is named in these selectors, and the named-ancestor route
+  // grounds a rule only against a host its own selector names. So all seven
+  // were measured at nothing and sat in the uncovered census, which is where
+  // the last unmeasured meta cell was shipping below AA. Registered rather
+  // than grandfathered on purpose: the ground is recoverable by reading the
+  // component, so calling them unmeasurable would be false, and a registration
+  // keeps the COLOUR read from the stylesheet so a retint re-measures.
+  // `.task-card-toggle` was already in GROUNDS with this same ground and the
+  // same reasoning; these are its siblings, missed because it paints
+  // `background: transparent` and they paint nothing at all.
+  'chat.css .compaction-raw': {
+    under: ['var(--bg-surface)'],
+    why: 'the raw body of a compaction card. `.compaction` (chat.css:1207) paints background: var(--bg-surface) and `.compaction-body` adds only padding and a top border, so the card fill is what is behind this text. Its selector names no painted ancestor',
+  },
+  'chat.css .task-card-glyph': {
+    under: ['var(--bg-surface)'],
+    why: 'the task card\'s leading glyph, rendered inside .task-card (TaskCard.tsx), which paints background: var(--bg-surface). Same ground and same reason as the .task-card-toggle entry already in GROUNDS; its selector names no painted ancestor',
+  },
+  'chat.css .task-card-status': {
+    under: ['var(--bg-surface)'],
+    why: 'the status chip in .task-card-head. It draws a border and no fill, so the card\'s --bg-surface is behind it; its selector names no painted ancestor',
+  },
+  'chat.css .task-card-status--ok': {
+    under: ['var(--bg-surface)'],
+    why: 'the ok variant retints the chip to --status-busy-text over the same card ground. A grouped or variant selector still names no painted ancestor, so it needs its own registration',
+  },
+  'chat.css .task-card-status--bad': {
+    under: ['var(--bg-surface)'],
+    why: 'the bad variant retints the chip to --status-dead-text over the same card ground. Registered separately from the base chip for the same reason the .proj-card-pool attention states are',
+  },
+  'chat.css .task-card-field dt': {
+    under: ['var(--bg-surface)'],
+    why: 'the field label in .task-card-fields. `.task-card-field` sets display and gap only, so the ground is still the card\'s --bg-surface; naming .task-card-field in the selector does not help, because the descendant route requires a SELF-GROUNDED host and that rule paints nothing',
+  },
+  'chat.css .task-card-field dd': {
+    under: ['var(--bg-surface)'],
+    why: 'the field value, same host and same ground as its dt. It scrolls within a max-height but paints no fill of its own',
+  },
   'fleet.css .proj-card-pool': {
     under: ['var(--bg-surface)'],
     why: 'the project-pool chip sits in .proj-card-head on the project card. Its selector names no ancestor and sets no ground, so the auditor cannot recover the card background from CSS alone',
