@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=82ff0222edcdb1dc83d31f36510214493244becbeb8284111661eca2f29fa55a
+# ccrc:generated 1 sha256=5cfd44adfc95afd3ac542bf96ecdd9cec3e253537dcca85f3557044e27a70e01
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13904,13 +13904,21 @@ _pane_narrow_note() {   # id site — say ONCE per COMPACT_NOTE_FLOOR that a tic
   # is the consequential one. The field is a bare epoch, `_compact_note`'s
   # `compactnote` half and nothing else: WHEN WE LAST SAID IT OUT LOUD. There is
   # no marker half, because there is only ever one reason.
-  local id="$1" site="$2" now nts
+  local id="$1" site="$2" now said
   now=$(date +%s)
   # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]`, so `&&` short-circuits
   # before the arithmetic ever sees a torn or hand-edited field — D-299's class,
   # the shape `_compact_note` and `_strand_mark` both use.
-  nts=$(_reg_get "$id" "${site}narrownote")
-  [[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
+  #
+  # `said`, NOT `nts`, AND THE NAME IS LOAD-BEARING. With `nts` this line is
+  # BYTE-IDENTICAL to `_compact_note`'s floor — same constant, same variable —
+  # and `ccd-arith-containment.test.ts`'s structural sweep identifies a site by
+  # the fragments on its line, so two identical lines make that file's
+  # `toHaveLength(1)` red on a row that is not the one that changed. Measured
+  # when this function first landed. A distinct operand name is what lets the
+  # sweep enumerate this as its OWN site, which it now does.
+  said=$(_reg_get "$id" "${site}narrownote")
+  [[ "$said" =~ ^[0-9]+$ && $((now - said)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
   _reg_set "$id" "${site}narrownote" "$now"
   echo "$(date '+%F %T') $site-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"
   return 0

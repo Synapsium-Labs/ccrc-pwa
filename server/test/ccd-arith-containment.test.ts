@@ -124,6 +124,20 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.cleanup();
   });
 
+  it('_pane_narrow_note does not evaluate a payload planted in its floor anchor', () => {
+    const h = makeCcdHarness('arith-narrownote');
+    // §6.3's stand-down note (drawer wave 2) floors itself on
+    // `$REG/<id>.<site>narrownote`, a bare epoch it reads back as an arithmetic
+    // operand — the same threat model as `compactnote` and `strandnotify`, and
+    // the same guard. The site word is part of the FIELD NAME, so the payload
+    // is planted in the field the `swap` arm actually reads.
+    h.sh(
+      " _reg_set myid swapnarrownote 'REG[$(touch \"$HOME/PWNED-narrow\")]';"
+      + ' _pane_narrow_note myid swap');
+    expect(existsSync(path.join(h.home, 'PWNED-narrow'))).toBe(false);
+    h.cleanup();
+  });
+
   it('_strand_mark does not evaluate a payload planted in strandnotify', () => {
     const h = makeCcdHarness('arith-strand');
     // The banner floor reads `strandnotify` as an arithmetic operand. A torn or
@@ -168,6 +182,14 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
     { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
+    // The drawer wave's §6.3 note floor. It reads the SAME constant as the row
+    // above, so its operand is deliberately named `said` rather than `nts`:
+    // with `nts` the two lines are byte-identical and this sweep's
+    // `toHaveLength(1)` reds on `_compact_note`'s row — a site identified by
+    // the fragments on its line cannot tell two identical lines apart
+    // (measured when `_pane_narrow_note` landed). Distinct operand, distinct
+    // row, and the population stays exactly enumerated.
+    { fn: '_pane_narrow_note (narrownote floor)',   anchors: ['$((now - said))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
   ];
   // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
   // premise (#69 review round 4). The comment here said "the seven sites are all
