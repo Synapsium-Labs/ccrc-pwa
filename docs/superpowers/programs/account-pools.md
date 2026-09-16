@@ -7431,3 +7431,30 @@ So the guards I described as "round 2's widening" were mostly round 1's, and my 
 otherwise. Recorded here rather than quietly corrected. They also found their own round-3 comment-strip
 was half a fix (line-leading `#` only, while the uninstall region's style is trailing), and that the
 file was created at `faf0f8f7`, not the `26413403` their first header claimed.
+
+**2026-09-16 14:3x Z — the worker's CI close-out (mail 1460), confirmed AT THE SOURCE rather than
+against their reading.** They settled the one fact wave-done 1452 left open (both macOS legs still
+running) with no new push and no new done-claim: `test-macos` FAIL 324/326, `probe-macos` PASS, four
+reds across six legs from three causes. I checked it against **main's own CI run**, not against the
+PR's: run `35083929329` at `dba672ac` is `test-macos` FAIL, `test (pwa)` FAIL, `test (server)` FAIL,
+with `build-pwa`, `test (agent)` and `probe-macos` green. Pulling that job's log names three failing
+tests in two files:
+
+- `ccd-plat-timeout.test.ts > D-2764 > a binary that SWALLOWS -k and exits 0 is not read as supporting it`
+- `ccd-plat-timeout.test.ts > D-2764 > a hostile binary that refuses -k never sees it, and never leaks its rc`
+- `crossrepo-prose.test.ts > states the measured cap predicates, not a workspace-to-slot equivalence`
+
+Byte-for-byte the test names the worker reported on the PR. `ccd-plat-timeout.test.ts` is **identical
+between `origin/main` and `7a662dca`** and appears nowhere in the branch's three-dot diff, so the wave
+cannot reach it. **The inherited-red claim is now measured on main directly, not inferred from the PR.**
+
+**A finding that is NOT this programme's, recorded because I measured it and nobody owns it: D-2764 is
+marked CLOSED and its own two tests still red on macOS.** PR #115 (`af2486b6`, merged 2026-09-15,
+"D-2764 closed; D-2836–D-2841") is an ancestor of both `origin/main` and this wave's tip, and main's
+macOS leg fails those two `D-2764` tests at that very commit — `expected '127' to be '124'`, four
+occurrences in the job log. So the closure did not hold on macOS. **I tested and REFUTED my own first
+guess** before reporting it: 127 is not "no `timeout` binary", because `_plat_timeout` (`ccd/ccd:353`)
+already falls through `timeout`/`gtimeout` to a bash watcher when neither exists. Why it is 127 is #115's
+owner's question, not mine, and guessing further would hand them a wrong lead. No open run claims #115
+and its author is the operator's own GitHub identity, so this goes up rather than out as mail.
+Costs if wrong: an owner spends one CI read confirming a red they already see.
