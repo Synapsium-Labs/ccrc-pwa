@@ -19,10 +19,11 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict, transitionsFor,
+  type CoordCaps, type CoordCapsUsage, type RunKind, type RunRefuseCode, type RunState, type SkillState,
+  type SpawnVerdict,
 } from '../../../shared/api.js';
-import { readWorkerSkillState } from '../skillstate.js';
+import { readSkillState, skillDirFor } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -39,6 +40,17 @@ import { readWorkerSkillState } from '../skillstate.js';
 // `name:`, so a rename cannot leave every worker being sent after a ghost.
 export const WORKER_KICKOFF_PREFIX =
   "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+// The reviewer's half of the same pair (design 2026-09-14 §8): one sentence,
+// one skill name, bound to `ccd/reviewer-skill/SKILL.md`'s frontmatter by
+// `reviewer-skill.test.ts` exactly as the worker's is.
+export const REVIEWER_KICKOFF_PREFIX =
+  "Run the ccrc-reviewer skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+/** Which standing protocol a brief of this kind invokes. `unknown` never
+ *  reaches here — dispatch refuses it at the transition precondition. */
+export const kickoffPrefixFor = (kind: RunKind): string =>
+  kind === 'review' ? REVIEWER_KICKOFF_PREFIX : WORKER_KICKOFF_PREFIX;
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -164,6 +176,31 @@ export type DispatchOutcome =
  * the route used to (D-46: the transition guard runs BEFORE the body is even
  * looked at).
  */
+
+/**
+ * THE CAP, MEASURED ONCE AND DECIDED ONCE (design 2026-09-14 §7.2 pin 2; D-2805).
+ * Two routes refuse on the concurrency cap — `dispatchRun` below and
+ * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
+ * state — and both take their numbers from this one read, so the refusal's
+ * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * taking the pair as arguments because `coord-caps-route.test.ts` pins that
+ * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
+ * needs the numbers for a refusal asks here and never reads them itself.
+ * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
+ * a cap that refuses without saying what it is is indistinguishable from a bug).
+ */
+export function capsMeasured(coord: CoordStore): {
+  caps: CoordCaps; usage: CoordCapsUsage;
+  overConcurrency: { limit: number; running: number } | null;
+} {
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
+    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
+    : null;
+  return { caps, usage, overConcurrency };
+}
+
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
 ): Promise<DispatchOutcome> {
@@ -186,7 +223,11 @@ export async function dispatchRun(
   // this only answers the question early enough that `ccd ensure`/`/clear`/
   // `ws-add`/`ws-hold` never fire for a transition that was always going to
   // be refused.
-  if (run.state !== 'planned') {
+  // Read by KIND through `transitionsFor` (design 2026-09-14 §5.2): identical
+  // for both real kinds — only `planned` carries a `dispatched` edge in
+  // either table — and it refuses a `kind:'unknown'` row (D-2795) here,
+  // BEFORE `ccd ensure`/`ws-add`/`ws-hold` fire.
+  if (!transitionsFor(run.kind)[run.state].includes('dispatched')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'dispatched' };
   }
 
@@ -196,7 +237,8 @@ export async function dispatchRun(
   // THE MAIL, composed once: the standing protocol by name, then the wave's
   // own brief. Composed HERE, before the cap below, because the cap must
   // measure what is actually queued — see that check's own comment.
-  const body = WORKER_KICKOFF_PREFIX + brief;
+  const prefix = kickoffPrefixFor(run.kind);
+  const body = prefix + brief;
   // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
   // its own `body`, applied to the mail this dispatch will queue —
   // `queueSystemMail` below is a SECOND producer of `mail`/`mail_deliveries`
@@ -216,8 +258,8 @@ export async function dispatchRun(
   // 8 KiB means, by exactly the length of a constant in this file.
   if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
-      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
-        `${Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')} bytes exceeds the ` +
+      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + kickoff prefix ` +
+        `${Buffer.byteLength(prefix, 'utf8')} bytes exceeds the ` +
         `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
   }
 
@@ -274,11 +316,11 @@ export async function dispatchRun(
 
   // 2: caps. The refusal carries the numbers — a cap that refuses without
   // saying what it is is indistinguishable from a bug.
-  const caps = coord.caps();
-  const usage = coord.capsUsage();
-  if (usage.running >= caps.maxConcurrentWorkers) {
+  const { caps, usage, overConcurrency } = capsMeasured(coord);
+  if (overConcurrency !== null) {
+    // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return { ok: false, kind: 'refused', code: 'cap-concurrency',
-      limit: caps.maxConcurrentWorkers, running: usage.running };
+      limit: overConcurrency.limit, running: overConcurrency.running };
   }
   if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
     return { ok: false, kind: 'refused', code: 'cap-daily',
@@ -748,8 +790,13 @@ export async function dispatchRun(
   // it written only for absent/unmeasurable, the ABSENCE of a row would mean
   // either `present` or "an older build with no preflight" — a second
   // overloaded null, one layer down from the one this field deletes.
-  const skillState = await readWorkerSkillState(
-    deps.io, wrapper === null ? undefined : deps.configDir(wrapper));
+  // Which skill directory: BY KIND. The cast is sound because the transition
+  // precondition above (`:190`, Task 4) already refused a `kind:'unknown'`
+  // row before this function ever reaches an irreversible act — `unknown`
+  // never lands here, so the narrower union is not a lie.
+  const skillState = await readSkillState(
+    deps.io, wrapper === null ? undefined : deps.configDir(wrapper),
+    skillDirFor(run.kind as 'work' | 'review'));
   coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never

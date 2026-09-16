@@ -5537,10 +5537,11 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs` (:6613),
   # `_inst_hooks` (:6812), `_inst_skills` (:6850) and `_inst_graphify_skill` (:6865) take
   # no arguments by contract and converge EVERY rostered home; this verb has one home to
-  # provision, and the four standalone scripts all take `--homes <dir>…`
+  # provision, and the five standalone scripts all take `--homes <dir>…`
   # (install-session-hooks.sh:63, and the identical line at
   # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
-  # install-graphify-skill.sh:77). So the scripts are called directly,
+  # install-reviewer-skill.sh:31, install-graphify-skill.sh:77). So the
+  # scripts are called directly,
   # `ccrc-install.test.ts:1812-1893`'s 23-entry `_inst_*` spine is untouched, and no
   # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step stands=""
@@ -5578,7 +5579,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # either would publish a write that did not happen; appending nothing would hide a step
   # that RAN. So the key's vocabulary carries both words and the array's length never changes.
   #
-  # The four installer tokens below mean something weaker on purpose — "ran and
+  # The five installer tokens below mean something weaker on purpose — "ran and
   # returned 0" — because each is a separate process converging a home and this verb
   # cannot see what it wrote. The merge is this verb's OWN write, so it can say which.
   if [ -n "$ACCT_SETTINGS_WRITTEN" ]; then
@@ -5588,10 +5589,11 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   fi
   # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's — `_inst_hooks`'
   # rule (:6799-6804): "the INSTALLED copy, never the one in the tree … It is also the
-  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER:
-  # the worker skill points at ../ccrc-coordinator/references/… (`_inst_skills`, :6841-6844).
+  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER
+  # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
+  # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-graphify-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -5691,7 +5693,7 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
 # supplies. The costs are asymmetric: one inert file against unmeasured work.
 #
 # NOTHING AFTER THE ROSTER ENTRY ROLLS BACK. `_inst_accounts_sh`, `cmd_wrappers`, the
-# config dir and the four installers are roster-driven CONVERGERS — `ccrc install`'s
+# config dir and the five installers are roster-driven CONVERGERS — `ccrc install`'s
 # own spine — so a failure among them leaves a lane rostered and not yet converged,
 # and the cure is to converge again. Un-writing an operator's roster entry to tidy up
 # a failed chmod would be the destructive act, on the one file this CLI calls theirs.
@@ -7059,7 +7061,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
   if [ -d "$cfg/skills" ]; then
     real="$(realpath "$cfg/skills" 2>/dev/null)" \
       || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
-    for name in ccrc-coordinator ccrc-worker graphify; do
+    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify; do
       { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
       if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
         rm -f -- "$real/$name" \
@@ -9440,7 +9442,7 @@ _inst_atomic() {   # <src> <dest> <mode>
 # contract for that shape, and it keeps the three properties the file-level
 # helper's callers already depend on:
 #
-#   1. IT COMPARES FIRST. `diff -r -q` is the identical check both skill
+#   1. IT COMPARES FIRST. `diff -r -q` is the identical check all three skill
 #      installers make before they touch a converged home, so "nothing to do"
 #      costs one walk and rewrites nothing — the measurement an operator uses to
 #      see what a run actually did (`_inst_accounts_sh`'s rule, applied to a
@@ -9465,7 +9467,7 @@ _inst_tree_copy() {   # <src-dir> <dest-dir>
   if [ -d "$dest" ] && diff -r -q "$src" "$dest" >/dev/null 2>&1; then
     return 0
   fi
-  # `.tmp.$$` and `.old.$$` are the two skill installers' own staging names, and
+  # `.tmp.$$` and `.old.$$` are the three skill installers' own staging names, and
   # `.tmp.` is the spelling `_inst_atomic`'s stray sweep and the test suite's
   # both already look for.
   tmp="$dest.tmp.$$"
@@ -10430,17 +10432,18 @@ _inst_hooks() {
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
 }
 
-# ── _inst_skills — the two skills, placed and then INSTALLED ──────────────
+# ── _inst_skills — the three skills, placed and then INSTALLED ────────────
 # THE ASYMMETRY THIS STEP CLOSES. `deploy/deploy.sh agent <host>` has shipped
 # the coordinator skill to the fleet host since Build 7, and now ships the
-# worker skill beside it — while a box that installed ITSELF got NEITHER,
-# because no step of this verb had ever heard of a skill. That gap is not
-# cosmetic. Both installers exist because skills resolve per
-# `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap while its id does
-# not: a coordinator (or a worker) is placed with no pinned account, so it has
-# to find its skill in EVERY rostered home. On a self-installed box it found one
-# in none of them, and the failure is silent — the model does not announce that
-# it has no protocol, it improvises one.
+# worker and reviewer skills beside it — while a box that installed ITSELF
+# got NONE OF THEM, because no step of this verb had ever heard of a skill.
+# That gap is not cosmetic. All three installers exist because skills
+# resolve per `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap
+# while its id does not: a coordinator (or a worker, or a reviewer) is
+# placed with no pinned account, so it has to find its skill in EVERY
+# rostered home. On a self-installed box it found one in none of them, and
+# the failure is silent — the model does not announce that it has no
+# protocol, it improvises one.
 #
 # TWO HALVES PER SKILL, IN DEPLOY'S OWN ORDER. The TREE is placed under
 # `~/.cc-sessions/<name>` — the same path `deploy.sh` rsyncs it to, which is
@@ -10456,7 +10459,8 @@ _inst_hooks() {
 # THE COORDINATOR GOES FIRST, for deploy.sh's reason: the worker skill carries
 # no `references/` of its own and points a live worker at the coordinator's
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
-# skills side by side under one config dir).
+# skills side by side under one config dir) — and the reviewer skill, third,
+# points into the same tree.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -10465,13 +10469,13 @@ _inst_hooks() {
 _inst_skills() {
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator and ccrc-worker in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker and ccrc-reviewer in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -11622,11 +11626,12 @@ _uninst_cc_sessions() {
   fi
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    "$reg/install-reviewer-skill.sh" \
     "$reg/install-graphify-skill.sh" \
     || _ccrc_die "removing ccrc's files under $reg failed"
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, both skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the three skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────

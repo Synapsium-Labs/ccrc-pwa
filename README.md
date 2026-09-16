@@ -1542,18 +1542,22 @@ pause, why `ws-reap` stays human-only, and the honest boundary — this section
 covers only what that one does not: the install lane, the PWA surfaces, the
 disaster-recovery drill, and the Build 4 dogfood runbook.
 
-**Both skills ship to every rostered account's config dir.** The
-coordinator's protocol is one of a pair: its worker counterpart is the
+**All three skills ship to every rostered account's config dir.** The
+coordinator's protocol is now a trio: its worker counterpart is the
 `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
-`server/test/worker-skill.test.ts`), which carries no `references/` of its own
-and points at the coordinator's — so it must land *beside* it, never instead of
-it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`, and a session's
-account drifts on swap — so `ccd/install-coordinator-skill.sh` and
-`ccd/install-worker-skill.sh` each install into *every* config dir
-the roster names, the same list
+`server/test/worker-skill.test.ts`), and its reviewer counterpart is the
+`ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
+`server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
+workspace and reports — it never rules. Neither carries a `references/` of
+its own — both point at the coordinator's — so each must land *beside* it,
+never instead of it, and never first. Skills resolve per `CLAUDE_CONFIG_DIR`,
+and a session's account drifts on swap — so `ccd/install-coordinator-skill.sh`,
+`ccd/install-worker-skill.sh` and `ccd/install-reviewer-skill.sh` each install
+into *every* config dir the roster names, in that order — coordinator, then
+worker, then reviewer — the same list
 `install-session-hooks.sh` uses. There is no hooks-able subset — that concept
 existed only while the installers carried a hand-typed `homes=(…)` array; all
-three now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
+four now `source` the generated `~/.ccrc/accounts.sh` and `continue` past any
 config dir that is absent, which is what makes "every account" the safe answer
 rather than a broader one. No list is trusted: `install-session-hooks.test.ts`,
 `install-coordinator-skill.test.ts` and `install-worker-skill.test.ts` each RUN
@@ -1853,7 +1857,7 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its eleven
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twelve
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
 shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
@@ -1926,8 +1930,14 @@ buy.
    is refused and mailed back with the reason. (An explicit abandon,
    `state:'failed'`, skips this re-measurement entirely — there is no
    worktree left to re-measure an abandon against.)
-5. The coordinator reviews the handoff commit like any other diff — brief
-   *quality* stays discipline, not something this server enforces — then must
+5. The coordinator **dispatches a review run** (`POST /api/runs` with
+   `kind:'review'`, `reviews:<id>`) whose reviewer reads the wave in its own
+   worktree at one measured tip and mails one report; the coordinator closes
+   that run on the reviewer's `{reviewedTip, report}` — refused
+   `stale-review` if the worker pushed meanwhile — and rules: send back
+   (`advance` to `working`, cap-checked, refused `review-in-flight` while the
+   review is open) or advance to `merging`. Brief *quality* stays discipline,
+   not something this server enforces — then must
    **open wave N+1 before it can close wave N**. A programme with zero open runs
    retires permanently, so close-first would break role-addressed coordinator
    mail between the two calls.
@@ -2051,10 +2061,18 @@ the full event archive, with no outstanding/history split. Both join through the
 run row; an event with no run behind it is programless and shows only unfiltered.
 
 **Caps and pause.** The single-row `coordinator_state` table holds
-`maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
-terminal) and `maxSessionsPerDay` (default 12 — dispatches inside a rolling
-24h window, not a calendar day), both checked at
-`POST /api/runs/:id/dispatch` before anything else is touched. Both are an
+`maxConcurrentWorkers` (default 3 — runs currently dispatched and in an
+ACTIVE state, `dispatched` or `working` (and any state token this build
+cannot name — the safe direction for a cap, D-2803); a worker at `awaiting-review`,
+`merging` or `closing` is idle by contract and holds no slot — design
+2026-09-14 §7.1; the one edge back into `working` is cap-checked on
+`POST /api/runs/:id/advance`) and `maxSessionsPerDay` (default 12 —
+dispatches inside a rolling 24h window, not a calendar day), both checked at
+`POST /api/runs/:id/dispatch` before anything else is touched. **Review runs
+are dispatches**, so a programme that made N dispatches per wave now makes
+about 2N; the seed `maxSessionsPerDay` of 12 covers roughly 6 waves a day,
+not 12 — raise the dial through `POST /api/coord/caps` when a programme
+runs hot rather than discovering `cap-daily` mid-wave (§7.3). Both are an
 operator control: `GET`/`POST /api/coord/caps` reads them beside their current
 usage and writes either or both, bounds-checked, and the `/runs` board renders
 the dial. (For a stretch of this build's history there was no route at all and

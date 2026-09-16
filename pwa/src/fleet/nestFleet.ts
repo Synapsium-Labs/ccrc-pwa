@@ -22,7 +22,8 @@
 // dispatched.
 // Neither is inferred here: both ride on the `runs` frame, which is ACTIVE-ONLY
 // by construction (`watch.ts`'s `emitRuns` calls `coord.runs()` with no
-// options, and that defaults to `state NOT IN ('done','failed')`). So the tree
+// options, and that defaults to excluding `TERMINAL_RUN_STATES`,
+// `shared/api.ts`'s `done`/`failed` pair). So the tree
 // shows the programme structure that is LIVE RIGHT NOW and forgets it when the
 // programme closes — which is the honest lifetime for a bracket the operator
 // reads as "this is happening".

@@ -256,3 +256,9 @@ re-send the old numbers.
 - **The brief and the plan disagree.** The plan's text governs (clause 6). Note
   the disagreement in your `wave-done` mail so the ledger gets it — that is how
   the next wave finds out.
+- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming
+  this run): a review run read your wave and the coordinator ruled. The report
+  at the path in the mail's `artifacts` — plus the rulings in its body — is
+  your brief for the fix round. Ack it (clause 3), fix on this workspace's own
+  branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never
+  re-send the old numbers.
