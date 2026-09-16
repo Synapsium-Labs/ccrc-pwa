@@ -7176,3 +7176,52 @@ Told the worker (mail 1386, addendum to 1385, same round): merge `origin/main` i
 re-measuring, and re-run the suites on the MERGED tree — the crossrepo wave edited the operator's docs,
 which is the exact surface these pins read, so every citation and passage slice needs re-checking there
 rather than at `7bac1727`.
+
+### 2026-09-16 10:5x UTC — #108 and #113 MERGED; #103 closed; the cap change is merged but NOT deployed
+
+**The operator merged both.** `d8aebba3` (#108, review runs) at 10:06:17Z and `f6be1fef` (#113, the
+ccd-queue D-2475 plan correction) at 10:06:55Z. **#103 is CLOSED** as superseded, with a comment saying
+why: #108 contains every commit of that branch, and the spec on `main` carries the D-2824 correction
+#103's own text could not.
+
+**The deploy has NOT happened, and I measured it rather than assuming.** Run 64 (`bug-fix-waves`) is
+`awaiting-review` with `dispatchedAt` set and STILL counts toward the seven — which is the OLD
+positive-form `capsUsage().running`. The merged formula treats `awaiting-review` as idle, so the live
+fleet reads 7/7 where the merged code reads 6/7. **The branch deploys SERVER FIRST** (its agent lane
+carries coordinator clause 12 whose server half must exist; the review routes are inert until someone
+opens a review run). I have left it with the operator, as I said I would — I flagged it rather than
+taking it, because it restarts the server ~20 sessions and seven coordinated runs depend on, and I had
+already handed that item over. Say the word and I run the server lane.
+
+**Run 42 (ccd-queue): BOTH standing conditions are now met** — (a) D-2475 is on `main` via #113, (b)
+account-pools' wave took its slot on the 15th. It stays `planned` on capacity alone, which is a NUMBER
+to re-measure and not an event to wait for ([[a-standing-position-needs-an-owner-for-each-condition]]).
+The deploy is what drops it to 6/7. Retry the dispatch the moment the count moves.
+
+**Peer mail 1405 from `claude-ccrc-pwa`** (coordinator of `home-project-flip`): `homeProject` becomes
+required on every `POST /api/runs` once their flip deploys; runs 43 and 47 both recorded
+`legacy-home-project` because I opened 47 at 11:34Z on the 14th and the skill that sends the field
+reached the fleet host at 11:51Z — seventeen minutes later. Both programmes were backfilled to
+`ccrc-pwa` this morning. Acked and replied (mail 1407): every future open of mine carries
+`"homeProject":"ccrc-pwa"` by hand rather than by trusting the installed skill's age; neither of my open
+rows can be stranded by the flip, since both need a dispatch next, not an open. I also told them #108 is
+merged-not-deployed, because their own flip's server deploy would carry my cap change with it and give
+the fleet a slot as a side effect.
+
+### 2026-09-16 10:5x UTC — fix round 2 is in flight and main moved under it AGAIN (mail 1408)
+
+The worker pushed `43b7e931` ("five false sentences, four false reds, and guards that state their own
+limits") with `f9fa7bb4` merging `origin/main` at `98236c81`. No wave-done yet; CI still running.
+
+Measured against the newer `dba672ac` and mailed as a second addendum to the SAME round, so the worker
+merges once rather than twice: the merge is clean; of the four new commits **only #108 touches README
+and CLAUDE.md** (+50/−17 and +11/−1); its README hunks (1353, 1664, 1737, 1862) sit BELOW the
+Account-pools section and its CLAUDE.md hunks (179, 191, 203) sit below both the pool bullet and the
+`## Coordination (Build 7) invariants` terminator, so **no passage slice or marker moves**; but it is
+net **+33 README lines above line 2760**, so the plan's corrected note goes stale again — "2760 at its
+head" becomes roughly 2793. Re-measure by content, never by adding 33. The size ratchet survives with
+~24 lines of margin inside its ±100 window.
+
+**That is the second time in ONE wave that a merge has moved the numbers under the note whose whole job
+is to be accurate about numbers** — the argument for that note carrying no head-relative figures at all.
+Told the worker to say so in the commit body.
