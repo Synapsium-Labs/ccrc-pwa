@@ -2254,11 +2254,30 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
   });
 
   it('wave-lifecycle.md §4 carries the escalation example, the demotion guidance, and never `ccd route`', () => {
+    // Bound to §4 itself (fix round 1, finding #1) — the paragraph lives in
+    // §4 but below the advance bullets, so slice from the §4 heading to the
+    // next `## ` heading the way the signals-section test below slices
+    // between two headings, rather than asserting against the whole file
+    // (which would stay green even if the paragraph moved into another
+    // section entirely).
     const wl = refs('wave-lifecycle.md');
-    expect(wl).toContain('"$API" runs route "$run_id" --json -');
-    expect(wl).toMatch(/kind":"<shallow\|ceiling\|unclear>"/);
-    expect(wl).toContain('**Demotion** is your judgement');
-    expect(wl).toMatch(/Never `ccd route` \(clause 1\) and never `--apply`/);
+    const start = wl.indexOf('## 4 — Advance the run as the wave progresses');
+    const end = wl.indexOf('## 5 — The boundary');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const section4 = wl.slice(start, end);
+    expect(section4).toContain('"$API" runs route "$run_id" --json -');
+    expect(section4).toMatch(/kind":"<shallow\|ceiling\|unclear>"/);
+    expect(section4).toContain('**Demotion** is your judgement');
+    expect(section4).toMatch(/Never `ccd route` \(clause 1\) and never `--apply`/);
+    // Controller ruling S5-R10 (fix round 1, finding #3): a refusal records
+    // neither a run event nor a journal row, so the mandated sentence is
+    // qualified to calls that change a record. Subject-bound (memory:
+    // a-substring-pin-binds-no-subject) — anchored on "Every call" so an
+    // unrelated "records neither" elsewhere in the section cannot satisfy it.
+    expect(flat(section4)).toMatch(
+      /Every call that CHANGES a record is one run event and one journal row; a refusal — the ladder's answers included — records neither\./,
+    );
   });
 
   it('wave-lifecycle.md\'s signals section names arm, routing, armUnparsed and routingUnparsed', () => {
@@ -2273,5 +2292,10 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
     }
     // §6's reader rule, in one sentence
     expect(signalsSection).toMatch(/`routing` is non-empty[\s\S]{0,120}mid-flight/);
+    // S5-R9 (fix round 1, finding #2): armUnparsed is what tells arm's two
+    // `null` causes apart — no arm ever seeded vs. an unparseable arm event
+    // excluded from its arm's mean. Named beside the `armUnparsed` field
+    // itself so this cannot be satisfied by the field name alone.
+    expect(signalsSection).toMatch(/armUnparsed === 0[\s\S]{0,200}armUnparsed > 0/);
   });
 });
