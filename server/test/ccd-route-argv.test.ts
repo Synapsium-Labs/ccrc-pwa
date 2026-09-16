@@ -218,3 +218,80 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     }
   });
 });
+
+// ── THE PARITY `ccd/ccd`'s HELPER-BLOCK HEADER CLAIMS ───────────────────────
+// `_route_argv_check` is `cmd_route`'s validator said a SECOND time, for the
+// reason that header gives: `cmd_route` reads the STANDING record to refuse the
+// haiku+effort pair across two calls, and there is no standing record at the
+// mint. A duplicate nobody measures is a request, not a mechanism — and these
+// two had already drifted once, silently, with nothing to say so. This block is
+// the mechanism. It derives BOTH copies from the shipped `ccd/ccd`, so a change
+// to either side reds here, and it names the single divergence that is meant:
+// the two refusals at the mint end `; nothing was touched`, which is a promise
+// only a refusal made before any side effect can make.
+const CCD_SRC = fs.readFileSync(CCD, 'utf8').split('\n');
+
+/** The statement lines of a top-level shell function — from its `name() {`
+ *  header to the `}` in column 0 that closes it — comments and blank lines
+ *  dropped, each trimmed, so the comparison is about code and not indentation
+ *  or the two bodies' (deliberately different) explanations. */
+const bodyOf = (name: string): string[] => {
+  const start = CCD_SRC.findIndex((l) => l.startsWith(`${name}() {`));
+  expect(start, `${name} not found in ccd/ccd`).toBeGreaterThan(-1);
+  const end = CCD_SRC.findIndex((l, i) => i > start && l === '}');
+  expect(end, `${name} has no closing brace`).toBeGreaterThan(start);
+  return CCD_SRC.slice(start + 1, end).map((l) => l.trim())
+    .filter((l) => l !== '' && !l.startsWith('#'));
+};
+
+/** The one declared divergence, as it appears inside the refusal's own quotes. */
+const MINT_PROMISE = '; nothing was touched"';
+const undiverge = (l: string): string => l.replace(MINT_PROMISE, '"');
+
+describe('_route_argv_check IS cmd_route\'s validator, measured against the shipped source', () => {
+  it('every line the two copies share is byte-identical, and the only divergence is the two refusals\' mint promise', () => {
+    const argv = bodyOf('_route_argv_check');
+    const verb = bodyOf('cmd_route');
+    const verbatim = argv.filter((l) => verb.includes(l));
+    const diverged = argv.filter((l) => !verb.includes(l) && verb.includes(undiverge(l)));
+    // LITERAL ratchets, never a count computed from the thing under test: a line
+    // reworded on EITHER side falls out of both sets, and the number reds.
+    expect(verbatim).toHaveLength(11);
+    expect(diverged).toHaveLength(2);
+    // The substance, named one arm at a time, so a drop cannot hide behind a
+    // structural line (`case "$rc" in`, `esac`, `done`) that still matches.
+    for (const [what, anchor] of [
+      ['the ROUTE_FIELDS check', /^_route_word_in "\$f" /],
+      ['the ccd-only refusal', /written by ccd only/],
+      ['the three-answer call', /^_route_valid "\$f" "\$v"; rc=\$\?$/],
+      ['the unreadable-vocabulary sentence', /roster projection carries no subagent class list/],
+    ] as const) {
+      expect(verbatim.filter((l) => anchor.test(l)), what).toHaveLength(1);
+    }
+    // ...and the two that diverge are the two REFUSALS, each diverging by the
+    // mint promise and by nothing else (that is what `undiverge` had to strip
+    // for them to land in this set at all).
+    expect(diverged[0]).toMatch(/die "bad value for \$f /);
+    expect(diverged[1]).toMatch(/die "class haiku takes no effort level/);
+    for (const l of diverged) expect(l).toContain(MINT_PROMISE);
+  });
+
+  it('the lines belonging to the argv copy alone make no refusal cmd_route does not also make', () => {
+    const argv = bodyOf('_route_argv_check');
+    const verb = bodyOf('cmd_route');
+    const only = argv.filter((l) => !verb.includes(l) && !verb.includes(undiverge(l)));
+    // The census: the signature, the loop over `$@` (`cmd_route` loops over its
+    // collected `--set`s), the well-formedness check that names THIS flag, and
+    // the return. A new arm on one side only shows up here and reds.
+    expect(only).toEqual([
+      `local kv f v rc cls="" eff=""`,
+      `for kv in "$@"; do`,
+      `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
+      `return 0`,
+    ]);
+    const dies = only.filter((l) => l.includes('die '));
+    expect(dies).toHaveLength(1);
+    // Same sentence, each flag spelled as the caller typed it.
+    expect(verb).toContain(dies[0]!.replace('--route', '--set'));
+  });
+});
