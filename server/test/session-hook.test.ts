@@ -6935,11 +6935,59 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
   };
 
   const norm = (s: string): string => s.replace(/\s+/g, ' ');
+  /** A SPECIFICITY FLOOR on what counts as a satisfying quotation, and the
+   *  blind spot both Important citation findings hid in. The rule's only
+   *  length condition was non-empty, so a reference quoting `}` or `fi` or
+   *  `at` was satisfied by almost any line of bash or TypeScript and the audit
+   *  reported it as anchored wherever it pointed.
+   *
+   *  MEASURED, with a byte-faithful replica of the shipped audit that
+   *  reproduced the census exactly: spec's suffix-rule sentence anchored three
+   *  `ccd/compact-card.mjs` functions ~107 lines high and all three passed on
+   *  the two-character token `" ("`; re-anchoring one of them to a line
+   *  reading `} else if (item.name === 'Read') {` kept the whole suite green
+   *  and the census at exactly 55. `ccd/ccd:1840-1848` survived on `" ("`
+   *  alone, because `SENT` cuts its clause at the `||` inside the quoted
+   *  condition; plan's glob clause survived because its ONE-character token
+   *  `f` occurs in the word "refuse" on the comment it pointed at.
+   *
+   *  THE RULE, and it is deliberately the NARROWEST one that closes the
+   *  measured blind spot rather than the strictest one available: every
+   *  ellipsis-part must be at least MIN_QUOTE non-space characters OR carry an
+   *  identifier-class character, and the six tokens measured as self-anchoring
+   *  never satisfy whatever else is true of them. A token that satisfies
+   *  neither states nothing about the line it points at, so a reference
+   *  carrying only such tokens is QUOTATIONLESS — a class the audit already
+   *  has (`unanchored`) and already does not count as a failure, which is why
+   *  this floor RAISES what the census can see without inventing a new
+   *  verdict. */
+  const MIN_QUOTE = 8;
+  /** The six tokens the review MEASURED as self-anchoring across this corpus,
+   *  refused by name. Five of them rule (a) already refuses for carrying no
+   *  identifier character at all; `at` is the one that does not, and it is the
+   *  token `ccd/session-hook.sh:865` survived on for four rounds. */
+  const NEVER = new Set(['/', ',', '(', 'at', '""', '$']);
+  const specific = (part: string): boolean => {
+    const t = part.trim();
+    if (t === '' || NEVER.has(t)) return false;
+    return t.replace(/\s+/g, '').length >= MIN_QUOTE || /[A-Za-z0-9_]/.test(t);
+  };
+  const partsOf = (tok: string): string[] =>
+    tok.split(/…|\.\.\./).map((x) => x.trim()).filter((x) => x !== '');
+  /** Whether a quoted span is EVIDENCE at all. A token that cannot satisfy the
+   *  rule under any anchor is not a quotation of anything, so it must not make
+   *  a reference CHECKED either — otherwise the floor would report a correct
+   *  anchor as stale for the sin of having said nothing. It is QUOTATIONLESS,
+   *  which is the class the audit already has and already does not fail. */
+  const usable = (tok: string): boolean => {
+    const parts = partsOf(tok);
+    return parts.length > 0 && parts.every(specific);
+  };
   /** An excerpt with an ellipsis is satisfied when EACH part occurs. */
   const occurs = (tok: string, cited: string): boolean => {
     const c = norm(cited);
-    const parts = tok.split(/…|\.\.\./).map((x) => x.trim()).filter((x) => x !== '');
-    return parts.length > 0 && parts.every((x) => c.includes(norm(x)));
+    const parts = partsOf(tok);
+    return parts.length > 0 && parts.every((x) => specific(x) && c.includes(norm(x)));
   };
 
   /** Blank-line separated, each line stripped and joined with ONE space — and
@@ -6967,7 +7015,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
    *  ground, is the caller's question, and the two passes below answer it
    *  differently. Shared so that the second pass cannot drift from the first on
    *  what a reference IS while deliberately differing on what excuses one. */
-  type Ref = { file: string; n1: number; n2: number; clause: string; toks: string[] };
+  type Ref = { file: string; n1: number; n2: number; clause: string; toks: string[]; at: number };
   const refsOf = (p: string): Ref[] => {
     const spans: Array<{ a: number; b: number; tok: string }> = [];
     for (const m of p.matchAll(QUOTED)) {
@@ -6996,8 +7044,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         file = lastCs === cs ? last : null;
         if (file === null || m.index === 0 || p[m.index! - 1] !== '`') continue;
       } else { last = file; lastCs = cs; }
-      out.push({ file, n1, n2, clause: p.slice(cs, ce),
-        toks: spans.filter((s) => s.a >= cs && s.b <= ce).map((s) => s.tok) });
+      out.push({ file, n1, n2, at: m.index!, clause: p.slice(cs, ce),
+        toks: spans.filter((s) => s.a >= cs && s.b <= ce).map((s) => s.tok).filter(usable) });
     }
     return out;
   };
@@ -7138,6 +7186,37 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'the marker is what exempts it, not the shape of the sentence').toEqual([1]);
   });
 
+  it('CONTROL: a quotation too weak to be evidence anchors NOTHING, and a real one still anchors', () => {
+    // THE SPECIFICITY FLOOR, in both directions, on ONE clause and ONE
+    // fixture line, so the difference measured is the QUOTATION and nothing
+    // else. `ccd/fx.sh:3` is `  printf "%s" "$a"`; `:7` is `echo done`, which
+    // carries neither quotation.
+    const weak = 'The helper writes ` (` at `ccd/fx.sh:7`.';
+    const strong = 'The helper writes `printf "%s" "$a"` at `ccd/fx.sh:7`.';
+    // A clause whose ONLY quotation is ` (` states nothing about any line, so
+    // it is QUOTATIONLESS rather than anchored — the class the audit already
+    // has. Before the floor this passed as ANCHORED, because `(` occurs in
+    // `printf "%s" "$a"`'s neighbours and in most lines of most files.
+    const w = audit([['fx', weak]], FX);
+    expect(w.failures, 'a ` (` quotation cannot anchor, so it cannot pass').toEqual([]);
+    expect(w.checked, 'and it is not CHECKED either — nothing was stated').toBe(0);
+    expect(w.unanchored, 'it is counted QUOTATIONLESS, which is what it is').toBe(1);
+    // THE SAME CLAUSE SHAPE with a real quotation IS checked, and reds here
+    // because `:7` does not carry it — so the floor removed the weak token's
+    // power to satisfy without removing the rule's power to refuse.
+    const st = audit([['fx', strong]], FX);
+    expect(st.checked, 'a real quotation is checked').toBe(1);
+    expect(st.failures.map(refKey), 'and reds on a line that does not carry it').toEqual(['ccd/fx.sh:7']);
+    // AND IT STILL PASSES WHERE IT IS TRUE, which is the other end of the pin.
+    expect(audit([['fx', strong.replace('fx.sh:7', 'fx.sh:3')]], FX).failures,
+      'the same quotation on the line that does carry it passes').toEqual([]);
+    // THE SIX NAMED TOKENS, each refused by name or by shape.
+    for (const tok of ['/', ', ', ' (', ' at ', '""', '$']) {
+      const doc = `The helper writes \`${tok}\` at \`ccd/fx.sh:3\`.`;
+      expect(audit([['fx', doc]], FX).checked, `\`${tok}\` is not evidence`).toBe(0);
+    }
+  });
+
   it('the audit reads the whole corpus — the numbers it is entitled to claim anything from', () => {
     const r = audit(realCorpus());
     // NON-VACUITY, MANDATORY. An audit that resolves nothing cannot red on
@@ -7266,7 +7345,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // LINE SHIFT in `ccd/ccd`, PROVEN rather than assumed: each cited range's
     // bytes at the base were located byte-identically at the tip, all five at
     // +80. No document was edited, no rule changed, no citation was added.
-    // `ccd/ccd` grew 89 lines (16,731 -> 16,820), 80 of them above `:2144` —
+    // `ccd/ccd` grew 89 lines (16,730 -> 16,819, as `wc -l` reads them; the
+    // figures this replaces were each one higher, the signature of a
+    // `split('\n').length` read of a file ending in LF — the DELTA was right
+    // in both directions, which is why nothing caught it), 80 of them above `:2144` —
     // R8-M1's acquire and arm comments, R8-M2's fallback note and R8-M3's
     // short-form renderer, all inside the lock-remedy block — and the
     // remaining 9 at the gc sweep's own tally.
@@ -7422,9 +7504,63 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     SUPERSEDED arm and into the checked set. Making a stale reference
     //     VISIBLE raises this map; that is what it is for.
     // RE-MEASURED against the tree, never adjusted to keep a number green.
+    //
+    // THE WHOLE-BRANCH FIX ROUND MOVES IT DOWN, 55 -> 54, AND THE MOVEMENT IS
+    // TWO CAUSES MEASURED APART RATHER THAN ONE NUMBER (wb B-I2). The audit was
+    // run unchanged against a `git archive` of the round's base (f18c1be5) and
+    // of this tip, and a THIRD way: the round's own TIP TREE under the round's
+    // BASE RULE, which is what separates a rule change from a line shift.
+    //   (A) base tree + base rule   55   the round's starting census
+    //   (B) tip  tree + base rule  133   this round's line shifts ALONE
+    //   (C) tip  tree + tip  rule   54   what this map asserts
+    // (B) is the honest measure of what editing `ccd/ccd` (+13 lines below
+    // `_reg_purge`) and `ccd/session-hook.sh` (+32 below the serve arm) did to
+    // anchors that were TRUE at the base: 78 of them. Every one was repaired by
+    // METHOD (1) — a shift PROVEN by byte-equality, the base's cited block
+    // located byte-identically in the tip file — never by arithmetic, and
+    // never inside a FROZEN task section. 117 references moved that way.
+    //
+    // THE SPECIFICITY FLOOR is the rule change, and it is the narrowest one
+    // that closes the measured hole: an ellipsis-part must be >= 8 non-space
+    // characters OR carry an identifier character, and the six tokens the
+    // review measured as self-anchoring (`/`, `, `, ` (`, ` at `, `""`, `$`)
+    // never satisfy. A token that can satisfy nothing is not a quotation, so
+    // it does not make a reference CHECKED either — it is QUOTATIONLESS, the
+    // class this audit already has. Measured against (B), the floor moved the
+    // census by -3 on its own while making three families VISIBLE that had
+    // been passing on `" ("` and on the one-character token `f`.
+    //
+    // WHAT THE 54 ARE, relative to the base's 55: SEVEN repaired and SIX new.
+    //   repaired: `ccd/ccd:11665-11670`, `:2399-2450`, `:3371`, `:3959`,
+    //             `:5059-5060`, `:886` and `ccd/session-hook.sh:2213` — each
+    //             either re-anchored to its measured tip site or era-marked
+    //             with a retraction marker the history arm reads.
+    //   new, and each one accounted for:
+    //     `ccd/ccd:3384` and `:5072-5073` are the SAME references as the
+    //       repaired `:3371` and `:5059-5060`, re-anchored by content and
+    //       still reported because `SENT` cuts their clause at the `;` or `|`
+    //       inside the very condition they quote. Net zero, and the anchors
+    //       are now TRUE.
+    //     `ccd/session-hook.sh:2245` is the SAME reference as the repaired
+    //       `:2213`, likewise re-anchored and likewise still reported — §5's
+    //       13 KB row quotes a shipped line carrying ESCAPED backticks
+    //       (`` `# this \`rm -f …\`` ``), and `QUOTED` pairs backticks left to
+    //       right with no escape rule, so every span after it in that row is
+    //       off by one. That is a FOURTH under-reporting mechanism beside the
+    //       three D-2758's append names, and it is recorded there rather than
+    //       fixed, because fixing it is a rule change no finding authorised.
+    //     `ccd/session-hook.sh:2231` sits inside Task 10's 24,688-byte FROZEN
+    //       section. This round's hook edit shifted its referent to `:2265`
+    //       and the freeze forbids the repair — exactly D-2849's class, and
+    //       recorded for exactly D-2849's reason.
+    //     `ccd/session-hook.sh:792-819` and `:795` are the rollback family
+    //       Task 9 DELETED. They are not re-anchorable at any line; the floor
+    //       made them visible by refusing the weak tokens that used to satisfy
+    //       them, which is the direction this map exists to move in.
+    // RE-MEASURED against the tree, never adjusted to keep a number green.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 24,
-      'ccd/session-hook.sh': 18,
+      'ccd/ccd': 20,
+      'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
       'server/test/ccd-workspaces.test.ts': 5,
@@ -7436,7 +7572,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(55);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(54);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -7501,7 +7637,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
         // Task 9's own list: the debt D-2758 parks in Task 11, RE-MEASURED
-        // there. FIVE of its eleven were re-anchored and now pass
+        // there. FIVE of its TEN entries inside the census were re-anchored and
+        // now pass — ten, not eleven: `ccd/session-hook.sh:1098` is one of the
+        // three keys the last assertion in this test names as reachable by THIS
+        // PASS ALONE, so it is outside the census by construction and the two
+        // numbers in this file cannot both be right
         // (`ccd/session-hook.sh:744` -> `:753`, `ccd/ccd:2756-2785` ->
         // `:3345-3374`, `:2766` -> `:3355`, `:2784` -> `:3373`, `:4355-4357` ->
         // `:5077-5079`). A SIXTH was re-anchored correctly and still reports:
@@ -7515,7 +7655,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/compact-card.mjs:433-560',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
-        'ccd/ccd:3371',
+        // RE-ANCHORED BY CONTENT this round (wb): the clause quotes
+        // `local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4`, which
+        // stood at `ccd/ccd:3371` at the round's base and stands
+        // byte-identically at `:3384` here. It still reports because `SENT`
+        // cuts the clause at the `;` inside that very quotation — a wrong
+        // ANCHOR became a right anchor with an unreachable quotation, which is
+        // a different defect and a smaller one.
+        'ccd/ccd:3384',
         // ADDED BY THE ROUND-14 PASS, and deliberately: this reference was a
         // bare `:3940-3951` whose clause names `ccd-wsaudit-nonpoison.test.ts`
         // (83 lines), so it resolved to a file that cannot hold it and the
@@ -7574,13 +7721,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
    *  DERIVED from `FILE_RE` rather than respelling a path grammar, so the two
    *  cannot disagree about what a path looks like. */
   const REF_TOKEN = new RegExp(`^(?:${FILE_RE})?:\\d+(?:[-–,\\d]*)$`);
-  const rowToksOf = (p: string): string[] => {
-    const out: string[] = [];
-    for (const m of p.matchAll(QUOTED)) {
-      const tok = m[1] ?? m[2] ?? m[3] ?? '';
-      if (tok === '' || REF_TOKEN.test(tok)) continue;
-      out.push(tok);
-    }
+  /** A row's CELLS, as [start, end) offsets into the joined row text. The row
+   *  is the paragraph, so a cell is the span between two unescaped `|`. */
+  const cellsOf = (p: string): Array<[number, number]> => {
+    const bars: number[] = [];
+    for (let i = 0; i < p.length; i++) if (p[i] === '|' && p[i - 1] !== '\\') bars.push(i);
+    const out: Array<[number, number]> = [];
+    for (let k = 0; k < bars.length - 1; k++) out.push([bars[k]! + 1, bars[k + 1]!]);
     return out;
   };
   const rowAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): RowAudit => {
@@ -7589,11 +7736,34 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       for (const { line: pstart, text: p } of paragraphs(text)) {
         if (!p.startsWith('|')) continue;
         r.rows++;
-        const toks = rowToksOf(p);
-        for (const { file, n1, n2 } of refsOf(p)) {
+        // A REFERENCE DRAWS ON ITS OWN CELL PLUS THE ROW'S FIRST CELL, not on
+        // the whole joined row (whole-branch review, B-I2(b)). The join is why
+        // this pass exists — a cell-scoped clause quotes nothing — but joining
+        // it whole gave ONE reference in a 12,996-byte row every one of that
+        // row's ~128 quotable tokens to satisfy itself with, so any anchor into
+        // any line carrying a slash passed. MEASURED: re-anchoring a real
+        // reference in that row to the FILE'S OWN HEADER COMMENT left all four
+        // ratchets green. The first cell is the row's SUBJECT and is what makes
+        // the join legitimate; every other cell is a different statement.
+        const cells = cellsOf(p);
+        const head = cells.length ? cells[0]! : null;
+        const cellToksOf = (idx: number): string[] => {
+          const own = cells.find(([a, b]) => a <= idx && idx < b) ?? null;
+          const spans = own && head && own[0] === head[0] ? [own] : [own, head].filter((x) => x !== null);
+          const out: string[] = [];
+          for (const m of p.matchAll(QUOTED)) {
+            const tok = m[1] ?? m[2] ?? m[3] ?? '';
+            if (tok === '' || REF_TOKEN.test(tok) || !usable(tok)) continue;
+            const a = m.index!; const b = a + m[0].length;
+            if ((spans as Array<[number, number]>).some(([s, e]) => a >= s && b <= e)) out.push(tok);
+          }
+          return out;
+        };
+        for (const { file, n1, n2, at } of refsOf(p)) {
           const lines = resolve(file);
           if (lines === null) continue;
           r.resolved++;
+          const toks = cellToksOf(at);
           if (!toks.length) { r.unanchored++; continue; }
           r.checked++;
           if (toks.some((t) => occurs(t, lines.slice(n1 - 1, n2).join('\n')))) continue;
@@ -7641,8 +7811,23 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     ].join('\n');
     const r = rowAudit([['fx', rows]], FX);
     expect(r.rows, 'both rows read').toBe(2);
-    expect(r.unanchored, 'and NEITHER is unanchored, because the row is the clause').toBe(0);
-    expect(r.failures.map(refKey), 'the row whose anchor does not carry the row\'s quotation reds')
+    // A REFERENCE DRAWS ON ITS OWN CELL PLUS THE ROW'S FIRST CELL. Here the
+    // anchor IS the first cell, so the quotation in cell 3 is out of its
+    // reach and both rows are QUOTATIONLESS — which is the point: before the
+    // binding, one reference in a 12,996-byte row could satisfy itself from
+    // any of that row's ~128 tokens, and re-anchoring a real reference to the
+    // file's own header comment left all four ratchets green.
+    expect(r.unanchored, 'a first-cell anchor cannot reach cell 3\'s quotation').toBe(2);
+    expect(r.failures, 'so neither row states anything for this pass to refuse').toEqual([]);
+    // AND THE BINDING IS NOT VACUOUS: with the quotation in the reference's OWN
+    // cell, the pass checks it and reds the row whose line does not carry it.
+    const bound = [
+      '| `ccd/fx.sh:3` writes with `printf "%s" "$a"` | `_fx_helper` |',
+      '| `ccd/fx.sh:4` writes with `printf "%s" "$a"` | `_fx_helper` |',
+    ].join('\n');
+    const rb = rowAudit([['fx', bound]], FX);
+    expect(rb.checked, 'both references reach their own cell\'s quotation').toBe(2);
+    expect(rb.failures.map(refKey), 'and the one whose line does not carry it reds')
       .toEqual(['ccd/fx.sh:4']);
     // THE CONTROL IN THE OTHER DIRECTION, on the SAME text: the shipped audit
     // sees a cell, not a row, so BOTH references extract no tokens at all and
@@ -7652,7 +7837,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     expect(a.unanchored, 'it counts both as quoting nothing').toBe(2);
     // AND NO EXEMPTION: sub-rule A would anchor `:4` on `_fx_helper`'s body,
     // and the retraction marker would excuse it in the audit. Neither does here.
-    expect(rowAudit([['fx', '| `ccd/fx.sh:4` | previously `_fx_helper` | `printf "%s" "$a"` |']], FX)
+    expect(rowAudit([['fx', '| `ccd/fx.sh:4` previously quoted `printf "%s" "$a"` | `_fx_helper` |']], FX)
       .failures.map(refKey), 'a retraction marker does not excuse a row reference').toEqual(['ccd/fx.sh:4']);
   });
 
@@ -7688,11 +7873,31 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // citing that arm's own lines. Each carries an era marker in its prose —
     // `8e457995:` on the anchor, or `superseded` in the clause — which the
     // audit above honours and this pass, by construction, does not.
+    // THE CELL BINDING RAISES THIS SET, 7 -> 15, and that is what it is for
+    // (wb B-I2(b)). Joining the whole row gave ONE reference every quotable
+    // token in it: §5's allow-list row is 12,996 bytes with ~95 references and
+    // ~128 tokens, so any anchor into any line carrying a slash passed, and
+    // MEASURED, re-anchoring a real reference in that row to the file's own
+    // header comment left ALL FOUR ratchets green. A reference now draws on
+    // its OWN cell plus the row's first cell — the row's subject, which is
+    // what makes joining legitimate at all — so the references this pass
+    // previously flattered are now either checked honestly or counted
+    // QUOTATIONLESS. Every surviving entry is one of two classes: a row whose
+    // subject is the PRE-Task-9 arm or the deleted rollback family, and the
+    // §5 recognizer row's own pre-Task-9 evidence, which carries its era in
+    // prose that the audit above honours and this pass, by construction, does
+    // not.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        'server/test/ccd-ws-reap.test.ts:344',
+        'ccd/ccd:5059', 'ccd/ccd:7568', 'ccd/ccd:11025',
         'ccd/ccd:11665-11670', 'ccd/ccd:11669', 'ccd/ccd:11670',
         'ccd/ccd:11669', 'ccd/ccd:11670',
         'ccd/ccd:11665-11670',
+        'ccd/ccd:3385',
+        'ccd/ccd:11665-11670',
+        'ccd/session-hook.sh:796',
+        'ccd/session-hook.sh:1094',
         'ccd/session-hook.sh:802',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
@@ -7708,7 +7913,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       `${f.doc}:${f.line} ${refKey(f)}`;
     const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
     expect(r.failures.map(site).filter((k) => seen.has(k)),
-      'the rows this pass reads that another pass already reaches').toEqual(['spec:2178 ccd/session-hook.sh:802']);
+      'the rows this pass reads that another pass already reaches').toEqual([
+        'spec:2115 ccd/ccd:5059', 'spec:2115 ccd/ccd:7568', 'spec:2115 ccd/ccd:11025',
+        'spec:2210 ccd/session-hook.sh:802',
+      ]);
   });
 
   it('THE RANGE BOUND: no citation names a line its file does not have, outside the ledger (round 14, A-I1)', () => {
