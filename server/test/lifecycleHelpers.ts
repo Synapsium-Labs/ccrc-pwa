@@ -127,8 +127,17 @@ export const expectContentionClauses = (verb: string, id: string, detail: string
   // THE ARM ITSELF, FIRST: every empty-`WHY` sentence opens by blaming the lock
   // it waited on, so this separates the contention arm from a tokened one and
   // from the fail-closed fallback before the clause assertions below run.
+  //
+  // AND IT READS THE ROW ID OUT OF THE RENDERED PATHNAME (wb R9-M3). The three
+  // arms render `$REG/.$id.compactions.lock` — the pathname an operator is
+  // told to inspect — and nothing read the id back out of it: MEASURED in a
+  // throwaway copy, dropping `.$id` from all three left 5 files / 311 tests
+  // passing, so an operator-facing remedy could lose the one component that
+  // makes it actionable on a multi-row box and no suite would notice. The id
+  // was pinned only in the `re-run ccd $verb $id` clause, a different sentence
+  // that two of the three verbs do not carry at all.
   expect(detail, `${verb}: the contention sentence names the lock it waited on`)
-    .toContain('was unavailable');
+    .toContain(`.${id}.compactions.lock was unavailable`);
   if (verb === 'ws-gc --prune') {
     expect(detail, `${verb}: the sweep declines before anything irreversible`)
       .toContain('the registry row is untouched');

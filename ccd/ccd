@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=74e9b1ba0c74080479039b02dec583ba97a428d467a9e924359daadea6bdc81c
+# ccrc:generated 1 sha256=e9492484a7334682b2a9d89b875af2524a34678a0f011641873e79e62782c42b
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2094,12 +2094,25 @@ _compact_lock_why_short() {   # -> the SHORT clause the `ws-gc --prune` sweep's
                               # `sentence` to leave unset and no fail-closed
                               # line to add: the `*)` arm IS the guard the
                               # remedy helper needs one for.
+                              #
+                              # AND EVERY ARM NAMES A STATE, NOT AN ACT (wb
+                              # R9-M1). `lock-publish-failed`'s short form said
+                              # the lock "was never published" — the act-wording
+                              # its own durable twin deliberately dropped one
+                              # round earlier, because the post-`link` re-test
+                              # reaches this token whenever the pathname is
+                              # EMPTY, which includes a publish that SUCCEEDED
+                              # and was unlinked one instant later. Two
+                              # renderers keyed on one vocabulary were telling
+                              # an operator two incompatible stories about one
+                              # state, and this is the one on the surface an
+                              # operator watches.
   case "${COMPACT_LOCK_WHY:-}" in
     '')                  printf '%s' "the compaction lock was unavailable" ;;
     canonical-vanished)  printf '%s' "$COMPACT_LOCK_WHY — the compaction lock was unlinked under a live holder" ;;
     lock-path-occupied)  printf '%s' "$COMPACT_LOCK_WHY — something that is not a regular file holds the compaction lock pathname" ;;
     lock-source-refused) printf '%s' "$COMPACT_LOCK_WHY — ccd could not create the private source it mints the compaction lock from" ;;
-    lock-publish-failed) printf '%s' "$COMPACT_LOCK_WHY — the compaction lock was never published" ;;
+    lock-publish-failed) printf '%s' "$COMPACT_LOCK_WHY — nothing stands at the compaction lock pathname" ;;
     *)                   printf '%s' "$COMPACT_LOCK_WHY — a condition this sweep carries no short form for" ;;
   esac
 }

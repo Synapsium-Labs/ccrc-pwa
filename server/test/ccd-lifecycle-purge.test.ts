@@ -1933,7 +1933,7 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expectSurvivingState(leg, r.detail);
       // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
       if (leg.verb === 'ws-gc --prune') {
-        expectGcShortForm(out, 'lock-publish-failed', 'was never published');
+        expectGcShortForm(out, 'lock-publish-failed', 'nothing stands at the compaction lock pathname');
       }
     }
   }, 120_000);
@@ -1998,9 +1998,20 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
       expect(r.detail, `${leg.verb}: no wait republishes a lock a stranger removed`)
         .not.toContain('once the compaction settles');
       expectSurvivingState(leg, r.detail);
-      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3).
+      // AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME (r8 R8-M3), INCLUDING THE
+      // ACT-WORDING IT DROPPED (wb R9-M1). The short form said the lock "was
+      // never published" while the durable sentence one line away said any
+      // state that leaves it unpublished is reported here, "including one
+      // removed the instant after it was created" — two renderers keyed on one
+      // vocabulary telling an operator two incompatible stories about THIS
+      // state, in which the publish demonstrably happened. The tally is the
+      // surface an operator watches, so it is asserted in both directions here,
+      // on the one route that falsifies the act.
       if (leg.verb === 'ws-gc --prune') {
-        expectGcShortForm(out, 'lock-publish-failed', 'was never published');
+        expectGcShortForm(out, 'lock-publish-failed', 'nothing stands at the compaction lock pathname');
+        const row = out.split('\n').find((l) => l.includes('declined') && l.includes('nothing was removed'));
+        expect(row!, `${leg.verb}: the publish HAPPENED here, so the tally may not say it never did`)
+          .not.toMatch(/never published/);
       }
     }
   }, 120_000);
@@ -2294,12 +2305,27 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     const shortFrom = src.indexOf('_compact_lock_why_short() {');
     expect(shortFrom, 'the sweep tally has its own renderer').toBeGreaterThan(-1);
     const shortBody = src.slice(shortFrom, src.indexOf('\n}\n', shortFrom));
+    // THE SCANNED REGION IS THE `case`, NOT THE FUNCTION (wb R9-M2), and it is
+    // the SAME repair this test already made for the remedy helper three
+    // assertions above. `shortBody` includes the header comment, and that
+    // comment ends "...and no fail-closed line to add: the `*)` arm IS the
+    // guard the remedy helper needs one for" — which contains the literal
+    // `*)`. So deleting the real catch-all arm from the `case` left the
+    // assertion below GREEN: the docstring supplied the token it scanned for.
+    // MEASURED in a throwaway copy, both before and after.
+    const shortCaseAt = shortBody.indexOf('case "${COMPACT_LOCK_WHY:-}" in');
+    expect(shortCaseAt, 'the short form dispatches on the token').toBeGreaterThan(-1);
+    const shortCase = shortBody.slice(shortCaseAt, shortBody.indexOf('esac', shortCaseAt));
     for (const t of vocab) {
-      expect(shortBody, `the tally gives ${t} its own clause rather than the contention one`)
+      expect(shortCase, `the tally gives ${t} its own clause rather than the contention one`)
         .toContain(`${t})`);
     }
-    expect(shortBody, 'and an unrecognised token gets a clause too, rather than an empty one')
+    expect(shortCase, 'and an unrecognised token gets a clause too, rather than an empty one')
       .toContain('*)');
+    // AND THE CATCH-ALL'S OWN SENTENCE, which no other arm produces — so the
+    // assertion cannot be satisfied by a `*)` that fell through to silence.
+    expect(shortCase, 'the catch-all says what it is, in words only it renders')
+      .toContain('a condition this sweep carries no short form for');
     expect(src, 'the unconditional contention tally is gone from the sweep')
       .not.toContain('the compaction lock was unavailable; nothing was removed');
     // AND THE SWEEP CONSULTS IT rather than carrying its own string — the
