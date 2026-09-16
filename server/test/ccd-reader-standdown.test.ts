@@ -237,27 +237,73 @@ describe('the two stand-downs outside the phrase population', () => {
 //
 // The behaviour cases above prove `_pane_measurable` works. This proves it is
 // CALLED — at every site, by construction rather than by anyone remembering.
-// It is this repo's whole-population mutation tripwire (`ccd-arith-containment
-// .test.ts`'s shape): the population is fixed and enumerated, each entry names
-// the function and how many phrase-carrying greps it holds, and dropping a
-// guard turns that function's row red whether or not a payload test happens to
-// walk that path.
+// It is this repo's whole-population mutation tripwire
+// (`ccd-arith-containment.test.ts`'s shape): the population is fixed and
+// enumerated, each entry names the function, how many phrase-carrying greps
+// it holds, and the SHAPE its own guard must take, and dropping — or
+// INVERTING — a guard turns that function's row red whether or not a payload
+// test happens to walk that path.
 
 /** The four phrases every stand-down exists for (spec §1, §6.3). */
 const PHRASES = ['esc to interrupt', 'continuing automatically', 'continuing shortly', 'Enter to confirm'];
 
-/** Function name -> how many LIVE `grep` lines in it carry one of the phrases.
- *  Measured against ccd/ccd at the wave-2 baseline. Adding a phrase grep to a
- *  new function, or to one of these, reds the census below until this table and
- *  that function's guard both move. */
-const POPULATION: Record<string, number> = {
-  _pane_auto_continue_armed: 1,
-  _session_hard_blocked: 1,
-  _auto_stale_check: 1,
-  _auto_swap_check: 1,
-  _auto_compact_check: 1,
-  _accept_first_run_prompts: 3,
-  _redrive_after_spawn: 2,
+/** Strip a trailing bash `#` comment — but ONLY when the `#` starts a WORD
+ *  (preceded by start-of-line or whitespace). `_pane_measurable "${1#cc-}"`
+ *  is parameter expansion, not a comment — that `#` sits mid-word, right
+ *  after `1` — so a naive `line.split('#')[0]` truncates that guard's own
+ *  `return` and reds the UNMUTATED file (measured; fix round 1 finding 1).
+ *  Verified against all seven live guard lines: three carry a real trailing
+ *  comment (space then `#`, stripped), four carry none, and this is the only
+ *  one with a `#` that is not a comment start (mid-word, left alone). */
+function stripComment(l: string): string {
+  return l.replace(/(^|\s)#.*$/, '$1');
+}
+
+interface GuardSpec { count: number; guard: RegExp }
+
+/** Function name -> { how many LIVE `grep` lines in it carry a phrase, the
+ *  SHAPE its own `_pane_measurable` guard must take }. Measured against
+ *  ccd/ccd at the wave-2 baseline. `guard` pins SENSE, not just presence —
+ *  fix round 1 finding 1 measured that "does some earlier line MENTION
+ *  _pane_measurable" is satisfied by a guard whose `return` was dropped, by
+ *  the call hidden inside a comment, and by the sense INVERTED (`!` added
+ *  while keeping `||`) — the exact 2026-09-08 incident shape, with nothing
+ *  to catch it. Five functions fail OPEN (`_pane_measurable "$id" || ...
+ *  return`, unmeasurable -> stand down); two INVERT it on purpose
+ *  (`! _pane_measurable "..." && ... return`, unmeasurable -> HOLD/type) —
+ *  §6.3 ruling R1 for `_pane_auto_continue_armed`'s cancel-proof armed state,
+ *  and the rc-6 "I stood down" gate in `_accept_first_run_prompts`. A guard
+ *  whose call, `return`, or SENSE moves reds that function's `it.each` row;
+ *  a phrase grep that moves, appears or vanishes reds the census below. */
+const POPULATION: Record<string, GuardSpec> = {
+  _pane_auto_continue_armed: {
+    count: 1,
+    guard: /!\s*_pane_measurable\s+"\$2"\s*&&.*\breturn\b/,
+  },
+  _session_hard_blocked: {
+    count: 1,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+  },
+  _auto_stale_check: {
+    count: 1,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+  },
+  _auto_swap_check: {
+    count: 1,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+  },
+  _auto_compact_check: {
+    count: 1,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+  },
+  _accept_first_run_prompts: {
+    count: 3,
+    guard: /!\s*_pane_measurable\s+"\$\{1#cc-\}"\s*&&.*\breturn\b/,
+  },
+  _redrive_after_spawn: {
+    count: 2,
+    guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
+  },
 };
 
 interface Site { fn: string; line: number; text: string }
@@ -281,13 +327,19 @@ function sites(): Site[] {
   return out;
 }
 
-/** The lines between a function's `name() {` and `line`, exclusive. */
+/** The lines between a function's `name() {` and `line`, exclusive — bounded
+ *  at the far end by the function's OWN closing brace (column 0), so a
+ *  phrase grep that lands past a mis-tracked function boundary cannot walk
+ *  into a LATER function's guard and credit it to this one (fix round 1
+ *  finding 4). */
 function bodyBefore(fn: string, line: number): string[] {
   const lines = readFileSync(CCD, 'utf8').split('\n');
   const start = lines.findIndex((l) => new RegExp(`^${fn}\\(\\)\\s*\\{`).test(l));
   expect(start, `ccd/ccd no longer defines ${fn}() at column 0 — re-anchor this scan`)
     .toBeGreaterThanOrEqual(0);
-  return lines.slice(start + 1, line - 1);
+  let close = lines.findIndex((l, i) => i > start && l === '}');
+  if (close === -1) close = lines.length;
+  return lines.slice(start + 1, Math.min(line - 1, close));
 }
 
 describe('every phrase-matching reader stands down first (mutation tripwire)', () => {
@@ -297,17 +349,18 @@ describe('every phrase-matching reader stands down first (mutation tripwire)', (
     const found = sites();
     const counted: Record<string, number> = {};
     for (const s of found) counted[s.fn] = (counted[s.fn] ?? 0) + 1;
+    const expected: Record<string, number> = {};
+    for (const [fn, spec] of Object.entries(POPULATION)) expected[fn] = spec.count;
     expect(counted, 'a phrase grep moved, appeared or vanished — update POPULATION and its guard together')
-      .toEqual(POPULATION);
-    expect(found.length).toBe(Object.values(POPULATION).reduce((a, b) => a + b, 0));
+      .toEqual(expected);
   });
 
-  it.each(Object.keys(POPULATION))('%s calls _pane_measurable before it matches a phrase', (fn) => {
+  it.each(Object.entries(POPULATION))('%s calls _pane_measurable, in its pinned SHAPE, before it matches a phrase', (fn, spec) => {
     for (const s of sites().filter((x) => x.fn === fn)) {
       expect(
-        bodyBefore(fn, s.line).some((l) => !/^\s*#/.test(l) && l.includes('_pane_measurable')),
-        `${fn} (ccd/ccd:${s.line}) matches a calibration phrase with no _pane_measurable guard ahead `
-        + `of it in the same function:\n    ${s.text}`,
+        bodyBefore(fn, s.line).some((l) => !/^\s*#/.test(l) && spec.guard.test(stripComment(l))),
+        `${fn} (ccd/ccd:${s.line}) matches a calibration phrase with no _pane_measurable guard of the `
+        + `pinned shape ahead of it in the same function:\n    ${s.text}`,
       ).toBe(true);
     }
   });
@@ -318,19 +371,37 @@ describe('every phrase-matching reader stands down first (mutation tripwire)', (
       .toHaveLength(1);
     const body = src.slice(src.indexOf('_pane_measurable() {'));
     const end = body.indexOf('\n}\n');
+    // FAILS OPEN otherwise: indexOf's -1 makes body.slice(0, -1) the WHOLE
+    // REST OF THE FILE, and all three checks below then pass on unrelated
+    // code (fix round 1 finding 3).
+    expect(end, 'the function no longer closes at column 0').toBeGreaterThan(0);
     const fn = body.slice(0, end);
     expect(fn, 'the probe must select the ACTIVE pane (F7)').toContain('#{pane_active}');
     expect(fn, 'the probe must read the width, not the height').toContain('#{pane_width}');
-    expect(fn, 'the comparison must be against the derived constant').toContain('READER_MIN_COLS');
+    // A bare toContain('READER_MIN_COLS') is satisfied by this function's OWN
+    // 30-line docstring, which names the constant three times in prose —
+    // measured (fix round 1 finding 2): mutating the real comparison to a
+    // bare `120`, even after ALSO scrubbing the def-line's inline mention,
+    // leaves a bare toContain green. The arithmetic SHAPE itself never
+    // appears in prose, so anchor on it directly instead.
+    expect(fn, 'the comparison must be against the derived constant, not a copy')
+      .toMatch(/\(\(\s*w\s*>=\s*READER_MIN_COLS\s*\)\)/);
   });
 });
 
 describe('the phrase literals themselves are NOT changed (F11)', () => {
-  it('ccd still greps the four phrases verbatim', () => {
+  it('the four phrases exist verbatim SOMEWHERE in ccd/ccd (existence only — per-site correctness is the census above)', () => {
     // Spec §6.3 is explicit that the regexes stay as they are and the guard is
     // what changes. A "fix" that widened `esc\s+to\s+interrupt` would still not
     // match across the newline grep never presents, and it would silently break
-    // `auto-continue-armed.test.ts`'s cross-copy pin.
+    // `auto-continue-armed.test.ts`'s cross-copy pin. This is a WHOLE-FILE
+    // toContain, so it proves each literal exists SOMEWHERE — counted:
+    // `grep -q "esc to interrupt"` (that exact substring) occurs on 8 lines
+    // total, six of them the census's own real sites and two the whole-line
+    // prose comments at 14702/15765 that quote it — not that every site in
+    // `sites()` still carries it verbatim; that job belongs to `sites()`'s
+    // own `PHRASES.some((p) => raw.includes(p))` filter (fix round 1
+    // finding 5: the title here now says only what this checks).
     const src = readFileSync(CCD, 'utf8');
     expect(src).toContain('grep -qiE "continuing automatically|continuing shortly"');
     expect(src).toContain('grep -q "esc to interrupt"');
