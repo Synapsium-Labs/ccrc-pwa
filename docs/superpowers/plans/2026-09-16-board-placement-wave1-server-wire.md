@@ -390,19 +390,25 @@ export function boardPlacement(input: PlacementInput): string {
 ```bash
 cd server && ./node_modules/.bin/vitest run test/coord-placement.test.ts
 ```
-Expected: PASS (7 tests).
+Expected: PASS. **The count is no longer 7** — see D-2873 and D-2874: the seven cases below were
+measured insufficient and the file grew. Do not treat a count in this plan as the expectation.
 
 - [ ] **Step 5: Measure each guard by mutation**
 
 Run each mutation, record RED, restore. A green mutation means the case is unpinned:
 
-| Mutation | Must red |
-|---|---|
-| `if (!input.held)` → `if (false)` | the not-held case |
-| `if (seen.has(next))` → `if (false)` | the cycle case (it will hang or exceed the cap) |
-| `MAX_HOPS = 4` → `MAX_HOPS = 99` | the past-the-cap case |
-| `if (input.stamped === null)` → `if (false)` | the no-stamp case |
-| `return at` → `return input.ownProject` | the coordinator and chain cases |
+> **This table shipped partly false — corrected by D-2873.** Rows 2 and 3 were measured GREEN against
+> the seven cases below, and row 2's parenthetical is wrong twice over: a cycle neither hangs nor is
+> distinguishable by return value at all. The corrected table is below; the history is in D-2873.
+
+| Mutation | Must red | Pinned by |
+|---|---|---|
+| `if (!input.held)` → `if (false)` | the not-held case | return value |
+| `if (input.stamped === null)` → `if (false)` | the no-stamp case | return value |
+| `return at` → `return input.ownProject` | the coordinator and chain cases | return value |
+| `MAX_HOPS = 4` → `MAX_HOPS = 99` | the one-hop-past-the-cap case | return value, via a chain that TERMINATES (a never-terminating chain cannot distinguish any cap) |
+| `if (seen.has(next))` → `if (false)` | the revisit case | `coordOf` CALL COUNT — a cycle returns the same value either way, so no return-value test can see it |
+| `new Set([input.ownProject])` → `new Set()` | the walk-through-own-project case | return value (D-2874) |
 
 - [ ] **Step 6: Commit**
 
@@ -729,4 +735,49 @@ cd server && ./node_modules/.bin/vitest run --shard=6/6
 
 ## Deviations found
 
-*(None yet. Allocate with `ccrc-api ledger allocate` at the moment you depart from this plan, and define the number in this section in the same commit. Never guess a number; never pre-mint a block.)*
+Block D-2870..D-2874 issued 2026-09-16 by `POST /api/ledger/deviations` (floor now 2875) to the
+controller of this wave's subagent-driven execution, and defined here in the same act. All five are
+controller rulings made during execution, not implementer improvisation.
+
+- **D-2870 — Task 1's Step 7 was incomplete: no read path, and a wire leak.** As written the task added
+  `runs.coordProject` and its INSERT but nothing that reads the value back, which left Tasks 2 and 3
+  unimplementable. Worse, `toRunSummary` strips by rest destructuring (`const { prLineage: _prLineage,
+  ...summary } = row`), so adding the field to `RunRow` without an explicit strip would have put an
+  undeclared fourth field on the wire — contradicting the spec's §5, which enumerates exactly three
+  additions and does not count this column among the two wire fields. Task 1 therefore also added
+  `coordProject` to `RunRowDb`, `RUN_ROW_COLUMNS`, `hydrateRun` and to `toRunSummary`'s strip.
+
+- **D-2871 — Task 1's Step 5 store assertion pinned nothing.** It asserted `expect(row).toBeDefined()`
+  under the title "stamps the coordinator project it is given", which passes whether or not the stamp
+  is ever written. Replaced with an assertion that the value round-trips through the store's public
+  `runs()` surface, plus a companion case that an unstamped open reads `null`.
+
+- **D-2872 — Task 1's Step 8 read a display default as if it were a measurement.** The plan prescribed
+  `coordRec.found ? coordRec.record.project : undefined`. `SessionRecord.project` is `project ?? id`
+  (`server/src/registry.ts:732`), so an unreadable or absent `.project` yields the coordinator's
+  SESSION ID — stamped as a project name — while `readSessionRecord` still answers `found: true`; and
+  an empty `.project` yields `''`, which `?? null` does not catch and which any `=== null`
+  "not stamped" check misreads as stamped. The stamp is permanent (there is no backfill), so a wrong
+  value never heals. Replaced with `fieldMeasured(deps.io, deps.cfg.registryDir, claimedBy,
+  'project')`, stamping only on `ok` and a non-empty value. This is the class D-2342 was spent on, and
+  the reason `fieldMeasured` is exported for exactly one other caller. Side effect: the route now does
+  one file read instead of a readdir plus 23 field reads, so the two dispatch call-count fixtures
+  returned to their pre-Task-1 numbering rather than advancing.
+
+- **D-2873 — Task 2's mutation table was partly false, and one guard is unpinnable by return value.**
+  Rows 2 and 3 were measured GREEN against the plan's own seven cases. `MAX_HOPS` was pinnable after
+  all — the plan's fixture used a chain that never terminates, which no cap value can distinguish; a
+  chain terminating exactly at the cap and one terminating a hop past it pin the value at exactly 4.
+  The cycle guard genuinely is not pinnable by return value: a cycle returns `ownProject` whether the
+  guard fires on the second call or the cap is reached on the fourth. It is pinned by a `coordOf` call
+  count instead.
+
+- **D-2874 — Task 2's "never places a session under itself" case was vacuous, and hid two load-bearing
+  lines.** It passed because the fixture's `coordOf` returns `null` for everything, so the walk settles
+  on the first call and `return at` yields the same value the guard would have — the same
+  fixture-cannot-distinguish-the-branch fault D-2873 was raised to fix, surviving one round past it.
+  Measured: disabling `if (seen.has(at))` or emptying the `new Set([input.ownProject])` seed left every
+  test green. Two cases were added — a stamp that walks back to its own project, and a chain that
+  passes THROUGH it. This also corrected the comment on the guard: for a genuine cycle it changes only
+  the call count, and its non-redundant work is the TRANSITIVE self-placement refusal that the
+  `ownProject` seed makes possible.
