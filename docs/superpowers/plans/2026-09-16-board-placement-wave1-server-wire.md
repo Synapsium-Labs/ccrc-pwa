@@ -848,3 +848,34 @@ D-2883 issued 2026-09-16, Task 4's own defect — the same class as D-2875.
   cases (`no-remote` → absent, every other reason → unmeasured); the full-line retention two lines
   below it is pinned the same way and, additionally, by `GET /api/projects carries the swept repo`, an
   end-to-end test that runs a real sweep rather than a route-level watcher double.
+
+Block D-2884..D-2885 issued 2026-09-16 by `POST /api/ledger/deviations` (floor now 2886), both Task 4
+controller rulings on findings the task review raised against this plan's own Step 4 text.
+
+- **D-2884 — the whole-repo-failure arm destroyed a good measurement; it now keeps the last one.**
+  This plan's Step 4 dictated an unconditional `this.projectRepos.set(project, repoCellFor({ reason }))`
+  on the failure arm, so a project measured `{state:'named', slug:'o/r'}` read `{state:'unmeasured'}`
+  after a single `timeout` — a repo label that blinks out whenever a `gh` call is slow. The statement
+  immediately after it is `this.backoffPr(...)`, whose docstring (`server/src/watch.ts:3271-3273`) says
+  "A failed read never overwrites a good phase — only greys it", pinned by `pr-sweep.test.ts:453`. Two
+  lanes were behaving oppositely on one event, and the `!res.ok` agent-down arm a third way. RULED:
+  keep-last on a failed read; write `unmeasured` only when the project has no cell yet; all three arms
+  agree. A repo slug is effectively immutable and a timeout says nothing about it, while `unmeasured`'s
+  own docstring — "no measurement happened" — is false once one has. This also makes the agent-down
+  arm's behaviour the rule rather than an exception: the two are mirror images of the same question,
+  and the decision not to add retention there was right for the same reason.
+
+- **D-2885 — `absent` claimed more than `no-remote` proves, and the claim is now bounded in the type.**
+  `_gh_repo_slug` (`ccd/ccd:3745-3760`) returns non-zero BOTH when a checkout has no `origin` AND when
+  `git -C "$1"` cannot use the path at all, and `pr-state --project` builds that path as
+  `$PROJECTS_ROOT/$project` before emitting `reason:"no-remote"`. But `listProjects` also admits
+  projects discovered only through the registry, whose `workdir` need not live under `PROJECTS_ROOT`
+  (`server/src/lifecycle.ts:141-145`). Such a project measures `absent` — "this project has no
+  repository" — while having one: a false claim on the board about a real project, which this design
+  names as its highest-stakes failure. The server is RECEIVING an already-narrowed distinction rather
+  than narrowing one, so the true repair is upstream in `ccd`. RULED: not in this wave. It is
+  deliberately not agent-first and touches nothing under `ccd/`; changing `_gh_repo_slug` would change
+  the deploy order and the wave's shape. Instead `ProjectRepoWire`'s docstring now BOUNDS the claim —
+  `absent` means no usable origin was found at the path the sweep looked at, never "this project has
+  no repository" — and names the conditions `no-remote` folds together, so no renderer may spell the
+  stronger sentence. Carried for a later agent-first wave.
