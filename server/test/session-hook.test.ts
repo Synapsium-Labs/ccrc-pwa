@@ -7170,7 +7170,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //   (2) A REFERENT MEASURED BY NAME, where (1) could not run because the
     //       bytes changed rather than moved — the three shipped
     //       `command -v flock` guards, the four `_reg_purge` call sites,
-    //       `_reg_purge`'s own loop and tail, `_ws_slug_free`/`_ws_slug_residue`,
+    //       `_reg_purge`'s own loop and tail, the two slug-freedom helpers,
     //       `cmd_ws_add`'s refusal, `cmd_forget`'s verdict/kill pair, and in
     //       the hook `_hook_write_atomic`, the two PreCompact `find` calls, the
     //       aged-card `find`, the set-building `jq -cn` and the blank line
