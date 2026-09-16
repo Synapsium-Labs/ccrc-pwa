@@ -236,15 +236,18 @@ export const sevenOf = (l: AccountLimits | undefined): number | null =>
  * empty stdout is overloaded in exactly the same three ways and says so in its
  * own header, so the two sides still agree; what neither side has is a second
  * channel on this seam, so the CALLER re-reads and names which it was.
- * `projectPlacement` below is the caller that does this for the wire, and it
- * tells apart only the FIRST TWO today: it answers `unmeasurable` for the
- * undecidable tag and `{kind:'none'}` for everything else, and it never passes
- * a class, so the third meaning cannot reach it yet. WHEN A CALLER FIRST PASSES
- * ONE — slice 4 — `projectPlacement` needs its own arm in the same commit, the
- * way ccd's `cmd_ws_add` reason builder does (controller ruling S3-R3's named
- * obligation, D-2854). That obligation was recorded for the bash side only;
- * this paragraph is the server side of it, and it is recorded HERE because a
- * plan document is a snapshot and this seam is not.
+ * `projectPlacement` below is the caller that does this for the wire, and as
+ * of slice 4 it tells all three apart: it answers `unmeasurable` for the
+ * undecidable tag, and on `home === null` it passes the class it was asked
+ * through to `projectHome` and then re-calls `projectHome` CLASS-BLIND
+ * (default class, no shares) to tell the third meaning from the other two —
+ * a non-null class-blind re-call means the class is what emptied the pool, so
+ * the `none` arm names it; a null re-call means the pool is empty for a
+ * reason the class did not cause, so `none` carries no `class` key (the
+ * caller-side arm this paragraph asked for, controller ruling S3-R3's named
+ * obligation, D-2854, landed in this commit). That obligation was recorded
+ * for the bash side only; this paragraph is the server side of it, and it is
+ * recorded HERE because a plan document is a snapshot and this seam is not.
  *
  * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
  * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
@@ -339,9 +342,16 @@ export function projectPlacement(
     // The trailing three parameters default so a caller that never passes a
     // class gets the pre-slice-4 answer byte for byte (`projectHome`'s own
     // rule, mirrored here): `class` only rides the wire when a caller asked
-    // for one, so an older reader that has never heard of it sees exactly
-    // the shape it always has.
-    return cls === 'default' ? notPlaceable : { ...notPlaceable, class: cls };
+    // for one AND the class is the reason the pool is empty (controller
+    // ruling S4-R12). A class-blind re-call (default class, no shares) tells
+    // the two apart: if it still comes back null, every home-able lane is
+    // disabled or the pool tag is undecidable — a fact the class did not
+    // cause — so `none` stays plain; only when the class-blind call finds a
+    // home does the class-scoped emptiness become the fact worth naming.
+    if (cls !== 'default' && projectHome(roster, limits, pool) !== null) {
+      return { ...notPlaceable, class: cls };
+    }
+    return notPlaceable;
   }
   return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }

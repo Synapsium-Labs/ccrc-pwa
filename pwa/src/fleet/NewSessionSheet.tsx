@@ -57,12 +57,16 @@ function ProjectRowButton({ row, selected, pool, onPick }: {
  *  label `modelOptions` already has for this wrapper/class pair (so gpt's
  *  own aliases read the same here as they do in the session screen's own
  *  picker) when the lane offers one, else the class word with its first
- *  letter capitalised. Never a hand-typed list of the four names — this is
- *  the only path this file may take to spell one, and it derives every
- *  spelling from `CLASSES` at render time. */
+ *  letter capitalised — with the class word ITSELF always appended (`—
+ *  <cls>`), because a gpt-lane label like "GPT-6 Astra" carries no class word
+ *  at all, though the option it labels posts `class=fable` (S4-R13). Never a
+ *  hand-typed list of the four names — this is the only path this file may
+ *  take to spell one, and it derives every spelling from `CLASSES` at render
+ *  time. */
 function classDisplayLabel(wrapper: string, cls: ModelClass): string {
   const opt = modelOptions(wrapper, null).find((o) => o.route.field === 'class' && o.route.value === cls);
-  return opt?.label ?? cls.charAt(0).toUpperCase() + cls.slice(1);
+  const base = opt?.label ?? cls.charAt(0).toUpperCase() + cls.slice(1);
+  return `${base} — ${cls}`;
 }
 
 export interface NewSessionSheetProps {
@@ -371,7 +375,7 @@ export function NewSessionSheet({
               >
                 <option value="">Coordinator row</option>
                 <option value="default">Default</option>
-                {CLASSES.map((c) => (
+                {[...CLASSES].reverse().map((c) => (
                   <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
                 ))}
               </select>
