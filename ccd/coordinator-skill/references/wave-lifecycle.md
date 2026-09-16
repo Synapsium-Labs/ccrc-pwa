@@ -708,7 +708,8 @@ above). `error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt;
 `error:'bad-request'` (400) means the id is not an integer.
 
 ```
-"$API" runs signals <run id>
+run_id=<the run id>
+"$API" runs signals "$run_id"
 ```
 
 answers the holds, the swap count, the refused-close count, `waveDoneMails` and the two signal
