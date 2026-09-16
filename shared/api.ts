@@ -3736,6 +3736,20 @@ export function isRunState(v: unknown): v is RunState {
   return typeof v === 'string' && (RUN_STATES as readonly string[]).includes(v);
 }
 
+/** What a run IS (design 2026-09-14 §5.1): `'work'` — a wave's worker, the only
+ *  kind that existed before that design; `'review'` — a reviewer reading one
+ *  work run's finished wave and reporting, never ruling. `'unknown'` is the
+ *  designated we-do-not-know member on `RunState`'s own model (D-2795): NEVER
+ *  WRITTEN, it is what a `kind` token from a newer build reads as, and
+ *  `transitionsFor('unknown')` has no edges at all, so such a row can neither
+ *  advance nor dispatch until a build that knows the word reads it. */
+export type RunKind = 'work' | 'review' | 'unknown';
+export const RUN_KINDS: readonly RunKind[] = ['work', 'review', 'unknown'];
+/** Use THIS, never `RUN_KINDS.includes(x as RunKind)` — `isRunState`'s rule. */
+export function isRunKind(v: unknown): v is RunKind {
+  return typeof v === 'string' && (RUN_KINDS as readonly string[]).includes(v);
+}
+
 /**
  * The machine. A transition absent from this table is REFUSED, and the refusal
  * is an answer the caller reads — never a silent no-op, and never an
@@ -3799,6 +3813,84 @@ export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = 
   failed:            [],
   unknown:           [],
 });
+
+/**
+ * THE PARTITION OF `RunState` THE DISPATCH CAP READS (design 2026-09-14 §7.1).
+ * Three lists, spelled ONCE, and `run-states.test.ts` pins that every
+ * `RunState` sits in exactly one of them — so a future state cannot be
+ * silently UNCOUNTED, which is the dangerous direction for a cap (an
+ * uncounted busy session over-dispatches the fleet without a word).
+ *
+ * ACTIVE = a dispatched session is doing work: `dispatched`, `working`. Both
+ * kinds of run (`RunKind`) are busy in exactly these two. `unknown` is here
+ * for the cap's own safe direction: a row whose state this build cannot name
+ * COUNTS, wedging visibly and fixably, rather than not counting and
+ * over-dispatching silently — and that is today's behaviour too, since
+ * `unknown` was never among the terminal pair.
+ *
+ * IDLE = the coordinator's states: the session beneath them is idle by
+ * contract (a worker stops pushing at `wave-done`, worker skill clause 9), so
+ * it holds a workspace but not a fleet slot. `planned` has never been
+ * dispatched (D-13's own narrowing, kept); `awaiting-review`, `merging` and
+ * `closing` are waits on the coordinator, not on the worker — run 43 sat at
+ * `merging` for hours on 2026-09-14 with its worker idle throughout.
+ *
+ * TERMINAL = the pair nothing leaves. `store.ts` builds its SQL fragments
+ * from these by `.join`, the `TERMINAL_DELIVERY_SQL` idiom, and
+ * `single-definition.test.ts` refuses a second hand-written copy of either
+ * list anywhere under the four roots. `unknown` is NOT terminal: it has no
+ * outgoing edge in `RUN_TRANSITIONS` because nothing may transition a state
+ * this build cannot name — not because such a row is finished (D-2794).
+ */
+export const ACTIVE_RUN_STATES = ['dispatched', 'working', 'unknown'] as const satisfies
+  readonly RunState[];
+export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closing'] as const satisfies
+  readonly RunState[];
+export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
+
+/**
+ * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
+ * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
+ * or release-with-ceremony, and reusing those states would make the table lie
+ * about what a row is doing. `failed` is reachable from every non-terminal
+ * state, as in `RUN_TRANSITIONS`. `working -> done` is direct: the close
+ * route's review arm (Task 7 of the plan) skips the `closing` hop for this
+ * kind (`viaClosing: false`, the same skip the abandon-of-a-planned-run
+ * already takes).
+ *
+ * Every state is a key so the two tables have one shape and one reader; the
+ * three work-only states are dead ends here, never reached. Those three dead
+ * ends are unreachable by construction — `advanceInner` refuses every edge
+ * into them for this kind — so a review row can never need an exit from one;
+ * `run-states.test.ts` pins that every REACHABLE non-terminal review state
+ * has one.
+ */
+export const REVIEW_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned:           ['dispatched', 'failed'],
+  dispatched:        ['working', 'failed'],
+  working:           ['done', 'failed'],
+  'awaiting-review': [],
+  merging:           [],
+  closing:           [],
+  done:              [],
+  failed:            [],
+  unknown:           [],
+});
+
+/** No edges at all — what a run of a kind this build cannot name may do (D-2795). */
+export const NO_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned: [], dispatched: [], working: [], 'awaiting-review': [], merging: [], closing: [],
+  done: [], failed: [], unknown: [],
+});
+
+/**
+ * THE ONE READER of the transition tables. Every route and the store's own
+ * `advanceInner` consult this by the run's kind; nothing indexes
+ * `RUN_TRANSITIONS` or `REVIEW_RUN_TRANSITIONS` directly outside this file
+ * (pinned by `run-states.test.ts`'s source scan).
+ */
+export const transitionsFor = (kind: RunKind): Readonly<Record<RunState, readonly RunState[]>> =>
+  kind === 'work' ? RUN_TRANSITIONS : kind === 'review' ? REVIEW_RUN_TRANSITIONS : NO_RUN_TRANSITIONS;
 
 /** A unit inside a run. `'unknown'` is the we-do-not-know member, as above. */
 export type WorkItemState = 'pending' | 'claimed' | 'done' | 'failed' | 'abandoned' | 'unknown';
@@ -4411,6 +4503,111 @@ export function parseFetchedMailEnvelope(text: string): MailEnvelopeParse {
   return parseMailEnvelope(envelope);
 }
 
+/** One `<name>value</name>` member of a harness envelope, in ARRIVAL ORDER. */
+export interface EnvelopeMember { name: string; value: string }
+
+/**
+ * Split a harness envelope into its `<tag>…</tag>` members, or null when the
+ * text is not ENTIRELY such members — prose before, between or after any of
+ * them disqualifies it, and so does an unclosed tag.
+ *
+ * ONE DEFINITION, TWO READERS, for the reason `parseMailEnvelope` states about
+ * itself: the PWA holds no rule the server does not also hold. The transcript
+ * parser reads it to decide WHAT a record is; `parseTaskNotification` below
+ * reads it again to decide what the record SAYS.
+ *
+ * Structural, and deliberately NOT sufficient on its own — every caller must
+ * also find a member it NAMES. A bare "the content is all tag blocks" rule has
+ * zero false positives against every human turn measured on the fleet box and
+ * is still not safe, because no human turn measured there so much as BEGINS
+ * with `<`: the corpus never exercised the predicate, so it is no evidence
+ * about `<p>one</p>\n<p>two</p>` or a pasted `<config>`. The named member is
+ * what makes it safe; the corpus only says it is sufficient.
+ *
+ * Members come back IN ARRIVAL ORDER, because order is the thing the envelope
+ * read exists to stop mattering and a Map would silently collapse a repeat.
+ */
+export function envelopeMembers(text: string): EnvelopeMember[] | null {
+  const t = text.trim();
+  if (!t.startsWith('<')) return null;
+  const re = /<([a-z][a-z0-9-]*)>([\s\S]*?)<\/\1>/g;
+  const members: EnvelopeMember[] = [];
+  let outside = '';
+  let last = 0;
+  for (let m = re.exec(t); m !== null; m = re.exec(t)) {
+    outside += t.slice(last, m.index);
+    last = re.lastIndex;
+    // Both groups are mandatory in the pattern, so neither can be absent on a
+    // match; the defaults are here because the PWA compiles this file under
+    // `noUncheckedIndexedAccess` and the server does not.
+    members.push({ name: m[1] ?? '', value: m[2] ?? '' });
+  }
+  if (members.length === 0) return null;
+  outside += t.slice(last);
+  return outside.trim() === '' ? members : null;
+}
+
+/**
+ * What a task notification says: the harness's own summary and status, and
+ * every other member it wrote, kept by name.
+ *
+ * `summary` and `status` are null when the member is ABSENT — the card renders
+ * no such row rather than an empty one, exactly as `runLabel` refuses to say
+ * "run —" about a mail that belongs to no run. Measured over the fleet box's
+ * 13 notifications, both are present in all 13 and `summary` never exceeds 209
+ * bytes; `fields` is everything else, in arrival order, nothing dropped.
+ */
+export interface TaskNotification {
+  summary: string | null;
+  status: string | null;
+  fields: EnvelopeMember[];
+}
+
+export type TaskNotificationParse =
+  | { ok: true; notification: TaskNotification }
+  | { ok: false; why: 'not-a-notification' };
+
+/**
+ * Parse the harness's background-task report out of a transcript row.
+ *
+ * THE SAME SHAPE AS `parseMailEnvelope`, and for the same reason: a structured
+ * record the machine wrote was rendering as a wall of its own markup filed
+ * under the operator's name, and the fix is to read the structure once, in
+ * `shared/`, and let the delivery layer render it as what it is. A refusal
+ * falls through to the ordinary row — never a half-populated card.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY. The transcript is a rank-3 source and
+ * a session can write this text into itself. Consequence of a forgery: one row
+ * looks like a task report. Named, accepted — the same sentence
+ * `parseMailEnvelope` carries, restated rather than inherited.
+ *
+ * The OUTER wrapper must be the whole record and must be named
+ * `task-notification`; the members inside it are read one level down. Both
+ * levels go through `envelopeMembers`, so a human pasting one of these plus a
+ * question keeps every word: the prose outside the block disqualifies it.
+ */
+export function parseTaskNotification(text: string): TaskNotificationParse {
+  const outer = envelopeMembers(text);
+  const body = outer?.find((m) => m.name === 'task-notification');
+  if (body === undefined) return { ok: false, why: 'not-a-notification' };
+  const members = envelopeMembers(body.value);
+  if (members === null) return { ok: false, why: 'not-a-notification' };
+  const take = (name: string): string | null => {
+    const m = members.find((x) => x.name === name);
+    return m === undefined ? null : m.value.trim();
+  };
+  return {
+    ok: true,
+    notification: {
+      summary: take('summary'),
+      status: take('status'),
+      fields: members
+        .filter((m) => m.name !== 'summary' && m.name !== 'status')
+        .map((m) => ({ name: m.name, value: m.value.trim() })),
+    },
+  };
+}
+
 /**
  * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
  * for `MAIL_SUBJECT_MAX_BYTES`'s own reason one block up: a title is one line
@@ -4479,13 +4676,19 @@ export const MAIL_REJECT_CODES = [
   // done-authority
   'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed', 'pr-unmeasurable',
   'no-handoff-commit',
+  // review-run verdicts (design 2026-09-14 §5.3)
+  'stale-review', 'report-unreadable',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
- * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
- * a forward advance can be refused with, as distinct from the ingress, peer-bound
- * and delivery families above.
+ * The done-authority subset of `MAIL_REJECT_CODES` — the eight a wave-done claim
+ * or a forward advance can be refused with, as distinct from the ingress,
+ * peer-bound and delivery families above: four a work run's claim alone
+ * (`stale-tip`, `pr-regressed`, `pr-unmeasurable`, `no-handoff-commit`), two
+ * shared by the branch resolution both verifiers run (`tip-unmeasurable`,
+ * `branch-unmeasurable`), two a review run's alone (`stale-review`,
+ * `report-unreadable`) (D-2797).
  *
  * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
  * one: the ARRAY is the single definition and the type follows it, because wave
@@ -4501,6 +4704,8 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 export const DONE_AUTHORITY_CODES = [
   'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
   'pr-unmeasurable', 'no-handoff-commit',
+  // review-run verdicts (design 2026-09-14 §5.3)
+  'stale-review', 'report-unreadable',
 ] as const satisfies readonly MailRejectCode[];
 export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 
@@ -4722,8 +4927,8 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Seventeen codes exist below today; the next new one would be the
- * eighteenth, not the ninth.
+ * Eighteen codes exist below today; the next new one would be the
+ * nineteenth, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
@@ -4770,12 +4975,16 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * The last two are the ledger's (Build 4, spec §3.2): `unknown-item` — "an
  * item id that is not THIS RUN's", 404 — and `item-terminal` — the item
  * already settled, 409, refused rather than silently applied.
+ *
+ * `review-in-flight` — a second non-terminal review run named the same
+ * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
+ * invariant 3).
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid';
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -4783,6 +4992,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
+  'review-in-flight': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -5017,6 +5227,16 @@ export interface RunSummary {
   workspace: string | null;
   branch: string | null;
   state: RunState;
+  /** `'work'` or `'review'` (design 2026-09-14 §5.1). ADDITIVE; `FLEET_PROTO`
+   *  is not bumped. REQUIRED here because `hydrateRun` returns a literal and
+   *  must compute it; TOLERATED ABSENT at the one PWA reader (`runKindChip`,
+   *  `pwa/src/fleet/runWords.ts`) because an older server omits it — absence
+   *  means `'work'`, the only kind that older server knew. */
+  kind: RunKind;
+  /** On a review run, the id of the work run it reviews; `null` on a work run
+   *  — a first-class answer ("reviews nothing"), never a failed read. Set at
+   *  open, immutable. */
+  reviews: number | null;
   /** The ONE coordinator that owns this run: the tmux-derived session id of
    *  the session that opened it, stamped at `POST /api/runs`. That stamp is the
    *  mechanism behind the `claimed-by-another` refusal — a second coordinator,
@@ -5344,7 +5564,10 @@ export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: nu
  *
  *  Named here only since the operator dial shipped (D-1209): before that the
  *  shape existed solely as an inline structural type on one method, because
- *  `dispatchRun` was its only reader and never had to name it. */
+ *  `dispatchRun` was its only reader and never had to name it.
+ *
+ *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
+ *  `ACTIVE_RUN_STATES`. */
 export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
@@ -7030,3 +7253,99 @@ export const LEDGER_STALE_MS = 7 * 24 * 60 * 60_000;
  *  Policy is REFUSE, never truncate: a trimmed title is a different sentence
  *  in the durable record. */
 export const LEDGER_TITLE_MAX_BYTES = 200;
+
+/** How far above the screen the drawer's history read starts. Stated ONCE,
+ *  here, and echoed back to the client in the response — the PWA never names a
+ *  number of its own, so there is nothing for the two sides to disagree about.
+ *  2000 is tmux's DEFAULT `history-limit`; `ccd/tmux.conf` sets none, so that
+ *  default is what the fleet runs. Asking for more is not an error — tmux
+ *  returns what it has.
+ *
+ *  IT IS A CEILING NOTHING HAS REACHED, and raising it is deliberately not
+ *  this program's move (spec §6.4). Census of 2026-09-14, 31 live panes on this
+ *  box: `history_size` min 0 / median 0 / p90 5 / max 11, with 25 of the 31 at
+ *  zero, every pane at `history-limit 2000`. What ends a pane's history is the
+ *  program inside it — Claude Code emits `ESC[3J` on repaint, which resets
+ *  `history_size` to 0 (measured, 452 -> 0). A raise would cost tmux memory and
+ *  a whole-server stall on every reflow (F10: ~linear in reflowed lines, 455 ms
+ *  narrow / 1230 ms widen at 19951) for a case the census says does not occur.
+ *  The lever, if a later census disagrees, is one `set -g history-limit N` line
+ *  in `ccd/tmux.conf` — read at tmux server start (F2), reaching no pane that
+ *  already exists. */
+export const PANE_HISTORY_LINES = 2000;
+
+/**
+ * ONE MEASUREMENT OF A PANE, and its failures told apart.
+ *
+ * Read with a single `list-panes -t cc-<id> -F '#{pane_active} #{history_size}
+ * #{history_limit} #{pane_width} #{pane_height} #{alternate_on}'` — all six are
+ * per-pane formats (F8) under a verb the agent already grants, so this opens no
+ * new door in the exec surface.
+ *
+ * FOUR ARMS, NOT A NULL. `list-panes -t <session>` lists EVERY pane of the
+ * current window and the ACTIVE one is the pane `capture-pane -t <session>`
+ * reads (F7) — PR #96 took row `[0]` and mismatched on a split window, where
+ * pane 0 held 278 lines of history and pane 1 was the 24-row active one. So
+ * "tmux answered, but no row said it was active" is a real and separate
+ * condition from "tmux refused" and from "the session is gone", and a caller
+ * that shows a different sentence for each must never receive one value for
+ * all three (CLAUDE.md, no overloaded null; `io.ts`'s `readFileMeasured` is the
+ * pattern).
+ *
+ * `alternate` is CONTEXT, neither a permit nor a refusal (spec §7.2): while the
+ * alternate screen is up a resize does not reflow, but the reflow is only
+ * DEFERRED to alt-exit and lands then, at a size that is exactly what the
+ * numbers at attach predict — nothing scrolls into history while a full-screen
+ * app holds the pane (F9, measured: 1852 -> 11359 in one step at alt-exit).
+ *
+ * Wave 3 reads `limit`, `width` and `height` off THIS probe and adds no second
+ * reader — one reader per field is the wire rule.
+ */
+export type PaneProbe =
+  | { ok: true; history: number; limit: number; width: number; height: number; alternate: boolean }
+  | { ok: false; reason: 'gone' }
+  | { ok: false; reason: 'unreadable'; detail: string }
+  | { ok: false; reason: 'unparseable'; detail: string };
+
+/**
+ * What `GET /api/sessions/:id/pane/history` answers.
+ *
+ * ADDITIVE AND ABSENCE-PERMITTING. `scrollback`, `alternate` and `width` are
+ * present exactly when the pane probe was `ok` and absent exactly when it was
+ * not — and absent is NOT zero. A `scrollback` of 0 is a MEASURED zero ("there
+ * is nothing above this screen"); an absent one is "we could not look", and a
+ * reader that finds it absent must behave exactly as it did before the field
+ * existed. Nothing here bumps `FLEET_PROTO`.
+ *
+ * `error` keeps `unmeasured` as the single wire token for every could-not-look
+ * condition, and `detail` beside it is the CAPTURE's own message — tmux's
+ * stderr, by way of `CaptureHistory`, whose reasons are only `gone` and
+ * `unmeasured`.
+ *
+ * THE PROBE'S FINER VOCABULARY IS ADAPTER-LOCAL AND DOES NOT REACH THE WIRE.
+ * `PaneProbe` tells `unreadable` from `unparseable` because the adapter must not
+ * narrow a distinction it received, but nothing here carries that pair: the
+ * probe exists to SIZE the capture and, from wave 3, to feed the fit floor —
+ * both server-side, where all four arms are intact. So the CAPTURE alone decides
+ * this reply's status, and a probe that failed while the capture succeeded is a
+ * 200 with the three measured fields simply absent. Absent is the whole of what
+ * the client is told, and it is enough: the drawer's behaviour on a failed probe
+ * is uniform by design.
+ *
+ * An earlier version of this docstring said the opposite — that `unreadable` vs
+ * `unparseable` "rides in `detail`, which is what the drawer renders". It never
+ * did, and could not: `detail` exists only on the `ok:false` arm, which only the
+ * capture produces. The sentence came from spec §5.3 by way of the plan, which
+ * then overrode it in its own must-not-re-decide note; the contradiction landed
+ * here. (Its deviation number is recorded in the commit that corrected this
+ * paragraph, and not inline: this wave's plan is not a file in this tree, so a
+ * D-ref here would name a number no plan HERE defines. That reds
+ * `deviation-refs.test.ts`'s floor-seed assertion — the one comparing
+ * `floorFromScan` over the tracked tree against the high-water DEFINED in this
+ * tree's plans — and not an orphan-ref scan, which that suite does not have.) If a
+ * later wave does want the probe's reason on the wire, that is a deliberate
+ * widening of this type — not something to infer from this paragraph.
+ */
+export type PaneHistoryReply =
+  | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
+  | { ok: false; error: 'gone' | 'unmeasured' | 'bad-session-id'; detail?: string };

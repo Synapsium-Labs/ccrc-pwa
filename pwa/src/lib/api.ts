@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -51,7 +51,25 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
 };
 
-export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+/**
+ * `verify-failed` has TWO outcomes and one code, so the sentence cannot come
+ * from the code alone. The server sets `submittable` when the box row it read
+ * back is a paste chip — Claude Code's own rendering of a large burst it holds
+ * in full — which means the opposite of the table's entry: the session DID take
+ * the text, it just showed a chip instead of the characters, and the `Send it`
+ * button beside this sentence presses the one Enter that sends it.
+ *
+ * Telling the operator "never echoed it back" next to a button that sends it is
+ * the contradiction this exists to remove. The flag is the discriminator here
+ * for the same reason it is one in `ChatList`'s gate: the code is shared, the
+ * proof is not.
+ */
+const VERIFY_FAILED_COLLAPSED = 'Typed it, and the session folded it into a paste chip instead of showing it.';
+
+export const sendErrorText = (code: string, submittable?: boolean): string =>
+  (code === 'verify-failed' && submittable === true)
+    ? VERIFY_FAILED_COLLAPSED
+    : (SEND_ERROR_TEXT[code] ?? code);
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
@@ -514,6 +532,17 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  a confirm sentence that names the crossing. */
     swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
       post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+    /** The terminal drawer's scrollback — the pane's own history, read with
+     *  `capture-pane`. `lines` is the server's number, echoed back: this side
+     *  never names one, so there is nothing for the two to disagree about.
+     *
+     *  `scrollback`/`alternate`/`width` are ABSENT from an older server and
+     *  from a pane that could not be measured, and absence is not zero: the
+     *  drawer opens the history exactly as it always did when it cannot be
+     *  told how much sits above the screen. A non-2xx rejects with `ApiError`,
+     *  whose `.body` carries the route's own `{error, detail?}`. */
+    paneHistory: (id: string) =>
+      getJson<Extract<PaneHistoryReply, { ok: true }>>(`${sid(id)}/pane/history`),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an

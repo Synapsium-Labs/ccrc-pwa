@@ -795,6 +795,30 @@ describe('send-failure copy', () => {
     // would tell the operator the wrong story about which one happened.
     expect(sendErrorText('verify-failed')).not.toBe(sendErrorText('enter-ignored'));
   });
+
+  // ONE CODE, TWO OUTCOMES — the paste-chip collapse. The server now sets
+  // `submittable` on a `verify-failed` whose box row is `[Pasted text #N]`,
+  // which means the OPPOSITE of the table's entry: the session did take the
+  // text and rendered it as a chip. Leaving the old sentence there would put
+  // "never echoed it back" directly above a button that sends it.
+  it('a submittable verify-failed gets its own sentence, and it does not deny the echo', () => {
+    const collapsed = sendErrorText('verify-failed', true);
+    expect(collapsed).not.toBe(sendErrorText('verify-failed'));
+    expect(collapsed).not.toMatch(/never/);
+    expect(collapsed).toMatch(/chip/);
+    // The register is its neighbours': it starts by granting that the typing
+    // worked, exactly as both existing sentences do.
+    expect(collapsed.startsWith('Typed it')).toBe(true);
+  });
+
+  it('and every OTHER code ignores the flag — it discriminates one arm, not all of them', () => {
+    for (const code of ['enter-ignored', 'dialog-open', 'not-alive', 'draft-clear-failed']) {
+      expect(sendErrorText(code, true), code).toBe(sendErrorText(code));
+    }
+    // Absent and false are the same answer: an older server sends neither.
+    expect(sendErrorText('verify-failed', false)).toBe(sendErrorText('verify-failed'));
+    expect(sendErrorText('verify-failed', undefined)).toBe(sendErrorText('verify-failed'));
+  });
 });
 
 // Account pools, wave 4. The three writes and the three refusals.

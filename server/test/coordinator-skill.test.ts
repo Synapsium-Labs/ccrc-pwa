@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// thirteen contract clauses, the routes it names, the refusal codes it promises,
+// fourteen contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -91,7 +91,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The thirteen clauses, verbatim. Kept as a literal array rather than a regex per
+// The fourteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -115,15 +115,24 @@ const CONTRACT = [
   'This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.',
   'This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.',
   'When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.',
+  'A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:\'review\'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.',
   'Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.',
-  'The handoff review invokes the held-out panel in `references/review-panel.md` as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.',
+  "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all thirteen clauses verbatim', () => {
+  it('carries all fourteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
+  });
+
+  it('no longer tells the coordinator to review the handoff commit itself (design 2026-09-14 §4, §13)', () => {
+    expect(skill).not.toContain('Review the handoff commit');
+    expect(skill).not.toContain('review the handoff commit');
+    expect(flat(skill)).toContain('never read by this session');
+    expect(flat(refs('wave-lifecycle.md'))).not.toContain('Review the handoff commit the way you would review any commit.');
+    expect(flat(refs('wave-lifecycle.md'))).not.toContain('your ordinary review');
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
@@ -134,7 +143,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These thirteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These fourteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -169,7 +178,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These thirteen sentences").
+    // SKILL.md states it once in its own words ("These fourteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -1749,26 +1758,26 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
   });
 
   // D-2717, on the surface that is always loaded. `wave-lifecycle.md` is read on
-  // demand; SKILL.md is read every wave, and its step 5 states the two
+  // demand; SKILL.md is read every wave, and its step 6 states the two
   // successions as two arms. The CROSSING table above pins their sentences with
   // bare `toContain`s over the whole file — and the closed-row phrase occurs in
   // BOTH arms, so deleting it from either one left every row green. Measured per
   // arm, by index, so an arm that loses an act, or states it before the close it
   // is supposed to follow, reds where the arm is named.
   it('orders each SKILL.md succession arm independently: open, close, then the closed-row proof', () => {
-    const start = skill.indexOf('5. **Review the handoff commit**');
-    expect(start, 'SKILL.md no longer carries step 5').toBeGreaterThanOrEqual(0);
-    const end = skill.indexOf('\n6. **Final merge:**', start + 1);
-    expect(end, 'step 5 no longer ends where step 6 begins').toBeGreaterThan(start);
-    const step5 = skill.slice(start, end);
+    const start = skill.indexOf('6. **Rule on the report**');
+    expect(start, 'SKILL.md no longer carries step 6').toBeGreaterThanOrEqual(0);
+    const end = skill.indexOf('\n7. **Final merge:**', start + 1);
+    expect(end, 'step 6 no longer ends where step 7 begins').toBeGreaterThan(start);
+    const step6 = skill.slice(start, end);
 
-    const sameAt = step5.indexOf('**Same project:**');
-    const crossAt = step5.indexOf('**Different project:**');
-    expect(sameAt, 'step 5 no longer has a same-project arm').toBeGreaterThanOrEqual(0);
-    expect(crossAt, 'step 5 no longer has a cross-project arm').toBeGreaterThan(sameAt);
+    const sameAt = step6.indexOf('**Same project:**');
+    const crossAt = step6.indexOf('**Different project:**');
+    expect(sameAt, 'step 6 no longer has a same-project arm').toBeGreaterThanOrEqual(0);
+    expect(crossAt, 'step 6 no longer has a cross-project arm').toBeGreaterThan(sameAt);
 
-    const same = flat(step5.slice(sameAt, crossAt));
-    const cross = flat(step5.slice(crossAt));
+    const same = flat(step6.slice(sameAt, crossAt));
+    const cross = flat(step6.slice(crossAt));
 
     for (const [name, arm, closeWith] of [
       ['the same-project arm', same, '`final:false`'],
@@ -1798,29 +1807,60 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
       .toBeGreaterThan(cond);
   });
 
-  // D-2730. The crossing section points BACK at step 5, and this branch rewrote
-  // step 5 — so the pointer's claim ("nothing in it says so") was falsified by
+  // D-2824: dispatch is `planned`'s door only (transitionsFor); a send-back
+  // arm that dispatches a run at `working` describes a call the server
+  // refuses. This pin is the class the branch lacked — an instruction
+  // checked against the transition table.
+  it('sends the worker back by mail, never by dispatch, after advancing the run', () => {
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'),
+      skill.indexOf('\n7. **Final merge:**'));
+    const start = step6.indexOf('**Send back:**');
+    expect(start, 'step 6 lost its Send back arm').toBeGreaterThanOrEqual(0);
+    const end = step6.indexOf('**Clean:**', start + 1);
+    expect(end, 'the Send back arm no longer ends where the Clean arm begins').toBeGreaterThan(start);
+    const sendBack = step6.slice(start, end);
+
+    // Not a bare `not.toContain('runs dispatch')`: the corrected prose itself
+    // names the banned call ("never by `runs dispatch`") to explain why not.
+    // What must be absent is the INVOCATION — the exact call form the old
+    // arm told the coordinator to make.
+    expect(sendBack, 'the send-back arm still tells the coordinator to `runs dispatch <work run id>`')
+      .not.toContain('runs dispatch <work run id>');
+    expect(sendBack, 'the send-back arm no longer re-briefs the worker by mail')
+      .toContain('mail send');
+    expect(sendBack, 'the send-back arm no longer sends a `fix-round` mail')
+      .toContain('fix-round');
+
+    const advanceAt = sendBack.indexOf('runs advance');
+    const mailAt = sendBack.indexOf('mail send');
+    expect(advanceAt, 'the send-back arm no longer advances the run to working').toBeGreaterThanOrEqual(0);
+    expect(mailAt, 'the mail send is no longer AFTER the advance that must precede it')
+      .toBeGreaterThan(advanceAt);
+  });
+
+  // D-2730. The crossing section points BACK at step 6, and this branch rewrote
+  // step 6 — so the pointer's claim ("nothing in it says so") was falsified by
   // the same commit that made it worth reading. A cross-reference is a claim
   // about another section, and nothing checked it: the CROSSING table pins only
-  // the bolded lead sentence. Grounded in step 5's own arm markers, so rewriting
+  // the bolded lead sentence. Grounded in step 6's own arm markers, so rewriting
   // either section without the other reds here.
-  it('describes step 5 as step 5 actually reads', () => {
+  it('describes step 6 as step 6 actually reads', () => {
     const start = skill.indexOf('## When a wave crosses into another project');
     const end = skill.indexOf('\n## ', start + 1);
     const section = flat(skill.slice(start, end === -1 ? undefined : end));
 
-    const step5 = skill.slice(skill.indexOf('5. **Review the handoff commit**'),
-      skill.indexOf('\n6. **Final merge:**'));
+    const step6 = skill.slice(skill.indexOf('6. **Rule on the report**'),
+      skill.indexOf('\n7. **Final merge:**'));
     for (const arm of ['**Same project:**', '**Different project:**']) {
-      expect(step5, `step 5 lost its ${arm} arm`).toContain(arm);
-      expect(section, `the crossing section does not name step 5's ${arm} arm`)
+      expect(step6, `step 6 lost its ${arm} arm`).toContain(arm);
+      expect(section, `the crossing section does not name step 6's ${arm} arm`)
         .toContain(arm);
     }
     // The falsified claim itself, by the property rather than the wording: the
-    // crossing section may not tell the reader step 5 is silent on this, because
-    // step 5 is not.
-    expect(section, 'the crossing section still claims step 5 does not distinguish the two')
-      .not.toMatch(/nothing in it says so|step 5[^.]{0,80}does not say/i);
+    // crossing section may not tell the reader step 6 is silent on this, because
+    // step 6 is not.
+    expect(section, 'the crossing section still claims step 6 does not distinguish the two')
+      .not.toMatch(/nothing in it says so|step 6[^.]{0,80}does not say/i);
   });
 
   it('names BOTH new refusal codes where the rule that provokes them is stated', () => {
@@ -2135,24 +2175,31 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
 });
 
 describe('the routing clauses (routing slice 2)', () => {
-  it('clause 12 names the matrix reference, which ships, and step 2 sends the brief writer to it', () => {
-    const c12 = CONTRACT[11]!;
-    expect(c12).toContain('`references/routing-matrix.md`');
+  it('clause 13 names the matrix reference, which ships, and step 2 sends the brief writer to it', () => {
+    const c13 = CONTRACT[12]!;
+    expect(c13).toContain('`references/routing-matrix.md`');
     expect(REFERENCE_NAMES).toContain('routing-matrix.md');
     // step 2's list of what a brief carries, in SKILL.md and in the reference
-    // (anchored on step 2's own opening phrase, not clause 12's — clause 12
+    // (anchored on step 2's own opening phrase, not clause 13's — clause 13
     // also contains "the shape of the wave and the routing" ~170 chars before
     // its own routing-matrix.md mention, which made that anchor self-satisfied)
     expect(flat(skill)).toMatch(/what only this wave knows[\s\S]{0,320}routing-matrix\.md/);
     expect(flat(refs('wave-lifecycle.md'))).toMatch(/A brief carries what only THIS wave knows:[\s\S]{0,900}routing-matrix\.md/);
   });
 
-  it('clause 13 names the panel reference, which ships, and step 5 invokes it before the ledger', () => {
-    const c13 = CONTRACT[12]!;
-    expect(c13).toContain('`references/review-panel.md`');
-    expect(c13).toContain('unverified, never as approval');
+  it('clause 14 names the panel reference, which ships, and step 5 sends the REVIEWER to it', () => {
+    // The merge of 2026-09-16: the panel is the review run's SHAPE, run by the
+    // reviewer (clause 14), not something this session runs on the diff —
+    // clause 12 (review runs, design 2026-09-14) forbids that reading, so the
+    // SKILL.md anchor is step 5's `Lenses:` sentence rather than the deleted
+    // "Review the handoff commit".
+    const c14 = CONTRACT[13]!;
+    expect(c14).toContain('`references/review-panel.md`');
+    expect(c14).toContain('unverified, never as approval');
+    expect(c14).toContain('the reviewer runs it as written');
     expect(REFERENCE_NAMES).toContain('review-panel.md');
-    expect(flat(skill)).toMatch(/Review the handoff commit[\s\S]{0,160}review-panel\.md/);
+    expect(flat(skill)).toMatch(/`Lenses:` line names the held-out panel[\s\S]{0,160}review-panel\.md/);
+    expect(flat(refs('review-brief.md'))).toMatch(/Lenses:[\s\S]{0,120}review-panel\.md/);
     expect(flat(refs('wave-lifecycle.md'))).toMatch(/## 5 — The boundary[\s\S]{0,600}review-panel\.md/);
   });
 

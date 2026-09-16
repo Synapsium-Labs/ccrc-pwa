@@ -13,7 +13,7 @@ import { CCRC_API } from './ccdWsHelpers.js';
 const root = path.join(import.meta.dirname, '..', '..');
 const corpusFiles = (): string[] => {
   const out: string[] = [];
-  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill']) {
+  for (const dir of ['ccd/coordinator-skill', 'ccd/worker-skill', 'ccd/reviewer-skill']) {
     const walk = (d: string): void => {
       for (const e of fs.readdirSync(d, { withFileTypes: true })) {
         const p = path.join(d, e.name);

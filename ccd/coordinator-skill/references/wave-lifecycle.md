@@ -231,8 +231,8 @@ skill the worker should invoke** (`superpowers:executing-plans` or
 settled, the deviations already ledgered, the shape of the wave and the
 routing the matrix derives from it — class, effort, subagent class, workflow
 mode, and the subagent effort the worker should name on its calls
-(`references/routing-matrix.md`, clause 12) — and whatever your review of the last
-handoff decided.
+(`references/routing-matrix.md`, clause 13) — and whatever the last review
+run's report, and your ruling on it, decided.
 
 **Every brief for a wave in ANOTHER project carries three immutable-plan
 coordinates:** `homeRepoRoot`, the absolute path to the home repository root;
@@ -469,7 +469,7 @@ The server reads them from the mail row, never from the envelope: `GET /api/runs
 answers `signals.suite` and `signals.failure`, each one of THREE answers — a value, `absent`
 (the line was not sent: an older worker, or nothing to say), or `unrecognised` (a line was sent
 with a word outside the vocabulary — a defect in the worker's report, surfaced, never read as
-silence). They are what spec §6's first-run quality signal and clause 12's next-wave routing
+silence). They are what spec §6's first-run quality signal and clause 13's next-wave routing
 decision read; a wave-done that omits the suite line is accepted by the fingerprint route all the
 same, and shows as `absent`.
 
@@ -497,14 +497,17 @@ same, and shows as `absent`.
 | reject.code | meaning |
 |---|---|
 | `stale-tip` | the branch moved after the claim was written |
-| `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way) |
+| `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way). On a REVIEW run's close it can also mean the reviewed run itself cannot be measured (it names no run, is gone, or has no session); the answer there is `{"state":"failed"}` on the review run, not a re-submit. |
 | `branch-unmeasurable` | the workspace's branch could not be resolved: the live registry has a row for this session and the row's own branch field is null — either listed with bytes that did not come back (transient) or absent (not). Not evidence either way; the run is unchanged. Re-submit once the registry reads clean. If it keeps answering this, the session's registry row needs a human — the run row's frozen branch column is deliberately not used as a guess |
 | `pr-regressed` | the PR is not in the phase the claim asserted |
 | `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) — but see below: this is ALSO what a malformed submission of your own gets, before any I/O runs |
-| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays your ordinary review, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
+| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays the review run's job, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
 | `unknown-run` | the run id is wrong |
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
+| `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
+| `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
+| `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 
 **`pr-unmeasurable` has two causes, and they need different responses.** The
 server returns it both for a transient re-read failure (`detail` reads like
@@ -570,11 +573,11 @@ Partial success on a ledger write is how tallies drift.
 
 ## 5 — The boundary: open the next wave's run, THEN close this one
 
-**The handoff review is the held-out panel, first** (clause 13, `references/review-panel.md`):
-three Opus lenses over the wave's commit range, three Sonnet refuters per finding, majority
-deciding, model and effort literal in the script. Confirmed findings go back to the worker as a
-`finding` mail and the run stays where it is; a lens that returned nothing is a review not yet
-done. Only a wave the panel has examined is reviewed "like any other commit" below.
+**The handoff review is a REVIEW RUN, and the held-out panel is its shape** (clause 14,
+`references/review-panel.md`): three Opus lenses over the wave's commit range, three Sonnet
+refuters per finding, majority deciding, model and effort literal in the script. The REVIEWER
+runs it — this session dispatches the review run and rules on the report it returns (step 1
+below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
 
 **Order is load-bearing here, and it is the opposite of what you might guess.**
 A program is `active` only while it has at least one open (non-`done`,
@@ -594,7 +597,7 @@ an operator/DB act, not a client one — or address the mail with an explicit
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
-1. Review the handoff commit the way you would review any commit.
+1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
    Commit it.

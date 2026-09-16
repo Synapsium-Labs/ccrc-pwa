@@ -1,7 +1,8 @@
 # The held-out review panel — every handoff review, three Opus lenses, a Sonnet refute pass, majority deciding
 
-Invoked by coordinator clause 13 at the handoff review (SKILL.md step 5), on the wave's handoff
-commit range, before the ledger is updated and before the next wave's run is opened. It is the
+Named by coordinator clause 14 as the review brief's shape and RUN BY THE REVIEWER of the review
+run this session dispatches (SKILL.md step 5), on the wave's handoff commit range, before the
+ledger is updated and before the next wave's run is opened. It is the
 quality gate of the routing design (spec §2): the one measurement that must not move when a
 worker's class or effort is changed, so it is **unroutable** — its model and effort are literal in
 the script below, it reads no routing field, and no escalation or demotion reaches it. A wave is

@@ -196,8 +196,10 @@ the operator from the pickers.
 
 The held-out panel has its own home: a second coordinator reference,
 `ccd/coordinator-skill/references/review-panel.md` (the three lenses, the refute pass, the
-literal model and effort), also in `REQUIRED_REFS` and the parity tests, invoked by a new twelfth
-coordinator clause. Neither the routing fields nor escalation or demotion reach it.
+literal model and effort), also in `REQUIRED_REFS` and the parity tests, named by coordinator
+clause 14 as the review brief's shape and RUN by the review run's reviewer (the review-runs design
+of 2026-09-14 holds clause 12 — the coordinator dispatches a review run and never reads the diff
+itself; merged 2026-09-16, deviation recorded by the controller). Neither the routing fields nor escalation or demotion reach it.
 
 ## 5. Mechanics
 

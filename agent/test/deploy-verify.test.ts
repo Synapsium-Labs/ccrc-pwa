@@ -1573,7 +1573,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // for the same reason — the roster is where it learns which config dirs
       // exist at all.
       ['worker skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-worker-skill.sh'"],
-      // The graphify skill's installer is the FOURTH (graphify Task 10,
+      // The reviewer skill's installer is the fourth roster reader this
+      // branch starts (review-runs Task 10) and it `source`s the same
+      // generated file for the same reason — the roster is where it learns
+      // which config dirs exist at all.
+      ['reviewer skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-reviewer-skill.sh'"],
+      // The graphify skill's installer is the FIFTH (graphify Task 10,
       // O3/O6b): it `source`s the same `~/.ccrc/accounts.sh` too, for the
       // identical reason — see `install-graphify-skill.sh`'s own fallback
       // `source "$HOME/.ccrc/accounts.sh"` branch. R-8 (fix round F1) gated

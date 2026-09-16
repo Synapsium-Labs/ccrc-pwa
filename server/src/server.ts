@@ -65,7 +65,7 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES, PANE_HISTORY_LINES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -1472,7 +1472,67 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
-    const p = spawnPty(id, dim(q.cols, 80), dim(q.rows, 24));
+    const cols = dim(q.cols, 80);
+    const rows = dim(q.rows, 24);
+    // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
+    //
+    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // tmux's own default is `latest` too — so the window follows whichever
+    // client most recently typed. A phone's pty client is a full tmux client
+    // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
+    // stored lines to the new width, and everything past `history-limit` is
+    // shed on the next scrolled line and never comes back. That reflow is
+    // measured, not assumed (F1, private tmux 3.4 socket): `resize-window -x 43`
+    // on a 220-column pane holding 1853 stored lines takes `history_size` to
+    // 9460, and at `history-limit 2000` the next output sheds the overflow for
+    // good.
+    //
+    // `resize-window` latches `window-size manual` (F3), so once it ARRIVES the
+    // attaching client cannot move the window. MEASURED end to end on one
+    // session (F14), 1153 stored lines / 1203 logical: unpinned, a 43-column
+    // attach left 1046 logical of 1203 — 157 destroyed; pinned first, the window
+    // read `manual`, stayed 220 throughout, and the history was untouched.
+    //
+    // ISSUING IT FIRST IS A BIAS, NOT A BARRIER, and the difference is measured.
+    // An earlier version of this comment said the later client "cannot move the
+    // window at all"; that is too strong. Both commands are in flight at once —
+    // this one is merely started first — and a harness TIGHTER than shipped
+    // raced them 40 times and saw the attach win TWICE, with the window at 43
+    // for transients of 0.47 ms and 4.28 ms before the pin landed. It is not a
+    // data-loss defect: tmux 3.4 does not collect history during a reflow, and
+    // the narrow-then-wide round trip was measured LOSSLESS even at 3.7x the
+    // limit (1452 stored / 1502 logical at 220, out to 43 where `history_size`
+    // reads 7463, and back to 220 byte-identical).
+    //
+    // THAT ROUND TRIP WAS MEASURED WITH NO OUTPUT IN FLIGHT, and the condition
+    // is load-bearing: the first paragraph above is the counterexample. A line
+    // that lands WHILE the window sits at 43 is written into a history already
+    // reflowed past `history-limit`, and the overflow it sheds is gone. So what
+    // losing the race costs is bounded by what the pane emits during a transient
+    // measured at 0.47 ms and 4.28 ms — usually nothing, and never nothing by
+    // guarantee. The pin is what keeps that window from being the whole session,
+    // which is why it is issued here rather than dropped.
+    //
+    // NOT AWAITED, and that is deliberate: the socket handler is L4 and decides
+    // nothing, `resizeWindow` answers a boolean this route has no branch for,
+    // and a tmux that cannot be reached is a session the attach below will fail
+    // on anyway. Awaiting it would ALSO put a round trip to the fleet box in
+    // front of every drawer open in remote mode, to buy back a transient that
+    // costs no history. What it must not be is LATER than the attach.
+    //
+    // WHAT THE TEST CAN SEE is issue ORDER, and only that: `pty.test.ts` drives
+    // one ordered log shared by the Runner and the spawn stub, so it pins that
+    // the pin is issued before the attach. It cannot pin arrival, because a unit
+    // test has no tmux to arrive at. The claim above about arrival is a
+    // measurement on a private socket, not something this suite re-checks.
+    //
+    // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
+    // for every drawer, so a second drawer closing restores nothing anyone was
+    // depending on, and the close handler's own 220x50 becomes a no-op rather
+    // than the defect PR #96's handoff was built to cure. The deliberate
+    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    void deps.tmux.resizeWindow(id, 220, 50);
+    const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
       try {
@@ -1490,6 +1550,77 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // not leave the session shrunken (wrapped panes break capture parsing).
       void deps.tmux.resizeWindow(id, 220, 50);
     });
+  });
+
+  /**
+   * The drawer's scrollback, and the whole of why it is a READ.
+   *
+   * `tmux attach` puts the CLIENT on the alternate screen (every attach begins
+   * ESC[?1049h — measured off a real pty), where xterm has no scrollback and
+   * turns a wheel notch into arrow keys aimed at the pane. tmux holds the
+   * pane's history regardless, so the fix is to read that history rather than
+   * to make the wheel drive the pane.
+   *
+   * The PANE's own alt flag is a SEPARATE layer and it is not always 0 — an
+   * earlier note here said `alternate_on=0` on every live session; measured
+   * across ten, two read 1. It does not matter, and that is worth stating so
+   * nobody "fixes" it: entering the alternate screen SAVES the normal-screen
+   * grid rather than dropping it, so `capture-pane` without `-a` still answers
+   * out of history. Measured on a private socket — 400 lines written, then
+   * ESC[?1049h: `alternate_on` flips to 1 and `capture-pane -S -400` still
+   * returns all 353 retained history lines.
+   *
+   * WHY NOT copy-mode, which is the other way to scroll a pane: copy mode is
+   * PANE state, not client state — a second attached client is dragged into the
+   * scrolled view too — and while a pane is in it `send-keys -l` does not
+   * deliver. Measured against tmux 3.4 with a client attached: the literal
+   * write HUNG (killed at 5 s), the Enter after it was eaten by the mode, and
+   * the text never reached the program — i.e. every prompt this server injects
+   * would wedge for as long as the mode lasted, and nothing in this tree can
+   * see or clear it. `capture-pane` mutates nothing: pane mode and attached
+   * clients measure identical either side of it.
+   *
+   * NO `knownId` GATE, deliberately (so it is absent from `routes.test.ts`'s
+   * census by construction, not by exemption): this route's own answer IS the
+   * measurement of whether the pane is there, taken against the pane rather
+   * than against a registry listing, and it tells `gone` from `unmeasured`
+   * where `knownId` folds both into 404.
+   */
+  app.get('/api/sessions/:id/pane/history', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    // THE MEASUREMENT COMES FIRST, AND IT SIZES THE READ (spec §5.2). PR #96
+    // captured 2000 lines and then asked how many there were, so a pane holding
+    // 47 paid for 2000 and the answer's own `lines` was a constant rather than
+    // a fact. One `list-panes -F` costs a single tmux round trip and turns the
+    // capture window into a measurement.
+    //
+    // A MEASURED ZERO KEEPS THE CONSTANT: `-S -0` starts at the screen's own
+    // top and returns nothing above it, which one layer up is indistinguishable
+    // from a failed read. The zero still travels as `scrollback: 0`, which is
+    // the fact the drawer refuses to open a layer on.
+    //
+    // AN UNMEASURABLE PROBE DOES NOT FAIL THE ROUTE. It falls back to the
+    // constant and OMITS the three measured fields — absence-permitting, and
+    // absent is not zero. The CAPTURE is what decides the status, because the
+    // capture is what the reader came for: `gone` -> 404, anything else -> 502
+    // carrying tmux's own message.
+    const probe = await deps.tmux.paneProbe(id);
+    const asked = probe.ok && probe.history > 0 ? probe.history : PANE_HISTORY_LINES;
+    const r = await deps.tmux.captureHistory(id, asked);
+    if (!r.ok) {
+      return r.reason === 'gone'
+        ? reply.code(404).send({ ok: false, error: 'gone' })
+        : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });
+    }
+    // `width` rides along so the DRAWER can size its own scrollback against the
+    // pane's width rather than a constant multiplier: a stored line re-wrapped
+    // at the reader's width is at most ceil(paneWidth / readerCols) rows, and
+    // the census holds a 302-column window, so the multiplier is measured
+    // rather than assumed (spec §5.4).
+    return probe.ok
+      ? { ok: true, text: r.text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
+      : { ok: true, text: r.text, lines: asked };
   });
 
   // Write routes: serialized per session through one KeyedQueue; injection
