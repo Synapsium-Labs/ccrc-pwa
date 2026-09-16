@@ -218,3 +218,54 @@ pair reads as fully pinned.
 **And one standing instruction, because it has cost this fleet twice today:** cite a `ccd` line with
 its COPY. `ccd/ccd:<n>` is `origin/main`'s; `~/.local/bin/ccd:<n>` is the deployed build, which is
 PR #116's unmerged branch and sits 68 lines lower above `is_ours`.
+
+## 2026-09-16 23:3x UTC — Part A is blocked by a required-lane pin. **Ruled: ship (c), narrowed to the weakest honest form.**
+
+The worker (mail 1542, artifact `partA-conflict.md`) found that **A2's prescribed fix is forbidden by
+a guard on a REQUIRED lane**. A2 says: when `"$2"` is a symlink to a directory, `rm -f -- "$2"` before
+the `mv -f`. `ccd-reg-set-atomic.test.ts` scans `_plat_mv_notdir`'s body as TEXT and asserts
+`not.toMatch(/rm\s+[^\n]*"\$2"/)` — *"the helper must never unlink its destination"*, inside the
+`it(… D-112 rests on this)` case. A regex on a body cannot see a guard, so an `rm` nested inside
+`if [ -L "$2" ] && [ -d "$2" ]` reds it exactly as an unconditional one does.
+
+**I measured three things before ruling, because a recommendation is a claim.** (1) The pin is real and
+says what they said. (2) **The permitted `rm` really is unreachable from `_reg_set`** — `/bin/grep -n
+'ln -s' ccd/ccd ccd/ccrc` returns ten hits and NOT ONE creates a symlink at `$REG/<id>.<field>`; they
+are comments about `pools/` and `swap.log` plus `ccrc`'s memory-store `ln -sfn`. So on the registry
+path the new arm is dead code and D-112's invariant is untouched. (3) **Even adversarially the
+narrowing is the safer side:** if something outside ccd planted a symlink-to-dir at a registry field,
+TODAY `mv -f` follows the link, writes INSIDE the directory and returns 0 — a silent wrong write with
+the name resolvable throughout. After the fix a reader sees a transient ENOENT instead, and a
+transient absence readers already tell from unreadable beats a silent write to the wrong place.
+
+**(a) REJECTED** — dropping `! -L` makes Darwin refuse a rename GNU performs, and `ccd/ccd:66-68`
+considered exactly that and rejected it ("`-L` BEFORE `-d` … is the whole correctness of the Darwin
+arm"). A4 authorises correcting the ATOMICITY paragraph, not rewriting the rejected-alternative
+paragraph above it. **(b) REJECTED**, and the worker refused it unprompted — widening a guard until
+your own change passes is the false green this repo mints rules against.
+
+**THE CONDITION ON (c), AND IT IS THE POINT.** A regex over a function body **cannot decide whether an
+`rm` sits INSIDE a guarded arm** — it can only see that `rm "$2"`, `[ -L "$2" ]` and `[ -d "$2" ]` all
+appear in the same text; an unconditional `rm` with the guard three lines away passes it. So the pin
+is narrowed to the WEAKEST honest form and **its own failure message must say it detects a CHANGE and
+does not prove the `rm` is guarded**. The guarantee lives where it can actually be observed, and the
+plan already asks for it: **A1** drives `CCD_OS=darwin` on Linux with `dest` a symlink-to-directory
+and asserts 0 only if `src` is now AT `dest`; its sibling case — `dest` a REAL directory → return 1,
+destination untouched — goes in the same act. **A5 now carries three mutation rows**: delete the `rm`
+→ A1's symlink case RED; delete `[ -d "$2" ]` from the new guard → the narrowed scan RED; **move the
+`rm` OUTSIDE the guarded arm → A1's real-directory case RED while the scan stays GREEN**, to be
+reported whatever it measures, because that row is the honest statement of what the scan cannot see.
+
+This is account-pools wave 6's ruling applied to its first case outside the wave that earned it: pin a
+claim mechanically only where the code names what the prose names, and where it does not, say so in
+the guard's own message rather than letting a regex imply a proof it has not got.
+**Costs if wrong:** one guard narrowed on a path measured to be dead, and a behavioural case that
+would have caught it either way.
+
+**Also ruled:** claim-extend to `ccd-reg-set-atomic.test.ts` before touching it (their own proposal —
+right). **D-2189's cardinal is six of eight, not four of five** — it counted `ccd/ccd` alone and missed
+`ccd/ccrc:748`, `:5672`, `:6839`; SUBJECT unchanged, so correct in place, no number, the D-2475 shape
+for the second time in this wave. A4 names the eight. **Open question, not a requirement:** if BSD `mv`
+has a flag that replaces a symlink-to-directory as a NAME the way `-T` does, it beats the `rm` outright
+and leaves the pin untouched — untestable from Linux, the macOS leg is 40 minutes and not required, so
+answer it in the wave-done or record it unanswered.
