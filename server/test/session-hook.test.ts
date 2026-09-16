@@ -4515,9 +4515,15 @@ describe('the compaction card — the sentences D-2605 falsifies (spec §3.4)', 
 // exists to red.
 describe('the compaction card — the two documents say what the code does (spec §3.4)', () => {
   const DOCS = path.resolve(__dirname, '../../docs/superpowers');
+  // README IS IN THIS CORPUS TOO (wb2 B-I2 = A1). The two documents are where
+  // the retracted sentences lived, but README is the OPERATOR-facing account of
+  // the same mechanisms and nothing stopped a retracted claim being restated
+  // there — it was simply never read. Adding it costs one file read and closes
+  // the gap by construction rather than by anyone remembering to look.
   const CORPUS = [
     ['spec', path.join(DOCS, 'specs/2026-09-09-graphify-compaction-card-design.md')],
     ['plan', path.join(DOCS, 'plans/2026-09-10-graphify-compaction-card-plan-a.md')],
+    ['readme', path.resolve(__dirname, '../../README.md')],
   ] as const;
 
   // PATTERN 1 — the purge-emit regression, in the three shapes the four
@@ -6880,9 +6886,19 @@ describe('the compaction card — the first held section forks exactly this (spe
 describe('the compaction card — every line citation is anchored (spec §3.4)', () => {
   const DOCS_DIR = path.resolve(__dirname, '../../docs/superpowers');
   const REPO = path.resolve(__dirname, '../..');
+  // THE CORPUS IS THREE DOCUMENTS, NOT TWO (wb2 B-I2 = A1). README carries
+  // operator-facing anchors into shipped source, and TWO of them — the
+  // `_hook_emit_context` call site and ccd's contended-acquire warning — were
+  // byte-exact at `f18c1be5` and were falsified by the whole-branch fix round's
+  // own edits to those two files. No assertion in this tree ever resolved a
+  // README reference, while the comment further down claimed the complete pass
+  // had classified it; a reader following either pointer landed on a comment
+  // and nothing reddened. `fromRepo` already resolves any repo-relative source
+  // path, so admitting README is a corpus change and not a rule change.
   const CORPUS = [
     ['spec', path.join(DOCS_DIR, 'specs/2026-09-09-graphify-compaction-card-design.md')],
     ['plan', path.join(DOCS_DIR, 'plans/2026-09-10-graphify-compaction-card-plan-a.md')],
+    ['readme', path.join(REPO, 'README.md')],
   ] as const;
 
   const FILE_RE = '(?:(?:[A-Za-z0-9_.-]+/)*[A-Za-z0-9_.-]+\\.(?:ts|mts|mjs|js|sh)|ccd/ccd|ccd/ccrc)';
@@ -6951,26 +6967,61 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
    *  condition; plan's glob clause survived because its ONE-character token
    *  `f` occurs in the word "refuse" on the comment it pointed at.
    *
-   *  THE RULE, and it is deliberately the NARROWEST one that closes the
-   *  measured blind spot rather than the strictest one available: every
-   *  ellipsis-part must be at least MIN_QUOTE non-space characters OR carry an
-   *  identifier-class character, and the six tokens measured as self-anchoring
-   *  never satisfy whatever else is true of them. A token that satisfies
-   *  neither states nothing about the line it points at, so a reference
-   *  carrying only such tokens is QUOTATIONLESS — a class the audit already
-   *  has (`unanchored`) and already does not count as a failure, which is why
-   *  this floor RAISES what the census can see without inventing a new
-   *  verdict. */
+   *  THE FIRST SPELLING OF THIS FLOOR DID NOT CLOSE THAT BLIND SPOT, and this
+   *  paragraph is the record of it (wb2 B-I1). "At least MIN_QUOTE non-space
+   *  characters OR ONE identifier-class character" refuses `" ("` and `/` and
+   *  `$`, and admits every one- or two-character WORD — so `rm`, `f`, `$1`
+   *  and `" in "` went on anchoring references, MEASURED by instrumenting
+   *  `occurs` on the tip tree, and two references passed on such a token with
+   *  no other satisfying token at all: plan's `ccd/ccd:1861` on `rm` (the
+   *  referent is `ccd/ccd:2445`) and plan's `ccd/session-hook.sh:792-819` on
+   *  `$1`. The paragraph this replaces named `f` as a CLOSED blind spot while
+   *  the rule still accepted it.
+   *
+   *  THE RULE, and it is still the narrowest one that closes what is measured
+   *  rather than the strictest available: an ellipsis-part satisfies when it
+   *  is at least MIN_QUOTE non-space characters, OR carries at least TWO
+   *  identifier-class characters AND is not one of the shell builtins and
+   *  control words named in `STOPWORD`. One identifier character is not a
+   *  quotation of anything — `f` occurs in every `printf`, `refuse` and
+   *  `find` — and a bare builtin is not either, because it occurs on whatever
+   *  line of bash you point at. A token that satisfies neither states nothing
+   *  about the line it points at, so a reference carrying only such tokens is
+   *  QUOTATIONLESS — a class the audit already has (`unanchored`) and already
+   *  does not count as a failure, which is why this floor RAISES what the
+   *  census can see without inventing a new verdict.
+   *
+   *  SELF-REFUTATION, because a floor stated as a rule has to be measured as
+   *  one: across all three documents the tokens of THREE non-space characters
+   *  or fewer that this rule still ACCEPTS are exactly `jq`, `ccd`, `it(` and
+   *  `out` — each a name rather than a keyword, and measured, NOT ONE of them
+   *  is the only satisfying token of any reference in the corpus. */
   const MIN_QUOTE = 8;
   /** The six tokens the review MEASURED as self-anchoring across this corpus,
    *  refused by name. Five of them rule (a) already refuses for carrying no
    *  identifier character at all; `at` is the one that does not, and it is the
    *  token `ccd/session-hook.sh:865` survived on for four rounds. */
   const NEVER = new Set(['/', ',', '(', 'at', '""', '$']);
+  /** THE STOPLIST: shell builtins, shell control words and the positional and
+   *  special parameters. Each occurs on so many lines of this corpus's own
+   *  sources that quoting one states nothing about any of them, and the rule
+   *  above cannot refuse them by shape — `rm`, `in`, `do` and `fi` all carry
+   *  two identifier characters. Some entries are refused by the two-identifier
+   *  rule anyway (`f`, and `$1`..`$9`/`$?`/`$!`/`$$`, which carry one or
+   *  none); they are named here rather than left implicit because the rule and
+   *  the list are separately mutable and the next reader should not have to
+   *  re-derive which arm refuses which token. MEASURED on this tree: deleting
+   *  the list alone, and changing nothing else, moves the census from 55 to
+   *  51 — four references re-anchoring on `die` or `case` — and the
+   *  `**Files:**` set from 12 to 11 and the `|`-row set from 20 to 15. */
+  const STOPWORD = new Set(['rm', 'f', 'at', 'in', 'die', 'echo', 'set', 'local', 'return',
+    'fi', 'do', 'done', 'then', 'else', 'case', 'esac', 'if', 'for', 'while', 'exit',
+    '$1', '$2', '$3', '$4', '$5', '$6', '$7', '$8', '$9', '$?', '$!', '$$']);
   const specific = (part: string): boolean => {
     const t = part.trim();
-    if (t === '' || NEVER.has(t)) return false;
-    return t.replace(/\s+/g, '').length >= MIN_QUOTE || /[A-Za-z0-9_]/.test(t);
+    if (t === '' || NEVER.has(t) || STOPWORD.has(t)) return false;
+    if (t.replace(/\s+/g, '').length >= MIN_QUOTE) return true;
+    return (t.match(/[A-Za-z0-9_]/g) ?? []).length >= 2;
   };
   const partsOf = (tok: string): string[] =>
     tok.split(/…|\.\.\./).map((x) => x.trim()).filter((x) => x !== '');
@@ -7214,6 +7265,51 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     for (const tok of ['/', ', ', ' (', ' at ', '""', '$']) {
       const doc = `The helper writes \`${tok}\` at \`ccd/fx.sh:3\`.`;
       expect(audit([['fx', doc]], FX).checked, `\`${tok}\` is not evidence`).toBe(0);
+    }
+  });
+
+  it('CONTROL: a builtin and a one-character token anchor nothing; a two-character NAME still does', () => {
+    // THE HOLE THE FIRST SPELLING OF THE FLOOR LEFT OPEN (wb2 B-I1), in both
+    // directions, against the same fixture sources — so this control cannot rot
+    // when a real file's lines move. `ccd/fx.sh` is seven lines: `:2` is
+    // `  local a="x"`, `:3` is `  printf "%s" "$a"`, `:4` is `  return 0`, and
+    // `:7` is `echo done`.
+    //
+    // (1) THE REVIEWER'S OWN CONTROL. A clause whose only quotation is `rm`
+    // states nothing about any line, so it must be QUOTATIONLESS — counted in
+    // `unanchored`, never in `checked`. Under the rule this replaces it was
+    // CHECKED, which is what let `rm` decide two references' fate.
+    const rm = audit([['fx', 'The helper removes with `rm` at `ccd/fx.sh:3`.']], FX);
+    expect(rm.checked, '`rm` is not evidence').toBe(0);
+    expect(rm.unanchored, 'so the reference is QUOTATIONLESS, which is what it is').toBe(1);
+    expect(rm.failures, 'and it cannot red on its own account either').toEqual([]);
+    // (2) AND THE DIRECTION THAT MATTERS MORE: a builtin that OCCURS on the
+    // line cited. `do` occurs inside `done`, so under the previous rule this
+    // clause PASSED as anchored while stating nothing — the exact shape the
+    // plan's two stale anchors survived in for four rounds.
+    expect(audit([['fx', 'The tail is `do` at `ccd/fx.sh:7`.']], FX).checked,
+      'a builtin that occurs on the cited line still anchors nothing').toBe(0);
+    // (3) ONE identifier character is refused, TWO are not — same line, same
+    // clause shape, so the difference measured is the RULE and nothing else.
+    const one = audit([['fx', 'The local holds `"x"` at `ccd/fx.sh:2`.']], FX);
+    expect(one.checked, 'a one-identifier-character token is not evidence').toBe(0);
+    expect(one.unanchored, 'so that reference is quotationless too').toBe(1);
+    const two = audit([['fx', 'The local holds `a="x"` at `ccd/fx.sh:2`.']], FX);
+    expect(two.checked, 'a two-identifier-character token IS evidence').toBe(1);
+    expect(two.failures, 'and it anchors, because `:2` carries it').toEqual([]);
+    // …and it still REFUSES where it is false, which is the other end of the
+    // pin: a floor that admitted nothing would be green here too.
+    expect(audit([['fx', 'The local holds `a="x"` at `ccd/fx.sh:4`.']], FX).failures.map(refKey),
+      'the same quotation on a line that does not carry it reds').toEqual(['ccd/fx.sh:4']);
+    // (4) THE STOPLIST BY NAME, in the arm that would otherwise admit each one,
+    // and the four short tokens the rule DOES accept — named so a later reader
+    // sees the whole of what this floor lets through at that length rather than
+    // having to re-derive it.
+    for (const tok of ['rm', 'die', 'in', 'do', 'case', 'echo', 'local', 'return', 'while', '$1']) {
+      expect(specific(tok), `\`${tok}\` never satisfies`).toBe(false);
+    }
+    for (const tok of ['jq', 'ccd', 'it(', 'out']) {
+      expect(specific(tok), `\`${tok}\` is a name, not a keyword, and still satisfies`).toBe(true);
     }
   });
 
@@ -7483,8 +7579,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //
     // FIX ROUND 2 OF TASK 11 MOVES IT AGAIN, 66 -> 55, and this one is a
     // DOCUMENT change rather than a line shift: the complete citation pass
-    // classified every reference in both documents and in README, and repaired
-    // the ones whose referent exists at this tip. Measured with this audit,
+    // classified every reference in both documents, and BY HAND in README,
+    // and repaired the ones whose referent exists at this tip. (README was in
+    // no CORPUS when that was written, so "and in README" named a hand pass no
+    // assertion could redo, and two of its anchors rotted unseen — wb2 B-I2.
+    // README is in the CORPUS above now, so the sentence is a statement about
+    // this tree and not only about that round.) Measured with this audit,
     // unchanged, before and after:
     //   `ccd/ccd` 37 -> 24. The whole `command -v flock` / fail-closed-doctrine
     //     family re-anchored to the measured tip sites (§4's five-row census,
@@ -7529,17 +7629,22 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // further anchor was WIDENED rather than moved — §3.3's compliance
     // sentence names two statements and cited only the first line of the two.
     //
-    // THE SPECIFICITY FLOOR is the rule change, and it is the narrowest one
-    // that closes the measured hole: an ellipsis-part must be >= 8 non-space
-    // characters OR carry an identifier character, and the six tokens the
+    // THE SPECIFICITY FLOOR was that round's rule change, and its FIRST
+    // spelling did not close the hole it was written for (wb2 B-I1, re-spelled
+    // at `specific()` above). It read ">= 8 non-space characters OR carry an
+    // identifier character", which refuses the six punctuation tokens the
     // review measured as self-anchoring (`/`, `, `, ` (`, ` at `, `""`, `$`)
-    // never satisfy. A token that can satisfy nothing is not a quotation, so
-    // it does not make a reference CHECKED either — it is QUOTATIONLESS, the
-    // class this audit already has. Measured against (B), the floor moved the
-    // census by -3 on its own while making three families VISIBLE that had
-    // been passing on `" ("` and on the one-character token `f`.
+    // and admits every one- and two-character WORD. A token that can satisfy
+    // nothing is not a quotation, so it does not make a reference CHECKED
+    // either — it is QUOTATIONLESS, the class this audit already has. Measured
+    // against (B), that spelling moved the census by -3 on its own while making
+    // the families that had been passing on `" ("` VISIBLE; `rm`, `f`, `$1` and
+    // `" in "` went on satisfying, and TWO references passed on such a token
+    // with no other satisfying token at all, so the sentence this replaces
+    // claimed the `f` class was closed while the rule still accepted it.
     //
-    // WHAT THE 54 ARE, relative to the base's 55: SEVEN repaired and SIX new.
+    // WHAT THE 54 WERE, relative to that round's base of 55: SEVEN repaired
+    // and SIX new.
     //   repaired: `ccd/ccd:11665-11670`, `:2399-2450`, `:3371`, `:3959`,
     //             `:5059-5060`, `:886` and `ccd/session-hook.sh:2213` — each
     //             either re-anchored to its measured tip site or era-marked
@@ -7562,14 +7667,64 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //       section. This round's hook edit shifted its referent to `:2265`
     //       and the freeze forbids the repair — exactly D-2849's class, and
     //       recorded for exactly D-2849's reason.
-    //     `ccd/session-hook.sh:792-819` and `:795` are the rollback family
-    //       Task 9 DELETED. They are not re-anchorable at any line; the floor
-    //       made them visible by refusing the weak tokens that used to satisfy
-    //       them, which is the direction this map exists to move in.
+    //     `ccd/session-hook.sh:792-819` and `:795` were reported together as
+    //       "the rollback family Task 9 DELETED … not re-anchorable at any
+    //       line", and MEASURED at this tip that is true of the first and
+    //       false of the second. `:795` is `_hook_write_atomic() {`, a live
+    //       function; its §5 reference is reported because that row's
+    //       backtick-pairing desync hands its clause the spans BETWEEN the
+    //       quotations (`toks` measures `"'s positional "`, `", mutating at "`
+    //       and `"$tmp"`), which is the FOURTH mechanism above and not a stale
+    //       anchor at all. The row's other `:795`, in the `8e457995:` literal
+    //       list, is quoted history and always was.
+    //
+    // THE WHOLE-BRANCH RE-REVIEW'S FIX ROUND TAKES IT TO 55 OVER A
+    // THREE-DOCUMENT CORPUS (wb2 B-I1, B-I2), and the movement is measured as
+    // separate causes rather than reported as one number. Every figure below is
+    // over spec + plan + README, so that (A) and (C) answer the same question:
+    //   (A) base tree (c14a8256) + base rule   56
+    //   (B) tip  tree             + base rule   51
+    //   (C) tip  tree             + tip  rule   55   what this map asserts
+    // (A) -> (B) IS -5, AND EVERY ONE OF THE FIVE IS A DOCUMENT REPAIR THIS
+    // ROUND MADE — none is a line shift, and that is provable rather than
+    // argued: every prose edit in the round is LINE-COUNT NEUTRAL, spec 2,464
+    // lines and plan 3,877 before and after, so no anchor could move.
+    //   `readme:1889`'s `ccd/session-hook.sh:2646` -> `:2680` and
+    //     `readme:1935`'s `ccd/ccd:14419-14420` -> `:14431-14433`, each
+    //     re-anchored BY CONTENT: the tip line carries the clause's own quoted
+    //     spelling (`_hook_emit_context "$CARD" "$CARD_COMPACT"`, `genrc == 1`).
+    //     Both were byte-exact at `f18c1be5` and were falsified by the previous
+    //     round's own edits to the two files they point into.
+    //   `ccd/session-hook.sh:792-819` and `:802`, in BOTH documents' copies of
+    //     §5's rollback-family mutation (spec `:2210`, plan `:3241`),
+    //     ERA-MARKED rather than re-anchored: the family Task 9 deleted stands
+    //     at no line, so each number now names the commit it was true at and
+    //     its clause says "superseded", which the history arm reads. Three
+    //     references leave the map that way — the plan's own `:792-819` was
+    //     invisible to the base rule and never entered it.
+    // (B) -> (C) IS +4, AND NONE OF THE FOUR IS A LINE SHIFT EITHER: the
+    // re-spelled floor made each VISIBLE. All four are the QUOTATIONLESS class
+    // this map already carries — a CORRECT anchor whose clause quotes a shell
+    // keyword instead of the source's own spelling:
+    //   `ccd/ccd:1022` twice (spec `:2199`, plan `:3226`) — `:1022` really is
+    //     `die() { echo "ccd: $*" >&2; exit 1; }` and the clause's only
+    //     satisfying token was `die`;
+    //   `ccd/ccd:3386` (plan `:2733`) — really is `die "$msg"`, same token;
+    //   `ccd/session-hook.sh:777-778` (spec `:1180`) — really is the
+    //     `case "$f" in …` / `(( ${#f} <= CCRC_ID_MAX ))` shape gate the clause
+    //     names, and its tokens were `case` and `${#x}`: a keyword, and an
+    //     idiom spelled with a metavariable the source does not carry.
+    // They are RECORDED, not repaired, for the reason the QUOTATIONLESS class
+    // above already gives: the repair is a QUOTATION change to the spec's and
+    // plan's own argument. The two references the finding NAMED — plan's
+    // `ccd/ccd:1861`, whose referent is `ccd/ccd:2445` (`rm -f
+    // "$REG/$id.hookstate.json"`), and plan's `ccd/session-hook.sh:792-819` —
+    // would have joined them; they were repaired and era-marked instead, so
+    // they appear under (A) -> (B) and not here.
     // RE-MEASURED against the tree, never adjusted to keep a number green.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 20,
-      'ccd/session-hook.sh': 21,
+      'ccd/ccd': 23,
+      'ccd/session-hook.sh': 19,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
       'server/test/ccd-workspaces.test.ts': 5,
@@ -7581,7 +7736,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(54);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(55);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -7599,6 +7754,39 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'ccd/ccrc', 'deploy/deploy.sh'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
+  });
+
+  it('README HAS ITS OWN CENSUS ENTRY, and it is EMPTY — every operator anchor resolves (wb2 B-I2)', () => {
+    // WHY THIS IS SEPARATE FROM THE MAP ABOVE. `byFile` is keyed on the CITED
+    // file, so a document's own contribution can never appear in it — which is
+    // exactly how two rotted README anchors sat inside the corpus's blind spot
+    // for a whole round while the file's own comment said the pass had
+    // classified README. This is the per-DOCUMENT measure.
+    //
+    // AND IT IS AN EQUALITY WITH EMPTY, NOT A RATCHET. README's anchors are
+    // operator pointers into shipped source: a reader follows them by hand,
+    // one at a time, and lands on a comment when one rots. There is no
+    // stale-by-construction debt here to park — every one of them resolved at
+    // `f18c1be5` and every one resolves now — so the honest assertion is that
+    // none is stale, not that no more than N are.
+    expect(CORPUS.map(([label]) => label),
+      'README is in the corpus, and dropping it would make the line below vacuous')
+      .toEqual(['spec', 'plan', 'readme']);
+    const r = audit(realCorpus());
+    expect(r.failures.filter((f) => f.doc === 'readme').map(refKey),
+      'a README anchor stopped naming what its own sentence quotes').toEqual([]);
+    // NON-VACUITY, and it is mandatory here for the same reason as everywhere
+    // else: an equality with empty proves nothing if the document is not being
+    // read. README resolves EIGHT references and all eight are CHECKED, not
+    // counted quotationless. (`pwa/src/session/HistoryTab.tsx:17` and `:61` are
+    // NOT among them — `FILE_RE` admits no `.tsx`, so they resolve to no file
+    // and no pass in this describe ever reaches them. That is a gap in the
+    // grammar, recorded here rather than closed, because widening `FILE_RE` is
+    // a rule change no finding authorised.)
+    const readmeOnly = audit([['readme', fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')]]);
+    expect(readmeOnly.resolved, 'README references resolved to a tracked source file').toBe(8);
+    expect(readmeOnly.checked, 'and every one is CHECKED — the rule really applies to them').toBe(8);
+    expect(readmeOnly.failures, 'and none of them is stale').toEqual([]);
   });
 
   it('CONTROL: the **Files:** pass takes neither exemption, and looks only at **Files:** lists', () => {
@@ -7672,6 +7860,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // ANCHOR became a right anchor with an unreachable quotation, which is
         // a different defect and a smaller one.
         'ccd/ccd:3384',
+        // ADDED BY THE RE-SPELLED FLOOR (wb2 B-I1), and it is a reference made
+        // VISIBLE rather than one newly broken. This `**Files:**` clause cites
+        // `ccd/ccd:3386` for `_lc_refuse`'s EMITS-THEN-DIES pair and its only
+        // satisfying token was `die`, a word that occurs on whatever line of
+        // bash it is pointed at. The ANCHOR is correct — `:3386` really is
+        // `die "$msg"` — so what is available is a QUOTATION change to the
+        // plan's own sentence, which is the class this pass records rather
+        // than makes.
+        'ccd/ccd:3386',
         // ADDED BY THE ROUND-14 PASS, and deliberately: this reference was a
         // bare `:3940-3951` whose clause names `ccd-wsaudit-nonpoison.test.ts`
         // (83 lines), so it resolved to a file that cannot hold it and the
@@ -7896,6 +8093,31 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // §5 recognizer row's own pre-Task-9 evidence, which carries its era in
     // prose that the audit above honours and this pass, by construction, does
     // not.
+    //
+    // THE RE-SPELLED FLOOR RAISES IT AGAIN, 15 -> 20 (wb2 B-I1), and all five
+    // are references made VISIBLE — measured, NOTHING left this set and no
+    // line moved, because every prose edit in that round is line-count neutral.
+    // Each one had been satisfying itself with `die` or `rm`, and each is named
+    // here with what its line actually holds at this tip:
+    //   `ccd/ccd:1022` — §5's own `die` row; the anchor is CORRECT
+    //     (`die() { echo "ccd: $*" >&2; exit 1; }`) and the quotation is the
+    //     keyword, so this is the QUOTATIONLESS class, not a wrong anchor.
+    //   `ccd/ccd:7661` — cited as one of `cmd_ws_restore`'s `:7616`/`:7661`/
+    //     `:7680` triple; measured, `:7661` is a COMMENT line ("`die`, not
+    //     about early exits in general"), so the anchor really is stale and
+    //     `die` was hiding it.
+    //   `ccd/session-hook.sh:795`, twice — §5's recognizer row cites it in its
+    //     `8e457995:` literal list AND in the filter clause. The anchor is
+    //     correct at this tip (`_hook_write_atomic() {`); this pass takes NO
+    //     history exemption, which is why the era copy appears here and not in
+    //     the census above.
+    //   `ccd/ccd:2455` — allow-list entry (13)'s
+    //     `rm -f "$REG/$id.generation"`; measured, `:2455` is a comment inside
+    //     `_reg_purge`'s dot-leading-family header and the unlink stands at
+    //     `ccd/ccd:2468`. A genuinely stale anchor, and the only reason it was
+    //     green is that `rm` satisfied it.
+    // RECORDED, NOT REPAIRED: this is a RATCHET, and re-anchoring references no
+    // finding examined is how a census stops being a measurement.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         'server/test/ccd-ws-reap.test.ts:344',
@@ -7903,28 +8125,40 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11665-11670', 'ccd/ccd:11669', 'ccd/ccd:11670',
         'ccd/ccd:11669', 'ccd/ccd:11670',
         'ccd/ccd:11665-11670',
+        'ccd/ccd:1022',
         'ccd/ccd:3385',
+        'ccd/ccd:7661',
         'ccd/ccd:11665-11670',
+        'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/session-hook.sh:1094',
+        'ccd/session-hook.sh:795',
+        'ccd/ccd:2455',
         'ccd/session-hook.sh:802',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
     // a key-only comparison would credit this pass with a failure another pass
-    // found somewhere else. SIX of the seven are reachable by no other pass: a
-    // cell-scoped clause quotes nothing, so both passes above count them
-    // `unanchored` rather than checking them. The seventh is `:802` in §5's
-    // fork-census row, whose row is long enough to carry a `. ` sentence break
-    // and so is partly visible to the audit already — which is the honest
-    // bound on the claim, and the reason it is measured rather than asserted.
+    // found somewhere else. FOURTEEN of the twenty are reachable by no other
+    // pass: a cell-scoped clause quotes nothing, so both passes above count
+    // them `unanchored` rather than checking them. The six below are the honest
+    // bound on that claim, and they are measured rather than asserted: three
+    // sit in §4's mechanism-absent row and one in §5's `die` row, both long
+    // enough to carry a `. ` sentence break the audit can read, and the two
+    // `:795` are the recognizer row's pair — the audit reaches the filter
+    // clause's copy and exempts the `8e457995:` one as history, while this pass
+    // reads both and this comparison is by SITE, so the era copy matches the
+    // other's site string. `spec:2210 ccd/session-hook.sh:802` left this list
+    // when that clause was era-marked (wb2 B-I1): the audit now classes it as
+    // history, so it is no longer a site another pass reaches.
     const site = (f: { doc: string; line: number; file: string; from: number; to: number }): string =>
       `${f.doc}:${f.line} ${refKey(f)}`;
     const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
         'spec:2115 ccd/ccd:5059', 'spec:2115 ccd/ccd:7568', 'spec:2115 ccd/ccd:11025',
-        'spec:2210 ccd/session-hook.sh:802',
+        'spec:2199 ccd/ccd:1022',
+        'spec:2210 ccd/session-hook.sh:795', 'spec:2210 ccd/session-hook.sh:795',
       ]);
   });
 
