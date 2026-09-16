@@ -11,7 +11,7 @@ agents) closed the remaining holes named in §3.0–§3.4 and Plan A's ledger (D
 ccrc row generation authorizes every compaction-lifecycle mutation; and a permanent per-session lock is published
 only by a private `mktemp` source plus atomic hard link, never opened at its canonical pathname. PreCompact,
 SessionStart(compact), PostCompact, registry-row creation, and purge use that one lock; ordinary hook paths remain
-lock-free. Compact SessionStart validates generation and safely acquires/revalidates the lock before every
+lock-free. Compact SessionStart safely acquires the lock, re-proves its identity, and validates generation under it before every
 lifecycle observation, then holds it through match, claim, emit, and nonce-marker publication. PostCompact
 retains an identity-checked private claim FD, unlinks canonical before touching that claim, and performs final
 journal work and any cleanup only under a safely reacquired validated lock. The raw JSONL predicate, exact family
@@ -546,8 +546,8 @@ fork it does not control.
    Under that lock (protocol steps 5–7, continued into step 8 at item 7 — so this item-pair's own span, not
    a contradiction of the "steps 5–8" first held section enumerated below), first validate that
    `CCRC_SESSION_GENERATION` is a strict lowercase
-   UUID and byte-for-byte equals the ccrc-owned `$REG/<id>.generation`; validate it again immediately before
-   each publication or destructive mutation. A hook with no generation (including an already-running
+   UUID and byte-for-byte equals the ccrc-owned `$REG/<id>.generation`; validate it once under each held
+   section, and re-prove lock identity immediately before each publication or destructive mutation — §3.3's own paragraph carries the residue argument that makes a PRE-lock validation wrong. A hook with no generation (including an already-running
    pre-upgrade process) fails closed for compaction lifecycle work only; ordinary hookstate behavior is
    unchanged. Then scan only exact-this-session regular claims matching
    `$REG/.<id>.compactpost.<pid>.<RANDOM>.<RANDOM>.claim`. If canonical and one such claim are the same
@@ -1578,9 +1578,9 @@ cleanup and change its family matcher; each must red.
 
 #### Settlement, final transaction, and cleanup
 
-PostCompact's operator-off, summary-type, and `find` guards precede lifecycle work. It then validates
-generation, takes the stable lock, and revalidates before every age, canonical, claim, marker, journal, or
-cleanup mutation. It never reads or ages canonical before this lock. Under the lock it first tests the canonical set's
+PostCompact's operator-off, summary-type, and `find` guards precede lifecycle work. It then takes the stable
+lock, validates generation once under it, and re-proves lock identity before every canonical mutation — §3.3's
+own paragraph carries the residue argument that makes a PRE-lock validation wrong. It never reads or ages canonical before this lock. Under the lock it first tests the canonical set's
 pathname for existence — a distinct test from any `link` return code, because a genuinely absent canonical
 and a present-but-unlinkable canonical both surface as a failing `link` in bash, and folding them together
 silently unmeasures whichever population is absent. **Canonical set genuinely absent** (every pre-upgrade

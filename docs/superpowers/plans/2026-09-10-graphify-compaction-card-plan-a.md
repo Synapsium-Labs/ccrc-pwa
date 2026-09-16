@@ -7,8 +7,8 @@
 **Architecture:** `ccd/session-hook.sh` gains behavior in its three existing compaction arms. One permanent
 per-row `.compactions.lock` inode is initialized by a private `mktemp` source and POSIX `link`, but is never
 opened at its canonical pathname: each holder opens a verified private hard-link alias and verifies its FD against
-the current canonical inode before/after flock and before mutation. Compact SessionStart validates generation,
-locks, then observes/matches/claims/emits/marks in that order. PostCompact settles by link, canonical unlink,
+the current canonical inode before/after flock and before mutation. Compact SessionStart locks, validates
+generation under that lock, then observes/matches/claims/emits/marks in that order. PostCompact settles by link, canonical unlink,
 then claim touch; it reads only a retained claim FD and reacquires the stable lock for its complete journal
 transaction and any cleanup. Generation is an exact no-LF UUID authorization, private residue blocks reuse, and
 permanent lock does not. `_reg_purge` gains an honest lock-guarded result, and Task 9 BUILDS the status branch in all four callers (measured on the pre-Task-9 tree `8e457995`, none read it; Task 9 built the branch in all four, and at this tip each reads the status into its own variable).
