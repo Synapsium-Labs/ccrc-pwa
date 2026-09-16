@@ -1477,6 +1477,125 @@ the transcript surface. Before starting it:
 Success is a program that completes with human pauses only at review points,
 and an audit trail that reads true.
 
+### Cross-repo programmes: one home, waves anywhere
+
+A programme is **initiated in one project and stays there**: its current spec,
+its plan, its ledger (`docs/superpowers/programs/<slug>.md`) and its coordinator
+session all live in that one repo. For cross-repo programmes, the current build
+spec is `docs/superpowers/specs/2026-09-08-crossrepo-programmes-design.md`; it
+points back to `docs/superpowers/specs/2026-08-11-crossrepo-programmes-design.md`,
+whose historical operator rulings stand. That repo is the programme's **home
+project**, and it is *declared*, never inferred — the canonical `POST /api/runs`
+body takes `homeProject` on every wave and stores it on the programme row at first
+insert. It is not guessed from wave 1's project and not derived from the registry
+or from whoever claims the run: a fact a programme carries for its whole life
+must not depend on a live read that can degrade.
+
+**A wave, though, may run anywhere.** `runs.project` has always been per-row, so
+a wave dispatches its run into whatever repo the work is in — that repo's
+checkout, that repo's PRs, that repo's git for every re-measurement. A wave whose
+`project` differs from its programme's `homeProject` is a **crossing**.
+
+**Two refusals guard the seam, and they are two on purpose.**
+
+- `project-mismatch` — **409**, body
+  `{"ok":false,"refused":"project-mismatch","by":"<the project that session belongs to>"}`.
+  It fires at two sites: at `POST /api/runs`, when the body reuses a `sessionId`
+  whose earlier runs belong to a different project — checked *before* the row is
+  opened, so a refusal leaves no `planned` orphan; and at
+  `POST /api/runs/:id/dispatch`, when the resume arm finds a registry record
+  whose project is not the run's — checked before the hold, the `/clear` and the
+  transition, so a mismatch costs nothing. A session no run has ever named
+  refuses nothing: absence permits.
+- `home-mismatch` — **409**, body
+  `{"ok":false,"refused":"home-mismatch","by":"<the stored home>"}`, when a later
+  open of the same programme names a different `homeProject`. A stored home that
+  is still null is *backfilled* from the body instead — first writer wins.
+
+Two codes rather than one because the caller does different things with them:
+the first says "you reused the wrong workspace", the second says "you are
+opening someone else's programme".
+
+**The open response says where the ledger really is.** Beside the relative
+`ledgerPath` it has always returned, `POST /api/runs` answers `ledgerRepo` (the
+home project) and `ledgerAbsPath` (that project's checkout plus
+`docs/superpowers/programs/<slug>.md`). Both are `null` while the stored home is
+null. `ledgerAbsPath` names only the programme ledger; it is neither the home
+repository root nor a plan path.
+
+**Foreign-repo waves read named Git objects, never mutable files.** Every foreign-plan wave's
+brief carries `homeRepoRoot` (the absolute home-repository root), `planRepoPath` (the
+tracked repository-relative plan path with no leading slash), and `planSha` (the
+full 40-hex plan commit SHA), then the worker reads exactly
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. Only a consumer that
+depends on a producer interface also carries `producerRepoRoot` (the absolute producer-
+repository root), `producerSourceRepoPath` (the producer repository-relative source-file
+path), `producerSha` (the exact full 40-hex merged producer SHA), and the contract excerpt
+inlined verbatim. The worker then reads exactly
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. A foreign-plan
+wave with no producer-interface dependency carries no producer tuple and no invented
+excerpt. If a required immutable blob cannot be resolved, report and stop: no `HEAD`
+substitution, direct mutable-checkout read, fetch, checkout, or repository mutation. When
+present, the inline contract excerpt is the dispatched interface-shape authority and the
+producer blob proves its provenance; the plan blob at `planSha` is always the requirements
+authority for wave scope. The current checkout's plan and source files are not authoritative
+for that dispatched wave. When that dependency exists, before dispatch the coordinator
+separately and independently proves the producer interface PR merged at that same
+`producerSha`; a closed run in `done` proves fingerprint and close, not merge. The worker
+commits only on its own workspace branch in its own repository. Paths, not payloads; the
+8 KiB body cap stands.
+
+**Mail finds a role, not a session.** `toId: 'worker'` joins `toId: 'coordinator'`
+as a recipient, resolved at send time — `worker` to that run's own session. A
+`worker` mail **must** carry its `runId`, because a worker is per run and there
+is nothing to fall back to; one that resolves to no session is refused
+`unknown-recipient`, naming the run. Carry the `runId` on coordinator mail too:
+the runId-less form resolves only while exactly one programme is active, and
+fails shut the moment a second is. Raw session-id addressing stays for ad-hoc
+mail. When a run's session is replaced, the replacement inherits every
+outstanding role-addressed (`toId:'worker'`) delivery on that run — queued
+*and* delivered-but-unacked — as a **new** delivery row, freshly rendered, and
+the predecessor's row is parked — an envelope that names the corpse may
+not be replayed.
+
+**Finding a programme's traffic.** `GET /api/mail?program=<slug>` answers the
+**outstanding** mail on that programme's runs — queued, delivered-but-unacked,
+and any `rejected` delivery this build gave up retrying, unless it was a
+deliberate cancel or its run is already `done`/`failed`; add `&all=1` —
+exactly `GET /api/mail?program=<slug>&all=1` — for full mail history. `to` and `program`
+are mutually exclusive — exactly one, never both and never neither; a request
+naming both is refused `400 bad-request`, because a mailbox and a programme
+thread are two different questions. `GET /api/feed?program=<slug>` is always the
+full feed archive and has no outstanding/history split. An event with no run
+behind it is **programless** and appears only unfiltered. `/mail` groups the
+feed by programme, with a filter chip; programless rows sit under their own
+header.
+
+**The board says which repo.** Every row on `/runs` carries a project badge
+(`run-project`), and a row whose project differs from its programme's home gains
+a crossing marker — a glyph *and* the word, because nothing on the board is read
+out by colour alone, and while a programme's `homeProject` is null the marker
+never shows. On the fleet board a worker stays on its own project's card — a
+card is a project's sessions, and a session's workspace lives in one repo — and
+when its coordinator is not among that card's live sessions (a rule-3 orphan)
+its row reads `<program> wave n/N`, with `· home <project>` appended only when
+the measured home differs from the card's own project. The home project's own
+card gains an `abroad` line, one sentence per wave working elsewhere
+("`<program>` wave 2/3 in `<other project>`").
+
+**What a crossing costs.** Caps stay global: one row, whole box, no per-project
+and no per-programme cap. Running-worker concurrency counts dispatched,
+non-terminal runs; it does not count held workspaces. A terminal producer whose
+workspace remains retained uses no running-worker slot, and a planned,
+undispatched consumer uses no running-worker slot. Each actual producer or
+consumer dispatch still consumes the rolling daily dispatch budget. A
+`cap-concurrency` or `cap-daily` refusal remains authoritative when that measured
+counter is exhausted; it is not inferred from the number of live workspaces.
+`$REG/coordinator-paused` is global but narrow: it refuses every dispatch on
+that box and stops nothing else — mail keeps flowing, and `$REG/mail-disabled`
+is the mail switch. The hold reason still names programme, wave and run id and
+never a project, because the run row is what carries the project.
+
 ### Workspace holds & programs
 
 A **hold** is a program's declared claim on a workspace — `ccd ws-hold
@@ -1575,7 +1694,16 @@ buy.
    written or read here** (the route's own docstring says so verbatim); it
    only names `docs/superpowers/programs/<slug>.md` in the response, so a
    coordinator that forgot to commit it is told once, in the place it would
-   notice. A second coordinator on the same program is refused. Wave 1 (no
+   notice. A second coordinator on the same program is refused. The body also
+   carries `homeProject`, the programme's home repo, stored on the programme
+   row at first insert: a later open naming a *different* one is refused
+   `home-mismatch` (**409**, `by:` the stored value), while a stored home
+   that is still null is backfilled from the body. A `sessionId` whose
+   earlier runs belong to another project is refused `project-mismatch`
+   (**409**, `by:` that project). Both `-mismatch` refusals are decided
+   *before the row is opened*, so neither leaves a `planned` orphan.
+   The response names `ledgerRepo` and `ledgerAbsPath` beside the relative
+   `ledgerPath`, both null while the stored home is. Wave 1 (no
    `sessionId` in the body) places **no hold yet** — dispatch is what claims
    the workspace. Wave N≥2 (`sessionId` names the workspace being reclaimed)
    holds it immediately (`ccd ws-hold`).
@@ -1583,7 +1711,11 @@ buy.
    caps **before spawning or resuming anything**; wave 1 (`run.sessionId`
    still null) runs `ccd ws-add` and learns the new session id by diffing
    the registry before/after (never ccd's own echoed sentence, and never
-   `ccd start` — no ccd verb of that name runs anywhere in this lane). Wave
+   `ccd start` — no ccd verb of that name runs anywhere in this lane). The
+   resume arm refuses `project-mismatch` (**409**, `by:` the registry record's
+   project) when the record it finds belongs to a different project than the
+   run — *before the hold*, before the injected `/clear` and before the
+   transition, so a mismatch costs the workspace nothing. Wave
    N≥2 resumes the *same* workspace with `ccd ensure` (the harness resumes
    its own transcript) and then discards that resumed context with an
    injected `/clear` through `sendPrompt`'s full proof discipline, so
@@ -1609,20 +1741,38 @@ buy.
    *quality* stays discipline, not something this server enforces — then must
    **open wave N+1 before it can close wave N**. A programme with zero open runs
    retires permanently, so close-first would break role-addressed coordinator
-   mail between the two calls. For a same-project successor, the new
-   `POST /api/runs` names the same `sessionId`; that opens a new row and re-holds
-   the same workspace under the wave-N+1 reason. Only then does
-   `POST /api/runs/:id/close` with `final:false` close this run as `done` and
-   hand the hold to the already-open successor. After close succeeds, read the
-   producer through `runs list --closed 1`; require its state to be `done` and,
-   before dispatching a dependent interface consumer, prove the producer PR is
-   merged at the named producer SHA. A cross-project successor opens first
-   without the producer's `sessionId`; close the producer with `final:true` so
-   its now-distinct workspace is released, require `released:true`, then verify
-   the producer's closed row and prove its PR merged at the named producer SHA
-   before dispatching the consumer. Using `final:false` on that crossing would
-   strand a synthetic
-   next-wave hold on the producer workspace.
+   mail between the two calls.
+
+   **For a same-project successor**, open the new `POST /api/runs` first with
+   the same `sessionId`; that immediately re-holds the producer workspace for
+   the new row. Then close the producer with `final:false`, verify the exact
+   producer closed row in `runs list --closed 1` is `done` with a full 40-hex
+   `handoffCommit`. If the consumer depends on an interface from this
+   producer, independently prove the producer PR merged at `producerSha`:
+   run `ccd pr-state --session <producer-session>`, select that session's
+   merged PR row, require the answer's `phase` to be `merged`, and require
+   that row's raw `headRefOid` to equal both that exact producer closed row's
+   `handoffCommit` and `producerSha`. Only then dispatch into the
+   already-held successor workspace.
+
+   **For a cross-project successor**:
+   A cross-project successor opens first without the producer's
+   `sessionId`, leaving the new row planned for fresh dispatch in the
+   target repository. Then close the producer with `final:true` so
+   its now-distinct workspace is released, require `released:true`
+   in the close response, then verify the exact producer closed row
+   is `done` with a full 40-hex `handoffCommit`. If the consumer depends
+   on an interface from this producer, independently prove
+   through `ccd pr-state --session <producer-session>` that the
+   selected `phase` is `merged` and raw `headRefOid` equals both that
+   `handoffCommit` and `producerSha` —
+   prove its PR merged at the named producer SHA
+   before dispatching the consumer. Only then dispatch the consumer
+   fresh in its target project.
+   A `done` run proves fingerprint and close, **not merge proof**;
+   missing, ambiguous, or mismatched PR evidence means report and do
+   not dispatch. Using `final:false` on that crossing would
+   strand a synthetic next-wave hold on the producer workspace.
 6. `POST /api/runs/:id/close` with `final:true` releases the hold (`ccd
    ws-release`); nothing archives the workspace on its own after that — the
    merged sweep only pushes its notification, so the workspace stays live and
@@ -1688,6 +1838,28 @@ having one:** `deploy/ccrc-mail.token.example`'s own placeholder value line
 must actually be replaced — copying the example verbatim is refused loudly
 at server boot (`MailTokenPlaceholderUnedited`), not silently accepted,
 because that exact placeholder is committed to this public repo.
+
+**Programme mail at scale.** `toId: 'coordinator'` has a sibling: `toId: 'worker'`,
+resolved at send time to that run's own session. `worker` requires a `runId` —
+a worker is per run, and there is nothing to fall back to — and one that
+resolves to no session is refused `unknown-recipient`, naming the run.
+`coordinator` keeps its fallback to the single active programme, which fails
+shut the moment a second programme is active, so carry the `runId` on both.
+Raw session-id addressing stays for ad-hoc mail. When a run's session is
+replaced, every outstanding role-addressed (`toId:'worker'`) delivery on that
+run is re-issued to the heir as a **new** row, freshly rendered, and the
+predecessor's row is parked — the act a reclaimed coordinator's heir has
+always had, generalised by role and funnelled through `bindSession`, the one
+writer that re-binds it.
+Reading it back by programme: `GET /api/mail?program=<slug>` returns the
+**outstanding** mail — queued, delivered-but-unacked, and any `rejected`
+delivery this build gave up retrying, unless it was a deliberate cancel or
+its run is already `done`/`failed` — and
+`GET /api/mail?program=<slug>&all=1` returns full history;
+`to` and `program` are mutually exclusive — exactly one, never both and
+never neither, and naming both is refused `400 bad-request`. `GET /api/feed?program=<slug>` is
+the full event archive, with no outstanding/history split. Both join through the
+run row; an event with no run behind it is programless and shows only unfiltered.
 
 **Caps and pause.** The single-row `coordinator_state` table holds
 `maxConcurrentWorkers` (default 3 — runs currently dispatched and not yet
