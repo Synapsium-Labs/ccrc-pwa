@@ -120,6 +120,10 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
        '--surface', 'agent', '--actor', `run:${h.runId} dispatch`],
     ]);
     expect(h.events()).not.toContain('route-omitted:no-route-argv-cap');
+    // routing spec §6 "Arms" (routing slice 5, Task 3): the seeded fields,
+    // in ROUTE_WRITABLE_FIELDS order, recorded once the ws-add that carried
+    // them succeeded.
+    expect(h.events()).toContain('arm:class=opus effort=high');
   });
 
   it('wave 1, without route-argv-v1: no --route reaches ws-add, and the omission is journaled', async () => {
@@ -134,6 +138,8 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     expect(wsAdd).not.toContain('--route');
     expect(wsAdd).toEqual(['ws-add', '--no-rc', PROJECT, '--surface', 'agent', '--actor', `run:${h.runId} dispatch`]);
     expect(h.events()).toContain('route-omitted:no-route-argv-cap');
+    // Nothing was seeded onto the argv, so nothing is recorded as an arm.
+    expect(h.events().some((d) => d.startsWith('arm:'))).toBe(false);
   });
 
   it('wave 1: a route with no fields asked (an empty object) omits nothing and journals nothing', async () => {
@@ -150,6 +156,9 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
       ['ws-add', '--no-rc', PROJECT, '--surface', 'agent', '--actor', `run:${h.runId} dispatch`],
     ]);
     expect(h.events()).not.toContain('route-omitted:no-route-argv-cap');
+    // A route that named no fields collapses to `routeFields === null` —
+    // there is nothing seeded, so there is nothing to arm.
+    expect(h.events().some((d) => d.startsWith('arm:'))).toBe(false);
   });
 
   it('wave N>=2, with route-v1: the route verb precedes the /clear injection in the recorder\'s combined order', async () => {
@@ -169,6 +178,7 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     expect(clearIdx, 'no /clear send-keys call found').toBeGreaterThan(-1);
     expect(routeIdx, 'the route verb must precede the /clear injection').toBeLessThan(clearIdx);
     expect(h.events()).not.toContain('route-omitted:no-route-v1-cap');
+    expect(h.events()).toContain('arm:class=opus');
   });
 
   it('wave N>=2, two fields: EXACTLY ONE route argv, every --set pair in ROUTE_WRITABLE_FIELDS order, before the /clear', async () => {
@@ -199,6 +209,9 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     const clearIdx = h.calls.findIndex((c) => c[0] === 'send-keys' && c.includes('-l') && c.includes('/clear'));
     expect(clearIdx, 'no /clear send-keys call found').toBeGreaterThan(-1);
     expect(h.calls.indexOf(routes[0]!), 'the one route argv must precede the /clear').toBeLessThan(clearIdx);
+    // The arm record ALSO follows ROUTE_WRITABLE_FIELDS order, not the
+    // body's own (`effort` first, `class` second).
+    expect(h.events()).toContain('arm:class=opus effort=high');
   });
 
   it('wave N>=2, two fields refused: fleetFailed, no /clear, and only the ONE argv was ever sent', async () => {
@@ -213,6 +226,8 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     expect(h.calls.some((c) => c[0] === 'send-keys' && c.includes('/clear'))).toBe(false);
     const row = h.coord.run(h.runId);
     expect(row.ok && row.run?.state).toBe('planned');
+    // The route verb itself failed — routing was never seeded, so no arm.
+    expect(h.events().some((d) => d.startsWith('arm:'))).toBe(false);
   });
 
   it('CCD_ARGV.routeSet refuses to build an argv with no --set pair at all', () => {
@@ -234,6 +249,7 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     expect(h.calls.some((c) => c[0] === 'route')).toBe(false);
     expect(h.calls.some((c) => c[0] === 'send-keys' && c.includes('-l') && c.includes('/clear'))).toBe(true);
     expect(h.events()).toContain('route-omitted:no-route-v1-cap');
+    expect(h.events().some((d) => d.startsWith('arm:'))).toBe(false);
   });
 
   it('wave N>=2: a refused route verb reports fleetFailed, never clears, and leaves the run planned', async () => {
@@ -243,6 +259,7 @@ describe('dispatch writes the routing record it was given (routing spec §5.3, s
     expect(h.calls.some((c) => c[0] === 'send-keys' && c.includes('/clear'))).toBe(false);
     const row = h.coord.run(h.runId);
     expect(row.ok && row.run?.state).toBe('planned');
+    expect(h.events().some((d) => d.startsWith('arm:'))).toBe(false);
   });
 
   it('a malformed route is refused before any fleet act — no ccd call, no tmux call', async () => {

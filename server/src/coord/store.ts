@@ -23,6 +23,8 @@ import {
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   isPositiveDecimalSafeInteger,
+  parseArmEventDetail,
+  parseRouteEventDetail,
   parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
@@ -35,6 +37,7 @@ import {
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
+  type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
   type WorkItemState,
@@ -2123,6 +2126,42 @@ export class CoordStore {
     ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[];
   }
 
+  /** Routing spec 2026-09-14 §6 "Arms" — this run's OWN event trail, parsed
+   *  into the writer's `arm:`/`route:` vocabulary (`parseArmEventDetail`/
+   *  `parseRouteEventDetail`, `shared/api.ts`). Read-only, callable on its
+   *  own so `runSignals` never has to walk `runEvents` a second time for a
+   *  caller that only wants the routing trail.
+   *
+   *  `arm` is the FIRST `arm:` event's fields, by position in the trail —
+   *  not re-tried on a later `arm:` event if the first one fails to parse,
+   *  since a dispatcher-written `arm:` is never malformed in practice and a
+   *  damaged first one is itself a fact worth reporting as `null` rather
+   *  than papering over with a later row. `routing` is every `route:` event
+   *  in order; a detail that starts `route:` but does not parse is skipped
+   *  and counted in `routingUnparsed`, never thrown — the same
+   *  never-crash-the-signals contract `runSignals` keeps everywhere else. */
+  runRoutingEvents(runId: number): { arm: RouteFields | null; routing: RoutingEvent[]; routingUnparsed: number } {
+    const events = this.runEvents(runId);
+    let arm: RouteFields | null = null;
+    let sawArm = false;
+    const routing: RoutingEvent[] = [];
+    let routingUnparsed = 0;
+    for (const e of events) {
+      if (e.detail === null) continue;
+      if (!sawArm && e.detail.startsWith('arm:')) {
+        sawArm = true;
+        arm = parseArmEventDetail(e.detail);
+        continue;
+      }
+      if (e.detail.startsWith('route:')) {
+        const parsed = parseRouteEventDetail(e.detail);
+        if (parsed === null) { routingUnparsed++; continue; }
+        routing.push({ at: e.at, causedBy: e.causedBy, ...parsed });
+      }
+    }
+    return { arm, routing, routingUnparsed };
+  }
+
   /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
    *  worker is `runs.sessionId` (never `claimedBy`, the coordinator). Holds
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
@@ -2224,6 +2263,7 @@ export class CoordStore {
       "SELECT body FROM mail WHERE runId = ? AND fromId = ? AND kind = 'status' AND subject = ? ORDER BY id",
     ).all(runId, run.sessionId, WAVE_DONE_SUBJECT) as { body: string }[];
     const last = waveDone[waveDone.length - 1];
+    const routingInfo = this.runRoutingEvents(runId);
     return {
       runId, dispatchedAt, closedAt, finalState, wallMs, holdMs, swaps, excludedUnmeasured,
       activeMs: wallMs === null ? null : Math.max(0, wallMs - holdMs),
@@ -2231,6 +2271,7 @@ export class CoordStore {
       firstSubmission: finalState === 'done' ? closeRefusals === 0 : null,
       waveDoneMails: waveDone.length,
       signals: last === undefined ? null : parseWaveDoneSignals(last.body),
+      arm: routingInfo.arm, routing: routingInfo.routing, routingUnparsed: routingInfo.routingUnparsed,
     };
   }
 

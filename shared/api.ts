@@ -5377,6 +5377,22 @@ export interface RunSummary {
  *  would have to widen this read to the session lineage — none does today
  *  (S2-R1). */
 
+/**
+ * One `route:` run event, parsed (`parseRouteEventDetail`, routing spec
+ * 2026-09-14 §6 "Arms"). `at`/`causedBy` are the event ROW's own columns —
+ * never re-derived — so a `RoutingEvent` is traceable back to the exact
+ * `run_events` row it came from.
+ */
+export interface RoutingEvent {
+  readonly at: number;
+  readonly mode: RouteMode;
+  readonly field: string;
+  readonly from: string;
+  readonly to: string;
+  readonly kind: FailureKind | 'manual';
+  readonly causedBy: string;
+}
+
 export interface RunSignals {
   readonly runId: number;
   readonly dispatchedAt: number | null;
@@ -5391,6 +5407,17 @@ export interface RunSignals {
   readonly firstSubmission: boolean | null;
   readonly waveDoneMails: number;
   readonly signals: WaveDoneSignals | null;
+  /** The fields the dispatcher seeded onto this run's FIRST `arm:` event
+   *  (routing spec §6) — `null` for an old run or a dispatch that carried no
+   *  routing at all. Parsed by `parseArmEventDetail`. */
+  readonly arm: RouteFields | null;
+  /** Every `route:` event this run's trail carries, in order. A malformed
+   *  detail is skipped here and counted in `routingUnparsed`, never thrown —
+   *  a run with a non-empty `routing` changed routing mid-flight, which is
+   *  the READER's cue to report it apart from its arm's mean (§6); the wire
+   *  only ever carries the facts. */
+  readonly routing: RoutingEvent[];
+  readonly routingUnparsed: number;
 }
 
 /**
@@ -5423,8 +5450,74 @@ export interface RunRouteBody {
  * with `RungTarget['mode']` by hand; a mismatch would be a compile error at
  * `routes.ts`'s own call site, which assigns a `RungTarget.mode` value into
  * a `RouteMode`-typed local).
+ *
+ * `ROUTE_MODES` is the RUNTIME list this type derives from (S5-R6, this
+ * task): before, the four words were spelled twice — this union, hand-typed,
+ * and the door's own inline regex (`routes.ts:1918`) — so a fifth mode
+ * added to one and not the other would compile and parse silently wrong.
+ * One list now, and `parseRouteEventDetail`'s regex alternation is BUILT
+ * from it.
  */
-export type RouteMode = 'escalate' | 'demote' | 'reverse-demotion' | 'manual';
+export const ROUTE_MODES = ['escalate', 'demote', 'reverse-demotion', 'manual'] as const;
+export type RouteMode = (typeof ROUTE_MODES)[number];
+
+/**
+ * The door's own regex, built from `ROUTE_MODES` and `FAILURE_KINDS`
+ * (S5-R6) rather than hand-typed a second time. Module-private: nothing
+ * outside this file has any business matching a `route:` detail itself —
+ * `parseRouteEventDetail` is the one reader.
+ */
+const ROUTE_EVENT_DETAIL_RE = new RegExp(
+  `^route:(${ROUTE_MODES.join('|')}):([^:]+):([^:]+)->([^:]+):(${FAILURE_KINDS.join('|')}|manual)$`,
+);
+
+/**
+ * Parse a `route:<mode>:<field>:<from>-><to>:<kind|manual>` run-event detail
+ * — the door's own write (`routes.ts`, after a successful `ccd route`) —
+ * back into its five fields. `null` on anything that does not match; the
+ * caller (`CoordStore.runRoutingEvents`, routing spec §6) counts a malformed
+ * detail rather than throwing, because a record this parser cannot read is
+ * still a fact worth surfacing as "unparsed", never a crash that would take
+ * the whole run's signals down with it.
+ */
+export function parseRouteEventDetail(detail: string): {
+  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual';
+} | null {
+  const m = ROUTE_EVENT_DETAIL_RE.exec(detail);
+  if (!m) return null;
+  const [, mode, field, from, to, kind] = m as unknown as [string, string, string, string, string, string];
+  return { mode: mode as RouteMode, field, from, to, kind: kind as FailureKind | 'manual' };
+}
+
+/**
+ * Parse an `arm:<field>=<value> …` run-event detail — the dispatcher's own
+ * write (`dispatch.ts`, routing spec §6 "Arms": the fields it actually
+ * seeded onto a wave, recorded only once the fleet act that carried them
+ * succeeded) — back into `RouteFields`. One `field=value` word per field,
+ * SPACE-separated, in the order the writer wrote them (`ROUTE_WRITABLE_FIELDS`
+ * order) — this function does not sort, it only refuses a word outside the
+ * vocabulary, a duplicate field, or an empty value. `null` on anything
+ * malformed or empty, the same never-throw contract `parseRouteEventDetail`
+ * keeps.
+ */
+export function parseArmEventDetail(detail: string): RouteFields | null {
+  if (!detail.startsWith('arm:')) return null;
+  const rest = detail.slice('arm:'.length);
+  if (rest === '') return null;
+  const fields: RouteFields = {};
+  for (const word of rest.split(' ')) {
+    const eq = word.indexOf('=');
+    if (eq <= 0) return null;
+    const field = word.slice(0, eq);
+    const value = word.slice(eq + 1);
+    if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field) || value === ''
+        || fields[field as RouteField] !== undefined) {
+      return null;
+    }
+    fields[field as RouteField] = value;
+  }
+  return fields;
+}
 
 /**
  * EIGHTH typed refusal union, admitted to `mail-routes.test.ts`'s kebab

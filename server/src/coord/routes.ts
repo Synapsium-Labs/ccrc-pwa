@@ -34,7 +34,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, parseRouteFields, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, parseRouteEventDetail, parseRouteFields, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -1910,14 +1910,19 @@ export function registerCoordRoutes(
         // then `manual field:effort value:max` then a failure would answer
         // `reverse-demotion medium->high` and walk the session DOWN from
         // `max` using a `from` that was never current.
+        // S5-R6: the parse itself is `parseRouteEventDetail` (`shared/api.ts`)
+        // now, not an inline regex — this door and `CoordStore.runSignals`
+        // read the SAME vocabulary (`ROUTE_MODES`/`FAILURE_KINDS`), so a mode
+        // or kind added to one can never silently go unrecognised by the
+        // other.
         const events = coord.runEvents(id);
         let lastDemotion: Demotion | null = null;
         let priorSameKind = 0;
         for (const e of events) {
           if (e.detail === null) continue;
-          const m = /^route:(escalate|demote|reverse-demotion|manual):([^:]+):([^:]+)->([^:]+):([^:]+)$/.exec(e.detail);
-          if (!m) continue;
-          const [, evMode, evField, evFrom, evTo, evKind] = m as unknown as [string, string, string, string, string, string];
+          const parsed = parseRouteEventDetail(e.detail);
+          if (parsed === null) continue;
+          const { mode: evMode, field: evField, from: evFrom, to: evTo, kind: evKind } = parsed;
           if (evMode === 'demote') {
             lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
           } else if (evMode === 'reverse-demotion') {

@@ -19,7 +19,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, parseRouteFields,
+  MAIL_BODY_MAX_BYTES, ROUTE_WRITABLE_FIELDS, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, parseRouteFields,
   routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
   type CoordCaps, type CoordCapsUsage, type RouteFields, type RunKind, type RunRefuseCode,
   type RunState, type SkillState, type SpawnVerdict,
@@ -205,6 +205,14 @@ export function capsMeasured(coord: CoordStore): {
     : null;
   return { caps, usage, overConcurrency };
 }
+
+/** The `arm:` run-event's own words (routing spec §6 "Arms") — the seeded
+ *  fields, `ROUTE_WRITABLE_FIELDS` order regardless of the caller's own key
+ *  order, mirroring `routeFlags`'s (`ccdargv.ts`) rule for the exact same
+ *  reason: the wire shape must not depend on `Object.keys` insertion order.
+ *  `parseArmEventDetail` (`shared/api.ts`) is this string's own reader. */
+const armWords = (fields: RouteFields): string =>
+  ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined).map((f) => `${f}=${fields[f]}`).join(' ');
 
 export async function dispatchRun(
   deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
@@ -464,6 +472,17 @@ export async function dispatchRun(
     // exists to describe. Nothing clears it; `state` ends the render.
     coord.markDispatchStarted(id, Date.now());
     const res = await deps.runCcd(argv);
+    // routing spec §6 "Arms": the `arm:` record, ONLY when routing was
+    // actually seeded onto the argv above (`routeFields !== null` AND the
+    // cap that gates it supported — the identical pair the omission event a
+    // few lines up gates on) AND the fleet act that carried it succeeded
+    // (`res.ok`). A refusal records no arm: a retried dispatch's own
+    // eventual success writes its own arm when it lands, and an arm on a
+    // call that never reached the fleet would be a fact this trail never
+    // measured.
+    if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP) && res.ok) {
+      coord.recordRunEvent(id, 'coordinator', `arm:${armWords(routeFields)}`);
+    }
     // §1.5: NO EARLY RETURN HERE ANY MORE. `!res.ok` used to short-circuit on
     // this line, before the diff below — see the gate after `winner`.
     // AFTER never tolerates degradation — the question here is "is this
@@ -804,6 +823,10 @@ export async function dispatchRun(
       const routeRes = await deps.runCcd(
         CCD_ARGV.routeSet(sessionId, routeFields, sweepDec(deps.fleetState, `run:${id} dispatch`)));
       if (!routeRes.ok) return { ok: false, kind: 'fleetFailed', stderr: routeRes.stderr };
+      // routing spec §6 "Arms": the `arm:` record, the wave-N sibling of the
+      // wave-1 arm's own — recorded only once the `route` verb itself
+      // succeeded, never on the refusal above.
+      coord.recordRunEvent(id, 'coordinator', `arm:${armWords(routeFields)}`);
     }
   }
 
