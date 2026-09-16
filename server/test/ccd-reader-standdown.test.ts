@@ -338,8 +338,11 @@ interface Site { fn: string; line: number; text: string }
  *  `origin/main` (+111 — they are 14813 and 15876 as of 2026-09-16, and the
  *  merge alone will move them again). The second was the dangerous one: 15765
  *  now lands on a real typing line, so the citation read as a live claim about
- *  the wrong kind of line. This plan's own D-2778 exists because ccd citations
- *  rot; a scan's own docstring should not add two more. */
+ *  the wrong kind of line. This wave's plan carries a deviation of its own
+ *  about exactly this rot (the number is recorded there and not inline: the
+ *  plan is not a file in this tree, so a D-ref here would name a number no plan
+ *  HERE defines — `PaneHistoryReply`'s docstring in `shared/api.ts` argues that
+ *  rule at length). A scan's own docstring should not add two more. */
 function sites(): Site[] {
   const lines = readFileSync(CCD, 'utf8').split('\n');
   const out: Site[] = [];
