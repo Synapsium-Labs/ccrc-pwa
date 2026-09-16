@@ -9,7 +9,8 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
-import { localIO } from '../src/io.js';
+import { localIO, type FleetIO } from '../src/io.js';
+import { sweepLatestPath } from '../src/shares.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
@@ -22,10 +23,10 @@ let app: FastifyInstance | undefined;
 
 const dead: Runner = async () => ({ code: 1, stdout: '', stderr: '' });
 
-const open = async (): Promise<FastifyInstance> => {
+const open = async (io: FleetIO = localIO): Promise<FastifyInstance> => {
   const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });
   const a = await buildServer({
-    cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io: localIO, queue: new KeyedQueue(),
+    cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io, queue: new KeyedQueue(),
   });
   await a.ready();
   return a;
@@ -106,14 +107,29 @@ describe('GET /api/projects?class= — the placement forecast by class', () => {
     expect(named.json()).toEqual(plain.json());
   });
 
-  it('no `class` query is byte-identical to the pre-slice-4 answer — no shares read, so a malformed sweep changes nothing', async () => {
-    // Deliberately malformed: if the route read shares for the default class,
-    // this would make every row unmeasurable rather than the plain forecast.
+  it('no `class` query never reads the shares sweep file at all — a malformed sweep changes nothing', async () => {
+    // A malformed sweep is not, by itself, proof of "no read": `readSharesMeasured`
+    // catches a `JSON.parse` failure into `{ kind: 'malformed' }`
+    // (parseSweepShares, src/shares.ts), and `projectHome` ignores `shares`
+    // outright once `cls === 'default'` (src/limits.ts) — so a route that
+    // read this file unconditionally would land on the exact same
+    // `projected` result asserted below. The only assertion that actually
+    // pins "no read at all" is on the recorded path list itself.
     mkdirSync(path.join(home, '.cc-sessions', 'usage', 'sweep'), { recursive: true });
     writeFileSync(path.join(home, '.cc-sessions', 'usage', 'sweep', 'latest.json'), 'not json');
-    app = await open();
+    const registryDir = path.join(home, '.cc-sessions');
+    const readPaths: string[] = [];
+    const spyIO: FleetIO = {
+      ...localIO,
+      async readFileMeasured(p, timeoutMs, signal) {
+        readPaths.push(p);
+        return localIO.readFileMeasured(p, timeoutMs, signal);
+      },
+    };
+    app = await open(spyIO);
     const res = await getProjects(app);
     expect(res.statusCode).toBe(200);
+    expect(readPaths).not.toContain(sweepLatestPath(registryDir));
     const demo = rowsOf(res.json()).find((p) => p.name === 'demo')!;
     // Ties go to the earlier account in roster declaration order (claude).
     expect(demo.placement).toEqual({ kind: 'projected', wrapper: 'claude', score: 10 });
