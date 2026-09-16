@@ -7368,3 +7368,66 @@ stop and mail me if they find themselves adding a regex alternative.
 this file is the first prose ratchet in the tree, and the house doctrine will make people copy it.
 Shipping seven Critical false reds inside it teaches the tree that a guard may call the truth false so
 long as it is strict. Costs if wrong: one deletion round, and a file that proves less than it hoped.
+
+
+## 2026-09-16 — round 3 accepted on the coordinator's own re-measurement; two rulings and a one-word round 4
+
+**Worker mail 1452, tip `7a662dca`, THREE commits.** `2f2b9978` is the deletion the brief asked for;
+`8aebed0f` is what a held-out 25-agent review of that commit found in it; `7a662dca` is a self-audit of
+the header `8aebed0f` wrote. One file across all three: `server/test/pools-prose.test.ts`, **900 -> 873
+lines**. No prose file touched this round.
+
+**I re-measured it myself rather than taking the worker's numbers** — detached worktree at the tip,
+restored byte-clean after every mutation. Artifact: `scratchpad/r3-coordinator-remeasure.md`.
+Confirmed independently: `git ls-remote refs/pull/114/head` = `7a662dca`, so branchTip == handoffCommit
+== PR head; `origin/main` `dba672ac` is an ANCESTOR of the tip, so the claimed no-op merge is one; the
+nine deleted symbols census ZERO, the two residual mentions being comments that explain the removal;
+`7a662dca` is comment-only by re-running the proof (non-comment changed lines EMPTY, 97 `expect(` and
+27 `it(` on both sides), so the mutation table measured at `8aebed0f` does hold at the tip; all 13
+`unchanged()` pins name a real file AND a function inside it; and the three-dot diff is six files with
+ZERO `pwa/` and ZERO `crossrepo-prose`/`store.ts`, so both red CI legs are main's, not this branch's.
+D-2827 holds — no `ccd/ccd` in the diff, server lane only.
+
+**The two controls that decided the round, run by me.** (A) Planting *"The server decides nothing."* —
+the sentence round 2 called false, and the shortest true statement of this feature's central claim —
+into the pools section with every pinned literal intact: **27/27 GREEN**. (B) Inverting the pinned
+sentence to *"It places a session and it writes the marker itself"*: **1 failed / 26 passed**, and the
+message is the change-detector verbatim, with the source to re-verify against and no truth claim in it.
+That pair is the whole deliverable of three rounds: the suite now reds on a CHANGE and says so, and
+stops reding on the truth.
+
+**Ruling — the worker was right not to wait (their question 2a).** They deleted four MORE
+English-parsing guards than my list named — `noUnqualifiedOverride`, the deploy.sh server-lane negative,
+the README ordering negative, the config.ts docstring vocabulary — each reproduced by measurement first,
+each replaced by an `unchanged()` pin sourced to `ccd/ccd`, `deploy/deploy.sh` (twice) and
+`fleetstate.ts`. **Standing order now: extending a ruling to unnamed instances of the SAME MEASURED
+SHAPE is the worker's to take; changing the SHAPE of the ruling is mine.** Costs if wrong: a worker
+deletes something I would have kept, and the ledger shows it in one diff.
+
+**Ruling — the forbidden-spelling class STAYS (their question 2b).** I reproduced the exposure rather
+than reasoning about it: a TRUE denial quoting the forbidden path (*"on the fleet host, never at
+`$REG/<project>.pool`"*) does red. But the message it reds with — "the rule names the REJECTED home.
+The tag lives at `~/.cc-sessions/pools/<project>`; `$REG/<project>.<x>` collides with session
+`<wrapper>-<project>`" — makes **no claim about whether the sentence is true**. It reports the presence
+of a literal, which is true, and then gives the reason the literal is forbidden, which is true of the
+world whatever surrounds it. That is the line between this class and the four I had deleted: round 2's
+`--force` guard asserted *semantics* and got them wrong, quoting a span containing the word "never"
+while telling its author nothing negated it. **A phrase nobody may write is the one thing a literal CAN
+hold**, and the header's treatment — name the class, its exposure and its remedy — is correct. Costs if
+wrong: an author who quotes a forbidden phrase to deny it gets one red with a clear remedy.
+
+**Round 4 is ONE commit, comment-only, one thing** (mail 1453, run sent back to `working`). The header's
+DERIVED paragraph reads *"`readerWords` is a RATCHET, not a follower: it / the reader's four words and
+compares them to a literal here"* — the verb is missing. A comment, no assertion changes, unreadable as
+written, in the paragraph the rest of this tree is going to copy. The worker's own finding this round
+was that the paragraph explaining a removal was false four ways; a dropped verb in that same paragraph
+is the same category one degree milder. No re-audit, no widening, no new pins, no prose file touched.
+Costs if wrong: one commit and one CI cycle on a PR whose CI is already red for reasons that are mine.
+
+**What the worker caught that I had not.** Their header audit found the ROUNDS were off by one: `git
+log -S` per symbol puts `bindsAuthority`, `AUTHORITY_VERB`, `FOLD`, `doesNotFold` and `NEGATOR` in
+`7bac1727` (round 1), not round 2 — only `OVERRIDE_WORD` and `forceIsNotAPoolOverride` are round 2's.
+So the guards I described as "round 2's widening" were mostly round 1's, and my own ledger entries said
+otherwise. Recorded here rather than quietly corrected. They also found their own round-3 comment-strip
+was half a fix (line-leading `#` only, while the uninstall region's style is trailing), and that the
+file was created at `faf0f8f7`, not the `26413403` their first header claimed.
