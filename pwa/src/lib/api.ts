@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -507,8 +507,14 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       ...(route !== undefined && Object.keys(route).length > 0 ? { route } : {}),
     }),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
-    workspaceAdd: (project: string): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    /** `route` rides the body ONLY when given — the fleet screen's class
+     *  chooser (routing spec, slice 5, Task 6) seeds it from whichever class
+     *  is selected there, and an ordinary `+` (the chooser left on
+     *  "Coordinator row") calls this with one argument, so its request body
+     *  is byte-identical to every caller that predates this parameter. */
+    workspaceAdd: (project: string, route?: RouteFields): Promise<void> =>
+      post(`/api/projects/${encodeURIComponent(project)}/workspaces`,
+        route === undefined ? undefined : { route }),
     /** `POST /api/projects/:project/pool` — tag the project into an account
      *  pool, or clear it with an explicit `null`.
      *

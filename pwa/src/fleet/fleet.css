@@ -43,6 +43,16 @@
   align-items: center;
   gap: var(--sp-3);
 }
+/* The class chooser (routing spec, slice 5, Task 6) reuses `.route-select`'s
+ * chrome verbatim — same edge, ground and tap-min height as the new-session
+ * sheet's routing row — but that rule's `width: 100%` is right for a grid
+ * cell and wrong for a flex sibling of the wordmark and the mail/bell icons:
+ * unmodified it would claim the header's whole remaining width. This is the
+ * one override, not a second control style. */
+.fleet-class-select {
+  width: auto;
+  flex-shrink: 0;
+}
 /* Notification toggle — a quiet bell; lit when push is on. */
 .bell {
   border: none;
