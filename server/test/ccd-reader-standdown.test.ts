@@ -286,11 +286,17 @@ interface GuardSpec { count: number; guard: RegExp }
  *  _pane_measurable" is satisfied by a guard whose `return` was dropped, by
  *  the call hidden inside a comment, and by the sense INVERTED (`!` added
  *  while keeping `||`) — the exact 2026-09-08 incident shape, with nothing
- *  to catch it. Five functions fail OPEN (`_pane_measurable "$id" || ...
- *  return`, unmeasurable -> stand down); two INVERT it on purpose
- *  (`! _pane_measurable "..." && ... return`, unmeasurable -> HOLD/type) —
- *  §6.3 ruling R1 for `_pane_auto_continue_armed`'s cancel-proof armed state,
- *  and the rc-6 "I stood down" gate in `_accept_first_run_prompts`. A guard
+ *  to catch it. Five functions use the `_pane_measurable "$id" || ... return`
+ *  shape — unmeasurable -> stand down. A sixth, `_accept_first_run_prompts`,
+ *  stands down the SAME way but is spelled `! _pane_measurable "${1#cc-}" &&
+ *  ... return 6` — the `!`/`&&` is a consequence of the `[[ "$i" == 1 ]] &&`
+ *  prefix it chains onto, not an inverted DECISION: rc 6 is still "I stood
+ *  down, I did not decide." Only the seventh, `_pane_auto_continue_armed`,
+ *  actually inverts the decision — unmeasurable -> HOLD (armed) — spec §6.3
+ *  ruling R1, because a cancelled continuation cannot be un-cancelled. (This
+ *  file's own header uses "fails OPEN" for the opposite thing — the PRE-fix
+ *  defect of typing on a pane it cannot trust — so that phrase is dropped
+ *  here rather than reused in the sense this paragraph needs.) A guard
  *  whose call, `return`, or SENSE moves reds that function's `it.each` row;
  *  a phrase grep that moves, appears or vanishes reds the census below. */
 const POPULATION: Record<string, GuardSpec> = {

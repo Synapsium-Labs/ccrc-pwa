@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1674811450945dc3cdc5aa32b00411dec1266e92c548d2da08c7f4fbdd386b14
+# ccrc:generated 1 sha256=829f23d9b47086ee5362046b9ddd47fbb24aab2ecfc6a8c817746bc921c687e5
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -13874,10 +13874,13 @@ _pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READE
   # pane is not idle.
   #
   # THE DISTINCTION THAT IS PRESERVED is the one callers act on differently:
-  # `_pane_auto_continue_armed` twelve lines below INVERTS — it HOLDS rather
-  # than releases, answering ARMED on an unmeasurable pane, because a cancelled
-  # continuation cannot be un-cancelled. One rc, two directions, chosen by the
-  # caller and never collapsed here.
+  # `_pane_auto_continue_armed`, defined below in this same file, INVERTS — it
+  # HOLDS rather than releases, answering ARMED on an unmeasurable pane, because
+  # a cancelled continuation cannot be un-cancelled. One rc, two directions,
+  # chosen by the caller and never collapsed here. (A line-count locator stood
+  # here once; this wave's own next commit moved the function it counted to and
+  # the count went stale uncaught — naming the function instead of a distance
+  # is what keeps this claim from rotting the same way again.)
   local rows w
   rows=$(tmux list-panes -t "$(_tmux "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
   w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")
@@ -16012,6 +16015,14 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
+  # A FRESH MEASURE, NOT A REDUNDANT ONE — this is the site the `_auto_compact_check`
+  # comment above names as where a re-measure IS meaningful: REDRIVE_WAIT_S seconds of
+  # real `sleep 1`s sit between the top-of-function guard and here, so the pane can have
+  # gone narrow in the meantime. But its NEGATIVE answer is not "auto-continue armed" —
+  # that would be `_pane_auto_continue_armed`'s own inverted answer to the SAME
+  # unmeasurable pane, naming a cause (Claude Code's own recovery timer) this line never
+  # detected. Logged as its own sentence so swap.log asserts only what was measured.
+  _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
   _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
