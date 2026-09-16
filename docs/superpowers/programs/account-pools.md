@@ -7531,3 +7531,41 @@ already merged and correct.
 Either the WORKER merges `main` and pushes — which is what I should have asked for — or whoever runs
 `update-branch` accepts that a fast-forward must follow before the run can close. Nothing warned me;
 the binding is not wrong about anything it measured, it is measuring a tip I moved out from under it.
+
+## 2026-09-16 23:22 UTC — RUN 47 IS CLOSED `done`, `released:true`. THE PROGRAMME IS COMPLETE.
+
+`handoffCommit b8d28127`, items 9/9, hold gone, workspace `clear-meadow` unclaimed. Six waves,
+closed on the last one. Fleet is 5 of 7 running.
+
+**How the wedge cleared, and the worker was half right and half wrong in a way worth recording.**
+Their finding (mail 1535) was excellent evidence and one wrong inference. Right: the wave was
+merged, all six files landed byte-identical, and README's seven differing lines were #131's, not
+theirs — proving a wave landed by diffing each of its files against `origin/main` and attributing
+every difference is the right method and it goes in the ledger as one. Wrong: they concluded the
+claim was **unbindable** because GitHub deleted the remote branch on merge.
+
+**`is_ours` never reads the remote.** It takes the `headRefOid` GitHub still returns for a MERGED PR
+and asks two LOCAL questions — is the object here, and is it reachable from this workspace's tip —
+and `bound()` matches `headRefName` against the branch NAME, which the row keeps after deletion. I
+measured all three from inside their workspace before answering: the object was present, the
+fast-forward was available, and the only dirty path was an untracked `.playwright-mcp/` the merge
+does not touch. So the wedge was mine to explain and theirs to clear with one command, and they
+cleared it: tip `8530fb38 -> b8d28127`, `.prnumber` re-bound to 114/`merged`, close accepted on the
+honest fingerprint.
+
+**Their second finding stands and I am NOT giving it a D-number, correcting what I told them in mail
+1536.** `pr-regressed` does collapse two conditions a caller handles differently — a registry that
+regressed to an older PR **while the branch lives** (a real stale claim; re-measure and retry) versus
+a claim that **cannot bind at all** (close it another way). That is this tree's own no-overloaded-null
+rule appearing in the coordination protocol rather than in the code, and the current message sends a
+worker looking for an error they did not make. But a `D-N` must be DEFINED in a plan's
+`## Deviations found`, and the only plan this run is bound to is the wave-5 docs plan, from which
+this is no departure at all. Minting into the wrong home to keep a promise would be worse than
+correcting the promise. **It is recorded here and surfaced to the operator for whoever owns
+`server/src/coord/routes.ts`.** Costs if wrong: a good finding waits for its own plan.
+
+**The wave's own numbers, final.** `pools-prose.test.ts` 877 lines, 27 tests, three assertion classes
+named in its own header, five forbidden spellings across seven sites, and an explicit statement that
+the semantic claims are not mechanically held. Four fix rounds; 176 single-change mutations across
+them (23, then 128, then a confirming 25); the file ended smaller than when the deletion began.
+D-2827/2828/2829 spent and defined. Merged as `03ecda65`.
