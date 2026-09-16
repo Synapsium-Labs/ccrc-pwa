@@ -7225,22 +7225,45 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // Nothing here widened the rule: refsOf/audit/filesAudit/funcBody/occurs/
     // paragraphs/SENT/QUOTED/SUPERSEDED and every non-vacuity floor are
     // byte-unchanged from 36d7dccd. Only the counts moved, and only down.
+    //
+    // FIX ROUND 2 OF TASK 11 MOVES IT AGAIN, 66 -> 55, and this one is a
+    // DOCUMENT change rather than a line shift: the complete citation pass
+    // classified every reference in both documents and in README, and repaired
+    // the ones whose referent exists at this tip. Measured with this audit,
+    // unchanged, before and after:
+    //   `ccd/ccd` 37 -> 24. The whole `command -v flock` / fail-closed-doctrine
+    //     family re-anchored to the measured tip sites (§4's five-row census,
+    //     its `_reg_purge`-caller triple, the reap chain, `_lc_refuse`'s
+    //     EMITS-THEN-DIES pair, ws-add's death and `_ws_slug_free`), plus the
+    //     `_reg_purge` purge-loop family in §5's fork-census row.
+    //   `server/test/compact-card.test.ts` 1 -> 0 and `ccd-ws-reap.test.ts`
+    //     3 -> 2: the past-EOF anchors and the two quotations that could match
+    //     no line (a test title quoted with THIS document's backticks, and one
+    //     quoted with a closing paren the source does not carry).
+    //   `ccd/session-hook.sh` 14 -> 18, and it is the honest direction of a
+    //     repair rather than a regression. Three references that were bare
+    //     `:N` inheriting a WRONG file — so the audit resolved them elsewhere
+    //     or dropped them — now spell `ccd/session-hook.sh` in full and are
+    //     checked for the first time; and two clauses gained a landed
+    //     measurement beside their pre-Task-9 one, which moved them out of the
+    //     SUPERSEDED arm and into the checked set. Making a stale reference
+    //     VISIBLE raises this map; that is what it is for.
+    // RE-MEASURED against the tree, never adjusted to keep a number green.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 37,
-      'ccd/session-hook.sh': 14,
+      'ccd/ccd': 24,
+      'ccd/session-hook.sh': 18,
       'ccd/compact-card.mjs': 4,
+      'server/test/ccd-ws-reap.test.ts': 2,
       'server/test/ccd-workspaces.test.ts': 5,
-      'server/test/ccd-ws-reap.test.ts': 3,
-      'server/test/compact-card.test.ts': 1,
-      'ccd/ccrc': 1,
       'deploy/deploy.sh': 1,
+      'ccd/ccrc': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(66);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(55);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -7320,6 +7343,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
         'ccd/ccd:3371',
+        // ADDED BY THE ROUND-14 PASS, and deliberately: this reference was a
+        // bare `:3940-3951` whose clause names `ccd-wsaudit-nonpoison.test.ts`
+        // (83 lines), so it resolved to a file that cannot hold it and the
+        // pass never reached it. Spelling `ccd/ccd` in full is the fix for the
+        // inheritance; the number itself is Task 9's own pre-Task-9
+        // prescription and stays, so the reference becomes VISIBLE debt
+        // rather than invisible debt.
+        'ccd/ccd:3940-3951',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
         // Task 10's list: FOUR of the five its two `- Modify:` bullets carry,
@@ -7346,5 +7377,200 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const census = new Set(audit(realCorpus()).failures.map(refKey));
     expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
       .toEqual(['ccd/session-hook.sh:1098', 'ccd/ccrc:5217', 'ccd/ccrc:7129-7130']);
+  });
+
+  /** THE THIRD PASS, and the third reason the census under-reports (D-2849,
+   *  round 14 B-M2). D-2849's appends name two mechanisms — sub-rule A's
+   *  function-body fallback and the SUPERSEDED retraction marker. A THIRD is
+   *  live: `SENT` counts a table-cell `|` as a clause boundary and `paragraphs`
+   *  makes each `|`-row its own paragraph, so INSIDE a row every cell is its own
+   *  clause and an anchor in cell 1 is never joined to the quotation in cell 3.
+   *  Measured with the shipped `refsOf`, every `ccd/ccd` reference in §4's
+   *  five-row `command -v flock` census extracted `toks=[]` and was counted
+   *  `unanchored` — by BOTH passes above — which is why a table claiming to BE
+   *  the measured census stood four rounds with all five rows naming comment
+   *  lines. This pass joins the row and asks the ordinary question of it, and it
+   *  takes NO exemption: not the ledger arm, not SUPERSEDED, not sub-rule A, not
+   *  sub-rule B. It shares `refsOf` for what a reference IS and nothing else. */
+  type RowAudit = {
+    rows: number; resolved: number; unanchored: number; checked: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number }>;
+  };
+  /** A quoted span is a QUOTATION unless it is itself a reference. `refsOf`
+   *  makes the same exclusion clause-locally; this one is whole-token and is
+   *  DERIVED from `FILE_RE` rather than respelling a path grammar, so the two
+   *  cannot disagree about what a path looks like. */
+  const REF_TOKEN = new RegExp(`^(?:${FILE_RE})?:\\d+(?:[-–,\\d]*)$`);
+  const rowToksOf = (p: string): string[] => {
+    const out: string[] = [];
+    for (const m of p.matchAll(QUOTED)) {
+      const tok = m[1] ?? m[2] ?? m[3] ?? '';
+      if (tok === '' || REF_TOKEN.test(tok)) continue;
+      out.push(tok);
+    }
+    return out;
+  };
+  const rowAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): RowAudit => {
+    const r: RowAudit = { rows: 0, resolved: 0, unanchored: 0, checked: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        if (!p.startsWith('|')) continue;
+        r.rows++;
+        const toks = rowToksOf(p);
+        for (const { file, n1, n2 } of refsOf(p)) {
+          const lines = resolve(file);
+          if (lines === null) continue;
+          r.resolved++;
+          if (!toks.length) { r.unanchored++; continue; }
+          r.checked++;
+          if (toks.some((t) => occurs(t, lines.slice(n1 - 1, n2).join('\n')))) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2 });
+        }
+      }
+    }
+    return r;
+  };
+
+  /** THE FOURTH PASS: the RANGE BOUND (round 14, A-I1). `lines.slice(n1 - 1, n2)`
+   *  CLAMPS silently, so a range past end-of-file is truncated rather than
+   *  refused, and sub-rule B then passes it on whatever `it(`/`expect(` line
+   *  happens to fall inside the clamp. Measured, eleven §3.4 anchors and one §5
+   *  anchor stood past the end of an 854-line `compact-card.test.ts` that way:
+   *  not stale but UNMEASURABLE, and invisible to every pass above. This one
+   *  asks a single question of every resolved reference — does the file have
+   *  the line it names — and takes no exemption either. */
+  type EofAudit = {
+    resolved: number;
+    failures: Array<{ doc: string; line: number; file: string; from: number; to: number }>;
+  };
+  const eofAudit = (corpus: Array<readonly [string, string]>, resolve: Resolve = fromRepo): EofAudit => {
+    const r: EofAudit = { resolved: 0, failures: [] };
+    for (const [label, text] of corpus) {
+      for (const { line: pstart, text: p } of paragraphs(text)) {
+        for (const { file, n1, n2 } of refsOf(p)) {
+          const lines = resolve(file);
+          if (lines === null) continue;
+          r.resolved++;
+          if (n2 <= lines.length) continue;
+          r.failures.push({ doc: label, line: pstart, file, from: n1, to: n2 });
+        }
+      }
+    }
+    return r;
+  };
+
+  it('CONTROL: the `|`-row pass joins the row, and takes none of the exemptions the other two take', () => {
+    // FIXTURE ROWS against the FIXTURE SOURCES above. `ccd/fx.sh:3` is
+    // `  printf "%s" "$a"`; `:4` is `  return 0`, inside `_fx_helper`'s body.
+    const rows = [
+      '| `ccd/fx.sh:3` | `_fx_helper` | writes with `printf "%s" "$a"` |',
+      '| `ccd/fx.sh:4` | `_fx_helper` | writes with `printf "%s" "$a"` |',
+    ].join('\n');
+    const r = rowAudit([['fx', rows]], FX);
+    expect(r.rows, 'both rows read').toBe(2);
+    expect(r.unanchored, 'and NEITHER is unanchored, because the row is the clause').toBe(0);
+    expect(r.failures.map(refKey), 'the row whose anchor does not carry the row\'s quotation reds')
+      .toEqual(['ccd/fx.sh:4']);
+    // THE CONTROL IN THE OTHER DIRECTION, on the SAME text: the shipped audit
+    // sees a cell, not a row, so BOTH references extract no tokens at all and
+    // it reports zero failures and two unanchored. That gap IS the finding.
+    const a = audit([['fx', rows]], FX);
+    expect(a.failures, 'the audit cannot see either row').toEqual([]);
+    expect(a.unanchored, 'it counts both as quoting nothing').toBe(2);
+    // AND NO EXEMPTION: sub-rule A would anchor `:4` on `_fx_helper`'s body,
+    // and the retraction marker would excuse it in the audit. Neither does here.
+    expect(rowAudit([['fx', '| `ccd/fx.sh:4` | previously `_fx_helper` | `printf "%s" "$a"` |']], FX)
+      .failures.map(refKey), 'a retraction marker does not excuse a row reference').toEqual(['ccd/fx.sh:4']);
+  });
+
+  it('CONTROL: the range-bound pass reds on a line the file does not have, at any clause shape', () => {
+    // `ccd/fx.sh` is 7 lines. `:99` cannot be read at all; `:3` can.
+    expect(eofAudit([['fx', 'The write is at `ccd/fx.sh:99`.']], FX).failures.map(refKey),
+      'a range past EOF reds').toEqual(['ccd/fx.sh:99']);
+    expect(eofAudit([['fx', 'The write is at `ccd/fx.sh:3`.']], FX).failures,
+      'and a line the file has does not').toEqual([]);
+    // THE SUB-RULE-B SHAPE, which is what hid A-I1: the audit passes this
+    // because the clamp lands on the fixture's `it(` line, and the range bound
+    // refuses it anyway. Both directions, on one text.
+    const past = 'The thing is pinned by `server/test/fx.test.ts:2-40`.';
+    expect(audit([['fx', past]], FX).failures, 'sub-rule B passes a clamped range').toEqual([]);
+    expect(eofAudit([['fx', past]], FX).failures.map(refKey), 'the range bound does not')
+      .toEqual(['server/test/fx.test.ts:2-40']);
+    // AND THE LEDGER IS NO EXEMPTION HERE EITHER — a superseded number may be
+    // wrong, but it may not name a line that cannot exist.
+    expect(eofAudit([['fx', 'The anchor was previously `ccd/fx.sh:99`, which is the wrong line.']], FX)
+      .failures.map(refKey), 'quoted history is not exempt from the range bound').toEqual(['ccd/fx.sh:99']);
+  });
+
+  it('THE `|`-ROW PASS: the exact set a joined row still fails on (round 14, B-M2)', () => {
+    const r = rowAudit(realCorpus());
+    // NON-VACUITY: the tables are still there and the rule reaches what they
+    // cite. Lower bounds — the documents grow.
+    expect(r.rows, '`|` rows read').toBeGreaterThanOrEqual(120);
+    expect(r.checked, 'references in them the rule applies to').toBeGreaterThanOrEqual(60);
+    // THE RATCHET, EXACT and in document order. RE-MEASURE AND LOWER IT; never
+    // widen the rule. Every surviving entry is the SAME class, and it is the
+    // one this pass deliberately does not excuse: a row whose subject is the
+    // PRE-Task-9 `_ws_gc_prune_row` arm, or the rollback family Task 9 deleted,
+    // citing that arm's own lines. Each carries an era marker in its prose —
+    // `8e457995:` on the anchor, or `superseded` in the clause — which the
+    // audit above honours and this pass, by construction, does not.
+    expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
+      .toEqual([
+        'ccd/ccd:11665-11670', 'ccd/ccd:11669', 'ccd/ccd:11670',
+        'ccd/ccd:11669', 'ccd/ccd:11670',
+        'ccd/ccd:11665-11670',
+        'ccd/session-hook.sh:802',
+      ]);
+    // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
+    // reference, because the same `file:N` is cited from several paragraphs and
+    // a key-only comparison would credit this pass with a failure another pass
+    // found somewhere else. SIX of the seven are reachable by no other pass: a
+    // cell-scoped clause quotes nothing, so both passes above count them
+    // `unanchored` rather than checking them. The seventh is `:802` in §5's
+    // fork-census row, whose row is long enough to carry a `. ` sentence break
+    // and so is partly visible to the audit already — which is the honest
+    // bound on the claim, and the reason it is measured rather than asserted.
+    const site = (f: { doc: string; line: number; file: string; from: number; to: number }): string =>
+      `${f.doc}:${f.line} ${refKey(f)}`;
+    const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
+    expect(r.failures.map(site).filter((k) => seen.has(k)),
+      'the rows this pass reads that another pass already reaches').toEqual(['spec:2178 ccd/session-hook.sh:802']);
+  });
+
+  it('THE RANGE BOUND: no citation names a line its file does not have, outside the ledger (round 14, A-I1)', () => {
+    const r = eofAudit(realCorpus());
+    // NON-VACUITY: the pass resolved most of the corpus's references.
+    expect(r.resolved, 'references resolved to a tracked source file').toBeGreaterThanOrEqual(400);
+    // THE CLAIM, and it is an EQUALITY WITH EMPTY rather than a ratchet: an
+    // anchor past end-of-file is not stale, it is unreadable, and no era marker
+    // can make it true. The operative text of both documents carries none.
+    const planLines = fs.readFileSync(CORPUS[1][1], 'utf8').split('\n');
+    const ledgerLine = planLines.findIndex((l) => l.startsWith(LEDGER)) + 1;
+    expect(ledgerLine, 'the ledger heading was found, so the filter below means something')
+      .toBeGreaterThan(0);
+    expect(r.failures.filter((f) => !(f.doc === 'plan' && f.line >= ledgerLine)),
+      'a citation names a line its file does not have').toEqual([]);
+    // AND THE RATCHET over what remains, which is entirely inside the ledger —
+    // quoted history, corrected by dated appends only, so these are recorded
+    // rather than repaired. Stated as an exact list so that DELETING the range
+    // check reds this line even while the assertion above stays green.
+    expect(r.failures.map(refKey), 'the ledger\'s own past-EOF citations (history, not debt)')
+      .toEqual([
+        'server/test/compact-card.test.ts:842-871',
+        'server/test/compact-card.test.ts:873-895',
+        'server/test/compact-card.test.ts:897-931',
+        'server/test/compact-card.test.ts:949-951',
+        'server/test/compact-card.test.ts:959-968',
+        'server/test/compact-card.test.ts:969',
+        'server/test/compact-card.test.ts:870',
+        'server/test/compact-card.test.ts:906-927',
+        'server/test/compact-card.test.ts:929-931',
+        'server/test/compact-card.test.ts:875-893',
+        'server/test/compact-card.test.ts:897-931',
+        'server/test/compact-card.test.ts:870',
+        'server/test/compact-card.test.ts:906-927',
+        'server/test/compact-card.test.ts:929-931',
+      ]);
   });
 });
