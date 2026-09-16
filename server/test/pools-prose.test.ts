@@ -15,53 +15,50 @@
 // the length check is a lower bound a truncated passage still clears, and every
 // negative assertion then passes over text that was cut away.
 //
-// FIX ROUND 1 (review lens B) rewrote most of the assertions below. The round's
-// finding, in one sentence: a free-floating `toMatch(/never places/)` holds a
-// SUBSTRING, not a CLAIM — the reviewer inverted "ccd decides; the server
-// refuses" in both documents and the suite stayed 25/25 green. Three rules came
-// out of that and are applied throughout:
-//   1. BIND THE SUBJECT. A claim about who does what is checked per sentence
-//      with the actor bound to the verb (`bindsAuthority`), never as two
-//      substrings that could sit in any sentence.
-//   2. UNDERSTAND NEGATION. Every true sentence here is a NEGATIVE ("the server
-//      never writes the marker", "neither is ever downgraded to untagged"), so a
-//      naive negative regex reds the truth. Each guard therefore looks for a
-//      negator BETWEEN the subject and the verb, which is what makes the
-//      inverted sentence — and only the inverted sentence — red.
-//   3. THE MESSAGE TEACHES THE RULE. A per-sentence guard fires on text whose
-//      author could not see the constraint, so every message states the
-//      constraint rather than the regex (the round's M-4 ruling: a comment in
-//      README would be a request; the red is the mechanism).
+// HISTORY, BECAUSE IT DECIDES THE SHAPE BELOW.
 //
-// WHAT THESE GUARDS CANNOT CATCH — read this before trusting one.
+// Round 1 pinned claims as free-floating substrings — `toMatch(/never places/)`
+// with no subject bound to it. The reviewer inverted "ccd decides; the server
+// refuses" in BOTH documents and the suite stayed 25/25 green.
 //
-// Every guard below is a RATCHET over prose, not a proof about it. Round 2 put
-// 73 one-change mutations through the file and the four classes that walk past
-// it are structural, not oversights: chasing them with more regex makes the
-// suite slower without making it honest. They are named here because a header
-// that overclaims is the same defect as prose that overclaims — which is the
-// subject of this entire file.
+// Round 2 answered that with guards that PARSED THE ENGLISH: a subject bound to
+// a closed verb list, a negator required between the two, a fold vocabulary, an
+// override vocabulary. They caught every inversion — and reddened seven TRUE
+// sentences, among them "the server decides nothing.", the shortest true
+// statement of this feature's central claim, each with a message telling its
+// author that the truth was the defect.
 //
-//   A. CLOSED VERB VOCABULARY. `AUTHORITY_VERB`, `FOLD` and `OVERRIDE_WORD` are
-//      lists of surface forms. "The server CHOOSES THE ACCOUNT and writes the
-//      tag", "an unreadable tag BECOMES untagged" — a synonym or an inflection
-//      outside the list is invisible. Each list grows only when a measurement
-//      says so, never speculatively.
-//   B. EXACT-LITERAL SUBJECT. `bindsAuthority` finds the literal `the server`.
-//      A bolded subject (`the **server**`), a renamed one, or a pronoun in a
-//      following sentence ("It decides every placement") is not seen at all —
-//      and bold is this document's dominant idiom.
-//   C. THE NEGATOR IS NOT SCOPED TO ITS CLAUSE. The guards require a negator
-//      somewhere between the subject and the verb, not inside the verb's own
-//      clause. "The server never refuses a swap; it decides the pool" passes:
-//      the first clause's "never" licenses the second. A sentence with two
-//      clauses and one true negative is the hole.
-//   D. A TEXTUAL WINDOW, NOT A RESOLVED PATH. `poolWritesInSource` reads 200
-//      characters of comment-stripped source after a write call and asks whether
-//      a pools path is spelled there. It cannot follow a variable: a path built
-//      three lines earlier, or passed in as an argument, is not seen.
+// Round 3 deleted them. A guard that calls a true sentence false misinforms with
+// the repo's authority, which is worse than a claim nobody holds — and the
+// oscillation between the two failures is not a tuning problem. It is what
+// happens when a regex is asked to decide whether an English sentence is true.
 //
-// What follows from that: a GREEN here is evidence, never proof. When one of
+// WHAT THIS FILE HOLDS, AND WHAT IT DOES NOT — read this before trusting a green.
+//
+// Two kinds of assertion live here and they prove different things.
+//
+//   DERIVED pins read a value out of the SOURCE and compare the prose to it:
+//   `ACCOUNT_KEYS`, the symbols `generate.mjs` emits, the four words
+//   `_project_pool_state` echoes, the two cooldown constants, the codes
+//   `refusePool` sends, the single `cross-pool` writer in `swap.log`, the README
+//   line count, the write-call scan over `server/src` and `agent/src`, the
+//   uninstall surface. These hold a CLAIM: move the number, path or name in the
+//   code and the prose goes red on the thing that moved. They are the mechanism.
+//
+//   LITERAL pins quote a canonical sentence and assert it is still there, via
+//   `unchanged()`. They hold that the sentence has not silently CHANGED. They
+//   cannot tell whether whatever replaced it is true: a rewrite that is false
+//   reds exactly as loudly as a rewrite that is better, so that red is a REQUEST
+//   to go and read the source, never a verdict on the new wording.
+//
+// THE SEMANTIC CLAIMS IN THESE PASSAGES ARE NOT MECHANICALLY HELD. Whether "the
+// server never writes the marker" is true of this tree is settled by reading
+// `ccd` and `server/src`, not by running this file. A claim is mechanically
+// holdable only where the prose names something the CODE also names — a
+// constant, a count, a state list, a path, a number. Everything else is quoted,
+// and is quoted precisely so that changing it cannot be quiet.
+//
+// So: a green here is evidence about EDITS, never proof about TRUTH. When one of
 // these sentences changes, read the source it describes — do not let the suite
 // read it for you.
 import { describe, it, expect } from 'vitest';
@@ -107,74 +104,21 @@ const flat = (text: string): string => text.replace(/\s+/g, ' ');
  *  passage, so a sentence is one line by the time it is matched. */
 const sentencesOf = (text: string): string[] => text.split(/(?<=[.:])\s+/);
 
-/** CLAUSES, for the guards that can be scoped that tightly. A sentence that
- *  PARTITIONS something — "swap writes X; prefer writes Y; start writes Z" —
- *  carries several claims, and a per-sentence attribution check reds on the
- *  whole of it for a term that belongs to one clause. (The negator guards below
- *  are NOT clause-scoped; class C in the header says so.) */
-const clausesOf = (text: string): string[] => text.split(/\s*[;—]\s*/);
-
-// A concessive "not only / not merely / not just" ASSERTS the thing it appears
-// to deny ("`--force` is not only a pool override" says it IS one), so it must
-// not count as a negator anywhere in this file.
-const NEGATOR = /\b(never|not|no|nor|neither)\b(?!\s+(only|merely|just|solely))/i;
-
-/** THE AUTHORITY CLAIM, BOUND TO ITS SUBJECT.
+/** A LITERAL PIN — a CHANGE-detector, not a TRUTH-detector.
  *
- *  "`ccd` decides; the server refuses and forecasts … it never places a session
- *  and it never writes the marker" is the load-bearing sentence of this whole
- *  feature — it is what a coder reads before deciding where to put a write. It
- *  used to be pinned as `toMatch(/never places/)` plus
- *  `toMatch(/never writes the marker/)`, two substrings with no subject bound to
- *  them, and BOTH documents survived a full inversion (server decides and
- *  writes; ccd only forecasts) at 25/25 green.
- *
- *  This binds the subject instead: after every mention of `the server`, each
- *  authority verb must have a NEGATOR between it and that mention. The true
- *  sentences pass because they say "never"; the inverted ones red because they
- *  do not. A verb that sits BEFORE `the server` in the sentence — "`ccd` decides
- *  at every placement …; the server REFUSES …" — is left alone, which is the
- *  point: its subject is ccd. */
-const AUTHORITY_VERB = /\b(decides|decide|places a session|places sessions|writes the marker)\b/gi;
-const bindsAuthority = (where: string, sentence: string): void => {
-  const i = sentence.toLowerCase().indexOf('the server');
-  if (i < 0) return;
-  const after = sentence.slice(i + 'the server'.length);
-  for (const m of after.matchAll(AUTHORITY_VERB)) {
-    expect(after.slice(0, m.index!),
-      `${where}: "the server" is described as "${m[0]}" with nothing negating it. ` +
-      'ccd DECIDES and WRITES; the server only refuses (409/503), forecasts and composes the ' +
-      `wire. Sentence: "${sentence.trim()}"`)
-      .toMatch(NEGATOR);
-  }
-};
-
-/** THE NO-OVERLOADED-NULL RULE, AS PROSE CAN BREAK IT.
- *
- *  CLAUDE.md calls collapsing two conditions a caller handles differently "a
- *  defect, not style". The old guard was `not.toMatch(/(reads?|treated) as
- *  untagged/i)` — ONE spelling: "treated as untagged" red, "falls back to
- *  untagged" green, same defect. Widened toward the claim, and negation-aware
- *  for the same reason `bindsAuthority` is: the TRUE sentence says "neither is
- *  ever quietly downgraded to untagged", which the bare pattern would red. */
-const FOLD = /\b(reads?|treats?|treated|falls? back|defaults?|downgrad\w+|counts? as|folds? into|becomes?)\b[^.]{0,40}\buntagged\b/gi;
-/** The undecidable states, which are what the fold has to be ABOUT. Round 2
- *  measured the false red this closes: "the reader reads the file and returns
- *  untagged when absent" is a true sentence about the ABSENT case, and the bare
- *  40-char window reddened it. A fold is only a fold when one of these is its
- *  subject, so the scan starts at the state rather than at the sentence. */
-const UNDECIDABLE = /\b(unreadable|malformed|undecidable)\b/i;
-const doesNotFold = (where: string, sentence: string): void => {
-  const u = UNDECIDABLE.exec(sentence);
-  if (!u) return;
-  const after = sentence.slice(u.index!);
-  for (const m of after.matchAll(FOLD)) {
-    expect(after.slice(0, m.index!),
-      `${where}: an undecidable tag is folded into untagged ("${m[0].trim()}") with nothing ` +
-      'negating it. `unreadable` and `malformed` are NOT `untagged` — on a tag nobody can read, ' +
-      `nobody decides. Sentence: "${sentence.trim()}"`)
-      .toMatch(NEGATOR);
-  }
+ *  Round 2 asked regexes to decide whether a sentence was true and they reddened
+ *  seven true ones. This asserts only that the canonical sentence is still there,
+ *  word for word, and its message says exactly that much. `source` names the file
+ *  a human has to read to re-decide the claim when the sentence has moved on.
+ *  Always fed a FLATTENED passage, so a hard-wrapped sentence is one line by the
+ *  time it is matched. */
+const unchanged = (where: string, text: string, literal: string, source: string): void => {
+  expect(text,
+    `${where}: this sentence is no longer present as written. It is pinned as a LITERAL, so this `
+    + 'red says the sentence CHANGED — it does NOT say the new wording is wrong, and it cannot: '
+    + `nothing here reads English. Re-verify the claim against ${source}, then update this literal `
+    + `in the same commit. Expected: "${literal}"`)
+    .toContain(literal);
 };
 
 /** "A manual verb overrides X" has to say what it does NOT override. Run over
@@ -190,41 +134,6 @@ const noUnqualifiedOverride = (where: string, section: string): void => {
         + 'override. `ccd start`/`swap`/`prefer` override the -disabled gate, never the pool rule '
         + `— that takes --cross-pool. Sentence: "${s.trim()}"`)
         .toMatch(/--cross-pool/);
-    }
-  }
-};
-
-/** `--force` IS NOT A POOL OVERRIDE — negation-aware, like every other guard.
- *
- *  Round 1 wrote this one as a bare negative, the single guard in the file with
- *  no negator test, and round 2 measured what that costs: the plainest TRUE
- *  statement of the rule this wave exists to teach — "`--force` does not
- *  override the pool rule; that takes `--cross-pool`." — REDDENED, and the
- *  message told its author their true sentence was the defect. A guard that
- *  calls the truth false is worse than no guard: it misinforms with the repo's
- *  authority.
- *
- *  Both word orders now count, because "a pool override" reads as naturally as
- *  "overrides the pool" and only the verb-first spelling was caught. The flag's
- *  own name is masked first: `--cross-pool` literally contains "cross" and
- *  "pool", so every true sentence naming both flags would otherwise match. */
-const OVERRIDE_WORD = String.raw`(cross(es|ing)?|overrid\w+|bypass\w*|ignor\w+|defeats?)`;
-const POOL_OVERRIDE_CLAIM = new RegExp(
-  String.raw`\b${OVERRIDE_WORD}\b[^.]{0,30}\bpool\b|\bpool\b[^.]{0,20}\b${OVERRIDE_WORD}\b`, 'gi');
-const forceIsNotAPoolOverride = (where: string, section: string): void => {
-  for (const sentence of sentencesOf(flat(section))) {
-    const i = sentence.indexOf('--force');
-    if (i < 0) continue;
-    const probe = sentence.replace(/--cross-pool/g, '<<FLAG>>');
-    const j = probe.indexOf('--force');
-    const after = probe.slice(j + '--force'.length);
-    for (const m of after.matchAll(POOL_OVERRIDE_CLAIM)) {
-      expect(after.slice(0, m.index!),
-        `${where}: \`--force\` is described as a pool override ("${m[0].trim()}") with nothing `
-        + 'negating it. `--force` means ONE thing — accept the transcript loss a swap costs. '
-        + 'Crossing a pool is a separate decision with its own flag, and the two compose. '
-        + `Sentence: "${sentence.trim()}"`)
-        .toMatch(NEGATOR);
     }
   }
 };
@@ -311,11 +220,18 @@ const poolWritesInSource = (): string[] => {
  *  inside an embedded awk or node program (this file has several) truncates the
  *  slice, and every negative below it then passes over text that was cut away.
  *  `cmd_uninstall` is the last `cmd_` in the file, so opener → dispatch covers
- *  the verb and all eight helpers and excludes the verb table itself. */
+ *  the verb and all eight helpers and excludes the verb table itself.
+ *
+ *  Bash comments are dropped first, the same way `readerWords` drops them and
+ *  `codeOf` drops the TypeScript ones: round 3 measured a comment DOCUMENTING
+ *  this very claim ("uninstall never names `pools/`") reddening the assertion
+ *  with a message saying uninstall names pools/. The scan is about CODE — a
+ *  comment cannot delete a directory. */
 const uninstallSurface = (): string => {
   const ccrc = read('ccd/ccrc');
-  const region = passage('ccrc, the uninstall surface', ccrc,
+  const raw = passage('ccrc, the uninstall surface', ccrc,
     'cmd_uninstall() {', '\ncase "$VERB" in', 1000);
+  const region = raw.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
   const called = [...new Set([...region.matchAll(/\b_uninst_[a-z_]+\b/g)].map((m) => m[0]))];
   expect(called.length, 'cmd_uninstall no longer delegates — re-decide what this scan covers')
     .toBeGreaterThanOrEqual(5);
@@ -531,22 +447,29 @@ describe('README: where the project tag lives (spec §4, §5.4.1)', () => {
     for (const w of readerWords()) {
       expect(p, `the state paragraph never names the reader's \`${w}\` answer`).toContain(w);
     }
-    for (const sentence of sentencesOf(p)) doesNotFold('README, the state paragraph', sentence);
+    // The no-overloaded-null half of the paragraph is QUOTED, not parsed: round 2
+    // tried to hold it with a fold vocabulary and reddened "A malformed tag reads
+    // as `malformed`, never as untagged." The mechanical half is above — the four
+    // words come off the reader itself.
+    unchanged('README, the state paragraph', p,
+      '**neither is ever quietly downgraded to untagged**',
+      'ccd/ccd, `_project_pool_state` — what it echoes on an undecidable tag');
   });
 
-  it('says the server refuses and forecasts but never places or writes — with the subject BOUND', () => {
+  it('quotes the authority split, and grounds it in the source that decides placement', () => {
+    // The load-bearing claim of the whole feature, and the one a coder reads
+    // before deciding where to put a write. It is QUOTED. Round 2 bound the
+    // subject to a closed verb list instead and reddened "the server decides
+    // nothing." — the shortest true statement of this very sentence.
     const s = flat(poolsSection());
-    expect(s, 'the section never says which side decides').toMatch(/`ccd` decides/);
-    expect(s).toMatch(/never places/);
-    expect(s).toMatch(/never writes the marker/);
-    for (const sentence of sentencesOf(s)) bindsAuthority('README, the account-pools section', sentence);
-    // BOTH sections. The claim's surface is the document, not one heading: the
-    // same false sentence planted nine lines ABOVE the pools heading — in the
-    // disabled-marker section, where the manual-verb override argument already
-    // lives — was green.
-    for (const sentence of sentencesOf(flat(placementSection()))) {
-      bindsAuthority('README, the disabled-marker section', sentence);
-    }
+    unchanged('README, the account-pools section', s,
+      '**`ccd` decides; the server refuses and forecasts.**',
+      'ccd/ccd (every placement site) and server/src/server.ts (`refusePool`)');
+    unchanged('README, the account-pools section', s,
+      'It never places a session and it never writes the marker itself',
+      'ccd/ccd (every placement site) and server/src/server.ts (`refusePool`)');
+    // And the half that IS mechanical: no write in `server/src` or `agent/src`
+    // names the pools directory. That one is not a quote — it reads the code.
     groundedInShippedMechanism();
   });
 
@@ -621,8 +544,15 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     const s = flat(poolsSection());
     expect(s).toContain('--cross-pool');
     expect(s).toContain('--force');
-    forceIsNotAPoolOverride('README, the account-pools section', s);
-    forceIsNotAPoolOverride('README, the disabled-marker section', placementSection());
+    // QUOTED, both halves. Round 2's override vocabulary reddened "`--force`
+    // overrides the prompt, never the pool rule." with a message quoting a span
+    // that contained the word "never" while asserting nothing negated it.
+    unchanged('README, the account-pools section', s,
+      '**Crossing on purpose: `--cross-pool`, which is not `--force`.**',
+      'ccd/ccd — `--force` and `--cross-pool` are separate flags that compose');
+    unchanged('README, the account-pools section', s,
+      '`--force` means one thing and still means only that — accept the transcript loss a swap costs.',
+      'ccd/ccd — `--force` and `--cross-pool` are separate flags that compose');
     expect(s, 'the swap/prefer split (spec §14 O1) is the thing operators get wrong')
       .toMatch(/prefer --cross-pool/);
     expect(s, 'automatic moves never cross — the sentence that keeps ruling 8 honest')
@@ -630,26 +560,27 @@ describe('README: what a retag does, and when (spec §5.5.4, §5.8, §5.7, §5.1
     // Grounded: the marker and its end-of-life log verb.
     expect(ccd()).toMatch(/crosspool/);
     expect(ccd(), 'the crossing no longer ends with a logged reason').toMatch(/crosspool-ended/);
-    // WHICH VERB WRITES THE LOG LINE. This seam has now minted a falsehood twice
-    // — first "every crossing writes a `cross-pool` line" (true of one verb of
+    // WHICH VERB WRITES THE LOG LINE. This seam has minted a falsehood twice —
+    // first "every crossing writes a `cross-pool` line" (true of one verb of
     // four), then a repair whose "while" put the journal act on prefer's side
-    // when swap writes one too. Grounded in the single writer, and guarded per
-    // sentence so neither error can come back: only `swap` adds the swap.log
-    // line, and all three write the marker.
+    // when swap writes one too. Two pins, and they do different jobs.
+    //
+    // DERIVED: exactly one place in ccd writes that line. If a second appears,
+    // the partition below is stale no matter how it is worded.
     const logWriters = [...ccd().matchAll(/^\s*echo .*cross-pool \$id.*swap\.log/gm)];
     expect(logWriters.length,
       'ccd no longer has exactly one `cross-pool` swap.log writer — re-decide which verbs the '
       + 'README says write that line')
       .toBe(1);
-    for (const sentence of sentencesOf(s)) for (const clause of clausesOf(sentence)) {
-      if (/`(prefer|start) --cross-pool`/.test(clause)) {
-        expect(clause,
-          'a `cross-pool` swap.log line is attributed to `prefer` or `start`. ccd writes that line '
-          + 'in exactly one place, inside `cmd_swap`; prefer records the crossing in the lifecycle '
-          + `journal and start writes the marker alone. Clause: "${clause.trim()}"`)
-          .not.toMatch(/swap\.log/);
-      }
-    }
+    // QUOTED: the partition itself, which no regex can check. Round 2's
+    // clause-scoped negative reddened the true sentence "`prefer --cross-pool`
+    // writes the journal act and no `swap.log` line" — the exact claim it existed
+    // to protect.
+    unchanged('README, the account-pools section', s,
+      '`swap --cross-pool` writes BOTH a `cross-pool` line in `swap.log` and a `dec.crosspool` act '
+      + 'in the lifecycle journal; `prefer --cross-pool` writes the journal act and no log line; '
+      + '`start --cross-pool` writes the marker alone.',
+      'ccd/ccd — `cmd_swap`, `cmd_prefer` and `cmd_start`');
   });
 
   it('names the skew states an operator can see, and the six rollout steps', () => {
@@ -826,20 +757,22 @@ describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () =
     expect(b, 'tagging only tightens — the other half of ruling 3').toMatch(/only tighten/i);
     expect(b, 'the marker path a coder must not relocate').toContain('~/.cc-sessions/pools/<project>');
     expect(b, 'the rejected spelling has to be named to be forbidden').toContain('$REG/<project>');
-    expect(b, 'ccd is the authority; the server refuses and forecasts').toMatch(/never places/i);
     expect(b, 'the four-word reader is the only reader').toMatch(/_project_pool_state/);
-    expect(b, '--cross-pool is not --force').toContain('--cross-pool');
     expect(b, 'the three per-id fields purge with the row').toMatch(/purge with the row/i);
     expect(b, 'fixture pool names, so nobody types a real one').toMatch(/pool-a/);
-    // The same subject-bound authority rule the README describe applies. The
-    // bullet's own TITLE says "`ccd` is the authority", and inverting the body
-    // (server decides and writes) used to leave this green.
-    for (const sentence of sentencesOf(b)) bindsAuthority('CLAUDE.md, the account-pools bullet', sentence);
-    // The bullet states the --force distinction too, and `toContain('--cross-pool')`
-    // above only measures that the flag's NAME appears — inverting the sentence to
-    // "`--cross-pool` is just `--force` with a pool override" left it green.
-    forceIsNotAPoolOverride('CLAUDE.md, the account-pools bullet', b);
-    for (const sentence of sentencesOf(b)) doesNotFold('CLAUDE.md, the account-pools bullet', sentence);
+    // The three claims this bullet exists for are QUOTED, for the reason the
+    // README describes above are: each of them was reddened in its TRUE form by a
+    // regex asked to decide whether it was true.
+    unchanged('CLAUDE.md, the account-pools bullet', b,
+      'the server REFUSES (409/503), FORECASTS and composes the wire, and '
+      + '**never places a session or writes the marker**',
+      'ccd/ccd (every placement site) and server/src/server.ts (`refusePool`)');
+    unchanged('CLAUDE.md, the account-pools bullet', b,
+      'an undecidable tag never folds into `untagged`',
+      'ccd/ccd, `_project_pool_state` — what it echoes on an undecidable tag');
+    unchanged('CLAUDE.md, the account-pools bullet', b,
+      '`--cross-pool` is NOT `--force` (transcript loss)',
+      'ccd/ccd — `--force` and `--cross-pool` are separate flags that compose');
   });
 
   it('does not attribute the pool-name rule to a scanner that has no pool class', () => {
@@ -850,7 +783,11 @@ describe('CLAUDE.md: the account-pools bullet is TRUE, not merely present', () =
     // against this tree's own "a comment is a request; a red suite is a
     // mechanism". The bullet must say the check is by hand for as long as that
     // is true, and this reds the day someone adds the class and forgets to.
-    const scans = /\bpool\b/i.test(read('server/test/topology-clean.test.ts'));
+    // Comment-stripped, for the reason `uninstallSurface` is: a COMMENT in
+    // topology-clean saying "pool names are deliberately NOT a class here" is the
+    // most likely way that word ever appears, and on the raw text it flips this
+    // to the else arm — which then reds the bullet for saying the true thing.
+    const scans = /\bpool\b/i.test(codeOf(read('server/test/topology-clean.test.ts')));
     const b = bullet();
     if (!scans) {
       expect(b,
