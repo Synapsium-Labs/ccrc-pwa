@@ -7,6 +7,7 @@
 // `parseRoster` is what validates and auto-assigns it; `RosterWire` below only
 // carries it.
 import type { Hue } from './roster.js';
+import type { RungTarget } from './routing-ladder.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -4819,7 +4820,7 @@ const ROUTE_VALUE_MAX_BYTES = 32;
  *  free-form log text against a forged journal line) — `_route_valid` has no
  *  control-character arm at all, since it only ever looks a value up in a
  *  closed vocabulary. */
-const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+export const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 
 /**
  * SHAPE only — known keys, non-empty strings, no control characters, ≤ 32
@@ -5376,6 +5377,32 @@ export interface RunSummary {
  *  done-claim for dispatched work. A route that rebinds a DISPATCHED run
  *  would have to widen this read to the session lineage — none does today
  *  (S2-R1). */
+
+/**
+ * `POST /api/runs/:id/route`'s wire body (routing spec 2026-09-14, slice 5,
+ * Task 2) — the coordinator's door onto the escalation/demotion ladders
+ * (`shared/routing-ladder.ts`). `why` becomes the verb's `--reason`
+ * (1..400 bytes, no control characters). Exactly ONE of `kind` (walk
+ * `escalate()`), `demote` (walk `demote()`) or `field`+`value` (the
+ * coordinator's own judgement, validated by ccd, not the ladder) — a body
+ * naming more or fewer than one is `bad-request`.
+ */
+export interface RunRouteBody {
+  readonly target: 'worker' | 'coordinator';
+  readonly why: string;
+  readonly kind?: FailureKind;
+  readonly demote?: 'class' | 'effort';
+  readonly field?: RouteField;
+  readonly value?: string;
+}
+
+/**
+ * The run-event/response word for a `route` door call. DERIVED from
+ * `RungTarget`'s own `mode` (S5-R1: one source, no handler-level respelling)
+ * plus `'manual'` for a `field`+`value` write the ladder never sees.
+ */
+export type RouteMode = Extract<RungTarget, { kind: 'move' }>['mode'] | 'manual';
+
 export interface RunSignals {
   readonly runId: number;
   readonly dispatchedAt: number | null;

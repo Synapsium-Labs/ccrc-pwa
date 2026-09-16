@@ -538,8 +538,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the twenty-four machine lanes the
-fleet host reaches (twenty-three box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the twenty-five machine lanes the
+fleet host reaches (twenty-four box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
@@ -1829,7 +1829,7 @@ the recipient POSTs
 `/api/mail/:id/ack`.
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
-`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`) — but **not** the
+`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`) — but **not** the
 operator doors `/api/runs/:id/abandon` and `/api/runs/:id/reclaim`, which carry
 no box token by design (D-282), any more than `/api/coord/pause` or
 `/api/claims/:id/break` do — `GET /api/mail?to=<id>` and

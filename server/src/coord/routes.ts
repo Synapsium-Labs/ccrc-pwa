@@ -3,13 +3,15 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import { UNMEASURED_ASK_AT, freshAskAt, fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import { escalate, demote, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
+import type { ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
@@ -32,8 +34,10 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
+  FAILURE_KINDS, ROUTE_WRITABLE_FIELDS, ROUTE_CONTROL_CHAR_RE,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
+  type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
 } from '../../../shared/api.js';
 
 /**
@@ -1686,6 +1690,214 @@ export function registerCoordRoutes(
       return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
     }
     return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+    });
+  });
+
+  /**
+   * `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3, slice 5, Task 2)
+   * — the coordinator's door onto the escalation/demotion ladders
+   * (`shared/routing-ladder.ts`'s `escalate`/`demote`). Clause 1 of the
+   * global constraints: the coordinator NEVER runs `ccd route` itself; this
+   * is the one place a `route` argv is built on a run's behalf, and it never
+   * passes `--apply`. Box-token gated — this route sits in the census
+   * `CLAUDE.md`'s "the bulk of the box-token surface" sentence covers
+   * (`requireMailToken` below, the same gate `dispatch`/`close`/`advance`
+   * carry), never the session-only set.
+   *
+   * This door only ever routes a MAIN session — the run's own worker
+   * (`run.sessionId`) or its coordinator (`run.claimedBy`) — never a
+   * subagent; `scope` is therefore always `'main'`. A subagent's own class
+   * ceiling (`SUBAGENT_CLASS_CEILING`) is a fact the worker/coordinator skill
+   * reasons about when it asks for a `field`/`value` write on `subagent`
+   * itself — this door does not read that field back, so a manual write
+   * records `from: '?'`.
+   *
+   * `kind`/`demote` walk the ladder: read the target session's served class
+   * (`degraded ?? class` — a degraded lane serves the DEGRADED class, and the
+   * ladder must compute from what is actually running, not what the record
+   * still intends) and effort off the registry, derive `priorSameKind` and
+   * `lastDemotion` from this run's OWN event trail (S5-R2: that bookkeeping
+   * is this door's, not the ladder's), and answer whatever `escalate()`/
+   * `demote()` answers. `field`+`value` is the coordinator's own judgement —
+   * no registry read, no ladder call, `value` reaches ccd unvalidated (ccd's
+   * `_route_valid` is the authority).
+   *
+   * The run-event/response `mode` is DERIVED from `RungTarget.mode` (S5-R1) —
+   * `RouteMode` is that type plus `'manual'` — never a second, hand-typed
+   * verb string. A ccd refusal (`fleetFailed`) records NO run event, so a
+   * retried call sees the record exactly as it was before the refused write.
+   */
+  app.post('/api/runs/:id/route', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'id must be a positive safe integer' });
+
+    const badRequest = (detail: string) => reply.code(400).send({ ok: false, error: 'bad-request', detail });
+
+    const body = (req.body ?? {}) as Partial<RunRouteBody>;
+    if (body.target !== 'worker' && body.target !== 'coordinator') {
+      return badRequest('target must be "worker" or "coordinator"');
+    }
+    if (typeof body.why !== 'string') return badRequest('why must be a string');
+    const whyBytes = new TextEncoder().encode(body.why).length;
+    if (whyBytes < 1 || whyBytes > 400 || ROUTE_CONTROL_CHAR_RE.test(body.why)) {
+      return badRequest('why must be 1..400 bytes with no control characters');
+    }
+    const why = body.why;
+
+    const hasKind = body.kind !== undefined;
+    const hasDemote = body.demote !== undefined;
+    const hasManual = body.field !== undefined || body.value !== undefined;
+    if ([hasKind, hasDemote, hasManual].filter(Boolean).length !== 1) {
+      return badRequest('exactly one of kind, demote, or field+value is required');
+    }
+
+    let kind: FailureKind | undefined;
+    let demoteField: 'class' | 'effort' | undefined;
+    let manualField: RouteField | undefined;
+    let manualValue: string | undefined;
+    if (hasKind) {
+      if (typeof body.kind !== 'string' || !(FAILURE_KINDS as readonly string[]).includes(body.kind)) {
+        return badRequest(`kind must be one of ${FAILURE_KINDS.join('/')}`);
+      }
+      kind = body.kind;
+    } else if (hasDemote) {
+      if (body.demote !== 'class' && body.demote !== 'effort') {
+        return badRequest('demote must be "class" or "effort"');
+      }
+      demoteField = body.demote;
+    } else {
+      if (typeof body.field !== 'string' || !(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(body.field)) {
+        return badRequest('field must be one of ' + ROUTE_WRITABLE_FIELDS.join('/'));
+      }
+      if (typeof body.value !== 'string' || body.value.length === 0) {
+        return badRequest('value must be a non-empty string');
+      }
+      manualField = body.field;
+      manualValue = body.value;
+    }
+
+    return coordMutex.run(async () => {
+      const read = coord.run(id);
+      if (!read.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+      const run = read.run;
+      if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+
+      const OPEN_RUN_STATES: readonly RunState[] = ['dispatched', 'working', 'awaiting-review'];
+      if (!OPEN_RUN_STATES.includes(run.state)) {
+        return reply.code(409).send({ ok: false, error: 'run-closed', detail: `run is ${run.state}` });
+      }
+
+      const sid = body.target === 'worker' ? run.sessionId : run.claimedBy;
+      if (sid === null || sid === '') {
+        return reply.code(409).send({ ok: false, error: 'no-session' });
+      }
+
+      if (!capSupported(deps.fleetState, ROUTE_CAP)) {
+        return reply.code(501).send({ ok: false, error: 'unsupported' });
+      }
+
+      let field: RouteField;
+      let from: string;
+      let to: string;
+      let mode: RouteMode;
+
+      if (manualField !== undefined) {
+        field = manualField;
+        from = '?';
+        to = manualValue!;
+        mode = 'manual';
+      } else {
+        const classRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'class');
+        if (!classRead.ok) {
+          return classRead.reason === 'absent'
+            ? reply.code(409).send({ ok: false, error: 'no-record', field: 'class' })
+            : reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'class' });
+        }
+        const effortRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'effort');
+        if (!effortRead.ok) {
+          return effortRead.reason === 'absent'
+            ? reply.code(409).send({ ok: false, error: 'no-record', field: 'effort' })
+            : reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'effort' });
+        }
+        const degradedRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'degraded');
+        if (!degradedRead.ok && degradedRead.reason === 'unreadable') {
+          return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'degraded' });
+        }
+        const rawClass = classRead.content as ModelClass;
+        const degraded = degradedRead.ok ? (degradedRead.content as ModelClass) : null;
+        const servedClass = degraded ?? rawClass;
+        const current: RungCurrent = {
+          class: servedClass,
+          effort: effortRead.content as RungCurrent['effort'],
+        };
+
+        // S5-R2: `lastDemotion` is bookkeeping this door owns, derived from
+        // this run's OWN event trail — the last `route:demote:` detail not
+        // yet followed by a `route:reverse-demotion:` detail. Walked in
+        // order, so a later reverse-demotion or a later demote always wins
+        // over an earlier one.
+        const events = coord.runEvents(id);
+        let lastDemotion: Demotion | null = null;
+        let priorSameKind = 0;
+        for (const e of events) {
+          if (e.detail === null) continue;
+          const m = /^route:(escalate|demote|reverse-demotion|manual):([^:]+):([^:]+)->([^:]+):([^:]+)$/.exec(e.detail);
+          if (!m) continue;
+          const [, evMode, evField, evFrom, evTo, evKind] = m as unknown as [string, string, string, string, string, string];
+          if (evMode === 'demote') {
+            lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
+          } else if (evMode === 'reverse-demotion') {
+            lastDemotion = null;
+          }
+          if (hasKind && evMode === 'escalate' && evKind === kind) {
+            priorSameKind++;
+          }
+        }
+
+        const target: RungTarget | { kind: 'floor'; why: string } = hasKind
+          ? escalate(kind!, current, 'main', priorSameKind, lastDemotion)
+          : demote(current, demoteField!);
+
+        if (target.kind !== 'move') {
+          return reply.code(409).send({ ok: false, error: target.kind, detail: target.why });
+        }
+
+        // A degraded session's own record may already intend the class the
+        // ladder just computed (the served class, not the intended one, is
+        // what escalated) — re-writing it is not a move, it is re-intending
+        // what the record already says. Only class escalations can collide
+        // this way: a demotion always lands BELOW the served class, and the
+        // served class is never above the raw one.
+        if (degraded !== null && target.field === 'class' && target.to === rawClass) {
+          return reply.code(409).send({
+            ok: false, error: 'ceiling',
+            detail: `the record already intends ${rawClass}; the lane serves ${servedClass} (degraded)`,
+          });
+        }
+
+        field = target.field;
+        from = target.from;
+        to = target.to;
+        mode = target.mode;
+      }
+
+      const dec = sweepDec(deps.fleetState, `run:${id} coordinator`);
+      const reason = `${mode}${kind ? ' ' + kind : ''}: ${why}`;
+      const argv = CCD_ARGV.route(sid, field, to, dec === null ? null : { ...dec, reason });
+      const res = await deps.runCcd(argv);
+      if (!res.ok) {
+        return reply.code(502).send({ ok: false, error: 'fleetFailed', stderr: res.stderr });
+      }
+
+      coord.recordRunEvent(id, 'coordinator', `route:${mode}:${field}:${from}->${to}:${kind ?? 'manual'}`);
+      return reply.code(200).send({
+        ok: true, applied: { session: sid, mode, field, from, to, kind: kind ?? null },
+      });
     });
   });
 
