@@ -6928,9 +6928,11 @@ export type PaneHistoryReply =
  * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down — a narrow
  * pane is UNMEASURED, not idle.
  *
- * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only consumer. Measured
- * 2026-09-16: `grep -rn 'READER_MIN_COLS' server/src pwa/src agent/src shared/*.ts`
- * returns exactly one hit — this declaration. In particular the server's mail
+ * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only consumer: run
+ * `grep -rn 'READER_MIN_COLS' server/src pwa/src agent/src shared/*.ts` and the
+ * only hits inside those four trees are this declaration and this sentence's
+ * own quotation of the command — no other file in server/src, pwa/src or
+ * agent/src references the constant. In particular the server's mail
  * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
  * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
  * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —

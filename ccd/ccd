@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5cfd44adfc95afd3ac542bf96ecdd9cec3e253537dcca85f3557044e27a70e01
+# ccrc:generated 1 sha256=1674811450945dc3cdc5aa32b00411dec1266e92c548d2da08c7f4fbdd386b14
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2422,7 +2422,12 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
   # up — the same discipline this paragraph is about. The drawer wave then added
   # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
-  # floors), re-measured the same way: 38.
+  # floors): 38, by that same addition — NOT a fresh census of every
+  # per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
+  # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
+  # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
+  # omits; the gap is pre-existing, not new, and this paragraph's count tracks
+  # only the additions named above against the last stated total.
   # The 38: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
@@ -6692,8 +6697,9 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   #     `tmux resize-window`, which works against an agent of any age. Its callers
   #     are an operator typing the verb on the box and the agent's `win-size`
   #     grant — NOT ccd itself, which is what this line claimed until fix round 2.
-  #     Measured 2026-09-16: `grep -n 'cmd_win_size' ccd/ccd` answers exactly two
-  #     lines, this definition and the dispatcher's own `win-size)` arm. No ccd
+  #     Measured 2026-09-16: `grep -n 'cmd_win_size' ccd/ccd` finds three lines —
+  #     this definition, the dispatcher's own `win-size)` arm, and this
+  #     sentence's own quotation of the command — and no fourth. No ccd
   #     function calls it.
   #
   # EXACT-MATCH TARGETS (`=`), NEVER A BARE `cc-<id>`, AND NEVER GLOBAL. Two
@@ -6710,11 +6716,14 @@ cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — p
   #     names NO session is routinely a unique PREFIX of one that is live —
   #     which is the whole hazard. (An earlier draft gave a concrete pair here
   #     as a live-box measurement. It was fabricated and wrapper-shaped, not
-  #     session-shaped, and this file ships publicly: no shipped source names an
-  #     account or a session.) So the liveness refusal below CANNOT FIRE for a
-  #     well-formed id that is a unique prefix of a live session, and the verb
-  #     would mutate a window nobody named. The id class does not help: the
-  #     hazard is built from the characters it already admits.
+  #     session-shaped, and this file ships publicly: this illustration carries
+  #     no session or account name, because a public-bound file should not
+  #     embed the fleet's roster — not a claim that no shipped source ever
+  #     does (`_gpt_enabled() { _account_ok gpt; }` names one, measured).) So
+  #     the liveness refusal below CANNOT FIRE for a well-formed id that is a
+  #     unique prefix of a live session, and the verb would mutate a window
+  #     nobody named. The id class does not help: the hazard is built from the
+  #     characters it already admits.
   #   • `set-option` with no `-t` AT ALL mutates ONE WINDOW NOBODY NAMED —
   #     whichever session tmux calls current. The claim that stood here was that
   #     it "writes the SERVER-WIDE default and re-sizes every live session at
@@ -15975,9 +15984,11 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   #
   # PANE WINDOW IS `tail -8`, EVERYWHERE BELOW BUT `_pane_box_draft` (D-2264).
   # Every other established consumer of `esc to interrupt`/`_pane_auto_continue_armed`/
-  # `_pane_hard_blocked` narrows first — `_auto_swap_check` (ccd:15626) and `_auto_compact_check`
-  # (ccd:15840) both `| tail -8` — and ccd:15826-15835 already documents why: a full ~50-row
-  # capture lets `grep -q "esc to interrupt"` match a STALE banner further up the scrollback, and
+  # `_pane_hard_blocked` narrows first — `_auto_swap_check` and `_auto_compact_check` both
+  # `| tail -8` their own capture — and `_auto_compact_check`'s own header (the "That is not
+  # cosmetic" paragraph, just above its `pane=$(tmux capture-pane …)` line) already documents
+  # why: a full ~50-row capture lets `grep -q "esc to interrupt"` match a STALE banner further
+  # up the scrollback, and
   # `_pane_hard_blocked`'s `limit reached|API Error: 429|rate limit` alternation is exactly what a
   # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
   # outside the last 8 lines while still being well inside a full capture, so widening this

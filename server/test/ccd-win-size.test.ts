@@ -161,8 +161,9 @@ describe('ccd win-size', () => {
     //   set-option    -t 'cc-oth*' window-size smallest-> rc 0, cc-other-session
     //                                                    took it (fnmatch, not
     //                                                    merely prefix)
-    // `-t` is a PATTERN resolved to a unique match, not a name — on the live box
-    // that is `cc-seven-ccrc` landing on `cc-seven-ccrc-pwa` among ~20 sessions.
+    // `-t` is a PATTERN resolved to a unique match, not a name — live sessions
+    // on this fleet share long prefixes and differ only in a final syllable,
+    // so an id that names NO session can uniquely prefix a live one.
     // So the liveness refusal below could not fire for such an id, and the verb
     // would mutate a session nobody named.
     //

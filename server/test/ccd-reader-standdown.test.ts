@@ -234,8 +234,10 @@ describe('the two stand-downs outside the phrase population', () => {
     // RE-MEASURED 2026-09-16, on a COPY of `ccd/ccd` with the guard line
     // deleted and this exact stub: stderr empty, and the recorded calls are
     // `capture-pane -t cc-demo -p`, `capture-pane -t cc-demo -p -e`,
-    // `send-keys -t cc-demo -l /effort ultracode`, `send-keys -t cc-demo Enter`.
-    // The control (shipped tree) records the width query alone. So deleting
+    // `send-keys -t cc-demo -l /effort ultracode`, `send-keys -t cc-demo Enter`,
+    // and `capture-pane -t cc-demo -p` again — the `Yes, switch` check that
+    // runs after Enter. The control (shipped tree) records the width query
+    // alone. So deleting
     // this guard reds BOTH assertions above — the message and the `send-keys`
     // — not neither.
     //
@@ -335,8 +337,9 @@ interface Site { fn: string; line: number; text: string }
  *  ANCHORED BY CONTENT, NOT BY LINE NUMBER, and that is a correction rather
  *  than a preference: these two were cited here as 14702 and 15765, which were
  *  right on the pre-merge parent and wrong the moment this branch merged
- *  `origin/main` (+111 — they are 14813 and 15876 as of 2026-09-16, and the
- *  merge alone will move them again). The second was the dangerous one: 15765
+ *  `origin/main`, and every subsequent edit to `ccd/ccd` moves them again —
+ *  which is why this paragraph does not restate a current pair. The second
+ *  was the dangerous one: 15765
  *  now lands on a real typing line, so the citation read as a live claim about
  *  the wrong kind of line. This wave's plan carries a deviation of its own
  *  about exactly this rot (the number is recorded there and not inline: the
