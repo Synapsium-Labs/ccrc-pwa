@@ -31,12 +31,13 @@ unverified, never as approval, and is recorded as
 finding whose refuters ALL died is `unexamined`, never `refuted` — it is reported beside the
 confirmed findings and blocks acceptance until examined.
 
-**What the coordinator does with the result.** Confirmed findings go back to the worker as a
-`finding` mail with the file, the line and the claim, and the run stays where it is; the ledger's
-"Decisions & deviations" records the panel's verdict and the count of findings per lens for the
-wave, which is what spec §6's quality signal reads. Nothing in this file changes routing: a wave
-with findings is a fix round on the spend side, and the routing decision for the NEXT wave is
-clause 12's, made on the evidence, not here.
+**What happens to the result.** The reviewer REPORTS and never rules (reviewer clause 6: it never
+mails the worker and never sends work back); the coordinator rules on the report and sends work back
+per SKILL.md step 6 — advance the work run to `working`, then a `status` mail with subject
+`fix-round`. The ledger's "Decisions & deviations" records the panel's verdict and the count of
+findings per lens for the wave, which is what spec §6's quality signal reads. Nothing in this file
+changes routing: a wave with findings is a fix round on the spend side, and the routing decision for
+the NEXT wave is clause 13's, made on the evidence, not here.
 
 **Run it as a Workflow**, passing the range and the documents as `args`. The script is complete;
 copy it verbatim. `agent`, `pipeline`, `parallel`, `phase` and `args` are the Workflow tool's

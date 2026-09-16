@@ -1690,12 +1690,13 @@ Nothing server-side makes reap mechanically impossible for a process with a
 shell — see "The honest boundary" below for what a contract does and does not
 buy.
 
-**Routing (routing slice 2).** Clause 12 makes every brief name the wave's shape and the routing
+**Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
 `ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
-the coordinator revise routing only on a wave's evidence, recorded in the ledger. Clause 13 routes
-every handoff review through the held-out panel in `references/review-panel.md` — three Opus lenses,
-a Sonnet refute pass per finding, model and effort literal in the script — so the quality gate does
-not move when a worker's class or effort does. Both references are in `install-coordinator-skill.sh`'s
+the coordinator revise routing only on a wave's evidence, recorded in the ledger. Clause 14 names the
+held-out panel in `references/review-panel.md` as the review brief's shape, RUN BY the review run's
+reviewer (clause 12) — three Opus lenses, a Sonnet refute pass per finding, model and effort literal
+in the script — so the quality gate does not move when a worker's class or effort does. Both
+references are in `install-coordinator-skill.sh`'s
 `REQUIRED_REFS` and pinned by `server/test/routing-references.test.ts`.
 
 The worker's half: clause 14 routes its own subagents by task shape from the same matrix, class

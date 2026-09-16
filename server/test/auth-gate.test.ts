@@ -192,7 +192,7 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(48);
+    expect(scanRoutes('server.ts').length).toBe(49);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -228,17 +228,30 @@ describe('the scanner is looking at something', () => {
     // thing it must not be is liftable by a caller who never signed in. Its
     // own docstring argues the absent `knownId` gate, which is a different
     // question from this one.
+    // 49 since `POST /api/sessions/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 4, Task 5) — the PWA pickers' write: the SAME shape a third time,
+    // registered in `server.ts`, NOT EXEMPT (its own docstring says so, and
+    // `sessions-route-route.test.ts` pins the absence) and carrying NO box
+    // token — a picker tap is as human-driven as a typed prompt, so it is
+    // session-gated like `POST /api/sessions/:id/prompt` beside it.
     //
     // THE TWO HALVES MOVED ON DIFFERENT BRANCHES, and this line is why the
-    // arithmetic is spelled out rather than carried. This wave took the
+    // arithmetic is spelled out rather than carried. The drawer wave took the
     // `server.ts` half 47 -> 48 and left `coord/routes.ts` where it was;
     // routing slice 0 took `coord/routes.ts` 28 -> 29 and left `server.ts`
     // where it was. Each branch read 76 and neither was wrong. Git saw the same
-    // 75 -> 76 edit on both sides and auto-merged this assertion to 76 with no
+    // 75 -> 76 edit on both sides and auto-merged that assertion to 76 with no
     // marker on it — the one line that is false on the merged tree is the one
-    // line the merge would not have shown. 48 + 29 = 77, a number no parent
-    // ever measured. Re-derived here, not chosen from a side.
-    expect(ROUTES.length).toBe(77);
+    // line the merge would not have shown.
+    //
+    // IT HAPPENED AGAIN, on the 2026-09-16 merge of `origin/main` into routing
+    // slice 4, and the same way: routing slice 4 took `server.ts` 47 -> 48 with
+    // `POST /api/sessions/:id/route` while main took the SAME half 47 -> 48
+    // with `GET /api/sessions/:id/pane/history`. Both sides read 48 and 76, so
+    // nothing conflicted and the merge carried a number neither parent's tree
+    // has: the merged `server.ts` registers BOTH routes, 49. Re-derived here on
+    // the merged tree, not taken from a side — 49 + 29 = 78.
+    expect(ROUTES.length).toBe(78);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -369,7 +382,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 77 scanned + the static wildcard when the bundle is built.
+    // 78 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -775,7 +788,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 74 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 75 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -839,7 +852,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 74 HTTP routes, not the 29 exempt.
+          //    is not itself flag-aware — the assertion that covers all 75 HTTP routes, not the 29 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

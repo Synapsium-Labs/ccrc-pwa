@@ -1,6 +1,6 @@
 # The routing matrix — which class, effort, subagent class and workflow mode a shape of work runs on
 
-This is the strategy the coordinator applies (clause 12) and the worker routes its own subagents
+This is the strategy the coordinator applies (clause 13) and the worker routes its own subagents
 by (worker clause 14). It is spec §3 of `docs/superpowers/specs/2026-09-14-effort-model-routing-design.md`,
 verbatim; the spec is the argument, this file is the rule the skills point at. A row changes by a
 PR against THIS file, with the spec amended in the same PR and the measurement behind the change
