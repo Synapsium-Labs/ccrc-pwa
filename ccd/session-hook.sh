@@ -1249,9 +1249,9 @@ _hook_compact_pre() {
   # which matters inside a held lock section — and each basename is then
   # matched against the exact family grammar.
   aged=$(find "$REG" -maxdepth 1 -name ".$id.*" -mmin "+$mins" 2>/dev/null) || aged=""
-  # ITEM 3 again: the `find` above is a synchronous child, which is exactly the
-  # window a replacement lands in. One proof covers the whole loop because the
-  # loop forks nothing.
+  # ITEM 3 again, and for the `find` alone: it is a synchronous child, which is
+  # the window a replacement lands in. The LOOP is outside item 3 — it mutates
+  # only private `.<id>.` family members, never a canonical pathname.
   _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
   while IFS= read -r cand; do
     [[ -n "$cand" ]] || continue
