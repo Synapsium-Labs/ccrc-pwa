@@ -224,8 +224,21 @@ screen-reader rotor still lists two indistinguishable buttons.
   the coordinator's card shows the pending phantom while the row sits on its own card. Two renderings of
   one spawn, but not two access paths — the phantom carries no session id and opens nothing — so it does
   not breach R2.
-- **Chains hit the depth ceiling.** `RowDepth = 0 | 1`, so on C1's card rule 4 lifts C2 to depth 0 with W
-  beneath it and C1's own bracket to C2 is not drawn. Accepted: no chain exists on the fleet today.
+- **Chains hit the depth ceiling, and one level is the ruling** (operator, 2026-09-16). `RowDepth = 0 | 1`,
+  so on C1's card rule 4 lifts C2 to depth 0 with W beneath it and C1's own bracket to C2 is not drawn.
+
+  How rare is the chain? **Measured over all 64 runs in history: 26 distinct workers, 9 distinct
+  coordinators, and ZERO sessions that were ever both.** It has never occurred. The worker skill forbids
+  it in its own description — "Never use it to coordinate a program — a worker that starts dispatching
+  has become a coordinator without a ledger". But it is a CONTRACT, not a mechanism: no guard in
+  `POST /api/runs` refuses a caller that is itself a worker, and `CLAUDE.md:63-65` states that fleet
+  identity is "attribution, not authentication" and "Don't assume server-side checks stop a session
+  acting directly". Note also that coordinating is not a main-checkout-only role — four workspace-shaped
+  sessions coordinate today — so the chain is one skill-clause away from reachable.
+
+  The bounded resolver is therefore kept despite the rarity: resolving one hop and assuming no chain
+  would still have to DETECT a chain to avoid silently placing a row on a card whose parent is absent,
+  so it costs nearly the same as walking correctly.
 
 ## 8. Testing
 
