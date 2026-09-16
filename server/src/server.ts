@@ -2048,8 +2048,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           return reply.code(501).send({ ok: false, error: 'unsupported' });
         }
         return runCcdOr502(reply, body.enable === false
-          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
-          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
+          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir, routed.route)
+          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir, routed.route));
       }
       const pool = poolFor(
         measured.poolsRead ? measured.pools : { listed: false },
@@ -2062,10 +2062,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
     //
-    // `routed.route` reaches BOTH the creating and the revival arm (Task 2
-    // made `start`/`enable` write the pairs whether the row is new or old) —
-    // this one call site serves both, since the crossPool branch above is the
-    // only path that returns before reaching it.
+    // `routed.route` reaches EVERY arm below it — the crossPool branch just
+    // above (its own `startCross`/`enableCross` call), the creating arm and
+    // the revival arm (Task 2 made `start`/`enable` write the pairs whether
+    // the row is new or old) — so no arm this handler can take drops an
+    // operator's route (fix round 1, finding #1: the crossPool branch used to
+    // return before ever reaching `routed.route`, silently dropping it).
     return runCcdOr502(reply, body.enable === false
       ? CCD_ARGV.start(body.wrapper, body.project, workdir, routed.route)
       : CCD_ARGV.enable(body.wrapper, body.project, workdir, routed.route));

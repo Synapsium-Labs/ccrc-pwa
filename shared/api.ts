@@ -4584,15 +4584,29 @@ export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow',
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
 
-/** `parseRouteFields`'s own byte cap — the SAME 32 bytes `_route_valid` on the
- *  box enforces per value, measured the same way (`_route_argv_check`
- *  counts bytes, not characters). Refusing early on an oversize value here
- *  saves the round trip; ccd's own check is still the authority. */
+/** `parseRouteFields`'s OWN ingress bound (this brief's, not a mirror of a
+ *  ccd check): a body-level SHAPE cap, 32 bytes measured with `TextEncoder`
+ *  (bytes, not `.length`, for the same reason `ccd/ccd`'s `_route_bytes`
+ *  counts bytes for its refusal messages — a UTF-8 value's byte count and
+ *  character count differ). Measured against the real binary: neither
+ *  `_route_valid` (`ccd/ccd:14727-14760`, closed-vocabulary lookups only,
+ *  no length check) nor `_route_argv_check` (`ccd/ccd:14801-14840`, which
+ *  calls `_route_bytes` only to RENDER a byte count inside an already-decided
+ *  refusal) enforces a byte cap on a `--route` value — so this constant has
+ *  no counterpart on the box and is not "the same 32 bytes" as anything ccd
+ *  does; it exists solely so a wildly oversized body is refused before the
+ *  round trip. ccd's own vocabulary check is still the sole authority on
+ *  whether a value is a valid `class`/`effort`/etc. */
 const ROUTE_VALUE_MAX_BYTES = 32;
 
-/** ccd's own refusal grammar for a bad `--route`/`--set` pair, mirrored here
- *  so a malformed body never reaches the fleet: a blank value, or one
- *  carrying a control character (`_route_valid`'s `*[[:cntrl:]]*` case). */
+/** SHAPE-only guard, this brief's OWN, not a mirror of a ccd validator: a
+ *  blank value or one carrying a control character is refused here before a
+ *  malformed body reaches the fleet. Measured against the real binary: the
+ *  only `[[:cntrl:]]` guard over a `--route` VALUE anywhere in `ccd/ccd` is
+ *  `cmd_route`'s over `--actor`/`--reason` (`ccd/ccd:6769-6771`, guarding
+ *  free-form log text against a forged journal line) — `_route_valid` has no
+ *  control-character arm at all, since it only ever looks a value up in a
+ *  closed vocabulary. */
 const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
 
 /**

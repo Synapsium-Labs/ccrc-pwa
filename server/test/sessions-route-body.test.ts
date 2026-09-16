@@ -16,9 +16,10 @@ import type { Runner } from '../src/exec.js';
 import { buildServer } from '../src/server.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
-import { ROUTE_ARGV_CAP } from '../src/ccdargv.js';
+import { POOLS_CAP, ROUTE_ARGV_CAP } from '../src/ccdargv.js';
 
 const WITH_TOKEN = ['ws-add', 'ensure', 'ws-hold', ROUTE_ARGV_CAP];
+const WITH_TOKEN_AND_POOLS = [...WITH_TOKEN, 'enable', 'start', POOLS_CAP];
 
 /** `/api/sessions`'s pool pre-check reads the registry directory (`readdir`)
  *  to tell a revival apart from a fresh create — an unlisted (rather than
@@ -95,6 +96,43 @@ describe('POST /api/sessions carries an operator route', () => {
     });
     expect(res.statusCode).toBe(200);
     expect(calls).toContainEqual(['enable', '--route', 'effort=high', 'claude', 'demo']);
+    await app.close();
+  });
+
+  // Fix round 1, finding #1: the crossPool arm used to return `startCross`/
+  // `enableCross` with NO route parameter at all, so an operator's route was
+  // silently dropped on exactly the path `NewSessionSheet.tsx` sends
+  // `crossPool: true` from. Measured against the real binary: `cmd_start`'s
+  // flag loop strips `--cross-pool` and `--route` independently of order, and
+  // `cmd_enable` forwards both unchanged — so the crossPool arm takes route
+  // pairs exactly like the ordinary one, flags leading, `--cross-pool` first.
+  it('crossPool + route, both tokens present: startCross/enableCross carry the route pairs', async () => {
+    const { app, calls } = await appWithCcdSpy(WITH_TOKEN_AND_POOLS);
+    const start = await app.inject({
+      method: 'POST', url: '/api/sessions',
+      payload: { wrapper: 'claude', project: 'demo', crossPool: true, enable: false, route: { class: 'opus' } },
+    });
+    expect(start.statusCode).toBe(200);
+    expect(calls).toContainEqual(['start', '--cross-pool', '--route', 'class=opus', 'claude', 'demo']);
+
+    const enable = await app.inject({
+      method: 'POST', url: '/api/sessions',
+      payload: { wrapper: 'claude', project: 'demo', crossPool: true, route: { class: 'opus' } },
+    });
+    expect(enable.statusCode).toBe(200);
+    expect(calls).toContainEqual(['enable', '--cross-pool', '--route', 'class=opus', 'claude', 'demo']);
+    await app.close();
+  });
+
+  it('crossPool + route, route-argv-v1 absent: 501, and no ccd call reaches the fleet — never a silent drop', async () => {
+    const { app, calls } = await appWithCcdSpy(['enable', 'start', POOLS_CAP]);
+    const res = await app.inject({
+      method: 'POST', url: '/api/sessions',
+      payload: { wrapper: 'claude', project: 'demo', crossPool: true, route: { class: 'opus' } },
+    });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toEqual({ ok: false, error: 'unsupported' });
+    expect(calls).toEqual([]);
     await app.close();
   });
 });

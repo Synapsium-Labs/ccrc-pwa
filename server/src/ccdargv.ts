@@ -220,9 +220,20 @@ export const CCD_ARGV = {
   enable:    (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
                argv(['enable', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   /** `start`/`enable` with the crossing declared — see `swapCross` below for
-   *  why the flag leads and why these are separate entries. */
-  startCross:  (w: string, p: string, wd?: string) => argv(['start', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
-  enableCross: (w: string, p: string, wd?: string) => argv(['enable', '--cross-pool', w, p, ...(wd ? [wd] : [])]),
+   *  why the flag leads and why these are separate entries. `route` is the
+   *  same defaulted trailing parameter as `start`/`enable` above: measured
+   *  against the real binary, `cmd_start`'s flag loop (`ccd/ccd:16478-16483`)
+   *  strips `--cross-pool` and `--route` independently of each other's
+   *  position, and `cmd_enable` forwards both unchanged to `cmd_start`
+   *  (`ccd/ccd:18500-18520`) — so a cross-pool spawn takes `--route` exactly
+   *  like an in-pool one, and dropping it here (as the entries did before)
+   *  silently downgraded an operator's ask on the one path `POST
+   *  /api/sessions` reaches when `crossPool: true` is set (routing spec
+   *  §5.3, slice 4 fix round 1, finding #1). */
+  startCross:  (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+                 argv(['start', '--cross-pool', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
+  enableCross: (w: string, p: string, wd?: string, route: RouteFields | null = null) =>
+                 argv(['enable', '--cross-pool', ...routeFlags(route), w, p, ...(wd ? [wd] : [])]),
   ensure:    (id: string) => argv(['ensure', id]),
   /** `surface` is REQUIRED, not defaulted — the caller always knows who is
    *  asking, and a default here would be how a second caller quietly
