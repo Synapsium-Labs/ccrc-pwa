@@ -85,6 +85,14 @@ const START_SPAWNLESS =
   '_spawn() { :; }; _spawn_start() { SPAWN_FROMSWAP=0; }; _spawn_settle() { :; };'
   + ' _ws_supervise() { :; }; _supervised_start() { :; }; tmux() { return 1; };';
 
+/** START_SPAWNLESS with the ONE fact these cases turn on reversed: the session
+ *  probe answers `live`, so `cmd_start` takes its already-running return —
+ *  the branch `cmd_enable` aliases through on every session that is UP.
+ *  `_have_systemctl` is refused so that branch's boot-persistence reconcile
+ *  (`ccd-enable.test.ts`'s subject, not this file's) stays out of the way. */
+const START_ALIVE = `${START_SPAWNLESS} _session_probe() { PROBE_VERDICT=live; PROBE_DETAIL=""; };`
+  + ' _have_systemctl() { return 1; };';
+
 /** The harness stubs home-able ids only, so an overflow lane has to be
  *  installed before `_account_ok` — or `command -v` on the spawn path — can
  *  see it (`ccd-auto-swap-pool.test.ts`'s own `install()`). */
@@ -294,6 +302,44 @@ describe('--route on start and enable (routing spec §5.3)', () => {
       'route claude-demo: class ∅ -> sonnet [actor=start] (argv)',
       'route claude-demo: class sonnet -> opus [actor=start] (argv)',
     ]);
+  });
+
+  it('enable --route on a LIVE session writes the pairs BEFORE the already-running return (final review finding 2)', () => {
+    // S4-R3's fix sat BELOW `cmd_start`'s `if _alive "$id"` return, so the silent
+    // drop that ruling was raised to close was still live for the commonest case
+    // of all — a session that is UP. `ccd enable --route class=opus claude demo`
+    // printed `already running`, wrote nothing, journaled nothing and exited 0,
+    // and `POST /api/sessions` renders that exit 0 as `{ok:true}` under the
+    // new-session sheet's "Starting …" toast: an operator who set Class in the
+    // sheet for a wrapper+project already running watched a write that never
+    // happened succeed. Every other case in this file stubs `tmux() { return 1; }`,
+    // which is exactly why this one was unpinned BY CONSTRUCTION — `_alive` was
+    // never true, so the branch was never entered.
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=sonnet claude demo`);
+    const r = shStatus(`${START_ALIVE} cmd_enable --route class=opus claude demo`);
+    expect(r.status, r.out).toBe(0);
+    expect(r.out).toContain('already running: claude-demo');
+    expect(h.reg('claude-demo', 'class')).toBe('opus');
+    const rows = routeRows();
+    expect(rows).toHaveLength(2);
+    expect(decOf(rows[1]!)).toMatchObject({ actor: 'start', reason: 'argv' });
+    expect(rows[1]!['detail']).toBe('class: sonnet -> opus');
+    expect(routeLog('claude-demo')).toEqual([
+      'route claude-demo: class ∅ -> sonnet [actor=start] (argv)',
+      'route claude-demo: class sonnet -> opus [actor=start] (argv)',
+    ]);
+  });
+
+  it('the other condition on the same branch: a LIVE session and NO --route writes nothing at all', () => {
+    // "You named fields" and "you named none" stay two conditions on this arm
+    // too — the revival arm's own rule, stated one branch down. A bare
+    // `ccd enable` on a live session is still the pure boot-persistence act it
+    // has always been, and must not seed a coordinator row over a record.
+    h.sh(`${START_SPAWNLESS} cmd_start --route class=sonnet claude demo`);
+    const r = shStatus(`${START_ALIVE} cmd_enable claude demo`);
+    expect(r.status, r.out).toBe(0);
+    expect(h.reg('claude-demo', 'class')).toBe('sonnet');
+    expect(routeRows()).toHaveLength(1);
   });
 
   it('start refuses a bad value before the registry row exists', () => {

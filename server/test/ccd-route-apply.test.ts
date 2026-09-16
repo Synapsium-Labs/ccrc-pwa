@@ -345,3 +345,122 @@ describe('route --apply (routing spec §5.3 live change; slice 1 keystrokes D-28
     expect(h.reg(GPT, 'routeskip')).toBeNull();
   });
 });
+
+describe('the final review\'s three writer/typer defects, each pinned where it happened', () => {
+  beforeEach(() => { seed(ID); plantIdle(); });
+
+  it('(1) a session that was NEVER routed: --apply on a busy pane queues, and the next idle tick TYPES the picker', () => {
+    // FINDING 1. `_route_apply_seed` treats "no `routeapplied` file" as "this
+    // record predates the applier" — a proxy that is only true at the deploy
+    // moment, because `_spawn_start` DELETES the stamp for a session with no
+    // record. Every never-routed session on the fleet therefore had no file,
+    // and the first routing write to one of them was stamped applied by the
+    // next tick with ZERO keystrokes: the pane kept its old model, nothing was
+    // pending, the retry budget was never spent, and the PWA showed `queued`
+    // and then its 60s unconfirmed toast for ever. The writers now seed the
+    // stamp from what the LAST SETTLE composed — here, nothing at all — so the
+    // write that follows is a divergence the applier types.
+    pane(MID_TURN_PANE);
+    const out = h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set class=opus --apply`);
+    expect(out).toContain(`queued ${ID}`);
+    expect(keys()).toEqual([]);
+    expect(h.reg(ID, 'routeskip')).toMatch(/^\d+ mid-turn$/);
+    // The stamp EXISTS and claims NOTHING — two conditions, not one: a session
+    // that was served nothing is not a session whose record predates the code.
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.routeapplied`))).toBe(true);
+    expect(h.reg(ID, 'routeapplied')).toBe('');
+    expect(swapLog()).not.toContain('routeapplied-seeded');
+
+    pane(IDLE_PANE); after('model', PICKER_PANE); after('s', ACK_MODEL('Opus 5'));
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=opus');
+  });
+
+  it("(1) the argv writer's own path — a wave N>=2 dispatch — seeds what the settle composed and leaves the NEW pair pending", () => {
+    // The same swallow reached `_route_argv_write`: the dispatcher's wave N>=2
+    // routing write carries no `--apply`, so the tick is the only thing that
+    // would ever type it.
+    h.sh(`_reg_set ${ID} class sonnet; _reg_set ${ID} effort auto`);   // a record with no stamp, as the fleet's are
+    h.sh(`${TMUX_STUB} _route_argv_write ${ID} 'run:7 dispatch' argv class=opus`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=sonnet effort=auto');
+    expect(swapLog()).toMatch(new RegExp(`routeapplied-seeded ${ID}: class=sonnet effort=auto \\(seeded at a route write`));
+
+    pane(IDLE_PANE); after('model', PICKER_PANE); after('s', ACK_MODEL('Opus 5'));
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Down', 'Down', '-l s']);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=opus');
+  });
+
+  it('(3) a STALE `Set model to …` line confirms nothing: the ack is bound to the row `s` was pressed on', () => {
+    // FINDING 3. `_route_ack_wait "$t" "Set model to .* for this session only"`
+    // greps the WHOLE visible pane, so any earlier model acknowledgement — a
+    // human's own `/model` tap minutes ago, a previous applier run — satisfied
+    // it, and `class` was recorded applied against a pane that never took it.
+    // The pane here carries an acknowledgement for ANOTHER model and the stub
+    // never renders a new one.
+    const STALE = `${IDLE_PANE}Set model to Sonnet 5 for this session only\n`;
+    pane(STALE);
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} routeapplied "class=sonnet"`);
+    after('model', `${STALE}❯ 1. Default (recommended) ✔\n  2. Sonnet\n  3. Opus\n  4. Haiku\n`);
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID} || :`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=sonnet');
+    expect(h.reg(ID, 'routeskip')).toMatch(/apply-unconfirmed/);
+    expect(keys().at(-1)).toBe('Escape');
+  });
+
+  it('(3) the control: an acknowledgement NAMING the selected row confirms it', () => {
+    pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} routeapplied "class=sonnet"`);
+    after('model', PICKER_PANE); after('s', ACK_MODEL('Opus 5'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=opus');
+    expect(h.reg(ID, 'routeskip')).toBeNull();
+  });
+
+  it("(3) the Default row binds on the DESCRIPTION's model name, parenthesised label and all", () => {
+    // Research doc row 232, both halves: the Anthropic picker labels row 1
+    // `Default (recommended)` — regex metacharacters, which is why the subject
+    // is quoted — and describes it with the model that row resolves to, which
+    // is the word the acknowledgement then carries (`Set model to Sonnet 5 …`).
+    pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class default; _reg_set ${ID} routeapplied "class=opus"`);
+    after('model', `${IDLE_PANE}  1. Default (recommended)  Sonnet 5 · Efficient for routine tasks\n`
+      + '  2. Sonnet  Sonnet 5 · Efficient for routine tasks\n'
+      + '❯ 3. Opus ✔  Opus 5 · Best for everyday, complex tasks\n'
+      + '  4. Haiku  Haiku 4.5 · Fastest for quick answers\n');
+    after('s', ACK_MODEL('Sonnet 5'));
+    h.sh(`${TMUX_STUB} _route_apply_now ${ID}`);
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Up', 'Up', '-l s']);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=default');
+  });
+
+  it('(4) a class write VOIDS a standing degraded stamp — the tap is not silently a no-op', () => {
+    // FINDING 4. `_route_wanted` answers the class SERVED, and the `degraded`
+    // stamp is a statement about the PREVIOUS class: with `class=fable
+    // degraded=opus` already applied, an operator tapping Sonnet got the record
+    // rewritten, ZERO keystrokes, no refusal word, and a session still running
+    // the old (more expensive) rung until some later settle.
+    pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} degraded opus; _reg_set ${ID} routeapplied "class=opus"`);
+    after('model', PICKER_PANE); after('s', ACK_MODEL('Sonnet 5'));
+    const out = h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set class=sonnet --apply`);
+    expect(h.reg(ID, 'degraded')).toBeNull();
+    expect(keys()).toEqual(['-l /model', 'Enter', 'Down', '-l s']);
+    expect(h.reg(ID, 'routeapplied')).toContain('class=sonnet');
+    expect(out).not.toContain('queued');
+  });
+
+  it('(4) the other direction: a write that names NO class leaves the stamp standing', () => {
+    // The rule is only wrong when the INTENT changes. An effort write says
+    // nothing about which rung this lane can serve, so the stamp — and the
+    // class the applier types — must survive it untouched.
+    pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class fable; _reg_set ${ID} degraded opus; _reg_set ${ID} routeapplied "class=opus"`);
+    after('s', ACK_EFFORT('high'));
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=high --apply`);
+    expect(h.reg(ID, 'degraded')).toBe('opus');
+    expect(h.reg(ID, 'routeapplied')).toContain('class=opus');
+    expect(h.reg(ID, 'routeapplied')).toContain('effort=high');
+  });
+});

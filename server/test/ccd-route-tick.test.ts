@@ -364,3 +364,50 @@ describe('the supervise heartbeat counts the seconds the applier actually spends
     expect(h.calls().filter((l) => l === 'stamp supervised')).toHaveLength(3);
   });
 });
+
+describe('the compactor and the applier share a pane, and only one of them types per tick (final review finding 5)', () => {
+  // THE COLLISION. The supervise loop's live) arm runs
+  // `_auto_compact_check "$id"; _route_apply_check "$id"` on ONE line (pinned
+  // above). The compactor ends by sending `/compact` + Enter and signals
+  // nothing; the applier then re-asks the idle predicate, whose whole answer is
+  // a pane capture and a `sessions/<pid>.json` read — neither of which has
+  // moved yet — and types `/model` on top of a compaction. The interlock is
+  // `lastcompact`, which `_auto_compact_check` writes immediately BEFORE its
+  // send-keys, so it also holds between processes: `ccd route --apply` is the
+  // operator's process, not the supervisor's.
+  const QUIET = Number(constOf('ROUTE_COMPACT_QUIET'));
+  const HOT_PANE = '│ 🤖 Opus 5 · xhigh │ ▓ ctx ▁▁▁ 95% │\n❯ \n';
+
+  beforeEach(() => {
+    seed(ID); plantIdle();
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} effort high; _reg_set ${ID} routeapplied "class=opus effort=xhigh"`);
+  });
+
+  it('ONE tick, both conditions: /compact is typed and the applier declines with its own word', () => {
+    pane(HOT_PANE);
+    h.sh(`${TMUX_STUB} _auto_compact_check ${ID}; _route_apply_check ${ID}`);
+    expect(keys(), 'the applier typed into a pane the compactor had just typed into').toEqual(['-l /compact', 'Enter']);
+    expect(h.reg(ID, 'routeskip')).toMatch(/^\d+ compacting$/);
+    expect(swapLog()).toMatch(new RegExp(`route-skip ${ID}: compacting`));
+    // The refusal is a NOTE, never an attempt (ruling S4-R7): nothing was typed
+    // and the condition clears itself, so the retry budget must not be spent.
+    expect(h.reg(ID, 'routetries')).toBeNull();
+  });
+
+  it('once the quiet window has passed the SAME record lands', () => {
+    pane(IDLE_PANE); after('s', ACK_EFFORT('high'));
+    h.sh(`_reg_set ${ID} lastcompact "$(( $(date +%s) - ${QUIET} ))"`);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(keys()[0]).toBe('-l /effort');
+    expect(h.reg(ID, 'routeapplied')).toContain('effort=high');
+  });
+
+  it('the VERB declines too — the operator\'s own process cannot see the supervisor\'s keystroke either', () => {
+    pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} lastcompact "$(date +%s)"`);
+    const out = h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set effort=max --apply`);
+    expect(out).toContain(`queued ${ID}`);
+    expect(keys()).toEqual([]);
+    expect(h.reg(ID, 'routeskip')).toMatch(/^\d+ compacting$/);
+  });
+});

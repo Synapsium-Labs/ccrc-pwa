@@ -71,6 +71,19 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     h.cleanup();
   });
 
+  it('_route_compact_settling does not evaluate a payload planted in lastcompact', () => {
+    const h = makeCcdHarness('arith-routecompact');
+    // The applier's interlock reads the SAME field `_auto_compact_check` writes
+    // and compares it in the same arithmetic context, so it inherits that row's
+    // threat model exactly: a torn or hand-edited registry field, one writer, no
+    // wire route.
+    h.sh(
+      " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-routesettling\")]';"
+      + ' _route_compact_settling myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-routesettling'))).toBe(false);
+    h.cleanup();
+  });
+
   it('_spawn_start does not evaluate a payload planted in lastswap', () => {
     const h = makeCcdHarness('arith-spawn');
     // wrapper/workdir/uuid non-empty so the `incomplete registry` die does not
@@ -177,6 +190,10 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_route_try_bump (routetries increment)', anchors: ['$((n + 1))', 'else n=1'],           arith: '$((' },
     { fn: '_route_retry_ok (attempt cap)',          anchors: ['-ge "$ROUTE_RETRY_MAX"'],           arith: '-ge' },
     { fn: '_route_retry_ok (backoff)',              anchors: ['$((now - ts))', 'ROUTE_RETRY_BACKOFF'], arith: '$((' },
+    // The final review's finding 5: the applier's compaction interlock reads
+    // `lastcompact` — `_auto_compact_check`'s own field, one writer, from
+    // `$(date +%s)` — into the same shape of comparison.
+    { fn: '_route_compact_settling (quiet window)',  anchors: ['$((now - last))', 'ROUTE_COMPACT_QUIET'], arith: '$((' },
   ];
   // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
   // premise (#69 review round 4). The comment here said "the seven sites are all

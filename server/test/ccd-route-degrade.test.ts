@@ -145,10 +145,16 @@ describe('_spawn_start composes the class SERVED (routing spec §5.4 last paragr
   });
 
   it('a standing degraded=opus STALE against a NEW intended class (rerouted to haiku), lane UNMEASURED: the stamp is cleared, --model haiku, a restore row whose reason starts stale:', () => {
-    // Ruling S3-R7. Nothing clears `degraded` when `class` changes (`cmd_route`
-    // refuses the field), so a stamp measured for the OLD intended class
-    // (fable -> opus) can outlive a reroute to `class haiku` — one rung ABOVE
-    // haiku, from a measurement about a class nobody intends anymore. No
+    // Ruling S3-R7, and this settle is now the BACKSTOP rather than the only
+    // reader: since the final review's finding 4 the routing writers clear a
+    // stale stamp at the moment the class is written (`_route_stale_degrade_clear`,
+    // pinned in `ccd-route-apply.test.ts`), because a live session's applier
+    // reads the stamp every five seconds and would otherwise type the OLD rung.
+    // What reaches here is a stamp that went stale by some other route — a
+    // record written before that fix, or a hand edit. A stamp measured for the
+    // OLD intended class (fable -> opus) outliving a reroute to `class haiku` is
+    // one rung ABOVE the class asked for, from a measurement about a class
+    // nobody intends anymore. No
     // limits/sweep file: the lane is UNMEASURED at haiku, so absent the stale
     // check this settle would compose the stale `opus` stamp unchanged.
     seed('myid'); h.sh('_reg_set myid class haiku; _reg_set myid degraded opus');
