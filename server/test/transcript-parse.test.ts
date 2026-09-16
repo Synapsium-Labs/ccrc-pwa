@@ -245,9 +245,19 @@ describe('the harness resume pair is system, not a conversation (D-2228)', () =>
       { kind: 'system', uuid: 'a1', ts: '2026-09-09T11:25:31.906Z', text: 'No response requested.', origin: 'no-response' },
     ]);
   });
-  it('a META user message with other content is still a user event (unchanged)', () => {
+  // WAS `a META user message with other content is still a user event
+  // (unchanged)`. That title fenced D-2228's scope rather than ruling on this,
+  // and the text it reached for to stand in for "other content" turns out to be
+  // the FIRST LINE of a 17,141-byte SKILL.md body the harness injects into the
+  // user channel — 5 occurrences here, beside 7 more at 92,395-92,401 bytes. So
+  // the assertion in force was that an injected reference document is the
+  // operator's speech. It is not, and `isMeta` is what says so: 99 of 99
+  // non-sidechain user records carrying the flag are harness-written, 0 human.
+  it('a META user message with other content is the HARNESS, not the operator', () => {
     const other = metaPrompt.replace('Continue from where you left off. Note: ccd restarted this session.', '# Workflow authoring reference');
-    expect(parseTranscriptLine(other).map((e) => e.kind)).toEqual(['user']);
+    expect(parseTranscriptLine(other)).toEqual([
+      { kind: 'system', uuid: 'm1', ts: '2026-09-09T11:25:31.906Z', text: '# Workflow authoring reference' },
+    ]);
   });
   it('a real model saying the same words is still an assistant event (unchanged)', () => {
     const real = synthetic.replace('"model":"<synthetic>"', '"model":"claude-fable-5-1"');
@@ -289,5 +299,237 @@ describe('the limit banner is a system event, not the model speaking (D-2365)', 
   });
   it('a rate_limit error with no isApiErrorMessage flag stays an assistant event — both fields decide', () => {
     expect(parseTranscriptLine(banner({ isApiErrorMessage: undefined })).map((e) => e.kind)).toEqual(['assistant']);
+  });
+});
+
+// — the harness stops wearing the operator's face —
+//
+// Measured 2026-09-11 over this box's 18 session transcripts under
+// `~/.claude/projects` (1892 `type:"user"`, `isSidechain!==true` records whose
+// `message.content` is a string or an array; the other 310 `.jsonl` files there
+// are subagent sidechains, every record `isSidechain:true`, dropped at
+// `parse.ts:68` and never rendered).
+//
+//   family                             n     bytes   renders today   isMeta
+//   injected SKILL body (array)       13   746,871   USER BUBBLE     yes
+//   <task-notification>               12   166,976   USER BUBBLE     no
+//   <local-command-stdout>            64    10,440   USER BUBBLE     no
+//   [Image: original NxN …] note      14     1,490   USER BUBBLE     yes
+//   command envelope, MESSAGE-first    7     1,380   USER BUBBLE     no
+//   command envelope, MESSAGE-first    5       675   USER BUBBLE     yes
+//   -------------------------------------------------------------------
+//   leaking                          115   927,832
+//   genuine human turns              129   169,217   (6 of them /compact
+//                                                     recaps the PWA folds;
+//                                                     largest TYPED is 4,034 B)
+//
+// TWO signals, because neither alone closes it. `isMeta` is Claude Code's own
+// marker and is decisive where it appears — 99 of 99 non-sidechain user records
+// carrying it are harness-written, ZERO are human — but 83 of the 115 leaks do
+// not carry it. Those are ENVELOPES, and the envelope read is anchored to the
+// WHOLE record: a record that is nothing but `<tag>…</tag>` blocks, one of them
+// named. Measured: no human turn in the corpus so much as BEGINS with `<`, and
+// the one human record that quotes `<command-name>` at itself — a 26,861-byte
+// /compact recap — carries prose outside the blocks and stays a user turn.
+describe('a harness-written user record is not the operator speaking', () => {
+  const TS = '2026-09-11T09:14:02.113Z';
+  const rec = (content: unknown, over: Record<string, unknown> = {}): string => JSON.stringify({
+    parentUuid: 'p', isSidechain: false, type: 'user', uuid: 'h1', timestamp: TS,
+    message: { role: 'user', content }, ...over,
+  });
+  const kinds = (line: string): string[] => parseTranscriptLine(line).map((e) => e.kind);
+  const sys = (line: string): Extract<ChatEvent, { kind: 'system' }> => {
+    const [e] = parseTranscriptLine(line);
+    expect(e?.kind).toBe('system');
+    return e as Extract<ChatEvent, { kind: 'system' }>;
+  };
+
+  // — isMeta: the flag the harness writes and nobody else does —
+
+  it('an injected SKILL body is a system row carrying its text verbatim, byte for byte', () => {
+    // The largest single record in the corpus is 92,401 bytes and this shape
+    // recurs 7 times. It RE-ATTRIBUTES, it never drops: `isMeta` belongs to a
+    // harness this tree does not version, so a record it ever mis-stamps still
+    // renders IN FULL under the wrong label, which a reader can see through.
+    const body = `Base directory for this skill: /home/x/.claude/skills/review-pr\n\n# Review PR\n${'x'.repeat(4000)}`;
+    expect(parseTranscriptLine(rec([{ type: 'text', text: body }], { isMeta: true }))).toEqual([
+      { kind: 'system', uuid: 'h1', ts: TS, text: body },
+    ]);
+  });
+
+  it('an image-scaling note is a system row — STRING content, which an array-only rule would miss', () => {
+    const note = '[Image: original 3122x1532, displayed at 2000x981. Multiply coordinates by 1.56 to map to original image.]';
+    expect(parseTranscriptLine(rec(note, { isMeta: true }))).toEqual([
+      { kind: 'system', uuid: 'h1', ts: TS, text: note },
+    ]);
+  });
+
+  it('an isMeta record carrying a tool_result still emits its tool_result — the arm relabels per BLOCK', () => {
+    // The relabel lives inside the array loop, beside the push it replaces, so
+    // it cannot swallow a block it does not understand. A guard hoisted above
+    // that loop and fed through `flattenContent` would: that helper reads
+    // `b.text`, and a tool_result block carries `.content`.
+    const line = rec([
+      { type: 'tool_result', tool_use_id: 'toolu_9', content: 'exit 0\nok' },
+      { type: 'text', text: 'and a note' },
+    ], { isMeta: true });
+    expect(kinds(line)).toEqual(['tool_result', 'system']);
+    expect(parseTranscriptLine(line)[0]).toMatchObject({ kind: 'tool_result', toolId: 'toolu_9', text: 'exit 0\nok' });
+  });
+
+  it('only the literal true relabels — a truthy flag is not the harness flag', () => {
+    for (const over of [{}, { isMeta: false }, { isMeta: 'true' }, { isMeta: 1 }]) {
+      expect(kinds(rec('ship it', over)), JSON.stringify(over)).toEqual(['user']);
+      expect(kinds(rec([{ type: 'text', text: 'ship it' }], over)), JSON.stringify(over)).toEqual(['user']);
+    }
+  });
+
+  it('NOTHING without the flag becomes a system row, however much it reads like an injection', () => {
+    for (const body of [
+      '# Workflow authoring reference',
+      'Base directory for this skill: /home/x/.claude/skills/review-pr',
+      '[Image: original 2044x1636, displayed at 1092x874]',
+      'Continue from where you left off.',
+    ]) {
+      expect(kinds(rec(body)), body).toEqual(['user']);
+      expect(kinds(rec([{ type: 'text', text: body }])), body).toEqual(['user']);
+    }
+  });
+
+  // — the command envelope: same record, two tag orders —
+
+  const NAME_FIRST = '<command-name>/effort</command-name>\n<command-message>effort</command-message>\n<command-args>ultracode</command-args>';
+  const MSG_FIRST = '<command-message>review-pr</command-message>\n<command-name>/review-pr</command-name>\n<command-args>https://example.test/pr/1</command-args>';
+  const MSG_FIRST_META = '<command-message>workflow-authoring</command-message>\n<command-name>workflow-authoring</command-name>\n<skill-format>true</skill-format>';
+
+  it('reads a MESSAGE-first envelope as the same row as a NAME-first one — 12 of 76 are that order', () => {
+    expect(parseTranscriptLine(rec(MSG_FIRST))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: '/review-pr' }]);
+    expect(parseTranscriptLine(rec(NAME_FIRST))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: '/effort' }]);
+  });
+
+  it('and reads the isMeta half of that pair the same way — the envelope is read BEFORE the flag', () => {
+    // 5 of the 12 MESSAGE-first records carry `isMeta`. Reading the flag first
+    // would render the same operator action two ways: 64 siblings as a clean
+    // `/name` pill and these 5 as a fold of raw XML.
+    expect(parseTranscriptLine(rec(MSG_FIRST_META, { isMeta: true })))
+      .toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: 'workflow-authoring' }]);
+  });
+
+  it('a human who QUOTES an envelope keeps every word — prose outside the blocks is the tell', () => {
+    // The one human record in the corpus that contains `<command-name>` is a
+    // 26,861-byte /compact recap quoting the whole exchange. It must stay a
+    // user turn, and `startsWith` could not have told it from the real thing.
+    const quoting = '<command-name>/clear</command-name>\nwhat does this render as? I never typed it';
+    expect(parseTranscriptLine(rec(quoting))).toEqual([{ kind: 'user', uuid: 'h1', ts: TS, text: quoting }]);
+  });
+
+  it('a human pasting markup keeps every word — the MEMBER NAME decides, not the shape', () => {
+    // A purely structural "entirely tag blocks" rule has zero false positives
+    // on this corpus and still silences every one of these, because no human
+    // turn measured here so much as begins with `<`. The corpus never exercised
+    // the predicate; the named member is what makes it safe, not the corpus.
+    for (const paste of [
+      '<p>one</p>\n<p>two</p>',
+      '<div>the thing I want changed</div>',
+      '<details><summary>the failing run</summary>stack trace</details>',
+      '<config>\n  <name>prod</name>\n  <port>8080</port>\n</config>',
+      '<svg><circle></circle></svg>',
+    ]) {
+      expect(kinds(rec(paste)), paste).toEqual(['user']);
+      expect(parseTranscriptLine(rec(paste))[0], paste).toMatchObject({ text: paste });
+    }
+  });
+
+  it('an envelope whose command-name is empty keeps the raw record — nothing vanishes', () => {
+    const empty = '<command-name></command-name>\n<command-message>x</command-message>';
+    expect(parseTranscriptLine(rec(empty))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: empty }]);
+  });
+
+  // — a slash command's own stdout: the ANSWER to the row above it —
+
+  const EFFORT = 'Set effort level to ultracode (this session only): xhigh + dynamic workflow orchestration';
+
+  it('renders a command\'s stdout as a system row rather than as the operator', () => {
+    expect(parseTranscriptLine(rec(`<local-command-stdout>${EFFORT}</local-command-stdout>`)))
+      .toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: EFFORT }]);
+  });
+
+  it('strips the ANSI it arrives wrapped in, and keeps the line structure', () => {
+    // Verbatim: 6 of the 64 stdout records are `/compact`'s hook chatter wrapped
+    // in dim/reset runs. Measured across all 64, the ONLY control codepoints
+    // present are ESC (x36, every one of them `\e[2m` or `\e[22m`) and LF (x12)
+    // — no cursor moves, no erase, no OSC, no CR — which is why SGR is stripped
+    // and nothing else is.
+    const raw = '<local-command-stdout>\x1b[2mCompacted (ctrl+o to see full summary)\x1b[22m\n'
+      + '\x1b[2mPreCompact [bash "$HOME/.cc-sessions/session-hook.sh"] completed successfully\x1b[22m</local-command-stdout>';
+    expect(sys(rec(raw)).text).toBe(
+      'Compacted (ctrl+o to see full summary)\n'
+      + 'PreCompact [bash "$HOME/.cc-sessions/session-hook.sh"] completed successfully',
+    );
+    expect(sys(rec(raw)).text).not.toContain('\x1b');
+  });
+
+  it('a human who leads with the stdout tag and then types keeps the whole message', () => {
+    // The likeliest shape this tag will ever take in a human turn: pasting the
+    // offending row to ask about it. The read is anchored to the whole record
+    // (`^…$`), so anything after the closing tag disqualifies it — measured,
+    // all 64 real records are the envelope whole and entire.
+    const paste = `<local-command-stdout>${EFFORT}</local-command-stdout>\n\nwhy does this render as me? I never typed it.`;
+    expect(parseTranscriptLine(rec(paste))).toEqual([{ kind: 'user', uuid: 'h1', ts: TS, text: paste }]);
+  });
+
+  it('an unterminated stdout tag is a user turn, not a pill — it is a human mid-paste', () => {
+    expect(kinds(rec('<local-command-stdout>half a li'))).toEqual(['user']);
+  });
+
+  it('stdout that printed nothing still emits a row — a record never disappears', () => {
+    expect(parseTranscriptLine(rec('<local-command-stdout></local-command-stdout>')))
+      .toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: '' }]);
+  });
+
+  // — the harness reporting a background task it finished —
+
+  const NOTIF = '<task-notification>\n<task-id>w0s3mcrji</task-id>\n'
+    + '<tool-use-id>toolu_01Qj6Dyd</tool-use-id>\n<status>completed</status>\n'
+    + '<summary>Dynamic workflow "resolve the six design forks" completed</summary>\n'
+    + '<result>{"verdict":"shippable"}</result>\n</task-notification>';
+
+  it('a task notification is a system row carrying the record VERBATIM', () => {
+    // The parser says WHAT the record is. What it SAYS is read by
+    // `parseTaskNotification` in `shared/` and rendered by the delivery layer,
+    // the same three-part split mail already has — so no reformatting happens
+    // here, and a reader that cannot render the card still gets every byte.
+    expect(parseTranscriptLine(rec(NOTIF))).toEqual([{ kind: 'system', uuid: 'h1', ts: TS, text: NOTIF }]);
+  });
+
+  it('reads it WITHOUT the harness flag — 12 of 13 carry no isMeta at all', () => {
+    // The envelope is the whole signal here. `isMeta` would have caught one of
+    // the thirteen, which is why the member name is what decides.
+    expect(kinds(rec(NOTIF))).toEqual(['system']);
+    expect(kinds(rec(NOTIF, { isMeta: true }))).toEqual(['system']);
+  });
+
+  it('a human who quotes one keeps every word — prose outside the block is the tell', () => {
+    const asking = NOTIF + '\n\nwhy is this whole wall attributed to me?';
+    expect(parseTranscriptLine(rec(asking))).toEqual([{ kind: 'user', uuid: 'h1', ts: TS, text: asking }]);
+  });
+
+  it('an unterminated notification is a user turn — a human mid-paste is not a record', () => {
+    expect(kinds(rec('<task-notification>\n<task-id>w0s3</task-id>'))).toEqual(['user']);
+  });
+
+  // — and the families that already read correctly, unchanged —
+
+  it('the caveat is still DROPPED, not relabelled', () => {
+    // All 64 in the corpus carry `isMeta`, but the fixture's own caveat row
+    // (`transcript-sample.jsonl` line 4) does NOT, so this check is load-bearing
+    // and stays ahead of both new reads.
+    expect(parseTranscriptLine(rec('<local-command-caveat>Caveat: …</local-command-caveat>'))).toEqual([]);
+    expect(parseTranscriptLine(rec('<local-command-caveat>Caveat: …</local-command-caveat>', { isMeta: true }))).toEqual([]);
+  });
+
+  it('an empty record still produces nothing', () => {
+    expect(parseTranscriptLine(rec('   ', { isMeta: true }))).toEqual([]);
+    expect(parseTranscriptLine(rec([{ type: 'text', text: '  ' }], { isMeta: true }))).toEqual([]);
   });
 });
