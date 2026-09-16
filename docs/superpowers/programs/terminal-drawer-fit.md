@@ -363,7 +363,7 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
   proved `main` dies too — node-pty accepts a NUL in argv, so main's close handler fires the
   identical stack. **The live box runs `CCRC_FLEET=remote`, whose `createRunner` catches every
   failure, so the live server is unaffected on both refs.** Its own item against main.
-- **`=cc-${id}` exact-match targeting** (`exec.ts:74`, and seven more sites) — **RULING REVERSED
+- **Anchored tmux targeting, `=cc-${id}:`** (`exec.ts:74`, and the sites below) — **RULING REVERSED
   2026-09-16, deviation 2862 (written bare: its entry lands in wave 2's plan on the worker's branch,
   and `deviation-refs.test.ts` reds any tracked `D-` ref whose definition is not in THIS tree —
   wave 4's reconcile converts it). This is a DEFECT, not hardening, and wave 3 owns it as its first
@@ -399,6 +399,45 @@ The spec's §11 carries fifteen numbered rulings; these are the ones a reviewer 
   **This is the programme's own defect class, committed by the coordinator in the act of reversing a
   ruling** — a sentence whose claim the tree measures false. It is recorded rather than quietly
   edited, for the same reason the reversal above is.
+
+  **SECOND CORRECTION, 2026-09-16: the FIX this bullet named was also wrong.** `=cc-${id}` — the
+  spelling this entry carried, and the one the next-wave brief ordered wave 3 to ship — does not
+  work. `=` anchors only the SESSION component of a target, and tmux's verbs take three different
+  target kinds. Measured on a private tmux 3.4 socket, sessions `cc-alpha-one` + `cc-beta-two`,
+  prefix `cc-al`:
+
+  | verb | target kind | `cc-al` (today) | `=cc-al` | `=cc-al:` | `=cc-alpha-one` | `=cc-alpha-one:` |
+  |---|---|---|---|---|---|---|
+  | `has-session` | session | rc0 **wrong** | rc1 | rc1 | rc0 | rc0 |
+  | `list-panes` | window | rc0 **wrong** | rc0 **STILL WRONG** | rc1 | rc0 | rc0 |
+  | `resize-window` | window | rc0 **wrong** | rc0 **STILL WRONG** | rc1 | rc0 | rc0 |
+  | `capture-pane` | pane | rc0 **wrong** | rc1 | rc1 | **rc1 BREAKS** | rc0 |
+  | `send-keys` | pane | rc0 **wrong** | rc1 | rc1 | **rc1 BREAKS** | rc0 |
+
+  So shipping `=cc-${id}` would have left `list-panes` and `resize-window` **silently vulnerable**
+  while taking `capture-pane` and `send-keys` — the pane reader and the keystroke sender, which is
+  the whole drawer and the whole answer path — to rc1 on **every** session. Every suite would have
+  stayed green, because they all stub the runner.
+
+  **The only spelling that anchors all five is `=cc-${id}:`** — the anchor plus the empty
+  window/pane component that forces tmux to parse the session part. Controls run, because a
+  narrowing must not change the hit: it accepts the exact id on all five verbs (rc0), a bogus id
+  refuses on all five (no silent fallback to "current"), and in a split, multi-window session
+  `list-panes -t '=cc-alpha-one:'` returns the byte-identical pane set and the same ACTIVE pane as
+  today's bare form. It is a pure narrowing.
+
+  **AND ANCHORING IS NOT SUFFICIENT — it is one of two mechanisms.** Measured: an id of
+  `alpha-one:1` resolves under BOTH `cc-alpha-one:1` and `=cc-alpha-one:1` (rc0 both), because the
+  `:` makes it a target-WINDOW before the anchor is consulted. `isSafeSessionId` permits `:`, `*`
+  and `?`. So the target spelling closes the PREFIX vector and an ingress predicate closes the
+  METACHARACTER vector; neither closes the other, and a plan naming only one is half a fix.
+
+  **`_tmux()` is an overloaded seam and must be SPLIT, not edited.** `ccd/ccd`'s
+  `_tmux() { echo "cc-$1"; }` has ~24 uses, but two of them are NAMES, not targets — it feeds
+  `new-session -s "$tname"`, and it is compared against `display-message -p '#S'`. Anchoring the
+  function wholesale would create sessions literally named `=cc-x:` and silently flip a swap
+  branch. One function means both "the name" and "the target"; correcting the claim means splitting
+  it (`_tmux` = name, `_tmux_t` = anchored target).
   **Scope of the reversal, stated so it is not over-read:** the live box is armed, so the upgrade is
   authenticated, and no shipped PWA path passes a non-session id — today's blast radius is an
   operator hand-typing a truncated id into the wrong terminal. It becomes an authorization defect
