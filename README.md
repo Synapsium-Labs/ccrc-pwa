@@ -1886,7 +1886,7 @@ things at that moment: it builds a SECOND card — the files this context was wo
 community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
 per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
 channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
-arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:2646`), which appends the second
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:2680`), which appends the second
 subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
 `PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
 working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
@@ -1932,7 +1932,7 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:14419-14420`, the `genrc == 1` arm); the
+  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:14431-14433`, the `genrc == 1` arm); the
   generation-absent row and the off-`PATH` box are SILENT — the acquire succeeds or fails without ever
   reaching that warning — and the absence of the artifacts is the only signal there. Adding the missing
   warning is a `ccd/ccd` change, which this documentation pass does not make.
