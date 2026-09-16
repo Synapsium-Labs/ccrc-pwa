@@ -1185,28 +1185,30 @@ accept that cost, and does not need to.
 
 **WHAT THIS RULING GOVERNS, measured against ccd's five shipped `command -v flock` sites (round 10, A-I2 /
 B-2).** Round 9 asserted a blanket over "ccd's own registry operations" without measuring any of them. All
-five, read at this commit:
+five, read at this tip (D-2605's own acquire gate, `ccd/ccd:1832`, is the sixth `command -v flock` in the
+file and is the "one more gate" named below, not a sixth row):
 
 | site | function | shipped disposition |
 | --- | --- | --- |
-| `ccd/ccd:2378` | `_lc_rotate` | fail OPEN — the probe's failure arm is a bare `return 0`, so rotation is skipped and the caller proceeds |
-| `ccd/ccd:4341` | `cmd_ws_add` | fail **CLOSED** — `die "flock (util-linux) is unavailable — refusing to create a workspace unserialised"` |
-| `ccd/ccd:6745` | `cmd_ws_restore` | fail **CLOSED** — `_lc_refuse restore … flock-unavailable` |
-| `ccd/ccd:10202-10204` | `cmd_ws_reap` | fail **CLOSED** — `command -v flock >/dev/null 2>&1 \` at `:10202` guarding `_lc_refuse reap "$id" flock-unavailable` at `:10203`, pinned by `server/test/ccd-ws-reap.test.ts:344`, `it('refuses to run the destructive verb unserialised when flock is missing')` |
-| `ccd/ccd:13242` | `_tmux_new_session` | fail OPEN (`if command -v flock …; then … fi`, no `else`) |
+| `ccd/ccd:2967` | `_lc_rotate` | fail OPEN — the probe's failure arm is a bare `return 0`, so rotation is skipped and the caller proceeds |
+| `ccd/ccd:5059-5060` | `cmd_ws_add` | fail **CLOSED** — `die "flock (util-linux) is unavailable — refusing to create a workspace unserialised"` |
+| `ccd/ccd:7568-7570` | `cmd_ws_restore` | fail **CLOSED** — `_lc_refuse restore … flock-unavailable` |
+| `ccd/ccd:11025-11027` | `cmd_ws_reap` | fail **CLOSED** — `command -v flock >/dev/null 2>&1 \` at `:11025` guarding `_lc_refuse reap "$id" flock-unavailable` at `:11026`, pinned by `server/test/ccd-ws-reap.test.ts:344`, `it('refuses to run the destructive verb unserialised when flock is missing')` |
+| `ccd/ccd:14231-14242` | `_tmux_new_session` | fail OPEN (`if command -v flock …; then … fi`, no `else`) |
 
 **Each of the five keeps its shipped disposition. D-2605 adds one more gate, and only that one fails open.**
-Concretely, this ruling governs `_reg_purge` reached through `cmd_ws_rm` (`:4896`), `cmd_forget` (`:15555`)
-and `_ws_gc_prune_row` (`:11668`) — the three call paths with no flock gate of their own — plus generation
+Concretely, this ruling governs `_reg_purge` reached through `cmd_ws_rm` (`:5667`), `cmd_forget` (`:16642`)
+and `_ws_gc_prune_row` (`:12595`) — the three call paths with no flock gate of their own — plus generation
 initialization/export in row creation and `_spawn_start`. It does NOT govern `cmd_ws_add`, `cmd_ws_restore`
 or `cmd_ws_reap`, which refuse before reaching any of that; `cmd_ws_reap` never reaches `_ws_reap_locked`
-(`:10248`) → `_ws_reap_tail` (`:10594`) → `_reg_purge` (`:11167`) at all, since `_lc_refuse` "EMITS, THEN
-DIES. Never returns." (`:2766`). Their doctrine is ccd's own and this design CITES it rather than
-contradicting it — `ccd/ccd:10196-10197`: "NOT a degraded mode. Without `flock` the serialisation is absent,
-not weaker, so the destructive verb does not run." Round 9's "row creation and `_spawn_start` … continue" is
-accordingly **qualified**: it holds for row writes that do not pass through `cmd_ws_add`, and not for
-`ccd ws-add`, which dies at `:4341` before `_ws_slug_free` (`:4356-4357`), before the addlock, and before any
-registry row exists.
+(`:11071`) → `_ws_reap_tail` (`:11417`) → `_reg_purge` (`:12013`) at all, since `_lc_refuse` "EMITS, THEN
+DIES. Never returns." (`:3355`). Their doctrine is ccd's own and this design CITES it rather than
+contradicting it — `ccd/ccd:11019-11020`: "NOT a degraded mode. Without `flock` the serialisation is absent …
+so the destructive verb does not run" (the shipped comment wraps mid-sentence, so the ellipsis is the
+comment marker the quotation steps over, not an omission). Round 9's "row creation and `_spawn_start` …
+continue" is accordingly **qualified**: it holds for row writes that do not pass through `cmd_ws_add`, and
+not for `ccd ws-add`, which dies at `:5059-5060` before `_ws_slug_free` (`:5078-5079`), before the addlock,
+and before any registry row exists.
 
 **THE GATE: `_reg_purge`'s fail-open is conditioned on the ABSENCE of `$REG/<id>.generation` (round 10).**
 Fact (ii) below is a BOX-level claim established by a PROCESS-level probe: `command -v flock` resolves
@@ -1281,7 +1283,7 @@ and on darwin the difference decides whether the row can be cleared at all.**
   `ccd/ccd:1511-1512` names cmd_forget in by name — "Every other caller — `_alive`, `_ws_status`,
   `cmd_forget`, `ws-archive`, `ws-reap` — reads PROBE_VERDICT only, and for them `no server running` must
   stay `unknown`: `unknown` refuses". Since `cmd_forget` itself kills the session's tmux window
-  (`tmux kill-session`, `:15554`) one line before `_reg_purge` (`:15555`), a forget of the box's LAST session
+  (`tmux kill-session`, `:16631`) eleven lines before `_reg_purge` (`:16642`), a forget of the box's LAST session
   kills the server on the way through, and the re-run then refuses on `session-verdict-unknown`.
 - **The remedy, traced rather than assumed: bring a tmux server back up, then re-run.** Any server on the
   box's socket restores the `can't find session:` spelling, the verdict returns to `gone`, and the re-run
@@ -1412,13 +1414,13 @@ stages, claims, markers and journal — goes inert, silently and totally, the sa
 already does; never a partial or degraded mode. **This paragraph was byte-identical to its pre-gate parent for
 one round and both its halves were false; the pre-gate wording is retracted and superseded here (round 11,
 A-I2).**
-`_reg_purge` reached through `ws-rm` (`ccd/ccd:4896`), `forget` (`:15555`) and `ws-gc --prune` (`:11668`) keeps
+`_reg_purge` reached through `ws-rm` (`ccd/ccd:5667`), `forget` (`:16642`) and `ws-gc --prune` (`:12595`) keeps
 working exactly as it does today **on a generation-ABSENT row**, and fails CLOSED, recoverably, on a
 generation-PRESENT one. `ws-reap` never reaches `_reg_purge` on such a box at all: `cmd_ws_reap` dies first at
-`:10202-10204`, where `_lc_refuse` "EMITS, THEN DIES. Never returns." (`:2766`), so the fourth caller
-`_ws_reap_tail` (`:11167`, under `_ws_reap_locked` `:10248`) is unreachable and "four callers keep working"
+`:11025-11027`, where `_lc_refuse` "EMITS, THEN DIES. Never returns." (`:3355`), so the fourth caller
+`_ws_reap_tail` (`:12013`, under `_ws_reap_locked` `:11071`) is unreachable and "four callers keep working"
 cannot be said here. Row creation and `_spawn_start` skip generation initialization/export and continue, for
-row writes that do not pass through `cmd_ws_add` — `ws-add` itself dies at `:4341` — and they are NOT gated on
+row writes that do not pass through `cmd_ws_add` — `ws-add` itself dies at `:5059-5060` — and they are NOT gated on
 generation presence; that gate is `_reg_purge`'s alone (§4's row; §6 restates it and cites this paragraph).
 All of which is consistent with "a hook with no generation fails closed for compaction lifecycle work only;
 ordinary hookstate behavior is unchanged". §4 carries the row, §10 the residual, and §5 the fixture that pins
@@ -2228,7 +2230,7 @@ adds the following real process and source pins, each through fixture HOME/PATH 
   beside `_lc_fail`/`_lc_refuse` (`ccd/ccd:3345-3374`), which emits the `refused` fact and RETURNS so the
   sweep continues. Without it the `intent destroy` minted at `:11665-11667` closes with no terminal fact at
   all, which the one-terminal-fact guard's own "exactly one" reading forbids; `_lc_refuse` cannot be reused
-  because it dies (`:2766`, `die` at `:2784`).
+  because it dies (`:3355`, `die` at `:3373`).
   `ws-rm` and `forget` can therefore
   now visibly decline against an in-flight compaction; that is disclosed, correct behavior.
 - **Card text reaches the model through one envelope, and never through a shell.** The card and standing
@@ -2374,7 +2376,7 @@ This spec yields **three plans at two explicit seams**, each independently usefu
   wrongly put it there (round 10, B-2):** `cmd_ws_reap` already refuses at `ccd/ccd:11025-11027` on such a
   box, pinned by `server/test/ccd-ws-reap.test.ts:344`, so it was never among the commands this ruling
   rescued — it is wedged there by shipped code independent of this design, deliberately. B's strengthening is
-  worth recording: on a box where `ccd ws-add` also refuses (`:4341`), **no workspace row and hence no slug is
+  worth recording: on a box where `ccd ws-add` also refuses (`ccd/ccd:5059-5060`), **no workspace row and hence no slug is
   ever taken at all**, so the "every slug wedged permanently" cost feared here cannot arise from ws-add. The
   residual that remains is narrower and
   real: **on a `flock`-absent box this design measures nothing at all.** No journal line is ever written, so
