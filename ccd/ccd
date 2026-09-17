@@ -1269,15 +1269,17 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # every terminal invocation. The two `die` sentences either side of this one
 # are the proof this ladder's author meant to refuse rather than hang; it was
 # simply missing the arm for a file that is present, readable, and not a
-# file — `_project_pool_state`'s pattern (ccd:1470-ish: "a character device
-# gets the one answer that is safe for all of them"), copied here as its own
-# arm rather than folded into `-r`, so the two existing sentences keep their
-# exact wording. ccd:1782 and ccd:5170 re-`source` this same path inside
-# subshell helpers (`{ . "$CCRC_ACCOUNTS_SH" ...; } || exit 1/9`) and inherit
-# this same exposure with no `-f` rung of their own — noted here rather than
-# given a second ladder, because this one hangs first on a pre-existing FIFO.
+# file — `_project_pool_state`'s pattern (NAMED BY FUNCTION, NOT LINE: "a
+# character device gets the one answer that is safe for all of them"),
+# copied here as its own arm rather than folded into `-r`, so the two
+# existing sentences keep their exact wording. `_wrapper_rostered_now` and
+# `cmd_ws_add`'s own home-able snapshot each re-`source` this same path
+# inside a subshell helper (`{ . "$CCRC_ACCOUNTS_SH" ...; } || exit 1/9`) and
+# inherit this same exposure with no `-f` rung of their own — noted here
+# rather than given a second ladder, because this one hangs first on a
+# pre-existing FIFO.
 [[ -f "$CCRC_ACCOUNTS_SH" ]] \
-  || die "account roster $CCRC_ACCOUNTS_SH exists but is not a regular file — something else (a FIFO, a device node, or a directory) is sitting at that path; remove it, then regenerate: ccrc install. Regenerating it will not help until the path is clear."
+  || die "account roster $CCRC_ACCOUNTS_SH exists but is not a regular file — something else (a FIFO, a device node, a UNIX socket, or a directory) is sitting at that path; remove it, then regenerate: ccrc install. Regenerating it will not help until the path is clear."
 [[ -r "$CCRC_ACCOUNTS_SH" ]] \
   || die "account roster $CCRC_ACCOUNTS_SH exists but is not readable by $(id -un) — fix its permissions (it must be readable by the user ccd runs as; the deploy installs it 644). Regenerating it will not help."
 # The first `source` this file has ever carried, so there is no in-file
@@ -4184,7 +4186,32 @@ if mode == 'state':
         # `endsWith('.uuid')` id minting, which DOES see dotfiles).
         dst = os.path.join(reg, id_ + '.' + field)
         tmp = os.path.join(reg, '.' + id_ + '.' + field + '.' + str(os.getpid()) + '.tmp')
+        # D-2380: this tmp open is the FOURTH by-name open in this mode, not
+        # counted alongside its three siblings (`get()` below, the
+        # compare-and-set lock, the prhistory append) until this pass —
+        # undercounted by the same D-2475 staleness their own count had
+        # already gone through once this wave. `open(tmp,'w')` blocks on a
+        # FIFO exactly as the siblings' `'a'` opens do (measured standalone:
+        # `mkfifo f.tmp; timeout 3 python3 -c "open('f.tmp','w')"` -> rc 124),
+        # and it is reachable: this path's name embeds `os.getpid()`, and pid
+        # reuse on a fleet host running ~20 supervised sessions is ordinary,
+        # so a stale non-regular file left by an EARLIER holder of this same
+        # pid can sit here when a new process claims it. Unlike the siblings,
+        # `'w'` is a CREATE, so `os.path.isfile` alone is the wrong test:
+        # the ordinary path never sees this tmp exist at all (fresh per-pid
+        # name), a STALE REGULAR tmp left by a prior crash must still be
+        # truncated and reused, and only a PRESENT NON-REGULAR tmp must
+        # refuse rather than block inside the open. `os.path.exists(...) and
+        # not os.path.isfile(...)` draws exactly that line — absent:
+        # proceed and create; regular: proceed and truncate; anything else:
+        # raise before the open, the same shape the lock guard below uses —
+        # and the raise is caught by the `except OSError` immediately below,
+        # so it becomes the same FAULT that block already turns any other
+        # write failure into (and the cleanup arm's `os.remove` clears the
+        # non-regular tmp too, the same self-heal `get()`'s FIFO case gets).
         try:
+            if os.path.exists(tmp) and not os.path.isfile(tmp):
+                raise OSError('refusing to write a non-regular-file pr-state tmp: ' + tmp)
             with open(tmp, 'w') as f:
                 f.write(str(value))
             os.replace(tmp, dst)
@@ -4423,11 +4450,18 @@ if mode == 'state':
                 if old_num is not None and old_num != number:
                     rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
                            'recordedAt': int(time.time())}
-                    # D-2380: THE THIRD OPEN in this mode — the plan's own
-                    # cardinal named two (`get()` and the lock above); this
-                    # append is the third, corrected in place here rather
-                    # than taking a new deviation number (controller ruling).
-                    # Same class, same guard: `open(path, 'a')` opens BY NAME
+                    # D-2380: THE FOURTH OPEN in this mode, not the third —
+                    # the plan's own cardinal named two (`get()` and the lock
+                    # above); a first correction this same wave counted
+                    # three and still missed `put()`'s own tmp-file open
+                    # (above `get()` in this file), which is by-name and
+                    # blocks on the identical shapes. Corrected in place
+                    # again here, still taking no new deviation number: the
+                    # coordinator's ruling is that a stale COUNT under this
+                    # number is the number going stale (the D-2475 shape),
+                    # not a new subject, and this is that ruling applied a
+                    # second time to the same subject. Same class, same
+                    # guard as `put()`'s: `open(path, 'a')` opens BY NAME
                     # and blocks forever on a FIFO with no writer, and this is
                     # the ONE write in this mode with no `try`/`except` of its
                     # own (it sits inside the outer `try` whose only handler
@@ -5594,11 +5628,16 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     # HELD, and this rung is untouched — but the `cat` that used to follow
     # opened BY NAME: a FIFO with no writer, or a symlink to an unbounded
     # character device, blocks in open(2)/read(2) forever, and this verb's
-    # caller is a terminal. `_project_pool_state`'s pattern (ccd:1470-ish):
-    # `-f`+`-r` checked BEFORE any attempt to open, so a non-regular shape is
-    # answered the SAME fallback text `cat`'s own `|| echo` already gave a
-    # directory — no behaviour change for anything that answered before,
-    # only for what used to hang.
+    # caller is a terminal. `_project_pool_state`'s pattern (NAMED BY
+    # FUNCTION, NOT LINE): `-f`+`-r` checked BEFORE any attempt to open, so a
+    # non-regular shape is answered the SAME fallback text `cat`'s own
+    # `|| echo` already gave a directory — but the population this changes
+    # is NOT just "what used to hang": a readable-but-not-regular shape that
+    # never hung, such as a symlink to `/dev/null`, used to satisfy `cat`
+    # promptly with EMPTY output (`-e` true, `-f` false, zero bytes read) and
+    # now answers the same fallback marker instead. The true population is
+    # "hangs UNION readable-but-not-regular", and every member of it gets a
+    # strictly more honest answer than before.
     local _hold_reason
     if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
       _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')
@@ -6658,7 +6697,7 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # and the server's merged push keeps naming the hold. Fail-shut in the safe
     # direction, but a lie either way, and the sibling verb's own guard is the
     # standard this file set.
-    # INSIDE the `-e` arm (ccd:4212), so a `not held` answer writes nothing: an
+    # INSIDE the `-e` arm above, so a `not held` answer writes nothing: an
     # idempotent no-op is not an act, and recording one would make the record
     # disagree with what happened. Read BEFORE the unlink, which is the only
     # instant the text exists.
@@ -6672,11 +6711,19 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # its OWN, never `<unreadable — treat as held>`: that sentence is a
     # refusal instruction, and this is a RELEASE record, the verb succeeding
     # at clearing the very hold in question — and never empty either, per
-    # this function's own argument two paragraphs up that a record must not
-    # disagree with what happened. (Measured: nothing in this repo parses
-    # `meas.held` by VALUE — `journalparse.ts`'s `reviveMeas` reads it as an
-    # opaque string, and `store.ts` only JSON-stringifies the whole `meas`
-    # object — so a new token here breaks no reader.)
+    # this function's own argument in the paragraph IMMEDIATELY ABOVE (one
+    # blank-comment-line separator, not "two paragraphs up" as an earlier
+    # revision of this comment said) that a record must not disagree with
+    # what happened. And empty is not just undesirable here, it is not
+    # REPRESENTABLE on this wire at all: `_lc_json`'s own encoder drops any
+    # key whose value is `""` before it ever reaches the line (an empty
+    # `meas.held` would not write a disagreeing value, it would write NO
+    # `held` key whatsoever) — which is why a marker, not emptiness, is the
+    # only way this record can carry the distinction. (Measured: nothing in
+    # this repo parses `meas.held` by VALUE — `journalparse.ts`'s
+    # `reviveMeas` reads it as an opaque string, and `store.ts` only
+    # JSON-stringifies the whole `meas` object — so a new token here breaks
+    # no reader.)
     local _hold_reason
     if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
       _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null)

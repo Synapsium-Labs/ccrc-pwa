@@ -1,59 +1,98 @@
 // Part D of the ccd-queue-platform-shim-and-doctor-coverage plan
 // (docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md,
-// D-2376 through D-2380): five families of `ccd/ccd` guard that admit a FIFO
+// D-2376 through D-2380): FOUR families of `ccd/ccd` guard that admit a FIFO
 // or an unbounded character device through an `-e`/`-r` test and then open
-// the path BY NAME — `source`, `cat`, a bash `grep FILE`, and three Python
-// `open()`s. Each one hangs the reader FOREVER on the shapes this file
-// plants. `_project_pool_state` (ccd:1470) is the pattern every fix here
-// copies: a type test (`-f`+`-r`, or `os.path.isfile`, its Python twin)
-// checked BEFORE any attempt to open, so the shape alone decides — never a
-// read.
+// the path BY NAME — `source`, `cat`, a bash `grep FILE`, and FOUR Python
+// `open()`s in `_pr_py`'s `state` mode (`put`'s tmp file, `get`, the
+// compare-and-set lock, and the prhistory append) — six openers across the
+// four `describe` blocks below. Each one hangs the reader FOREVER on the
+// shapes this file plants. `_project_pool_state` (NAMED BY FUNCTION, NOT
+// LINE — a line number here goes stale the moment anything above it grows)
+// is the pattern every fix here copies: a type test (`-f`+`-r`, or
+// `os.path.isfile`, its Python twin) checked BEFORE any attempt to open, so
+// the shape alone decides — never a read.
 //
 // DOUBLE-BOUNDED, the same reason `ccd-project-pool.test.ts`'s `boundedState`
 // is: vitest's own per-test timeout cannot fire while `execFileSync` blocks
-// the event loop it needs, so the bound has to live on the CHILD PROCESS —
-// `execFileSync`'s own `timeout` option, which SIGTERMs the child and throws
-// an error with `.code === 'ETIMEDOUT'` (`.killed` is NOT set on that error).
-// `runBounded` below turns a regression into a normal, readable test failure
-// — "this hung" — never a real hang; the vitest-level `}, 10000)` on every
-// case that plants a hanging shape is the second, independent bound.
+// the event loop it needs, so the bound has to live on the CHILD PROCESS.
+// `execFileSync`'s own `timeout` option SIGTERMs only the DIRECT child
+// (`bash`) and throws `.code === 'ETIMEDOUT'` — it does NOT reach a
+// grandchild blocked on a FIFO open inside a command-substitution subshell,
+// which is exactly what most cases below plant, so that option alone leaks
+// an immortal process per case (measured on this box: dozens of blocked
+// `cat`/`grep`/`python3` children surviving hours past the run that spawned
+// them, some inherited from a SIBLING suite and aged 7.5 days). `runBounded`
+// below instead spawns through GNU `timeout -k 1 <secs> bash -c …`, which
+// puts `bash` in its OWN process group and signals the whole GROUP on
+// expiry — every descendant blocked on the same FIFO dies with it — and the
+// hang case is `rc === 124`, not an `ETIMEDOUT` exception. `runBounded`
+// turns that into a normal, readable test failure — "this hung" — never a
+// real hang; the vitest-level `}, 10000)` on every case that plants a
+// hanging shape is the second, independent bound.
 //
-// A case whose shape does not actually hang the PRE-FIX code (a directory at
-// a `cat`-guarded path, for instance, already fails fast with `cat`'s own
-// EISDIR) is deliberately left OUT of the hang-shape tables below — such a
-// case is green before the fix and pins nothing (this file's own brief). The
-// four echo-fallback D2 sites' directory shape and D3/D1's directory shape
-// are exactly that, and are already covered as regression pins in
-// `ccd-hold.test.ts`/`ccd-ws-rename.test.ts`; this file is not a second copy
-// of them.
+// A case whose shape does not actually hang the PRE-FIX code is deliberately
+// left OUT of the hang-shape tables below — such a case is green before the
+// fix and pins nothing (this file's own brief). MEASURED, not assumed, for
+// the three shapes this reasoning actually touches:
+//  - D1's directory shape (account roster) IS in this file, in its own
+//    `describe` block below, and WAS red pre-fix: the pre-fix ccd answers a
+//    generic `source: … is a directory` plus the roster's own `account
+//    roster unreadable` die, with no `not a regular file` in it — it is the
+//    case whose MESSAGE this fix corrects, not one that pins nothing.
+//  - The four echo-fallback D2 sites' directory shape is excluded because it
+//    genuinely does NOT hang pre-fix (`cat`'s own EISDIR trips the existing
+//    `|| echo` fallback promptly) — but it is NOT "already covered
+//    elsewhere" either: `ccd-forget.test.ts` plants a REGULAR hold only, and
+//    no suite in this tree plants a directory at any of the five hold paths.
+//    A true gap, left as one, because behaviour there is unchanged by this
+//    fix either way (directory already satisfied `-e` before it, same as
+//    after).
+//  - D3's directory shape at `<cfg>/sessions/<pid>.json` is excluded for the
+//    same non-hang reason, and it is likewise NOT covered elsewhere: neither
+//    `ccd-hold.test.ts` nor `ccd-ws-rename.test.ts` — nor any other file in
+//    this tree — touches that path with a directory.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, ghContainedEnv, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { readJournal, measOf } from './lifecycleHelpers.js';
 
 type Bounded = { code: number; stdout: string; stderr: string };
 
 /** The one driver every case below goes through — `source "$CCD"` plus a
- *  snippet, under the CHILD PROCESS's own timeout (never vitest's), the exact
- *  shape `boundedState` (ccd-project-pool.test.ts:41-66) uses. Takes `home`
- *  explicitly rather than closing over a module-level harness variable,
- *  because D4's describe block below runs its own `PrHarness` alongside the
- *  outer `CcdHarness`. */
+ *  snippet, under the CHILD PROCESS's own bound (never vitest's), the exact
+ *  reason `boundedState` (ccd-project-pool.test.ts:41-66) builds its own
+ *  `execFileSync` too. Takes `home` explicitly rather than closing over a
+ *  module-level harness variable, because D4's describe block below runs its
+ *  own `PrHarness` alongside the outer `CcdHarness`.
+ *
+ *  Spawns through GNU `timeout -k 1 <secs> bash -c …`, NOT via
+ *  `execFileSync`'s own `timeout` option — that option SIGTERMs only the
+ *  DIRECT child, never a grandchild blocked on a FIFO open inside a
+ *  command-substitution subshell, which is exactly what every hang case
+ *  below plants (measured: `bash -c 'x=$(cat fifo)'` under
+ *  `execFileSync(..., {timeout})` leaves `cat` running forever after the
+ *  parent throws `ETIMEDOUT`). GNU `timeout` puts `bash` in its OWN process
+ *  group and signals the whole GROUP on expiry (measured: `timeout -k1 2
+ *  bash -c 'x=$(cat fifo)'` — `timeout`, `bash` and the grandchild `cat` all
+ *  share one pgid, and all three are gone after the 124), so every
+ *  descendant blocked on the same FIFO dies with it. The hang case is
+ *  `rc === 124`, not an `ETIMEDOUT` exception. */
 function runBounded(home: string, snippet: string, ms = 5000): Bounded {
+  const secs = String(ms / 1000);
   try {
     const out = execFileSync(
-      'bash', ['-c', `source "${CCD}"; ${snippet}`],
-      { encoding: 'utf8', cwd: home, timeout: ms,
+      'timeout', ['-k', '1', secs, 'bash', '-c', `source "${CCD}"; ${snippet}`],
+      { encoding: 'utf8', cwd: home,
         env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }) },
     );
     return { code: 0, stdout: out.trim(), stderr: '' };
   } catch (err) {
     const e = err as NodeJS.ErrnoException
       & { status?: number; stdout?: Buffer | string; stderr?: Buffer | string };
-    if (e.code === 'ETIMEDOUT') {
+    if (e.status === 124) {
       throw new Error(
         `runBounded(${JSON.stringify(snippet)}) did not return within ${ms}ms `
         + '— this is a hang regressing, not a flake');
@@ -66,8 +105,11 @@ type BadShape = 'fifo' | 'symlink-fifo' | 'symlink-devzero' | 'directory';
 
 /** Plants one of the four shapes at an arbitrary path. FIFO / symlink-to-FIFO
  *  / symlink-to-an-infinite-character-device are the three that HANG a
- *  read-by-name; directory is included only at the one site (`cmd_ws_release`)
- *  where its answer actually differs before/after the fix. */
+ *  read-by-name; directory is included only at D1's site (the account
+ *  roster), where its answer differs before/after the fix even though it
+ *  never hung (`source` on a directory fails fast with EISDIR — the pre-fix
+ *  MESSAGE is wrong, not the promptness). `cmd_ws_release` deliberately has
+ *  NO directory case — see the comment above its `describe.each` below. */
 function plantBad(p: string, shape: BadShape): void {
   fs.rmSync(p, { force: true, recursive: true });
   switch (shape) {
@@ -128,7 +170,7 @@ describe('D1 — the account roster `source`, module top level (D-2377)', () => 
     const r = boundedRun('true');
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('no account roster at');
-  });
+  }, 10000);
 
   // root defeats chmod — the house pattern (`ccd-project-pool.test.ts`'s own
   // `it.skipIf(process.getuid?.() === 0)`), because a mode-000 file IS `-r`
@@ -144,7 +186,7 @@ describe('D1 — the account roster `source`, module top level (D-2377)', () => 
       } finally {
         fs.chmodSync(ACCOUNTS_SH(), 0o644);
       }
-    });
+    }, 10000);
 });
 
 describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
@@ -179,7 +221,7 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
       plantBad(HOLD(id), shape);
       const r = boundedRun(`cmd_ws_rename --session ${id} --branch feat/real-name`);
       expect(r.code).toBe(0);
-      // Parsed, not a raw-substring check: `_json_str` (ccd:2666) deliberately
+      // Parsed, not a raw-substring check: `_json_str` deliberately
       // emits `ensure_ascii` JSON, so the em-dash is `—` on the wire —
       // JSON.parse is what un-escapes it back to the real character.
       const o = JSON.parse(r.stdout) as { refused: string; detail: string };
@@ -215,7 +257,7 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
   // DIRECTORY IS DELIBERATELY NOT IN THIS TABLE, unlike the other four sites'
   // shape choices — a directory hold does not hang here (measured), but it
   // does not survive the verb EITHER, for a reason outside this fix's scope:
-  // `rm -f -- "$REG/$id.hold"` (ccd:6560-ish) has no `-r`, so it fails on a
+  // `cmd_ws_release`'s own `rm -f -- "$REG/$id.hold"` unlink has no `-r`, so it fails on a
   // directory with "Is a directory" and the verb dies "STILL held" — an
   // out-of-scope, PRE-EXISTING defect in the unlink, not the read this task
   // was asked to bound. Reported in this file's own report as a finding, not
@@ -223,7 +265,7 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
   // own `meas.held` question is about the READ, not the unlink).
   describe.each(HANG_SHAPES)(
     'cmd_ws_release, for %s at the hold path', (_label, shape) => {
-      it('releases PROMPTLY — never hangs — and meas.held is neither empty nor "<unreadable — treat as held>"', () => {
+      it('releases PROMPTLY — never hangs — and meas.held carries its own distinct release-time marker', () => {
         const id = 'demo-quiet-vale';
         regSet(id, 'uuid', 'u');
         plantBad(HOLD(id), shape);
@@ -235,8 +277,16 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
         const releaseEvents = readJournal(h.home).filter((e) => e['act'] === 'release');
         expect(releaseEvents.length).toBeGreaterThan(0);
         const held = measOf(releaseEvents[releaseEvents.length - 1]!)['held'];
-        expect(held, 'a lifecycle record must not disagree with what happened by staying empty').not.toBe('');
-        expect(held).not.toBe('<unreadable — treat as held>');
+        // ONE POSITIVE literal, not two negatives: an empty `meas.held` is
+        // not merely undesirable, it is UNREPRESENTABLE on this wire at all
+        // (`_lc_json`'s own encoder drops any key whose value is `""` before
+        // it ever reaches the line, so an empty value here would not write
+        // a disagreeing record, it would write NO `held` key whatsoever —
+        // `measOf(...)['held']` would then be `undefined`, and
+        // `expect(undefined).not.toBe('')` / `.not.toBe('<unreadable —
+        // treat as held>')` BOTH pass). A negative pair pins nothing the
+        // marker actually decided; only the exact string does.
+        expect(held).toBe('<unreadable — hold present but could not be read at release>');
       }, 10000);
     },
   );
@@ -250,7 +300,7 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
     expect(r.code).toBe(0);
     const releaseEvents = readJournal(h.home).filter((e) => e['act'] === 'release');
     expect(measOf(releaseEvents[releaseEvents.length - 1]!)['held']).toBe('program:x wave:1/4');
-  });
+  }, 10000);
 });
 
 describe('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () => {
@@ -297,7 +347,7 @@ describe('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () =>
     expect(boundedRun(`${STUB} _ws_status ${id}`).stdout).toBe('idle');
     fs.writeFileSync(sessionJsonPath(), JSON.stringify({ status: 'busy', statusUpdatedAt: 1 }));
     expect(boundedRun(`${STUB} _ws_status ${id}`).stdout).toBe('busy');
-  });
+  }, 10000);
 
   it('still answers non-zero for an ABSENT sessions JSON (unchanged — the pre-existing rung this adds beside)', () => {
     const id = 'demo';
@@ -305,10 +355,10 @@ describe('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () =>
     fs.rmSync(sessionJsonPath(), { force: true });
     const r = boundedRun(`${STUB} _ws_status ${id}`);
     expect(r.code).not.toBe(0);
-  });
+  }, 10000);
 });
 
-describe('D4 — `_pr_py`\'s Python opens in `state` mode — THREE, not two (D-2380)', () => {
+describe('D4 — `_pr_py`\'s Python opens in `state` mode — FOUR, not two (D-2380)', () => {
   let hp: PrHarness;
   beforeEach(() => { hp = makePrHarness('ccrc-ccd-bounded-d4-'); });
   afterEach(() => { hp.cleanup(); });
@@ -346,7 +396,8 @@ describe('D4 — `_pr_py`\'s Python opens in `state` mode — THREE, not two (D-
   it('the compare-and-set lock: a FIFO at $REG/.prstate-<id>.lock proceeds UNLOCKED, PROMPTLY', () => {
     // `open(path, 'a')` blocks until a READER appears — `except OSError`
     // cannot fire for a block, only for an error, so the disclosed "proceed
-    // unlocked" arm (ccd:4329-4332-ish, D-139) does not cover a hang. Same
+    // unlocked" arm around `_pr_py`'s own lock-open `try` (D-139, NAMED BY
+    // FUNCTION, NOT LINE) does not cover a hang. Same
     // guarantee this file's own comment states must survive: "this guard may
     // only remove races, never add a refusal that stops a phase from ever
     // updating" — so the write must still land, just unlocked.
@@ -360,10 +411,13 @@ describe('D4 — `_pr_py`\'s Python opens in `state` mode — THREE, not two (D-
   }, 10000);
 
   it('the prhistory append: a FIFO at $REG/<id>.prhistory faults PROMPTLY rather than hanging the whole sweep', () => {
-    // THE THIRD OPEN, the one D-2380's own count (as it reads in the plan)
-    // omits — corrected here in place, no new deviation number (controller
-    // ruling): `get()`, the lock, and this append are three sites in the same
-    // mode, not two. Reached only on the old_num != number transition — a
+    // THE FOURTH OPEN, not the third — `get()`, `put()`'s own tmp file, the
+    // lock and this append are four sites in the same mode, not two (the
+    // plan's original count) and not three (this same wave's first
+    // correction, which still missed `put()`'s tmp). Corrected in place
+    // again, no new deviation number (controller ruling: a stale COUNT
+    // under an already-allocated number is that number going stale, not a
+    // new subject). Reached only on the old_num != number transition — a
     // pre-seeded `.prnumber` stands in for a first sweep, so one call is
     // enough to reach it. A HANG here would wedge `cmd_pr_state`'s per-id
     // loop for every OTHER session too; a FAULT (non-zero, prompt) is a
@@ -377,6 +431,53 @@ describe('D4 — `_pr_py`\'s Python opens in `state` mode — THREE, not two (D-
     hp.ghRows([mergedRow({ number: 601, headRefOid: tip })]);
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
     expect(r.code).not.toBe(0);
+    // A non-zero exit for ANY unrelated reason would satisfy a bare
+    // `not.toBe(0)` — bind the SENTENCE, mirroring how D1's cases bind
+    // their `die` sentence, so a regression that faults for some OTHER
+    // reason cannot pass this case by accident.
+    expect(r.stderr).toContain('refusing to append to a non-regular-file prhistory');
+  }, 10000);
+
+  it("put(): a FIFO already at the pid-named tmp path (pid reuse) faults PROMPTLY rather than hanging the whole sweep", () => {
+    // `put`'s tmp name embeds `os.getpid()`, unknowable to this test ahead of
+    // the real interpreter starting — so a `python3` SHIM stands in first on
+    // PATH (inside `harnessBin`, already the head of every PATH this harness
+    // builds) that `exec`s straight into the real interpreter: `exec` never
+    // forks, so the shim's own `$$` IS the pid the real interpreter goes on
+    // to report from `os.getpid()`, and the shim plants the FIFO at that
+    // exact path before handing off. This is what pid reuse looks like on a
+    // live fleet host: a stale name left behind by a DIFFERENT, earlier
+    // holder of the same pid.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    const shim = path.join(harnessBin(hp.home), 'python3');
+    fs.writeFileSync(shim,
+      '#!/bin/bash\n'
+      + `mkfifo "${path.join(REG(), `.${id}.prcheckedat.$$.tmp`)}" 2>/dev/null || true\n`
+      + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
+    hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('refusing to write a non-regular-file pr-state tmp');
+  }, 10000);
+
+  it('put(): a stale REGULAR file already at the pid-named tmp path is still overwritten normally (unchanged)', () => {
+    // The other half of the same guard's contract: `os.path.isfile` cannot
+    // be the sole test for a `'w'`-mode CREATE, because a stale REGULAR tmp
+    // (left by, say, a prior crash between `open` and `os.replace`) must
+    // still be truncated and reused, not refused. Same shim technique as
+    // the FIFO case above, planting a regular file instead.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    const shim = path.join(harnessBin(hp.home), 'python3');
+    fs.writeFileSync(shim,
+      '#!/bin/bash\n'
+      + `printf 'stale' > "${path.join(REG(), `.${id}.prcheckedat.$$.tmp`)}"\n`
+      + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
+    hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(REG(), `${id}.prcheckedat`), 'utf8')).not.toBe('stale');
   }, 10000);
 
   it('still appends prhistory normally when the path is a regular file (unchanged)', () => {
@@ -390,5 +491,5 @@ describe('D4 — `_pr_py`\'s Python opens in `state` mode — THREE, not two (D-
       .trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as { pr: number });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.pr).toBe(591);
-  });
+  }, 10000);
 });
