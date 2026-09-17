@@ -1596,15 +1596,42 @@ describe('the model files, and who reads each one', () => {
     // `install`/`install_atomic`/`_inst_atomic`/`writeFileSync`/`renameSync`
     // naming it, would be a second, unvalidated editor of the operator's own
     // file.
-    const REGISTRY_PATH = /\.ccrc\/models\/[^ "']*\.classes\.json/;
+    //
+    // R2 (fix round 2): the first cut of this guard anchored on the full
+    // literal `.ccrc/models/…classes.json`, which requires that substring on
+    // the SAME line as the write. `_check_models` never spells it that way —
+    // it binds `local dir="$HOME/.ccrc/models"` once and then writes every
+    // touch as `"$dir/$id.classes.json"`, so the population line and every
+    // future write in that same idiom sailed straight past the old regex
+    // (measured: `echo "{}" > "$dir/$id.classes.json"` and
+    // `mv /tmp/seed.json "$dir/$id.classes.json"` both stayed GREEN; only the
+    // full-path spelling, which the file never uses, went red). Anchoring on
+    // the FILENAME alone puts `"$dir/$id.classes.json"` in scope regardless
+    // of how the directory half is spelled.
+    const REGISTRY_FILENAME = /\.classes\.json/;
     const writesRegistryDirectly = (l: string): boolean => {
-      if (!REGISTRY_PATH.test(l)) return false;
+      if (!REGISTRY_FILENAME.test(l)) return false;
       if (/\b(?:mv|cp|tee|install|install_atomic|_inst_atomic|writeFileSync|renameSync)\b/.test(l)) return true;
-      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*\.classes\.json/.test(l);
+      // Excluding any preceding word character (not just digit/&) matters
+      // here specifically: this file's own prose spells the id placeholder
+      // as `<id>.classes.json` in a user-facing message, and `<id>`'s own
+      // closing `>` sits directly in front of the filename — an unguarded
+      // lookbehind reads that as a redirect target. A real redirect's `>` is
+      // preceded by whitespace, a quote, or nothing; never a bare letter.
+      return /(?<![0-9A-Za-z_&])>{1,2}\s*"?[^"'\s]*\.classes\.json/.test(l);
     };
     const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'));
     expect(code.filter(writesRegistryDirectly),
       'ccd/ccrc-doctor-checks writes a registry directly instead of only reading it').toEqual([]);
+    // Pin the exact COUNT of lines that touch `.classes.json` at all, the
+    // same strength "the probe is the ONLY thing that writes a catalogue"
+    // above gets from its exact-count pin on `_probe_mv_notdir`: a write
+    // detector's own vocabulary can always miss a future spelling, but an
+    // exact count forces a human to look at any new touch, write or not.
+    // Measured against HEAD: 2 — the population test (`[ -f
+    // "$dir/$id.classes.json" ]`) and the empty-population SKIP message that
+    // names the path in its own text.
+    expect(code.filter((l) => REGISTRY_FILENAME.test(l)).length).toBe(2);
   });
 
   it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {

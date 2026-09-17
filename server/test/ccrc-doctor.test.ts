@@ -211,6 +211,41 @@ function stubNodeRosterExit(home: string, code: number): void {
     + `exec '${process.execPath}' "$@"`);
 }
 
+/** A `node` that fails with `code` for the models CATALOGUE READ only —
+ *  matched on that reader's own env-var name (`CCRC_DOCTOR_MODELS_DIR`),
+ *  which appears literally in the `-e` script text the same way
+ *  `stubNodeRosterExit` above matches `CCRC_DOCTOR_ROSTER` — and behaves
+ *  normally for the roster read and the `--version` probe, so the population
+ *  loop above the batched read is never collateral. R1 case 2. */
+function stubNodeModelsExit(home: string, code: number): void {
+  stub(home, 'node',
+    `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi\n`
+    + `case "$*" in *CCRC_DOCTOR_MODELS_DIR*) exit ${code} ;; esac\n`
+    + `exec '${process.execPath}' "$@"`);
+}
+
+/** A `node` that answers the models CATALOGUE READ with a status
+ *  (`WEIRD`) `_check_models`'s own `case` does not define, for every
+ *  population id it is handed on stdin — matched the same way
+ *  `stubNodeModelsExit` above is, so the roster read and `--version` probe
+ *  are untouched. A real reader only ever emits
+ *  NOCATALOGUE/UNREADABLE/INVALID/OK; this is how R3(b)'s missing default
+ *  arm is reached at all. R1 case 7. */
+function stubNodeModelsWeirdStatus(home: string): void {
+  stub(home, 'node', [
+    `if [ "$1" = "--version" ]; then echo 'v22.20.0'; exit 0; fi`,
+    `case "$*" in *CCRC_DOCTOR_MODELS_DIR*)`,
+    `  US=$'\\x1f'`,
+    `  while IFS= read -r id; do`,
+    `    printf '%s%sWEIRD%s%s%s\\n' "$id" "$US" "$US" "$US" "$US"`,
+    `  done`,
+    `  exit 0`,
+    `  ;;`,
+    `esac`,
+    `exec '${process.execPath}' "$@"`,
+  ].join('\n'));
+}
+
 /** tmux, answering the ONLY two argv shapes doctor sends: `-V` names the
  *  CLIENT (the binary on disk, in tmux's own `tmux 3.4` spelling), and
  *  `display-message -p '#{version}'` asks the RUNNING SERVER for its own —
@@ -1831,8 +1866,12 @@ describe('ccrc doctor: services', () => {
     expect(lines[w + 1]).toContain('enable --now ccd-cap-scopes.timer');
     expect(lines[w]).toContain('failed');            // systemd's word, not "inactive"
     // The worse class is what the check returns, and the summary counts both.
-    // `HEALTHY_SKIPS` rides along on every REAL-table count in this file: a
-    // Darwin box skips `scopes` and there is nothing wrong with that.
+    // `HEALTHY_SKIPS` rides along on every REAL-table count in this file: it
+    // is 1 on Linux (`models` SKIPs on every healthy fixture regardless of
+    // platform — the fixture plants only the upstream Anthropic account,
+    // which never has a model registry) and 2 on macOS (`models` plus
+    // `scopes`, which IS the Darwin-only one — cgroup throttling has nothing
+    // to measure there).
     expect(r.stdout).toMatch(new RegExp(
       `^summary: \\d+ checks \\(${HEALTHY_SKIPS} skipped\\), \\d+ verdicts — \\d+ passed, 1 warned, 1 failed$`, 'm'));
     expect(r.code).toBe(1);
@@ -6407,10 +6446,15 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
 // never produces.
 
 /** `~/.ccrc/models/<id>.classes.json` — presence is the whole question the
- *  check asks of this file, so its shape barely matters; written realistically
- *  anyway (`server/test/fixtures/modelCases.ts`'s UNSEEDED shape — every class
- *  null, no `effort` block — since that is what this function actually
- *  writes; `SEEDED` has three non-null classes and an `effort` map). */
+ *  check asks of this file, so its shape barely matters; written as an
+ *  UNSEEDED-shaped registry (every class null, no `effort` block) but NOT
+ *  byte-for-byte either of `server/test/fixtures/modelCases.ts`'s named
+ *  fixtures — measured: this writes `probe: 'codex'` and
+ *  `discovery: 'catalogue'`, where that file's `UNSEEDED` has
+ *  `probe: 'openrouter'` and `discovery: []` (R5, fix round 2: naming a
+ *  fixture this function does not actually match is the same defect R2
+ *  found against `SEEDED`, just against a different fixture — so this
+ *  docstring now describes what the function writes instead of citing one). */
 function writeModelRegistry(home: string, id: string): void {
   mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), JSON.stringify({
@@ -6562,6 +6606,116 @@ describe('ccrc doctor: models', () => {
     expect(line).toContain('gpt');
     expect(line).not.toContain('ghost');
     expect(out).not.toContain('must never surface');
+  });
+
+  // ── R2 fix round 2, R1: the seven cases round 1 changed behaviour on
+  // without adding a single `it(` for. Each was measured RED against
+  // `git show 22033c6d:ccd/ccrc-doctor-checks` (kept outside the repo) before
+  // this round's own edits — see partC-report.md for the paired before/after
+  // runs. ──────────────────────────────────────────────────────────────────
+
+  it('R1-1: a non-object catalogue on one lane never swallows a second lane\'s WARN (C2\'s own scenario)', () => {
+    const home = healthy('ccrc-doctor-models-nonobject-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }, { id: 'grok', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'), 'null');
+    writeModelRegistry(home, 'grok');
+    writeModelCatalogue(home, 'grok', { stale: true, lastError: 'HTTP 401 unauthorized', fetchedAt: nowS() - 9 * 60 });
+    const out = runDoctor(home).stdout;
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toBeDefined();
+    expect(any).not.toMatch(/^PASS models: 0 lanes,/);
+    expect(out).toMatch(/grok/);
+    expect(out).toMatch(/HTTP 401/);
+  });
+
+  it('R1-2: the batched catalogue reader exiting non-zero is not a PASS', () => {
+    const home = healthy('ccrc-doctor-models-readerdown-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() - 60 });
+    stubNodeModelsExit(home, 7);
+    const out = runDoctor(home).stdout;
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toBeDefined();
+    expect(any).not.toMatch(/^PASS models: /);
+  });
+
+  it('R1-3: a directory at <id>.json (EISDIR) gets a sentence distinct from never-probed', () => {
+    const home = healthy('ccrc-doctor-models-eisdir-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    mkdirSync(join(home, '.ccrc', 'models', 'gpt.json'));
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).not.toMatch(/never probed/);
+    expect(lines[i]).toMatch(/broken path/);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    'R1-4: an unreadable <id>.json (EACCES) gets its own sentence too', () => {
+    const home = healthy('ccrc-doctor-models-eacces-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() - 60 });
+    chmodSync(join(home, '.ccrc', 'models', 'gpt.json'), 0o000);
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).not.toMatch(/never probed/);
+    expect(lines[i]).toMatch(/broken path/);
+  });
+
+  it('R1-5: a non-integer fetchedAt (float, numeric string, or 1e21) completes the run with its own verdict, never a bash arithmetic crash', () => {
+    const home = healthy('ccrc-doctor-models-noninteger-');
+    writeRoster(home, [
+      { id: 'aaa', exec: { kind: 'external' } },
+      { id: 'bbb', exec: { kind: 'external' } },
+      { id: 'ccc', exec: { kind: 'external' } },
+    ]);
+    for (const id of ['aaa', 'bbb', 'ccc']) writeModelRegistry(home, id);
+    writeFileSync(join(home, '.ccrc', 'models', 'aaa.json'),
+      JSON.stringify({ probe: 'codex', fetchedAt: 1789000000.5, stale: false, models: [] }));
+    writeFileSync(join(home, '.ccrc', 'models', 'bbb.json'),
+      JSON.stringify({ probe: 'codex', fetchedAt: '1789000000', stale: false, models: [] }));
+    writeFileSync(join(home, '.ccrc', 'models', 'ccc.json'),
+      JSON.stringify({ probe: 'codex', fetchedAt: 1e21, stale: false, models: [] }));
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(out).toMatch(/aaa/);
+    expect(out).toMatch(/bbb/);
+    expect(out).toMatch(/ccc/);
+    expect(out).not.toMatch(/^PASS models: 0 lanes,/m);
+  });
+
+  it('R1-6: a future fetchedAt gets the unmeasurable-age verdict, never a PASS', () => {
+    const home = healthy('ccrc-doctor-models-future-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() + 99999999 });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'models');
+    expect(line, out).not.toMatch(/^PASS models: /);
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toMatch(/^WARN models: /);
+    expect(out).toMatch(/future/);
+  });
+
+  it('R1-7 / R3(b): a status the case does not recognize gets its own verdict, never a silent PASS 0 lanes over a non-empty population', () => {
+    const home = healthy('ccrc-doctor-models-unknownstatus-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }, { id: 'grok', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelRegistry(home, 'grok');
+    stubNodeModelsWeirdStatus(home);
+    const out = runDoctor(home).stdout;
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toBeDefined();
+    expect(any).not.toMatch(/^PASS models: 0 lanes,/);
   });
 });
 
