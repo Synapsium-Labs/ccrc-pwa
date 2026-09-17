@@ -471,6 +471,23 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(fs.readFileSync(path.join(REG(), `${id}.prnumber`), 'utf8')).toBe('591');
   }, 20000);
 
+  it('the compare-and-set lock: a DANGLING SYMLINK at $REG/.prstate-<id>.lock proceeds UNLOCKED, PROMPTLY', () => {
+    // C2 (this round): the `lexists`-not-`exists` fix on this same guard exists
+    // BECAUSE `exists` follows a symlink — a target that is gone reads as
+    // absent, the guard is skipped, and `open(path, 'a')` creates a REGULAR
+    // file at this name instead of raising, silently losing the refusal the
+    // FIFO case above pins. `lexists` does not follow, so this shape raises
+    // the same `OSError` the FIFO does, caught by the same `try` that turns
+    // it into "proceed unlocked" — the write must still land, unlocked.
+    const { id, tip } = workspace();
+    const lockPath = path.join(REG(), `.prstate-${id}.lock`);
+    fs.symlinkSync(path.join(REG(), 'nonexistent-target'), lockPath);
+    hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).toBe(0);
+    expect(fs.readFileSync(path.join(REG(), `${id}.prnumber`), 'utf8')).toBe('591');
+  }, 20000);
+
   it('the prhistory append: a FIFO at $REG/<id>.prhistory faults PROMPTLY rather than hanging the whole sweep', () => {
     // THE FOURTH OPEN, not the third — `get()`, `put()`'s own tmp file, the
     // lock and this append are four sites in the same mode, not two (the
@@ -499,6 +516,22 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(r.stderr).toContain('refusing to append to a non-regular-file prhistory');
   }, 20000);
 
+  it('the prhistory append: a DANGLING SYMLINK at $REG/<id>.prhistory faults PROMPTLY rather than hanging the whole sweep', () => {
+    // C2 (this round): same `lexists`-not-`exists` gap as the lock case
+    // above, on the fourth site — a target that is gone must not read as
+    // absent here either, or the append silently creates a REGULAR file at
+    // this name instead of raising.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(path.join(REG(), `${id}.prnumber`), '591');
+    const histPath = path.join(REG(), `${id}.prhistory`);
+    fs.symlinkSync(path.join(REG(), 'nonexistent-target'), histPath);
+    hp.ghRows([mergedRow({ number: 601, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('refusing to append to a non-regular-file prhistory');
+  }, 20000);
+
   it("put(): a FIFO already at the pid-named tmp path (pid reuse) faults PROMPTLY rather than hanging the whole sweep", () => {
     // `put`'s tmp name embeds `os.getpid()`, unknowable to this test ahead of
     // the real interpreter starting — so a `python3` SHIM stands in first on
@@ -515,6 +548,28 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     fs.writeFileSync(shim,
       '#!/bin/bash\n'
       + `mkfifo "${path.join(REG(), `.${id}.prcheckedat.$$.tmp`)}" 2>/dev/null || true\n`
+      + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
+    hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('refusing to write a non-regular-file pr-state tmp');
+  }, 20000);
+
+  it("put(): a DANGLING SYMLINK already at the pid-named tmp path (pid reuse) faults PROMPTLY rather than hanging the whole sweep", () => {
+    // C2 (this round): the same `lexists`-not-`exists` gap on the third
+    // site — `exists` follows a symlink, so a gone target reads as absent,
+    // the guard is skipped, and `open(tmp, 'w')` creates the link's TARGET
+    // while `os.replace(tmp, dst)` renames the SYMLINK itself onto `dst`,
+    // landing the field's bytes outside `$REG` entirely (the exact failure
+    // this wave's own README/comment repair names). Same pid-preserving
+    // shim technique as the FIFO case above, planting a dangling symlink
+    // instead.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    const shim = path.join(harnessBin(hp.home), 'python3');
+    fs.writeFileSync(shim,
+      '#!/bin/bash\n'
+      + `ln -s "${path.join(REG(), 'nonexistent-target')}" "${path.join(REG(), `.${id}.prcheckedat.$$.tmp`)}" 2>/dev/null || true\n`
       + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
     hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);

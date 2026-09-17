@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9ad737e123b1788b513cf2d38f57b3cb33cd70fcad6adf0a1589d801ce8c0efc
+# ccrc:generated 1 sha256=638658893e86646e69a369fad3216ffc3f6db2cff26113d1c20da8bb6a6a2f95
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -4961,11 +4961,18 @@ if mode == 'state':
         # an overloaded null at a seam, the shape this repo's own
         # conventions ban, and `_check_models` (`ccd/ccrc-doctor-checks`)
         # takes the OPPOSITE position on the same class (a distinct verdict
-        # for a read it cannot trust). Not reopened this late: the collapse
-        # is CONTAINED, because `put()`'s and `clear()`'s own guards on this
-        # same path still raise on a non-regular shape — the fault moves
-        # downstream to the next write rather than disappearing, it is never
-        # silently accepted as though the field had simply never existed.
+        # for a read it cannot trust). Not reopened this late, but NARROWED
+        # to what measures true (final-round correction): only a DIRECTORY at
+        # this same path still faults at the next `put`/`clear` — `put`'s own
+        # guard sits on the TMP path, not on `dst`, so `os.replace(tmp, dst)`
+        # renames straight over a FIFO, socket, device or symlink at `dst`
+        # with no raise, and `clear`'s `os.remove` unlinks any of those four
+        # just as silently. A directory at `dst` is the one shape that still
+        # faults, because `os.replace`/`os.remove` themselves refuse it
+        # (`IsADirectoryError`) with nothing downstream to swallow that. For
+        # every other non-regular shape the overloaded `None` above is NOT
+        # contained: the next write silently replaces or unlinks it instead
+        # of raising, exactly as though the field had simply never existed.
         p = os.path.join(reg, id_ + '.' + field)
         if not os.path.isfile(p):
             return None

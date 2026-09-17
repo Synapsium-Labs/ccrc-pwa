@@ -216,7 +216,7 @@ group by design; a row can be green across all four and still be caught elsewher
 
 | # | mutant | case (a) | case (b) | narrowed scan | A1 case 2 |
 |---|---|---|---|---|---|
-| M1 | delete the `rm -f -- "$2"` line entirely | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four; caught only by A1's case 1 |
+| M1 | delete the `rm -f -- "$2"` line entirely | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four; caught by THREE cases: A1's case 1 (`answers 0 only if src is now AT a dest that was a symlink to a directory`), the rm-fails price (`when the guarded rm FAILS…`) and the destination-gone price (`when src is absent, a symlink-to-directory dest is left GONE…`) |
 | M2 | guard the `rm` by `-L "$2"` only (drop `-d`) | GREEN | **RED** | GREEN | GREEN |
 | M2b | guard the `rm` by `-d "$2"` only (drop `-L`) | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four, but **PROVABLY EQUIVALENT** (below), not an uncaught defect |
 | M3 | make the `rm` unconditional (drop its own `-L`/`-d`, keep `\|\| return 1`) | **RED** | **RED** | GREEN | GREEN |
