@@ -1121,15 +1121,15 @@ const lineFor = (out: string, name: string): string | undefined =>
 const anyVerdictFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
 
-/** How many checks a HEALTHY fixture skips. Zero on Linux; exactly one on
- *  macOS, and it is `scopes`: cgroup throttling is a Linux mechanism, so a
- *  Darwin box has no such fault to find. It answers SKIP rather than PASS
- *  deliberately — a PASS there would be a verdict nobody measured, which is
- *  the forgery class this repo bans by name. The same shape as the standing
- *  `linger` WARN the summary test below already accounts for. */
-// `+ 1` universally: `healthy()` plants only the upstream (Anthropic) account,
-// which never has a model registry by design, so the new `models` check
-// SKIPs on every platform's healthy fixture — not just Darwin's `scopes`.
+/** How many checks a HEALTHY fixture skips. ONE on Linux, TWO on macOS —
+ *  `models` SKIPs on every platform (`healthy()` plants only the upstream
+ *  Anthropic account, which never has a model registry by design, so the
+ *  population is empty everywhere), and macOS adds a second, `scopes`:
+ *  cgroup throttling is a Linux mechanism, so a Darwin box has no such fault
+ *  to find. Both answer SKIP rather than PASS deliberately — a PASS there
+ *  would be a verdict nobody measured, which is the forgery class this repo
+ *  bans by name. The same shape as the standing `linger` WARN the summary
+ *  test below already accounts for. */
 const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 1;
 
 // ── the table itself ──────────────────────────────────────────────────────
@@ -3313,11 +3313,12 @@ describe('ccrc doctor: wrappers', () => {
     expect(pass + warn + fail).toBe(verdicts);
     // The comparison is against the checks that ANSWERED WITH A VERDICT, not
     // against every check in the table. A skip subtracts a verdict without
-    // subtracting a check, so on a platform that legitimately skips one
-    // (macOS: `scopes`) the two-class check's extra verdict is cancelled
-    // exactly, and `verdicts > total` reads 26 > 26 — a red leg reporting
-    // arithmetic that was never wrong. On Linux `HEALTHY_SKIPS` is 0 and this
-    // is the assertion it always was.
+    // subtracting a check, so on a platform that legitimately skips some
+    // (every platform: `models`; macOS also: `scopes`) the two-class check's
+    // extra verdict is cancelled exactly, and `verdicts > total` reads
+    // 26 > 26 — a red leg reporting arithmetic that was never wrong. On
+    // Linux `HEALTHY_SKIPS` is 1 (`models`) and this is the assertion it
+    // always was, just no longer over a zero skip count.
     expect(verdicts).toBeGreaterThan(total - HEALTHY_SKIPS);
   });
 
@@ -5364,10 +5365,13 @@ describe('ccrc doctor: the output contract', () => {
     // SKIP is in the alternation and NOT in the verdict count: a check that did
     // not run has not answered, and counting it as an answer is the whole
     // defect the skip exists to avoid. Both fixtures are walked, because the
-    // healthy box has no skip of its own on Linux and the address-less one has
-    // exactly two — `fleet` and, since Stage 4 Task 9, `build`, each for its
-    // own reading of the same missing address. Add `HEALTHY_SKIPS` to both on a
-    // platform that legitimately skips a check outright (macOS: `scopes`).
+    // healthy box's own skip (`HEALTHY_SKIPS` — `models`, everywhere, plus
+    // `scopes` on macOS) is not zero on either platform any more, and the
+    // address-less one has exactly two ADDITIONAL skips on top of that —
+    // `fleet` and, since Stage 4 Task 9, `build`, each for its own reading of
+    // the same missing address. `HEALTHY_SKIPS` is added to both below for
+    // exactly that reason: it is not something only a platform quirk adds,
+    // it is the healthy box's own baseline now.
     const home = healthy('ccrc-doctor-shape-');
     ghStub(home, ['github.com', '  - Logged in to github.com account fixture-bot (oauth_token)'], 0);
     const skipBox = healthy('ccrc-doctor-shape-skip-');
@@ -5416,11 +5420,14 @@ describe('ccrc doctor: the output contract', () => {
     const [total, skipped, verdicts, pass, warn, fail] = m!.slice(1).map(Number);
     expect(total).toBe(tableNames().length);
     expect(pass + warn + fail).toBe(verdicts);
-    // On a HEALTHY box every check answers exactly once, so the two nouns
-    // agree — which is what makes the two-class run's disagreement meaningful.
-    // A SKIP is an answer but NOT a verdict (cmd_doctor counts them apart), so
-    // a platform that legitimately skips one check has one fewer verdict than
-    // checks. On Linux `HEALTHY_SKIPS` is 0 and this reads as it always did.
+    // On a HEALTHY box every check answers exactly once EXCEPT the
+    // `HEALTHY_SKIPS` checks that legitimately SKIP (`models`, everywhere;
+    // `scopes` too on macOS) — which is what makes the two-class run's
+    // disagreement meaningful by contrast. A SKIP is an answer but NOT a
+    // verdict (cmd_doctor counts them apart), so a box with `HEALTHY_SKIPS`
+    // legitimate skips has that many fewer verdicts than checks. On Linux
+    // `HEALTHY_SKIPS` is 1, not 0 — the skip is real now, not a
+    // Darwin-only special case.
     expect(verdicts).toBe(total - HEALTHY_SKIPS);
     expect(skipped).toBe(HEALTHY_SKIPS);
     expect(fail).toBe(0);
@@ -6401,7 +6408,9 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
 
 /** `~/.ccrc/models/<id>.classes.json` — presence is the whole question the
  *  check asks of this file, so its shape barely matters; written realistically
- *  anyway (`server/test/fixtures/modelCases.ts`'s SEEDED shape). */
+ *  anyway (`server/test/fixtures/modelCases.ts`'s UNSEEDED shape — every class
+ *  null, no `effort` block — since that is what this function actually
+ *  writes; `SEEDED` has three non-null classes and an `effort` map). */
 function writeModelRegistry(home: string, id: string): void {
   mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
   writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), JSON.stringify({

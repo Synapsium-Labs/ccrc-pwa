@@ -1488,24 +1488,25 @@ describe('the model files, and who reads each one', () => {
     }
   });
 
-  // THESE LISTS GROW WITH PLANS 2 AND 3a, deliberately and BY NAME — each of
-  // those plans has a step that edits the rows below by hand:
+  // THIS LIST STILL GROWS WITH PLAN 2, deliberately and BY NAME — that plan
+  // has a step that edits the row below by hand:
   //   Plan 2 adds `'ccd/ccd'`               (the class carry's reader of the
   //     TSV's third column and of the catalogue), beside its agreement test.
-  //   Plan 3a adds `'ccd/ccrc-doctor-checks'` (the doctor's per-lane check,
-  //     which reads the catalogue and the settings block through the shipped
-  //     `shared/models.mjs` / `shared/modelenv.mjs`).
-  // So the settled end state of the first assertion is the four-row list
+  // `'ccd/ccrc-doctor-checks'` (Part C's per-lane freshness check, a READER of
+  // both the catalogue and the registry file) has already landed as the
+  // second row below — measured against HEAD, not predicted ahead of it. So
+  // the settled end state of the first assertion is the four-row list
   //   ['ccd/ccd', 'ccd/ccrc', 'ccd/ccrc-doctor-checks', 'ccd/ccrc-models-probe']
-  // in `holdersOf`'s own sort order. It is left at TWO rows here on purpose:
+  // in `holdersOf`'s own sort order. It is left at THREE rows here on purpose:
   // an exact match that is widened by the plan that widens the code is the
   // guard; a list written ahead of the code is a list nobody measured. Turning
   // any row into a pattern would retire the guard outright.
 
   it('the models directory is spelled by exactly these bash tools', () => {
     expect(holdersOf('.ccrc/models')).toEqual([
-      'ccd/ccrc',              // cmd_models and its helpers — the verbs
-      'ccd/ccrc-models-probe', // the catalogue's writer
+      'ccd/ccrc',                 // cmd_models and its helpers — the verbs
+      'ccd/ccrc-doctor-checks',   // Part C's freshness check — a READER only, see below
+      'ccd/ccrc-models-probe',    // the catalogue's writer
     ]);
   });
 
@@ -1562,7 +1563,7 @@ describe('the model files, and who reads each one', () => {
     }
   });
 
-  it('the REGISTRY file is named by exactly three files, and edited by one of them', () => {
+  it('the REGISTRY file is named by exactly four files, and edited by one of them', () => {
     // `<id>.classes.json` is the operator's own file (§4.1), edited only
     // through the verbs — so the verbs' node half is the one program that
     // writes it, and every write passes the validator. `shared/models.ts`
@@ -1571,9 +1572,39 @@ describe('the model files, and who reads each one', () => {
     // own docstring — measured 2026-09-08: the single-source ruling moved the
     // validator ITSELF into this file, so the sentence describing what the
     // validator validates moved with it. Neither file holds an fs call (both
-    // are L0 and import nothing) — a bash holder would be a second,
-    // unvalidated editor of the same bytes.
-    expect(spell('classes.json')).toEqual(['deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts']);
+    // are L0 and import nothing).
+    //
+    // `ccd/ccrc-doctor-checks` is a fourth holder, added by Part C: it tests
+    // `[ -f "$dir/$id.classes.json" ]` to build its population — a READER,
+    // not an editor. A bash holder that only ever TESTS or READS the path is
+    // not the "second, unvalidated EDITOR" this test's older comment warned
+    // against; that warning is about a bash WRITE of the same bytes, which is
+    // exactly what the assertion just below this one now forbids by name, so
+    // admitting a reader here does not reopen the door the comment was
+    // guarding.
+    expect(spell('classes.json')).toEqual([
+      'ccd/ccrc-doctor-checks', 'deploy/models-op.mjs', 'shared/models.mjs', 'shared/models.ts',
+    ]);
+  });
+
+  it('the doctor\'s models check reads the registry file but never writes it', () => {
+    // The other half of the ruling just above: admitting a reader is only
+    // honest if that reader really never edits the same bytes. Same shape as
+    // "the probe is the ONLY thing that writes a catalogue" above, aimed at
+    // `.classes.json` instead of the catalogue's own `.json` — a `>`/`>>`
+    // redirect TARGETING the registry path, or an `mv`/`cp`/`tee`/
+    // `install`/`install_atomic`/`_inst_atomic`/`writeFileSync`/`renameSync`
+    // naming it, would be a second, unvalidated editor of the operator's own
+    // file.
+    const REGISTRY_PATH = /\.ccrc\/models\/[^ "']*\.classes\.json/;
+    const writesRegistryDirectly = (l: string): boolean => {
+      if (!REGISTRY_PATH.test(l)) return false;
+      if (/\b(?:mv|cp|tee|install|install_atomic|_inst_atomic|writeFileSync|renameSync)\b/.test(l)) return true;
+      return /(?<![0-9&])>{1,2}\s*"?[^"'\s]*\.ccrc\/models\/[^"'\s]*\.classes\.json/.test(l);
+    };
+    const code = codeLines(path.join(ccrcRoot, 'ccd', 'ccrc-doctor-checks'));
+    expect(code.filter(writesRegistryDirectly),
+      'ccd/ccrc-doctor-checks writes a registry directly instead of only reading it').toEqual([]);
   });
 
   it('the LiteLLM config path is spelled once, in one tool, through one helper', () => {
