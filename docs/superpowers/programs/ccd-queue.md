@@ -1755,3 +1755,70 @@ Review run **78** dispatched to `ccrc-pwa-amber-mesa`, scoped to five items — 
 has ever seen (`ccd-telemetry-keepalive`, `ccd-authdead.test.ts`, `telemetry-keepalive.test.ts`), the
 revert, the census rise, the re-censused class, and the new sentences. `origin/main` is `8430b1ca`:
 **the seventh move during this wave.**
+
+## 2026-09-17 20:2x UTC — review 78 closed; a THIRD `_authdead` body, and my own deferral criterion turned against me
+
+Run 78 (`ccrc-pwa-amber-mesa`) at `73e67950`: 14 findings, panel verbatim, **72 agents, 20 confirmed,
+3 refuted, 0 unexamined, no unverified lenses.** Suites green at the tip. Closed `done`,
+`released:true`. I verified all three ruling items myself.
+
+### What the review ratified — including the reasoning I asked it to attack
+
+- The mutations reproduce exactly and **each body reds only its own suite** (1F/24P, 1F/36P) — the
+  two-body contract is independently pinned, which was the thing I could not check myself.
+- **The revert was the right call on all three grounds**, reproduced end to end, including `diff` of
+  two failed `sed`s exiting 0.
+- **The +21 is honest**: 24 gross new, 3 gone, 22 provable unique line shifts, 2 ambiguous only
+  because the anchor is a recurring line — and **not one has a changed or deleted referent**, so
+  every one is named and repairable. The census in fact **UNDERSTATES by 3**: three anchors left the
+  failing set by landing on comment lines, a coincidence in main's favour. Better than I ruled for.
+- **None of the six escalated sites is merge-blocking** — the deferral stands on an independent read.
+
+### The finding that reopens the round, and why I cannot defer it
+
+**`server/src/limits.ts` is a THIRD body of the `_authdead` contract.** `io.readFile` is
+`node:fs/promises` — no lstat, no `O_NOFOLLOW` — so it FOLLOWS. Before this wave all three bodies
+followed: consistently wrong. **After it, bash answers rc 1 (healthy) and the server still condemns.**
+
+The file's own docstring (`:76-80`) forbids precisely this, in precisely this direction:
+
+> "Trusting the FILENAME alone here would make the server MORE CREDULOUS than bash — `touch
+> $REG/<w>-authdead` would condemn the account here while `_account_ok`'s own reader still calls it
+> healthy — and an adapter may not narrow OR WIDEN a distinction it received."
+
+**I deferred the worker's six on the ground that they are pre-existing and none is a regression this
+branch introduces. This one the branch introduces.** So the criterion I used to defer them is the
+criterion that forbids deferring this — and it cuts against my wish to be finished, which is the only
+reason it is worth anything. The six keep their follow-up wave.
+
+### The scope error is now THREE for three, and that is the pattern
+
+The class's instrument walks `git ls-files ccd/`, so **a `$REG` reader outside `ccd/` cannot be in
+the census by construction.** That is the same shape as my field-path grammar excluding `_authdead`,
+and as the `ln -s` scan that could not see `symlinkSync`. **Three times in one wave a census came back
+clean because its scope excluded the member.** The instrument must walk the repo, not `ccd/`.
+
+### Two corrections the review measured and I confirmed
+
+**The 4-cosmetic/1-not split is wrong by its own criterion — 2 cosmetic, 3 persisted.** `_lc_emit` is
+ccd's ONE writer into `.lifecycle/` ("NOTHING BUT THIS FUNCTION WRITES INTO `.lifecycle/`"), and
+`_lc_refuse` calls `_lc_emit … refused …` then `die`, while `_lc_done` calls it twice. `:6846` and
+`:21366` persist exactly as `:8012` does; `:8012` keeps its ranking (it records a hold being REMOVED)
+but not its count.
+
+**The `_authdead` header contradicts the test the same commit wrote**, five lines above the paragraph
+it corrected: the 14-input census still reads "a regular marker, A SYMLINK TO ONE and a hardlink
+answer rc 0 before and after" and "IT NARROWS NOTHING". The new rung makes a symlink answer rc 1 and
+narrows exactly that input. True of the hang-class guard it was written for, false at the shipping
+tree. **Nothing pins the prose — that is this whole wave in one paragraph.**
+
+### The census collision continues under a different hand
+
+`origin/main` is `1a4b9794` (it was `2985b9d1` when the review ended). **Main now asserts 161 with the
+`shared/api.ts` key DROPPED** while this branch asserts 183 — a second programme re-measuring the same
+census off its own base. The reviewer derived the merged value (182, no `shared/api.ts` key) rather
+than guessing it; the worker re-derives on its own shipping tree rather than typing the reviewer's
+number, per D-2990.
+
+Round 5 sent as mail 1660: the third body, the widened instrument (report only — fix nothing new), the
+two corrections, the merge, and the derivation last.
