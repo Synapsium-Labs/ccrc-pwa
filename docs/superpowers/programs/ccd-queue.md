@@ -1544,3 +1544,63 @@ that exonerating result as it would have on an incriminating one.
 
 Round 3 sent as mail 1616: merge `2ff33333`, re-locate that one anchor **by content**, re-derive every
 cardinal last. Nothing else. I merge on green with `--admin`.
+
+## 2026-09-17 16:4x UTC — round 3 green; run 42 `awaiting-review` at `2080f293`; review run 76 dispatched
+
+`suite: green`, no `failure` line. Tip `2080f293`, PR #136 OPEN/MERGEABLE/BLOCKED, head bound.
+Advanced `working` → `awaiting-review`; **the server re-measured the fingerprint and agreed.**
+
+### Verified before advancing
+
+The previously-red assertion is **333/333 at the claimed tip**, run foreground from a `git archive`
+of the tip (the first attempt was backgrounded by the harness and would have been memory-killed;
+re-run in the foreground). The branch contains `2ff33333`.
+
+**The branch's own change is 16 files, +3733/-310 — measured THREE-DOT** against `origin/main`. The
+two-dot diff says 139 files and 18,223 insertions, which is a lie: it blames main's routing slices
+(#116, #139, #140), arriving by two merges, on this branch. Recorded because I nearly sized the
+review off it.
+
+### The anchor was re-derived, not taken from me
+
+I gave `:3072` and flagged it as my measurement on a tree that was not the worker's yet. It
+re-derived independently — the base block occurs exactly once at the tip, at `:3072`. Same answer,
+its instrument. **And no census cardinal moved** (109 total, `ccd/ccd` 72, re-measured rather than
+assumed). That is the correct outcome and it is the mechanism working: *a weak anchor is one the
+census scores GREEN, so repairing it cannot move the census.* The two instruments disagree by
+construction, and the disagreement is the point.
+
+### The flake, ruled
+
+Shard 1's FIRST run failed `boot.test.ts > a valid, instant ccd also boots fast`; green in isolation
+and green on a full shard re-run **with no edit between the two runs, tree byte-identical.** The
+worker disclosed it rather than laundering it and asked me to rule.
+
+**Ruled `green`.** A red that goes green on a byte-identical tree is a measurement of the box, not of
+the wave — and **laundering a red REQUIRES an edit, by definition.** That is a mechanical
+discriminator, not a judgement, which is what makes it safe to apply: "it was a flake" is not
+checkable, "no edit between the runs" is. `boot.test.ts` is **not** among CLAUDE.md's five named
+flakes; that list understates the surface again.
+
+### The wave's real finding, and it is the worker's
+
+> "The rule we both kept invoking — nothing typed from an earlier measurement — was written for
+> NUMBERS, and every one of these six was a DIAGNOSIS."
+
+Six instances this wave: my keying explanation, my round-2 GREEN instruction, the worker's README
+claim, and its two anchors stale the moment they were typed. **A diagnosis has a tree the way a
+number does**, and neither of us wrote that down until now. Carried into run 76's brief as item 3,
+stated against my own instance as well as the worker's.
+
+### A mechanism fact, found by a refused dispatch
+
+`POST /api/runs/76/dispatch` answered 502 `bad value for subagent (4 bytes)`. **`SUBAGENT_CLASSES` is
+`['haiku','sonnet']`** (`shared/models.mjs:70`), deliberately narrowed and tied to Claude Code
+2.1.267 — so the `subagent` ROUTE FIELD is the per-session class FLOOR and cannot spell `opus`. The
+held-out panel's Opus lenses do not come from that field at all: they ride the Workflow per-call
+`model:`, and clause 14 says the panel is **exempt from every routing field.** I had put the panel's
+model in the floor. Re-dispatched with `subagent: sonnet`; nothing was touched by the refusal.
+
+Review run **76** (not 72 — the allocator's own id) dispatched to `ccrc-pwa-warm-delta`, opened with
+the programme's own title so the open could not overwrite it. Six items; item 2 is the 117-anchor
+provenance re-point, **which no review has ever seen.**
