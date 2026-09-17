@@ -2129,8 +2129,8 @@ export class CoordStore {
     const n = clampMailLimit(closedLimit ?? 500);
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, coordProject FROM runs ' +
-      "WHERE coordProject IS NOT NULL AND (state NOT IN ('done','failed') OR id IN " +
-      "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?)) " +
+      `WHERE coordProject IS NOT NULL AND (state NOT IN ${TERMINAL_RUN_STATES_SQL} OR id IN ` +
+      `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?)) ` +
       'ORDER BY id',
     ).all(n) as unknown as { idText: string; sessionId: string | null; claimedBy: string | null; coordProject: string }[];
     const stamps: CoordPlacementStamp[] = [];
