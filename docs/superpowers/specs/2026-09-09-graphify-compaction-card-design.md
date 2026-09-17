@@ -96,7 +96,7 @@ the hook's stable lock, the row generation, the exact-family lifecycle and the j
 canonical pathname, the pre-mutation identity re-check is `_hook_lock_still_canonical` (`:1389`), the record
 predicate is `JOURNAL_RECORD_PRED` with sixteen keys and no persisted ordinal (`:2596`), and the journal
 commits by `mv -f "$stage" "$journal"` under the reacquired lock (`:1983`). `ccd` carries the twinned
-`COMPACT_LOCK_WAIT` and the three-status `_reg_purge` (`ccd/ccd:2964`), and all four of its callers branch on
+`COMPACT_LOCK_WAIT` and the three-status `_reg_purge` (`ccd/ccd:3072`), and all four of its callers branch on
 that status rather than on a boolean — `_rm_prc` (`ccd/ccd:6791`), `_rt_prc` (`:13746`), `_pr_prc` (`:14328`)
 and `_fg_prc` (`:19488`). §4's mechanism-absent row and §3.4's decline paragraph describe those arms as they
 stood BEFORE that build, and the ledger's D-2782 and D-2793 record the build itself. **Task 10** shipped the

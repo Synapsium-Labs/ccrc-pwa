@@ -464,6 +464,37 @@ that produced them. Neither 66 (this branch's) nor 162 (main's) may be typed. If
 number true of a tree that stops existing the moment `main` moves. Making it a derivation makes
 re-running it cheap, and the race is won by SHORTENING THE WINDOW, not by measuring more carefully.
 
+**WHY IT HAD TO BECOME A DERIVATION, AND IT IS NOT THE REASON ANYONE ASSUMED: THE REPAIR'S BASE WAS
+NEVER ONE TREE.** The classifier compares an anchor's block AT A BASE against the tip, and this corpus
+carries THREE populations with three different bases — anchors the first repair (`61e0d45b`) re-pointed,
+anchors that arrived with a merge of `origin/main`, and anchors nobody has ever touched (`dfa167d7`).
+Measured at the merged tree:
+
+| classified against | provable repairs |
+|---|---|
+| `dfa167d7` alone | **1** |
+| `61e0d45b` alone | 34 |
+| both, taking any unique byte-identical hit | 138 — **of which 103 CONFLICT** |
+
+A conflict is two bases each yielding a DIFFERENT unique hit for the same anchor. Byte-equality cannot
+break that tie, and taking either side is a guess of exactly the kind this wave exists to refuse.
+
+**The rule that removes the conflicts rather than guessing them is DERIVABLE: an anchor's base is the
+tree whose copy of THAT SAME DOCUMENT contains that exact citation spelling.** Under it the 176 failing
+anchors resolve into 117 repairable, 16 non-unique, 15 referent-gone and 28 already correct, with no
+conflicts left to adjudicate. A second membership pass caught 13 more. Census 176 -> 113 -> 109.
+
+**What is REFUSED rather than guessed, and stays refused:** the 16 non-unique, the 15 whose referent is
+gone, and 5 whose spelling the applier could not locate in its own paragraph. A repair method that
+cannot say WHICH TREE an anchor was last measured against cannot prove anything about it, and an
+unprovable anchor declared is worth more than a plausible one written.
+
+**And the applier's own hazard, designed out:** edits are grouped BY PARAGRAPH SEGMENT with the ranges
+asserted disjoint. The previous instrument applied one edit per repaired LINE, so two repairs inside one
+paragraph were two writes over the identical byte range — last write wins, both counted in the tally. It
+never fired on this corpus (measured: 59 repaired lines across 59 distinct segments, zero collisions)
+but it would have reported repairs the file never received.
+
 **THE ORDER IS PART OF THE RULING.** Three items each change `ccd/ccd`'s line count and two are derived
 from it: merge first, then the guard class, then every tree-derived cardinal last. Done in any other
 order each invalidates the last. And "earlier" includes earlier IN THE SAME ROUND — two anchors
