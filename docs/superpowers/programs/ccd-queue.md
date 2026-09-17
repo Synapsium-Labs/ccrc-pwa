@@ -1237,3 +1237,57 @@ operator.** That habit is the thing worth keeping; neither script is.
 **And the worker deliberately did NOT hunt the four coincidence anchors**, so as not to contaminate
 the independent comparison with run 71. Correct, and for the same reason I have not told run 71 that
 the ordering question is closed: it was asked to derive that file set itself.
+
+---
+
+## A diagnosis of an instrument is a claim too — and this one was wrong
+
+The worker refused my reconciliation of 66-vs-112 (*"a stricter instrument over the same set"*) on
+correct grounds: that asserts a relationship between two numbers without deriving it, which is the
+thing this run has spent all day refusing from other people. **It was right to refuse it and I should
+not have offered it.** It then computed five readings of my predicate against its repair set, found
+none equal to 66, refused B=67 as an off-by-one — *"the least trustworthy kind of agreement"* — and
+landed on: `66 = spec 39 + plan 27`, i.e. *my instrument does not count README*, with the conclusion
+that **the one repair that was actually wrong is the one my instrument would have been blind to.**
+
+**Measured before replying, because a diagnosis of a tool is a claim like any other:**
+
+| document | removed | added |
+|---|---:|---:|
+| `README.md` | **1** | **1** |
+| `…compaction-card-plan-a.md` | 28 | 28 |
+| `…compaction-card-design.md` | 37 | 37 |
+| | **66** | **66** |
+
+And the README reference it sees, by name: `ccd/ccd:16644-16646` → `ccd/ccd:16678-16680` — the
+`genrc == 1` anchor, the one repair that was actually wrong. **It is the one my instrument sees.** So
+the load-bearing sentence of that mail is false, and 66 is not `spec 39 + plan 27` but
+`README 1 + plan 28 + spec 37`. The gap to its B=67 is **distributed** — 39/27 against 37/28 — a
+KEYING difference (doc-line-keyed repairs against occurrences of changed citation tuples), not a
+dropped document.
+
+**The number is still not retired, and on the worker's own reasoning:** an off-by-one is the weakest
+agreement there is. What each measures is the honest end state — mine counts occurrences of
+path-qualified citation tuples whose text changed; its counts doc-line-keyed repairs under the
+census's own grammar, bare `:N` included. **Its grammar governs, because the census is what goes red.**
+
+**Two things of its survive intact, and they are the valuable ones.** The 45 bare-`:N` references are a
+real gap in my regex. And the corpus property is the durable finding: **two independent instruments
+have now under-counted this corpus by dropping bare references** — its first pass ran 112 → 17 before
+it handled both spellings, mine drops 45. Anyone building a third should be told before they start.
+So is the rule it drew: *a scope that silently drops a document reads identically to a scope that found
+nothing there* — true, and exactly why refusing my lazy reconciliation was right.
+
+### The shape worth both parties' time
+
+The worker refused an off-by-one as too weak to close a number — correct — **and then closed it on a
+decomposition it had not run against the instrument it was diagnosing.** Same defect, one step later,
+inside the message diagnosing that defect. I did the identical thing an hour earlier, ruling an
+ordering on a file set I assumed.
+
+> **Neither party should diagnose an instrument it has not run.** It cost one command here — the same
+> command the other would have run — and the alternative is a confident, specific, false claim about
+> why someone else's number differs from yours.
+
+Nothing here touches what the worker is holding: its repair set, its zero-cost derivation and its
+stated boundary all stand exactly as measured, and my independent check confirmed the file set.
