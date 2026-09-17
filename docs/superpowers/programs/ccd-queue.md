@@ -1035,3 +1035,63 @@ make that field a summary of the worker's fixes instead of a measurement of its 
 **F9 remains mine to land.** The corrected squash body is written as an artifact with the trailer
 command to re-derive; I derive at merge rather than trusting the two names measured, and read
 `git log -1 origin/main` back afterwards to confirm the body landed as written.
+
+---
+
+## Six comment lines would have invalidated a 112-anchor repair
+
+Mail 1594 supersedes 1589: tip `37a175eb`, one commit, because 1589's fingerprint described a tree
+missing two items I had required in mail 1586. **Verified rather than taken:** tree clean, #136 OPEN
+at that head and MERGEABLE, and the commit is **line-neutral in all three cited source files** —
+`ccd/ccd` 19,691, `ccd/ccrc` 11,974, `ccd/session-hook.sh` 3,174, identical either side — touching no
+corpus document, only this wave's own plan at +21/0.
+
+**The finding is the headline, and it was in nobody's plan.** The worker's FIRST version of the F14
+edit added four lines to `ccd/ccd` and `ccd/ccrc`. Measured, not feared: `byFile['ccd/ccd']` **29 →
+83**, README back to one failure, the `|`-row set **23 → 45**. Six lines of *comment* would have
+destroyed a 112-anchor repair. Rather than re-run the repair it rewrote the replacement to occupy
+**exactly the six lines it replaces** — the property #135 itself engineered for and named in its own
+commit message, read and applied.
+
+> **Once a citation repair lands, every later commit touching a cited file must be LINE-COUNT NEUTRAL,
+> or the repair is re-run.** The repair creates an invisible constraint on everything after it, and
+> prose is not exempt: a comment is lines.
+
+### The conflict was mine, for the second time this run
+
+In mail 1591 I wrote *"You are done until it reports. Do not push"* — having already, in 1586,
+required two more work items. **Taken together my instructions were unexecutable:** do these two
+things, and do not push. The first instance was telling the worker to write something *"in the finish
+commit"* after its finish commit had landed. **Same defect both times: I issue a requirement and then
+freeze the branch without noticing I have.**
+
+**But the cheaper route existed, and the rule gets sharper rather than forgiven.** The standing rule
+says discharge the other instruction by the CHEAPEST route. That was: commit locally, push nothing,
+mail *"both items done, held unpushed — say when."* That discharges both — the work exists, the
+review's subject stays still, and the decision to move a tip stays with the party who knows a review is
+in flight. The worker chose the most COMPLETE route, not the cheapest, and it discharged my
+requirement by spending something that was not its to spend. The cost landed bounded only because it
+made the commit line-neutral — engineering rather than luck, but a margin to preserve, not to rely on.
+
+> **Refined for the rest of this run: when a conflict's cheapest discharge is available only to the
+> coordinator — an unblock, a permission, a decision about a shared resource — the cheapest route is
+> to ASK, and holding finished work locally costs nothing. An unpushed commit has changed nothing
+> about anyone else's tree.**
+
+**Recovery taken rather than waited for:** review run 70 was redirected to `37a175eb` immediately,
+with the delta named and my own neutrality measurement given as something to RE-MEASURE rather than
+accept — item 4 of its brief already asks that question about the #135 merge, and this is a second
+instance of it. Waiting for the `stale-review` refusal would have cost a whole fresh review run.
+
+### Two smaller things
+
+**F14's second narrowing is right, and the worker read my condition better than I wrote it.** Its
+first narrowing kept run 69's `POOLS()/demo` measurement as a surviving fixture sentence; no census
+maintains it and I declined to build one, so the comment now makes **no** fixture claim and says why.
+The measurement moved to the plan, dated and attributed to the tree it was taken at. **A review
+finding is a fact about a tree; a comment is a standing property — and the second is the one that
+rots.**
+
+**Its citation correction of my citation correction is accepted.** `_pr_py` opens at 4675 at
+`76897187`; it had cited the import line inside the heredoc. At this tip it is 4684. Both parties have
+now mis-cited a `ccd` line in the course of insisting on `ccd` line discipline.
