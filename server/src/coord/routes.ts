@@ -1809,8 +1809,8 @@ export function registerCoordRoutes(
       // control-character or length arm at all (`ROUTE_CONTROL_CHAR_RE`'s own
       // docstring), so this door is the only barrier on shape; a manual
       // `value` that skipped it would reach `CCD_ARGV.route` unbounded and
-      // could poison the `route:<mode>:<field>:<from>-><to>:<kind>` event
-      // string this door later parses back off its own history.
+      // could poison the `route:<mode>:<field>:<from>-><to>:<kind>[:<session>]`
+      // event string this door later parses back off its own history.
       const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
       if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
         return badRequest(!parsed.ok ? `field/value invalid: ${parsed.why}` : 'field and value are required');
@@ -1940,11 +1940,13 @@ export function registerCoordRoutes(
           effort: effortContent as RungCurrent['effort'],
         };
 
-        // S5-R2: `lastDemotion` is bookkeeping this door owns, derived from
-        // this run's OWN event trail — the last `route:demote:` detail not
-        // yet followed by a `route:reverse-demotion:` detail. Walked in
-        // order, so a later reverse-demotion or a later demote always wins
-        // over an earlier one.
+        // S5-R2: `lastDemotion` is bookkeeping this door owns (not the
+        // ladder's), derived from the SESSION's event trail — the last
+        // `route:demote:` detail not yet followed by a
+        // `route:reverse-demotion:` detail. Walked in order, so a later
+        // reverse-demotion or a later demote always wins over an earlier
+        // one. (Routing slice 6, Task 1, D-2957 closed: the walk is the
+        // session's, across every run it touches — see below.)
         //
         // Fix round 2, finding #8, ruling S5-R5: a manual write on the
         // DEMOTED field also clears `lastDemotion` — the coordinator's own
@@ -1984,7 +1986,7 @@ export function registerCoordRoutes(
         // here rather than guessed at.
         const touching = coord.runsTouching(sid);
         const trail = touching
-          .flatMap((r) => coord.runEvents(r.id).map((e) => ({ ...e, runId: r.id })))
+          .flatMap((r) => coord.runEvents(r.id).map((e) => ({ ...e, runId: r.id, runSessionId: r.sessionId })))
           .sort((a, b) => (a.at - b.at) || (a.runId - b.runId));
         let lastDemotion: Demotion | null = null;
         let priorSameKind = 0;
@@ -1993,8 +1995,7 @@ export function registerCoordRoutes(
           const parsed = parseRouteEventDetail(e.detail);
           if (parsed === null) continue;
           const { mode: evMode, field: evField, from: evFrom, to: evTo, kind: evKind, session: evSession } = parsed;
-          const eventRun = touching.find((r) => r.id === e.runId)!;
-          const belongsToSid = evSession !== null ? evSession === sid : eventRun.sessionId === sid;
+          const belongsToSid = evSession !== null ? evSession === sid : e.runSessionId === sid;
           if (!belongsToSid) continue;
           if (evMode === 'demote') {
             lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
