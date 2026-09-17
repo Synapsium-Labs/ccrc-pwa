@@ -547,3 +547,44 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(rows[0]!.pr).toBe(591);
   }, 10000);
 });
+
+describe.skipIf(NO_DEADLINE_BIN)('D5 — `cmd_project_pool`\'s registry-row existence glob, unguarded (D-2925)', () => {
+  // `cmd_project_pool`'s `--pool` arm proves a registry-only project exists
+  // with `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` — a GLOB, not
+  // a single named path, so `grep` opens EVERY matched `.project` row BY
+  // NAME, in glob (sort) order, before it can report a match or a miss. A
+  // FIFO or a symlink-to-an-infinite-character-device among those rows
+  // blocks `grep`'s `open(2)` (or its `read(2)`) forever — the exact class
+  // `_project_pool_state` (`_project_pool_state`'s own header, above) already
+  // closes for the SINGLE-file read; this glob is the second, unguarded
+  // reader of the same directory. A bad row sorting BEFORE the real one is
+  // the shape that actually blocks: `grep` never reaches the row that would
+  // have answered.
+  let h: CcdHarness;
+  beforeEach(() => { h = makeCcdHarness('ccrc-ccd-bounded-d5-'); });
+  afterEach(() => { h.cleanup(); });
+
+  const boundedRun = (snippet: string, ms = 5000): Bounded => runBounded(h.home, snippet, ms);
+  const REG = (): string => path.join(h.home, '.cc-sessions');
+
+  for (const [label, shape] of HANG_SHAPES) {
+    it(`still tags a registry-row project, PROMPTLY — never hangs, past ${label} sorting BEFORE the real row`, () => {
+      fs.mkdirSync(REG(), { recursive: true });
+      // Alphabetically FIRST, so the unguarded glob's `grep` opens this row
+      // before it ever reaches the real one below.
+      plantBad(path.join(REG(), 'aaa-blocker.project'), shape);
+      fs.writeFileSync(path.join(REG(), 'zzz-real.project'), 'quiet-basin');
+      const r = boundedRun('cmd_project_pool --project quiet-basin --pool pool-a');
+      expect(r.code).toBe(0);
+      expect(r.stdout).toBe('tagged quiet-basin pool-a');
+    }, 10000);
+  }
+
+  it('still refuses "no such project" when every .project row is an ordinary file (unchanged)', () => {
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(path.join(REG(), 'zzz-real.project'), 'quiet-basin');
+    const r = boundedRun('cmd_project_pool --project never-existed --pool pool-a');
+    expect(r.code).not.toBe(0);
+    expect(r.stdout).not.toContain('tagged');
+  }, 10000);
+});
