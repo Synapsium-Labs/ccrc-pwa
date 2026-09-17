@@ -6388,6 +6388,171 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
   });
 });
 
+// ── models: is each lane's model catalogue actually being refreshed? ──────
+// Two DIFFERENT files per lane (census/C-contract.md §0, the premise
+// correction): `<id>.classes.json` is the REGISTRY — operator-owned, and it
+// never carries `fetchedAt`/`stale`/`lastError`. Those three live ONLY in
+// `<id>.json`, the CATALOGUE, written by `ccd/ccrc-models-probe`. A fixture
+// that put them in the registry file would be testing a shape the real probe
+// never produces.
+
+/** `~/.ccrc/models/<id>.classes.json` — presence is the whole question the
+ *  check asks of this file, so its shape barely matters; written realistically
+ *  anyway (`server/test/fixtures/modelCases.ts`'s SEEDED shape). */
+function writeModelRegistry(home: string, id: string): void {
+  mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+  writeFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), JSON.stringify({
+    probe: 'codex',
+    classes: { haiku: null, sonnet: null, opus: null, fable: null },
+    subagent: 'sonnet',
+    discovery: 'catalogue',
+  }));
+}
+
+/** `~/.ccrc/models/<id>.json` — the CATALOGUE, the only file `fetchedAt`,
+ *  `stale` and `lastError` live in. `fetchedAt` defaults to now, in UNIX
+ *  SECONDS (`ccd/ccrc-models-probe:397`'s `int(time.time())`) — never the
+ *  millisecond stamps the server side uses elsewhere. */
+function writeModelCatalogue(home: string, id: string, o: {
+  fetchedAt?: number; stale?: boolean; lastError?: string;
+} = {}): void {
+  mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+  const body: Record<string, unknown> = {
+    probe: 'codex',
+    fetchedAt: o.fetchedAt ?? Math.floor(Date.now() / 1000),
+    stale: o.stale ?? false,
+    models: [],
+  };
+  if (o.lastError !== undefined) body['lastError'] = o.lastError;
+  writeFileSync(join(home, '.ccrc', 'models', `${id}.json`), JSON.stringify(body));
+}
+
+const nowS = (): number => Math.floor(Date.now() / 1000);
+
+describe('ccrc doctor: models', () => {
+  it('is in the table and has a function — both directions', () => {
+    expect(tableNames()).toContain('models');
+  });
+
+  it('SKIPS — not a confident PASS naming no lane — when no account has a model registry', () => {
+    const home = healthy('ccrc-doctor-models-none-');
+    const out = runDoctor(home).stdout;
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toMatch(/^SKIP models: /);
+    expect(any).not.toMatch(/^PASS models: /);
+  });
+
+  it('PASSES, naming the lane and its catalogue age, when fresh', () => {
+    const home = healthy('ccrc-doctor-models-pass-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() - 41 * 60 });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'models');
+    expect(line, out).toMatch(/^PASS models: /);
+    expect(line).toContain('1 lane');
+    expect(line).toContain('gpt');
+    expect(line).toMatch(/41 min old/);
+  });
+
+  it('WARNS when a registered lane has never been probed — no catalogue at all', () => {
+    const home = healthy('ccrc-doctor-models-neverprobed-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    // Deliberately no writeModelCatalogue call: a registry with no <id>.json.
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('gpt');
+    expect(lines[i]).toMatch(/never probed/);
+    expect(lines[i]).toContain('ccrc models refresh gpt');
+    expect(lines.some((l) => l.startsWith('FAIL models: '))).toBe(false);
+  });
+
+  it('WARNS — the silent-timer arm — when stale:false but fetchedAt is older than 3 hours', () => {
+    // C4's first arm: nobody rewrote the file — the timer is not reaching
+    // this lane, and an active `ccrc-models.timer` looks identical to a
+    // stopped one to the `services` check's unit-active test above.
+    const home = healthy('ccrc-doctor-models-silent-timer-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { stale: false, fetchedAt: nowS() - (3 * 3600 + 60) });
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('gpt');
+    expect(lines[i]).toMatch(/not marked stale/);
+    expect(lines[i]).toContain('ccrc-models.timer');
+    expect(lines.some((l) => l.startsWith('FAIL models: '))).toBe(false);
+  });
+
+  it('stays a PASS inside the 3 hour window — the control for the silent-timer arm', () => {
+    const home = healthy('ccrc-doctor-models-fresh-window-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { stale: false, fetchedAt: nowS() - (3 * 3600 - 60) });
+    const out = runDoctor(home).stdout;
+    expect(lineFor(out, 'models'), out).toMatch(/^PASS models: /);
+  });
+
+  it('WARNS — the stale-provider arm — regardless of age, quoting lastError and the age', () => {
+    // C4's second arm: the timer ran, the provider refused it. Warned
+    // regardless of age — the fixture's fetchedAt is minutes old, not hours.
+    const home = healthy('ccrc-doctor-models-stale-provider-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { stale: true, fetchedAt: nowS() - 5 * 60, lastError: 'HTTP 401' });
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('gpt');
+    expect(lines[i]).toContain('HTTP 401');
+    expect(lines[i]).toMatch(/5 min old/);
+    expect(lines.some((l) => l.startsWith('FAIL models: '))).toBe(false);
+  });
+
+  it('reports the stale arm only, not the silent-timer one, when both conditions hold — stale decides', () => {
+    const home = healthy('ccrc-doctor-models-stale-and-old-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { stale: true, fetchedAt: nowS() - 6 * 3600, lastError: 'HTTP 500' });
+    const out = runDoctor(home).stdout;
+    const warns = out.split('\n').filter((l) => l.startsWith('WARN models: '));
+    expect(warns.length, out).toBe(1);
+    expect(warns[0]).toContain('HTTP 500');
+    expect(warns[0]).not.toMatch(/not marked stale/);
+  });
+
+  it('ignores an orphan registry — an id no roster row names', () => {
+    const home = healthy('ccrc-doctor-models-orphan-');
+    writeModelRegistry(home, 'ghost');
+    writeModelCatalogue(home, 'ghost', { stale: true, lastError: 'must never surface' });
+    const out = runDoctor(home).stdout;
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toMatch(/^SKIP models: /);
+    expect(out).not.toContain('ghost');
+    expect(out).not.toContain('must never surface');
+  });
+
+  it('ignores an orphan registry even alongside a real lane\'s PASS', () => {
+    const home = healthy('ccrc-doctor-models-orphan-alongside-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() - 60 });
+    writeModelRegistry(home, 'ghost');
+    writeModelCatalogue(home, 'ghost', { stale: true, lastError: 'must never surface' });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'models') ?? '';
+    expect(line, out).toMatch(/^PASS models: /);
+    expect(line).toContain('gpt');
+    expect(line).not.toContain('ghost');
+    expect(out).not.toContain('must never surface');
+  });
+});
+
 describe('ccrc doctor: accounts', () => {
   const COMPATIBLE: RosterEntry = {
     id: 'orchard-api', configDirSuffix: '.claude-orchard-api',
