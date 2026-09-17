@@ -702,3 +702,69 @@ inside one `toEqual`, not a fourth failing case.
 so my "the freeze is pinned by nothing" finding turns out not to move this decision at all. It removed
 a false mechanism from the record without changing an outcome, and locating the region by sliding a
 sha-256 window rather than trusting a heading is what made that zero evidence instead of an assumption.
+
+---
+
+## "All six" — there were five, and I said it one message after writing the rule against myself
+
+Mail 1572 asked me to name my sixth plan/brief disagreement. **There is no sixth.** I wrote *"all six
+the same way"* and then enumerated **five**: item 423's twelve rows, D5 already landed, A4's mirroring,
+D-2380's four, D-2189's eight. The worker's wave-done named those same five. The list was right and the
+count was wrong — and it was wrong **one message after** I wrote *"a count in a sentence is derived from
+the list beside it or it is not written"* into this ledger as a rule on myself. The worker caught it by
+applying that rule back at me, which is the correct use of it.
+
+**I declined the exit it offered.** It wrote *"if your sixth is the D-71 recurrence I agree and it is
+class 4."* It is not: the recurrence is a plan ENTRY the wave added, not a plan-vs-brief disagreement,
+and taking it would be retro-fitting the list to the count — the exact move I refused twice today in
+#134's census. **Five.** A rule that survives only when it costs someone else is not a rule.
+
+### Its class 3 carries the mirror of my defect: right count, wrong list
+
+Measured here on the plan's own diff (294/43, which matches its figure). The non-checkbox removed lines
+are **18, in three blocks**: (1) the A2/Darwin rationale, (2) D-2189's heading **and** body, (3)
+D-2380's body. Its mail named *"EXACTLY THREE removed lines: D-2189's heading, D-2189's body, D-2380's
+body"* — D-2189 counted twice, block 1 omitted. Three is the right number of blocks; those are not the
+three.
+
+**And block 1 is a REWRITE, not a removal** — checked before saying anything, because the class matters
+more than the count: `claude-OpenClawHetzner` appears **three times at `dfa167d7` and three times at the
+tip**, the sentence lives at plan `:201`, and the replacement adds *"**Conditional on the unlink
+succeeding**"*. The attribution survived. I looked specifically because a squash on this repo once
+dropped a co-author trailer and cost a PR comment to repair. Its conclusion may well hold once block 1
+is classed as a rewrite; the list as written is still not derivable from the diff.
+
+**I asked for no corrected taxonomy.** That measurement belongs to review run 69.
+
+### Why none of it goes to the reviewer
+
+The worker's rationale is **the subject's own defence**, and a held-out review is held out from exactly
+that. Run 69's brief asks it to decide "correction earned or standard moved" from the diff; handing it
+the worker's classification would turn an independent measurement into a check of the worker's
+reasoning. It stays with me and I read it when I rule on the report — the one place it is evidence
+rather than influence. **Costs if wrong:** the reviewer re-derives a classification the worker already
+made, at the price of one lens's time, which is what a held-out panel is for.
+
+### A standing rule this run earned: conflicting instructions
+
+I told the worker to state the rationale *"in the finish commit"* in the same message that told it not
+to push while the review reads — and its finish commit had **already landed**, so the instruction was
+unexecutable as given. **That defect is mine.** It obeyed the constraint whose violation is
+irreversible (a moved tip makes run 69's report evidence about a tip that is gone, costing a whole
+fresh review run), satisfied the other by a route that costs nothing, and **told me rather than letting
+me discover it**.
+
+> **When two of this session's instructions conflict, obey the one whose violation cannot be undone,
+> satisfy the other by the cheapest route that still discharges it, and REPORT the substitution.**
+> The reporting is what makes it a resolution rather than a silent swap.
+
+The rationale lands as the first commit of a fix round if run 69 returns findings; if it returns none it
+stays a mail and this ledger carries it, because a commit whose only purpose is to restate a mail is not
+worth a tip move now.
+
+### Declined credit, recorded accurately
+
+The worker called my finding on the safe/reachable split *"a better finding than mine and it is yours."*
+It is not. It called the arithmetic impossible; I only found which of my own sentences was lying.
+Without its line I would not have re-read that paragraph, and "the headline disagrees with its own list"
+is not something anyone notices about their own prose unprompted.
