@@ -7732,8 +7732,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // above, proven the same way — sha256 of the cited line at the base
     // against the same line at this tip: `:5217` -> `:5223` (+6, c412b7f0…,
     // the `_inst_atomic "$tree/ccd/session-hook.sh" …` line Step 4 inserts
-    // above) and `:7129-7130` -> `:7136-7137` (+7, 251e2386…,
-    // `_uninst_cc_sessions`' "install set, exactly" header). THIS audit cannot
+    // above) and `:7129-7130` -> `:7207-7208` (RE-MEASURED at
+    // the final tree by locating the base block's own bytes, not by carrying
+    // an offset). ITS ATTRIBUTION WAS FALSE (F10, review 71): this named
+    // `_uninst_cc_sessions`' "install set, exactly" header, and
+    // `_uninst_cc_sessions` is at `ccd/ccrc:11706` — four thousand lines away.
+    // The referent is inside `_acct_remove()` (`ccd/ccrc:7161`). THIS audit cannot
     // see either, for two different reasons, both measured by an instrumented
     // trace of it: the first passes through sub-rule A (`_inst_files`' body
     // still contains 5217), the second never reaches sub-rule A at all — its
@@ -8048,7 +8052,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 125,
+      'ccd/ccd': 72,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8070,7 +8074,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 59 -> 161 (S6-R10) -> 162 (Task 6), the sum of the re-measured map
     // above: the headline is a MECHANISM, not a separate number, so it moves
     // with `ccd/ccd`.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(162);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(109);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8189,50 +8193,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const set = r.failures.map(refKey);
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
-        // RULING S6-R10 (fix round 2, controller, overruling this task's own
-        // hand-off above): routing slices 2-6 grew `ccd/ccd` by ~1751 lines
-        // below this corpus's anchors — measured on the merged tree at
-        // `1c71be12` — so the stale set moves 12 -> 20, all eight new entries
-        // `ccd/ccd`. RE-MEASURED against the tree, never adjusted to keep a
-        // number green; Task 11 still owns re-anchoring the citations
-        // themselves. No D-number (S6-R11).
-        'ccd/compact-card.mjs:433-560',
-        'ccd/compact-card.mjs:726-728',
-        'ccd/compact-card.mjs:726',
-        'ccd/ccd:6478',
-        'ccd/ccd:13020',
-        'ccd/ccd:19131',
-        'ccd/ccd:4006-4035',
-        'ccd/ccd:4045',
-        'ccd/ccd:4029',
-        'ccd/ccd:4047',
-        'ccd/ccd:3940-3951',
-        'ccd/ccd:5828-5830',
-        'ccd/ccd:1330-1333',
-        'ccd/session-hook.sh:1098',
-        'ccd/session-hook.sh:1175-1177',
-        'deploy/deploy.sh:560',
-        'deploy/deploy.sh:629',
-        'ccd/ccrc:5217',
-        'ccd/ccrc:6531',
-        // `ccd/ccrc:7129-7130` LEFT THIS SET WITH PR #136, AND IT WAS NOT
-        // REPAIRED — the distinction matters, because the reference is still
-        // stale in fact. That branch added nine lines to `ccd/ccrc` ABOVE line
-        // 7129, so the stale anchor lands wherever `ccd/ccrc` happens to have
-        // grown to at any given measurement (measured on THIS tree:
-        // `ccd/ccrc:7129-7130` sits inside `_acct_sign_out`, which opens at
-        // `ccd/ccrc:7115` — not `_uninst_cc_sessions`, a different function,
-        // defined far below at `ccd/ccrc:11706`; both this function and the
-        // exact line the anchor now lands on have already shifted more than
-        // once since this note was written, because `ccd/ccrc` keeps growing
-        // — re-measure rather than trust either number here), which happen to
-        // carry a token its clause quotes, and this pass therefore reads it
-        // as anchored. A FALSE
-        // GREEN by coincidence, not a repair: the citation still does not name
-        // what D-2849 says it names. It could not have been repaired either —
-        // it sits inside Task 10's 24,688-byte freeze, which #136 verified
-        // intact before and after its own work. Recorded here so the entry is
-        // not simply missing from the list the next reader compares against.
+        // RE-MEASURED at the tree this ships in (fix round 2, review 71
+        // CRITICAL 2). The deliverable here is a DERIVATION, not a number:
+        // this list is whatever `filesAudit(realCorpus())` prints on the final
+        // tree, produced AFTER the merge of `origin/main` (`ecbb8b22`) and
+        // AFTER this round's own `ccd/ccd` and `ccd/ccrc` edits, never typed
+        // from an earlier measurement. 20 -> 17.
+        // `ccd/ccd:6478` and `:13020` LEFT this set by REPAIR, not by
+        // coincidence: both were re-pointed (to `:6753` and `:13368`) by the
+        // provenance-based repair this round ran, which is what F2(a) asked
+        // for. Command: `filesAudit(realCorpus()).failures.map(refKey)`.
+      'ccd/compact-card.mjs:433-560',
+      'ccd/compact-card.mjs:726-728',
+      'ccd/compact-card.mjs:726',
+      'ccd/ccd:6753',
+      'ccd/ccd:13368',
+      'ccd/ccd:19488',
+      'ccd/ccd:4006-4035',
+      'ccd/ccd:4245',
+      'ccd/ccd:4247',
+      'ccd/ccd:1422-1425',
+      'ccd/session-hook.sh:1098',
+      'ccd/session-hook.sh:1175-1177',
+      'deploy/deploy.sh:560',
+      'deploy/deploy.sh:629',
+      'ccd/ccrc:5217',
+      'ccd/ccrc:6531',
+      'ccd/ccrc:7129-7130',
       ]);
     // D-2849's OWN FIVE (its 2026-09-17 append), named rather than counted, so a set
     // that keeps its length while losing one of them still reds.
@@ -8252,7 +8239,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // entry the same way regardless, and it stays GREEN whether the citation
     // was genuinely repaired or is merely still coincidentally invisible —
     // this pin cannot tell those two apart. It catches the first case only.
-    const D2849_INVISIBLE_SINCE_PR136 = ['ccd/ccrc:7129-7130'];
+    // RETIRED, AND BY THE MECHANISM THIS LINE WAS BUILT FOR. The note above
+    // said: "the day it becomes visible again to this pass, THIS line reds and
+    // a human reads the note rather than finding an entry silently gone." That
+    // is what happened. This round's merge and repair moved `ccd/ccrc`, the
+    // reference stopped being swallowed, and the assertion went red asking to
+    // be read. All five of D-2849's references are visible to this pass again,
+    // so the exception set is EMPTY and the filter below is now a no-op that
+    // asserts the whole of `D2849` is stale — a stronger claim than the one it
+    // replaces, not a weaker one. Kept as an empty constant rather than
+    // deleted so the next entry has a home and this history stays attached.
+    const D2849_INVISIBLE_SINCE_PR136: string[] = [];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')
       .toEqual(D2849.filter((k) => !D2849_INVISIBLE_SINCE_PR136.includes(k)));
@@ -8271,7 +8268,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // two new `ccd/ccd` entries this pass alone reaches are the same growth
     // (routing slices 2-6), not a new exemption.
     expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
-      .toEqual(['ccd/ccd:5828-5830', 'ccd/ccd:1330-1333', 'ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130']);
+      .toEqual([
+      // RE-MEASURED at the tree this ships in (fix round 2, review 71). 4 -> 6.
+      // `ccd/ccd:6753` and `:13368` are `:6478` and `:13020` AFTER this round's
+      // provenance-based repair re-pointed them — they did not appear from
+      // nowhere, they moved, which is the whole of F2(a). `ccd/ccrc:7129-7130`
+      // is back because the exception that hid it retired itself (see below).
+      // Command: filesAudit(realCorpus()) minus audit(realCorpus()), by refKey.
+      'ccd/ccd:6753', 'ccd/ccd:13368', 'ccd/ccd:4006-4035',
+      'ccd/ccd:1422-1425', 'ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130',
+    ]);
   });
 
   /** THE THIRD PASS, and the third reason the census under-reports (D-2849,
@@ -8546,54 +8552,54 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        // RE-MEASURED at the tree this ships in (fix round 2, review 71
+        // CRITICAL 2), by the same rule as the **Files:** set above and for
+        // the same reason: a number true of a tree that no longer exists is
+        // worth nothing. 48 -> 43.
+        // Command: `rowAudit(realCorpus()).failures.map(refKey)`.
+        'ccd/ccd:266',
         'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:13573-13575',
-        'ccd/ccd:3038',
-        'ccd/ccd:5797',
-        'ccd/ccd:7568',
-        'ccd/ccd:11025',
+        'ccd/ccd:6110',
+        'ccd/ccd:8185',
+        'ccd/ccd:11742',
         'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13567',
-        'ccd/ccd:13673',
-        'ccd/ccd:19109',
-        'ccd/ccd:19098',
+        'ccd/ccd:14641',
+        'ccd/ccd:14747',
+        'ccd/ccd:20945',
+        'ccd/ccd:19455',
         'ccd/ccd:19120',
-        'ccd/ccd:19131',
+        'ccd/ccd:19488',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
-        'ccd/ccd:12032-12034',
-        'ccd/ccd:5810-5811',
+        'ccd/ccd:13998-14000',
+        'ccd/ccd:6065-6066',
         'ccd/ccd:12032-12034',
         'ccd/ccd:11665-11670',
-        'ccd/ccd:12594-12659',
-        'ccd/ccd:13809',
-        'ccd/ccd:13812',
-        'ccd/ccd:6425',
-        'ccd/ccd:1223',
-        'ccd/ccd:6547',
-        'ccd/ccd:3401',
-        'ccd/ccd:4029',
-        'ccd/ccd:4046',
-        'ccd/ccd:3038',
-        'ccd/ccd:2972-2973',
-        'ccd/ccd:8609',
-        'ccd/ccd:8654',
-        'ccd/ccd:8673',
+        'ccd/ccd:12942-13007',
+        'ccd/ccd:14886',
+        'ccd/ccd:6700',
+        'ccd/ccd:1467',
+        'ccd/ccd:6822',
+        'ccd/ccd:3693',
+        'ccd/ccd:4138',
+        'ccd/ccd:3264-3265',
+        'ccd/ccd:9665',
+        'ccd/ccd:9710',
+        'ccd/ccd:9729',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
-        'ccd/ccd:2874',
-        'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
-        'ccd/ccd:2433-2439',
+        'ccd/ccd:3158',
+        'ccd/ccd:3070',
+        'ccd/ccd:2547',
         'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
-        'ccd/ccd:5725',
-        'ccd/ccd:4642-4653',
-        'ccd/ccd:5819-5823',
+        'ccd/ccd:5980',
+        'ccd/ccd:5353-5362',
+        'ccd/ccd:6083-6085',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -8632,34 +8638,33 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // spec lines. No ruling id and no rule change.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-        'spec:2123 ccd/ccd:13573-13575',
-        'spec:2124 ccd/ccd:3038',
-        'spec:2125 ccd/ccd:5797',
-        'spec:2125 ccd/ccd:7568',
-        'spec:2125 ccd/ccd:11025',
-        'spec:2125 ccd/ccd:13673',
-        'spec:2125 ccd/ccd:19109',
-        'spec:2125 ccd/ccd:19098',
+        // RE-MEASURED at the tree this ships in (fix round 2, review 71
+        // CRITICAL 2). 28 -> 20. This list is DERIVED — the intersection of
+        // the `|`-row failures with the two passes above — so it moves
+        // mechanically whenever either of those moves, and both moved twice
+        // this round (the merge of `origin/main`, then this round's own
+        // `ccd/ccd`/`ccd/ccrc` edits, then the provenance-based repair).
+        // Command: rowAudit(realCorpus()).failures.map(site).filter(seen.has).
+        'spec:2125 ccd/ccd:6110',
+        'spec:2125 ccd/ccd:8185',
+        'spec:2125 ccd/ccd:11742',
+        'spec:2125 ccd/ccd:14641',
+        'spec:2125 ccd/ccd:14747',
+        'spec:2125 ccd/ccd:20945',
+        'spec:2125 ccd/ccd:19455',
         'spec:2125 ccd/ccd:19120',
-        'spec:2125 ccd/ccd:19131',
-        'spec:2204 ccd/ccd:12032-12034',
-        'spec:2204 ccd/ccd:12032-12034',
-        'spec:2209 ccd/ccd:13809',
-        'spec:2209 ccd/ccd:13812',
-        'spec:2209 ccd/ccd:6425',
-        'spec:2209 ccd/ccd:1223',
-        'spec:2209 ccd/ccd:3401',
-        'spec:2209 ccd/ccd:4029',
-        'spec:2209 ccd/ccd:4046',
-        'spec:2209 ccd/ccd:3038',
-        'spec:2209 ccd/ccd:2972-2973',
-        'spec:2209 ccd/ccd:8609',
-        'spec:2209 ccd/ccd:8654',
-        'spec:2209 ccd/ccd:8673',
-        'spec:2220 ccd/ccd:2874',
-        'spec:2220 ccd/ccd:2874',
+        'spec:2125 ccd/ccd:19488',
+        'spec:2209 ccd/ccd:14886',
+        'spec:2209 ccd/ccd:6700',
+        'spec:2209 ccd/ccd:1467',
+        'spec:2209 ccd/ccd:3693',
+        'spec:2209 ccd/ccd:4138',
+        'spec:2209 ccd/ccd:3264-3265',
+        'spec:2209 ccd/ccd:9665',
+        'spec:2209 ccd/ccd:9710',
+        'spec:2209 ccd/ccd:9729',
         'spec:2220 ccd/session-hook.sh:993',
-        'spec:2222 ccd/ccd:5725',
+        'spec:2222 ccd/ccd:5980',
       ]);
   });
 

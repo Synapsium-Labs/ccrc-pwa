@@ -15,20 +15,23 @@ Part A touches the PLATFORM BLOCK, which is byte-identical in `ccd/ccd` and `ccd
 by `macos-platform.test.ts` — **both files must change together or that pin reds.** Part B touches
 `ccd/ccrc-doctor-checks` only. **Part D touches `ccd/ccd` only.** Its site count is DERIVED at execution time, not quoted here: D1-D5 name ten mandatory sites and D8 names four further groups, two of them conditional and one dead on a Linux fleet, so no reading of the list below yields the twelve this sentence used to assert (D-2475). Re-measure the class before fixing it, and navigate by SYMBOL — every line anchor in Part D predates #69/#78/#79 and has drifted.
 No server, agent, shared or PWA source is touched.
-**ELEVEN TRACKED FILES OUTSIDE `ccd/` ARE EDITED on this branch, not two** (measured against this
-branch's own diff versus its merge base — `git diff --name-only <merge-base>...HEAD | grep -v '^ccd/'`,
-merge base = `origin/main` tip `ecbb8b22` at this measurement): `CLAUDE.md`; this plan itself
+**TWELVE TRACKED FILES OUTSIDE `ccd/` ARE EDITED on this branch, not two** (measured at the FINAL tree
+with `git diff --name-only origin/main HEAD | grep -v '^ccd/'` — a two-dot diff is exact here, and only
+here, because the merge made `origin/main` an ancestor of `HEAD`, checked with `git merge-base
+--is-ancestor` rather than assumed): `CLAUDE.md`; `README.md`; this plan itself
 (`docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`);
 `docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md`;
 `docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md`; and seven `server/test/`
 suites — `ccd-bounded-reads.test.ts`, `ccd-crosspool.test.ts`, `ccd-reg-set-atomic.test.ts`,
 `ccrc-doctor.test.ts`, `macos-platform.test.ts`, `session-hook.test.ts`, `single-definition.test.ts`.
-Of those eleven, this section originally declared TWO as carrying a reason spelled out here rather than
-left to a reader of the diff (F13, review run 69) — and re-measuring that pair turns up a further
-defect: `git diff origin/main HEAD -- README.md` is EMPTY at this tree (the file is byte-identical to
-`origin/main`'s copy), so the README.md repair the paragraph below describes is **not part of this
-branch's current diff at all** — disclosed here, not resolved; whatever landed it either predates this
-measurement's merge base or was reconciled away by a later merge, and this batch does not chase which.
+**THIS NUMBER WAS ELEVEN FOR MOST OF THIS ROUND, AND THE REASON IS WORTH KEEPING.** Measured mid-round,
+`README.md` was byte-identical to `origin/main` and so was genuinely NOT in the diff — the merge had
+resolved its one conflicting line to main's side, deliberately, pending re-derivation. The mid-round
+measurement recorded that absence and guessed at a cause ("predates the merge base, or was reconciled
+away"); the real cause was this round's own merge resolution, three commits earlier. The anchor was
+then re-located BY CONTENT on the final tree, `README.md` re-entered the diff, and eleven became
+twelve. A cardinal measured before the last commit that can change it is not a measurement, it is a
+forecast — which is D-2990's whole subject, reproduced inside the round that states it.
 (1) `README.md` — one line-anchor repair, AUTHORISED by the
 coordinator during this wave ("README's `ccd/ccd:16330-16332`, repaired rather than bumped"); it cites
 `  elif (( genrc == 1 )); then`, and the repair was re-measured at the shipping tree because an
