@@ -325,6 +325,18 @@ is a precondition nothing enforced until the final round, closed there by `rm -f
 FOR the fix, not a reason to wait for a mac. Reported by `claude-OpenClawHetzner`; confirmed and narrowed
 here.
 
+**F14 (review run 69) — the header's fixture claim, narrowed and then WITHDRAWN rather than restated.**
+The shipped paragraph closed with *"no symlink-to-DIRECTORY exists at any of the eight anywhere in the
+tree"*, while its own `ln -s` census is scoped to the shipped files and excludes test fixtures BY
+CONSTRUCTION — fixtures build links with `symlinkSync`, which no `ln -s` scan can see. The sentence is
+now scoped to what the census measures. **The fixture claim is not restated in a narrower form either,
+and the reason is not cost:** run 69 DID measure those fixtures — `POOLS()/demo` targets a FIFO,
+`/dev/zero`, `/dev/null` and a regular file, none of them a directory — so the wide claim was TRUE at
+`76897187`. But its warrant would rest on a census NOTHING IN THIS TREE MAINTAINS, so it goes silently
+false the first time anyone adds a directory fixture: an absence asserted with no writer that keeps it
+true. That measurement therefore lives HERE, dated and attributed to the tree it was taken at — which is
+what a review finding is — rather than in a shipped comment as a standing property.
+
 **Part A mutation table (D-2187) — SIX mutants of the fix's new guard, four columns per row (final-round
 item 6; supersedes the five-row/"caught by" form below it once carried).** All six applied to `ccd/ccd`'s
 `_plat_mv_notdir` only, each restored from a copy kept outside the repo (never `git checkout --`); full
@@ -392,6 +404,15 @@ on its own and **re-measured at this tree**, `vitest run test/macos-platform.tes
 an artefact of mutating `ccd/ccd` alone and not a behavioural case. **So A5's measurement is RED at FOUR
 independent cases, not three** — the count the earlier rounds recorded, before F10 added a pin that holds
 regardless of uid.
+
+**ROW 6 IS RED ON `A1 case 2`, AND `79aa38b4`'s COMMIT MESSAGE SAYS OTHERWISE (F9, review run 69).**
+That message claims row 6 was *"measured GREEN on all four"* and uses that to settle deleting the
+narrowed scan. The table above, that commit's own diff, and every tree since record row 6 as **RED on
+the `A1 case 2` column** and GREEN on the other three. The CONCLUSION is unaffected and stands — the
+scan was vacuous for a different, separately measured reason (row 6's own ground, below) — but the
+stated ground was wrong. Recorded HERE because `main` is protected, so no amend reaches that message,
+and because a SQUASH merge drops it entirely: the squash body is then the only surviving message, and a
+reader looking for a mutation result reads this table, not `git log`.
 
 **The narrowed scan's column is historical for M1–M4/M2b and MEASURED for row 6** (the rest were not
 re-run against it, since it no longer exists — deleting it is what row 6 decided; see below). **M4's `A1

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ab76da2da36c9bbcfeb73b8f67a326449227a776110378f2ca0e98a29595395e
+# ccrc:generated 1 sha256=1937503d0bd0347b706409c78df25b4e9c9e4b8ea0a9cd9a5e81a9c4c1197196
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -126,12 +126,12 @@ esac
 # strictly narrower than the "anywhere in the tree" this sentence claimed
 # until F14 (review run 69): the census excludes test fixtures BY
 # CONSTRUCTION, and fixtures create links with `symlinkSync`, which no
-# `ln -s` scan can see. The wider claim was not falsified either — run 69
-# measured the fixtures at `POOLS()/demo` and found a FIFO, `/dev/zero`,
-# `/dev/null` and a regular file, none of them a directory — so what was
-# wrong was the WARRANT, not the conclusion: an argument narrower than the
-# sentence it backed, which is the D-2189 shape appearing inside the very
-# paragraph that fixes D-2189. Stated as measured, the price is real for the
+# `ln -s` scan can see. NO CLAIM IS MADE ABOUT FIXTURES HERE, and not for
+# cost: an absence over them would rest on a census nothing in this tree
+# maintains, so it would go false the moment one is added. The plan records
+# what run 69 measured about them, and when. What was wrong was the WARRANT,
+# not the conclusion — the D-2189 shape inside the paragraph fixing D-2189.
+# Stated as measured, the price is real for the
 # one destination shape this `rm` covers, so it is disclosed here rather than
 # only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>

@@ -185,12 +185,12 @@ esac
 # strictly narrower than the "anywhere in the tree" this sentence claimed
 # until F14 (review run 69): the census excludes test fixtures BY
 # CONSTRUCTION, and fixtures create links with `symlinkSync`, which no
-# `ln -s` scan can see. The wider claim was not falsified either — run 69
-# measured the fixtures at `POOLS()/demo` and found a FIFO, `/dev/zero`,
-# `/dev/null` and a regular file, none of them a directory — so what was
-# wrong was the WARRANT, not the conclusion: an argument narrower than the
-# sentence it backed, which is the D-2189 shape appearing inside the very
-# paragraph that fixes D-2189. Stated as measured, the price is real for the
+# `ln -s` scan can see. NO CLAIM IS MADE ABOUT FIXTURES HERE, and not for
+# cost: an absence over them would rest on a census nothing in this tree
+# maintains, so it would go false the moment one is added. The plan records
+# what run 69 measured about them, and when. What was wrong was the WARRANT,
+# not the conclusion — the D-2189 shape inside the paragraph fixing D-2189.
+# Stated as measured, the price is real for the
 # one destination shape this `rm` covers, so it is disclosed here rather than
 # only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
