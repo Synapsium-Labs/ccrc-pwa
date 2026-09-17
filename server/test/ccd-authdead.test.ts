@@ -51,6 +51,39 @@ describe('_authdead', () => {
     expect(ok('_authdead claude')).toBe(false);
   });
 
+  it('is FALSE for a LIVE SYMLINK to a file whose first word is digits — the marker may not be fabricated', () => {
+    // D-2989, re-censused BY PAIRING (a type test on any `$REG` path followed by
+    // a read of it). `-f` FOLLOWS the chain, so a link at
+    // `$REG/<wrapper>-authdead` pointing anywhere readable whose first word is
+    // digits passed the test and the `cat` below returned THAT file's bytes — a
+    // fabricated AUTH-DEAD verdict sourced from outside `$REG`. `ccd/ccd:6005`
+    // skips placement on it and the rescue arm scores `sc=101` from it, so the
+    // fabricated value decides where a session lands.
+    // The first census could not reach this site: it named the class by the
+    // FIELD-path grammar `$REG/<id>.<field>`, which excludes a `-authdead`
+    // marker BY CONSTRUCTION while the defect is identical.
+    const foreign = path.join(home, 'outside-the-registry');
+    fs.writeFileSync(foreign, '1757203200 auth-401');
+    fs.symlinkSync(foreign, marker('claude'));
+    expect(ok('_authdead claude')).toBe(false);
+  });
+
+  it('CONTROL: a REAL regular file holding those same bytes is still TRUE', () => {
+    // Without this the case above is equally consistent with a guard that broke
+    // every marker. Same bytes, same path, the only difference being the TYPE.
+    mark('claude', '1757203200 auth-401');
+    expect(ok('_authdead claude')).toBe(true);
+  });
+
+  it('CONTROL: a DANGLING symlink was already false, which is why it pinned nothing', () => {
+    // Recorded as a control rather than as evidence: `-f` is false for a broken
+    // link for free, so a dangling case is GREEN with no guard at all. That is
+    // exactly why this class survived three rounds of review — the shape that
+    // had to be planted was a link that RESOLVES.
+    fs.symlinkSync(path.join(home, 'no-such-target'), marker('claude'));
+    expect(ok('_authdead claude')).toBe(false);
+  });
+
   it('answers per account, never fleet-wide', () => {
     mark('claude-a', '1757203200 auth-401');
     expect(ok('_authdead claude-a')).toBe(true);

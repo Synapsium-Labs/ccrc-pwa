@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=b0a9859cc6570bc86de072c9e15da57cd2c0122c83dd13907c5e74970f39701a
+# ccrc:generated 1 sha256=f5457832940bce63518f9f940b8162edda8cbc2af3929e3af4916e14982f688e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1540,12 +1540,24 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # costs at most one rescue landing on a lane that may not authenticate, and "a
 # rescue must always have a destination". The opposite fold is the unsafe one.
 #
-# AND IT ENDS A DIVERGENCE rather than starting one: the second body of this
-# same contract, in `ccd/ccd-telemetry-keepalive`, already opens with
-# `[ -f "$f" ] || return 1`. This copy was the one left behind.
+# AND THE DIVERGENCE IT CLAIMED TO END WAS NEVER THE REAL ONE. This paragraph
+# used to say the second body of this contract, in `ccd/ccd-telemetry-keepalive`,
+# "already opens with `[ -f "$f" ] || return 1`" and that this copy "was the one
+# left behind". Measured: that sibling opens with the SAME following test and
+# carries the SAME defect, so `-f` was never the thing this copy was missing.
+# Both bodies are fixed together, because the contract's own header says the two
+# hold the marker's FORMAT equal rather than the function's text — and a class
+# closed in one body of a two-body contract is closed nowhere.
 _authdead() {   # wrapper -> success iff a well-formed auth-dead marker stands for it
   local f="$REG/$1-authdead" t
-  [[ -f "$f" ]] || return 1
+  # `! -L` AND NOT `-f` ALONE (D-2989, re-censused by PAIRING). `-f` FOLLOWS the
+  # chain, so a symlink at `$REG/<wrapper>-authdead` pointing at ANY file whose
+  # first word is digits passes this test and the `cat` below returns THAT
+  # file's bytes — a fabricated AUTH-DEAD verdict from outside `$REG`, which
+  # `cmd_*`'s placement skip and the rescue arm both key on. The marker is not
+  # a `<id>.<field>` path, which is exactly why the first census — named by the
+  # FIELD-path grammar — could not contain it.
+  [[ -f "$f" && ! -L "$f" ]] || return 1
   t=$(cat "$f" 2>/dev/null); t="${t%% *}"
   [[ "$t" =~ ^[0-9]+$ ]]
 }
