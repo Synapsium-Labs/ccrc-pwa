@@ -23,7 +23,7 @@ const CONTRACT = [
   "Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.",
   "Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.",
   "Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.",
-  "One report, written ONCE: to an absolute path under this worktree, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. The mail's body opens with one JSON line, `{\"reviewedTip\":\"<sha>\",\"report\":\"<absolute path>\"}`, which the coordinator submits to the close route exactly as you wrote it.",
+  "One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{\"reviewedTip\":\"<sha>\",\"report\":\"<absolute path>\"}`, which the coordinator submits to the close route exactly as you wrote it.",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.",
   "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. Keep your input box empty: a half-typed draft makes the delivery lane refuse `draft-present`.",
   "Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.",
@@ -128,5 +128,60 @@ describe('the reviewer skill: the name dispatch invokes', () => {
   })();
   it('is the name the reviewer kickoff prefix tells every reviewer to run', () => {
     expect(REVIEWER_KICKOFF_PREFIX).toContain(`the ${SKILL_NAME} skill`);
+  });
+});
+
+// THE REPORT PATH IS PART OF THE CONTRACT, because the close route re-measures
+// it and the reviewer never sees the refusal itself.
+//
+// MEASURED, review run 69, 2026-09-17. A reviewer followed the clause as it
+// then read — "an absolute path under this worktree" — and the coordinator's
+// close was refused `report-unreadable` TWICE on a mode-664 file the reviewer
+// could `cat` in the same shell. The file was never the problem: on a two-box
+// fleet the server reaches the fleet host only through the agent, whose
+// `checkPath(path, cfg, 'read')` grants `$HOME/.cc-sessions`, `.cc-limits`,
+// `.cc-clips`, `$HOME/.claude*` and the projects root — and answers
+// `forbidden` for everything else. `CCRC_PROJECTS_ROOT` is `$HOME/projects`,
+// while every dispatched session's worktree is cut under `$HOME/worktrees`,
+// so the prescribed location was outside all five roots for EVERY reviewer on
+// this fleet. `statMeasured` therefore never saw ENOENT, which is why the
+// detail said `unreadable` rather than `no such file` and cost an hour to
+// diagnose from the reviewer's side.
+//
+// A clause is a request; this is the mechanism. Both ends of the seam are
+// pinned, because either one moving alone re-opens the defect: the skill must
+// keep sending reports to a granted root, AND the agent must keep granting it.
+describe('the reviewer skill: the report lands where the close route can read it', () => {
+  it('sends the report to .cc-clips and never to the worktree', () => {
+    const clause = CONTRACT[6]!;
+    // Bind the SUBJECT, not a loose substring: the clause that owns the report
+    // path must name the granted root, and must say the worktree is excluded.
+    expect(clause, 'clause 7 must name the granted root it writes to')
+      .toContain('$HOME/.cc-clips/<your session id>/');
+    expect(clause, 'clause 7 must say the worktree is NOT it, or a reader will "fix" it back')
+      .toContain('NOT under this worktree');
+    expect(clause, 'clause 7 must name the refusal it exists to prevent')
+      .toContain('report-unreadable');
+    // The worked example and the copyable snippet have to agree with the
+    // clause — a reviewer copies those, not the contract.
+    expect(skill, 'the worked report path must sit under $CLIPS')
+      .toContain('`$CLIPS/review-<review-run-id>-<tip first 8>.md`');
+    expect(skill, '$CLIPS must be defined as the granted root')
+      .toContain('CLIPS="$HOME/.cc-clips/$id"');
+    // Literal-absence pin: the old, refused location must not come back in any
+    // of the three places that used to spell it.
+    expect(skill, 'the refused worktree report path must not return')
+      .not.toMatch(/\$WT\/\.ccrc-review/);
+  });
+
+  it('and the agent still grants that root — the other end of the same seam', () => {
+    // Derived from the agent's OWN source, not restated here: if someone drops
+    // `.cc-clips` from the read arm, this reds and names the skill as what
+    // breaks, instead of the next reviewer rediscovering it from a refusal.
+    const whitelist = readFileSync(path.join(root, 'agent/src/whitelist.ts'), 'utf8');
+    const readArm = whitelist.slice(whitelist.indexOf('const readAllowed'));
+    expect(readArm.slice(0, readArm.indexOf(';')),
+      "the agent's read allowlist must still grant .cc-clips, or the reviewer skill's report path stops being readable")
+      .toContain(".cc-clips");
   });
 });

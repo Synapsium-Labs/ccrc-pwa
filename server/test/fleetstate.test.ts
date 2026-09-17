@@ -17,7 +17,7 @@ const session = (id: string): FleetSession => ({
   branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null,
   unmeasured: [], statusUnmeasured: false, lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, route: null,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
 });
 
 describe('fleetstate', () => {
@@ -753,5 +753,24 @@ describe('reviveFleetSession carries usage (routing slice 0)', () => {
     expect(reviveFleetSession({ ...base, usage })?.usage).toEqual(usage);
     expect(reviveFleetSession({ ...base, usage: { ...usage, ts: 'x' } })).toBeNull();      // MalformedSnapshot: no clock
     expect(reviveFleetSession({ ...base, usage: { ...usage, class: 7 } })).toBeNull();     // MalformedSnapshot: not a string
+  });
+});
+
+describe('reviveFleetSession carries boardProject (board-placement wave 1, Task 3)', () => {
+  it('a revived session with no boardProject reads null — absence permits', () => {
+    // Built by DELETING the key from a snapshot this file already revives, never
+    // by hand-writing a literal: a hand-written one goes stale the next time
+    // FleetSession gains a required field, and would then be testing nothing.
+    const raw = JSON.parse(JSON.stringify(session('demo-c'))) as Record<string, unknown>;
+    delete raw.boardProject;
+    const revived = reviveFleetSession(raw);
+    expect(revived).not.toBeNull();
+    expect(revived!.boardProject).toBeNull();
+  });
+
+  it('a revived session WITH a boardProject keeps it', () => {
+    const raw = JSON.parse(JSON.stringify(session('demo-c'))) as Record<string, unknown>;
+    raw.boardProject = 'intake-platform';
+    expect(reviveFleetSession(raw)!.boardProject).toBe('intake-platform');
   });
 });

@@ -8099,14 +8099,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
       'deploy/deploy.sh': 2,
       'ccd/ccrc': 5,
-      'shared/api.ts': 1,
+      // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
+      // (#137): its own additions moved this file's lines, and repairing the
+      // README anchors it broke re-pointed BY CONTENT the one anchor that was
+      // carrying this debt. Re-measured, not adjusted to keep a number green —
+      // the entry is gone because the debt is, which is the direction this
+      // census is allowed to move without a finding.
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    // 59 -> 161 (S6-R10) -> 162 (Task 6), the sum of the re-measured map
+    // 59 -> 161 (S6-R10) -> 162 (Task 6) -> 161 (#137 repaired the one
+    // `shared/api.ts` anchor), the sum of the re-measured map
     // above: the headline is a MECHANISM, not a separate number, so it moves
     // with `ccd/ccd`.
     expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(183);

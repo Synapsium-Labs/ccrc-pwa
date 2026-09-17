@@ -43,15 +43,24 @@
   align-items: center;
   gap: var(--sp-3);
 }
-/* The class chooser (routing spec, slice 5, Task 6) gets a ROW OF ITS OWN
- * under the head, and that is a measurement rather than a preference. The
- * head's right group carries four other items — the count, the accounts door,
- * the mail badge and the bell — whose min-content widths total 244px, and at
- * 390px that group has 294px to spend. The 50px left over (38px once this
- * control's own 12px gap is paid) cannot hold a `<select>` sized to its widest
- * option, "Coordinator row", which measures 167px. No floor, cap or shrink
- * factor closes a 129px deficit; only leaving the row does. Measured in
- * Chromium against the rendered component from 320px to 1440px.
+/* The class chooser (routing spec, slice 5, Task 6) shares the RUNS LINE, and
+ * both halves of that are measurements rather than preferences.
+ *
+ * It is not in the head because it does not fit there. The head's right group
+ * carries four other items — the count, the accounts door, the mail badge and
+ * the bell — whose min-content widths total 244px, and at 390px that group has
+ * 294px to spend. The ~38px left over once this control's gap is paid cannot
+ * hold a `<select>` sized to its widest option, "Coordinator row", which
+ * measures 167px. No floor, cap or shrink factor closes a 129px deficit; only
+ * leaving the row does. Measured in Chromium from 320px to 1440px.
+ *
+ * It does not get a row of its own either — that read as an orphan, a lone
+ * right-aligned control on an otherwise empty band. `.fleet-runs-row` was
+ * already full-width, `--tap-min` tall and nearly empty, so the pair costs no
+ * height at all. The partner is the runs door rather than `HotFilesStrip`
+ * because that strip returns null with no live claim: pairing with it would
+ * put two controls side by side only while somebody held a hot file, and leave
+ * this one orphaned again the moment the last claim expired.
  *
  * `.route-select`'s chrome is still reused verbatim — same edge, ground and
  * tap-min height as the new-session sheet's routing row. What is NOT reused is
@@ -62,17 +71,23 @@
  * order and never applied once. That is why the control rendered at 286px
  * instead of 167px, and `flex-shrink: 0` then forbade it giving any of that
  * back: the head overflowed the viewport by 225px at 390px and by 219px at
- * 700px, so the defect was never phone-only. `fleet-css.test.ts` pins the
- * specificity and the source order that makes it necessary; the pixel figures
- * above are browser measurements it cannot recompute, and it says so rather
- * than re-deriving them from the code they describe. */
-.fleet-class-row {
+ * 700px, so the defect was never phone-only. `.fleet-runs-row` carries its own
+ * `width: 100%` and needs the same treatment for the same reason — it is
+ * declared later still, so the compound selector below is what lets it yield
+ * the row instead of claiming all of it. `fleet-css.test.ts` pins both. */
+.fleet-runs-line {
   display: flex;
-  justify-content: flex-end;
-  padding: 0 var(--sp-1);
+  align-items: center;
+  gap: var(--sp-2);
+}
+.fleet-runs-line .fleet-runs-row {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
 }
 .route-select.fleet-class-select {
   width: auto;
+  flex: none;
   max-width: 100%;
 }
 /* Notification toggle — a quiet bell; lit when push is on. */

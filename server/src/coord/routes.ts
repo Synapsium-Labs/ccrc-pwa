@@ -3,7 +3,9 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { UNMEASURED_ASK_AT, freshAskAt, fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import {
+  UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
+} from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
@@ -1300,6 +1302,23 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
 
+    // The coordinator's project, from the REGISTRY — never `sessionProject`,
+    // which reads the runs table and so answers only for a session that has
+    // been a worker. Measured over all 64 runs in history: no session has ever
+    // been both, so `sessionProject(claimedBy)` is null for every coordinator.
+    //
+    // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
+    // whose `project ?? id` collapsing default (`registry.ts`'s
+    // `buildRecord`) would otherwise reach this permanent stamp as if it
+    // were a measurement (D-2342, the same reason `dispatch.ts`'s
+    // `project-mismatch` rung reads `.project` this way instead of through a
+    // built record). An unreadable field, an absent field, and a present but
+    // EMPTY field all leave the stamp off — `undefined`, never a guess —
+    // because the stamp is written once and never backfilled: absence
+    // permits, but a wrong value never heals.
+    const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, claimedBy, 'project');
+    const coordProject = projectRead.ok && projectRead.content !== '' ? projectRead.content : undefined;
+
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
     // also now IDEMPOTENT for a retry naming the same (program, wave,
@@ -1307,7 +1326,8 @@ export function registerCoordRoutes(
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
       kind: runKind, reviews: runKind === 'review' ? (reviews as number) : null,
-      ...(home !== undefined ? { homeProject: home } : {}) });
+      ...(home !== undefined ? { homeProject: home } : {}),
+      ...(coordProject !== undefined ? { coordProject } : {}) });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -2319,7 +2339,8 @@ export function registerCoordRoutes(
 
   /**
    * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
-   * (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`).
+   * (spec:225-227). Strips `prLineage` and `coordProject` on the way out
+   * (`toRunSummary`).
    *
    * EXEMPT FROM THE SESSION GATE, AND AUTHENTICATED HERE INSTEAD — the
    * `GET /api/auth/status` pattern, for a reason no task-level review could
