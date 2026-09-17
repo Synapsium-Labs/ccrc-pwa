@@ -198,6 +198,29 @@ follow a symlink to a directory, which nobody has measured. After `rm -f` the de
 and no `mv` can move into it, so "unverified on Darwin" is the argument FOR the fix, not a reason to wait
 for a mac. Reported by `claude-OpenClawHetzner`; confirmed and narrowed here.
 
+**Part A mutation table (D-2187) — five mutants of the fix's new guard, mechanism by mechanism.** All
+five applied to `ccd/ccd`'s `_plat_mv_notdir` only, each restored from a copy kept outside the repo
+(never `git checkout --`); full transcripts in
+`.superpowers/sdd/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage/partA-report.md`, which
+`.gitignore` excludes — recorded here so the measurement survives the worktree:
+
+| mutant | result | caught by |
+|---|---|---|
+| M1 — delete the `rm -f -- "$2"` line entirely | **RED** | A1's case 1 (symlink-to-directory dest, src a regular file) |
+| M2 — guard the new `rm` by `-L "$2"` only (drop `-d`) | **RED** | the new symlink-to-file/missing-src case |
+| M2b — guard the new `rm` by `-d "$2"` only (drop `-L`) | **GREEN** | none — **provably equivalent mutant**, not an uncaught defect |
+| M3 — make the new `rm` unconditional | **RED** | both new behavioural cases (plain-file/missing-src and symlink-to-file/missing-src) |
+| M4 — M3 plus delete the pre-existing refusal guard (`if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi`) too | **RED** | four mechanisms: the narrowed `ccd-reg-set-atomic` scan, A1's case 2 (real-directory dest), and both new behavioural cases |
+
+**M2b's equivalence, stated rather than assumed:** the untouched refusal guard returns before the `rm`
+line for every non-symlink directory, so by the time `[ -d "$2" ]` is evaluated on the `rm`'s own guard,
+`-d "$2"` being true there already implies `-L "$2"` is true too — `-d`-alone and `-L`-and-`-d` cannot
+differ on any input that reaches that line. No behavioural case can distinguish them, and inventing one
+would pin nothing while looking as if it did.
+
+**Before this fix round, M2 and M3 were both green on every mechanism** — the two new behavioural cases
+above are what turned them red; that asymmetry is the whole reason this table exists.
+
 ### D-2188 — the case that would have caught it has never run
 `macos-platform.test.ts`'s Darwin block is `describe.skipIf(!IS_DARWIN)`. Measured on the fleet box:
 **38 passed, 10 skipped**, and the `_plat_mv_notdir` case is one of the ten. Adding a symlink case there
@@ -277,17 +300,18 @@ of Part B.
 class, cited here and not minted again**: D-71's general form (defined 2026-08-15, restated twice
 since) is *"any tab-delimited record with possibly-empty fields must not use `read` with `IFS` alone"* —
 bash treats a tab as IFS *whitespace* regardless of what `IFS` is set to, so a run of empty fields
-collapses and every later column shifts left. Measured directly, exactly as the finding reproduced it:
+collapses and every later column shifts left. Measured directly, exactly as the finding reproduced it —
+given here as a here-string, not a pipeline, because the last stage of a pipeline runs in a subshell, so
+`read`'s assignments there never reach the parent's `echo`. Both lines below were run verbatim and
+reproduce exactly as printed:
 
-    $ printf 'id\tOK\t\t0\t\n' | IFS=$'\t' read -r a b c d e; echo "c=[$c] d=[$d] e=[$e]"
-    c=[0] d=[] e=[]
+    IFS=$'\t'   read -r a b c d e <<< "$(printf 'id\tOK\t\t0\t')"        -> c=[0] d=[]  e=[]
 
 Fixed by moving the whole row protocol, on **both** the node emitter and the bash reader, from `\t` to
 `\x1f` (ASCII unit separator) — not classified as IFS whitespace, so a run of empty fields survives
 intact:
 
-    $ printf 'id\x1fOK\x1f\x1f0\x1f\n' | IFS=$'\x1f' read -r a b c d e; echo "c=[$c] d=[$d] e=[$e]"
-    c=[] d=[0] e=[]
+    IFS=$'\x1f' read -r a b c d e <<< "$(printf 'id\x1fOK\x1f\x1f0\x1f')" -> c=[]  d=[0] e=[]
 
 **One improvement claimed explicitly, against D-71 itself:** D-71's own stated remedy was *"split the
 fields by hand"* — parse the joined string in code rather than trust `read`. Moving the protocol to a
@@ -296,7 +320,9 @@ wire, so nothing downstream has to remember to re-split by hand at every call si
 in the future. That is a new remedy recorded against D-71, not a new deviation.
 
 **Disclosed in the same paragraph, per the coordinator's own audit: D-71's rule is stated six times in
-this repo's prose and violated thirteen times in code — 10 sites safe, THREE reachable.** Their anchors
+this repo's prose and violated thirteen times in code — 13 sites total, NINE safe, FOUR reachable call
+sites across THREE findings (the two `ccd/ccd` sites below are one finding, not two — 9 + 4 = 13).**
+Their anchors
 are not ours: they measured the population at `origin/main 03ecda65`, and this branch is behind that ref
 and has added lines of its own, so every site below was **re-measured in this tree by symbol**, not
 transcribed:
@@ -535,6 +561,16 @@ totals them, it has planted a fact that the next edit falsifies silently.**
   `[[ -f "$f" && -r "$f" ]]`. Behaviour-identical for every input that answers today, because an
   unreadable row already contributes nothing through `2>/dev/null`. **Costs if wrong:** one helper and
   one call site, both reverted by deleting the commit.
+
+[**Anchors note (added post-commit, definition above left byte-for-byte):** every line anchor in the
+D-2925 paragraph above was measured before this wave's own later commits moved them; navigate by
+symbol instead — `cmd_project_pool`, the guard's new home (the fix extracted it into its own helper,
+`_reg_project_glob_has`), and `_project_pool_state`. Separately, noted here rather than fixed (this
+commit's scope is this plan file only, not `ccd/ccd`/`ccd/ccrc`): the shipped header comment
+immediately above `_plat_mv_notdir` in both files says the `ln -s` census found "one plants a symlink
+AT that exact path, `ccd-crosspool.test.ts`'s `devzero-symlink` case" — measured, that file plants a
+symlink at a `$REG/<id>.<field>`-shaped path in more than one place, so the comment should read "at
+least one, e.g." rather than naming a single instance.]
 
 **D7 mutation table (one site, landed this wave as `_reg_project_glob_has`):**
 
