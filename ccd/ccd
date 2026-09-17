@@ -1260,6 +1260,24 @@ die() { echo "ccd: $*" >&2; exit 1; }
 CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 [[ -e "$CCRC_ACCOUNTS_SH" ]] \
   || die "no account roster at $CCRC_ACCOUNTS_SH — generate it from ~/.ccrc/accounts.json (deploy/deploy.sh, or \`ccrc install\`)"
+# D-2377: `-e` and `-r` are not enough on their own — neither is false for a
+# FIFO or a character device, and `source` below opens BY NAME: `open(2)`
+# blocks FOREVER on a FIFO with no writer. This is not one verb's exposure —
+# it is the MODULE TOP LEVEL, so every `ccd` process on the box reaches it:
+# every `ccd supervise` unit at startup and at every systemd restart, every
+# `ccd` the agent shells out under the exec whitelist (hence every PWA tap),
+# every terminal invocation. The two `die` sentences either side of this one
+# are the proof this ladder's author meant to refuse rather than hang; it was
+# simply missing the arm for a file that is present, readable, and not a
+# file — `_project_pool_state`'s pattern (ccd:1470-ish: "a character device
+# gets the one answer that is safe for all of them"), copied here as its own
+# arm rather than folded into `-r`, so the two existing sentences keep their
+# exact wording. ccd:1782 and ccd:5170 re-`source` this same path inside
+# subshell helpers (`{ . "$CCRC_ACCOUNTS_SH" ...; } || exit 1/9`) and inherit
+# this same exposure with no `-f` rung of their own — noted here rather than
+# given a second ladder, because this one hangs first on a pre-existing FIFO.
+[[ -f "$CCRC_ACCOUNTS_SH" ]] \
+  || die "account roster $CCRC_ACCOUNTS_SH exists but is not a regular file — something else (a FIFO, a device node, or a directory) is sitting at that path; remove it, then regenerate: ccrc install. Regenerating it will not help until the path is clear."
 [[ -r "$CCRC_ACCOUNTS_SH" ]] \
   || die "account roster $CCRC_ACCOUNTS_SH exists but is not readable by $(id -un) — fix its permissions (it must be readable by the user ccd runs as; the deploy installs it 644). Regenerating it will not help."
 # The first `source` this file has ever carried, so there is no in-file
