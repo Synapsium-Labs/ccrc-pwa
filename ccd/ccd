@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a824a3cc4de1d600f8999c91d1b3e81ff92e5877e7a92cb7ad1d3d17e6f70ca9
+# ccrc:generated 1 sha256=bd5a1bf94911a9f79f812ad5353bde87a5d0a9a27fee789ef34068dc4de1ce27
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1141,7 +1141,8 @@ TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or ne
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
 COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts, for a
-                                # session whose routing record names no `compact` field of its own
+                                # session whose routing record hands `_route_get` no `compact` value —
+                                # the field absent, or present and refused by `_route_valid`
                                 # (routing spec §5.1; slice 6, Task 5) — the DEFAULT, not the only one
 COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also bounds the post-swap window)
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
@@ -2252,8 +2253,8 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 152
-# invocations across 128 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 151
+# invocations across 127 non-comment lines.
 #
 # THE LAST MOVE WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
@@ -16540,26 +16541,38 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # 3 of 19 panes are in that state, and nothing anywhere said so.
   pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
   # THE THRESHOLD IS THIS SESSION'S, NOT THE BOX'S (routing spec §5.1; slice 6, Task 5). The
-  # record's `compact` field is the number this comparison uses; ABSENT means `COMPACT_THRESHOLD`,
+  # record's `compact` field is the number this comparison uses. The matrix gives a WORKER 40 so
+  # a dependent chain comes back under the wall between tasks (S6-R9), while a coordinator keeps
+  # the default.
+  #
+  # THE FIELD IS READ THROUGH `_route_get`, NOT `_reg_get` (controller ruling S6-R12). The
+  # routing record's fields have ONE validated reader and this is a routing field like any
+  # other: `_route_get` answers the value only when `_route_valid` accepts it — the `compact`
+  # arm admits two or three digits in 10–100 and nothing else — and answers NOTHING for a bad
+  # value, an unmeasurable vocabulary or a present-but-unreadable file, journalling each of the
+  # three through its own routing note (`_route_reject_note` names the field and a BYTE COUNT,
+  # never the bytes; `_route_unmeasured_note`; `_route_unread_note`). Reading it raw here would
+  # have given the field a SECOND, looser vocabulary — `5`, `0`, `007`, `120` and `99999` are
+  # all digits and none of them is a threshold this fleet admits — and would have folded
+  # absent, empty and unreadable into the one `""` those three notes exist to tell apart.
+  #
+  # SO THE REFUSAL'S JOURNAL IS THE ROUTING NOTE, not `compactskip`. A bad value used to write
+  # a `compact-skip … compact-field-invalid` line under `_compact_note`'s shared floor, where
+  # the next below-threshold tick's `_compact_note_clear` erased it: a routing refusal wearing
+  # the compactor's marker, cleared by the compactor's own success path. `_route_get`'s notes
+  # carry their own per-field floor marker (`routenotecompact`) and nothing here clears them.
+  #
+  # ABSENT (and every condition `_route_get` answers nothing for) MEANS `COMPACT_THRESHOLD`,
   # which is every session that predates the field and every one the coordinator gives no
-  # threshold. The matrix gives a WORKER 40 so a dependent chain comes back under the wall
-  # between tasks (S6-R9), while a coordinator keeps the default.
-  #
-  # PRESENT BUT NOT DIGITS IS A TORN FILE, not input: `_route_valid`'s `compact` arm refuses
-  # anything but 10–100 at the write, so the only way one gets here is a half-written registry
-  # file or a hand edit. It falls back rather than dying — a bad byte must not leave a session
-  # uncompactable — but it is SAID, because compacting at a threshold the record does not name
-  # is exactly the silent collapse D-2013 exists to prevent. `_compact_note`'s floor handles the
-  # repetition; the value is rendered as a BYTE COUNT (`_route_bytes`, the spelling every other
-  # rejected routing value gets) rather than echoed into a log humans read.
-  #
-  # THE DIGIT TEST IS FIRST AND ON ITS OWN LINE, before `$thr` ever reaches `-ge` below: `[[ ]]`
-  # EVALUATES an arithmetic operand, so an unguarded torn field is D-299's class exactly.
-  thr=$(_reg_get "$id" compact)
-  [[ -z "$thr" || "$thr" =~ ^[0-9]+$ ]] \
-    || _compact_note "$id" compact-field-invalid "compact field is $(_route_bytes "$thr") bytes, not digits; using ${COMPACT_THRESHOLD}%"
-  [[ "$thr" =~ ^[0-9]+$ ]] || thr=$COMPACT_THRESHOLD
-  [[ "$pct" -ge "$thr" ]] || { _compact_note_clear "$id"; return 0; }
+  # threshold — a bad byte must never leave a session uncompactable.
+  thr=$(_route_get "$id" compact)
+  thr=${thr:-$COMPACT_THRESHOLD}
+  # THE DIGIT TEST IS FIRST AND INSIDE THE SAME `[[ ]]` as the arithmetic, which is the shape
+  # `ccd-arith-containment.test.ts`'s SITES table pins and the only shape that short-circuits
+  # before `-ge` EVALUATES its operand (D-299). `$thr` is a validated value or the default by
+  # the line above, so the guard is belt and braces today — it is what refuses the future edit
+  # that reads the field raw again.
+  [[ "$thr" =~ ^[0-9]+$ && "$pct" -ge "$thr" ]] || { _compact_note_clear "$id"; return 0; }
   # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
   # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
   # constant, which says exactly what 80%+ does and does not establish about the landing.

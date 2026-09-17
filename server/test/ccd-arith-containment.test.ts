@@ -24,14 +24,11 @@
 // instance was `cmd_ensure`'s positional, closed in 73bc0fe.
 //
 // ROUTING SLICE 6 ADDS ONE OPERAND WITH A WRITER OUTSIDE THAT PICTURE, and it
-// is named here rather than left to the reader: `compact` — the per-session
-// compaction threshold `_auto_compact_check` compares `ctx` against — is
-// written by `ccd route` / `--route`, which the server reaches from a wave
-// dispatch. `_route_valid`'s `compact` arm admits only two or three digits in
-// 10–100, so what can still arrive at that `-ge` is a TORN or hand-edited
-// file, the same class as every field above; the guard is the same
-// `=~ ^[0-9]+$`, one line before the comparison instead of inside it, because
-// this site normalises the operand rather than refusing the tick.
+// is a ROW in the structural table below rather than a paragraph here:
+// `compact`, the per-session compaction threshold `_auto_compact_check`
+// compares `ctx` against, is written by `ccd route` / `--route`, which the
+// server reaches from a wave dispatch. That row states what still reaches its
+// `-ge` and why the guard sits there anyway.
 //
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
@@ -84,10 +81,13 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
   it('_auto_compact_check does not evaluate a payload planted in the compact field', () => {
     const h = makeCcdHarness('arith-compactfield');
     // Routing slice 6, Task 5 — the per-session threshold reaches
-    // `[[ "$pct" -ge "$thr" ]]`, an arithmetic context, exactly as the two
-    // cooldowns above reach theirs. The pane and idle predicates are stubbed so
-    // the tick reaches the comparison and stops there; the payload fires (or
-    // not) on the way past.
+    // `[[ "$thr" =~ ^[0-9]+$ && "$pct" -ge "$thr" ]]`, an arithmetic context,
+    // exactly as the two cooldowns above reach theirs. TWO things have to fail
+    // for the payload to fire, and this case walks past both: `_route_get`'s
+    // `_route_valid` check, which refuses the value so `$thr` is the default
+    // here, AND the `=~ ^[0-9]+$` that short-circuits the `-ge`. The pane and
+    // idle predicates are stubbed so the tick reaches the comparison and stops
+    // there; the payload fires (or not) on the way past.
     h.sh(
       '_reg_set myid wrapper claude;'
       + ' _reg_set myid compact \'REG[$(touch "$HOME/PWNED-compactfield")]\';'
@@ -221,6 +221,16 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     // `lastcompact` — `_auto_compact_check`'s own field, one writer, from
     // `$(date +%s)` — into the same shape of comparison.
     { fn: '_route_compact_settling (quiet window)',  anchors: ['$((now - last))', 'ROUTE_COMPACT_QUIET'], arith: '$((' },
+    // Routing slice 6, Task 5, controller ruling S6-R12: `compact` is the per-session
+    // compaction threshold and the ONE operand in this table whose writer sits outside the
+    // header's picture — `ccd route` / `--route`, which the server reaches from a wave
+    // dispatch. It arrives at the `-ge` already validated, because `_auto_compact_check`
+    // reads it through `_route_get` and `_route_valid`'s `compact` arm admits only two or
+    // three digits in 10–100, answering nothing otherwise so the read falls back to
+    // `COMPACT_THRESHOLD`. The `=~ ^[0-9]+$` is first inside the same `[[ ]]` anyway: a
+    // validated reader is another function's promise, and this row is what refuses the
+    // future edit that reads the field raw again — the shape the first cut of this site had.
+    { fn: '_auto_compact_check (compact threshold)', anchors: ['-ge "$thr"', '_compact_note_clear'], arith: '-ge' },
   ];
   // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
   // premise (#69 review round 4). The comment here said "the seven sites are all

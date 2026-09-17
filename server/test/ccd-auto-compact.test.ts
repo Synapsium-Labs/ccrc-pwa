@@ -508,11 +508,22 @@ describe('an armed auto-continue is never cancelled by /compact (D-2229)', () =>
 // coordinator's matrix gives a worker 40 (S6-R9) so a dependent chain comes
 // back under the wall between tasks, while a coordinator keeps the default.
 //
-// The field is a registry FILE, so "present but not digits" is reachable
-// (a torn write, a hand edit — `_route_valid` refuses a non-numeric value at
-// the write). It falls back to the default rather than dying, and it SAYS so:
-// silently compacting at a threshold the record does not name is exactly the
-// collapse D-2013 exists to prevent.
+// The field is read through `_route_get` (controller ruling S6-R12), so its
+// vocabulary here is `_route_valid`'s `compact` arm and nothing looser: two or
+// three digits in 10–100. `5`, `0`, `007`, `120` and `99999` are all digits
+// and none of them is a threshold, so a raw `=~ ^[0-9]+$` read would have given
+// the field a second, wider vocabulary than the one the writer enforces — the
+// cases below walk both edges of that gap.
+//
+// The field is a registry FILE, so a value the writer would refuse is still
+// reachable (a torn write, a hand edit). It falls back to the default rather
+// than dying, and it SAYS so — silently compacting at a threshold the record
+// does not name is exactly the collapse D-2013 exists to prevent — but the
+// sentence is `_route_get`'s OWN (`route-reject … field compact …`), carried on
+// the routing reader's per-field floor marker. It is NOT a `compact-skip` note:
+// `compactskip` is the compactor's marker and `_compact_note_clear` erases it
+// on the very next below-threshold tick, which is where the first cut of this
+// read put a routing refusal and lost it.
 describe('routing slice 6: `compact` is this session’s threshold, absent means COMPACT_THRESHOLD', () => {
   it('a session at `compact=40` compacts at 45%, where the default would not', () => {
     seed(); sessionJson('idle', 600);
@@ -531,8 +542,9 @@ describe('routing slice 6: `compact` is this session’s threshold, absent means
     seed(); sessionJson('idle', 600);
     tick(BELOW_DEFAULT);
     expect(sendKeys()).toEqual([]);
-    expect(skipLines().join('\n'),
-      'an ABSENT field is not an invalid one').not.toContain('compact-field-invalid');
+    expect(swapLog(),
+      'an ABSENT field is not a refused one — `_route_get` is silent on absence')
+      .not.toContain('field compact');
     tick(MODEST);
     expect(sendKeys().join('\n')).toContain('/compact');
     expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
@@ -546,8 +558,46 @@ describe('routing slice 6: `compact` is this session’s threshold, absent means
     h.sh(`_reg_set ${ID} compact abc`);
     tick(BELOW_DEFAULT);
     expect(sendKeys(), '45% is under the default the torn field falls back to').toEqual([]);
-    expect(skipLines().join('\n')).toContain(`compact-skip ${ID}: compact-field-invalid`);
-    expect(skipLines().join('\n')).toContain('3 bytes, not digits; using 50%');
+    // The refusal's journal is `_route_reject_note`'s own sentence, subject-bound
+    // to this field: it names the FIELD and a BYTE COUNT and never the bytes.
+    expect(swapLog()).toContain(
+      `route-reject ${ID}: field compact holds an unrecognised value (3 bytes) — treated as absent`);
+    // And `compactskip` does NOT carry it. This is the half that reds if the
+    // refusal is moved back onto `_compact_note`: that marker rides the
+    // compactor's shared floor, and this very tick's `_compact_note_clear`
+    // (45% is below the threshold) would have erased the refusal it just wrote.
+    expect(reason(), 'a routing refusal must not wear the compactor’s marker').toBeNull();
+    expect(skipLines().join('\n')).not.toContain('compact-field-invalid');
+  });
+
+  it('a `compact` field of 5 is refused by the field’s vocabulary, not admitted as digits', () => {
+    // The LOW edge of the gap between `^[0-9]+$` and `_route_valid`'s compact
+    // arm (`^[0-9]{2,3}$` and 10–100). Mutation, measured: read the field with
+    // `_reg_get` instead of `_route_get` and 45% compacts against a threshold
+    // of 5 — a session that compacts on every tick forever.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 5`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys(), '5 is not a threshold; the default 50 decides and 45% is under it').toEqual([]);
+    expect(swapLog()).toContain(`route-reject ${ID}: field compact`);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
+  });
+
+  it('a `compact` field of 120 is refused by the same arm — above the ceiling is not a threshold', () => {
+    // The HIGH edge. `120` passes `^[0-9]{2,3}$` and fails the 10–100 bound, so
+    // only the validated reader tells it from a real value. Mutation, measured:
+    // `_reg_get` in place of `_route_get` and 55% stops compacting — the session
+    // goes silent at a ceiling the writer never admitted.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 120`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys()).toEqual([]);
+    expect(swapLog()).toContain(`route-reject ${ID}: field compact`);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
   });
 
   it('a `compact` field of 100 is a session that never auto-compacts below the wall', () => {
