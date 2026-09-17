@@ -410,6 +410,103 @@ gates an `os.walk` + `os.remove` **delete** on `os.path.isdir`, which follows a 
 not in this wave's diff, and a delete-side instance of this same class — the next wave inherits it here
 rather than rediscovering it.
 
+### D-2990(a) — "line-count neutral" is pinned by NOTHING, and this wave leaned on it
+**The honest epitaph for the repair method, and the one declaration this round owes beyond its fixes.**
+Twice in this wave a later commit was written to be LINE-COUNT NEUTRAL so that an already-landed anchor
+repair would stay valid — the F14 fixture condition was rewritten to exactly six lines for precisely
+that reason. **Measured: no suite pins any line count or byte size of `ccd/ccd`, `ccd/ccrc` or
+`ccd/session-hook.sh`.**
+
+    git grep -nE '19691|11974|53707' -- server/test/     ->  EMPTY
+
+What `macos-platform.test.ts` actually pins is the two homes' **byte-IDENTITY** — it slices both files
+between `# ── THE PLATFORM LAYER` and `# ── END PLATFORM LAYER` and compares. That pin stays GREEN when
+both files grow **identically**, which is exactly the case that shifts every anchor below the block. It
+is a real mechanism for a different property.
+
+**So the property this wave relied on to keep `61e0d45b` valid is a PROMISE, not a mechanism** — a
+convention held by authors remembering it, with nothing that reds when they forget. Two separate
+things follow, and both are already visible in this round: a line-count-neutral edit does not protect
+anchors ABOVE it in another file (this round's `ccd/ccrc` growth moved anchors that a neutral `ccd/ccd`
+edit could never have touched), and **line-count neutrality is not anchor safety at all** — F16 measured
+`ccd/session-hook.sh:1118-1120` and `:1123` REWRITTEN IN PLACE by #135, cited bytes changed under a
+citation while the file's length never moved.
+
+It is stated here rather than mechanised because the mechanism that would help is not a size pin — it
+is the census itself, and D-2992 records exactly the residue the census cannot see.
+
+### F15 — a commit message asserts a measurement it did not make, and cannot be amended
+`0011a2ec`'s message claims a measurement about `ccd/ccd:16610-16612`; at that commit's own tree those
+lines are a comment about minting. **The SHIPPED ANCHOR is correct** — the defect is the message's
+claim ABOUT the measurement, not the anchor it produced. `main` is protected and the commit is merged,
+so the message cannot be amended: **this paragraph is the durable correction**, in the same role the
+hand-written squash body played for F9. Recorded rather than quietly dropped because a commit message
+is the first thing the next reader trusts and the last thing anyone re-measures.
+
+### D-2990 — the citation repair's deliverable is a DERIVATION, not a number
+**Review 71 CRITICAL 2.** `main` moved TWICE inside a single review (`2f9deae2` -> `d02c2549` ->
+`ecbb8b22`), and each move falsified the census this branch had just re-measured. Three repairs on this
+wave have now expired that way. The reviewer offered two options — re-point once more, or take the
+repair out of the wave — and **neither was available**: reverting does not restore correctness, it
+restores a DIFFERENT wrongness, because the reverted anchors point at pre-#135 lines that are also
+wrong on the merged tree. There is no clean removal.
+
+**So the deliverable changed shape.** The census map, its total, the README anchor and the
+`# ccrc:generated` stamp are no longer numbers this plan asserts; they are **whatever the instrument
+prints on the tree that ships**, produced in the LAST commit of the round and named with the command
+that produced them. Neither 66 (this branch's) nor 162 (main's) may be typed. If the instrument prints
+200, 200 ships.
+
+**This is the only shape that converges,** and the reason is worth keeping: the old deliverable was a
+number true of a tree that stops existing the moment `main` moves. Making it a derivation makes
+re-running it cheap, and the race is won by SHORTENING THE WINDOW, not by measuring more carefully.
+
+**THE ORDER IS PART OF THE RULING.** Three items each change `ccd/ccd`'s line count and two are derived
+from it: merge first, then the guard class, then every tree-derived cardinal last. Done in any other
+order each invalidates the last. And "earlier" includes earlier IN THE SAME ROUND — two anchors
+corrected mid-round (`_inst_dirs`, `_inst_graph_always_on_off`) were stale by the +15 lines this round's
+own `ccd/ccrc` commit added, and had to be re-measured at the line-final tree.
+
+### D-2991 — a verified wave-done FREEZES the tip, and the constraint binds the coordinator
+`37a175eb` landed after its own verified wave-done, and that push discarded review run 70 entire — 26
+findings, a full panel, six sharded suites, closed `stale-review`.
+
+**The worker did the obedient thing.** A ruling arrived while the branch sat in `awaiting-review` with a
+review in flight, and a requirement delivered then has nowhere to land except a push. **The rule is
+therefore on the issuing side:** a requirement that arrives after a verified wave-done is the NEXT
+round's, always. A coordinator does not issue requirements against a branch whose fingerprint is under
+review; it holds them for the brief that review will trigger. Recorded as a deviation rather than as a
+note because it is a protocol defect with a named cost — one full review run — and the next programme
+inherits the rule, not the anecdote.
+
+### D-2992 — the census cannot find its own residue, so the residue is DECLARED with its instrument
+**Twelve distinct anchors are COINCIDENCE-GREEN:** unchanged spelling since `dfa167d7`, scored GREEN by
+the census at the branch tip, and citing DIFFERENT BYTES between the two trees. All twelve are into
+`ccd/ccd`, measured at `37a175eb`: `:3050-3070`, `:3060`, `:3091`, `:4006-4035`, `:6465`, `:6478`,
+`:6547`, `:13020`, `:13561`, `:13567`, `:13602`, `:13618`.
+
+**This is the indictment of the repair method, and it is why the scope CONTRACTS rather than expands.**
+The repair takes its work list from the census's FAILING set. These twelve are green. **The method can
+never reach them** — not through more care, and not through another round. Two of the twelve (`:6478`,
+`:13020`) are caught by `main`'s new anchored-by-shortness assertion and are repaired in this round's
+final commit. **The other ten are DECLARED HERE, NOT REPAIRED.**
+
+**The instrument, because a declaration without one is just another number that goes stale silently** —
+compare the cited BYTES, never the anchor's spelling, between the two trees:
+
+    for a in <anchor…>; do
+      diff <(git show dfa167d7:ccd/ccd | sed -n "${a}p") \
+           <(git show <tip>:ccd/ccd    | sed -n "${a}p") >/dev/null || echo "MOVED: $a"
+    done
+
+A repaired ten with no instrument is worth less than a declared ten with one: the declaration is
+INHERITABLE and re-runnable at any future tip, which is exactly the property every number this wave
+typed turned out to lack.
+
+**Run 70's framing of its own four does not hold** — it said they "left the failing set"; all four were
+already green at `d59f93d7`. The substance was right and the arithmetic around it was not. Recorded
+here because a correction to a finding this wave ACCEPTED is this wave's to carry.
+
 ### D-2187 — `_plat_mv_notdir`'s Darwin arm answers 0 with its own postcondition false
 The contract is `# <src> <dest> -> 0 iff <src> is now at <dest>`. Measured on GNU coreutils 9.4,
 `mv -f -- src dest` with `dest` a **symlink to a directory** returns 0 with `dest` still the symlink and
@@ -930,12 +1027,16 @@ totals them, it has planted a fact that the next edit falsifies silently.**
 [**Anchors note (added post-commit, definition above left byte-for-byte):** every line anchor in the
 D-2925 paragraph above was measured before this wave's own later commits moved them; navigate by
 symbol instead — `cmd_project_pool`, the guard's new home (the fix extracted it into its own helper,
-`_reg_project_glob_has`), and `_project_pool_state`. Separately, noted here rather than fixed (this
-commit's scope is this plan file only, not `ccd/ccd`/`ccd/ccrc`): the shipped header comment
-immediately above `_plat_mv_notdir` in both files says the `ln -s` census found "one plants a symlink
-AT that exact path, `ccd-crosspool.test.ts`'s `devzero-symlink` case" — measured, that file plants a
-symlink at a `$REG/<id>.<field>`-shaped path in more than one place, so the comment should read "at
-least one, e.g." rather than naming a single instance.]
+`_reg_project_glob_has`), and `_project_pool_state`. **WITHDRAWN (F7, review run 71) — its subject no longer
+exists.** This note used to carry a second half about the shipped header above `_plat_mv_notdir`
+naming "one plants a symlink AT that exact path, `ccd-crosspool.test.ts`'s `devzero-symlink` case",
+and asked for it to read "at least one, e.g.". That sentence is GONE from both shipped files —
+`git grep -F 'devzero-symlink' -- ccd/` and `git grep -F 'plants a symlink' -- ccd/` are both EMPTY —
+because F14 narrowed that paragraph and F3 then deleted its false warrant outright. `d59f93d7`'s
+message already claimed this note was withdrawn and it was not; this is the withdrawal, and the third
+commit message claiming it is gone would have been the defect, not the fix. The case itself still
+exists in `server/test/ccd-crosspool.test.ts` (`:793`, `:814`, `:1676`) — it is the shipped SENTENCE
+about it that no longer does.]
 
 **D7 mutation table (one site, landed this wave as `_reg_project_glob_has`):**
 
