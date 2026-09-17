@@ -111,6 +111,76 @@ unanchored targets". It does not reproduce — the tree gains ONE new target con
 direction is the dangerous one, because **wave 3 is the anchoring wave and sizes directly from those
 two sentences**: a worker expecting a `-t cc-` scan that over-reds would build one that under-covers.
 
+### The merge landed, and the guard followed the phrase — RATIFIED (2026-09-17)
+
+`ws/plain-basin` is at **`9dc9d45e`**, #117 reads **MERGEABLE**, `ccd/ccd` re-stamped
+`ccrc-unmodified`. Verified three ways here — `git ls-remote`, `gh pr view 117`, a fresh fetch.
+
+**It took THREE merges, not one.** `2985b9d1` (the 18 commits), then `1db070f1`, then `f06abdce` —
+each landing while the previous was being verified, and every one touching `ccd/ccd` moved the
+compaction card's line-anchored citations, so each cost a full census re-derivation. **#117 will
+conflict again the next time anything lands on `ccd/ccd`**; mergeable is a window, not a state.
+
+#### The behaviour decision, and why it was the worker's to make
+
+Routing slice 4 extracted `_pane_for_keystroke`/`_idle_for_keystroke` out of `_auto_compact_check`
+and took the `esc to interrupt` read with it. **The phrase read now lives in shared code with three
+callers** — `cmd_route` (8148), `_auto_compact_check` (16976), `_route_apply_check` (17665) — and
+wave 2's guard sat in only one of them. The worker's first resolution kept the guard where it was, to
+preserve blast radius, and wrote that reasoning into the tree. **It then reversed itself**, against
+its own written argument, which is the harder direction.
+
+RATIFIED. Task 4 is "the stand-down at every typing site". `cmd_route --apply` and
+`_route_apply_check`'s tick ARE typing sites; they merely did not exist when the plan was written.
+**Applying a ruling to instances its list did not name is the worker's; changing its SHAPE is mine** —
+and this holds the shape rather than changing it. The invariant's subject was never a function name,
+it is the phrase: a site that interprets `esc to interrupt` must not do so where it cannot trust the
+phrase sits on one line. The guard goes with the phrase, or the wave's headline invariant ships FALSE
+at two sites reached through code wave 2 never saw. That is the larger change, not the smaller one.
+
+Measured here rather than taken, at `9dc9d45e`: the guard sits in `_idle_for_keystroke` (16812) and
+returns rc 1 through the helper's own `KS_WHY`/`KS_DETAIL` channel, so each caller renders its own
+refusal — correct, since a predicate must not write another caller's note. `_auto_compact_check` keeps
+its own guard (16930), standing down BEFORE the pane read, which is exactly the behaviour wave 2
+shipped. `POPULATION` is still seven rows with the `_auto_compact_check` row **RENAMED** to
+`_idle_for_keystroke`: the census keys on phrase-carrying functions, the phrase moved, and a
+phrase-carrying function guarding itself is the stronger arrangement.
+
+**One consequence nobody named, and it is not new breakage.** `_auto_compact_check` now holds a guard
+while no longer being a `POPULATION` row, so that guard is invisible to the census — another instance
+of wave-3 entries 4 and 5, which already say the census is blind to sites outside its rows. Folded in
+as an instance; nothing reopened.
+
+#### Wave-3 entry SEVEN, and it is mine
+
+**deviation 2879's subject moved.** Its edit (4e) is about `_auto_compact_check`'s one-argument call to
+`_pane_auto_continue_armed`; the merge moved that call into `_pane_for_keystroke` (16785), where it is
+now reached from all three callers — so the entry's premise, that a second measurement there could
+only change the WORD one site logs, is no longer a statement about one site. **deviation 2881 SURVIVES, and I
+checked rather than assumed:** `_redrive_after_spawn` (18888) is still the only two-argument caller in
+the tree. Wave 3 gets the measurement, not the re-derivation.
+
+#### The near-miss is the most valuable thing the merge produced
+
+A regex-delimited array replacement in `session-hook.test.ts` located the array's end by the next
+`]);`, overran, and **deleted three `it()` blocks**. The suite would have reported **330 passed** —
+green, plausible and wrong. It was caught by diffing the `it()` COUNT against the pre-edit file, not
+by reading the result. **Standing rule for this programme from here: after any automated edit to a
+test file, the case count before and after is part of the evidence.** Deleting assertions makes a
+suite faster, quieter and greener — every signal moves the reassuring way.
+
+#### Accepted as reported
+
+The `session-hook` strace arm fails under shard load and passes 333/333 isolated, twice. It is on
+`CLAUDE.md`'s documented five, its own failure message tells the reader to isolate first, and naming
+it beats folding it into a green line. Suites on the merged tree — a tree neither parent ran — were
+run across three server shards plus agent and pwa.
+
+**"Nothing smuggled" was VERIFIED, not accepted.** On the merged tree `ccd-pane-narrow-note.test.ts`
+is still round 3's structure exactly: the only `WIDE_PANE`-driven case is R1 and it still drives the
+SWAP lane alone, there is no stale-lane WIDE case, and `_spawn_settle` still carries zero guards with
+the header still naming it. Wave-3 entries 1 and 5 are untouched.
+
 ### #117 went CONFLICTING, and the re-run I ordered raced my own fix by 39 seconds (2026-09-17)
 
 **The worker caught a coordinator error and it was worth catching.** After `f27c8a86` (#130) landed I
