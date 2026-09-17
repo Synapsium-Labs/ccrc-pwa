@@ -6934,7 +6934,13 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     const { transcript } = plantSession({ lines: workLines(tree) });
     const { forks } = straceRun(preCompact(tree, transcript));
     // EVERY MEMBER IS §3.1's, and the count beside each is what makes adding or
-    // deleting ANY child red — not only a third `find`:
+    // deleting any child THIS SCENARIO DRIVES red — not only a third `find`.
+    // The qualifier is load-bearing (closing gate M6): "any child" is false of
+    // a multiset, however exact, because a member the path never reaches
+    // contributes nothing to it. That is not hypothetical — it is what hid the
+    // sweep loop's per-iteration `rm` from both of this describe's original
+    // scenarios; the residue scenario at the end of this describe is the one
+    // that drives it, and only together do the three cover §3.1's list:
     //   link + rm  — step 5's generation-read hard-link alias and its unlink,
     //                the two children Task 9 ADDS to this section;
     //   find × 2   — the overlap check and the exact-family sweep. The scope
@@ -6963,6 +6969,59 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     // the ordinary run, which is why the multiset is stated per scenario.
     expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 2 });
   }, 60_000);
+
+  // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration
+  // `rm -f "$cand"` (`ccd/session-hook.sh:1458`) is the one member of this
+  // section neither scenario above can see: both leave the registry free of
+  // AGED family residue, so `$aged` is empty, the loop body never runs, and a
+  // child that costs one `execve` per swept candidate contributes nothing to
+  // either multiset. That is also why the comment above says what it now says:
+  // a multiset pins the children the scenario DRIVES, not every child the arm
+  // can take.
+  //
+  // ONE PLANTED AND TWO, because presence and UNBOUNDEDNESS are two claims.
+  // A single-N pin stays green if the loop ever learns to batch — `rm -f a b`
+  // is one fork for two candidates, and it is the obvious optimisation here —
+  // so the property worth pinning is that the count RISES WITH THE WORK.
+  // The residue is `.stage` temp family, deliberately not `compactpost.*.claim`:
+  // the overlap `find` at `:1433` reads that second name, and although it
+  // reads it YOUNG-only and aged residue could not flip the verdict, a fixture
+  // whose planted file is also an input to the scope decision would couple two
+  // measurements that have no business being coupled.
+  for (const planted of [1, 2]) {
+    it(`the SWEEP run forks one further \`rm\` per swept candidate — ${planted} planted, ${planted} swept`, () => {
+      const tree = cardTree(); plantHelper();
+      const { transcript } = plantSession({ lines: workLines(tree) });
+      const at = (f: string): string => path.join(home, '.cc-sessions', f);
+      // Older than `COMPACT_CARD_MAX_AGE` (1200 s), by the same margin the
+      // sweep's own fixture uses, so `find -mmin +20` matches every one.
+      const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+      const residue = Array.from({ length: planted }, (_, k) =>
+        at(`.demo-quiet-basin.compactset.99${k}.compact-1-99${k}-1-2.stage`));
+      for (const f of residue) { fs.writeFileSync(f, 'x'); fs.utimesSync(f, old, old); }
+      const { forks, raw } = straceRun(preCompact(tree, transcript));
+      // THE DIAGNOSTIC BELONGS IN THE FAILURE, not in a later bisect. A busy
+      // box makes `strace -f` interleave, and an `execve` split across
+      // `<unfinished ...>` / `<... execve resumed>` matches NEITHER half of
+      // this parser's pair of regexes, so the child loses its name and reads
+      // as `(subshell)` — a mis-ATTRIBUTION that looks exactly like a changed
+      // arm. Measured on this box 2026-09-17 under four concurrent agents:
+      // `find` 2 -> 1 with `(subshell)` 1 -> 2, the same six forks throughout.
+      // So the message says which of the two a reader is looking at.
+      const split = raw.split('\n').filter((l) => l.includes('<unfinished ...>')
+        || l.includes('resumed>')).length;
+      // The ORDINARY multiset, plus exactly one `rm` per planted candidate.
+      expect(tally(forks), split === 0
+        ? 'the first held section\'s forks, with the sweep loop\'s removals'
+        : `${split} interleaved strace lines in this trace: a child may have lost `
+          + `its exec and be counted as "(subshell)". Re-run in isolation before `
+          + `reading this as a changed arm.`).toEqual(
+        { '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 + planted });
+      // AND THE SWEEP REALLY SWEPT: a green multiset over residue that was
+      // never removed would be measuring a fork this arm did not take.
+      for (const f of residue) expect(fs.existsSync(f), `swept: ${f}`).toBe(false);
+    }, 60_000);
+  }
 });
 
 // ── D-2605: the CITATION AUDIT over both documents (spec §3.4, round 14) ──
@@ -7423,14 +7482,73 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'the same quotation on a line that does not carry it reds').toEqual(['ccd/fx.sh:4']);
     // (4) THE STOPLIST BY NAME, in the arm that would otherwise admit each one,
     // and the four short tokens the rule DOES accept — named so a later reader
-    // sees the whole of what this floor lets through at that length rather than
-    // having to re-derive it.
+    // sees the whole of what this floor lets through AT THREE NON-SPACE
+    // CHARACTERS OR FEWER rather than having to re-derive it. "That length"
+    // used to be left to the reader (closing gate M2); it is now both stated
+    // and MEASURED, by the corpus test directly below — these four loops are
+    // about the PREDICATE, that one is about the CORPUS, and only the pair
+    // makes the sentence above a claim anything could falsify.
     for (const tok of ['rm', 'die', 'in', 'do', 'case', 'echo', 'local', 'return', 'while', '$1']) {
       expect(specific(tok), `\`${tok}\` never satisfies`).toBe(false);
     }
     for (const tok of ['jq', 'ccd', 'it(', 'out']) {
       expect(specific(tok), `\`${tok}\` is a name, not a keyword, and still satisfies`).toBe(true);
     }
+  });
+
+  it('THE TWO CORPUS FACTS the docstring above states, asserted rather than asserted-about', () => {
+    // A DOCSTRING IS NOT A PIN. The comment above states two facts about the
+    // REAL corpus — not about `FX`, the seven-line fixture the loops use — and
+    // until now nothing measured either: the loops prove the PREDICATE's
+    // verdict on four hand-written strings, which is a different claim from
+    // "these four are the whole of what the corpus gets through the floor".
+    // Both facts were TRUE when measured (2026-09-17, origin/main 2f9deae2);
+    // that is exactly why they were worth pinning, since a fact nobody checks
+    // is one edit away from being prose that used to be true.
+    const short = (x: string): boolean => x.replace(/\s+/g, '').length <= 3;
+    const accepted = new Set<string>();
+    const weak: string[] = [];
+    let resolved = 0; let anchored = 0;
+    for (const [, text] of realCorpus()) {
+      for (const { text: p } of paragraphs(text)) {
+        for (const { file, n1, n2, toks } of refsOf(p)) {
+          const lines = fromRepo(file);
+          if (lines === null) continue;
+          resolved++;
+          for (const t of toks) for (const part of partsOf(t)) if (short(part)) accepted.add(part);
+          const cited = lines.slice(n1 - 1, n2).join('\n');
+          const hits = toks.filter((t) => occurs(t, cited));
+          if (!hits.length) continue;
+          anchored++;
+          // ANCHORED BY SHORTNESS ALONE: every token that actually occurs in
+          // the cited lines is at or below the floor's short bound. Such a
+          // reference passes on evidence the loops above call too weak to be
+          // evidence, so the audit's verdict on it would rest on nothing.
+          if (hits.every((t) => partsOf(t).every(short))) weak.push(refKey({ file, from: n1, to: n2 }));
+        }
+      }
+    }
+    // NON-VACUITY FIRST, because both facts below are shapes an empty walk
+    // would satisfy for free: an unread corpus offers no short token and
+    // anchors nothing, and would print exactly the two answers wanted here.
+    expect(resolved, 'references into tracked source that the walk resolved')
+      .toBeGreaterThanOrEqual(400);
+    expect(anchored, 'and references some quotation of theirs actually anchors')
+      .toBeGreaterThanOrEqual(200);
+    // FACT ONE — the docstring's "the whole of what this floor lets through".
+    // `toks` is already `usable`-filtered, so this set cannot contain a token
+    // the floor refuses; what it CAN contain, and what this asserts it does
+    // not, is a FIFTH short token the comment above never named. The partition
+    // is not tautological: the stoplist loop directly above names ten short
+    // tokens the floor refuses, and `rm`, `do` and `in` are all offered by
+    // this same corpus.
+    expect([...accepted].sort(), 'every short token the real corpus gets through the floor')
+      .toEqual(['ccd', 'it(', 'jq', 'out']);
+    // FACT TWO — nothing in the corpus is anchored by shortness alone, so none
+    // of those four decides a reference's fate on its own. This is the fact
+    // that makes the floor SAFE to have tightened: had the set been non-empty,
+    // tightening it would have turned correct references stale.
+    expect(weak, 'references anchored only by tokens at or below the short bound').toEqual([]);
   });
 
   it('the audit reads the whole corpus — the numbers it is entitled to claim anything from', () => {
@@ -8352,8 +8470,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     `_reg_purge`'s dot-leading-family header and the unlink stands at
     //     `ccd/ccd:2468`. A genuinely stale anchor, and the only reason it was
     //     green is that `rm` satisfied it.
-    // RECORDED, NOT REPAIRED: this is a RATCHET, and re-anchoring references no
-    // finding examined is how a census stops being a measurement.
+    // RECORDED, NOT REPAIRED — and the two classes are not the same class.
+    // The two STALE anchors above were each EXAMINED and their referents named
+    // at the measurement this comment reports: `ccd/ccd:2455`'s allow-list
+    // entry (13) cites a comment inside `_reg_purge`'s dot-leading-family
+    // header while the `rm -f "$REG/$id.generation"` it names stood at
+    // `ccd/ccd:2468`, and `ccd/ccd:7661` is a comment line about `die`. So for
+    // those two the deferral is a CHOICE with the evidence already in hand,
+    // not an absence of it — this is a RATCHET, and re-anchoring references a
+    // pass examined is how a census stops being a measurement of the debt it
+    // inherited. (Both numbers are the BRANCH-TIP measurement; the merge below
+    // renumbers them, and `:2455` in particular now names something else.)
     //
     // THE MERGE WITH `origin/main` TAKES IT 20 -> 18 (merge fix M2), and the
     // movement is FIVE RENUMBERINGS and TWO DEPARTURES, none of them a rule
