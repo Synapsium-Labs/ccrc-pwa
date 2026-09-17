@@ -8098,7 +8098,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   tree. Both causes are live here and neither number is this tree's, so the
       //   figure below is re-derived from the MERGED tree by this audit rather than
       //   carried over from either side.
-      'ccd/ccd': 129,
+      'ccd/ccd': 132,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8126,7 +8126,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `shared/api.ts` anchor), the sum of the re-measured map
     // above: the headline is a MECHANISM, not a separate number, so it moves
     // with `ccd/ccd`.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(165);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(168);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8293,7 +8293,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // two new `ccd/ccd` entries this pass alone reaches are the same growth
     // (routing slices 2-6), not a new exemption.
     expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
-      .toEqual(['ccd/ccd:5828-5830', 'ccd/ccd:1330-1333', 'ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130']);
+      .toEqual([
+        'ccd/ccd:1330-1333',
+        'ccd/session-hook.sh:1098',
+        'ccd/ccrc:7129-7130',
+      ]);
   });
 
   /** THE THIRD PASS, and the third reason the census under-reports (D-2849,
@@ -8602,7 +8606,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
+        'ccd/ccd:13567',
         'ccd/ccd:13673',
+        'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
@@ -8618,6 +8624,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13812',
         'ccd/ccd:6425',
         'ccd/ccd:1223',
+        'ccd/ccd:6547',
         'ccd/ccd:3390-3402',
         'ccd/ccd:3401',
         'ccd/ccd:4029',
@@ -8627,17 +8634,24 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
+        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
         'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
+        'ccd/ccd:3070',
+        'ccd/ccd:3050',
+        'ccd/ccd:3050',
+        'ccd/ccd:3070',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
+        'ccd/ccd:3070',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
-        'ccd/ccd:5385-5388',
+        'ccd/ccd:5828-5830',
+        'ccd/ccd:5819-5823',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -8683,7 +8697,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
+        'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
+        'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',
@@ -8703,12 +8719,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3050',
+        'spec:2220 ccd/ccd:3050',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
         'spec:2222 ccd/ccd:5725',
-        'spec:2222 ccd/ccd:5385-5388',
-    ]);
+      ]);
   });
 
   it('THE RANGE BOUND: no citation names a line its file does not have, outside the ledger (round 14, A-I1)', () => {
