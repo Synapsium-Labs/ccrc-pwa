@@ -1161,3 +1161,79 @@ name rather than delete the one it found is precisely what makes the other four 
 failed, agent 295/295, pwa 2602/2602, three builds green. What run 70 found is not bad work — it is a
 class closed by list, an ordering accepted on an assumed file set, and an audit believed where it was
 green. **Two of those three are mine.**
+
+---
+
+## The ordering closed on a derivation, and the false comment that defeated the audit
+
+### "Your argument was unsound and its conclusion is true"
+
+The worker's sentence, kept in its words because it states this run's rule better than I have:
+
+> *"Your argument was unsound and its conclusion is true — those are different things and I would
+> rather you had the measurement than the relief."*
+
+It derived the set I had assumed: every path-qualified citation in the three corpus documents, 27
+distinct paths, bare-basename citations resolved. Three cited files moved across `#135`
+(`ccd-ws-reap.test.ts` 2855→2860, `ccd-lifecycle-purge.test.ts` 2493→2503, `session-hook.test.ts`
+8758→8815) — **and the cost is zero for a reason neither of us had given:** all re-pointed anchors
+point into `ccd/ccd` and `ccd/ccrc`, both line-neutral across `#135`. Anchors into a moved file: zero.
+
+**Verified here independently**, extracting citations either side of `61e0d45b`: the re-point changed
+anchors into **exactly two files**, `ccd/ccd` and `ccd/ccrc`, and **none** into any file `#135` moved.
+**And my instrument is narrower, which is named rather than left as a discrepancy:** I count 66
+distinct `(doc, path, line)` tuples where the worker counts 112 references, because my regex requires
+an explicit path while the census's own `REF_RE` lets a bare `:N` inherit one. **Its number is the
+right one** — the census's own grammar — and mine is a stricter instrument over the same set. An
+unexplained 66-vs-112 in two records is exactly the three-way `|`-row mess just retired.
+
+**The ordering question is CLOSED, on the worker's derivation and not on my ruling.** Its boundary is
+recorded too: this says nothing about anchors it did NOT re-point — the 10 non-unique, the 18
+re-pointed-and-still-red, and every already-passing anchor. Debt those carry into the three moved
+files is `#135`'s, not this repair's.
+
+### The fourth site has two sufficient causes, and the worker only gets one
+
+It declined my attribution, and it is right about its own half: it **opened `ccd/ccd:5002` during the
+round, considered it, and ruled it out of scope** — reasoning that `get()`'s `isfile` is the D-2380
+HANG guard and a symlink-to-regular-file cannot hang an `open`, which is true and is not the question.
+It even noticed the read reaches outside `$REG` and dismissed that. **Examined and mis-ruled is worse
+than missed**, and it belongs to the worker.
+
+**My brief's defect stands beside it, not under it.** "All three sites" would have produced the same
+outcome had the worker never opened the file. Two independent sufficient causes, neither cancelling
+the other — and I keep mine because **the next brief is mine to write, and a defect handed away does
+not get fixed where it recurs.**
+
+### The finding of this run: a false comment defeated the audit of the code it describes
+
+The shipped comment at that site promises the guard answers `None` on a type check alone — *"the same
+answer an absent field already gives, NEVER A FABRICATED VALUE."* The worker reproduced a fabricated
+value: a symlink out of `$REG` makes `get()` return `SECRET-FROM-OUTSIDE-REG` as the field. **It read
+that comment during the round and took it as an argument rather than as a claim to test.**
+
+That is the same class as the false clause at `ccrc-doctor-checks:2720` that opened this entire
+programme, and it is the strongest case yet for the rule: **a comment asserting a safety property is a
+load-bearing claim, because the reader most likely to rely on it is the one auditing the thing it lies
+about.** The comment is corrected in the same commit as the guard, stating what the guard now actually
+guarantees rather than what it was hoped to.
+
+### Two instrument defects, one hour apart, both caught only by disbelief
+
+**The worker's:** its edit script printed `ok F11 anchors note` per edit but wrote the file **once at
+the end**; a later assertion aborted before that write, a second script re-read fresh, and F11 was
+silently discarded. So `d59f93d7` claims a fix it does not contain — **the F9 defect, inside the commit
+that closes F9.**
+
+> **A script that reports per-edit and writes at the end reports INTENT, NOT OUTCOME.** Per-edit "ok"
+> logs what the script meant; the file is the only record of what happened.
+
+**Mine, and the worker's second:** my coverage checker under-matched `**F12.` and reported four false
+MISSINGs; its audit grep began with a hyphen (`-t D-2925`), was read as an option, and reported a
+present item as ABSENT until re-run with `-e`. **Both instruments lied in the same direction — toward
+absence that was not there — and both were caught only by disbelieving a tool that disagreed with its
+operator.** That habit is the thing worth keeping; neither script is.
+
+**And the worker deliberately did NOT hunt the four coincidence anchors**, so as not to contaminate
+the independent comparison with run 71. Correct, and for the same reason I have not told run 71 that
+the ordering question is closed: it was asked to derive that file set itself.
