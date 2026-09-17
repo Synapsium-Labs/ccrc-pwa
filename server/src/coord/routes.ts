@@ -10,7 +10,7 @@ import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
 import { CCD_ARGV, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
-import { escalate, demote, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
+import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
 import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
@@ -1841,6 +1841,17 @@ export function registerCoordRoutes(
       let from: string;
       let to: string;
       let mode: RouteMode;
+      // THE COMPANION EFFORT A CLASS RUNG RESETS, or `null` when this call
+      // writes one field (final review, finding #1). Spec §3: "A class rung
+      // resets effort to the new class's matrix row, never carries the old
+      // level across" — so a ladder move on `class` is TWO pairs, and
+      // `classRungEffortReset` is the one place that says which value.
+      // `null` on an effort rung (nothing to reset) and on a MANUAL write,
+      // which this door forwards exactly as the coordinator typed it — the
+      // coordinator's own judgement is not a rung, and a manual
+      // `class=haiku` that ccd refuses is ccd's answer to give, not this
+      // door's to silently amend.
+      let effortReset: string | null = null;
 
       if (manualField !== undefined) {
         field = manualField;
@@ -1925,6 +1936,25 @@ export function registerCoordRoutes(
         // read the SAME vocabulary (`ROUTE_MODES`/`FAILURE_KINDS`), so a mode
         // or kind added to one can never silently go unrecognised by the
         // other.
+        //
+        // THE SCOPE IS THIS RUN, AND A WAVE IS ONE RUN ROW (final review,
+        // finding #2). `runEvents(id)` reads one run's rows, while the rung
+        // itself is a property of the SESSION, which is resumed across waves
+        // — so both derivations above are per-wave: a demotion taken on wave
+        // N's run is not reversed by a failure reported against wave N+1's,
+        // and `priorSameKind` (the `max` gate) restarts at zero with each new
+        // run. Widening it is not a one-line change and is deliberately NOT
+        // attempted here: a run's `route:` events name a FIELD, never the
+        // session they were about, and one run can route both its worker
+        // (`run.sessionId`) and its coordinator (`run.claimedBy`) — so
+        // resolving the trail across a session's runs needs the event grammar
+        // to carry the session first, or it would attribute one session's
+        // demotion to the other. What IS fixed is the promise: the
+        // coordinator's own reference (`ccd/coordinator-skill/references/
+        // wave-lifecycle.md` §4) now states this run scope and tells a
+        // coordinator how to carry a standing demotion across a wave
+        // boundary by hand, instead of promising a reversal this door cannot
+        // see.
         const events = coord.runEvents(id);
         let lastDemotion: Demotion | null = null;
         let priorSameKind = 0;
@@ -1970,19 +2000,40 @@ export function registerCoordRoutes(
         from = target.from;
         to = target.to;
         mode = target.mode;
+        effortReset = target.field === 'class' ? classRungEffortReset(target.to) : null;
       }
 
       const dec = sweepDec(deps.fleetState, `run:${id} coordinator`);
       const reason = `${mode}${kind ? ' ' + kind : ''}: ${why}`;
-      const argv = CCD_ARGV.route(sid, field, to, dec === null ? null : { ...dec, reason });
+      const flags = dec === null ? null : { ...dec, reason };
+      // ONE ARGV FOR THE PAIR, NEVER TWO CALLS (`CCD_ARGV.routeSet`'s own
+      // docstring / ruling S4-R5). `cmd_route` validates every `--set` pair
+      // and then the class/effort PAIR — "refused whether it arrives in one
+      // call or across two" — before its write loop touches the registry, so
+      // one argv is all-or-nothing while two calls would commit
+      // `class=haiku` and then die on the pair check. That pair is not
+      // hypothetical here: `demote: class` off sonnet lands on haiku, whose
+      // reset is `auto` precisely because ccd refuses haiku beside a level.
+      // A single-field `route` argv for a class rung would therefore write
+      // the wrong effort silently on every other class rung and refuse
+      // outright on that one.
+      const argv = effortReset === null
+        ? CCD_ARGV.route(sid, field, to, flags)
+        : CCD_ARGV.routeSet(sid, { class: to, effort: effortReset }, flags);
       const res = await deps.runCcd(argv);
       if (!res.ok) {
         return reply.code(502).send({ ok: false, error: 'fleetFailed', stderr: res.stderr });
       }
 
+      // ONE run event, naming the RUNG — the companion effort reset is part
+      // of that one class rung, not a second decision, and the `route:` event
+      // grammar (`routeEventDetail`, `shared/api.ts`) carries one field by
+      // construction. The reset is visible in the journal (ccd writes one
+      // `route` row per `--set` pair), in the `--reason` text the ladder
+      // composed ("… effort reset to <value>"), and on the response below.
       coord.recordRunEvent(id, 'coordinator', routeEventDetail({ mode, field, from, to, kind: kind ?? 'manual' }));
       return reply.code(200).send({
-        ok: true, applied: { session: sid, mode, field, from, to, kind: kind ?? null },
+        ok: true, applied: { session: sid, mode, field, from, to, kind: kind ?? null, effortReset },
       });
     });
   });

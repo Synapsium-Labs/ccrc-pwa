@@ -578,6 +578,22 @@ before the ladder applies. Never `ccd route` (clause 1) and never `--apply` (cla
 rule and spec §8 row 5). Every call that CHANGES a record is one run event and one journal row;
 a refusal — the ladder's answers included — records neither.
 
+**The reversal is bookkeeping THIS RUN owns, and a wave is one run row.** The door derives "the
+last unreversed demotion" — and the same-kind count that gates `max` — from this run's own event
+trail, so the sentence above holds exactly INSIDE one wave and not across a wave boundary: a
+demotion taken on wave N's run is not reversed by a failed check you report against wave N+1's
+run, and the same-kind count starts again at zero with each new run. Carry it yourself when it
+matters: `"$API" runs signals "<the previous wave's run id>"` lists that run's `routing` events,
+and if the demotion still stands, walk it back by hand with
+`{"target":"worker","field":"<class|effort>","value":"<the rung it was demoted from>","why":"…"}`
+before you report the new failure.
+
+**A class rung is two fields in one write.** An escalation or demotion that moves `class` resets
+effort in the SAME call (spec §3 — effort names do not transfer across classes): to `high`, or to
+`auto` onto haiku, which takes no effort level at all. The answer's `applied.effortReset` names
+the value that went with it, and is `null` when the call wrote a single field — an effort rung, or
+a manual `field`/`value` write, which this door forwards exactly as you typed it.
+
 ### 4b — Settle the work items, AFTER the advance answers `ok`
 
 `GET /api/runs/:id/items` / `POST /api/runs/:id/items`
@@ -772,8 +788,9 @@ no control characters>", ...one of...}`:
   <= 32 bytes) — ccd's `_route_valid` is the sole authority on whether the value is a legal
   member of that field's own vocabulary.
 
-Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind"}}`, `mode`
-one of `escalate`/`demote`/`reverse-demotion`/`manual`. Refusals: `no-session` (the target has no
+Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind","effortReset"}}`,
+`mode` one of `escalate`/`demote`/`reverse-demotion`/`manual`; `effortReset` is the companion
+effort a CLASS rung wrote in the same argv (§4 above), `null` on a single-field write. Refusals: `no-session` (the target has no
 session id on this run), `no-record` (the registry has no `.class`/`.effort` file to walk from),
 `unrouteable-record` (`.class`/`.effort`/`.degraded` IS present and readable but its content is
 not a legal rung — a stray ccd value like `class=default`, or a torn/never-written field — refused
@@ -784,8 +801,9 @@ routable and refuses later on its true reason), `ceiling`/`floor`/`no-effort-run
 degraded-record guard, has nowhere to move this request to — an answer, not an error),
 `unsupported` (501, the fleet host predates `route-v1`), `fleetFailed` (502, ccd refused the write
 — no run event is recorded on a refusal). Any failed check reverses the run's own last unreversed
-demotion before the ladder applies to the new failure — that bookkeeping is derived from the run's
-event trail, not sent by the caller.
+demotion before the ladder applies to the new failure — that bookkeeping is derived from THIS
+run's event trail, not sent by the caller and not read across the runs of earlier waves (§4
+above).
 
 ## Build 9 — peers, claims, deviations (wave 7 surface)
 

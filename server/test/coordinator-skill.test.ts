@@ -2288,6 +2288,21 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
     expect(flat(section4)).toMatch(
       /Every call that CHANGES a record is one run event and one journal row; a refusal — the ladder's answers included — records neither\./,
     );
+    // Final review, finding #2: the reversal sentence above promises a
+    // cross-wave behaviour the door does not have — its `lastDemotion` and
+    // same-kind count are derived from ONE run's events, and a wave is one
+    // run row. §4 now says so where the coordinator acts, and names the
+    // by-hand carry. Each claim is bound to its own subject rather than one
+    // wide regex over the section (memory: a-substring-pin-binds-no-subject).
+    const scope = flat(section4);
+    expect(scope).toContain('The reversal is bookkeeping THIS RUN owns, and a wave is one run row.');
+    expect(scope).toMatch(/demotion taken on wave N's run is not reversed by a failed check you report against wave N\+1's run/);
+    expect(scope).toMatch(/same-kind count[\s\S]{0,80}starts again at zero with each new run/);
+    expect(scope).toMatch(/runs signals[\s\S]{0,120}`routing` events/);
+    // Finding #1: a class rung writes TWO fields, and the answer says which.
+    expect(scope).toContain('A class rung is two fields in one write.');
+    expect(scope).toMatch(/resets\s+effort in the SAME call[\s\S]{0,140}`auto` onto haiku/);
+    expect(scope).toMatch(/`applied\.effortReset`[\s\S]{0,200}`null` when the call wrote a single field/);
   });
 
   it('wave-lifecycle.md\'s signals section names arm, routing, armUnparsed and routingUnparsed', () => {

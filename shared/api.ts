@@ -5625,7 +5625,13 @@ export function armEventDetail(fields: RouteFields): string {
  *   502 fleetFailed          — the `route` verb itself refused (stderr in
  *                             the body); NO run event is recorded
  *   200 ok:true              — `{ applied: { session, mode, field, from,
- *                             to, kind } }`
+ *                             to, kind, effortReset } }`. `effortReset` is
+ *                             the COMPANION effort value a class rung wrote
+ *                             in the same argv (spec §3: a class rung resets
+ *                             effort to the new class's row, `auto` onto
+ *                             haiku), and `null` when the call wrote one
+ *                             field — an effort rung, or a manual write,
+ *                             which is forwarded exactly as typed
  *
  * `run-closed` collides, in SPELLING ONLY, with `store.ts`'s unrelated
  * `releaseClaimsForRun` `endedBy` forensic value the scanner's `NOT_CODES`

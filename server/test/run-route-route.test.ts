@@ -332,7 +332,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow' },
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow', effortReset: null },
     });
     expect(calls.filter((c) => c[0] === 'route')).toEqual([
       ['route', '--session', sid, '--set', 'effort=xhigh', '--actor', `run:${id} coordinator`,
@@ -368,13 +368,72 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'demote', field: 'effort', from: 'high', to: 'medium', kind: null },
+      ok: true, applied: { session: sid, mode: 'demote', field: 'effort', from: 'high', to: 'medium', kind: null, effortReset: null },
     });
     expect(calls.filter((c) => c[0] === 'route')).toEqual([
       ['route', '--session', sid, '--set', 'effort=medium', '--actor', `run:${id} coordinator`,
         '--reason', 'demote: slow down'],
     ]);
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:demote:effort:high->medium:manual');
+  });
+
+  // Final review, finding #1: A CLASS RUNG IS TWO `--set` PAIRS IN ONE ARGV.
+  // Spec §3 — "A class rung resets effort to the new class's matrix row,
+  // never carries the old level across" — and both ladder arms SAY so in
+  // their `why`. Until this pair of cases the class rung was pinned by
+  // nothing at the door (the only `kind: 'ceiling'` case above is the
+  // DEGRADED 409), and the door sent one `--set`: a silently wrong effort on
+  // every class escalation, and on `demote: class` off sonnet a guaranteed
+  // 502 — `cmd_route` dies on `class haiku` beside a level, "whether it
+  // arrives in one call or across two".
+
+  it('kind: ceiling on a worker at sonnet·xhigh escalates class to opus AND resets effort to high in ONE argv', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w21'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w21');
+    seed(home, sid, { class: 'sonnet', effort: 'xhigh' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'a design flaw it could not see', kind: 'ceiling' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      applied: { session: sid, mode: 'escalate', field: 'class', from: 'sonnet', to: 'opus',
+        kind: 'ceiling', effortReset: 'high' },
+    });
+    // ONE argv, both pairs — `CCD_ARGV.routeSet`, never two `route` calls
+    // (S4-R5): `cmd_route` validates every pair before its write loop, so one
+    // argv is all-or-nothing. `xhigh` does NOT travel across the class rung.
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([
+      ['route', '--session', sid, '--set', 'class=opus', '--set', 'effort=high',
+        '--actor', `run:${id} coordinator`, '--reason', 'escalate ceiling: a design flaw it could not see'],
+    ]);
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:class:sonnet->opus:ceiling');
+  });
+
+  it('demote: class off sonnet lands on haiku with effort=auto in the same argv — the pair ccd refuses when it arrives without one', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w22'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w22');
+    seed(home, sid, { class: 'sonnet', effort: 'high' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'three clean waves', demote: 'class' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true,
+      applied: { session: sid, mode: 'demote', field: 'class', from: 'sonnet', to: 'haiku',
+        kind: null, effortReset: 'auto' },
+    });
+    // `auto`, not `high`: haiku takes no effort LEVEL, and `auto` is the
+    // absent-equivalent (spec §5.1) — ccd's own remedy sentence ("set
+    // effort=auto or pick another class"). A bare `--set class=haiku` here is
+    // the 502 this case exists to keep out of the fleet.
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([
+      ['route', '--session', sid, '--set', 'class=haiku', '--set', 'effort=auto',
+        '--actor', `run:${id} coordinator`, '--reason', 'demote: three clean waves'],
+    ]);
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:demote:class:sonnet->haiku:manual');
   });
 
   it('a second kind: shallow after a demotion reverses it first — reverse-demotion, no ladder move', async () => {
@@ -393,7 +452,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow' },
+      ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', effortReset: null },
     });
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:reverse-demotion:effort:medium->high:shallow');
   });
@@ -426,7 +485,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow' },
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow', effortReset: null },
     });
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:effort:high->xhigh:shallow');
   });
@@ -447,9 +506,54 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow' },
+      ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', effortReset: null },
     });
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:reverse-demotion:effort:medium->high:shallow');
+  });
+
+  // Final review, finding #2: THE LADDER'S HISTORY IS THIS RUN'S, AND A WAVE
+  // IS ONE RUN ROW. `lastDemotion` and `priorSameKind` are derived from
+  // `coord.runEvents(id)` — one run's rows — while the rung they walk belongs
+  // to the SESSION, which is resumed wave after wave. So the spec's
+  // cross-history rules ("any failed check reverses the last demotion";
+  // "`max` … after a second failed check of the same kind on the same
+  // session") hold inside a wave and not across one. This case MEASURES that
+  // scope rather than leaving it to be rediscovered, and
+  // `ccd/coordinator-skill/references/wave-lifecycle.md` §4 now states it to
+  // the coordinator in the wave they act in, with the by-hand carry. If the
+  // scope is ever widened to the session, this case is the one that must
+  // change with it — deliberately, not silently.
+  it("a demotion on wave N's run is NOT reversed by a failure on wave N+1's run — the bookkeeping is run-scoped", async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-w23'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id: waveOne, sid } = await dispatchedRun(w.app, 'demo-w23');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+
+    const demoted = await postRoute(w.app, waveOne, { target: 'worker', why: 'three clean waves', demote: 'effort' });
+    expect(demoted.statusCode, 'setup: the wave-1 demotion must land').toBe(200);
+
+    // Wave 2 is a NEW run row on the SAME session (CLAUDE.md: "wave N+1 is a
+    // NEW POST /api/runs, not a reopen"), bound by `sessionId` at open the
+    // way a resumed worker's wave is.
+    const openedTwo = await postOpen(w.app, { ...OPEN_BODY, wave: 2, sessionId: sid });
+    expect(openedTwo.statusCode, 'setup: wave 2 must open').toBe(200);
+    const waveTwo = (openedTwo.json() as { id: number }).id;
+    expect(waveTwo).not.toBe(waveOne);
+
+    const res = await postRoute(w.app, waveTwo, { target: 'worker', why: 'failed again', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    // Wave 1's demotion is invisible here, so this is a plain ladder
+    // escalation off the record (`.effort` still reads `high` — the stubbed
+    // ccd never rewrote it), not the `reverse-demotion` the same two calls
+    // inside ONE run produce (the case above).
+    expect(res.json()).toEqual({
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh',
+        kind: 'shallow', effortReset: null },
+    });
+    expect(w.coord.runEvents(waveTwo).map((e) => e.detail)).toEqual(['route:escalate:effort:high->xhigh:shallow']);
+    // …and wave 1's own trail is untouched by wave 2's call.
+    expect(w.coord.runEvents(waveOne).map((e) => e.detail)).toContain('route:demote:effort:high->medium:manual');
   });
 
   it('manual field/value writes the argv as given and records mode manual with from "?"', async () => {
@@ -461,7 +565,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'subagent', value: 'opus' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'manual', field: 'subagent', from: '?', to: 'opus', kind: null },
+      ok: true, applied: { session: sid, mode: 'manual', field: 'subagent', from: '?', to: 'opus', kind: null, effortReset: null },
     });
     expect(calls.filter((c) => c[0] === 'route')).toEqual([
       ['route', '--session', sid, '--set', 'subagent=opus', '--actor', `run:${id} coordinator`,
@@ -549,7 +653,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow' },
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow', effortReset: null },
     });
   });
 

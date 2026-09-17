@@ -30,6 +30,30 @@ export type EffortRung = (typeof EFFORT_LADDER)[number];
  *  subagent, however an escalation would otherwise resolve. */
 export const SUBAGENT_CLASS_CEILING: ModelClass = 'opus';
 
+/** §3: "A class rung resets effort to the new class's matrix row, never
+ *  carries the old level across, because effort names do not transfer; where
+ *  the matrix has no cell for the pair, the target is the new class's
+ *  Anthropic default (`high`)." The one class whose row has NO effort cell at
+ *  all is `haiku`, and there the reset is `auto` — the ABSENT-equivalent
+ *  (spec §5.1), not a level: ccd refuses the PAIR outright (`cmd_route`'s
+ *  `class haiku takes no effort level — set effort=auto or pick another
+ *  class`, refused "whether it arrives in one call or across two"), so a
+ *  class rung onto haiku that carried `high` would be a guaranteed refusal
+ *  rather than a rung.
+ *
+ *  ONE FUNCTION FEEDS BOTH THE SENTENCE AND THE WRITE. Every `why` below that
+ *  promises a reset interpolates this, and the door (`POST
+ *  /api/runs/:id/route`) sends the same value in the SAME argv as the class
+ *  pair (`CCD_ARGV.routeSet`, never two `route` calls) — so what the
+ *  coordinator reads and what ccd is asked to write cannot disagree, and
+ *  neither can be changed without the other. Takes a plain `string` (not
+ *  `ModelClass`) because the door holds `RungTarget.to`, which the union
+ *  widens to `string`; every value it is ever called with is a `CLASSES`
+ *  member. */
+export function classRungEffortReset(to: string): 'high' | 'auto' {
+  return to === 'haiku' ? 'auto' : 'high';
+}
+
 /** The rung a session is reported to be on right now. `effort` widens past
  *  `EffortRung` to the two values a live session can report that are not
  *  rungs themselves — the ladder functions below give each its own answer. */
@@ -68,10 +92,11 @@ const effortIndex = (e: EffortRung | 'auto' | 'ultracode'): number => {
 /** The class-rung move shared by `kind: 'ceiling'`, the `unclear` class-aware
  *  case on sonnet, and haiku's no-effort-ladder case — same mechanics (one
  *  class up, read off `CLASSES` by index rather than hand-typed, effort
- *  reset to high, a subagent stops at `SUBAGENT_CLASS_CEILING`, the top class
+ *  reset by `classRungEffortReset` (never carried across), a subagent stops
+ *  at `SUBAGENT_CLASS_CEILING`, the top class
  *  has nothing above it), different reason for having been triggered. `reason`
  *  supplies that reason verbatim and is composed into the default `why`
- *  (`"${reason} — escalating to ${next}, effort reset to high"`); a caller
+ *  (`"${reason} — escalating to ${next}, effort reset to ${classRungEffortReset(next)}"`); a caller
  *  whose own `why` text does not fit that shape passes `wholeWhy` instead,
  *  used in place of the composed text on the successful-move arm only. */
 const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reason: string, wholeWhy?: string): RungTarget => {
@@ -84,11 +109,11 @@ const classEscalation = (current: RungCurrent, scope: 'main' | 'subagent', reaso
   }
   return {
     kind: 'move', mode: 'escalate', field: 'class', from: current.class, to: next,
-    why: wholeWhy ?? `${reason} — escalating to ${next}, effort reset to high`,
+    why: wholeWhy ?? `${reason} — escalating to ${next}, effort reset to ${classRungEffortReset(next)}`,
   };
 };
 
-/** §3 "Escalation": shallow → effort +1 within the class; ceiling → class +1 (effort reset to 'high'); unclear → effort-first, class-aware:
+/** §3 "Escalation": shallow → effort +1 within the class; ceiling → class +1 (effort reset by `classRungEffortReset`, which the CALLER writes in the same argv); unclear → effort-first, class-aware:
  *  on sonnet, when the next effort rung would be xhigh or max, the class rung to opus instead (2.5× per token ≈ xhigh, < max). `max` only from
  *  `xhigh` and only when priorSameKind ≥ 1 (a second failed check of the same kind). Any failed check first reverses `lastDemotion` if it is
  *  not yet reversed (mode 'reverse-demotion'), CLAMPED BY SCOPE — a subagent never receives back an origin rung it could not itself hold (an
@@ -123,7 +148,8 @@ export function escalate(
     return {
       kind: 'move', mode: 'reverse-demotion', field: lastDemotion.field,
       from: lastDemotion.to, to: lastDemotion.from,
-      why: `reversing the unreversed demotion (${lastDemotion.field} ${lastDemotion.from}->${lastDemotion.to}) before the ladder applies to this failure`,
+      why: `reversing the unreversed demotion (${lastDemotion.field} ${lastDemotion.from}->${lastDemotion.to}) before the ladder applies to this failure${
+        lastDemotion.field === 'class' ? `, effort reset to ${classRungEffortReset(lastDemotion.from)}` : ''}`,
     };
   }
 
@@ -137,7 +163,7 @@ export function escalate(
   if (current.class === 'haiku') {
     return classEscalation(
       current, scope, '',
-      `haiku takes no effort; an effort rung on haiku is a class rung to ${CLASSES[classIndex(current.class) + 1]} at high`,
+      `haiku takes no effort; an effort rung on haiku is a class rung to ${CLASSES[classIndex(current.class) + 1]} at ${classRungEffortReset(CLASSES[classIndex(current.class) + 1] ?? '')}`,
     );
   }
   if (current.effort === 'ultracode') {
@@ -168,7 +194,9 @@ export function escalate(
   };
 }
 
-/** §3 "Demotion": one rung down on the named field; never below low / haiku (the mechanical floor); a class rung down resets effort to 'high'. */
+/** §3 "Demotion": one rung down on the named field; never below low / haiku (the mechanical floor); a class rung down resets effort by
+ *  `classRungEffortReset` — 'high' for every class that has a matrix row, 'auto' onto haiku, which takes no effort level at all. The reset is
+ *  the CALLER's write, in the same argv as the class pair (the door's `CCD_ARGV.routeSet` branch); this function only says what it must be. */
 export function demote(current: RungCurrent, field: 'class' | 'effort'): RungTarget | { kind: 'floor'; why: string } {
   if (field === 'effort') {
     if (current.effort === 'ultracode') {
@@ -187,6 +215,6 @@ export function demote(current: RungCurrent, field: 'class' | 'effort'): RungTar
   const prev = CLASSES[idx - 1]!;
   return {
     kind: 'move', mode: 'demote', field: 'class', from: current.class, to: prev,
-    why: `demoting class from ${current.class} to ${prev} and resetting effort to high`,
+    why: `demoting class from ${current.class} to ${prev} and resetting effort to ${classRungEffortReset(prev)}`,
   };
 }

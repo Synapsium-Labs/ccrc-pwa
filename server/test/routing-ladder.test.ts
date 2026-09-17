@@ -7,7 +7,8 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { FAILURE_KINDS } from '../../shared/api.js';
-import { EFFORT_LADDER, escalate, demote } from '../../shared/routing-ladder.js';
+import { CLASSES } from '../../shared/models.js';
+import { EFFORT_LADDER, escalate, demote, classRungEffortReset } from '../../shared/routing-ladder.js';
 import { ROUTING_LADDER_CASES } from './fixtures/routing-ladder.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -27,6 +28,27 @@ describe('the routing ladder — one fixture table over escalate() and demote()'
     for (const kind of FAILURE_KINDS) {
       expect(kindsInTable.has(kind), `no fixture row exercises FailureKind '${kind}'`).toBe(true);
     }
+  });
+});
+
+describe("classRungEffortReset — §3's \"a class rung resets effort to the new class's matrix row\"", () => {
+  it('is the Anthropic default for every class with a matrix row, and auto onto haiku', () => {
+    // Read off CLASSES, so a new class added to the ladder shows up here as a
+    // row that must be decided rather than silently defaulting.
+    expect(CLASSES.map((c) => classRungEffortReset(c))).toEqual(['auto', 'high', 'high', 'high']);
+  });
+
+  it("ccd's own class/effort pair check exempts exactly the value this function resets haiku to", () => {
+    // NOT a restatement of the function: the assertion's expected value is
+    // read out of the REAL binary's guard line, so returning 'high' for haiku
+    // (the value every other class gets) reds this — and that value is the
+    // one the door would then put in an argv `cmd_route` dies on.
+    const src = readFileSync(path.join(root, 'ccd/ccd'), 'utf8');
+    // The GUARD line, not the paragraph above it that explains the guard —
+    // anchored on the `die` so a comment can never satisfy this pin.
+    const guard = src.split('\n').find((l) => l.includes('die "class haiku takes no effort level'));
+    expect(guard, "ccd/ccd's haiku/effort pair check is gone").toBeDefined();
+    expect(guard).toContain(`"$eff" != ${classRungEffortReset('haiku')}`);
   });
 });
 
