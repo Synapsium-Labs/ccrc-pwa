@@ -210,6 +210,10 @@ Issued by the allocator on 2026-09-17 after the whole-slice review and defined i
 - **D-2959** (reversal-from-measured) — a reverse-demotion whose bookkeeping `from` differs from the MEASURED live field is a demotion superseded out of band: the door clears it and applies the plain ladder from the measured value (S5-R17).
 - **D-2960** (absent-effort-is-auto) — `.class` present with `.effort` absent is `effort: auto` (the record's own 'no override'), never `no-record`; `no-record` is reserved for an absent `.class` (S5-R18) — the brief refused on either absence.
 
+Issued by the allocator on 2026-09-17 at PR #116's merge-readiness check, after the block above, and defined in the same act:
+
+- **D-2988** (census-cases-linux-only) — Task 5's six systemd-census cases (stopped-unrecorded, mixed-live, zero-live, truncated, fail-zero and the systemctl exit-1 stub) are skipped on darwin (`it.skipIf(NO_SYSTEMD_CENSUS)`): `ccrc` recomputes CCD_OS from `$OSTYPE`/`uname` at source time, so on a Mac `_check_routing` answers the D-2952 launchd arm before the fixture `systemctl` is asked anything, and the census wording they pin is never produced there — measured on PR #116's `test-macos` leg at 162bd427 (run 35210902959: five red on exactly that wording, the exit-1 stub green for the wrong reason, its `unmeasured` coming from the launchd arm). The darwin arm stays pinned on every platform by the direct-source "on a launchd box" case; the Linux legs run the six unchanged. The brief said nothing about platforms.
+
 ## Carried to slice 6
 
 - The `compact` field's read in `_auto_compact_check` and the worker's lower threshold — after the graphify compaction card ships.

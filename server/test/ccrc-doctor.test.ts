@@ -6257,6 +6257,20 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     seedAccountsSh(home, ROUTING_ROSTER);
     return home;
   };
+  // THE SYSTEMD CENSUS IS LINUX-ONLY BY CONSTRUCTION, and so are the six
+  // cases below that drive it through `runDoctor`. `ccrc` recomputes CCD_OS
+  // from `$OSTYPE`/`uname` at source time (ccd/ccrc:109 onward), so on a Mac
+  // `_check_routing` takes its darwin arm — "unmeasured: this is a launchd
+  // box" — before `_have_systemctl` or the fixture `systemctl` is asked
+  // anything, and the census wording these cases pin is never produced
+  // there. MEASURED on CI's `test-macos` leg 2026-09-17 (run 35210902959,
+  // PR #116): five of the six red on exactly that wording, the sixth (the
+  // exit-1 stub) green for the wrong reason, its `unmeasured` coming from
+  // the launchd arm rather than the systemctl answer it stubs. Skipped on
+  // darwin rather than rewritten: the darwin arm is pinned on EVERY platform
+  // by the "on a launchd box" case further down, which sources the checks
+  // file directly, and the Linux legs run these six unchanged.
+  const NO_SYSTEMD_CENSUS = process.platform === 'darwin';
 
   it('routing: PASSES when no Anthropic lane\'s settings.json names a routing env key', () => {
     const home = routingBox('ccrc-doctor-routing-pass-');
@@ -6265,7 +6279,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const line = lineFor(runDoctor(home).stdout, 'routing');
     expect(line).toMatch(/^PASS routing: 1 Anthropic lane\(s\)/);
   });
-  it('routing: WARNS — never FAILS — a stopped, unrecorded session does not inflate the live-session count (S1-R13; ruling S5-R12, fix round 2)', () => {
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: WARNS — never FAILS — a stopped, unrecorded session does not inflate the live-session count (S1-R13; ruling S5-R12, fix round 2)', () => {
     // CURRENT RATIONALE (ruling S5-R12, fix round 2 — replaces the S1-R13
     // comment this test carried before the FAIL arm existed): the FAIL below
     // fires ONLY over a measured, non-empty, FULLY-RECORDED live set (live
@@ -6301,7 +6315,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(out).toContain('remedy: remove the key from those lanes');
     expect(out, 'the subagent key alone must never read as a FAIL').not.toMatch(/^FAIL routing: /m);
   });
-  it('routing: WARNS naming exactly 1 live session when one of two LIVE ids carries no routing record (brief fixture (a), fix round 2, finding #4)', () => {
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: WARNS naming exactly 1 live session when one of two LIVE ids carries no routing record (brief fixture (a), fix round 2, finding #4)', () => {
     // The brief's literal fixture (a): two LIVE ids, one WITHOUT `.class`.
     // Distinct from the test above — both ids here are actually running, so
     // this pins the `.class` filter on its own, independent of the
@@ -6320,7 +6334,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
       .not.toContain('sess-recorded');
     expect(out, 'a mixed live population is not yet a measured FAIL').not.toMatch(/^FAIL routing: /m);
   });
-  it('routing: WARNS with its own zero-live wording when the census measures no live session at all (ruling S5-R12(2), fix round 2)', () => {
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: WARNS with its own zero-live wording when the census measures no live session at all (ruling S5-R12(2), fix round 2)', () => {
     // A registry that is present, readable, and has zero live ids is a
     // MEASURED zero — distinct from "unmeasured" (finding #2's old code
     // FAILed here, which would abort `ccrc update` on a rebooted or dev box
@@ -6350,7 +6364,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(stoppedOut, 'never the FAIL reserved for a fully-recorded population')
       .not.toMatch(/^FAIL routing: /m);
   });
-  it('routing: appends "and N more" once the unrecorded live-id list is truncated past five (fix round 2, finding #6)', () => {
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: appends "and N more" once the unrecorded live-id list is truncated past five (fix round 2, finding #6)', () => {
     const home = routingBox('ccrc-doctor-routing-subagent-warn-truncated-');
     writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
     for (let i = 1; i <= 6; i++) {
@@ -6364,7 +6378,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     for (let i = 1; i <= 5; i++) expect(line).toContain(`sess-${i}`);
     expect(line, 'the truncated tail is never silently dropped').toContain('and 1 more');
   });
-  it('routing: the subagent-key FAILs once the live-session census measures zero unrecorded sessions', () => {
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: the subagent-key FAILs once the live-session census measures zero unrecorded sessions', () => {
     const home = routingBox('ccrc-doctor-routing-subagent-fail-zero-');
     writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
     plantSession(home, 'sess-a', { live: true, recorded: true });
@@ -6380,7 +6394,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(out, 'a measured zero is a FAIL, not also a WARN about the same lane')
       .not.toMatch(/^WARN routing: /m);
   });
-  it('routing: the subagent-key WARN says the live-session census is unmeasured rather than fabricate a zero', () => {
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: the subagent-key WARN says the live-session census is unmeasured rather than fabricate a zero', () => {
     // `systemctl --user is-active` answering something other than 0 (active)
     // or 3 (inactive/failed — a real, measured "not live") for a reason of
     // its own — modelled here by a stub that exits 1 for every unit — must
