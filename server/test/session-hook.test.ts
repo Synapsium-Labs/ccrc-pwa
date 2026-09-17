@@ -8081,7 +8081,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 125,
+      // 125 -> 124 (D-2994): `cmd_ws_restore`'s mint grows `ccd/ccd` by 35
+      // lines at `:8974`, and ONE anchor below that point stopped failing
+      // by landing on content that happens to quote its token. Lowered
+      // because the rule must never widen — not because anything was fixed.
+      'ccd/ccd': 124,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8109,7 +8113,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `shared/api.ts` anchor), the sum of the re-measured map
     // above: the headline is a MECHANISM, not a separate number, so it moves
     // with `ccd/ccd`.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(161);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(160);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8552,6 +8556,25 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
+        // D-2994 MOVES IT 48 -> 47, AND NOT ONE OF THE THREE IS A REPAIR.
+        // The mint this round adds to `cmd_ws_restore` grows `ccd/ccd` by 35
+        // lines at `:8974`, so every anchor into that file BELOW that point
+        // now names content written 35 lines earlier. The three that moved,
+        // each MEASURED against `origin/main` rather than inferred:
+        //   `ccd/ccd:19098` LEAVES — it named `_lc_done ensure … meas.inUnit`
+        //     and now lands inside D-2993's own minting comment, which happens
+        //     to carry a quotable token.
+        //   ONE of the three `ccd/ccd:11665-11670` copies LEAVES on the same
+        //     accident: the range held `_ws_gc`'s `[[ -d "$workdir" ]]`
+        //     argument and now holds `_ws_reap_eval`'s sixteenth-forgery
+        //     paragraph.
+        //   `ccd/ccd:13573-13575` ENTERS, the mirror image — it named the
+        //     `_ws_gc_prune_row` orphan-arm sentence and now names
+        //     `_ws_gc_dirty`'s round-3 header.
+        // A COINCIDENTAL PASS IS NOT A GREEN ANCHOR: the set shrank by one
+        // while the corpus got MORE stale, which is why this is a measurement
+        // and not a score. Same shape as S6-R10, when routing grew the file by
+        // ~1751 lines. Task 11 still owns the debt.
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd:13573-13575',
         'ccd/ccd:3038',
@@ -8564,7 +8587,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13567',
         'ccd/ccd:13673',
         'ccd/ccd:19109',
-        'ccd/ccd:19098',
         'ccd/ccd:19120',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
@@ -8588,7 +8610,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:11665-11670',
+        'ccd/ccd:13573-13575',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
@@ -8645,7 +8667,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:19109',
-        'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',
         'spec:2125 ccd/ccd:19131',
         'spec:2204 ccd/ccd:12032-12034',
@@ -8662,6 +8683,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
+        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',

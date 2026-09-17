@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=51304e503e5acc2fdc8aafbf5346c14655b7553f2100b94cbf2958739d6aac69
+# ccrc:generated 1 sha256=1262d40a3839de93cc9fdc966724a46d9023fb475093148bc6da856ff88081af
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -8954,6 +8954,41 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
   # sourcing shell for ever.) The spawn's verdict travels in `$rc` instead, so
   # SUCCESS AND FAILURE LEAVE THE LOCKED REGION THROUGH THE SAME CLOSE and the
   # next editor has nothing to remember.
+  # THE THIRD RESPAWN PATH, AND THE ONLY ONE THAT NEVER MINTED (D-2994).
+  # `cmd_ensure` and `cmd_start` each initialise a missing generation before
+  # they spawn; this verb reaches `_spawn_start` directly, so a row archived
+  # before D-2605 came back with a pane carrying no CCRC_SESSION_GENERATION and
+  # `_hook_generation_ok` failed closed for that pane's whole life. D-2993 fixed
+  # the supervised path and left this one — and no respawn sweep can reach an
+  # archived row, so this is the arm that heals it.
+  #
+  # BEST-EFFORT, NEVER FATAL, for a DIFFERENT reason than `cmd_ensure`'s: by
+  # this line the restore has already cleared `archived` and put the worktree
+  # back, so a `die` would strand a HALF-RESTORED row — and this sits inside the
+  # reap flock region whose contract is that success and failure leave through
+  # the same close (no `return` between the lock and its release, pinned by
+  # `ccd-restore-reap-lock.test.ts`). rc 2 skips and CONTINUES, `cmd_start`'s
+  # precedent for not gating pre-existing registry work on a mechanism it never
+  # required.
+  local _wr_gfd="" _wr_grc=0
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; _wr_grc=$?
+  if (( _wr_grc == 0 )); then
+    _wr_gfd="$COMPACT_LOCK_FD"
+    _reg_generation_init "$id" \
+      || echo "ccd: warn: $id: $REG/$id.generation is present and invalid — restoring without it; inspect it by hand" >&2
+    _compact_lock_release "$_wr_gfd"; _wr_gfd=""
+  else
+    # NOT A SILENT FALL-THROUGH, WHICH IS THE WHOLE LESSON OF D-2993. The
+    # absent-generation case took an arm that said nothing, and the fleet ran
+    # inert for a day behind that silence. Both remaining codes are named — and
+    # neither refuses the restore, so this is a disclosure, not a gate. It also
+    # keeps `session-hook.sh`'s acquire-site sentence true: the two FUNCTIONS
+    # that fall through an unknown code into a SILENT continue are still
+    # `cmd_start` and `_spawn_start`, and this site is deliberately not a third.
+    echo "ccd: warn: $id: $REG/$id.generation was not checked on restore —" \
+         "_compact_lock_acquire rc $_wr_grc (1 = contended, 2 = no flock mechanism);" \
+         "if this row carries none, the restored pane's compaction lifecycle is inert until its next respawn" >&2
+  fi
   local rc=0
   if _spawn_start "$id" resume; then
     _reg_claim "$id"
