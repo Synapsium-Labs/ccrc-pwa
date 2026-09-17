@@ -320,3 +320,66 @@ that attribution is correct. (2) **Part C's fix round shipped six behaviour chan
 cases** — restoring the pre-fix file leaves the models block 10/10 green, so the whole round was a
 green mutation. Round 2 is dispatched with the tests as its deliverable; it must not close without a
 mutation row per behaviour change.
+
+## 2026-09-17 03:0x UTC — the D-71 reachability audit: **13 sites, 10 safe, THREE reachable**, one guarded by a false comment
+
+The measurement the worker correctly refused to widen into, taken at my cost. Ten agents against
+read-only copies of the four files at `origin/main` `03ecda65` in my own scratchpad — never a live
+checkout — one tracer per producer on Sonnet, adversarial refutation of every `reachable` verdict on
+Opus, and a completeness critic that re-derived the site list itself. Zero errors. Artifact:
+`scratchpad/tab-audit-result.md`. **I re-measured all three positives by hand afterwards; nothing
+below rests on an agent's word.**
+
+**R1 — `ccrc-doctor-checks:2731` (`_check_accounts`), and its consumer comment is FALSE.** Producer
+`deploy/account-op.mjs:1075-1076` pushes `[DOCTOR_FINDINGS[0], acct.id, '…'].join('\t')` with no
+presence check, and `opDoctor`'s own docstring at `:1036` says in capitals **"IT DOES NOT VALIDATE THE
+ROSTER, and that is a measurement rather than a taste"**, with five lines arguing why it must not.
+`join` renders `undefined` as `''`, so an id-less account emits `FINDING\t\t<message>` and `:2734`
+prints the message where the id belongs. **`ccrc-doctor-checks:2720-2725` asserts this is impossible** —
+*"Every field the helper writes is non-empty by construction (a code, an id, a sentence, or a number),
+so CLAUDE.md's measured TSV hazard … cannot bite here"*. The clause "an id" is false, and the producer
+says so about itself.
+
+**R2 — `ccrc-doctor-checks:4382` (`_check_routing`), nobody had flagged it.** Producer `:4358` prints
+`"$a"` then `_ccrc_cfg_dir "$a"`; an empty `CCRC_ANTHROPIC_BACKEND` element gives `\t<cfgdir>`, and I
+reproduced the parse: `a=[/home/u/.claude-x] d=[] f=[/settings.json]`. So `[ -n "$a" ] || continue` at
+`:4383` **can never fire for the case it exists to catch**, `n` counts a lane nobody measured, and the
+verdict is decided off the filesystem root. **That is D-71's original signature verbatim** — *"the
+no-id guard was dead code that could never fire"* — reproduced ~2000 lines from the comment in the same
+file that records it.
+
+**R3 — `ccd:12850`/`:12917` (`_ws_gc_scan`'s `dead-reg` row).** `[[ "$p-$s" == "$id" ]]` at `:12484`
+admits an empty component — measured, `p=proj s="" id="proj-"` passes — and the row then shifts:
+`slug=[-] bytes=[-] age=[/w/proj-] p=[]`, the path lost into `age`. The comment immediately above
+describes the PREVIOUS incarnation of this bug as a **"FABRICATED SUCCESS LINE"**. The fan-out had
+called this site safe; **the critic caught that its argument was a non-sequitur from the guard it
+quoted**, which is the whole reason a completeness critic is in the harness.
+
+**The ten that are safe**, briefly, because a safe verdict is a measurement too: the five
+`_wrap_parse_shape` readers are gated by `WRAPPER_ID_RE`/`WRAPPER_SUFFIX_SAFE_RE`, neither of which
+accepts empty, and every consumer checks `ok = ok` before touching a later field; `ccd:3646` puts the
+free-form reflog subject LAST by design; `ccd:10029` is reached only after `is_merged` proves the oid
+matches `^[0-9a-f]{7,40}$`; `ccd:12619`'s `sens` is a literal and its `b` is digit-gated; `ccrc:2722`
+obeys its own file's ban.
+
+**What run 42 does with it: disclose all three, and ONE authorised exception.** I told the worker to
+paste the three anchors into the D-71 disclosure paragraph and fix no code outside Part C — and then
+authorised exactly one departure: **correct the false clause at `ccrc-doctor-checks:2720-2725`**, in a
+file Part C already edits, naming it in the wave-done. **Ruling and its reason:** a comment asserting a
+safety property the producer explicitly refuses to provide is not documentation, it is a false guard —
+the class the sibling programme spent four rounds and 176 mutations removing — and leaving it while
+disclosing the defect three paragraphs away teaches the next reader that the comment is the authority.
+One clause, one commit, named. Costs if wrong: one comment edit in a file the wave already touches.
+
+**Two cousins, outside the idiom and outside this wave, recorded so they are not lost.** `ccd:2933` is
+the same rule with a SPACE — `tmux list-panes -a -F '#{session_name} #{pane_pid}'` read with
+`IFS=' '`, and `-a` lists every pane on the box including a human's, where a session name may contain
+a space. `ccd:11847` runs awk's DEFAULT FS over a TAB record, so `length($1)` measures the path only to
+its first space — and that length is the sort key for the deepest-first ordering `:11828` says is the
+only order in which each child's own `worktree remove` actually removes it.
+
+**The finding under all of them.** D-71 is banned in three plans and at least six in-file comments, one
+saying it "must not come back". Thirteen call sites, three reachable, one guarded by a false claim.
+**A rule stated six times in prose and violated thirteen times in code is a missing mechanism, not a
+knowledge-transfer failure.** D-71 has never had a red suite. That is someone's wave — surfaced to the
+operator, not taken here.
