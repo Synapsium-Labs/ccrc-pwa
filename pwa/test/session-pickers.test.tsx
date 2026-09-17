@@ -261,7 +261,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('the active row follows the intended record, not the live read-back', () => {
     renderScreen({
       effort: 'medium', // the live pane has not caught up yet
-      route: { fields: { effort: 'high' }, degraded: null, inert: [] },
+      route: { fields: { effort: 'high' }, degraded: null, inert: [], unreadable: [] },
     });
     openEffortSheet();
 
@@ -273,7 +273,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('the queued badge derives from the wire alone — no tap required to show or clear it', () => {
     const { fleet } = renderScreen({
       effort: 'medium',
-      route: { fields: { effort: 'high' }, degraded: null, inert: [] },
+      route: { fields: { effort: 'high' }, degraded: null, inert: [], unreadable: [] },
     });
     // Mismatch between the intended record and the live read-back: queued,
     // with nobody ever having tapped a row.
@@ -284,7 +284,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
       fleet.setState({
         sessions: [fleetSession({
           effort: 'high',
-          route: { fields: { effort: 'high' }, degraded: null, inert: [] },
+          route: { fields: { effort: 'high' }, degraded: null, inert: [], unreadable: [] },
         })],
       });
     });
@@ -294,7 +294,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('an inert field renders its intended value with a marker, never a badge', () => {
     renderScreen({
       effort: 'medium', // still mismatched — would be "queued" if it weren't inert
-      route: { fields: { effort: 'high' }, degraded: null, inert: ['effort'] },
+      route: { fields: { effort: 'high' }, degraded: null, inert: ['effort'], unreadable: [] },
     });
 
     // No badge: ccd will never apply this field on the current lane, so
@@ -314,7 +314,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('effort:"auto" never lights the badge — ccd types nothing back for it', () => {
     renderScreen({
       effort: 'medium', // the live pane can never read "auto" back, ever
-      route: { fields: { effort: 'auto' }, degraded: null, inert: [] },
+      route: { fields: { effort: 'auto' }, degraded: null, inert: [], unreadable: [] },
     });
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
@@ -325,7 +325,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('class:"default" never lights the badge — no model string distinguishes it', () => {
     renderScreen({
       model: 'Sonnet 5', // no model string this row could ever match
-      route: { fields: { class: 'default' }, degraded: null, inert: [] },
+      route: { fields: { class: 'default' }, degraded: null, inert: [], unreadable: [] },
     });
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
@@ -341,7 +341,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('an out-of-vocabulary effort value is unmeasurable, not permanently queued', () => {
     renderScreen({
       effort: 'medium',
-      route: { fields: { effort: 'ludicrous' }, degraded: null, inert: [] },
+      route: { fields: { effort: 'ludicrous' }, degraded: null, inert: [], unreadable: [] },
     });
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
@@ -354,13 +354,98 @@ describe('the routing record on the wire drives the pickers directly (routing sl
   it('an out-of-vocabulary class value is unmeasurable, not permanently queued', () => {
     renderScreen({
       model: 'Sonnet 5',
-      route: { fields: { class: 'ludicrous' }, degraded: null, inert: [] },
+      route: { fields: { class: 'ludicrous' }, degraded: null, inert: [], unreadable: [] },
     });
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
     for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
+    }
+  });
+
+  // Fix round 2, finding 1 (controller ruling S6-R5): a field this pass
+  // could not read (`route.unreadable`) is UNKNOWN — not "never routed".
+  // It is ALSO absent from `route.fields` (never both), which already skips
+  // the queued badge (no `intended` to compare); the row-level behaviour
+  // this pair covers is that an unreadable field must not fall back to the
+  // loose live-pane match either — that would light a row on a claim the
+  // read never established.
+  it('an unreadable effort field renders no active row and no badge, even though the live pane would otherwise match one', () => {
+    renderScreen({
+      effort: 'high', // would highlight "High" under the ordinary live-match fallback
+      route: { fields: {}, degraded: null, inert: [], unreadable: ['effort'] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openEffortSheet();
+    for (const name of ['Low', 'Medium', 'High', 'Xhigh', 'Max', 'Ultracode', 'Auto']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${name}`) }).className).not.toContain('opt--selected');
+    }
+  });
+
+  it('an unreadable class field renders no active row and no badge, even though the live pane would otherwise match one', () => {
+    renderScreen({
+      model: 'Opus 5', // would highlight "Opus 5" under the ordinary live-match fallback
+      route: { fields: {}, degraded: null, inert: [], unreadable: ['class'] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openModelSheet();
+    for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+      expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
+    }
+  });
+
+  // Fix round 2, finding 2: once `route` rides the wire, it is the WHOLE
+  // STORY for every field on this session — a tap must never ALSO arm the
+  // local 60s "not confirmed" toast, which would contradict the very
+  // sheet/badge the same tap just updated (or, for a field on `route.inert`,
+  // promise a confirmation ccd will never send).
+  it("a routed session's tap arms no local toast — the wire is the whole story, not the local queued state", async () => {
+    vi.useFakeTimers();
+    try {
+      renderScreen({
+        effort: 'high',
+        route: { fields: { effort: 'high' }, degraded: null, inert: [], unreadable: [] },
+      });
+      openEffortSheet();
+      fireEvent.click(screen.getByRole('button', { name: /^Low/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      expect(route).toHaveBeenCalledWith(ID, 'effort', 'low');
+      // No badge from either source: the wire's own record still agrees
+      // (`effort: 'high'` === live `effort: 'high'`) until a NEW frame
+      // arrives, and the tap armed no local timer to race it.
+      expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+      // 60s pass with no fleet frame at all — the false "not confirmed"
+      // toast a local timer would have fired must never appear.
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.queryByText('Routing queued; the pane has not confirmed it yet')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a tap on a field the wire already marks inert also arms no local toast", async () => {
+    vi.useFakeTimers();
+    try {
+      renderScreen({
+        effort: 'medium',
+        route: { fields: { effort: 'high' }, degraded: null, inert: ['effort'], unreadable: [] },
+      });
+      openEffortSheet();
+      fireEvent.click(screen.getByRole('button', { name: /^Low/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+
+      expect(route).toHaveBeenCalledWith(ID, 'effort', 'low');
+      expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.queryByText('Routing queued; the pane has not confirmed it yet')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

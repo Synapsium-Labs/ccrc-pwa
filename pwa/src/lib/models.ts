@@ -34,6 +34,17 @@ import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 export interface RoutingOverride {
   intended: string | null;
   inert: boolean;
+  /** Routing slice 6, Task 4, ruling S6-R5 (fix round 2): true when THIS
+   *  field's own read measured UNREADABLE this pass (`route.unreadable`
+   *  names it) rather than genuinely never having been written. Forces
+   *  `active` to false on every row, overriding even the loose live-pane
+   *  fallback `intended === null` would otherwise take (that fallback
+   *  asserts "this field currently reads as row X", a claim an unreadable
+   *  read never established). No separate badge carve-out is needed: an
+   *  unreadable field is also absent from `route.fields`, so `intended` is
+   *  already null and the wire-derived queued check already requires a
+   *  non-null `intended` to fire. */
+  unreadable?: boolean;
 }
 
 export interface PickOption {
@@ -74,8 +85,9 @@ export function modelOptions(wrapper: string, current: string | null, routing?: 
   const c = (current ?? '').toLowerCase();
   const intended = routing?.intended ?? null;
   const inert = routing?.inert ?? false;
+  const unreadable = routing?.unreadable ?? false;
   const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => {
-    const active = intended !== null ? alias === intended : (key !== '' && c.includes(key));
+    const active = unreadable ? false : intended !== null ? alias === intended : (key !== '' && c.includes(key));
     return {
       label, sublabel, route: { field: 'class', value: alias }, readback: key, active,
       ...(active && inert ? { inertOnThisLane: true } : {}),
@@ -131,19 +143,21 @@ export function effortOptions(
   const e = (effort ?? '').toLowerCase();
   const intended = routing?.intended ?? null;
   const inert = routing?.inert ?? false;
+  const unreadable = routing?.unreadable ?? false;
   const level = (label: string, value: string, active: boolean, sublabel?: string): PickOption => ({
     label, sublabel, route: { field: 'effort', value }, readback: value, active,
     ...(active && inert ? { inertOnThisLane: true } : {}),
   });
-  const activeFor = (rung: EffortRung): boolean =>
-    intended !== null ? rung === intended : (rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung);
+  const activeFor = (rung: EffortRung): boolean => unreadable
+    ? false
+    : intended !== null ? rung === intended : (rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung);
   const opts: PickOption[] = [
     ...EFFORT_LADDER.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
-    level('Auto', 'auto', intended !== null ? intended === 'auto' : e === 'auto'),
+    level('Auto', 'auto', unreadable ? false : intended !== null ? intended === 'auto' : e === 'auto'),
   ];
   if (wrapper !== 'gpt') {
     opts.splice(4, 0, level(
-      'Ultracode', 'ultracode', intended !== null ? intended === 'ultracode' : ultracode,
+      'Ultracode', 'ultracode', unreadable ? false : intended !== null ? intended === 'ultracode' : ultracode,
       'xhigh + workflow orchestration',
     ));
   }

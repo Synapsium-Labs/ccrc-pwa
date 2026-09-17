@@ -3,20 +3,25 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS, type IdentityField, type LifecycleField, type PrPhase,
-  type RouteField, type RouteFields, type StopSurface,
+  isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS, type IdentityField, type LifecycleField,
+  type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
 
-// Destructured, never re-typed as quoted string literals, at `buildRecord`'s
-// own Promise.all below: `single-definition.test.ts`'s ROUTE_WRITABLE_FIELDS
-// census (routing spec §5.3, slice 4) scans every `[...]` literal under the
-// four roots for two or more of these five words QUOTED together, and a
-// hand-typed `field(io, dir, id, 'class')`/`'effort'`/… run alongside each
-// other in that Promise.all would BE exactly the second copy the census
-// exists to catch — this repo's own "enumerated once, derived" rule
-// (CLAUDE.md), applied to a reader instead of a writer for once.
-const [ROUTE_FIELD_CLASS, ROUTE_FIELD_EFFORT, ROUTE_FIELD_SUBAGENT, ROUTE_FIELD_WORKFLOW, ROUTE_FIELD_COMPACT] =
-  ROUTE_WRITABLE_FIELDS;
+// Fix round 2, finding 3: the five writable-field reads used to bind
+// `ROUTE_FIELD_CLASS`/`_EFFORT`/`_SUBAGENT`/`_WORKFLOW`/`_COMPACT` to
+// `ROUTE_WRITABLE_FIELDS` BY POSITION (`const [a, b, c, d, e] = LIST`), an
+// identity that held only as long as nobody reordered the L0 list — and
+// `routeRawByField` below re-enumerated the same five names a second time,
+// kept honest only by its `Record<RouteField, …>` annotation, not by any
+// mechanism. Both are gone: `buildRecord`'s own Promise.all now maps
+// `ROUTE_WRITABLE_FIELDS` directly (`ROUTE_WRITABLE_FIELDS.map((f) =>
+// fieldMeasured(...))`), and the result is zipped back onto field names by
+// the SAME iteration — `ROUTE_WRITABLE_FIELDS.forEach((f, i) => …reads[i])`
+// — below, so no ordering assumption and no second list survive a reorder
+// of the L0 vocabulary. `single-definition.test.ts`'s ROUTE_WRITABLE_FIELDS
+// census (routing spec §5.3, slice 4) still scans every `[...]` literal
+// under the four roots for two or more of these five words QUOTED together;
+// nothing here quotes more than one at a time.
 
 // `IdentityField` moved to shared/api.ts (Task 2): `FleetSession.unmeasured`
 // carries the SAME evidence onto the wire, and a second, server-only
@@ -260,20 +265,39 @@ export interface SessionRecord {
    * The routing record ccd owns for this session — the SEVEN files
    * `$REG/<id>.{class,effort,subagent,workflow,compact,degraded,inert}`
    * (routing slice 6, Task 4), read alongside every other field on the same
-   * `Promise.all` so a routing read never costs a second round trip. `null`
-   * when NONE of the seven files exist at all — the ordinary state of a
-   * session ccd has never routed. Otherwise:
-   *   - `fields` — the WRITABLE fields present (`ROUTE_WRITABLE_FIELDS`),
-   *     absent fields simply absent, values trimmed and otherwise UNCHECKED —
-   *     this is a raw registry read, not `parseRouteFields`'s ingress guard,
-   *     so an unparseable-by-ccd value still rides the wire rather than
-   *     being silently dropped.
-   *   - `degraded` — `.degraded`'s word, or `null` when absent.
+   * `Promise.all` so a routing read never costs a second round trip.
+   *
+   * MEASURED per controller ruling S6-R5 (fix round 2): every one of the
+   * seven reads through `fieldMeasured`, never the collapsing `field()`, so
+   * a transient agent-link failure on one or all seven is told apart from
+   * the file genuinely never having been written. `null` ONLY when all
+   * seven measure ABSENT — the ordinary state of a session ccd has never
+   * routed. A read that measures UNREADABLE on ANY of the seven also makes
+   * `route` non-null: that field is reported by name in `unreadable`, never
+   * silently folded into `route: null` ("never routed", a claim this read
+   * cannot support when the agent link merely dropped) or into an absent
+   * `fields`/`null` `degraded`/`[]` `inert` (which would assert "ccd never
+   * set this", equally unsupported). Otherwise:
+   *   - `fields` — the WRITABLE fields (`ROUTE_WRITABLE_FIELDS`) that
+   *     measured READABLE, values trimmed and otherwise UNCHECKED — this is
+   *     a raw registry read, not `parseRouteFields`'s ingress guard, so an
+   *     unparseable-by-ccd value still rides the wire rather than being
+   *     silently dropped. A field that measured unreadable is named in
+   *     `unreadable` instead of appearing here — never both.
+   *   - `degraded` — `.degraded`'s word when it measured readable; `null`
+   *     when it measured absent OR unreadable (the latter is ALSO named in
+   *     `unreadable`).
    *   - `inert` — `.inert`'s comma-separated list, split and restricted to
    *     `ROUTE_WRITABLE_FIELDS` members (a stray word ccd never writes is
-   *     dropped rather than laundered onto the wire as a routable field).
+   *     dropped rather than laundered onto the wire as a routable field),
+   *     when `.inert` measured readable; `[]` when it measured absent or
+   *     unreadable (the latter is ALSO named in `unreadable`).
+   *   - `unreadable` — every one of the seven fields (`RouteReadField`)
+   *     whose read measured UNREADABLE this pass; `[]` when none did.
    */
-  route: { fields: RouteFields; degraded: string | null; inert: RouteField[] } | null;
+  route: {
+    fields: RouteFields; degraded: string | null; inert: RouteField[]; unreadable: RouteReadField[];
+  } | null;
 }
 
 /**
@@ -605,7 +629,7 @@ async function buildRecord(
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
     stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
-    classRaw, effortRaw, subagentRaw, workflowRaw, compactRaw, degradedRaw, inertRaw] = await Promise.all([
+    routeFieldReads, degradedRead, inertRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -619,15 +643,18 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
     fieldMeasured(io, cfg.registryDir, id, 'stranded'),
-    // Routing slice 6, Task 4: the seven routing files, plain trimmed reads
-    // (no measured ladder — a raw, unvalidated string carried onto
-    // `SessionRecord.route`, exactly the shape asked for below). The first
-    // five read through the `ROUTE_FIELD_*` constants above, not quoted
-    // literals — see that block's own comment.
-    field(io, cfg.registryDir, id, ROUTE_FIELD_CLASS), field(io, cfg.registryDir, id, ROUTE_FIELD_EFFORT),
-    field(io, cfg.registryDir, id, ROUTE_FIELD_SUBAGENT), field(io, cfg.registryDir, id, ROUTE_FIELD_WORKFLOW),
-    field(io, cfg.registryDir, id, ROUTE_FIELD_COMPACT), field(io, cfg.registryDir, id, 'degraded'),
-    field(io, cfg.registryDir, id, 'inert'),
+    // Routing slice 6, Task 4 (MEASURED per ruling S6-R5, fix round 2): the
+    // seven routing files, read through `fieldMeasured` rather than the
+    // collapsing plain reader — a transient agent-link failure is told apart
+    // from the file genuinely never having been written (fix round 2,
+    // finding 1). The five writable fields are read in ONE PASS over
+    // `ROUTE_WRITABLE_FIELDS` (fix round 2, finding 3) rather than five
+    // hand-typed calls bound back to field names by position; the result is
+    // zipped against `ROUTE_WRITABLE_FIELDS` by the SAME iteration below, so
+    // no ordering assumption and no second hand-written field-name list
+    // survive a reorder of the L0 vocabulary.
+    Promise.all(ROUTE_WRITABLE_FIELDS.map((f) => fieldMeasured(io, cfg.registryDir, id, f))),
+    fieldMeasured(io, cfg.registryDir, id, 'degraded'), fieldMeasured(io, cfg.registryDir, id, 'inert'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -778,23 +805,37 @@ async function buildRecord(
   // string exactly when the evidence is `'named'`.
   const branchName = branchEvidence === 'named' && branchRead.ok ? branchRead.content : null;
 
-  // Routing slice 6, Task 4: `route` is `null` only when NONE of the seven
-  // routing files exist — a session ccd has never routed. `field()` already
-  // returns `null` for an absent file, so `raw` below IS the presence check.
-  const routeRawByField: Record<RouteField, string | null> = {
-    class: classRaw, effort: effortRaw, subagent: subagentRaw, workflow: workflowRaw, compact: compactRaw,
-  };
+  // Routing slice 6, Task 4 (MEASURED per ruling S6-R5, fix round 2): `route`
+  // is `null` ONLY when all seven reads measure ABSENT — a session ccd has
+  // never routed. A read that measures UNREADABLE on ANY of the seven also
+  // makes `route` non-null: that field's name goes into `unreadable` and is
+  // left OUT of `fields` (or, for `.degraded`/`.inert`, left at their
+  // absent-equivalent default) rather than laundering "the agent link
+  // dropped" into either "never routed" (`route: null`) or "never set"
+  // (absent from `fields`) — the two positive claims this read cannot make
+  // about an unreadable field. `allAbsent` starts true and only an `ok`
+  // (present) or `unreadable` (failed, not absent) read on ANY of the seven
+  // clears it — an `absent` read leaves it untouched, so it survives to
+  // `true` exactly when every one of the seven agreed.
   const routeFields: RouteFields = {};
-  for (const f of ROUTE_WRITABLE_FIELDS) {
-    const raw = routeRawByField[f];
-    if (raw !== null) routeFields[f] = raw;
-  }
-  const inertList = (inertRaw ?? '').split(',').map((s) => s.trim()).filter(Boolean);
-  const inert = inertList.filter((f): f is RouteField => (ROUTE_WRITABLE_FIELDS as readonly string[]).includes(f));
-  const route: SessionRecord['route'] =
-    Object.keys(routeFields).length === 0 && degradedRaw === null && inertRaw === null
-      ? null
-      : { fields: routeFields, degraded: degradedRaw, inert };
+  const unreadable: RouteReadField[] = [];
+  let allAbsent = true;
+  ROUTE_WRITABLE_FIELDS.forEach((f, i) => {
+    const r = routeFieldReads[i]!;
+    if (r.ok) { routeFields[f] = r.content; allAbsent = false; }
+    else if (r.reason === 'unreadable') { unreadable.push(f); allAbsent = false; }
+    // r.reason === 'absent': ordinary "never written", leaves both untouched.
+  });
+  let degraded: string | null = null;
+  if (degradedRead.ok) { degraded = degradedRead.content; allAbsent = false; }
+  else if (degradedRead.reason === 'unreadable') { unreadable.push('degraded'); allAbsent = false; }
+  let inert: RouteField[] = [];
+  if (inertRead.ok) {
+    const inertList = inertRead.content.split(',').map((s) => s.trim()).filter(Boolean);
+    inert = inertList.filter((f): f is RouteField => (ROUTE_WRITABLE_FIELDS as readonly string[]).includes(f));
+    allAbsent = false;
+  } else if (inertRead.reason === 'unreadable') { unreadable.push('inert'); allAbsent = false; }
+  const route: SessionRecord['route'] = allAbsent ? null : { fields: routeFields, degraded, inert, unreadable };
 
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,

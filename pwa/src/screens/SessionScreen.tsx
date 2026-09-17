@@ -181,6 +181,18 @@ export function SessionScreen({
   const effortIntended = routeInfo?.fields.effort ?? null;
   const classInert = routeInfo?.inert.includes('class') ?? false;
   const effortInert = routeInfo?.inert.includes('effort') ?? false;
+  // Fix round 2, finding 1 (ruling S6-R5): a field named in `route.unreadable`
+  // is UNKNOWN, not "never routed" — its own read failed this pass, so it is
+  // ALSO absent from `route.fields` (never both). `classIntended`/
+  // `effortIntended` above are already `null` for it, same as a genuinely
+  // never-routed field, but that would otherwise fall back to the loose
+  // live-pane match (`modelOptions`/`effortOptions`'s own `intended === null`
+  // branch) and light a row anyway — a claim this read never established.
+  // `RoutingOverride.unreadable` below forces no active row for exactly this
+  // field, on top of the queued badge already skipping it for having no
+  // `intended` to compare.
+  const classUnreadable = routeInfo?.unreadable.includes('class') ?? false;
+  const effortUnreadable = routeInfo?.unreadable.includes('effort') ?? false;
   // The intended value's readback vs. the live read-back: `live.effort`
   // directly for effort (`ultracode` is its own boolean, not an effort
   // string — the same split `pick`'s own read-back effect already makes),
@@ -307,23 +319,37 @@ export function SessionScreen({
   const changeEffort = (): void => setPicker('effort');
   const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
-    // The timer is installed in the SAME statement sequence as `setQueued`,
-    // before the `await` below (fix round 1, finding 1) — not after the
-    // write resolves. A fleet frame (or `route --apply`'s own pane keystroke)
-    // can read the write back WHILE the HTTP request is still in flight, and
-    // the read-back effect's `clearQueuedTimer()` has to find a real timer at
-    // that moment or the resumed continuation below installs a fresh one for
-    // a write that is already confirmed — a false 60s "not confirmed" toast.
-    // Installing it here also means this call's own leading
-    // `clearQueuedTimer()` always cancels a PRIOR pick's real timer, never a
-    // not-yet-installed one, so a fast second tap can no longer leak the
-    // first pick's handle.
     clearQueuedTimer();
-    setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
-    queuedTimer.current = setTimeout(() => {
-      setQueued(null);
-      toast('Routing queued; the pane has not confirmed it yet');
-    }, 60_000);
+    // Fix round 2, finding 2: once `route` rides the wire (`routeInfo !==
+    // null`), it is the WHOLE STORY for this field — `queuedField` above
+    // already derives straight from it, never from this local `queued`
+    // state. Arming the 60s timer here regardless used to pop "Routing
+    // queued; the pane has not confirmed it yet" a minute later for a field
+    // the wire already read back (or, worse, one on `route.inert` — ccd will
+    // never apply it on this lane, so nothing was ever going to confirm it)
+    // — contradicting the very sheet/badge this same tap just updated. Keep
+    // the optimistic local state only for the tap's own moment on a session
+    // `route` says nothing about yet; an unrouted session keeps exactly
+    // today's behaviour below.
+    //
+    // The timer, when armed, is installed in the SAME statement sequence as
+    // `setQueued`, before the `await` below (fix round 1, finding 1) — not
+    // after the write resolves. A fleet frame (or `route --apply`'s own pane
+    // keystroke) can read the write back WHILE the HTTP request is still in
+    // flight, and the read-back effect's `clearQueuedTimer()` has to find a
+    // real timer at that moment or the resumed continuation below installs a
+    // fresh one for a write that is already confirmed — a false 60s "not
+    // confirmed" toast. Installing it here also means this call's own
+    // leading `clearQueuedTimer()` always cancels a PRIOR pick's real timer,
+    // never a not-yet-installed one, so a fast second tap can no longer leak
+    // the first pick's handle.
+    if (routeInfo === null) {
+      setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
+      queuedTimer.current = setTimeout(() => {
+        setQueued(null);
+        toast('Routing queued; the pane has not confirmed it yet');
+      }, 60_000);
+    }
     try {
       await api.route(id, o.route.field, o.route.value);
       // Neither value leaves a mark the pane can read back — `auto` clears no
@@ -331,7 +357,8 @@ export function SessionScreen({
       // wrapper falls back to with no distinguishing model string of its own.
       // Absence, not a lie, so the 2xx response IS the confirmation. The
       // timer installed above must be cancelled here too, or it outlives its
-      // own confirmation and fires the false toast 60s later.
+      // own confirmation and fires the false toast 60s later. A no-op when
+      // `routeInfo !== null` never armed one in the first place.
       if ((o.route.field === 'effort' && o.route.value === 'auto')
           || (o.route.field === 'class' && o.route.value === 'default')) {
         clearQueuedTimer();
@@ -517,7 +544,10 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
-        options={modelOptions(wrapper, live?.model ?? null, routeInfo ? { intended: classIntended, inert: classInert } : undefined)}
+        options={modelOptions(
+          wrapper, live?.model ?? null,
+          routeInfo ? { intended: classIntended, inert: classInert, unreadable: classUnreadable } : undefined,
+        )}
         onPick={(o) => void pick(o)}
       />
       <PickSheet
@@ -527,7 +557,7 @@ export function SessionScreen({
         title="Reasoning effort"
         options={effortOptions(
           wrapper, live?.effort ?? null, live?.ultracode ?? false,
-          routeInfo ? { intended: effortIntended, inert: effortInert } : undefined,
+          routeInfo ? { intended: effortIntended, inert: effortInert, unreadable: effortUnreadable } : undefined,
         )}
         onPick={(o) => void pick(o)}
       />

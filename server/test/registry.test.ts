@@ -12,6 +12,7 @@ import {
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { unreadableField, absentField } from './ioDoubles.js';
+import { ROUTE_WRITABLE_FIELDS } from '../../shared/api.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
@@ -19,10 +20,24 @@ const seed = (dir: string, id: string, fields: Record<string, string>) => {
 
 const REGISTRY_CENSUS_TAG = 'registry-read-census';
 
+/**
+ * One bare `field(`/`fieldMeasured(` call site is one registry read — except
+ * the ONE call site that reads several files through
+ * `ROUTE_WRITABLE_FIELDS.map((f) => fieldMeasured(...))` (routing slice 6,
+ * Task 4 fix round 2, finding 3: one pass over the vocabulary instead of
+ * `ROUTE_WRITABLE_FIELDS.length` hand-typed calls), which the bare regex
+ * below sees as exactly ONE call but which fires `ROUTE_WRITABLE_FIELDS
+ * .length` reads at runtime. Derived from the real constant, not a
+ * hand-typed "5", so a change to the vocabulary's own size keeps this
+ * census honest without a second edit here.
+ */
 function buildRecordFieldReadCount(src: string): number {
   const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);
   expect(body, '`buildRecord` no longer has the one Promise.all this census measures').not.toBeNull();
-  return [...body![1]!.matchAll(/\bfield(?:Measured)?\(/g)].length;
+  const text = body![1]!;
+  const bareCalls = [...text.matchAll(/\bfield(?:Measured)?\(/g)].length;
+  const mapCalls = [...text.matchAll(/ROUTE_WRITABLE_FIELDS\.map\(/g)].length;
+  return bareCalls + mapCalls * (ROUTE_WRITABLE_FIELDS.length - 1);
 }
 
 function taggedRegistryCensusClaims(src: string): Map<string, number[]> {

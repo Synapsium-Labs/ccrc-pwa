@@ -5,6 +5,14 @@
 // (`server/src/registry.ts`'s `buildRecord`, the census this task raised
 // from 23 to 30 [registry-read-census:fields] — see registry.test.ts's own
 // census suite for that half).
+//
+// Fix round 2, finding 1 (controller ruling S6-R5): the seven reads are now
+// MEASURED (`fieldMeasured`, not the collapsing `field()`), so `route` is
+// `null` ONLY when all seven measure ABSENT, and an UNREADABLE field is
+// named in `route.unreadable` rather than folded into "never routed" or
+// "never set". `degradedReadIO`/`unreadableField` below (`ioDoubles.ts`)
+// model that failure the same way every other migrated registry field's
+// suite does.
 import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -12,9 +20,10 @@ import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { reviveFleetSession, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, ROUTE_WRITABLE_FIELDS, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
+import { degradedReadIO, unreadableField } from './ioDoubles.js';
 
 const session = (id: string): FleetSession => ({
   id, wrapper: 'claude', home: '/home/rc', project: id, workdir: `/data/projects/${id}`,
@@ -42,34 +51,62 @@ describe('reviveFleetSession — route (routing slice 6, Task 4)', () => {
     expect(reviveFleetSession(base)?.route).toBeNull();
   });
 
-  it('revives a full route object — fields present, degraded, inert', () => {
+  it('revives a full route object — fields present, degraded, inert, unreadable', () => {
     const base = session('demo-a');
-    const route = { fields: { class: 'opus', effort: 'high' }, degraded: 'ceiling', inert: ['effort'] };
+    const route = {
+      fields: { class: 'opus', effort: 'high' }, degraded: 'ceiling', inert: ['effort'], unreadable: ['subagent'],
+    };
     expect(reviveFleetSession({ ...base, route })?.route).toEqual(route);
   });
 
-  it('revives fields absent, degraded null, inert empty', () => {
+  it('revives fields absent, degraded null, inert empty, unreadable empty', () => {
     const base = session('demo-a');
-    const route = { fields: {}, degraded: null, inert: [] };
+    const route = { fields: {}, degraded: null, inert: [], unreadable: [] };
     expect(reviveFleetSession({ ...base, route })?.route).toEqual(route);
+  });
+
+  it('fix round 2, finding 1: an older route object with no `unreadable` key at all revives it as [] — optional on the wire', () => {
+    const base = session('demo-a');
+    const route: Record<string, unknown> = { fields: { effort: 'high' }, degraded: null, inert: [] };
+    expect('unreadable' in route).toBe(false);
+    expect(reviveFleetSession({ ...base, route })?.route).toEqual({ ...route, unreadable: [] });
   });
 
   it('rejects the WHOLE session when route.fields names a field outside ROUTE_WRITABLE_FIELDS', () => {
     const base = session('demo-a');
-    const route = { fields: { degraded: 'x' }, degraded: null, inert: [] };
+    const route = { fields: { degraded: 'x' }, degraded: null, inert: [], unreadable: [] };
     expect(reviveFleetSession({ ...base, route })).toBeNull();
   });
 
   it('rejects the WHOLE session when a route.fields value is not a string', () => {
     const base = session('demo-a');
-    const route = { fields: { class: 7 }, degraded: null, inert: [] };
+    const route = { fields: { class: 7 }, degraded: null, inert: [], unreadable: [] };
     expect(reviveFleetSession({ ...base, route })).toBeNull();
   });
 
   it('rejects the WHOLE session when route.inert carries a word outside ROUTE_WRITABLE_FIELDS', () => {
     const base = session('demo-a');
-    const route = { fields: {}, degraded: null, inert: ['degraded'] };
+    const route = { fields: {}, degraded: null, inert: ['degraded'], unreadable: [] };
     expect(reviveFleetSession({ ...base, route })).toBeNull();
+  });
+
+  it('rejects the WHOLE session when route.unreadable is present but not an array', () => {
+    const base = session('demo-a');
+    const route = { fields: {}, degraded: null, inert: [], unreadable: 'effort' };
+    expect(reviveFleetSession({ ...base, route })).toBeNull();
+  });
+
+  it('rejects the WHOLE session when route.unreadable carries a word outside ROUTE_READ_FIELDS', () => {
+    const base = session('demo-a');
+    const route = { fields: {}, degraded: null, inert: [], unreadable: ['not-a-field'] };
+    expect(reviveFleetSession({ ...base, route })).toBeNull();
+  });
+
+  it('accepts every ROUTE_WRITABLE_FIELDS member plus degraded/inert in route.unreadable', () => {
+    const base = session('demo-a');
+    const unreadable = [...ROUTE_WRITABLE_FIELDS, 'degraded', 'inert'];
+    const route = { fields: {}, degraded: null, inert: [], unreadable };
+    expect(reviveFleetSession({ ...base, route })?.route).toEqual(route);
   });
 });
 
@@ -96,6 +133,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
       fields: { class: 'opus', effort: 'high' },
       degraded: 'ceiling',
       inert: ['effort', 'workflow'],
+      unreadable: [],
     });
   });
 
@@ -106,7 +144,7 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     const now = 1784600000;
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
-    expect(s?.route).toEqual({ fields: {}, degraded: null, inert: ['effort'] });
+    expect(s?.route).toEqual({ fields: {}, degraded: null, inert: ['effort'], unreadable: [] });
   });
 
   it('a session with ONLY a .degraded file (no class/effort/etc, no .inert) still answers route non-null', async () => {
@@ -116,6 +154,50 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     const now = 1784600000;
     const fleet = await assembleFleet(localIO, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
-    expect(s?.route).toEqual({ fields: {}, degraded: 'floor', inert: [] });
+    expect(s?.route).toEqual({ fields: {}, degraded: 'floor', inert: [], unreadable: [] });
+  });
+
+  // Controller ruling S6-R5 (fix round 2, finding 1): promote the seven
+  // reads to the MEASURED ladder — `route: null` only when all seven measure
+  // ABSENT, never when one merely fails to read.
+  it('all seven files measured unreadable (a transient agent-link failure): route is non-null, all seven named in unreadable, never route: null', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-quiet-basin', 'claude');
+    const now = 1784600000;
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const io = degradedReadIO((p) => /\.(class|effort|subagent|workflow|compact|degraded|inert)$/.test(p));
+    const fleet = await assembleFleet(io, cfg, new Tmux(noopRun), now);
+    const s = fleet.find((r) => r.id === 'claude-quiet-basin');
+    expect(s?.route).not.toBeNull();
+    expect(s?.route).toEqual({
+      fields: {},
+      degraded: null,
+      inert: [],
+      unreadable: ['class', 'effort', 'subagent', 'workflow', 'compact', 'degraded', 'inert'],
+    });
+  });
+
+  it('.class readable, .effort measured unreadable: fields.class present, unreadable names only effort, no silent "never set"', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-quiet-basin', 'claude', { class: 'opus' });
+    const now = 1784600000;
+    const io = unreadableField('claude-quiet-basin', 'effort');
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const s = fleet.find((r) => r.id === 'claude-quiet-basin');
+    expect(s?.route).toEqual({ fields: { class: 'opus' }, degraded: null, inert: [], unreadable: ['effort'] });
+  });
+
+  it('.effort measured unreadable while every other one of the seven measures absent: still route non-null, not route: null', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-quiet-basin', 'claude');
+    const now = 1784600000;
+    const io = unreadableField('claude-quiet-basin', 'effort');
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const s = fleet.find((r) => r.id === 'claude-quiet-basin');
+    expect(s?.route).not.toBeNull();
+    expect(s?.route).toEqual({ fields: {}, degraded: null, inert: [], unreadable: ['effort'] });
   });
 });

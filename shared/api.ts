@@ -356,29 +356,54 @@ export interface FleetSession {
    *  one. */
   readonly usage: SessionUsage | null;
   /**
-   * The routing record ccd owns for this session (routing slice 6, Task 4) —
+   * The routing record ccd owns for this session (routing slice 6, Task 4;
+   * MEASURED per controller ruling S6-R5, fix round 2) —
    * `server/src/registry.ts`'s `SessionRecord.route`, carried straight onto
-   * the wire. `null` when NONE of the seven routing files exist at all — the
+   * the wire. Each of the seven `$REG/<id>.{class,effort,subagent,workflow,
+   * compact,degraded,inert}` files is read through `fieldMeasured`, so a
+   * transient agent-link failure is told apart from the file genuinely never
+   * having been written. `null` ONLY when all seven measure ABSENT — the
    * ordinary state of a session ccd has never routed; NOT the same word
    * `degraded` already carries elsewhere on this interface, which means a
    * degraded ROW (a failed identity lookup) — the two never collide because
    * the routing values ride this ONE nested object instead of flat fields
-   * (S6-R4).
+   * (S6-R4). A read that measures UNREADABLE (rather than absent) on ANY of
+   * the seven also makes `route` non-null — an unreadable field is reported
+   * by name in `unreadable`, never silently folded into "never routed"
+   * (`route: null`) or "never set" (absent from `fields`).
    *
-   *   - `fields` — the writable fields present (`ROUTE_WRITABLE_FIELDS`),
-   *     absent fields simply absent, values the raw trimmed strings the
-   *     registry holds. UNVALIDATED beyond that shape — this is a reading,
-   *     not `parseRouteFields`'s ingress guard, so the PWA validates nothing
+   *   - `fields` — the writable fields present (`ROUTE_WRITABLE_FIELDS`)
+   *     AND measured readable, values the raw trimmed strings the registry
+   *     holds. UNVALIDATED beyond that shape — this is a reading, not
+   *     `parseRouteFields`'s ingress guard, so the PWA validates nothing
    *     and shows what ccd actually wrote, even a value a newer/older ccd
-   *     vocabulary does not recognise.
-   *   - `degraded` — `$REG/<id>.degraded`'s word, or `null`.
+   *     vocabulary does not recognise. A field named in `unreadable` is
+   *     ABSENT from `fields` — its measured value is unknown, not "unset".
+   *   - `degraded` — `$REG/<id>.degraded`'s word when measured readable,
+   *     `null` when measured absent OR unreadable (an unreadable
+   *     `.degraded` is named in `unreadable` instead).
    *   - `inert` — `$REG/<id>.inert`'s comma list, split and restricted to
-   *     `ROUTE_WRITABLE_FIELDS` members.
+   *     `ROUTE_WRITABLE_FIELDS` members, when measured readable; `[]` when
+   *     measured absent or unreadable (an unreadable `.inert` is named in
+   *     `unreadable` instead).
+   *   - `unreadable` — every one of the seven files (`RouteReadField`) whose
+   *     read measured UNREADABLE this pass, `[]` when none did. A consumer
+   *     treats a field named here as UNKNOWN — no active picker row, no
+   *     queued badge — the same treatment an absent field already gets,
+   *     never a positive "ccd cleared it" or "ccd never set it" claim.
+   *     Required on every FRESHLY ASSEMBLED record; `reviveRoute` below is
+   *     the one reader tolerating its absence on an OLDER PERSISTED frame
+   *     (a `state-cache.json` a pre-fix-round-2 server wrote), defaulting
+   *     absent to `[]` — optional on the wire, not optional in what a live
+   *     read produces.
    *
    * ADDITIVE, absence-permits: an older persisted `FleetSession[]` (a
    * `state-cache.json` from before this task) revives with `route: null`
    * through `reviveFleetSession` below — no `FLEET_PROTO` bump. */
-  readonly route: { readonly fields: RouteFields; readonly degraded: string | null; readonly inert: readonly RouteField[] } | null;
+  readonly route: {
+    readonly fields: RouteFields; readonly degraded: string | null;
+    readonly inert: readonly RouteField[]; readonly unreadable: readonly RouteReadField[];
+  } | null;
 }
 
 /**
@@ -2405,10 +2430,22 @@ const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | 
  *  that answer. `fields` keeps only `ROUTE_WRITABLE_FIELDS` members with
  *  string values (an unknown key or non-string value rejects); `degraded`
  *  is free text with no vocabulary to check; `inert` keeps only
- *  `ROUTE_WRITABLE_FIELDS` members, same restriction the live read applies. */
+ *  `ROUTE_WRITABLE_FIELDS` members, same restriction the live read applies.
+ *
+ *  `unreadable` (ruling S6-R5, fix round 2) is OPTIONAL on the wire, unlike
+ *  every other member here: an older persisted frame's `route` object
+ *  predates the key entirely (a `state-cache.json` a pre-fix-round-2 server
+ *  wrote), and that is "the reading never told us about an unreadable
+ *  field", not "the frame is malformed" — so absent degrades to `[]`,
+ *  the ONE exception to this function's own "present-but-malformed rejects
+ *  the whole session" stance, exactly because ABSENT is not "malformed"
+ *  here. Present-but-wrong-shape (not an array, or a member outside
+ *  `ROUTE_READ_FIELDS`) still rejects the whole session, same as `inert`.
+ *  THE ONE READER: no other call site parses `route.unreadable` off raw
+ *  JSON. */
 const reviveRoute = (
   o: RawObj, k: string,
-): { fields: RouteFields; degraded: string | null; inert: RouteField[] } | null => {
+): { fields: RouteFields; degraded: string | null; inert: RouteField[]; unreadable: RouteReadField[] } | null => {
   const v = o[k];
   if (v === undefined || v === null) return null;
   const s = asObj(v, k);
@@ -2425,7 +2462,18 @@ const reviveRoute = (
   )) {
     throw new MalformedSnapshot(`${k}.inert`);
   }
-  return { fields, degraded: optStr(s, 'degraded'), inert: inertRaw as RouteField[] };
+  const unreadableRaw = s['unreadable'];
+  let unreadable: RouteReadField[];
+  if (unreadableRaw === undefined) {
+    unreadable = [];
+  } else if (!Array.isArray(unreadableRaw) || (unreadableRaw as unknown[]).some(
+    (x) => typeof x !== 'string' || !(ROUTE_READ_FIELDS as readonly string[]).includes(x),
+  )) {
+    throw new MalformedSnapshot(`${k}.unreadable`);
+  } else {
+    unreadable = unreadableRaw as RouteReadField[];
+  }
+  return { fields, degraded: optStr(s, 'degraded'), inert: inertRaw as RouteField[], unreadable };
 };
 
 /** `FleetSession.ask`'s own persistence contract (Task 19, CORRECTED by fix
@@ -4852,6 +4900,20 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
 export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact'] as const;
 export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
 export type RouteFields = Partial<Record<RouteField, string>>;
+
+/**
+ * Every one of the SEVEN files a session's routing record reads from
+ * (routing slice 6, Task 4, ruling S6-R5): the five `ROUTE_WRITABLE_FIELDS`
+ * a route WRITE may name, plus the two ccd writes for status —
+ * `.degraded`/`.inert` — that a route WRITE may never name (see
+ * `ROUTE_WRITABLE_FIELDS`'s own docstring). Derived from `ROUTE_WRITABLE_FIELDS`,
+ * not a second hand-typed list, so `single-definition.test.ts`'s census
+ * still sees one vocabulary. This is the vocabulary `FleetSession.route.unreadable`
+ * names FROM — a route READ can fail on any of the seven, not only the five
+ * a caller may write.
+ */
+export const ROUTE_READ_FIELDS = [...ROUTE_WRITABLE_FIELDS, 'degraded', 'inert'] as const;
+export type RouteReadField = (typeof ROUTE_READ_FIELDS)[number];
 
 /** `parseRouteFields`'s OWN ingress bound (this brief's, not a mirror of a
  *  ccd check): a body-level SHAPE cap, 32 bytes measured with `TextEncoder`
