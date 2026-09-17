@@ -473,3 +473,92 @@ table. Binding on both roles for the rest of this run: **a ruling that rests on 
 the measurement, never the promise; a proposal offering a replacement mechanism arrives WITH the table.**
 The worker applied that to itself here, unprompted and at the cost of reopening work it had closed,
 which is the only reason the vacuity was found before the wave-done rather than by a reviewer after it.
+
+---
+
+## The cross-plan citation collision: a ratchet with no owner, met an hour after it shipped
+
+Mail 1563, BLOCKED, worker had touched nothing. `#134` (graphify compaction card, D-2849)
+merged at **2026-09-17T04:04:42Z** carrying a repo-wide line-citation census in
+`server/test/session-hook.test.ts`. Run 42's branch merged `dfa167d7` and four of its cases
+went red: `ccd/ccd` debt **22 → 127**, a README anchor 0 → 1, `**Files:**` refs 12 → 20,
+`|`-rows 18 → 54. None of the rotted citations are run 42's: they are in #134's own spec and
+plan, in README, and in that census's own comment.
+
+**Two of the worker's premises were wrong, and correcting them changed the answer.**
+
+**`ccd/ccd` grew 268 net lines, not ~700.** `git diff --numstat dfa167d7 9b53f221 -- ccd/ccd`
+= 286 in, 18 out. The ~700 was the whole-branch insertion count across nine files. This is
+load-bearing, not pedantic: a few hundred lines at a handful of insertion points implies a
+**small number of distinct constant offsets**, which is the difference between a mechanisable
+repair and a heroic one.
+
+**The freeze is pinned by nothing.** All six mentions of the 24,688-byte / `46535cdd…`
+section inside `session-hook.test.ts` are comments; no assertion reads it; `git grep -l
+46535cdd -- server/test` returns that one file, and #134's Plan A is complete. So *"the
+repair is out of reach"* is false as a mechanical claim. **The conclusion survives on a
+better reason:** those bytes are the preflight contract a COMPLETED task executed against,
+and rewriting them rewrites the record of what that task was told to do. Told to the worker
+in that form, because a worker who believes a freeze is mechanised never considers the option
+at all — and a false mechanism cited as a constraint is the same defect class as the false
+comment at `ccrc-doctor-checks:2720`.
+
+**The worker's principle was right and its precedent stronger than it argued.** It wrote
+*"it is only 'adjusting' if the number is changed without the referent having moved"* — and
+that census has ALREADY absorbed a foreign programme's merge, by name: *"`deploy/deploy.sh`
+2 since the SECOND merge of main (03ecda65, #114)"*. **#114 is account-pools wave 6 — this
+coordinator's own programme.** Its authors met this exact case and chose absorb-and-name.
+
+**Ruling: PROVE, REPAIR, then absorb only the residue — and the scale is what decides.**
+What that precedent establishes is absorb-with-proof **at +1**. Every raise in that file's
+history is proven per anchor by byte identity (*"sha256 231a9934… on both sides"*, *"all
+five at +80"*); the largest it has ever accepted is **+3**. The proposal was **+105**, 35×
+that, with a prose paragraph where the proofs go — under a sentence that reads *"RE-MEASURE
+AND LOWER THE CENSUS; never widen the rule."* **The reason scale matters is mechanical, not
+moral: a shift you have PROVEN can be REPAIRED instead of absorbed, and a repair lowers the
+debt.** At +1 nobody bothers; at +105 the repair is the whole point, and absorbing without
+looking forecloses it. So: prove each new failure by that file's method (1), repair every
+anchor provable and unfrozen, absorb only what remains with its cause and commit range named.
+**Costs if wrong:** a sizing measurement nobody uses.
+
+**Carried into the instruction: Task 11's own withdrawal guard.** Its method (1) produced
+**seven false repairs**, withdrawn because the chosen block *"had landed on a COMMENT … and
+the clause's token happened to occur in it"*, on the principle that *"a reference pointing at
+the wrong line is worse than one pointing at a line that moved."* A repair counts only when
+the tip block is byte-equal, **unique**, and carries the clause's own longest quoted token;
+a non-unique match is reported, never chosen between.
+
+**Step one is a measurement with no edits** — the new failures split three ways (provable
+shift / inside the freeze / neither), with the distinct offsets and the script — because
+**both hand-offs the worker offered are gone**: #134 merged an hour before it wrote, and
+Task 11, which that assertion names as the owner of closing this debt, has already run.
+Nobody is left to absorb it and there is no later re-measurement to ride.
+
+**One edit authorised now:** README's `ccd/ccd:16330-16332`, repaired rather than bumped,
+shift proven by byte-equality. A knowingly wrong line number in the operator-facing README is
+the one cost nobody should carry while the rest is sized. The census-comment note is HELD —
+the comment and the number land together or neither does.
+
+### Two things this cost me, not the worker
+
+**`ownership.test.ts` is half my omission.** The worker owned it because its briefs named
+`single-definition`, `dtbd` and `deviation-refs` as the repo-wide guards and never named
+`ownership`. **I wrote those briefs.** Naming a suite list at all invites the miss; the
+answer is the shards, not a longer list. And the durable fact no brief of mine has ever
+carried, recorded here for every future ccd wave: **`ccd/ccd` is a GENERATED file carrying
+`# ccrc:generated`, so any wave that edits it must re-stamp with `markGenerated`** or
+`ownership.test.ts` reds — and it reds before a merge, not because of one, which is why this
+one hid through every round.
+
+**`suite: RED` is the right signal and it stays.** Clause 15 asks what the FIRST full run
+after implementation said. It said red. A second number would make that field a summary of
+the worker's fixes rather than a measurement of its branch.
+
+### Surfaced to the operator, not taken
+
+**#134's census is a ratchet with no owner.** Its expected value is a hard-coded exact
+per-file map keyed on `ccd/ccd` — a file every programme in this repo edits — and its
+`TOUCHED` list is FILE-granular, so it cannot distinguish the thing it declares it measures
+(*"THE CITATION DEBT this task creates"*) from rot an unrelated wave caused in the same file.
+Its owning programme is complete and the Task 11 it names as the owner of closing the debt
+has already run. **The next wave to touch `ccd/ccd` meets it exactly as run 42 did.**
