@@ -255,7 +255,7 @@ jobs:
         run: npm ci
       - name: Probe
         working-directory: server
-        run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts --reporter=verbose
+        run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts test/compact-lock-darwin-probe.test.ts --reporter=verbose
       # THE TWO PANE-BOUND DESCRIBES ONLY, and the narrowing is the point.
       #
       # This step began as the whole `ccd-account-auth.test.ts` file and was cut

@@ -2761,7 +2761,12 @@ describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () 
     } finally { release(); }
   }, 60000);
 
-  it('and on a CANONICAL-VANISHED row the SAME token carries a different sentence — no wait is prescribed (r4 A-M3)', async () => {
+  // LINUX ONLY (round M4). The condition this leg drives is measured by
+  // `_compact_lock_vanished`'s `/proc/<pid>/fd` arm, gated
+  // `[ -d /proc ] || return 1`; on Darwin the acquire mints instead of
+  // refusing, so the reap succeeds and there is no failed record to read. That
+  // is recorded platform residue, not something this case may assert away.
+  itLinux('and on a CANONICAL-VANISHED row the SAME token carries a different sentence — no wait is prescribed (r4 A-M3)', async () => {
     // STATUS 1'S SECOND CONDITION, at the fourth purge caller.
     // `_compact_lock_acquire` answers 1 both for the contended lock the leg
     // above holds and for a permanent lock unlinked out of contract under a
