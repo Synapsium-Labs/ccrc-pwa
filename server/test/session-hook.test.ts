@@ -7859,13 +7859,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // RE-MEASURED AGAIN at Task 6, on the same standing rule and with no
     // ruling id of its own: Task 5's two hunks into `ccd/ccd` (`+3` at
     // `:1143`, `+32` at `:16543`) landed after S6-R10's measurement, taking
-    // `ccd/ccd` 124 -> 125. The movement is TWO references and it nets to one:
-    // the `+35` below `:16543` moved README's `genrc == 1` anchor, which was
-    // RE-ANCHORED BY CONTENT here rather than parked (`ccd/ccd:17992-17994` ->
-    // `:18027-18029`, the three bytes byte-identical at both trees) because
-    // README's own entry is an equality with empty, not a debt; and the `+3`
-    // below `:1143` newly stales two `**Files:**`-visible plan references and
-    // un-stales one.
+    // `ccd/ccd` 124 -> 125. The composition was MEASURED by running this same
+    // audit against the pre-Task-5 tree (`ccd/ccd` and `README.md` at
+    // `4784dd18`, this file unchanged) and diffing the two failure lists:
+    // EXACTLY ONE reference entered, `spec:2125 ccd/ccd:19131`, which sits
+    // below BOTH hunks (a cumulative `+35`), and NOTHING left. README contributes nothing to this
+    // number because its `genrc == 1` anchor was RE-ANCHORED BY CONTENT
+    // rather than parked (`ccd/ccd:17992-17994` -> `:18027-18029`, the three
+    // bytes byte-identical at both trees) — README's own entry is an equality
+    // with empty, not a debt, so a rotted anchor there is repaired, never
+    // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
+    // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
       'ccd/ccd': 125,
       'ccd/session-hook.sh': 21,
@@ -8317,8 +8321,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `:13561`, `:13560-13562`, `:13573-13575` (one of its two sites) and
     // `:5385-5388` each stopped failing because the `+3` shift slid a
     // different comment line under the anchor — not because anything was
-    // re-anchored. `:19131` starts failing for the mirror reason, below the
-    // `+35`. Nothing here is a repair and no rule changed; Task 11 still owns
+    // re-anchored. `:19131` starts failing for the mirror reason, below BOTH
+    // hunks (a cumulative `+35`). Nothing here is a repair and no rule changed; Task 11 still owns
     // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
