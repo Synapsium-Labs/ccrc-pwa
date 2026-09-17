@@ -149,7 +149,7 @@ function runBounded(home: string, snippet: string, ms = 5000): Bounded {
     if (e.status === 124) {
       throw new Error(
         `runBounded(${JSON.stringify(snippet)}) did not return within ${ms}ms `
-        + '— this is a hang regressing, not a flake');
+        + '— either the guard regressed or this box is loaded; re-run in isolation before concluding');
     }
     return { code: e.status ?? 1, stdout: String(e.stdout ?? '').trim(), stderr: String(e.stderr ?? '') };
   }
@@ -417,7 +417,14 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
   beforeEach(() => { hp = makePrHarness('ccrc-ccd-bounded-d4-'); });
   afterEach(() => { hp.cleanup(); });
 
-  const boundedPrRun = (snippet: string, ms = 5000): Bounded => runBounded(hp.home, snippet, ms);
+  // 15000, not the family default 5000 (final-round item 5): measured
+  // 788ms in isolation for the case that failed at the 5000ms bound running
+  // alongside the other 21 `ccd-[a-f,h]*` files — 6.4x headroom on a box
+  // CLAUDE.md already calls load-sensitive was not enough. The `it(...)`
+  // trailing timeout below is raised to 20000 to match — it must stay above
+  // this bound or vitest's own per-test timeout fires first and hides the
+  // driver's readable "did not return within Nms" message.
+  const boundedPrRun = (snippet: string, ms = 15000): Bounded => runBounded(hp.home, snippet, ms);
 
   /** `demo-quiet-basin`, zero-commit — the identical fixture
    *  `ccd-prhistory.test.ts`'s own `workspace()` builds, for the identical
@@ -445,7 +452,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     // Self-healing: the FIFO is gone, replaced by `put`'s atomic tmp+replace —
     // proof the sweep proceeded rather than merely swallowing an error.
     expect(fs.statSync(p).isFIFO()).toBe(false);
-  }, 10000);
+  }, 20000);
 
   it('the compare-and-set lock: a FIFO at $REG/.prstate-<id>.lock proceeds UNLOCKED, PROMPTLY', () => {
     // `open(path, 'a')` blocks until a READER appears — `except OSError`
@@ -462,7 +469,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
     expect(r.code).toBe(0);
     expect(fs.readFileSync(path.join(REG(), `${id}.prnumber`), 'utf8')).toBe('591');
-  }, 10000);
+  }, 20000);
 
   it('the prhistory append: a FIFO at $REG/<id>.prhistory faults PROMPTLY rather than hanging the whole sweep', () => {
     // THE FOURTH OPEN, not the third — `get()`, `put()`'s own tmp file, the
@@ -490,7 +497,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     // their `die` sentence, so a regression that faults for some OTHER
     // reason cannot pass this case by accident.
     expect(r.stderr).toContain('refusing to append to a non-regular-file prhistory');
-  }, 10000);
+  }, 20000);
 
   it("put(): a FIFO already at the pid-named tmp path (pid reuse) faults PROMPTLY rather than hanging the whole sweep", () => {
     // `put`'s tmp name embeds `os.getpid()`, unknowable to this test ahead of
@@ -513,7 +520,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('refusing to write a non-regular-file pr-state tmp');
-  }, 10000);
+  }, 20000);
 
   it('put(): a stale REGULAR file already at the pid-named tmp path is still overwritten normally (unchanged)', () => {
     // The other half of the same guard's contract: `os.path.isfile` cannot
@@ -532,7 +539,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
     expect(r.code).toBe(0);
     expect(fs.readFileSync(path.join(REG(), `${id}.prcheckedat`), 'utf8')).not.toBe('stale');
-  }, 10000);
+  }, 20000);
 
   it('still appends prhistory normally when the path is a regular file (unchanged)', () => {
     const { id, tip } = workspace();
@@ -545,7 +552,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
       .trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as { pr: number });
     expect(rows).toHaveLength(1);
     expect(rows[0]!.pr).toBe(591);
-  }, 10000);
+  }, 20000);
 });
 
 describe.skipIf(NO_DEADLINE_BIN)('D5 — `cmd_project_pool`\'s registry-row existence glob, unguarded (D-2925)', () => {

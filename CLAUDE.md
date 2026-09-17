@@ -76,11 +76,14 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `npx vitest`** — it resolves a global copy with no jsdom and falsely reports "no tests".
 - **Run suites in the FOREGROUND, timeout ≥600000ms.** Backgrounding hides a hang; the suites are load-sensitive.
 - **Known load flakes** (real suites — re-run IN ISOLATION before calling a real break): `ccd-ws-gc`,
-  `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`. CI on the quiet box is the arbiter; a flake
-  CI passes is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap re-stamps while it
-  carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured 2026-08-16 at 2/4 full
-  runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can clear it and a single
-  green isolated run is not proof it was the load.
+  `pr-sweep`, `session-hook`, `typecheck-tests`, `ccd-session-state`, `ccd-bounded-reads`. CI on the quiet box is
+  the arbiter; a flake CI passes is a flake. `ccd-session-state`'s window is `the supervisor heartbeat > a swap
+  re-stamps while it carries` (`expected ['mid-carry:orphan'] to include 'mid-carry:restarting'`) — measured
+  2026-08-16 at 2/4 full runs and 1/3 under concurrent load, but **0/6 on an idle box**, so isolation alone can
+  clear it and a single green isolated run is not proof it was the load. `ccd-bounded-reads`' D4 family bounds
+  a real ~788ms call at a 5000ms `runBounded` deadline; measured failing once in a 22-file `ccd-[a-f,h]*` batch
+  under load and green in isolation and on re-run — the bound is now 15000ms, but the family still shells a
+  real `timeout`-wrapped child process, so a badly loaded box can still starve it.
 - **Node floor `>=22.13.0`, identical across the three engines**, pinned by `server/test/node-floor.test.ts`
   (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
   fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
