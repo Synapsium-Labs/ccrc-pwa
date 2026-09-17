@@ -103,10 +103,13 @@ esac
 # so a call with `dest` a symlink-to-directory and `src` absent leaves the
 # destination GONE, where the pre-fix behavior left the symlink intact
 # (measured against both revisions). Reachability from `_reg_set` is nil
-# today — the `ln -s` census holds, no symlink is ever created at
-# `$REG/<id>.<field>` — but the price is real for the one destination shape
-# this `rm` covers, so it is disclosed here rather than only in a mutation
-# table.
+# today — no symlink is created at `$REG/<id>.<field>` BY CCD OR CCRC (the
+# `ln -s` census was scoped to the shipped files, not to test fixtures — one
+# plants a symlink AT that exact path, `ccd-crosspool.test.ts`'s
+# `devzero-symlink` case), and no symlink-to-DIRECTORY exists at any of the
+# eight anywhere in the tree — but the price is real for the one destination
+# shape this `rm` covers, so it is disclosed here rather than only in a
+# mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
     if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi
