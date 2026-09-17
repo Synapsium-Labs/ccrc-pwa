@@ -47,7 +47,7 @@ clause except the JSON shape in clause 7, which the pin spells escaped.
 4. Read in YOUR OWN worktree only: `git checkout --detach <reviewedTip>` here, and never `checkout` the worker's branch, never commit, amend, rebase, cherry-pick, reset or push it, never open a PR on it, and never `git worktree add` or `remove` anything. This workspace's own branch (`ws/<slug>`) stays where dispatch left it; you land nothing on it.
 5. Run the SDD shape the brief names and nothing lighter: the review lenses over the wave's whole diff against the plan file the brief names (that plan's text governs over your recollection of the spec), then the whole-branch pass, then the suites the plan says to run, in this worktree, at `reviewedTip`.
 6. Report, never rule. This session never calls `POST /api/runs/:id/advance`, `POST /api/runs/:id/close`, `POST /api/runs/:id/dispatch` or `POST /api/ledger/deviations` on any run, never mails the worker, never sends work back and never allocates a deviation number. A finding that needs a ruling is written as such in the report — `needs a ruling:` and the question — and the coordinator rules.
-7. One report, written ONCE: to an absolute path under this worktree, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
+7. One report, written ONCE: to an absolute path under `$HOME/.cc-clips/<your session id>/`, by temp file and `mv` so a half-written report never exists at that path, named in the `review-done` mail's `artifacts`; after that mail you do not touch it. NOT under this worktree, however readable the file looks to you: the close route stats that path through the agent, whose read allowlist is `.cc-sessions`, `.cc-limits`, `.cc-clips`, `$HOME/.claude*` and the projects root — and every session worktree sits outside all five, so a report beside your checkout is refused `report-unreadable`. The mail's body opens with one JSON line, `{"reviewedTip":"<sha>","report":"<absolute path>"}`, which the coordinator submits to the close route exactly as you wrote it.
 8. Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, for any reason.
 9. Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane; your parent (the coordinator) may answer it before the operator is notified. Keep your input box empty: a half-typed draft makes the delivery lane refuse `draft-present`.
 10. Remote control is decided at your creation, not by you: dispatched reviewers spawn WITHOUT it (`ws-add --no-rc`, the dispatch path's own declaration), and `~/.ccrc/remote-control` governs every non-dispatched session on this box. Neither is yours to write.
@@ -81,7 +81,7 @@ through. Both install beside this file.
 ## Reading
 
 ```bash
-WT=$(git rev-parse --show-toplevel)                       # THIS worktree
+WT=$(git rev-parse --show-toplevel)                       # THIS worktree — you READ here
 tip=$(git rev-parse "refs/heads/ws/<worker-slug>")        # clause 3, ONCE
 git checkout --detach "$tip"                               # clause 4
 base=$(git merge-base origin/main "$tip")
@@ -96,9 +96,11 @@ are detached; nothing you change lands anywhere) and restore exactly.
 
 ## The report
 
-One markdown file, absolute path under `$WT` — for example
-`$WT/.ccrc-review/<review-run-id>-<tip first 8>.md` — written to a temp path
-and moved into place (clause 7). Shape:
+One markdown file, absolute path under `$CLIPS` — for example
+`$CLIPS/review-<review-run-id>-<tip first 8>.md` — written to a temp path
+and moved into place (clause 7). `$CLIPS` is `$HOME/.cc-clips/$id`: you READ in
+your worktree and WRITE the report there, because that is the only root the
+agent's read allowlist lets the close route reach. Shape:
 
 ```markdown
 # Review — run <review run id> reviews run <work run id> at <reviewedTip>
@@ -120,7 +122,8 @@ lens", if that is what you measured.
 ## Reporting review-done
 
 ```bash
-report="$WT/.ccrc-review/<review run id>-${tip:0:8}.md"
+CLIPS="$HOME/.cc-clips/$id"                                 # clause 7: NOT $WT
+report="$CLIPS/review-<review run id>-${tip:0:8}.md"
 mkdir -p "$(dirname "$report")"
 cat > "$report.tmp" <<'MD'
 …the report…
