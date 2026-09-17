@@ -15,8 +15,21 @@ Part A touches the PLATFORM BLOCK, which is byte-identical in `ccd/ccd` and `ccd
 by `macos-platform.test.ts` — **both files must change together or that pin reds.** Part B touches
 `ccd/ccrc-doctor-checks` only. **Part D touches `ccd/ccd` only.** Its site count is DERIVED at execution time, not quoted here: D1-D5 name ten mandatory sites and D8 names four further groups, two of them conditional and one dead on a Linux fleet, so no reading of the list below yields the twelve this sentence used to assert (D-2475). Re-measure the class before fixing it, and navigate by SYMBOL — every line anchor in Part D predates #69/#78/#79 and has drifted.
 No server, agent, shared or PWA source is touched.
-**TWO TRACKED FILES OUTSIDE `ccd/` ARE EDITED, and both are declared here rather than left to a
-reader of the diff (F13, review run 69).** (1) `README.md` — one line-anchor repair, AUTHORISED by the
+**ELEVEN TRACKED FILES OUTSIDE `ccd/` ARE EDITED on this branch, not two** (measured against this
+branch's own diff versus its merge base — `git diff --name-only <merge-base>...HEAD | grep -v '^ccd/'`,
+merge base = `origin/main` tip `ecbb8b22` at this measurement): `CLAUDE.md`; this plan itself
+(`docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`);
+`docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md`;
+`docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md`; and seven `server/test/`
+suites — `ccd-bounded-reads.test.ts`, `ccd-crosspool.test.ts`, `ccd-reg-set-atomic.test.ts`,
+`ccrc-doctor.test.ts`, `macos-platform.test.ts`, `session-hook.test.ts`, `single-definition.test.ts`.
+Of those eleven, this section originally declared TWO as carrying a reason spelled out here rather than
+left to a reader of the diff (F13, review run 69) — and re-measuring that pair turns up a further
+defect: `git diff origin/main HEAD -- README.md` is EMPTY at this tree (the file is byte-identical to
+`origin/main`'s copy), so the README.md repair the paragraph below describes is **not part of this
+branch's current diff at all** — disclosed here, not resolved; whatever landed it either predates this
+measurement's merge base or was reconciled away by a later merge, and this batch does not chase which.
+(1) `README.md` — one line-anchor repair, AUTHORISED by the
 coordinator during this wave ("README's `ccd/ccd:16330-16332`, repaired rather than bumped"); it cites
 `  elif (( genrc == 1 )); then`, and the repair was re-measured at the shipping tree because an
 earlier commit moved the referent after the first measurement. (2) `CLAUDE.md` — the `ccd-bounded-reads`
@@ -156,12 +169,34 @@ each mutant restored from a copy kept outside the repo and byte-compared after r
 
 **C-M2 is an EQUIVALENT mutant, not an unpinned one, and C-M2c is why.** `Number.isInteger` can only
 reject a NON-INTEGRAL float; every such value crosses the process boundary as a string the bash side
-then refuses on its own (`String(1789000000.5)` is `"1789000000.5"`, which that regex rejects; `1e21`
-IS an integer to `Number.isInteger` and passes both). The node check is belt to the bash braces — which
+then refuses on its own (`String(1789000000.5)` is `"1789000000.5"`, which that regex rejects;
+`1700000000` — an ordinary `fetchedAt` UNIX-seconds value — IS an integer to `Number.isInteger` and
+passes both: `String(1700000000)` is `"1700000000"`, which the regex accepts. `1e21` does NOT
+illustrate this — `Number.isInteger(1e21)` is `true` but `String(1e21)` is `"1e+21"`, which the same
+regex REJECTS, so `1e21` is not a value that "passes both"; the conclusion below still holds, since no
+real `fetchedAt` is ever near that magnitude, but that value was the wrong illustration for it). The
+node check is belt to the bash braces — which
 is exactly what its own shipped comment claims — so removing it changes no reachable verdict. The
 control proves the claim rather than asserting it: mutating the mechanism that DOES decide reds a case
 immediately. **This is the honest form of a green mutation row:** the row is not evidence of coverage
 on its own, and it is not left ambiguous either.
+
+**C6's OWN named deliverable, on its own line (F12's remedy for this identical shape, applied here
+too).** C6 is recorded `[x]` above and commit `d59f93d7`'s message lists F5 among the findings it closed
+("B6's and C6's tables transcribed into the plan and re-measured rather than copied") — that claim
+overclaims: **C6 is HALF closed.** C6's own named deliverable is a mutation-table row per C4 arm ("C6.
+Mutation table: stop the clock ... and measure C4's first arm RED; set `stale:true` on a fresh catalogue
+and measure the second arm RED"), and neither arm has one. The five-row table above pins the `0x1F`
+delimiter, `Number.isInteger`, the `lastError` sanitiser, F2's catalogue type test and R1's rung — none
+of those five mutants IS a break of C4's own WARN logic. What DOES exist, measured by grep: ordinary
+(non-mutation) behaviour tests for both arms, `server/test/ccrc-doctor.test.ts:6810`
+(`WARNS — the silent-timer arm — when stale:false but fetchedAt is older than 3 hours`, its body
+commented `// C4's first arm`) and `:6837` (`WARNS — the stale-provider arm — regardless of age, quoting
+lastError and the age`, commented `// C4's second arm`). Both assert the current CORRECT behaviour; NEITHER
+is paired with a restored mutant proving it catches a regression, so C4's two arms remain exactly where
+they were when C6 was first ticked: argued, not mutation-pinned. Landed: the five OTHER C6 rows, newly
+row'd this round. Not landed: a mutation row for either of C6's own two named arms — still only the
+gitignored-artifact comment this same section already disclosed above.
 
 ---
 
@@ -249,9 +284,12 @@ read corrects — it is a process that never returns, holding whatever it holds.
       number, because D-71 already covers the class and the coordinator refused a second number for it
       once this run.** Both are the wave's own class, in files this wave touched, and until now they were
       named only in a source comment: `ccd/ccrc` sources the account roster with NO `-f`/`-r` rung at all
-      at `_inst_dirs` (`:10294`) and `_inst_graph_always_on_off` (`:10625`), while `ccd/ccrc`'s six other
-      roster readers do guard it; and `ccd/ccrc-doctor-checks` guards it with `-r` ONLY at `:3047` and
-      `:3376`, the second inside `_check_routing`, which THIS WAVE edited. `-r` alone admits a FIFO, so
+      at `_inst_dirs` (`:10314`) and `_inst_graph_always_on_off` (`:10646`), while `ccd/ccrc`'s six other
+      roster readers do guard it; and `ccd/ccrc-doctor-checks` guards it with `-r` ONLY at THREE sites, not
+      two (re-measured — neither of the originally-named two is where this said it was): `:3047` is inside
+      `_check_pools`, `:3376` is inside `_check_graphify`, and a third site the enumeration omitted,
+      `:4364` (`if [ ! -r "$sh" ]; then`), is inside `_check_routing`, which THIS WAVE edited — the only
+      one of the three actually there. `-r` alone admits a FIFO, so
       each hangs on one independently (measured, rc 124). Not fixed here: `ccd/ccrc`'s copy of the
       platform block is byte-pinned to `ccd/ccd`'s, and these sites sit outside D1-D5's enumerated scope,
       so repairing them is a scope widening this wave declined rather than an omission it overlooked.
@@ -269,9 +307,18 @@ governing document before it can be called a defect. Booked as a QUESTION in D-2
 
 **Ruled by the coordinator, before merge (F6, review run 69).** `server/test/session-hook.test.ts`
 carries a census — added by PR #134, D-2849 — that checks every line citation in the compaction-card
-documents against the file each one names. Three of its assertions are RED at this branch's tip, and
-they are **100% this wave's own doing**: review run 69 measured it one file at a time and found all
-three GREEN at the base `dfa167d7`, RED at the tip, and GREEN again once this branch's `ccd/` scripts,
+documents against the file each one names. **FIVE of its assertions are RED at this branch's tip, not
+three** (re-measured at this tree, `HEAD` `33bd6024`: `cd server && ./node_modules/.bin/vitest run
+test/session-hook.test.ts` reports `Tests  5 failed | 328 passed (333)`; the five are `THE TWO CORPUS
+FACTS the docstring above states, asserted rather than asserted-about`, `THE CITATION DEBT this task
+creates is measured, per cited file (Task 11 owns closing it)`, `README HAS ITS OWN CENSUS ENTRY, and it
+is EMPTY — every operator anchor resolves (wb2 B-I2)`, `` THE **Files:** LISTS ARE LOCATION INDEXES — the
+exact stale set, exemption-free (D-2849) `` and `` THE `|`-ROW PASS: the exact set a joined row still
+fails on (round 14, B-M2) ``). This is a reader-of-`main`-after-merge count, at the tip this branch
+carries now; it is **100% this wave's own doing**: review run 69 measured it one file at a time, AT THE
+TIP REVIEW RUN 69 SAW (an earlier commit than this one — not re-measured by this batch, and not
+necessarily still three now that two further assertions have gone red since), and found all three GREEN
+at the base `dfa167d7`, RED at that tip, and GREEN again once this branch's `ccd/` scripts,
 `README.md` and `CLAUDE.md` are reverted. This is not rot the branch inherited. It is debt the branch
 created, in documents the branch does not own — the citing documents are a spec and a plan belonging to
 another programme, and every anchor in them shifted because this wave inserted lines into `ccd/ccd`.
@@ -419,13 +466,18 @@ both sides of the word. Review run 69 measured FOUR further behaviour changes wi
 in Part C (the `0x1F` delimiter, `Number.isInteger`, the `lastError` sanitiser) and one in Part D
 (`cmd_ws_release`'s `-r` conjunct, which the reviewer measured by dropping it and finding the entire
 `ccd-bounded-reads` suite still GREEN at 40 passed). A single integer cannot carry that, because the
-four resolve three different ways. Measured at this tree, the wave's mutants now fall into exactly
-three classes:
+four resolve **two** different ways, not three (re-counted: of the four, three — the `0x1F` delimiter,
+the `lastError` sanitiser and `cmd_ws_release`'s `-r` conjunct — land PINNED below, and the fourth,
+`Number.isInteger`, lands EQUIVALENT; none of the four is the row in the third class, which is
+`M1`, a pre-existing item from the ORIGINAL "two UNPINNED mutants" this paragraph opens by correcting,
+not one of the four review run 69 added). Measured at this tree, the wave's mutants — the four just
+named, plus M1 and M2b from before them, plus two more (F2's catalogue type test and R1's empty-output
+rung) that arrived separately via C6's own table — fall into exactly three classes:
 
-- **PINNED this round (4):** the `0x1F` delimiter, the `lastError` sanitiser, F2's catalogue type test
+- **PINNED this round (5):** the `0x1F` delimiter, the `lastError` sanitiser, F2's catalogue type test
   and R1's empty-output rung — each with its own case and its own RED above (C6's table); plus
   `cmd_ws_release`'s `-r` conjunct, pinned by a mode-000 hold case that reds when the conjunct is
-  dropped at that one site.
+  dropped at that one site. (Five items enumerated here, not four — recounted.)
 - **EQUIVALENT, with a control (2):** M2b in the table above (measured across all six destination
   shapes; the one shape where the two spellings differ is unreachable, refused by the guard above it)
   and C-M2 (`Number.isInteger`, whose control C-M2c reds immediately). An equivalent mutant is not an

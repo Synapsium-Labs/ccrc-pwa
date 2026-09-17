@@ -7167,14 +7167,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
    *  census can see without inventing a new verdict.
    *
    *  SELF-REFUTATION, because a floor stated as a rule has to be measured as
-   *  one — and the measurement is over EVERY REFERENCE THESE THREE DOCUMENTS
-   *  RESOLVE, which is narrower than "every token in them" and is the honest
-   *  bound: of the tokens offered to those references, the ones of THREE
-   *  non-space characters or fewer that this rule still ACCEPTS are exactly
-   *  `jq`, `ccd`, `it(` and `out` — each a NAME rather than a keyword. And
-   *  measured the other way too: NOT ONE reference in the corpus is anchored
-   *  only by tokens that short, so none of the four decides anything on its
-   *  own. */
+   *  one — and stating that here, in prose, was not a measurement: this
+   *  paragraph used to CLAIM, unmeasured, that of the tokens offered to every
+   *  reference these three documents resolve, the ones of THREE non-space
+   *  characters or fewer that this rule still ACCEPTS are exactly `jq`,
+   *  `ccd`, `it(` and `out`, and that none of the four ever anchors a
+   *  reference on shortness alone. Main has since mechanised that check —
+   *  see "THE TWO CORPUS FACTS the docstring above states, asserted rather
+   *  than asserted-about" below, whose `accepted`/`weak` assertions run both
+   *  claims against the real corpus. Read that assertion for the current
+   *  answer, not this paragraph. */
   const MIN_QUOTE = 8;
   /** The six tokens the review MEASURED as self-anchoring across this corpus,
    *  refused by name. Five of them rule (a) already refuses for carrying no
@@ -8216,9 +8218,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `ccd/ccrc:7129-7130` LEFT THIS SET WITH PR #136, AND IT WAS NOT
         // REPAIRED — the distinction matters, because the reference is still
         // stale in fact. That branch added nine lines to `ccd/ccrc` ABOVE line
-        // 7129, so the stale anchor now lands on `_uninst_cc_sessions`' own
-        // `rm -f -- "$real/$name"` lines, which happen to carry a token its
-        // clause quotes, and this pass therefore reads it as anchored. A FALSE
+        // 7129, so the stale anchor lands wherever `ccd/ccrc` happens to have
+        // grown to at any given measurement (measured on THIS tree:
+        // `ccd/ccrc:7129-7130` sits inside `_acct_sign_out`, which opens at
+        // `ccd/ccrc:7115` — not `_uninst_cc_sessions`, a different function,
+        // defined far below at `ccd/ccrc:11706`; both this function and the
+        // exact line the anchor now lands on have already shifted more than
+        // once since this note was written, because `ccd/ccrc` keeps growing
+        // — re-measure rather than trust either number here), which happen to
+        // carry a token its clause quotes, and this pass therefore reads it
+        // as anchored. A FALSE
         // GREEN by coincidence, not a repair: the citation still does not name
         // what D-2849 says it names. It could not have been repaired either —
         // it sits inside Task 10's 24,688-byte freeze, which #136 verified
@@ -8233,9 +8242,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // written beside its entry in the set above. It is kept in `D2849` because
     // the reference is still stale in fact and this list is the record of what
     // that paragraph falsifies; the exception is named separately so that the
-    // day it becomes visible again, or is genuinely repaired, THIS line reds
-    // and a human reads the note rather than finding an entry silently gone.
-    // This pin is the one that caught the change, which is what it is for.
+    // day it becomes visible again to this pass, THIS line reds and a human
+    // reads the note rather than finding an entry silently gone. MEASURED:
+    // only that half holds. A GENUINE repair of the citation is NOT caught —
+    // `set` still would not carry the entry (this pass never reaches it,
+    // repaired or not — the invisibility is a different mechanism entirely,
+    // see the note above) and `D2849_INVISIBLE_SINCE_PR136` still excludes it
+    // from the other side, so BOTH sides of the assertion below drop the
+    // entry the same way regardless, and it stays GREEN whether the citation
+    // was genuinely repaired or is merely still coincidentally invisible —
+    // this pin cannot tell those two apart. It catches the first case only.
     const D2849_INVISIBLE_SINCE_PR136 = ['ccd/ccrc:7129-7130'];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)')

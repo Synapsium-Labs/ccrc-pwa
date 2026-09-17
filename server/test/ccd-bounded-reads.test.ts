@@ -423,7 +423,11 @@ describe.skipIf(NO_DEADLINE_BIN)('D2 — the hold family, five sites, one shape 
 });
 
 describe.skipIf(NO_DEADLINE_BIN)('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () => {
-  // (F7/D6's directory case for this family is the last `it` in this block.)
+  // (F7/D6's directory case for this family is deliberately ABSENT — see this
+  // file's header: `<cfg>/sessions/<pid>.json` measured as a non-hang shape
+  // pre-fix and not covered elsewhere, so no case is planted here. The last
+  // `it` in this block is the pre-existing ABSENT-file rung, not a directory
+  // case.)
   let h: CcdHarness;
   beforeEach(() => { h = makeCcdHarness('ccrc-ccd-bounded-d3-'); });
   afterEach(() => { h.cleanup(); });
