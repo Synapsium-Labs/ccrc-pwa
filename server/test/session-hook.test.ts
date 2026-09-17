@@ -7801,7 +7801,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // Three grew again afterwards and each delta belongs to its own commit:
     // `ccd/session-hook.sh` -> 3,174 at M1's `fbbf6907` (+16),
     // `server/test/ccd-workspaces.test.ts` -> 1,540 at M1b's `525dd92d` (+10),
-    // `deploy/deploy.sh` -> 1,209 at the SECOND merge `03ecda65` (+9).
+    // `deploy/deploy.sh` -> 1,209 at the second merge `9db527a5` (of main's `03ecda65`, #114) (+9).
     //   (A) branch base (`fcf2c660`) + this rule    55   the pre-merge census
     //   (B) merged tip  (`c7cc7348`) + this rule   251   the merge's shifts alone
     //   (C) this tip                 + this rule    59   what this map asserts
