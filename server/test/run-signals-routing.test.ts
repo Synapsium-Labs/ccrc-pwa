@@ -12,7 +12,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import {
-  armEventDetail, parseArmEventDetail, parseRouteEventDetail, routeEventDetail,
+  armEventDetail, isSessionIdShape, parseArmEventDetail, parseRouteEventDetail, routeEventDetail,
 } from '../../shared/api.js';
 
 afterEach(removeTmpFixtures);
@@ -129,5 +129,26 @@ describe('armEventDetail / routeEventDetail round-trip their own parsers (shared
     expect(parseRouteEventDetail('route:escalate:effort:medium->high:shallow')).toEqual(
       { mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', session: null },
     );
+  });
+});
+
+// Fix round 1, finding #2: `isSessionIdShape` is the predicate the door
+// (`routes.ts`) checks BEFORE it ever calls `routeEventDetail` — a value it
+// rejects is exactly a value that would corrupt the sixth segment above.
+describe('isSessionIdShape (shared/api.ts)', () => {
+  it('accepts the charset ccd actually mints a session id from', () => {
+    expect(isSessionIdShape('demo-quiet-mesa_v2.1')).toBe(true);
+  });
+
+  it('rejects a value carrying the grammar\'s own delimiter, `:`', () => {
+    expect(isSessionIdShape('bad:session')).toBe(false);
+  });
+
+  it('rejects a value carrying a space', () => {
+    expect(isSessionIdShape('bad session')).toBe(false);
+  });
+
+  it('rejects the empty string', () => {
+    expect(isSessionIdShape('')).toBe(false);
   });
 });

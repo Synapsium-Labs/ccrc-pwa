@@ -34,7 +34,7 @@ import {
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
   MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
-  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
   type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
@@ -1833,6 +1833,20 @@ export function registerCoordRoutes(
       const sid = body.target === 'worker' ? run.sessionId : run.claimedBy;
       if (sid === null || sid === '') {
         return reply.code(409).send({ ok: false, error: 'no-session' });
+      }
+      // Fix round 1, finding #2: `sid` comes off `run.sessionId`/
+      // `run.claimedBy` (`POST /api/runs` shape-checks `claimedBy`/
+      // `sessionId` only for "non-empty string", no charset guard), but
+      // `routeEventDetail` below embeds `sid` unescaped as the sixth segment
+      // of a `:`-delimited grammar that `ROUTE_EVENT_DETAIL_RE`'s own group
+      // accepts only `[A-Za-z0-9._-]+` for. Refuse the bad shape HERE, before
+      // ever building an argv or writing an event this door's own reader
+      // would later refuse to parse back — `no-session` (nothing to route
+      // to) and `bad-session` (something to route to, but not a name this
+      // door can safely write) are two different conditions and must not
+      // collapse to one refusal.
+      if (!isSessionIdShape(sid)) {
+        return reply.code(409).send({ ok: false, error: 'bad-session' });
       }
 
       if (!capSupported(deps.fleetState, ROUTE_CAP)) {

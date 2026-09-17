@@ -5488,8 +5488,36 @@ export type RouteMode = (typeof ROUTE_MODES)[number];
  * A session id, as ccd mints and stamps one (`[A-Za-z0-9._-]+`) — never
  * containing `:`, which is what lets the sixth segment below sit inside a
  * `:`-delimited grammar without escaping.
+ *
+ * Fix round 1, finding #2: that charset is a fact about what ccd MINTS, not
+ * a guarantee about what reaches this file. `run.sessionId`/`run.claimedBy`
+ * (`store.ts`) come from `POST /api/runs`'s `claimedBy`/`sessionId` body
+ * fields, which are shape-checked only for "non-empty string" (routes.ts) —
+ * no charset guard — so an operator- or bug-supplied value carrying a `:`
+ * or a space would reach `routeEventDetail` and get written into a
+ * `route:` detail this regex's OWN sixth-segment group then refuses to read
+ * back, silently: `parseRouteEventDetail` returns `null`, the door's walk
+ * `continue`s past the record it just wrote, and `runSignals` counts it as
+ * `routingUnparsed` rather than as the write the door itself made. Exported
+ * so the door (`routes.ts`) can refuse a bad session SHAPE before it ever
+ * calls `routeEventDetail` — see `isSessionIdShape` below.
  */
 const SESSION_ID_SEGMENT = '[A-Za-z0-9._-]+';
+const SESSION_ID_SHAPE_RE = new RegExp(`^${SESSION_ID_SEGMENT}$`);
+
+/**
+ * True iff `s` is a legal session-id SHAPE — the same charset
+ * `ROUTE_EVENT_DETAIL_RE`'s sixth segment accepts, so a value this returns
+ * `true` for is guaranteed to round-trip through `routeEventDetail`/
+ * `parseRouteEventDetail` unmangled. Callers that resolve a session id from
+ * a run row (`run.sessionId`/`run.claimedBy`) before writing a `route:`
+ * event MUST check this first (routing slice 6, fix round 1, finding #2) —
+ * the door answers `bad-session` rather than silently mis-writing a record
+ * its own reader will later refuse to parse.
+ */
+export function isSessionIdShape(s: string): boolean {
+  return SESSION_ID_SHAPE_RE.test(s);
+}
 
 /**
  * The door's own regex, built from `ROUTE_MODES` and `FAILURE_KINDS`
@@ -5627,6 +5655,15 @@ export function armEventDetail(fields: RouteFields): string {
  *                             every IDLE state route THROUGH this gate
  *   409 no-session          — the resolved target (worker/coordinator)
  *                             carries no session id on this run
+ *   409 bad-session          — the resolved target's session id (`run.sessionId`/
+ *                             `run.claimedBy`) is present but not a legal
+ *                             session-id SHAPE (`isSessionIdShape`, above this
+ *                             union in this file) — distinct from `no-session`
+ *                             (nothing there at all): a value here would
+ *                             silently fail to round-trip through
+ *                             `routeEventDetail`/`parseRouteEventDetail`'s
+ *                             `:`-delimited grammar (fix round 1, finding #2),
+ *                             so this door refuses it before ever writing one
  *   501 unsupported         — the fleet does not report `route-v1`
  *   409 no-record           — the target session's registry has no `.class`
  *                             file at all (S5-R18: an absent `.effort`
@@ -5676,7 +5713,7 @@ export function armEventDetail(fields: RouteFields): string {
  * tolerance.
  */
 export const RUN_ROUTE_REFUSE_CODES = [
-  'no-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
+  'no-session', 'bad-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
   'ceiling', 'floor', 'no-effort-rungs',
 ] as const;
 export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];

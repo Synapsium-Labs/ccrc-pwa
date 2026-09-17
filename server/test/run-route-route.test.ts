@@ -244,6 +244,40 @@ describe('POST /api/runs/:id/route', () => {
     expect(res.json()).toEqual({ ok: false, error: 'no-session' });
   });
 
+  // Fix round 1, finding #2. `POST /api/runs`'s own body guard only checks
+  // `claimedBy`/`sessionId` for "non-empty string" — no charset guard — so a
+  // value with a space or a `:` reaches `run.claimedBy`/`run.sessionId`
+  // untouched. Left unchecked, THIS door would embed it verbatim as
+  // `routeEventDetail`'s sixth segment, produce a `route:` detail its own
+  // `ROUTE_EVENT_DETAIL_RE` (shared/api.ts) refuses to parse back, and answer
+  // 200 while silently corrupting the trail (`parseRouteEventDetail` returns
+  // `null`, the door's own walk `continue`s past the record it just wrote,
+  // and `runSignals` reports it as `routingUnparsed` — a corrupt record,
+  // not the door's own write). `isSessionIdShape` (shared/api.ts) refuses it
+  // here instead, before either an argv or an event is ever built.
+  it('409s bad-session (not 200, and writes no event) when the COORDINATOR session id is not a legal shape', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const opened = (await postOpen(w.app, { ...OPEN_BODY, claimedBy: 'bad claimant' })).json() as { id: number };
+    const res = await postRoute(w.app, opened.id, { target: 'coordinator', why: 'x', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session' });
+    expect(w.coord.runEvents(opened.id)).toEqual([]);
+  });
+
+  it('409s bad-session for target worker when the dispatched sessionId is not a legal shape (a routable record, so without the guard this would 200 and write an unparseable event)', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run } = makeRunner(home, { wsAddCreates: ['bad worker'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'bad worker');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'x', kind: 'shallow' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, error: 'bad-session' });
+    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+  });
+
   it('501s without the route-v1 capability', async () => {
     const home = mkTmp('ccrc-route-');
     const { run } = makeRunner(home);
@@ -582,50 +616,27 @@ describe('POST /api/runs/:id/route', () => {
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:reverse-demotion:effort:medium->high:shallow:${sid}`);
   });
 
-  // Final review, finding #2: THE LADDER'S HISTORY IS THIS RUN'S, AND A WAVE
-  // IS ONE RUN ROW. `lastDemotion` and `priorSameKind` are derived from
-  // `coord.runEvents(id)` — one run's rows — while the rung they walk belongs
-  // to the SESSION, which is resumed wave after wave. So the spec's
-  // cross-history rules ("any failed check reverses the last demotion";
-  // "`max` … after a second failed check of the same kind on the same
-  // session") hold inside a wave and not across one. This case MEASURES that
-  // scope rather than leaving it to be rediscovered, and
-  // `ccd/coordinator-skill/references/wave-lifecycle.md` §4 now states it to
-  // the coordinator in the wave they act in, with the by-hand carry. If the
-  // scope is ever widened to the session, this case is the one that must
-  // change with it — deliberately, not silently.
-  it("a demotion on wave N's run is NOT reversed by a failure on wave N+1's run — the bookkeeping is run-scoped", async () => {
-    const home = mkTmp('ccrc-route-');
-    const { run } = makeRunner(home, { wsAddCreates: ['demo-w23'] });
-    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
-    const { id: waveOne, sid } = await dispatchedRun(w.app, 'demo-w23');
-    seed(home, sid, { class: 'opus', effort: 'high' });
-
-    const demoted = await postRoute(w.app, waveOne, { target: 'worker', why: 'three clean waves', demote: 'effort' });
-    expect(demoted.statusCode, 'setup: the wave-1 demotion must land').toBe(200);
-
-    // Wave 2 is a NEW run row on the SAME session (CLAUDE.md: "wave N+1 is a
-    // NEW POST /api/runs, not a reopen"), bound by `sessionId` at open the
-    // way a resumed worker's wave is.
-    const openedTwo = await postOpen(w.app, { ...OPEN_BODY, wave: 2, sessionId: sid });
-    expect(openedTwo.statusCode, 'setup: wave 2 must open').toBe(200);
-    const waveTwo = (openedTwo.json() as { id: number }).id;
-    expect(waveTwo).not.toBe(waveOne);
-
-    const res = await postRoute(w.app, waveTwo, { target: 'worker', why: 'failed again', kind: 'shallow' });
-    expect(res.statusCode).toBe(200);
-    // Wave 1's demotion is invisible here, so this is a plain ladder
-    // escalation off the record (`.effort` still reads `high` — the stubbed
-    // ccd never rewrote it), not the `reverse-demotion` the same two calls
-    // inside ONE run produce (the case above).
-    expect(res.json()).toEqual({
-      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh',
-        kind: 'shallow', effortReset: null },
-    });
-    expect(w.coord.runEvents(waveTwo).map((e) => e.detail)).toEqual([`route:escalate:effort:high->xhigh:shallow:${sid}`]);
-    // …and wave 1's own trail is untouched by wave 2's call.
-    expect(w.coord.runEvents(waveOne).map((e) => e.detail)).toContain(`route:demote:effort:high->medium:manual:${sid}`);
-  });
+  // Final review, finding #2 (routing slice 5) once pinned a case here named
+  // "the bookkeeping is run-scoped": `lastDemotion`/`priorSameKind` walked
+  // only `coord.runEvents(id)`, so a demotion on wave N's run was invisible
+  // to wave N+1's. Routing slice 6, Task 1 CLOSED that rule (D-2957): the
+  // walk now reads the union of `coord.runsTouching(sid)`'s events, so the
+  // shape that case exercised (a demotion on run A, a failure on run B, same
+  // worker session, `.effort` never re-seeded after the demote) NOW reverses
+  // — the wave-1 demotion IS visible on wave 2. Fix round 1, finding #1: the
+  // case's own title and comment went on asserting the closed rule while its
+  // body kept passing for an unrelated reason (S5-R17's measured-value guard
+  // — `.effort` still read `high`, `lastDemotion.to` read `medium`, so S5-R17
+  // cleared the demotion and produced the same plain-escalate result the
+  // old run-scoped rule would have, by coincidence of an untouched fixture,
+  // not by run-scoping). Deleted rather than rewritten in place:
+  // `run-route-session-trail.test.ts` already carries both halves this one
+  // case conflated — the positive cross-run reversal
+  // ("a demotion on run A (wave 1) is reversed by a failed check on run B
+  // (wave 2, same worker session)") and an S5-R17-across-runs control
+  // ("an out-of-band write after a demotion on an EARLIER run supersedes the
+  // reversal on a LATER one") — under titles that say what each one now
+  // measures, so a reader is never left taking a stale title as the contract.
 
   it('manual field/value writes the argv as given and records mode manual with from "?"', async () => {
     const home = mkTmp('ccrc-route-');

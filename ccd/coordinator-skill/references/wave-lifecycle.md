@@ -791,7 +791,9 @@ no control characters>", ...one of...}`:
 Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind","effortReset"}}`,
 `mode` one of `escalate`/`demote`/`reverse-demotion`/`manual`; `effortReset` is the companion
 effort a CLASS rung wrote in the same argv (§4 above), `null` on a single-field write. Refusals: `no-session` (the target has no
-session id on this run), `no-record` (the registry has no `.class` file at all — an ABSENT `.effort`
+session id on this run), `bad-session` (the target has a session id, but not one this door will write
+into a routing event — a shape check, refused before the write rather than silently mis-recorded),
+`no-record` (the registry has no `.class` file at all — an ABSENT `.effort`
 alongside a present `.class` is not this: it reads as `effort: 'auto'`, the record's own vocabulary
 for "no override, the model's default"), `unrouteable-record` (`.class`/`.effort`/`.degraded` IS
 present and readable but its content is not a rung of the ladder — a record, not a rung: a stray ccd
