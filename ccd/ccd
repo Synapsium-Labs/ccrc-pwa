@@ -3508,9 +3508,11 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   # answer, so `shell` reading idle deletes the tree out from under a running
   # `npm test`. A status we do not recognise is far likelier to be new work than
   # new rest, and an allowlist is the only polarity that survives the wrapper
-  # growing a fourth word. Same polarity as _auto_swap_check's gate
-  # (ccd:1913), which is likewise `[[ "$st" == "idle" ]]` and stops on anything
-  # else.
+  # growing a fourth word. Same polarity as `_auto_swap_check`'s gate (NAMED
+  # BY FUNCTION, NOT LINE — a stale "ccd:1913" stood here, pointing at
+  # unrelated prose; `_pr_py`'s own comment states the reason: a line number
+  # goes stale the moment anything above it grows), which is likewise
+  # `[[ "$st" == "idle" ]]` and stops on anything else.
   local id="$1" wrapper cfg pid sf st
   wrapper=$(_reg_get "$id" wrapper); [[ -n "$wrapper" ]] || return 1
   cfg=$(_cfg_dir "$wrapper");        [[ -n "$cfg" ]]     || return 1
@@ -3527,6 +3529,19 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   [[ "$pid" =~ ^[0-9]+$ ]] || return 1
   sf="$cfg/sessions/$pid.json"
+  # D-2379: the one unguarded reader of this path family — `_sync_uuid`
+  # (`-f`), `_auto_swap_check` (`-f`) and `_auto_compact_check` (a three-rung
+  # ladder) each type-test `$sf` before opening it; this one did not, and
+  # `grep FILE` opens BY NAME — a FIFO with no writer, or a symlink to an
+  # unbounded character device, blocks forever, holding open the destructive
+  # verbs that gate on this function (`cmd_ws_archive`, `_ws_reap_eval`,
+  # `cmd_ws_reap`). `-f` alone, matching the PATH siblings above rather than
+  # the SHAPE siblings (`_project_pool_state`, `_transcript_stalled_pair`)
+  # that also pair `-r`: this function's own contract already collapses
+  # every unreadable/unrecognised shape to the same non-zero `[[ -n "$st" ]]
+  # || return 1` lands on, so a mode-000 `$sf` is unaffected either way —
+  # measured, not assumed.
+  [[ -f "$sf" ]] || return 1
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
   [[ -n "$st" ]] || return 1
   [[ "$st" == idle ]] || { echo busy; return 0; }
