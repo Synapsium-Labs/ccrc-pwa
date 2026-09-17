@@ -547,7 +547,7 @@ fork it does not control.
    a contradiction of the "steps 5–8" first held section enumerated below), first validate that
    `CCRC_SESSION_GENERATION` is a strict lowercase
    UUID and byte-for-byte equals the ccrc-owned `$REG/<id>.generation`; validate it once under each held
-   section, and re-prove lock identity immediately before each publication or destructive mutation — §3.3's own paragraph carries the residue argument that makes a PRE-lock validation wrong. A hook with no generation (including an already-running
+   section, and re-prove lock identity immediately before each publication or CANONICAL mutation — the narrowing the ITEM-3 pin measures and §3.4's settlement sentence already uses, and narrower than "destructive" deliberately, because the age-gated sweep below is the carve-out it makes room for: the sweep's `rm -f "$cand"` (`ccd/session-hook.sh:1458`) destroys one private `.<id>.` family member per iteration and never a canonical pathname, so the arm proves identity ONCE for the whole loop rather than once per removal — §3.3's own paragraph carries the residue argument that makes a PRE-lock validation wrong. A hook with no generation (including an already-running
    pre-upgrade process) fails closed for compaction lifecycle work only; ordinary hookstate behavior is
    unchanged. Then scan only exact-this-session regular claims matching
    `$REG/.<id>.compactpost.<pid>.<RANDOM>.<RANDOM>.claim`. If canonical and one such claim are the same
@@ -717,7 +717,7 @@ line by line: the overlap `find`
 (`ccd/session-hook.sh:1433`), step 6's **conditional ambiguous-card `rm -f "$cardf"` (`:1439`)** — `rm` is an
 external binary (measured on this box, `type -t rm` answers `file`), so it forks exactly as
 `_hook_write_atomic`'s own conditional failure-path `rm -f` already listed here does, and conditionality is
-therefore no excuse for leaving it out — the exact-family sweep `find` (`:1449`), the
+therefore no excuse for leaving it out — the exact-family sweep `find` (`:1449`), the sweep LOOP's per-iteration `rm -f "$cand"` (`ccd/session-hook.sh:1458`), which is this section's ONLY UNBOUNDED member — one `execve` per swept candidate, not a fixed count, MEASURED by planting one aged sweepable file and then two and reading the multiset's `rm` at 2 and then 3 against the ordinary run's 1 (`server/test/session-hook.test.ts`, the residue scenario). It is also the member every earlier draft of this list missed, and the reason is structural rather than careless: both of the fork-multiset pin's original scenarios leave the registry free of AGED residue, so `$aged` is empty and the loop body never runs, and a prose list checked against a pin can only be as complete as the paths that pin drives. Then the 
 `at=$(_hook_epoch_ms)` **command substitution (`:1460`)**, which forks a subshell even though
 `_hook_epoch_ms`'s `EPOCHREALTIME` fast path (`:34-42`) is builtin-only and execs nothing (measured on
 this box, bash 5.2.21: `strace -f -c -e trace=clone,clone3,fork,vfork,execve` over that one statement
@@ -1088,7 +1088,7 @@ slug residue because it intentionally outlives the row. The Bash 4.4+/GNU-or-BSD
    `flock -w "$1" "$fd"` — **the wait is the acquire helper's first positional parameter, never a constant
    spelled inside the helper**, which is what lets `COMPACT_LOCK_WAIT_SERVE` (compact SessionStart alone) and
    `COMPACT_LOCK_WAIT` (every other acquisition, §2) coexist as two independently callable bounds through the
-   one helper — and immediately before each mutation. Any unavailable
+   one helper — and immediately before each mutation. That last clause is the LOOSE spelling, and it is kept verbatim because §3.1 item 5 and Plan A both quote it: read "each mutation" as each CANONICAL mutation, which is the rule the ITEM-3 pin measures site by site and the only one the arms build. The age-gated sweep's private-family removals are the measured carve-out — one proof for the whole loop, never one per `rm` (§3.1 item 5). Any unavailable
    inspection, FIFO, symlink (including dangling or to FIFO/regular), directory, disappearance, replacement,
    link/open/flock race, or mismatch closes the FD and refuses. It never recreates canonical. A test holds
    the old inode while canonical disappears and requires prompt refusal, zero recreated canonical, and no
