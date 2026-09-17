@@ -194,23 +194,56 @@ is caught by the guard's `return 1`. The `! -L` in that guard is what admits the
 function's own header calls that order "the whole correctness of the Darwin arm" while enumerating only
 two outcomes for it — replace, or wrongly refuse — where the code performs a third.
 **The fix removes a bet rather than placing one:** the arm is correct today only if BSD `mv` does not
-follow a symlink to a directory, which nobody has measured. After `rm -f` the destination does not exist
-and no `mv` can move into it, so "unverified on Darwin" is the argument FOR the fix, not a reason to wait
-for a mac. Reported by `claude-OpenClawHetzner`; confirmed and narrowed here.
+follow a symlink to a directory, which nobody has measured. **Conditional on the unlink succeeding** —
+after a SUCCESSFUL `rm -f`, the destination does not exist and no `mv` can move into it; a FAILING `rm`
+is a precondition nothing enforced until the final round, closed there by `rm -f -- "$2" || return 1`
+(the fall-through this defect's own recurrence rode in on) — so "unverified on Darwin" is the argument
+FOR the fix, not a reason to wait for a mac. Reported by `claude-OpenClawHetzner`; confirmed and narrowed
+here.
 
-**Part A mutation table (D-2187) — five mutants of the fix's new guard, mechanism by mechanism.** All
-five applied to `ccd/ccd`'s `_plat_mv_notdir` only, each restored from a copy kept outside the repo
-(never `git checkout --`); full transcripts in
-`.superpowers/sdd/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage/partA-report.md`, which
-`.gitignore` excludes — recorded here so the measurement survives the worktree:
+**Part A mutation table (D-2187) — SIX mutants of the fix's new guard, four columns per row (final-round
+item 6; supersedes the five-row/"caught by" form below it once carried).** All six applied to `ccd/ccd`'s
+`_plat_mv_notdir` only, each restored from a copy kept outside the repo (never `git checkout --`); full
+transcripts in `.superpowers/sdd/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage/partA-report.md`
+and `finish-report.md`, which `.gitignore` excludes — recorded here so the measurement survives the
+worktree. The four columns are the ones relevant to whether the `rm` is CONTAINED in its guard — not
+every mechanism that exists: **case (a)** = "refuses when src is missing and leaves a plain-file dest
+untouched" (`macos-platform.test.ts`), **case (b)** = "...leaves a symlink-to-file dest resolvable", **the
+narrowed scan** = `ccd-reg-set-atomic.test.ts`'s since-DELETED "WEAKEST HONEST FORM" check (see below),
+**A1 case 2** = "refuses a real directory destination and leaves it untouched". A1's case 1
+(symlink-to-directory dest, src present — the fix's own defining case) sits outside this four-column
+group by design; a row can be green across all four and still be caught elsewhere.
 
-| mutant | result | caught by |
-|---|---|---|
-| M1 — delete the `rm -f -- "$2"` line entirely | **RED** | A1's case 1 (symlink-to-directory dest, src a regular file) |
-| M2 — guard the new `rm` by `-L "$2"` only (drop `-d`) | **RED** | the new symlink-to-file/missing-src case |
-| M2b — guard the new `rm` by `-d "$2"` only (drop `-L`) | **GREEN** | none — **provably equivalent mutant**, not an uncaught defect |
-| M3 — make the new `rm` unconditional | **RED** | both new behavioural cases (plain-file/missing-src and symlink-to-file/missing-src) |
-| M4 — M3 plus delete the pre-existing refusal guard (`if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi`) too | **RED** | four mechanisms: the narrowed `ccd-reg-set-atomic` scan, A1's case 2 (real-directory dest), and both new behavioural cases |
+| # | mutant | case (a) | case (b) | narrowed scan | A1 case 2 |
+|---|---|---|---|---|---|
+| M1 | delete the `rm -f -- "$2"` line entirely | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four; caught only by A1's case 1 |
+| M2 | guard the `rm` by `-L "$2"` only (drop `-d`) | GREEN | **RED** | GREEN | GREEN |
+| M2b | guard the `rm` by `-d "$2"` only (drop `-L`) | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four, but **PROVABLY EQUIVALENT** (below), not an uncaught defect |
+| M3 | make the `rm` unconditional (drop its own `-L`/`-d`, keep `\|\| return 1`) | **RED** | **RED** | GREEN | GREEN |
+| M4 | M3 plus delete the pre-existing refusal guard (`if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi`) too | **RED** | **RED** | **RED** | GREEN |
+| 6 | delete ONLY the refusal guard — the `rm` line left EXACTLY as HEAD has it | GREEN | GREEN | GREEN | **RED** |
+
+**The narrowed scan's column is historical for M1–M4/M2b and MEASURED for row 6** (the rest were not
+re-run against it, since it no longer exists — deleting it is what row 6 decided; see below). **M4's `A1
+case 2` column is a NEW result, not the historical one**: before this final round added
+`rm -f -- "$2" || return 1`, an unconditional `rm` on a real (non-symlink) directory failed but fell
+through to a `mv` that then succeeded by moving `src` INSIDE it — the shape M4 exists to catch. With
+`|| return 1` now in place, `rm -f` (no `-r`) on a real directory still fails, but the function now
+returns 1 immediately on that failure regardless of whether the refusal guard exists — so this fix
+*coincidentally* closes M4's real-directory column on its own, for this one shape. M4's case (a)/(b)
+columns are unaffected and still catch it.
+
+**Row 6 decides the narrowed scan's fate, per the coordinator's ruling, and it is GREEN**: deleting only
+the refusal guard, with the `rm`'s own `-L`/`-d` guard left untouched, still leaves both an `-L "$2"` and
+a `-d "$2"` token in the body (supplied by the `rm` guard line itself) — so the scan, which only checks
+token PRESENCE anywhere in the body, never fires. A pin whose name promises containment while its body
+cannot fail is worse than none: the next reader sees a named assertion and stops looking. **The scan is
+DELETED** (`ccd-reg-set-atomic.test.ts`, in the same test as before — the rest of that test, which pins
+`_reg_set`'s own body, is untouched) and the sentences claiming it — in that file's comments and in this
+paragraph's prior wording — are removed with it. `_plat_mv_notdir`'s Darwin arm is pinned entirely by
+`macos-platform.test.ts`'s "`_plat_mv_notdir`'s Darwin arm, forced from Linux (D-2187)" describe now:
+A1's two cases, the two R1 behavioural cases, and the two prices this final round added (the rm-fails
+case and the destination-gone case, both below).
 
 **M2b's equivalence, stated rather than assumed:** the untouched refusal guard returns before the `rm`
 line for every non-symlink directory, so by the time `[ -d "$2" ]` is evaluated on the `rm`'s own guard,
@@ -218,8 +251,17 @@ line for every non-symlink directory, so by the time `[ -d "$2" ]` is evaluated 
 differ on any input that reaches that line. No behavioural case can distinguish them, and inventing one
 would pin nothing while looking as if it did.
 
-**Before this fix round, M2 and M3 were both green on every mechanism** — the two new behavioural cases
-above are what turned them red; that asymmetry is the whole reason this table exists.
+**Before the fix round that added the two R1 behavioural cases, M2 and M3 were both green on every
+mechanism** — those two cases are what turned them red; that asymmetry is the whole reason this table
+exists.
+
+**Two more prices, pinned this final round (item 4):** the **rm-fails price** — dest a symlink-to-directory
+inside a parent with no write permission, so `rm -f -- "$2"` itself fails — must not answer 0 (this is
+what makes the `|| return 1` fix in item 1 a mechanism rather than a comment); and the
+**destination-gone price** — dest a symlink-to-directory, `src` ABSENT — leaves the destination GONE
+where the pre-fix code left the symlink intact, disclosed in `_plat_mv_notdir`'s own header and now
+pinned so it cannot silently change in either direction. Both live in the same describe as A1's cases;
+the first is `it.skipIf(process.getuid?.() === 0)` because root defeats `chmod`.
 
 ### D-2188 — the case that would have caught it has never run
 `macos-platform.test.ts`'s Darwin block is `describe.skipIf(!IS_DARWIN)`. Measured on the fleet box:
@@ -227,7 +269,7 @@ above are what turned them red; that asymmetry is the whole reason this table ex
 would add a comment, not a mechanism. Both arms are pure bash and CAN be pinned in a suite that runs on
 linux by driving `CCD_OS=darwin` after sourcing the platform block, which is what A1 does.
 
-### D-2189 — the atomicity paragraph's destination claim is false at four of five call sites
+### D-2189 — the atomicity paragraph's destination claim is false at six of eight call sites
 **Cardinal corrected in place (the D-2475 shape) — the conclusion survives, only the count was wrong.**
 It reads *"every destination is `$REG/<id>.<field>`, and this function is its only writer — so the race is
 unreachable here rather than tolerated."* The original count ("four of five") was `ccd/ccd` alone and
@@ -237,10 +279,16 @@ and comment lines): **eight executable call sites**, five in `ccd/ccd` (`_svc_wr
 `_reg_set`, `_lc_err`, `cmd_project_pool`, `cmd_supervise`) and three in `ccd/ccrc`
 (`_svc_write_session_plist`, `_acct_mark_off`, `_acct_rehome`). **Six of the eight** write outside the
 canonical `$REG/<id>.<field>` shape; only `_reg_set` and `_acct_rehome` write it. The conclusion survives
-unchanged (nothing in the tree creates a *directory* at any of the eight, so the race stays unreachable);
-the argument that proves it does not, which is the misattribution class this entry is itself an instance
-of — a wave (`account-pools` wave 2a, which added `cmd_project_pool`) added a call site and left the
-quantifier standing, and this plan then quoted only half the file split.
+unchanged, but not for the reason first written here: every directory that sits at one of the eight
+destinations exists BEFORE `_plat_mv_notdir` is ever called — `ccd-project-pool.test.ts` mkdirSyncs
+`POOLS()/demo` and `ccd-hold.test.ts` mkdirSyncs `$REG/<id>.hold` before either test drives the call, two
+of the eight — so the refusal guard's `[ -d ]` arm sees the directory and returns 1; the race this
+paragraph is about is a directory appearing INSIDE the window between the test and the rename, which is
+not what any of the eight call sites, or these two fixtures, does. A measured fact about today's call
+sites, not a guarantee about future ones — the argument that proves the conclusion does not survive
+unchanged, which is the misattribution class this entry is itself an instance of — a wave
+(`account-pools` wave 2a, which added `cmd_project_pool`) added a call site and left the quantifier
+standing, and this plan then quoted only half the file split.
 
 ### D-2190 — `_check_services` never asks about `ccrc-models.timer`
 `known` is a hardcoded five-unit list, and `installed` is built only from it, so a unit outside it never
