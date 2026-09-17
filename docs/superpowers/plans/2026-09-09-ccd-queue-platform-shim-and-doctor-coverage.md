@@ -381,14 +381,24 @@ from a real read. The fix is a test that does NOT follow: bash `! -L`, python
 `stat.S_ISREG(os.lstat(p).st_mode)`, node `lstatSync`.
 
 **THE INSTRUMENT, so the next reader re-measures rather than inherits a number.** Per file, find that
-file's own spelling of the registry root (`REG=`, `_SVC_REG=`, `reg=`, `$HOME/.cc-sessions`), then pair
-type tests against reads of the same path:
+file's own spelling of the registry root (`REG=`, `_SVC_REG=`, `reg=`, `$HOME/.cc-sessions`,
+`registryDir`), then pair type tests against reads of the same path.
 
-    git -C <repo> ls-files ccd/ | while read -r f; do
-      /bin/grep -nE '\[\[? *-[efrsdx] |os\.path\.(isfile|isdir|exists)|existsSync|statSync' "$f"
+**THE CORPUS IS THE REPO, NOT `ccd/`** — corrected in round 5, after the `ccd/`-only form reported a
+clean sweep while `server/src/limits.ts` carried the class. Widen the first line to every tracked
+shipped file naming the registry root and keep the rest:
+
+    git -C <repo> ls-files ccd/ server/src agent/src shared deploy pwa/src | while read -r f; do
+      /bin/grep -nE '\[\[? *-[efrsdx] |os\.path\.(isfile|isdir|exists)|existsSync|statSync|readdir\(' "$f"
     done
     # then, per hit, read forward for a read of the SAME path (cat, $(<p), read <p, jq/grep/awk p,
-    # source p, python open(p), node readFileSync) with no -L / lstat / S_ISREG in between.
+    # source p, python open(p), node readFileSync, io.readFile) with no -L / lstat / S_ISREG between.
+
+`readdir(` is in the pattern for round 5's reason: in TypeScript the type test is often a FILENAME —
+a listing filtered by suffix, then each survivor read. That is the shape `limits.ts` had and
+`registry.ts` still has, and a pattern of `-e`-style tests alone cannot see either. The rule is the
+same in both languages: something decided this path was the right KIND of thing, and something else
+then read it, and a symlink satisfies the first while changing the answer to the second.
 
 Run 42 ran it as a 7-agent census — four independent lenses (bash `-f`/`-e`; bash `-r`/`-s`/`-d`/glob;
 python + node; indirect/multi-level) then three adversarial verifiers (both-halves-present;
@@ -396,54 +406,201 @@ would-a-symlink-actually-change-the-answer; reachability-and-blast-radius), each
 NOT-IN-CLASS when uncertain. A site below is listed only where a MAJORITY of verifiers held it in class
 and no verifier found it already guarded.
 
-**FIXED THIS WAVE — five bodies, each with its own mutation row:**
+**FIXED THIS WAVE — SIX bodies.** The `each with its own mutation row` this heading used to claim was
+not true of THIS document: the table has no mutation column, and D-2989(a)'s mutation table below
+covers `_reg_get`, `_reg_read` and `get()` only. The `_authdead` rows' mutants live in commit
+`a4fe09bb`'s message and the `limits.ts` rows' in its own commit's; the heading now says where, rather
+than asserting a coverage this file does not carry.
 
-| body | before | after |
-|---|---|---|
-| `ccd/ccd` `_reg_get` | `[[ -f ]]` | `&& ! -L` -> rc 1, its existing not-a-field arm |
-| `ccd/ccd` `_reg_read` | `[[ -f ]]` | `[[ -L ]] && return 2` before the open |
-| `ccd/ccd` `_pr_py`'s `get()` | `os.path.isfile` | `lexists ∧ ¬S_ISREG(lstat)` |
-| `ccd/ccd` `_authdead` | `[[ -f "$f" ]]` | `[[ -f "$f" && ! -L "$f" ]]` |
-| `ccd/ccd-telemetry-keepalive` `_authdead` | `[ -f "$f" ]` | a separate `[ -L "$f" ] && return 1` rung |
+| body | before | after | mutation table |
+|---|---|---|---|
+| `ccd/ccd` `_reg_get` | `[[ -f ]]` | `&& ! -L` -> rc 1, its existing not-a-field arm | D-2989(a), below |
+| `ccd/ccd` `_reg_read` | `[[ -f ]]` | `[[ -L ]] && return 2` before the open | D-2989(a), below |
+| `ccd/ccd` `_pr_py`'s `get()` | `os.path.isfile` | `lexists ∧ ¬S_ISREG(lstat)` | D-2989(a), below |
+| `ccd/ccd` `_authdead` | `[[ -f "$f" ]]` | `[[ -f "$f" && ! -L "$f" ]]` | commit `a4fe09bb` |
+| `ccd/ccd-telemetry-keepalive` `_authdead` | `[ -f "$f" ]` | a separate `[ -L "$f" ] && return 1` rung | commit `a4fe09bb` |
+| `server/src/limits.ts` `readLimits` | `io.readFile` alone (follows) | `io.lstatMeasured` first; only a proven `regular` may condemn | round 5's commit, per rung |
 
-The last two are ONE contract in two bodies. `ccd/ccd`'s header claimed the sibling "already opens with
-`[ -f "$f" ] || return 1`" and that this copy "was the one left behind" — measured, the sibling carried
-the SAME following test and the SAME defect, so `-f` was never what was missing. A class closed in one
-body of a two-body contract is closed nowhere.
+THE SIXTH BODY WAS FOUND BY REVIEW 78 AND FIXED RATHER THAN DEFERRED, on the coordinator's own
+criterion for deferring the declared remainder: those are pre-existing on `main`, this one THIS BRANCH
+CREATED. Before this wave all three bodies of the `_authdead` contract followed the link and were
+consistently wrong; closing the two bash ones alone made the server condemn accounts the fleet's own
+gate calls healthy — the widening `limits.ts`'s own docstring forbids, reached from the other side. A
+class closed in one body of a three-body contract is closed nowhere.
+
+**A PENDING DEPARTURE, NAMED IN PROSE BECAUSE IT CANNOT BE NUMBERED HERE.** The sixth body needed a
+question no port on this fleet could ask — the server reads the registry over the agent WS in the
+live configuration — so `FleetIO` gained `lstatMeasured` and the agent protocol gained an `lstat`
+op. **Adding an op to the wire is a MECHANISM, not another instance of D-2989's class, so it wants a
+number of its own.** This wave's block (D-2989..D-2992) is spent and defined; the standing instruction
+for this run is never to call the allocator mid-wave; and a concrete `D-TBD-<slug>` reds
+`server/test/dtbd.test.ts` by design. It is therefore reported in the wave-done mail for the
+coordinator to mint against this project, and named here so a later reader finds it before the number
+exists. Additive on the wire, `FLEET_PROTO` untouched; an agent too old for the op refuses the request
+and the server reads UNMEASURED, never a kind.
+
+ROWS 4 AND 5 ARE ONE CONTRACT IN TWO BASH BODIES, and row 6 is its third. `ccd/ccd`'s header claimed
+the keepalive sibling "already opens with `[ -f "$f" ] || return 1`" and that this copy "was the one
+left behind" — measured, the sibling carried the SAME following test and the SAME defect, so `-f` was
+never what was missing. A fix banner describing what it MEANT rather than what it did.
 
 **DECLARED, NOT FIXED — the measured remainder, with what each one reaches.** This is a declaration
 because the round that found it was bounded to `_authdead` plus a re-census; it is not a claim that
 these are harmless. Four of them are destructive and one writes into a model's context.
 
-| site | votes | what a fabricated value there reaches |
-|---|---|---|
-| `ccd/ccd:1735` | 4/5 | WRONG-POOL PLACEMENT — the worst non-destructive consequence in this census. CLAUDE.md: `_project_pool_state` is ccd's ONLY reader of the project pool |
-| `ccd/ccd:6846` | 3/3 | cmd_ws_rm's refusal: the fabricated bytes go into `_lc_refuse destroy "$id" held "held: $_hold_reason — release first: …"`, i.e. the operator-visible  |
-| `ccd/ccd:7307` | 3/3 | COSMETIC — cmd_ws_rename's refusal is already decided at ccd/ccd:7302 `if [[ -e "$REG/$id.hold" ]]`. The value lands only in the wire JSON at ccd/ccd: |
-| `ccd/ccd:8012` | 3/3 | AUDIT RECORD, AND IT OUTLIVES ITS SUBJECT — worse than the other four hold sites. The value goes into ccd/ccd:8016 `_lc_done release "$id" "" meas.hel |
-| `ccd/ccd:8334` | 2/2 | SMALLEST OF THE REAL ONES. Single caller, ccd/ccd:8471 inside cmd_project_pool's `--pool` arm: `[[ -d "$PROJECTS_ROOT/$project" ]] || _reg_project_glo |
-| `ccd/ccd:12532` | 4/5 | READ *AND* WRITE THROUGH THE LINK — the only candidate in the census that CLOBBERS a foreign file rather than merely misreading one. Caller: ccd/ccd:1 |
-| `ccd/ccd:12582` | 4/5 | A DESTRUCTIVE ARM, AND THE SELF-CONSISTENCY IS WHAT MAKES IT BITE — the widest radius in this census. On cmd_ws_reap's RESUME path: 12860 `tombtip=$(_ |
-| `ccd/ccd:12633` | 4/5 | THE CONSENTED-CHILD SET ON A REAP RESUME. Callers: ccd/ccd:13037 `rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json")` and 13390 `childlines=$(_w |
-| `ccd/ccd:12703` | 3/3 | COSMETIC — cmd_ws_reap's held-refusal is decided at ccd/ccd:12698 `if [[ -e "$REG/$id.hold" ]]`, before any read. Fabricated bytes reach only ccd/ccd: |
-| `ccd/ccd:14947` | 3/3 | FABRICATED PLACEMENT HEADROOM FOR THE FABLE CLASS. Single caller: ccd/ccd:14977 `fig=$(_share_pct "$w"); rc=$?` inside `_serviceable`, whose own comme |
-| `ccd/ccd:21366` | 3/3 | COSMETIC — the refusal is decided at ccd/ccd:21361 `if [[ -e "$REG/$id.hold" ]]`; the value only fills ccd/ccd:21369-21370 `_lc_refuse forget "$id" he |
-| `ccd/ccd-graph-sweep:88` | 3/3 | GRAPH FRESHNESS ONLY — nothing destructive, nothing the PWA renders. `_gs_session_on` is called at ccd-graph-sweep:201 (a `.claude/worktrees` candidat |
-| `ccd/ccd-graph-sweep:297` | 3/3 | `_gs_busy` at :1069 gates `_gs_row "$tree" "$BUSY_OUTCOME"` — the sweep's decision not to touch a tree. A symlink to any fresh JSON carrying a live `. |
-| `ccd/ccd-telemetry-keepalive:521` | 3/3 | AN ACCOUNT'S KEEPALIVE TURN. Caller: ccd-telemetry-keepalive:680 `sess_why="$(_ka_session_on "$acct")"; sess_rc=$?`. The function's own header (510-51 |
-| `ccd/ccd-usage-sweep.py:272` | 2/3 | THE TOOL'S ONLY DESTRUCTIVE PATH, BY ITS OWN DOCSTRING (lines 238-244: "This is the tool's ONLY destructive path, so an id whose `ts` is absent, unrea |
-| `ccd/ccrc-api:275` | 3/3 | MUTED, AND THE REASON IS WORTH STATING. DERIVED_ID comes from the tmux pane (271-274), not from the file, so `who` at ccrc-api:404 is unaffected; only |
-| `ccd/ccrc-doctor-checks:3063` | 3/3 | ADVISORY DIAGNOSTIC ONLY. `reg_rows` is consumed at ccrc-doctor-checks:3164 `if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then p_stal |
-| `ccd/ccrc-doctor-checks:3145` | 3/3 | Doctor's per-tag pools verdict (`p_malformed`/`p_unread`/the reported tag). A symlink at $REG/pools/<project> resolving to any ≤64-byte file matching  |
-| `ccd/session-hook.sh:456` | 3/3 | BYTES INTO A PEER'S MODEL CONTEXT — the widest non-destructive radius here. Callers: session-hook.sh:480 `_ct_read "$REG/$id.project"` and 531/547 (`_ |
+**RE-EMITTED AS A LIST IN ROUND 5, AND THE FORMAT IS THE POINT.** This was a three-column table and
+every one of its nineteen rows was cut mid-token before its closing `|` — so the blast-radius column,
+which is this declaration's ENTIRE deliverable for sites it is not fixing, was missing in every case
+(three rows lost a citation to the cut). A list has no width to exceed. Every entry below was
+re-derived on the shipping tree rather than un-truncated from memory: the tail of each cut sentence is
+gone, and completing it by inference is exactly what this wave keeps punishing. **Line numbers are the
+shipping tree's**, and each ccd/ccd site was re-checked by content after this round's `_authdead`
+header correction moved every line past `:1528` by 26.
+
+*Destructive or context-reaching entries are marked. Votes are the original census's.*
+
+- **`ccd/ccd:1761`** (4/5) — `_project_pool_state` (`:1679`). **WRONG-POOL PLACEMENT — the worst
+  non-destructive consequence in this census.** CLAUDE.md: this is ccd's ONLY reader of the project
+  pool tag, and it answers one of four words that every placement, tick and manual verb keys on. A
+  symlink at `$REG/pools/<project>` resolving to any readable ≤64-byte file matching the pool grammar
+  makes it answer `named <that>`, placing work on a pool nobody tagged.
+- **`ccd/ccd:6872`** (3/3) — `cmd_ws_rm`'s held-refusal. **PERSISTED** (corrected this round): the
+  fabricated bytes go into `_lc_refuse destroy "$id" held "held: $_hold_reason — release first: …"`
+  (`:6877`), which emits through `_lc_emit` — the journal — and then dies. The HELD verdict itself is
+  the separate `-e` gate above and is not forgeable; the reason TEXT is.
+- **`ccd/ccd:7333`** (3/3) — `cmd_ws_rename`'s held-refusal. **COSMETIC.** Already decided by the `-e`
+  gate above it; the value lands only in the wire JSON at `:7338`
+  (`printf '{"refused":"held","detail":%s,"paths":[]}\n'`), which nothing persists.
+- **`ccd/ccd:8038`** (3/3) — `cmd_ws_release`'s measured hold. **PERSISTED, AND IT OUTLIVES ITS
+  SUBJECT** — the highest-ranked of the three persisted hold rungs, because it records a hold being
+  REMOVED and the `rm -f -- "$REG/$id.hold"` two lines later destroys the only other copy. The value
+  goes into `_lc_done release "$id" "" meas.held "$_hold_reason"` (`:8043`).
+- **`ccd/ccd:8360`** (2/2) — `_reg_project_glob_has` (`:8357`). **SMALLEST OF THE REAL ONES.** Single
+  caller, `:8497`, inside `cmd_project_pool`'s `--pool` arm, as the second disjunct of a
+  project-exists check. A symlink to any file containing the project name as a whole line makes an
+  unknown project look known, so a tag is accepted for a project that is not there.
+- **`ccd/ccd:12558`** (4/5) — `_ws_tombstone_reclip` (`:12507`). **READ *AND* WRITE THROUGH THE LINK —
+  the only candidate in this census that CLOBBERS a foreign file rather than merely misreading one.**
+  `[[ -s "$f" ]]` follows, the python that rewrites the tombstone opens the same path, and the write
+  lands on the link's TARGET. Single caller, `:13392`, on `cmd_ws_reap`'s path. **DESTRUCTIVE.**
+- **`ccd/ccd:12608`** (4/5) — `_ws_tomb_str` (`:12571`). **A DESTRUCTIVE ARM, AND THE
+  SELF-CONSISTENCY IS WHAT MAKES IT BITE — the widest radius in this census.** On `cmd_ws_reap`'s
+  RESUME path, `:12886` takes `tombtip=$(_ws_tomb_str "$REG/.reaped/$id.json" tip)`, and a tip read
+  from a substituted tombstone is then what the resume acts on, including `update-ref -d`.
+  **DESTRUCTIVE.**
+- **`ccd/ccd:12659`** (4/5) — `_ws_tomb_children` (`:12618`). **THE CONSENTED-CHILD SET ON A REAP
+  RESUME.** Callers `:13063` (`rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json")`) and `:13416`
+  (`childlines=$(_ws_tomb_children "$tomb")`). A substituted child list is a substituted answer to
+  "which children did the operator consent to destroy". **DESTRUCTIVE.**
+- **`ccd/ccd:12729`** (3/3) — `cmd_ws_reap`'s held-refusal. **COSMETIC**, same shape as `:7333`: the
+  refusal is already decided by the `-e` gate above, and the fabricated bytes reach only the wire JSON
+  at `:12734`.
+- **`ccd/ccd:14973`** (3/3) — `_share_pct` (`:14967`). **FABRICATED PLACEMENT HEADROOM FOR THE FABLE
+  CLASS.** Single caller `:15003` (`fig=$(_share_pct "$w"); rc=$?`) inside `_serviceable`. A symlink
+  to any JSON carrying a fresh-looking timestamp and a low share makes an account look serviceable for
+  Fable work when its real share says otherwise.
+- **`ccd/ccd:21392`** (3/3) — `cmd_ws_forget`'s held-refusal. **PERSISTED** (corrected this round):
+  `_lc_refuse forget "$id" held …` at `:21397` reaches the journal through `_lc_emit`, exactly as
+  `:6872` does.
+- **`ccd/ccd-graph-sweep:88`** (3/3) — `_gs_session_on`. **GRAPH FRESHNESS ONLY** — nothing
+  destructive, nothing the PWA renders. Called at `:201` on a `.claude/worktrees` candidate.
+- **`ccd/ccd-graph-sweep:297`** (3/3) — `_gs_busy`, gating `_gs_row "$tree" "$BUSY_OUTCOME"` at
+  `:1069` — the sweep's decision not to touch a tree. A symlink to any fresh JSON carrying a live
+  marker makes the sweep skip a tree that is idle, or work one that is not.
+- **`ccd/ccd-telemetry-keepalive:521`** (3/3) — `_ka_session_on`. **AN ACCOUNT'S KEEPALIVE TURN.**
+  Caller `:680` (`sess_why="$(_ka_session_on "$acct")"; sess_rc=$?`). The function's own header at
+  `:510-519` argues the gate this bypasses.
+- **`ccd/ccd-usage-sweep.py:272`** (2/3) — **THE TOOL'S ONLY DESTRUCTIVE PATH, BY ITS OWN DOCSTRING**
+  (`:238-243`: an id whose `ts` is absent, unreadable or malformed must not be reaped). The type test
+  is `os.path.isfile`, which follows; the fix shape is `os.path.lexists` ∧ `stat.S_ISREG(os.lstat(...))`.
+  **DESTRUCTIVE**, and the file is not in this branch's diff at all — the follow-up wave's FIRST item.
+- **`ccd/ccrc-api:275`** (3/3) — **MUTED, AND THE REASON IS WORTH STATING.** `DERIVED_ID` comes from
+  the tmux pane (`:271-274`), not from the file, so `who` at `:404` is unaffected; only a path that
+  does not decide identity reads through the link.
+- **`ccd/ccrc-doctor-checks:3063`** (3/3) — **ADVISORY DIAGNOSTIC ONLY.** `reg_rows` is consumed at
+  `:3167` (`if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then`), which prints a
+  staleness warning and changes nothing.
+- **`ccd/ccrc-doctor-checks:3145`** (3/3) — doctor's per-tag pools verdict
+  (`p_malformed`/`p_unread`/the reported tag). A symlink at `$REG/pools/<project>` resolving to any
+  ≤64-byte file matching the grammar makes doctor report a tag nobody set. Advisory, but it is the
+  surface an operator uses to decide whether the pool state is sane.
+- **`ccd/session-hook.sh:456`** (3/3) — `_ct_read`. **BYTES INTO A PEER SESSION'S MODEL CONTEXT — the
+  widest non-destructive radius here.** Callers `:480` (`_ct_read "$REG/$id.project"`) and `:531`/`:547`.
+
+**WIDENED IN ROUND 5 — the instrument's corpus was `git ls-files ccd/`, which could not contain this
+class BY CONSTRUCTION.** The class says "a type test on ANY path under `$REG`", and `$REG` is read
+from four packages. That bounding error is the THIRD of this shape in one wave — after a field-path
+grammar that could not contain `_authdead`, and an `ln -s` scan that could not see `symlinkSync` — so
+it is named as the pattern it is: *an instrument whose corpus is narrower than the class it is named
+for reports a clean sweep of the part it can see.*
+
+The widened corpus is every tracked SHIPPED file naming the registry root by any spelling (`REG=`,
+`_SVC_REG=`, `reg=`, `$HOME/.cc-sessions`, `registryDir`), across `server/src`, `agent/src`, `shared`,
+`deploy` and `pwa/src`, with the same pairing rule and the same default of NOT-IN-CLASS. Test files
+are excluded and that is an exclusion, not an oversight: a fixture plants its own registry, so a
+symlink there is the test's own act and reaches nothing.
+
+What the widened pass found:
+
+- **`server/src/limits.ts`'s `readLimits` — FIXED THIS ROUND**, not declared. The third body of the
+  `_authdead` contract; see the round-5 ruling and the commit that closes it.
+- **`server/src/registry.ts:1010` and `:1119`** — NEW, DECLARED. The candidate list is a FILENAME
+  test — `names.filter(n => n.endsWith('.uuid'))`, and an `includes` of the same `<id>.uuid` name —
+  and every field
+  then reads through `io.readFile`, which follows. A symlink at `$REG/<id>.uuid` is listed, passes,
+  and fabricates a whole session ROW on the wire. Same shape as the `limits.ts` site — `limits.ts`'s
+  own docstring is the one that names it ("Trusting the FILENAME alone here would make the server MORE
+  CREDULOUS than bash") — and it is now the only unfixed instance of it on the server.
+- **`deploy/deploy.sh:568-570`** — NEW, DECLARED, LOWEST. `[ ! -f ~/.cc-sessions/<f> ] || cp -a …`
+  pairs a following `-f` with an operation on the same path. `cp -a` does NOT follow, so the effect is
+  a backup that contains a link instead of the bytes it was meant to preserve — a fidelity defect on
+  the deploy path, not a fabricated value.
+- **`server/src/pools.ts` — ALREADY DECLARED, not new.** Its symlink residual is disclosed as D-2516
+  in the file's own type docstring, and `server/test/pools-existence-pairing.test.ts` (D-1848) already
+  pins the class for pools paths across three bodies. Recorded here so the follow-up does not re-find
+  it and count it twice.
+- **NOT IN CLASS, each for a stated reason, not by omission:** `server/src/hookstate.ts`,
+  `shares.ts` and `usage.ts` read `$REG` paths through `readFileMeasured` with NO type test paired —
+  the same bare-read shape as `ccd/session-hook.sh:198`, ruled out of this class in round 4 and ruled
+  out again here. `dispatch.ts:347`, `watch.ts:2553` and `watch.ts:3885` test a marker's PRESENCE in a
+  listing and never read it, so there is no pairing and a symlink's target is never consulted.
+  `coord/prhistory.ts:98` uses the listing only to tell absence from unreadability and re-reads the
+  SAME path either way. `agent/src` runs every file op on `checkPath`'s canonical result, so links are
+  resolved before any read — which is also exactly why the new `lstat` op had to step outside that,
+  and why its first implementation shipped inert. `shared/` imports nothing and `pwa/src` is a browser
+  bundle with no filesystem at all.
 
 **RULED EXPLICITLY, because the round asked for these two by name:**
-- **The five hold rungs** (`ccd/ccd:6846`, `:7307`, `:8012`, `:12703`, `:21366`) **are in the class and
-  are NOT fixed here.** In all five the HELD/not-held decision is the separate `-e` gate above them —
-  "doubt reads as HELD", fail-shut and deliberate — so a symlink cannot unwedge a refusal. What it
-  fabricates is the reason TEXT. Four of the five are therefore cosmetic; `:8012` is not, because
-  `cmd_ws_release` persists it into the lifecycle journal as the measured hold, where it outlives its
-  subject and reaches the wire.
+- **The five hold rungs are in the class and are NOT fixed here.** In all five the HELD/not-held
+  decision is the separate `-e` gate above them — "doubt reads as HELD", fail-shut and deliberate — so
+  a symlink cannot unwedge a refusal. What it fabricates is the reason TEXT.
+  **THE SPLIT IS 2 COSMETIC, 3 PERSISTED** (corrected in round 5; this entry said four and one, and
+  the discriminator it used for the one was shared by two of the four it called cosmetic). Each rung is an
+  `[[ -f && -r ]]` test over `$REG/$id.hold` with the `cat` on the next line; what separates them is
+  the CONSUMER, named
+  by function rather than by line because a line here has already rotted once:
+
+  | rung (the `[[ -f && -r ]]` test) | consumer | reaches |
+  |---|---|---|
+  | `ccd/ccd:6872` | `_lc_refuse destroy` | the lifecycle journal — **PERSISTED** |
+  | `ccd/ccd:7333` | `printf '{"refused":"held",…}'` | stdout — cosmetic |
+  | `ccd/ccd:8038` | `_lc_done release … meas.held` | the lifecycle journal — **PERSISTED** |
+  | `ccd/ccd:12729` | `printf '{"refused":"held",…}'` | stdout — cosmetic |
+  | `ccd/ccd:21392` | `_lc_refuse forget` | the lifecycle journal — **PERSISTED** |
+
+  Measured, not inherited, and stated no wider than it was measured: **`_lc_emit` is the only writer of
+  RECORDS**, one `printf … >> "$live"` at `ccd/ccd:4232`, and `_lc_refuse` and `_lc_done` both reach the
+  journal only through it — `_lc_refuse` emits then dies, `_lc_done` delegates in one line. The
+  function's own header says "NOTHING BUT THIS FUNCTION WRITES INTO `.lifecycle/`" and then qualifies
+  itself, correctly: `_lc_err` bumps `$_LC_DIR/errors` and the rotation arm mints and moves generation
+  files. Those write into the DIRECTORY and neither appends a record, so the claim that matters here
+  survives the qualification — but "nothing else writes there" would have been false, and an
+  unqualified grep would have said so. Containment is pinned by
+  `server/test/ccd-lifecycle-contain.test.ts`. So the property the entry used to single `:8012` out for — "persists into the
+  lifecycle journal, where it outlives its subject and reaches the wire" — is true of three rungs, not
+  one. **`:8038` keeps its RANKING and loses its count**: alone among the three it records a hold being
+  REMOVED, so its record survives the thing it describes. The other two refuse and die, leaving the
+  hold in place for anyone to read directly.
 - **`ccd/session-hook.sh:198` is NOT in the class**, and that is a measurement, not an exemption: it is
   `cwd=$(cat "$REG/$id.workdir" 2>/dev/null)` with **no type test at all**. An unguarded read is a
   different shape. The hook's real in-class site is `_ct_read` (`:456`), which the census found
