@@ -1913,3 +1913,67 @@ construction — it is a commit message.**
 
 Round 6 sent as mail 1673 with the exact-text artifact. A review will check byte-equality and that
 nothing else moved; that is the only thing it is asked to check.
+
+## 2026-09-17 22:3x UTC — byte-equality verified; two rulings; merge-and-derive is the last round
+
+Round 6 came back green at `0f6e2609`. **I verified byte-equality independently**: banner ×1, markers
+×3, the census block, `:6017`. Two files, 87/20 and 1/1. Every REMOVED line accounted for — the stale
+header block, the `:6005` token, and the round-5 prose placeholder, which the worker declared and
+which **edit 4 requires**: leaving it would make the document carry both *"it cannot be numbered here"*
+and the number. Not an extra edit; the edit finishing.
+
+### The transcription round worked, and it moved the hazard rather than removing it
+
+**The worker's process note is the keeper.** Its first attempt at edit 3 failed on a **curly-vs-straight
+apostrophe in an anchor it had RETYPED** — and aborted before writing anything. It then matched by a
+PREFIX TAKEN FROM THE FILE ITSELF, so no character of an anchor was typed by hand at all.
+
+> *The thing you retype to FIND the text is as retypeable-wrong as the text.*
+
+A transcription round protects the PAYLOAD by contract and silently moves the typing hazard to the
+LOCATOR. Six rounds of false prose, and the seventh was nearly minted in the act of preventing one.
+
+### Ruling 1 — the clause stands, and flagging was right even though it was fine
+
+The worker transcribed a clause of mine it believed stale rather than silently improving it
+("both were reverted and ship byte-identical to `origin/main`"), because the round's contract is
+byte-equality and a silent improvement would defeat the one check it exists to make.
+
+**Measured: `git diff --name-only origin/main...HEAD | grep -c graphify` is 0.** The branch contributes
+NOTHING to either document, so the merge takes main's copy whatever main is, and **the shipped tree
+carries main's copy byte-for-byte at any main, at any time.** The sentence is true of the shipping
+tree. The only reading that falsifies it is a snapshot comparison of two independently moving refs —
+not a durable claim, and the exact error this wave has been punished for six times.
+
+**The flag was right anyway.** It cost one paragraph; a silent fix would have defeated the check. *A
+transcriber who edits is not a transcriber.*
+
+### Ruling 2 — merge, and the structural fact behind six rounds of this
+
+**The census assertion is a FUNCTION OF THE MERGE.** It walks the corpus and resolves anchors into
+`ccd/ccd`. main touches `ccd/ccd` in ~17% of its commits and has moved **ten times today** (`f06abdce`
+as I write, two past the `1db070f1` the worker saw). So every such move invalidates this branch's
+census on the PR's merge ref.
+
+**This PR is not "hard to merge" — it is structurally unmergeable unless the window between deriving
+and merging is short.** That is the whole of what has been happening since round 2, stated plainly at
+last. Hence: merge-and-derive, nothing else, and the squash body written NOW so the merge is one
+command.
+
+Resolution RULES given, not resolutions: any file the branch contributes nothing to → take main (both
+graphify documents, measured 0); `ccd/ccd` and `session-hook.sh` → keep BOTH sides, the edits are
+disjoint in purpose; **`README.md` → re-derive both anchors BY CONTENT on the merged `ccd/ccd`, because
+#148 moved it +35 net and NEITHER side's numbers are right on the merge**; the census map → act 2, not
+a conflict resolution. And: if the merge surfaces a new red, **report and stop** — at this point an
+unplanned fix costs more than a red does.
+
+### The squash body's trailers, DERIVED not remembered
+
+```
+gh api repos/<org>/<repo>/pulls/136/commits --paginate -q '.[].commit.message' \
+  | grep -iE '^co-authored-by:' | sort -u
+```
+→ `Claude Opus 5` and **`Claude Sonnet 5`**, across **56 commits**. The Sonnet trailer is one I would
+not have remembered, which is exactly why the rule exists: a hand-written squash body REPLACES the
+generated one, and the generated body is the only thing that aggregates the squashed commits'
+trailers. Both lines go in, and `git log -1 origin/main` gets read back afterwards.
