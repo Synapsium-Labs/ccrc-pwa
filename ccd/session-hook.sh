@@ -1219,7 +1219,7 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
   # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
-  # the acquire as a boolean (`|| return 0`) and ccd's five read the VALUE, with
+  # the acquire as a boolean (`|| return 0`) and ccd's six read the VALUE, with
   # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
   # which holds two of them — falling through an unknown code into a silent
   # continue, so a third numeric status would be a distinct refusal nobody
@@ -1288,8 +1288,8 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
 #
 # IT FAILS CLOSED, and the cost is disclosed rather than hidden: a session
 # whose spawn could not read a generation — a pre-D-2605 row, or a spawn whose
-# acquire was contended — publishes NO compaction artifact for its whole life,
-# until its next respawn. That is the property ccd's own fail-open at
+# acquire was contended — publishes NO compaction artifact for THAT PANE's life. The pane cannot recover: its environment is fixed at exec. THE ROW CAN, and now does — `cmd_ensure` mints a generation it finds missing before it spawns, so the next supervised respawn carries one. Until that fix a pre-D-2605 row could never gain one at all, because both minting sites are row CREATION and the systemd unit reaches neither.
+# That is the property ccd's own fail-open at
 # `_reg_purge` is gated on: absence of the generation proves no hook on that row
 # ever received one, so no hook arm ever ran the lifecycle and there is nothing
 # for a destructive verb to race.

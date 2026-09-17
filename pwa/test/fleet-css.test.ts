@@ -2,7 +2,7 @@
 // render. Each one below fixes a defect MEASURED on the live page; reading the
 // stylesheet as text is what stops them regressing silently.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { POOL_NAME_RE } from '../../shared/roster';
 import {
@@ -986,5 +986,121 @@ describe('maximum pool name account-row fit (D-2688)', () => {
     expect(declValue(rule, 'white-space')).toBe('nowrap');
     expect(declValue(ruleFor('.acct-gauges'), 'flex')).toBe('none');
     expect(declValue(ruleFor('.acct-gauges'), 'width')).toBe('148px');
+  });
+});
+
+describe('the fleet head holds one row, and the class chooser is not on it', () => {
+  // Measured in Chromium against the rendered component (the real markup, not
+  // a reconstruction) at 320/360/390/430/700/1440px, before this fix:
+  //
+  //   viewport   320   360   390   430   700   1440
+  //   overflow  +280  +240  +225  +225  +219    ok
+  //
+  // Two independent faults produced that, and both are pinned below.
+
+  /** Specificity as a (0,x,0) count — classes, attributes and pseudo-classes.
+   *  Enough here for the same reason it is enough at the spawn chip above:
+   *  there is no id and no element name anywhere near these two selectors. */
+  const spec = (sel: string): number =>
+    (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+
+  it('wins the width override by SPECIFICITY, the only way it can win it', () => {
+    // FAULT 1. The chooser reuses `.route-select`'s chrome and must reject its
+    // `width: 100%`, which is right for a grid cell and wrong for a control
+    // sized to its own option list. The rule that shipped said so as
+    // `.fleet-class-select { width: auto }` — one class, (0,1,0), declared
+    // ~650 lines ABOVE `.route-select`, which is also (0,1,0). Equal
+    // specificity, so the tie went to source order and the override never
+    // applied ONCE: the control rendered at 286px at 390px and 528px at 700px
+    // instead of the 167px its options ask for. A comment, not a mechanism.
+    const scrubbed = stripComments(css);
+    const baseAt = scrubbed.search(/\.route-select\s*\{/);
+    const overrideAt = scrubbed.search(/\.route-select\.fleet-class-select\s*\{/);
+
+    expect(overrideAt, 'the compound override is gone — the chooser is back on source order')
+      .toBeGreaterThan(-1);
+    expect(baseAt, '.route-select is gone; this pair no longer describes the stylesheet')
+      .toBeGreaterThan(-1);
+
+    // Without BOTH of these the assertion below is vacuous: there has to be a
+    // `width` to beat, and it has to be declared later, or source order alone
+    // would already have settled it and specificity would prove nothing.
+    expect(declValue(ruleFor('.route-select'), 'width'),
+      '.route-select no longer claims the full width, so there is nothing to override')
+      .toBe('100%');
+    expect(baseAt,
+      '.route-select now PRECEDES the override, so this test no longer proves anything')
+      .toBeGreaterThan(overrideAt);
+
+    expect(spec('.route-select.fleet-class-select'),
+      'the override no longer out-specifies .route-select, so it loses the tie to source order')
+      .toBeGreaterThan(spec('.route-select'));
+    expect(declValue(ruleFor('.route-select.fleet-class-select'), 'width')).toBe('auto');
+
+    // …and no single-class restatement may creep back in beside it: that is
+    // the exact shape that was dead code for the whole of #116's life, and it
+    // reads as a fix while doing nothing.
+    expect(scrubbed, 'a single-class .fleet-class-select rule is back — it cannot win the cascade')
+      .not.toMatch(/(^|[\s,}])\.fleet-class-select\s*\{/);
+  });
+
+  it('gives the chooser a row of its own rather than a seat in the head', () => {
+    // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
+    // four other items — count, accounts door, mail badge, bell — need 244px
+    // of min-content, and the group has 294px at 390px; the chooser's widest
+    // option, "Coordinator row", measures 167px against the ~38px left once
+    // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
+    // shrink factor, so the control leaves the row. Those figures are browser
+    // measurements and deliberately are NOT recomputed here — an arithmetic
+    // gate over constants this file cannot measure would agree with itself
+    // forever. What IS checkable is the structure that keeps them true.
+    const row = ruleFor('.fleet-class-row');
+    expect(declValue(row, 'display')).toBe('flex');
+    expect(declValue(row, 'justify-content')).toBe('flex-end');
+
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const head = screen.slice(screen.indexOf('<header className="fleet-head">'),
+                              screen.indexOf('</header>'));
+    expect(head, 'the chooser is back inside <header>, where it never fit')
+      .not.toContain('fleet-class-select');
+    expect(screen).toContain('<div className="fleet-class-row">');
+  });
+
+  it("lets the sheet's routing row shrink below its three selects", () => {
+    // The same bug class as `.proj-card`'s `min-width: 0` above: a grid item's
+    // automatic minimum size is its min-content, so a bare `1fr` track cannot
+    // go narrower than the widest option of the `<select>` inside it and the
+    // row pushes the sheet sideways instead of the options scrolling. Every
+    // other multi-track grid in this file already spells it `minmax(0, 1fr)`;
+    // `.route-row` was the one that did not.
+    const cols = declValue(ruleFor('.route-row'), 'grid-template-columns');
+    // Compared THROUGH `norm`, which is the reader's documented contract:
+    // whitespace next to a comma or paren is never significant, so a
+    // formatter reflowing this value must not red the suite.
+    expect(cols).toBe(norm('repeat(3, minmax(0, 1fr))'));
+  });
+
+  it('leaves no bare repeat(n, 1fr) track anywhere in pwa/src', () => {
+    // The instance above is one of a CLASS, so the guard is written against
+    // the class: a bare `1fr` inside `repeat()` is unbounded below by its
+    // items' min-content and pushes its container sideways. This is not a
+    // vacuous 0-of-0 census — nine multi-track grids exist across these
+    // stylesheets and every one of them already spells it `minmax(0, 1fr)`,
+    // so the population is real and `.route-row` was the single exception.
+    const dir = path.join(import.meta.dirname, '..', 'src');
+    const sheets = readdirSync(dir, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.css'));
+    expect(sheets.length, 'no stylesheets found — this walk stopped seeing the tree')
+      .toBeGreaterThan(3);
+
+    const offenders: string[] = [];
+    for (const sheet of sheets) {
+      const text = stripComments(readFileSync(path.join(dir, sheet), 'utf8'));
+      for (const m of text.matchAll(/repeat\(\s*[0-9]+\s*,\s*1fr\s*\)/g)) {
+        offenders.push(`${sheet}: ${m[0]}`);
+      }
+    }
+    expect(offenders).toEqual([]);
   });
 });

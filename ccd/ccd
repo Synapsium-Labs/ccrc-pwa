@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f5457832940bce63518f9f940b8162edda8cbc2af3929e3af4916e14982f688e
+# ccrc:generated 1 sha256=85b1f792ff701b39304c8797b26472fc8e19c96a60c4bed0b2cd00ca2ed85e9a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -18440,10 +18440,31 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; genrc=$?
   if (( genrc == 0 )); then
     genfd="$COMPACT_LOCK_FD"
-    if _reg_generation_read "$id"; then genval="$REG_GENERATION"; genenv="CCRC_SESSION_GENERATION='$genval' "; fi
+    if _reg_generation_read "$id"; then genval="$REG_GENERATION"; genenv="CCRC_SESSION_GENERATION='$genval' "
+    else
+      # THE COMMON CASE, AND IT USED TO BE SILENT. The `elif` below reports a
+      # CONTENDED acquisition, which is rare; a row with no generation at all —
+      # or one present and invalid — took this arm, read nothing, and spawned
+      # without a word. Measured on this fleet 2026-09-17: 31 of 34 live rows
+      # in exactly that state, and the string below appearing in no log on the
+      # box. A condition that disables a whole subsystem for the life of a row
+      # has to be audible, whichever of the two reasons produced it.
+      echo "ccd: warn: $id: no valid $REG/$id.generation;" \
+           "spawning without CCRC_SESSION_GENERATION — this session's compaction lifecycle is inert until its next respawn" >&2
+    fi
     _compact_lock_release "$genfd"; genfd=""
   elif (( genrc == 1 )); then
     echo "ccd: warn: $id: could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s;" \
+         "spawning without CCRC_SESSION_GENERATION — this session's compaction lifecycle is inert until its next respawn" >&2
+  else
+    # THE THIRD STATE, and the last of them to be silent. `rc 2` is MECHANISM
+    # ABSENCE — no `flock`, `mktemp` or `link` resolvable — so the acquire was
+    # never attempted and neither arm above can speak for it. The compaction
+    # lifecycle is unavailable on such a box for the same reason, which is
+    # exactly why saying nothing was the wrong answer: "no artifacts appeared"
+    # is indistinguishable from "the feature is off", and a reader with no line
+    # to grep has to reconstruct the cause from absence.
+    echo "ccd: warn: $id: no lock mechanism on PATH (flock, mktemp, link);" \
          "spawning without CCRC_SESSION_GENERATION — this session's compaction lifecycle is inert until its next respawn" >&2
   fi
   # `_tmux_new_session`, not a bare `tmux new-session`: this is the call that
@@ -19453,6 +19474,45 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   # `cmd_ensure` stops being re-entered), never by anything journal-side. A
   # future reader retuning those systemd limits is also retuning this
   # journal's write rate, and nothing here will warn them of that.
+  # ── D-2605 TRANSITION: THE ROW'S GENERATION, MINTED HERE IF IT IS MISSING ─
+  # `_reg_generation_init` mints ONLY on genuine absence and is idempotent, so
+  # on an ordinary row this costs one acquisition and a read. It exists for the
+  # population row creation cannot reach: a row that predates the generation
+  # mechanism carries no `.generation` at all, and BOTH minting sites —
+  # `cmd_ws_add` and `cmd_start` — are row CREATION. The systemd unit reaches
+  # neither. It runs `ccd supervise`, which calls THIS function, so without
+  # this block a pre-mechanism row can never gain a generation: its compaction
+  # lifecycle is inert for the life of the row, and `_spawn_start`'s own
+  # warning ("inert until its next respawn") promises a repair that no respawn
+  # performs. Measured on this fleet 2026-09-17, hours after the card shipped:
+  # 31 of 34 live rows had none, and no path could have given them one.
+  #
+  # BEST EFFORT, NEVER FATAL — the one way it differs from `cmd_start`'s
+  # otherwise identical block. That verb DIES on a contended lock because it
+  # has written nothing yet and a half-built row is the worse outcome; this is
+  # the SUPERVISOR's path, where a die leaves the session down and the unit
+  # retrying into its own start limit. The disposition is `_spawn_start`'s
+  # instead: fail OPEN, spawn without a generation, and let the standing
+  # fail-closed rule answer for the lifecycle. Every rc is non-fatal here —
+  # rc 1 contended, rc 2 no `flock` mechanism, and a present-but-INVALID
+  # generation, which `_reg_generation_init` refuses to repair by design and
+  # which is reported rather than silently carried.
+  #
+  # IT CANNOT AUTHORIZE A PANE THAT SHOULD NOT PUBLISH, and that is the whole
+  # safety argument. `_hook_generation_ok` requires a NON-EMPTY
+  # `CCRC_SESSION_GENERATION` in the pane's environment AND byte equality with
+  # the row's file. A pane spawned before this mint carries no value at all, so
+  # it is refused whatever the file says afterwards; a pane spawned after it
+  # carries exactly what was minted. The mint is strictly forward-looking: it
+  # can only reach the spawn this call is about to make.
+  local _ce_gfd="" _ce_grc=0
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; _ce_grc=$?
+  if (( _ce_grc == 0 )); then
+    _ce_gfd="$COMPACT_LOCK_FD"
+    _reg_generation_init "$id" \
+      || echo "ccd: warn: $id: $REG/$id.generation is present and invalid — spawning without it; inspect it by hand" >&2
+    _compact_lock_release "$_ce_gfd"; _ce_gfd=""
+  fi
   _lc_done ensure "$id" "" meas.inUnit "${CCD_IN_UNIT:-0}"
   # Inside the unit (cmd_supervise sets CCD_IN_UNIT in its own process) this IS the spawn; anywhere
   # else it is a REQUEST for one, and the request goes through the unit so the session comes back

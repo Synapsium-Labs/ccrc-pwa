@@ -6158,11 +6158,11 @@ describe('the compaction card — the row generation authorizes every arm (spec 
   });
 
   it('NO generation in the environment — a pre-D-2605 pane — publishes NOTHING, and says nothing', () => {
-    // The disclosed cost, stated as a test rather than as prose: a session
-    // whose spawn could not hand it a generation is inert for its whole life,
-    // until its next respawn. That is exactly the property ccd's fail-open at
-    // `_reg_purge` is gated on — no hook on that row ever ran the lifecycle, so
-    // a destructive verb has nothing to race.
+    // The disclosed cost, stated as a test rather than as prose: a pane whose
+    // spawn could not hand it a generation is inert for THAT PANE's life, its
+    // environment being fixed at exec — while the ROW recovers on its next
+    // supervised respawn, where `cmd_ensure` mints one it finds missing. That is exactly the property ccd's
+    // fail-open at `_reg_purge` is gated on — no hook on that row ever ran the lifecycle, so a destructive verb has nothing to race.
     allThree({ CCRC_SESSION_GENERATION: '' });
     expect(published(), 'not a set, not a card, not a stage, not a claim').toEqual([]);
     expect(fs.existsSync(journalFile()), 'and no journal line').toBe(false);
@@ -8172,15 +8172,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'a README anchor stopped naming what its own sentence quotes').toEqual([]);
     // NON-VACUITY, and it is mandatory here for the same reason as everywhere
     // else: an equality with empty proves nothing if the document is not being
-    // read. README resolves EIGHT references and all eight are CHECKED, not
-    // counted quotationless. (`pwa/src/session/HistoryTab.tsx:17` and `:61` are
+    // read. README resolves NINE references and all nine are CHECKED, not
+    // counted quotationless — EIGHT until the generation-transition fix gave
+    // `cmd_ensure` a mint and the README an anchor for it. (`pwa/src/session/HistoryTab.tsx:17` and `:61` are
     // NOT among them — `FILE_RE` admits no `.tsx`, so they resolve to no file
     // and no pass in this describe ever reaches them. That is a gap in the
     // grammar, recorded here rather than closed, because widening `FILE_RE` is
     // a rule change no finding authorised.)
     const readmeOnly = audit([['readme', fs.readFileSync(path.join(REPO, 'README.md'), 'utf8')]]);
-    expect(readmeOnly.resolved, 'README references resolved to a tracked source file').toBe(8);
-    expect(readmeOnly.checked, 'and every one is CHECKED — the rule really applies to them').toBe(8);
+    expect(readmeOnly.resolved, 'README references resolved to a tracked source file').toBe(9);
+    expect(readmeOnly.checked, 'and every one is CHECKED — the rule really applies to them').toBe(9);
     expect(readmeOnly.failures, 'and none of them is stale').toEqual([]);
   });
 
