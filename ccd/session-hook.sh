@@ -1219,7 +1219,7 @@ _hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 re
   local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
   HOOK_LOCK_FD=""
   # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
-  # the acquire as a boolean (`|| return 0`) and ccd's six read the VALUE, with
+  # the acquire as a boolean (`|| return 0`) and ccd's seven read the VALUE, with
   # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
   # which holds two of them — falling through an unknown code into a silent
   # continue, so a third numeric status would be a distinct refusal nobody

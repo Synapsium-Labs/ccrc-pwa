@@ -16,7 +16,7 @@ const ALL_ACTS: Record<LifecycleAct, true> = {
   create: true, claim: true, purge: true, supervise: true, unsupervise: true,
   destroy: true, rename: true, hold: true, release: true, archive: true, restore: true,
   'attic-drop': true, reap: true, rehome: true, gc: true, spawn: true, route: true, start: true, ensure: true,
-  swap: true, enable: true, stop: true, forget: true,
+  swap: true, enable: true, stop: true, forget: true, unarchive: true,
   unknown: true,
 };
 const ACTS = Object.keys(ALL_ACTS) as LifecycleAct[];
@@ -30,7 +30,7 @@ describe('isLifecycleAct accepts exactly the declared acts', () => {
   it.each(ACTS)('%s', (act) => { expect(isLifecycleAct(act)).toBe(true); });
 
   it('covers the whole union — the runtime list cannot fall behind the type', () => {
-    expect(ACTS.length).toBe(24);
+    expect(ACTS.length).toBe(25);
     expect([...LIFECYCLE_ACTS].sort()).toEqual([...ACTS].sort());
   });
 
@@ -51,7 +51,7 @@ describe('`unknown` is the READER-side degrade, never a ccd call site', () => {
     // wants and does not have.
     expect(LC_ACT_UNKNOWN).toBe('unknown');
     expect(LIFECYCLE_ACTS).toContain(LC_ACT_UNKNOWN);
-    expect(LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN)).toHaveLength(23);
+    expect(LIFECYCLE_ACTS.filter((a) => a !== LC_ACT_UNKNOWN)).toHaveLength(24);
   });
 });
 

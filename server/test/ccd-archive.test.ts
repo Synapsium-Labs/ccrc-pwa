@@ -1298,6 +1298,42 @@ describe('ws-restore', () => {
     expect(h.calls()).toContain('supervise demo-quiet-basin');
   });
 
+  it('an archived row with NO generation GAINS one on restore — the third respawn path, and the only one that never minted', () => {
+    workspace('demo', 'quiet-basin');
+    // Plant the pre-D-2605 row rather than describe it: `cmd_ws_add` mints a
+    // generation, so the fixture has to take it away to BE the row the fleet
+    // actually carried — 31 of 34 live rows on 2026-09-17.
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation'));
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'generation'), 'archiving mints nothing').toBeNull();
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    // `cmd_ensure` and `cmd_start` each mint before spawning; this verb reaches
+    // `_spawn_start` directly, so without a mint of its own the restored pane
+    // carries no CCRC_SESSION_GENERATION and `_hook_generation_ok` fails closed
+    // for that pane's whole life — inert, and until D-2993 silently so.
+    // Two assertions, not one: `.toMatch` on a null throws a TypeError, which
+    // reds for the right reason with the wrong message. The absence IS the
+    // defect, so it gets its own line and says so.
+    const gen = h.reg('demo-quiet-basin', 'generation');
+    expect(gen, 'restore mints the generation it found missing').not.toBeNull();
+    expect(gen ?? '', 'and mints a UUID, not a placeholder')
+      .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it('and a restore whose row ALREADY carries one leaves it byte-identical — the mint is absence-only', () => {
+    workspace('demo', 'quiet-basin');
+    const before = h.reg('demo-quiet-basin', 'generation');
+    expect(before, 'ws-add minted one').toMatch(/^[0-9a-f-]{36}$/);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    // Re-minting would be the worse defect: the hook compares the ROW's bytes to
+    // the value its pane was spawned with, so a fresh value on every restore
+    // would silently disown every pane that outlived it. THIS ROW IS THE CONTROL
+    // — it stays green across the fix, which is what makes the red one above
+    // mean "mints on absence" rather than "writes the file unconditionally".
+    expect(h.reg('demo-quiet-basin', 'generation'), 'never re-minted').toBe(before);
+  });
+
   it('leaves the started flag set even when the entry never had one', () => {
     // Nothing in ccd ever clears `started`, so in the ordinary fixture this
     // assignment is a no-op and its deletion is invisible. The state it exists for
