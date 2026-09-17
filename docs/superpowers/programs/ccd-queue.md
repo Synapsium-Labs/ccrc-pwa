@@ -1683,3 +1683,75 @@ subject; an independent finding gets an issued number.* Precedent `D-1454(b)`, `
 The worker's pwa flake (`contrast.test.ts`, 242/242 isolated, byte-identical tree, zero `pwa/` files
 on the branch) is green under the rule it reached on the server suite — **which is what makes it a
 rule rather than an excuse.**
+
+## 2026-09-17 19:1x UTC — the revert landed; six escalated sites ruled to a follow-up; review 78 dispatched
+
+`suite: green`, all six shards, zero failures, no flake. Tip `73e67950`. Advanced to
+`awaiting-review`; the server re-measured and agreed.
+
+### Verified before advancing
+
+**The revert is real:** both graphify documents are byte-identical to `origin/main` by sha256, and
+the README delta is exactly the two anchors main's own weak-anchor assertion named
+(`:18038-18040` → `:18456-18458`, and `:19094` → `:19512`). `_authdead` is fixed in **both** bodies —
+`ccd/ccd` and `ccd/ccd-telemetry-keepalive`, the latter `[ -L "$f" ] && return 1` as its own rung.
+
+**The worker extended my ruling into the sibling body unasked, and was right twice over:** the class
+was open there, and `ccd/ccd`'s own header asserted the sibling "already opens with `[ -f … ]`" and
+that "this copy was the one left behind" — a fix banner describing what it MEANT rather than what it
+did. *A class closed in one body of a two-body contract is closed nowhere.* Extending a ruling to
+instances its list did not name is the worker's; changing its shape is mine. It stayed on that line.
+
+**It declined `session-hook.sh:198`, which I had named, and I accept the refusal:** a bare `cat` with
+no type test is not the pairing, and folding unguarded reads in would make the class unbounded —
+**my naming error in the other direction.** I named this class wrong once by grammar; being generous
+with it would have been the same mistake mirrored.
+
+Its own refutation of its provenance rule is the cleanest thing in the wave: the implementation was
+`ORDER.find(...)`, so **ties broke on ARRAY POSITION, not evidence** — "a preference order wearing a
+rule's clothes." Found in its own shipped code.
+
+### The census rose, and I am accepting that in public
+
+`'ccd/ccd': 125` / total **162** on main → `143` / **183** on the branch; `ccd/ccd` goes
+21,180 → 21,607, **+427 lines**. All four numbers verified by me. **So this wave ships +21 citation
+failures.**
+
+That is the price of my ruling and it is the right price: with the repair the census read **109 —
+BELOW main's own 162** — while carrying 16–33 anchors that were provably wrong and scored GREEN.
+**A census that falls because a repair mis-lands anchors is worse than one that rises honestly,
+because the failing set is the only work list anyone inherits.** Review 78's item 3 asks the panel to
+attack that reasoning rather than ratify it. **And the ratchet still has no owner — now with a number
+on it: any wave that grows `ccd/ccd` pays in census failures it cannot repair.** To the operator.
+
+### The six escalated sites — RULED, and recorded here so they cannot be lost
+
+The worker declared a 19-site class rather than expanding (I had bounded the round) but **escalated
+six rather than burying them**, saying plainly that a declaration is not a claim of harmlessness:
+
+| site | consequence |
+|---|---|
+| `ccd/ccd:12532` | reads AND WRITES through the link — the only one that CLOBBERS a foreign file |
+| `ccd/ccd:12582` | reap RESUME: fabricated tip/branch reaching `update-ref -d` |
+| `ccd/ccd:12633` | the consented-child set on a reap resume |
+| `ccd/ccd-usage-sweep.py:272` | the tool's ONLY destructive path, by its own docstring |
+| `ccd/session-hook.sh:456` | `_ct_read` → foreign bytes into a PEER SESSION'S MODEL CONTEXT |
+| `ccd/ccd:1735` | `_project_pool_state`, ccd's only pool-tag reader — wrong-pool placement |
+
+**Ruled: none this wave; all six to a follow-up wave opened the moment #136 merges**, with the
+19-site census as its brief and `ccd-usage-sweep.py:272` as its first item. Four reasons: all six are
+**pre-existing in main**, none a regression this branch introduced; they escalate **blast radius, not
+privilege** (anything that can plant a symlink in `$REG` can already write a regular file there —
+one UNIX user, no caller auth), which bounds urgency without excusing them; **every scope expansion
+in this wave has introduced at least one new defect** — a measured property of this branch, not a
+mood; and `ccd-usage-sweep.py` is not in the diff at all, so adding it at round five would ship the
+most destructive file with **zero** review rounds.
+
+Review 78 is told this is out of scope AND told that if it judges any of the six urgent enough to
+block the merge, saying so is a finding I will act on. A ruling that forbids its own contradiction is
+not a ruling.
+
+Review run **78** dispatched to `ccrc-pwa-amber-mesa`, scoped to five items — three files no review
+has ever seen (`ccd-telemetry-keepalive`, `ccd-authdead.test.ts`, `telemetry-keepalive.test.ts`), the
+revert, the census rise, the re-censused class, and the new sentences. `origin/main` is `8430b1ca`:
+**the seventh move during this wave.**
