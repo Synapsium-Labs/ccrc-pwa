@@ -62,7 +62,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   branch: 'ws/quiet-basin', ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
 });
 
 const prState = (over: Partial<PrState> = {}): PrState => ({
@@ -94,7 +94,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,

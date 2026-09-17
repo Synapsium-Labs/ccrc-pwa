@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -51,7 +51,25 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
 };
 
-export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+/**
+ * `verify-failed` has TWO outcomes and one code, so the sentence cannot come
+ * from the code alone. The server sets `submittable` when the box row it read
+ * back is a paste chip — Claude Code's own rendering of a large burst it holds
+ * in full — which means the opposite of the table's entry: the session DID take
+ * the text, it just showed a chip instead of the characters, and the `Send it`
+ * button beside this sentence presses the one Enter that sends it.
+ *
+ * Telling the operator "never echoed it back" next to a button that sends it is
+ * the contradiction this exists to remove. The flag is the discriminator here
+ * for the same reason it is one in `ChatList`'s gate: the code is shared, the
+ * proof is not.
+ */
+const VERIFY_FAILED_COLLAPSED = 'Typed it, and the session folded it into a paste chip instead of showing it.';
+
+export const sendErrorText = (code: string, submittable?: boolean): string =>
+  (code === 'verify-failed' && submittable === true)
+    ? VERIFY_FAILED_COLLAPSED
+    : (SEND_ERROR_TEXT[code] ?? code);
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
@@ -467,17 +485,36 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
     // the server had already stopped sending (D-1028).
-    projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
+    /** `cls` appends `?class=` only when given (routing spec, slice 4, Task 6)
+     *  — an ordinary fetch (the fleet screen, this sheet's own project list)
+     *  asks nothing and gets the byte-identical class-blind answer; only a
+     *  caller that means to forecast one class's placement sends it. */
+    projects: (cls?: string) => getJson<{ roots: string[]; projects: ProjectRow[] }>(
+      cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
+    ),
     /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
      *  start keeps the parsed request shape it sent before pools existed —
      *  no key an older server does not know, and a flag that only ever means
-     *  "yes" never needs to travel saying "no". */
-    createSession: ({ crossPool, ...rest }: {
+     *  "yes" never needs to travel saying "no". `route` rides the same rule:
+     *  present only when the sheet's routing row set at least one field, so
+     *  an ordinary start's body is unchanged from before that row existed. */
+    createSession: ({ crossPool, route, ...rest }: {
       wrapper: string; project: string; workdir?: string; crossPool?: boolean;
-    }) => post('/api/sessions', crossPool === true ? { ...rest, crossPool: true } : rest),
+      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow'>, string>>;
+    }) => post('/api/sessions', {
+      ...rest,
+      ...(crossPool === true ? { crossPool: true } : {}),
+      ...(route !== undefined && Object.keys(route).length > 0 ? { route } : {}),
+    }),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
-    workspaceAdd: (project: string): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    /** `route` rides the body ONLY when given — the fleet screen's class
+     *  chooser (routing spec, slice 5, Task 6) seeds it from whichever class
+     *  is selected there, and an ordinary `+` (the chooser left on
+     *  "Coordinator row") calls this with one argument, so its request body
+     *  is byte-identical to every caller that predates this parameter. */
+    workspaceAdd: (project: string, route?: RouteFields): Promise<void> =>
+      post(`/api/projects/${encodeURIComponent(project)}/workspaces`,
+        route === undefined ? undefined : { route }),
     /** `POST /api/projects/:project/pool` — tag the project into an account
      *  pool, or clear it with an explicit `null`.
      *
@@ -545,6 +582,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),
+    /** `POST /api/sessions/:id/route` — the model/effort pickers' write
+     *  (routing spec 2026-09-14 §5.3, slice 4, Task 5). ONE field, ONE value:
+     *  the picker taps a single control, and the record is the arbiter, never
+     *  a slash command typed straight into the pane — see `prompt` above,
+     *  which stays exactly that for the operator's own composer text. */
+    route: (id: string, field: RouteField, value: string) => post(`${sid(id)}/route`, { field, value }),
     /** `POST /api/sessions/:id/kickoff` — queues the coordinator kickoff as
      *  DURABLE system mail instead of typing it into the pane (program-leverage
      *  wave 4). Deliberately adjacent to `prompt`, because the pair is the

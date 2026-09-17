@@ -37,6 +37,8 @@ describe('install-coordinator-skill', () => {
         .toBe(fs.readFileSync(path.join(SRC, 'SKILL.md'), 'utf8'));
       expect(fs.existsSync(skill(d, 'references', 'wave-lifecycle.md'))).toBe(true);
       expect(fs.existsSync(skill(d, 'references', 'ledger-template.md'))).toBe(true);
+      expect(fs.existsSync(skill(d, 'references', 'routing-matrix.md'))).toBe(true);
+      expect(fs.existsSync(skill(d, 'references', 'review-panel.md'))).toBe(true);
     }
   });
 

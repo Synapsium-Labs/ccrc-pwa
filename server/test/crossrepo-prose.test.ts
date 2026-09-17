@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { RUN_REFUSE_CODES } from '../../shared/api.js';
+import { IDLE_RUN_STATES, RUN_REFUSE_CODES, TERMINAL_RUN_STATES } from '../../shared/api.js';
 
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const read = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
@@ -200,14 +200,29 @@ describe('README: cross-repo programmes', () => {
 
   it('states the measured cap predicates, not a workspace-to-slot equivalence', () => {
     const s = crossSection();
-    expect(STORE, 'the running cap no longer counts dispatched non-terminal rows')
-      .toContain("dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')");
+    // PIN THE DERIVATION, NOT A HAND-WRITTEN LIST. This assertion used to spell
+    // `('done','failed')` inline, which went red the moment PR #108 narrowed the
+    // predicate from "non-terminal" to "active" — correctly, and the README said
+    // the old thing for a day. The store now builds the list from
+    // `IDLE_RUN_STATES ∪ TERMINAL_RUN_STATES`, so this pins that it is BUILT
+    // rather than retyped, and the membership assertion below pins what the two
+    // lists mean. A spelling pin would have to be re-edited by every change to
+    // either list; this one only reds when the derivation itself is broken.
+    expect(STORE, 'the running cap no longer counts dispatched rows by a DERIVED inactive list')
+      .toContain('dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}');
+    expect(STORE, 'INACTIVE_RUN_STATES_SQL is no longer built from the two shared lists')
+      .toMatch(/const INACTIVE_RUN_STATES_SQL =[^\n]*IDLE_RUN_STATES[^\n]*TERMINAL_RUN_STATES/);
+    expect([...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].slice().sort(),
+      'the states excluded from the running cap are no longer idle ∪ terminal')
+      .toEqual(['awaiting-review', 'closing', 'done', 'failed', 'merging', 'planned']);
     expect(STORE, 'the daily cap no longer counts rows dispatched inside its rolling window')
       .toContain('dispatchedAt IS NOT NULL AND dispatchedAt > ?');
     expect(s, 'the section still equates two held workspaces with two running-worker slots')
       .not.toMatch(/two concurrency slots/i);
-    expect(s, 'the section does not say concurrency counts dispatched non-terminal runs')
-      .toMatch(/concurrency[\s\S]{0,180}?dispatched[\s\S]{0,100}?non-terminal runs/i);
+    expect(s, 'the section does not say concurrency counts dispatched runs in an ACTIVE state')
+      .toMatch(/concurrency[\s\S]{0,180}?dispatched runs in\s*\n?an ACTIVE state/i);
+    expect(s, 'the section does not say an IDLE run gives its slot back without closing')
+      .toMatch(/IDLE[\s\S]{0,120}?gives its slot back without closing/i);
     expect(s, 'the section does not say a planned undispatched consumer uses no running slot')
       .toMatch(/planned[\s\S]{0,80}?undispatched[\s\S]{0,100}?no running-worker slot/i);
     expect(s, 'the section does not say a terminal retained producer uses no running slot')
@@ -548,12 +563,28 @@ describe('the legacy-flip measurement is recorded, whichever way it went', () =>
       .toMatch(/20\d\d-\d\d-\d\d/);
   });
 
-  it('and says the read was an operator act, because no route can serve it', () => {
+  it('says the historical read was an operator act, and names every route that now reads the trail', () => {
     const m = passage('the ledger measurement block', LEDGER, '## Measurements', '\n## ');
     expect(m, 'the measurement does not say where it was taken').toContain('coord.db');
-    // Grounded, so the sentence reds the day a route DOES serve the trail:
-    // if `runEvents` ever appears in the route file, this claim is stale.
-    expect(ROUTES, 'a route now reads runEvents — the ledger sentence calling this an ' +
-      'operator act is now false and must be corrected').not.toContain('runEvents');
+    // GROUNDED THE OTHER WAY NOW (routing slice 5, Task 2, 2026-09-16): this
+    // test used to pin `runEvents` absent from every route, with a comment
+    // predicting the day that stopped being true. That day arrived —
+    // `POST /api/runs/:id/route` legitimately reads it for its own ladder
+    // bookkeeping (`priorSameKind`/`lastDemotion`) — so the guard now DERIVES
+    // every route whose handler body mentions `runEvents` and requires the
+    // ledger to name each one, rather than reverting to a blanket claim
+    // nobody re-derives or silently deleting the check a second route would
+    // need.
+    const starts = [...ROUTES.matchAll(/app\.(get|post)\('([^']+)'/g)]
+      .map((h) => ({ key: `${h[1]!.toUpperCase()} ${h[2]!}`, at: h.index! }));
+    const runEventsRoutes = starts
+      .filter(({ at }, i) => ROUTES.slice(at, starts[i + 1]?.at ?? ROUTES.length).includes('runEvents'))
+      .map((h) => h.key);
+    expect(runEventsRoutes.length, 'no route reads runEvents any more — the ledger correction ' +
+      'naming one can be reverted to the original "no route can serve it" claim').toBeGreaterThan(0);
+    for (const route of runEventsRoutes) {
+      expect(m, `the ledger measurement block does not name ${route} as now reading runEvents`)
+        .toContain(route);
+    }
   });
 });

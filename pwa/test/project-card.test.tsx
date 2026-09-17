@@ -21,7 +21,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
@@ -384,7 +384,8 @@ const FROZEN = 1_800_000_000_499;
 const runFor = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
   project: 'demo', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'demo-quiet-mesa', resumed: false, clearedAt: null,
   openedAt: FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,
@@ -805,6 +806,16 @@ describe('the + names in-pool accounts, never "all accounts"', () => {
                         roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
                         pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
     expect(screen.getByRole('button', { name: 'New workspace on demo — nothing is in pool pool-b' }))
+      .toBeInTheDocument();
+  });
+
+  it('names the class rather than the pool when a `?class=` read measures every lane unservable for it (routing slice 4, Task 6)', () => {
+    render(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} onAddWorkspace={() => {}}
+                        projected={null}
+                        placement={{ kind: 'measured', pool: { state: 'tagged', name: 'pool-b' }, placement: { kind: 'none', pool: 'pool-b', class: 'fable' } }}
+                        roster={pooled({ claude: 'pool-a', claude2: 'pool-a', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a' })}
+                        pools={{ listed: true, byProject: { demo: { state: 'tagged', name: 'pool-b' } }, enforcement: 'enforced' }} />);
+    expect(screen.getByRole('button', { name: 'New workspace on demo — no lane can serve fable' }))
       .toBeInTheDocument();
   });
 

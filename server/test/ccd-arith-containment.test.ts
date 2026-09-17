@@ -23,6 +23,13 @@
 // registry field, not a live-vulnerability fix. The one live wire-reachable
 // instance was `cmd_ensure`'s positional, closed in 73bc0fe.
 //
+// ROUTING SLICE 6 ADDS ONE OPERAND WITH A WRITER OUTSIDE THAT PICTURE, and it
+// is a ROW in the structural table below rather than a paragraph here:
+// `compact`, the per-session compaction threshold `_auto_compact_check`
+// compares `ctx` against, is written by `ccd route` / `--route`, which the
+// server reaches from a wave dispatch. That row states what still reaches its
+// `-ge` and why the guard sits there anyway.
+//
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
 // after, `=~ ^[0-9]+$` short-circuits and it does not. The structural test
@@ -95,6 +102,39 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
       + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compactswap'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_auto_compact_check does not evaluate a payload planted in the compact field', () => {
+    const h = makeCcdHarness('arith-compactfield');
+    // Routing slice 6, Task 5 — the per-session threshold reaches
+    // `[[ "$thr" =~ ^[0-9]+$ && "$pct" -ge "$thr" ]]`, an arithmetic context,
+    // exactly as the two cooldowns above reach theirs. TWO things have to fail
+    // for the payload to fire, and this case walks past both: `_route_get`'s
+    // `_route_valid` check, which refuses the value so `$thr` is the default
+    // here, AND the `=~ ^[0-9]+$` that short-circuits the `-ge`. The pane and
+    // idle predicates are stubbed so the tick reaches the comparison and stops
+    // there; the payload fires (or not) on the way past.
+    h.sh(
+      '_reg_set myid wrapper claude;'
+      + ' _reg_set myid compact \'REG[$(touch "$HOME/PWNED-compactfield")]\';'
+      + ' _pane_for_keystroke(){ KS_PANE="▓ ctx ████ 88%"; return 0; };'
+      + ' _idle_for_keystroke(){ KS_WHY=not-idle; KS_DETAIL=x; return 1; };'
+      + ' _auto_compact_check myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-compactfield'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_route_compact_settling does not evaluate a payload planted in lastcompact', () => {
+    const h = makeCcdHarness('arith-routecompact');
+    // The applier's interlock reads the SAME field `_auto_compact_check` writes
+    // and compares it in the same arithmetic context, so it inherits that row's
+    // threat model exactly: a torn or hand-edited registry field, one writer, no
+    // wire route.
+    h.sh(
+      " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-routesettling\")]';"
+      + ' _route_compact_settling myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-routesettling'))).toBe(false);
     h.cleanup();
   });
 
@@ -212,6 +252,29 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
     { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
+    // Routing slice 4, controller ruling S4-R7: `routetries` (`<n> <epoch>`) is the
+    // applier's bounded-retry counter and BOTH of its tokens are arithmetic operands —
+    // the attempt count against `ROUTE_RETRY_MAX`, the epoch against
+    // `ROUTE_RETRY_BACKOFF`, and the count again when it is incremented. Same threat
+    // model as every row above: one writer (`_route_try_bump`, from `$(date +%s)` and its
+    // own arithmetic), no wire route, a torn or hand-edited registry field.
+    { fn: '_route_try_bump (routetries increment)', anchors: ['$((n + 1))', 'else n=1'],           arith: '$((' },
+    { fn: '_route_retry_ok (attempt cap)',          anchors: ['-ge "$ROUTE_RETRY_MAX"'],           arith: '-ge' },
+    { fn: '_route_retry_ok (backoff)',              anchors: ['$((now - ts))', 'ROUTE_RETRY_BACKOFF'], arith: '$((' },
+    // The final review's finding 5: the applier's compaction interlock reads
+    // `lastcompact` — `_auto_compact_check`'s own field, one writer, from
+    // `$(date +%s)` — into the same shape of comparison.
+    { fn: '_route_compact_settling (quiet window)',  anchors: ['$((now - last))', 'ROUTE_COMPACT_QUIET'], arith: '$((' },
+    // Routing slice 6, Task 5, controller ruling S6-R12: `compact` is the per-session
+    // compaction threshold and the ONE operand in this table whose writer sits outside the
+    // header's picture — `ccd route` / `--route`, which the server reaches from a wave
+    // dispatch. It arrives at the `-ge` already validated, because `_auto_compact_check`
+    // reads it through `_route_get` and `_route_valid`'s `compact` arm admits only two or
+    // three digits in 10–100, answering nothing otherwise so the read falls back to
+    // `COMPACT_THRESHOLD`. The `=~ ^[0-9]+$` is first inside the same `[[ ]]` anyway: a
+    // validated reader is another function's promise, and this row is what refuses the
+    // future edit that reads the field raw again — the shape the first cut of this site had.
+    { fn: '_auto_compact_check (compact threshold)', anchors: ['-ge "$thr"', '_compact_note_clear'], arith: '-ge' },
     // The drawer wave's §6.3 note floor. It reads the SAME constant as the row
     // above, so its operand is deliberately named `said` rather than `nts`:
     // with `nts` the two lines are byte-identical and this sweep's

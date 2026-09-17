@@ -7,7 +7,7 @@
 // Two cues per row, always: the word is the fact and the glyph is the shape, so
 // no state has to be read out of colour (StatusDot.tsx's own discipline).
 import { KICKOFF_UNACKED_MS, MAIL_REPLAY_WARN_COUNT, SPAWN_STALL_MS, isRunState,
-  type RunHealth, type RunItemTally, type RunState, type RunSummary } from '../../../shared/api';
+  type RunHealth, type RunItemTally, type RunKind, type RunState, type RunSummary } from '../../../shared/api';
 import { formatAge } from './formatReset';
 
 export const RUN_WORD: Record<RunState, string> = {
@@ -79,9 +79,10 @@ export const runClosedAt = (run: { closedAt?: number | null }): number | null =>
 
 /** The active/finished SPLIT (fix, review findings 3/22): `state`, never
  *  `closedAt` — `CoordStore.runs()` itself (the live `{type:'runs'}` frame's
- *  own source, `watch.ts`'s `emitRuns`) draws the SAME line on `state NOT IN
- *  ('done','failed')`, so this is not a new definition, it is the existing
- *  one restated where the client can use it. `closedAt` is written by
+ *  own source, `watch.ts`'s `emitRuns`) draws the SAME line by excluding
+ *  `TERMINAL_RUN_STATES` (`shared/api.ts`'s `done`/`failed` pair), so this is
+ *  not a new definition, it is the existing one restated where the client
+ *  can use it. `closedAt` is written by
  *  exactly one path (`advanceInner`, `store.ts`) and `CoordStore.reconstruct`
  *  — the disaster-recovery rebuild `server/test/reconstruction-drill.test.ts`
  *  pins as one of the twelve facts the drill CANNOT recover — never sets it,
@@ -432,6 +433,34 @@ export function crossingNote(
     title: `this wave runs in ${run.project}; its programme is homed in ${home}`,
   };
 }
+
+/* ── design 2026-09-14 §8: the kind chip ──────────────────────────────────── */
+
+export const REVIEW_GLYPH = '⌕';
+
+export interface RunKindChip { readonly glyph: string; readonly word: string; readonly title: string }
+
+/**
+ * THE ONE READER of `RunSummary.kind` and `RunSummary.reviews` on this side
+ * of the wire (CLAUDE.md "Wire discipline": a newer peer tolerates an older
+ * peer omitting a field, through a SINGLE reader per field). Both are declared
+ * optional here though the wire type requires them, `runWarnings`'s idiom: an
+ * older SERVER omits them, and absence means a work run — the only kind that
+ * server knew. `null` = render nothing, which is what every work row does.
+ */
+export const runKindChip = (run: { kind?: RunKind; reviews?: number | null }): RunKindChip | null => {
+  if (run.kind === undefined || run.kind === 'work') return null;
+  if (run.kind === 'review') {
+    return {
+      glyph: REVIEW_GLYPH,
+      word: run.reviews === null || run.reviews === undefined ? 'review' : `reviews #${run.reviews}`,
+      title: run.reviews === null || run.reviews === undefined
+        ? 'a review run: reads one work run at one measured tip and reports; the coordinator rules'
+        : `a review run: reads run #${run.reviews} at one measured tip and reports; the coordinator rules`,
+    };
+  }
+  return { glyph: '·', word: 'unknown kind', title: 'a run of a kind this build cannot name' };
+};
 
 /* ── F7: the compact warn row ──────────────────────────────────────────────── */
 

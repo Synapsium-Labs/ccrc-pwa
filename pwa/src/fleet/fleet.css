@@ -43,6 +43,38 @@
   align-items: center;
   gap: var(--sp-3);
 }
+/* The class chooser (routing spec, slice 5, Task 6) gets a ROW OF ITS OWN
+ * under the head, and that is a measurement rather than a preference. The
+ * head's right group carries four other items — the count, the accounts door,
+ * the mail badge and the bell — whose min-content widths total 244px, and at
+ * 390px that group has 294px to spend. The 50px left over (38px once this
+ * control's own 12px gap is paid) cannot hold a `<select>` sized to its widest
+ * option, "Coordinator row", which measures 167px. No floor, cap or shrink
+ * factor closes a 129px deficit; only leaving the row does. Measured in
+ * Chromium against the rendered component from 320px to 1440px.
+ *
+ * `.route-select`'s chrome is still reused verbatim — same edge, ground and
+ * tap-min height as the new-session sheet's routing row. What is NOT reused is
+ * its `width: 100%`, and this override must OUT-SPECIFY that rule rather than
+ * merely restate it: `.route-select` is declared some 650 lines further down
+ * and carries equal specificity (one class each), so the single-class
+ * `.fleet-class-select { width: auto }` that shipped lost the tie to source
+ * order and never applied once. That is why the control rendered at 286px
+ * instead of 167px, and `flex-shrink: 0` then forbade it giving any of that
+ * back: the head overflowed the viewport by 225px at 390px and by 219px at
+ * 700px, so the defect was never phone-only. `fleet-css.test.ts` pins the
+ * specificity and the source order that makes it necessary; the pixel figures
+ * above are browser measurements it cannot recompute, and it says so rather
+ * than re-deriving them from the code they describe. */
+.fleet-class-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 var(--sp-1);
+}
+.route-select.fleet-class-select {
+  width: auto;
+  max-width: 100%;
+}
 /* Notification toggle — a quiet bell; lit when push is on. */
 .bell {
   border: none;
@@ -676,6 +708,44 @@
 }
 .proj-skel {
   padding: var(--sp-3) 0;
+}
+/* The new-session sheet's optional routing row (routing spec, slice 4, Task
+ * 6) — three plain selects under the project list. Reuses `.proj-search`'s
+ * chrome tokens (edge, raised ground, tap-min height) rather than inventing a
+ * second control style for the app's first `<select>`. */
+.route-row {
+  display: grid;
+  /* `minmax(0, 1fr)`, never a bare `1fr`: a grid item's automatic minimum size
+   * is its min-content, so three `<select>`s whose option lists are wider than
+   * a third of a phone's sheet push the track past the container instead of
+   * scrolling inside it — the same defect `.proj-card`'s `min-width: 0` fixes
+   * elsewhere in this file. Measured 2026-09-17: this was the ONLY bare
+   * `repeat(n, 1fr)` left in `pwa/src`; the other nine multi-track grids
+   * already spell it this way. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.route-field {
+  display: grid;
+  gap: 2px;
+}
+.route-field-label {
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.route-select {
+  width: 100%;
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 0 var(--sp-2);
+}
+.route-select:focus {
+  border-color: var(--accent);
 }
 .sheet-confirm {
   margin-top: var(--sp-2);
@@ -2242,6 +2312,13 @@ button.proj-card-pool::before {
   color: var(--ink-secondary);
 }
 .run-row .run-crossing-glyph { color: var(--ink-tertiary); }
+.run-row .run-kind {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-kind-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }

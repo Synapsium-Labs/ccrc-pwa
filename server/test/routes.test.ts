@@ -207,7 +207,7 @@ describe('canonical positive-safe decimal parser', () => {
 });
 
 describe('canonical coordination id route census', () => {
-  it('keeps all fourteen textual resource-id seams on the shared parser', () => {
+  it('keeps all fifteen textual resource-id seams on the shared parser', () => {
     expect(canonicalCoordIdRoutes()).toEqual([
       { method: 'POST', routePath: '/api/mail/:id/ack' },
       { method: 'GET', routePath: '/api/mail/:id' },
@@ -216,6 +216,9 @@ describe('canonical coordination id route census', () => {
       { method: 'POST', routePath: '/api/runs/:id/abandon' },
       { method: 'POST', routePath: '/api/runs/:id/reclaim' },
       { method: 'POST', routePath: '/api/runs/:id/advance' },
+      // routing slice 5, Task 2: the coordinator's escalation/demotion door,
+      // registered right after `advance` in coord/routes.ts.
+      { method: 'POST', routePath: '/api/runs/:id/route' },
       { method: 'POST', routePath: '/api/runs/:id/items' },
       { method: 'GET', routePath: '/api/runs/:id/signals' },
       { method: 'GET', routePath: '/api/runs/:id/items' },
@@ -252,6 +255,7 @@ describe('knownId route census', () => {
 
     expect(requestGates).toEqual([
       { method: 'POST', routePath: '/api/sessions/:id/prompt', args: 'id' },
+      { method: 'POST', routePath: '/api/sessions/:id/route', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/dialog', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/ask', args: 'id' },
       { method: 'GET', routePath: '/api/sessions/:id/commands', args: 'id' },
@@ -269,8 +273,8 @@ describe('knownId route census', () => {
       { method: 'GET', routePath: '/api/sessions/:id/workspace/audit', args: 'id' },
       { method: 'POST', routePath: '/api/sessions/:id/workspace/reap', args: 'id' },
     ]);
-    expect(requestGates).toHaveLength(17);
-    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(13);
+    expect(requestGates).toHaveLength(18);
+    expect(requestGates.filter(({ method }) => method === 'POST')).toHaveLength(14);
     expect(requestGates.filter(({ method }) => method === 'GET')).toHaveLength(4);
 
     const revivalProbes = calls.filter(({ args }) => args !== 'id');
@@ -340,7 +344,7 @@ describe('write routes', () => {
       if (args[0] === 'list-panes') return { code: 0, stdout: `${PANE_PID}\n`, stderr: '' };
       return { code: 0, stdout: '', stderr: '' };
     };
-    // The shape `remote/io.ts` produces when one of the 23
+    // The shape `remote/io.ts` produces when one of the 30
     // [registry-read-census:fields] field reads a session's `readRegistry` fires
     // in parallel fails or times out: null, indistinguishable
     // at field() from a file that is not there (same idiom as hold-gate.test.ts's

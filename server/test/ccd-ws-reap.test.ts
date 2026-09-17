@@ -1,10 +1,12 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, WS_ADD } from './ccdWsHelpers.js';
+import { CCD, WS_ADD, ghContainedEnv } from './ccdWsHelpers.js';
 import { CFG_DIR, GH_STUB, makePrHarness, mergedRow, type PrHarness } from './ccdPrHelpers.js';
 import { itLinux } from './platformFixtures.js';
+import { eventsOf, refusalsOf, holdCompactLock, compactLockPath,
+  expectContentionClauses } from './lifecycleHelpers.js';
 
 let h: PrHarness;
 beforeEach(() => { h = makePrHarness('ccrc-ccd-reap-'); });
@@ -363,6 +365,14 @@ describe('refusals are answers', () => {
     expect(fs.existsSync(wt), 'and nothing is destroyed').toBe(true);
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toContain('ws/quiet-basin');
     expect(h.reg('demo-quiet-basin', 'uuid')).not.toBeNull();
+    // D-2605, leg (b) of §5's mechanism-absence matrix: AND NO `purge` FACT.
+    // `_reg_purge` is the one function every destruction path terminates in and
+    // the one that journals unconditionally, so "nothing was destroyed" and
+    // "nothing journalled a destruction" are two different claims — a verb that
+    // refused after reaching the purge would satisfy the first and not this.
+    expect(eventsOf(h.home, 'purge'), 'the verb never reached the purge at all').toEqual([]);
+    expect(refusalsOf(h.home).filter((r) => r.act === 'reap').map((r) => r.token),
+      'and it refused by NAME, with the mechanism-absence token').toEqual(['flock-unavailable']);
   }, 30000);
 
   it('refuses rather than writing a tombstone it cannot quote', () => {
@@ -2669,4 +2679,182 @@ describe('a branch another checkout is standing on', () => {
     expect(out.reaped).toBe('demo-quiet-basin');
     expect(h.git(main, 'branch', '--list', 'ws/quiet-basin')).toBe('');
   }, 30000);
+});
+
+// ── D-2605: the reap tail answers for a purge it could not take ───────────
+// `_ws_reap_tail` is the branch `_ws_reap_locked` reaches last, and it is
+// POST-ACTION by construction: worktree, branch and clips are already gone when
+// `_reg_purge` runs. So a refusal there is a FAILURE, never a refusal, and the
+// message names what completed and what still stands.
+//
+// THE MECHANISM-ABSENCE LEG WAS CALLED UNSATISFIABLE HERE, AND IT IS NOT
+// (r3 A-I3). What stood in this place said "the lock MECHANISM being absent
+// cannot reach this branch at all", on the ground that `cmd_ws_reap` dies at
+// its own `command -v flock` gate and `_lc_refuse` "EMITS, THEN DIES. Never
+// returns." The premise is true and the conclusion overshoots it: that gate
+// names `flock` ALONE, while `_compact_lock_acquire` answers mechanism-absent
+// for `flock`, `mktemp` OR `link`. MEASURED on a generation-present row, each
+// of the three absent on its own makes `_reg_purge` answer 2 — so a box
+// carrying `flock` and missing `mktemp` reaches the tail with that status, and
+// the third `_lc_fail` is an ordinary fixture. Both conditions are below, and
+// the property that matters is that they are two records, not one.
+describe('ws-reap: the tail reports a purge the row mutex refused (D-2605)', () => {
+  it('reaps everything, then FAILS with purge-refused — no done, and the registry row STANDS', async () => {
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    // 20 s, against `COMPACT_LOCK_WAIT`'s 5 s: the reap does real git work
+    // before step (i), so the hold has to outlast the whole verb rather than
+    // just the acquire.
+    const release = await holdCompactLock(h.home, 'demo-quiet-basin', 20);
+    try {
+      const r = reap(tok);
+      // The verb returns non-zero — a reap that could not purge is not a
+      // success — and says so where an operator sees it.
+      expect(r.code, 'a reap whose purge was refused is not a success').not.toBe(0);
+      expect(r.stderr).toContain('reaped, registry NOT purged');
+
+      const reaps = eventsOf(h.home, 'reap');
+      const outcomes = reaps.map((e) => String(e['outcome']));
+      expect(outcomes, 'the tail closed its transaction with a FAILURE').toContain('failed');
+      expect(outcomes, 'and never with a done').not.toContain('done');
+      const failed = reaps.find((e) => e['outcome'] === 'failed')!;
+      expect(failed['refusal']).toBe('purge-refused');
+      expect(String(failed['detail'])).toContain('still stand');
+      // THE DISCRIMINATORS, so the CONTROL sentence the leg below names is true
+      // (r5 R4-M1). "still stand" is carried by BOTH status-1 sentences, so
+      // asserting it alone pinned nothing about WHICH one shipped: MEASURED in
+      // a throwaway copy, making `ccd/ccd`'s canonical-vanished override fire
+      // unconditionally left this file GREEN 88/88, while an ordinary contended
+      // reap journaled "restore the lock by hand" for a lock that is right
+      // there and "a re-run cannot help" when a re-run is the only thing that
+      // can. Only the contention arm prescribes a wait that ends, and only the
+      // other arm names its own token, so these two tell them apart.
+      expect(String(failed['detail']), 'the CONTENTION sentence: a wait that can end is the remedy')
+        .toContain('once the compaction settles');
+      expect(String(failed['detail']), 'and never the canonical-vanished remedy, which is false on a lock that exists')
+        .not.toContain('canonical-vanished');
+      // AND THE RE-RUN CLAUSE IS THIS VERB'S (r8 R8-I1). `once the compaction
+      // settles` is carried by all three shapes of the empty-`WHY` sentence,
+      // so the assertion above pinned nothing about WHICH one a reap gets. The
+      // clause is selected by a NESTED `case "$verb"` inside
+      // `_compact_lock_why_remedy`, and its `ws-reap)` label was measured by
+      // nothing: renaming it left this file and `ccd-lifecycle-purge` GREEN
+      // 144/144 while the reap fell through to the catch-all and told an
+      // operator to `re-run ccd ws-reap <id>` — a re-run of a reap that had
+      // already completed, the exact claim the helper's own docstring says
+      // this arm exists to avoid. This is the ONLY leg in the tree that drives
+      // the reap verb's ordinary-contention sentence, so it is where that
+      // label gets measured.
+      expectContentionClauses('ws-reap', 'demo-quiet-basin', String(failed['detail']));
+      expect(String(failed['tx'] ?? ''), 'a MINTED, non-empty tx').not.toBe('');
+
+      // WHAT THE MESSAGE PROMISES IS TRUE: the row and its authorization are
+      // both still there, so the re-run the message names can work.
+      expect(h.reg('demo-quiet-basin', 'uuid'), 'the registry row still stands').not.toBeNull();
+      expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation')),
+        'and so does its generation').toBe(true);
+      // AND THE REAP ITSELF REALLY RAN — without this the assertions above are
+      // satisfied by a verb that refused early and destroyed nothing, which is
+      // a different test.
+      expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
+      expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
+    } finally { release(); }
+  }, 60000);
+
+  // LINUX ONLY (round M4). The condition this leg drives is measured by
+  // `_compact_lock_vanished`'s `/proc/<pid>/fd` arm, gated
+  // `[ -d /proc ] || return 1`; on Darwin the acquire mints instead of
+  // refusing, so the reap succeeds and there is no failed record to read. That
+  // is recorded platform residue, not something this case may assert away.
+  itLinux('and on a CANONICAL-VANISHED row the SAME token carries a different sentence — no wait is prescribed (r4 A-M3)', async () => {
+    // STATUS 1'S SECOND CONDITION, at the fourth purge caller.
+    // `_compact_lock_acquire` answers 1 both for the contended lock the leg
+    // above holds and for a permanent lock unlinked out of contract under a
+    // live holder, and tells them apart only in COMPACT_LOCK_WHY. The leg
+    // above is the CONTROL, and since r5 R4-M1 it ASSERTS the difference
+    // instead of implying it: same token, same verb, and it requires the
+    // contention arm's own clause ("once the compaction settles") together
+    // with the ABSENCE of this leg's token. Before that it asserted only
+    // "still stand", which both sentences carry, so it could not have caught
+    // an override that fired on every refusal.
+    //
+    // THE HOLDER GOES THROUGH THE SHIPPED ACQUIRE, which is what leaves a
+    // descriptor on an unlinked `lock-open` alias for `_compact_lock_vanished`
+    // /proc arm to find. `holdCompactLock` opens canonical directly, so after
+    // the unlink there would be nothing to find and the next acquire would
+    // MINT instead of refusing — a fixture that silently tests the leg above.
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    const child = spawn('bash', ['-c',
+      `source "${CCD}"; _compact_lock_acquire demo-quiet-basin 5 || { echo "ACQRC=$?"; exit 1; }; echo held; exec sleep 60`],
+      { cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
+    let hout = '';
+    await new Promise<void>((res, rej) => {
+      const t = setTimeout(() => rej(new Error(`the holder never acquired: ${hout}`)), 10_000);
+      child.stdout.on('data', (d: Buffer) => { hout += d.toString(); if (hout.includes('held')) { clearTimeout(t); res(); } });
+      child.stderr.on('data', (d: Buffer) => { hout += d.toString(); });
+      child.on('error', (e) => { clearTimeout(t); rej(e); });
+    });
+    try {
+      // THE OUT-OF-CONTRACT ACT. Nothing in this tree unlinks the permanent
+      // lock — `_reg_purge` skips it BY NAME and `_ws_private_family` excludes
+      // it — so this is a stranger, which is the condition §4 rules on.
+      fs.unlinkSync(compactLockPath(h.home, 'demo-quiet-basin'));
+      const r = reap(tok);
+      expect(r.code, 'a reap whose purge was refused is not a success').not.toBe(0);
+      const reaps = eventsOf(h.home, 'reap');
+      const failed = reaps.find((e) => e['outcome'] === 'failed');
+      expect(failed, 'the tail closed its transaction with a FAILURE').toBeTruthy();
+      expect(failed!['refusal'], 'still status 1 — the token does not change').toBe('purge-refused');
+      const detail = String(failed!['detail'] ?? '');
+      expect(detail, 'names the condition the acquire measured').toContain('canonical-vanished');
+      expect(detail, 'and says why a re-run cannot help')
+        .toContain('has been unlinked while a live holder still owns its inode');
+      expect(detail, 'and names the remedy that can').toContain('by hand');
+      // THE FALSE CLAUSE IS GONE, asserted as an absence because that is
+      // exactly what the conflation put here, verbatim.
+      expect(detail, 'no wait is prescribed for a compaction that can never settle')
+        .not.toContain('once the compaction settles');
+      // AND THE REAP ITSELF RAN, so this is the tail and not an early refusal.
+      expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
+      expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
+      expect(h.reg('demo-quiet-basin', 'uuid'), 'and the registry row still stands').not.toBeNull();
+    } finally { try { child.kill('SIGKILL'); } catch { /* gone */ } }
+  }, 60000);
+
+  it('and on a box whose MECHANISM is absent it fails with the OTHER token — reachable through mktemp, which ws-reap does not gate', () => {
+    const { main, wt } = ready();
+    const tok = tokenOf();
+    // `mktemp`, not `flock`: the verb's own gate refuses a flock-less box
+    // before the tail runs, so `flock` is the one absence that CANNOT produce
+    // this record. `command` is shimmed rather than PATH emptied, the idiom
+    // this file already uses — and the shim only defeats the `command -v`
+    // PROBE, so every real `mktemp` elsewhere still runs.
+    const NOMKTEMP = 'command() { [[ "${1-}" == -v && "${2-}" == mktemp ]] && return 1;'
+      + ' builtin command "$@"; };';
+    // IN A SUBSHELL, like the flock-absence leg above: the tail's report path
+    // ends in a non-zero return, and the sourcing shell must survive it.
+    h.sh(`${GH_STUB} ${ARCH} ${NOMKTEMP} `
+      + `( cmd_ws_reap --expect ${tok} --session demo-quiet-basin ) >out3.json 2>err3.txt; echo "exit=$?"`);
+    const reaps = eventsOf(h.home, 'reap');
+    const failed = reaps.find((e) => e['outcome'] === 'failed');
+    expect(failed, 'the tail closed its transaction with a FAILURE').toBeTruthy();
+    expect(failed!['refusal'], 'mechanism absence is not contention').toBe('purge-mechanism-absent');
+    const detail = String(failed!['detail'] ?? '');
+    // NEITHER OF CONTENTION'S TWO CLAUSES, which are false on this box.
+    expect(detail, 'no lock file is blamed — none was consulted').not.toContain('was unavailable');
+    expect(detail, 'and no wait is prescribed for a compaction that cannot run')
+      .not.toContain('once the compaction settles');
+    expect(detail, 'the cause is named').toContain('MECHANISM is absent');
+    // THE BINARIES ARE NAMED AS TEXT, NOT RUN — see the same assertion in
+    // `ccd-lifecycle-purge.test.ts` for the measurement: backticks inside the
+    // double-quoted detail made bash RUN them and splice a real temp pathname
+    // into the record, while every other clause of the sentence survived.
+    expect(detail, 'named as text, in one unmangled phrase')
+      .toContain('mktemp or link could not be resolved');
+    // AND THE REAP ITSELF RAN, so this is the tail and not an early refusal.
+    expect(fs.existsSync(wt), 'the worktree is gone').toBe(false);
+    expect(h.git(main, 'branch', '--list', 'ws/quiet-basin'), 'the branch is gone').toBe('');
+    expect(h.reg('demo-quiet-basin', 'uuid'), 'and the registry row still stands').not.toBeNull();
+  }, 60000);
 });

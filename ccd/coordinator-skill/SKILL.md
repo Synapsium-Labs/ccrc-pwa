@@ -1,6 +1,6 @@
 ---
 name: ccrc-coordinator
-description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, review the handoff commit, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
+description: Drive a multi-wave ccrc program as the coordinator session — open the run, dispatch each wave, read mail, re-measure a claimed wave-done, dispatch a review run and rule on its report, release on the final merge. Use when this session IS the coordinator for a program (the operator said so, or `GET /api/runs` names this session id as the `claimedBy` of an open run). Never use it to do a wave's own work — a coordinator that starts implementing has become a worker with a stale plan.
 ---
 
 # Coordinating a ccrc program
@@ -64,7 +64,7 @@ run record and the server's own re-measurement are what settle facts.
 
 ## The contract
 
-These eleven sentences are the boundary between "a coordinator" and "an agent
+These fourteen sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -78,12 +78,17 @@ with a shell on the fleet host". They are not advice.
 9. This session never sends `/clear` to a worker directly, by any route, at any wave. `POST /api/runs/:id/dispatch` is the one writer of that step.
 10. This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.
 11. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
+12. A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:'review'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.
+13. Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.
+14. The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
 Clause 1 is about *changing* fleet state, and the reason is not that ccd is
 unsafe — it is that an act the server did not record did not happen as far as
-the run board, the caps and the operator are concerned.
+the run board, the caps and the operator are concerned. This session changes a
+run's routing only through `POST /api/runs/:id/route` (`ccrc-api runs route`)
+— `ccd route` is never this session's call.
 
 **`/clear` is dispatch's job, never yours (clause 9).** For wave ≥ 2, `POST
 /api/runs/:id/dispatch` itself resumes the workspace and injects `/clear`
@@ -243,7 +248,10 @@ not after.
    THAT places the hold immediately.)
 2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief AND the
    wave's declared ledger: the body is `{"brief": "<prose>", "items":
-   ["<title>", …]}`, at most 32 titles of at most 200 UTF-8 bytes each. The
+   ["<title>", …], "route": {…}}`, at most 32 titles of at most 200 UTF-8
+   bytes each. `route` is the object clause 13's placement derives, carried
+   on this same call (`references/wave-lifecycle.md` §2 has its shape and
+   its two omission events). The
    brief is prose the server never reads; the items are the machine-readable
    half of the same wave plan, and **they must agree** — the board's tally is
    built from the items, so a brief naming five units of work beside three
@@ -256,7 +264,9 @@ not after.
    `ccrc-worker` skill, and that skill IS the protocol** — so your brief carries
    what only this wave knows (the plan file's path, the task range, **the
    execution skill the worker should invoke**, the interfaces earlier waves
-   settled, the deviations already ledgered), not the
+   settled, the deviations already ledgered), **the shape of the wave and the
+   routing** the matrix derives from it (`references/routing-matrix.md`;
+   clause 13), not the
    identity, ack, question and fingerprint rules the worker already has. The
    execution skill is not optional: the worker's clause 6 invokes "the
    execution skill the brief names", so an unnamed one is a clause pointing at
@@ -297,32 +307,76 @@ not after.
    That ordering IS the authorisation: the server's own re-measurement is what
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
-5. **Review the handoff commit** like any other commit, update the ledger,
-   then `POST /api/runs` **for wave N+1 first**. Order matters: closing first,
-   even briefly, leaves the program with zero open runs, and the server retires
-   a program with none — silently breaking every `toId:'coordinator'` mail
-   from that point on. Opening first never lets the count reach zero.
-   **Same project:** open wave N+1 first with this producer's `sessionId`, close
-   the producer with `final:false` so its hold transfers to the already-open
-   successor on the same workspace, then run `"$API" runs list --closed 1`,
-   find the producer by run id, and require its own `state` to be `done`.
-   **Different project:** open wave N+1 first without this producer's
-   `sessionId`, close the producer with `final:true` and require
-   `released:true`, then run `"$API" runs list --closed 1`, find the producer
-   by run id, and require its own `state` to be `done`. If the consumer depends
-   on an interface from that producer, independently prove the producer
-   interface PR merged at the exact `producerSha` carried in the conditional
-   producer contract. A missing or non-`done` row, failed release, or required
-   exact-SHA merge proof that is absent means report and do not dispatch. The
-   closed row proves the fingerprint and terminal run state; it does not prove
-   a required interface merged. Only then dispatch wave N+1 (step 2).
-6. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
+5. **Dispatch a review run** (clause 12; design 2026-09-14). With the work run
+   at `awaiting-review`, open the reviewer's run and dispatch it:
+   `"$API" runs open --json -` with
+   `{"program":"<slug>","title":"Review wave N","kind":"review","reviews":<work run id>,"claimedBy":"<your id>","homeProject":"<home>"}`
+   — `project`, `wave` and `waveOf` are the reviewed run's and are derived
+   server-side; do not send them. `review-in-flight` means a review run is
+   already open for that wave: close it first (`{"state":"failed"}` if the
+   reviewer died), then retry. A bare `400 bad-request` with no `detail` on
+   this open means the SERVER lane has not landed yet (this branch deploys
+   server first; the plan's Task 14 says why) — wait for the next wake and
+   do NOT add `project`/`wave` to satisfy it: an older server would open a
+   second WORK run for the wave. Then `"$API" runs dispatch <review run id> --json -` with a
+   brief cut from `references/review-brief.md` — the work run id, its branch
+   `ws/<worker-slug>`, the plan coordinates, the task range, the lenses, the
+   suites. The brief's `Lenses:` line names the held-out panel
+   (`../ccrc-coordinator/references/review-panel.md`, clause 14) — the
+   reviewer runs it; this session never runs it on the diff itself.
+   `cap-concurrency` here is ordinary: the reviewer needs a slot and
+   the idle worker no longer holds one, so retry on the next wake. **End your
+   turn.** The reviewer's `review-done` mail wakes you.
+6. **Rule on the report**. The `review-done` mail's body opens with one JSON
+   line, `{"reviewedTip":…,"report":…}`. Submit it EXACTLY as written:
+   `"$API" runs close <review run id> --json -` with `{"fingerprint":{"reviewedTip":"…","report":"…"}}`
+   (no `final`, no `archive` — a review run is always final and its workspace
+   is released by this close). `stale-review` means the worker pushed after
+   its wave-done: the report is evidence about a tip that is gone — do not
+   rule on it; close the review run with `{"state":"failed"}`, mail the worker
+   the code and detail verbatim, and once its re-measured wave-done arrives,
+   open a NEW review run (step 5). `report-unreadable`
+   means the path the reviewer named cannot be opened: close the review run
+   with `{"state":"failed"}` and open a new one. Once the close answers `ok`, read the
+   report — findings are the reviewer's, rulings are yours (clause 10 for any
+   deviation the report surfaces). Then ONE of two moves:
+   - **Send back:** `"$API" runs advance <work run id> --json -` with
+     `{"to":"working","fingerprint":{…the wave-done fingerprint you verified…}}`
+     (a retreat re-measures nothing; it may refuse `cap-concurrency` — retry on
+     the next wake — or `review-in-flight` — you skipped this step's close). Then
+     RE-BRIEF THE WORKER BY MAIL, never by `runs dispatch` — dispatch is
+     `planned`'s door only, and a run at `working` has no edge back to
+     `dispatched` (D-2824): `"$API" mail send --json -` with
+     `{"fromId":"<your id>","fromUuid":"<your uuid>","toId":"<worker session id>","runId":<work run id>,"kind":"status","subject":"fix-round","body":"<the report's absolute path on the first line, then your rulings — which findings to fix, which you overruled and why>","artifacts":["<report path>"]}`.
+     The idle-gated delivery lane wakes the worker; its fix round ends in a new
+     wave-done and a NEW review run (step 5); review runs are never reused.
+   - **Clean:** update the ledger — Waves row, Decisions, Carried constraints,
+     and the **Next-wave brief** — commit it, then `POST /api/runs` **for wave N+1
+     first**. Order matters: closing first, even briefly, leaves the program with
+     zero open runs, and the server retires a program with none — silently
+     breaking every `toId:'coordinator'` mail from that point on. Opening first
+     never lets the count reach zero.
+     **Same project:** open wave N+1 first with this producer's `sessionId`, close
+     the producer with `final:false` so its hold transfers to the already-open
+     successor on the same workspace, then run `"$API" runs list --closed 1`,
+     find the producer by run id, and require its own `state` to be `done`.
+     **Different project:** open wave N+1 first without this producer's
+     `sessionId`, close the producer with `final:true` and require
+     `released:true`, then run `"$API" runs list --closed 1`, find the producer
+     by run id, and require its own `state` to be `done`. If the consumer depends
+     on an interface from that producer, independently prove the producer
+     interface PR merged at the exact `producerSha` carried in the conditional
+     producer contract. A missing or non-`done` row, failed release, or required
+     exact-SHA merge proof that is absent means report and do not dispatch. The
+     closed row proves the fingerprint and terminal run state; it does not prove
+     a required interface merged. Only then dispatch wave N+1 (step 2).
+7. **Final merge:** `POST /api/runs/:id/close` with `final:true` closes the run
    and, *if no other open run names this workspace*, releases the hold. Nothing
    archives the workspace on its own after that: the merged sweep only pushes
    a notification, so the workspace stays live and supervised until a human
    archives it. Read `released` in the response: `false`
    means the run closed but the workspace is **still claimed** — another open
-   run owns it, which is exactly the state step 5's open-before-close creates.
+   run owns it, which is exactly the state step 6's open-before-close creates.
    The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
 
@@ -339,11 +393,11 @@ brief, resolve the home checkout separately as `homeRepoRoot`, keep the tracked
 plan path as `planRepoPath` under `docs/superpowers/plans/` with no leading slash,
 and name the full 40-hex commit as `planSha`. A later open naming a different home is
 refused `home-mismatch` with `by:` the stored value — the fix is your body, never
-the server. (An open with no `homeProject` at all is still accepted for one
-deploy generation and recorded as a `legacy-home-project` run event, with the
-column left NULL rather than guessed. You never omit it.)
+the server. (An open with no `homeProject` at all is refused
+`400 bad-request` with `detail: 'homeProject is required'` — the legacy
+generation that accepted it ended 2026-09-16. You never omit it.)
 
-**Reuse `sessionId` ONLY when the next wave stays in the same project.** Step 5
+**Reuse `sessionId` ONLY when the next wave stays in the same project.** Step 6
 above says so itself: its **Same project:** arm — same `sessionId`, same
 workspace — is the one this rule governs, and its **Different project:** arm is
 the one below. A wave that CHANGES project opens WITHOUT `sessionId` and
@@ -354,11 +408,13 @@ session's workspace belongs to — at the open, and again at the dispatch resume
 the open ever let one through.
 
 **What a crossing costs, so a cap refusal reads as arithmetic rather than a
-fault.** The cap rule is exact: concurrency counts dispatched non-terminal runs,
-not held workspaces. A terminal producer retained on a hold and a planned
-undispatched consumer consume no running-worker slot, while each actual dispatch
-still consumes daily budget and a dispatched non-terminal consumer consumes one
-concurrency slot. `cap-concurrency`
+fault.** The cap rule is exact: concurrency counts dispatched runs in an ACTIVE
+state, not held workspaces and not merely non-terminal ones. A terminal producer
+retained on a hold and a planned undispatched consumer consume no running-worker
+slot, and neither does a run parked IDLE at `awaiting-review`, `merging` or
+`closing` — it gives its slot back without closing (D-2803) — while each actual
+dispatch still consumes daily budget and a dispatched run consumes one
+concurrency slot for as long as it stays active. `cap-concurrency`
 or `cap-daily` remains authoritative — stop, say which cap, and wait to be woken,
 exactly as you would for any other run.
 
@@ -403,7 +459,8 @@ Handoffs are commits. Briefs are prose reviewed like code. The ledger is for
 humans and is parsed by nothing — including you: read it, do not build a parser
 for it. Parallelism only across workspaces a plan proves disjoint. SDD's per-PR
 mechanics (implement → review lenses → whole-branch pass) are unchanged; you
-*dispatch* that shape, you do not reinvent it.
+*dispatch* that shape to a review run rather than run it yourself — the diff
+is never read by this session.
 
 ## When something is wrong
 

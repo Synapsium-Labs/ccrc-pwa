@@ -19,6 +19,7 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField } from './ioDoubles.js';
 import { okRun } from './coordReadHelpers.js';
 
 const NOW = 1_000_000_000_000;            // epoch MILLISECONDS, the units the ladder takes
@@ -231,6 +232,18 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
   });
 });
 
+/** `seedRow` minus the `project` file — the shape whose `SessionRecord.project`
+ *  collapses to the session id (`buildRecord`'s `project ?? id`), and whose
+ *  `fieldMeasured` answers a proven absence. */
+const seedRowNoProject = (home: string, id: string): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  for (const [k, v] of Object.entries({
+    wrapper: 'claude', workdir: `/w/${id}`, uuid: `u-${id}`, started: '1',
+    workspace: id, branch: `ws/${id}`, base: 'origin/main',
+  })) writeFileSync(path.join(reg, `${id}.${k}`), v);
+};
+
 const seedRun = (s: CoordStore, claimedBy: string, wave = 1): number => {
   const r = s.openRun({ program: PROGRAM, title: 'F5 demo', project: 'demo',
     wave, waveOf: 2, claimedBy });
@@ -244,9 +257,9 @@ const seedRun = (s: CoordStore, claimedBy: string, wave = 1): number => {
 const watchCommit = (s: CoordStore): { calls: number } => {
   const seen = { calls: 0 };
   const real = s.reclaimProgram.bind(s);
-  s.reclaimProgram = ((runId: number, to: string, at: number) => {
+  s.reclaimProgram = ((runId: number, to: string, at: number, coordProject: string | null) => {
     seen.calls += 1;
-    return real(runId, to, at);
+    return real(runId, to, at, coordProject);
   }) as CoordStore['reclaimProgram'];
   return seen;
 };
@@ -409,6 +422,75 @@ describe('reclaimRun — the order is the guard', () => {
     const r = await reclaimRun(depsFor(home, s, ALIVE), id, DEAD);
     expect(r).toMatchObject({ ok: true, runIds: [], from: DEAD, to: DEAD });
     expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+});
+
+// FINAL WHOLE-BRANCH REVIEW, Important 2 (D-2922). Reclaim restamps the board
+// placement because the programme genuinely HAS a new coordinator (spec §7) —
+// and the value it stamps is MEASURED, with absence leaving null rather than
+// guessing, exactly as the open-time stamp is.
+describe('reclaimRun restamps the board placement it just invalidated', () => {
+  /** `coordProject` is stripped from `RunSummary` (it is not a wire field), so
+   *  it is read back through `runs()`, whose rows are `RunRow`s. */
+  const stampOn = (s: CoordStore, id: number): string | null => {
+    const read = s.runs({ includeClosed: true });
+    if (!read.ok) throw new Error('fixture: runs() refused');
+    return read.runs.find((r) => r.id === id)!.coordProject;
+  };
+
+  it('stamps the HEIR\'s measured project across the whole program', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const one = seedRun(s, DEAD, 1);
+    const two = seedRun(s, DEAD, 2);
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'the-heir-project' });
+    expect(await reclaimRun(depsFor(home, s, GONE), two, LIVE)).toMatchObject({ ok: true });
+    expect([stampOn(s, one), stampOn(s, two)]).toEqual(['the-heir-project', 'the-heir-project']);
+  });
+
+  it('leaves the stamp NULL when the heir\'s project cannot be READ — never the displaced one', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'the-heir-project' });
+    // The row LISTS and assembles — only `<LIVE>.project`'s bytes refuse — so
+    // the ladder still reaches the commit and this is a stamp question, not a
+    // refusal question.
+    const io = unreadableField(LIVE, 'project');
+    expect(await reclaimRun(depsFor(home, s, GONE, io), id, LIVE)).toMatchObject({ ok: true });
+    expect(stampOn(s, id)).toBeNull();
+  });
+
+  it('leaves the stamp NULL for an EMPTY project field — `?? null` does not catch `\'\'`', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: '' });
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: true });
+    // D-2872's class: an empty field is not a measurement, and a stamp written
+    // once and never backfilled must not carry `''` as a project name.
+    expect(stampOn(s, id)).toBeNull();
+  });
+
+  it('measures the field, not `SessionRecord.project`\'s `project ?? id` display default', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
+    seedRow(home, DEAD);
+    // No `<LIVE>.project` file at all, but the row still assembles from its
+    // identity triple. `readSessionRecord(...).record.project` would answer the
+    // SESSION ID here — `buildRecord`'s `project ?? id` — and stamping that
+    // would put a session id on the board as a project name, permanently.
+    seedRowNoProject(home, LIVE);
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: true });
+    expect(stampOn(s, id)).not.toBe(LIVE);
+    expect(stampOn(s, id)).toBeNull();
   });
 });
 

@@ -5,6 +5,9 @@ import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type Roster } from '../../shared/roster.js';
 import { poolEligible, poolUndecidable } from './poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
+import { serviceability, type ShareReading } from '../../shared/serviceability.js';
+import type { ModelClass } from '../../shared/models.js';
+import { shareFor, type SharesRead } from './shares.js';
 
 export interface AccountLimits {
   five: number | null; seven: number | null; ts: number | null;
@@ -141,6 +144,13 @@ export const measured = (l: AccountLimits | undefined): number | null => {
     : Math.max(l.five, l.seven);
 };
 
+/** The seven-day figure the serviceability clause reads — MEASURED or null,
+ *  the `measured()` rule's seven-day half: a rolled-over window is null, not
+ *  its inferred 0. ccd's `_limit_field w seven` is the twin (it retracts on
+ *  rollover the same way). */
+export const sevenOf = (l: AccountLimits | undefined): number | null =>
+  (!l || l.seven === null || l.sevenRolledOver ? null : l.seven);
+
 /**
  * The account a new workspace would land on, and its pressure score.
  *
@@ -194,19 +204,50 @@ export const measured = (l: AccountLimits | undefined): number | null => {
  * condemned, the first condemned one. `null` stays reserved for the case a
  * human declared — every home-able lane disabled — exactly as ccd's `""` does.
  *
- * Note what is deliberately NOT here: `_ws_least_loaded` applies no `_avail` /
- * SWAP_CEILING filter, so it returns the minimum even when every account is
- * pinned. Mirroring that faithfully is the point — a projection of 99 is
- * precisely the warning the user needs, and inventing "none available" here
- * would describe an outcome ccd never produces.
+ * WITHOUT A CLASS, no `_avail` / SWAP_CEILING filter applies on either side, so
+ * this returns the minimum even when every account is pinned. Mirroring that
+ * faithfully is the point — a projection of 99 is precisely the warning the
+ * user needs, and inventing "none available" here would describe an outcome ccd
+ * never produces. WITH `cls` set to any rung BELOW `fable` it no longer holds,
+ * and the sentence that stood here said it unconditionally (final review
+ * finding 3): `serviceability()` tests every one of those rungs against
+ * `SEVEN_DAY_CEILING_PCT`, which IS ccd's `SWAP_CEILING`, on the lane's own
+ * seven-day figure — the identical test `_avail` makes — so an all-pinned fleet
+ * empties `live` and this returns `null` for a HEALTH reason. `classBelow` does
+ * not relieve it either: every rung below the top one reads the same figure
+ * against the same ceiling, so they answer unservable together. Only `fable`
+ * behaves the way the old paragraph described, because its ceiling is the
+ * sweep's share estimate and its refusal can also be the roster's `backend`
+ * word. ccd's `_ws_least_loaded` carries the same admission in its own header;
+ * the narrowness is the mitigation — no shipped caller passes a class until
+ * slice 4's `ws-add --route`.
  *
  * The honest delta against the bash: the server has no filesystem authority
  * over `~/.local/bin`, so it cannot see a missing wrapper the way
  * `_account_ok`'s `-x` check does — a projection can still name an account
  * whose binary is gone. ccd's refusal at ws-add is the authority; this is a
- * best-effort forecast of it. `null` iff every home-able lane is disabled,
- * mirroring `_ws_least_loaded`'s empty-stdout "" for the same case — nothing is
- * placeable, and inventing a target would lie.
+ * best-effort forecast of it.
+ *
+ * `null` HAS THREE MEANINGS, not two, and the third arrived with the class
+ * positional (final review finding 3; the deferred minor at the `live.length`
+ * guard below). They are: every home-able lane DISABLED; the pool tag
+ * UNDECIDABLE, so nobody may decide; and — only when `cls` is not `default` —
+ * every eligible lane MEASURED UNSERVABLE for that class. `_ws_least_loaded`'s
+ * empty stdout is overloaded in exactly the same three ways and says so in its
+ * own header, so the two sides still agree; what neither side has is a second
+ * channel on this seam, so the CALLER re-reads and names which it was.
+ * `projectPlacement` below is the caller that does this for the wire, and as
+ * of slice 4 it tells all three apart: it answers `unmeasurable` for the
+ * undecidable tag, and on `home === null` it passes the class it was asked
+ * through to `projectHome` and then re-calls `projectHome` CLASS-BLIND
+ * (default class, no shares) to tell the third meaning from the other two —
+ * a non-null class-blind re-call means the class is what emptied the pool, so
+ * the `none` arm names it; a null re-call means the pool is empty for a
+ * reason the class did not cause, so `none` carries no `class` key (the
+ * caller-side arm this paragraph asked for, controller ruling S3-R3's named
+ * obligation, D-2854, landed in this commit). That obligation was recorded
+ * for the bash side only; this paragraph is the server side of it, and it is
+ * recorded HERE because a plan document is a snapshot and this seam is not.
  *
  * THE POOL IS AN ARGUMENT, REQUIRED (account pools, spec §5.6). `poolEligible`
  * replaces the bare `roster.homeAble`, mirroring `_ws_least_loaded`'s
@@ -224,8 +265,27 @@ export const measured = (l: AccountLimits | undefined): number | null => {
  */
 export function projectHome(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
+  nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectedHome | null {
-  const live = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
+  const eligible = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
+  // POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), and the clause is a
+  // FILTER on eligibility exactly as `_pool_ok` is: a lane measured at the
+  // class's ceiling drops out here, before scoring and before the condemned
+  // tier; an UNMEASURED lane stays — unmeasured never becomes ineligible, the
+  // rule the three unknown-handling sites share — and ranks by its own score.
+  // `default` skips the clause, so every caller that passes no class gets the
+  // pre-slice-3 answer byte for byte. ccd's `_ws_least_loaded project [class]`
+  // is the twin; `projected-home.test.ts` drives both over one fixture table.
+  const live = cls === 'default' ? eligible : eligible.filter((a) =>
+    serviceability(cls, { anthropic: a.telemetry === 'anthropic', seven: sevenOf(limits[a.id]), share: shareFor(shares, a.id) }, nowS)
+      .kind !== 'unservable');
+  // THE THIRD MEANING OF `null` IS BORN HERE (the docstring's own paragraph, and
+  // the deferred minor that named this line). A class-emptied pool and an
+  // all-disabled pool leave through the same `return`, which is the overloaded
+  // seam ccd's `""` already has — kept identical on purpose rather than split,
+  // because a second value here would make this function disagree with the
+  // authority it forecasts. The caller is where they are told apart.
   if (live.length === 0) return null;
   const scorable = live.filter((a) => a.telemetry !== 'none');
   // ONE PREDICATE, TWO CONSUMERS, AND THAT IS THE MIRROR. `_ws_least_loaded`
@@ -272,10 +332,27 @@ export function projectHome(
  */
 export function projectPlacement(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
+  nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectPlacement {
   if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
-  const home = projectHome(roster, limits, pool);
-  if (home === null) return { kind: 'none', pool: pool.state === 'tagged' ? pool.name : null };
+  const home = projectHome(roster, limits, pool, cls, shares, nowS);
+  if (home === null) {
+    const notPlaceable = { kind: 'none' as const, pool: pool.state === 'tagged' ? pool.name : null };
+    // The trailing three parameters default so a caller that never passes a
+    // class gets the pre-slice-4 answer byte for byte (`projectHome`'s own
+    // rule, mirrored here): `class` only rides the wire when a caller asked
+    // for one AND the class is the reason the pool is empty (controller
+    // ruling S4-R12). A class-blind re-call (default class, no shares) tells
+    // the two apart: if it still comes back null, every home-able lane is
+    // disabled or the pool tag is undecidable — a fact the class did not
+    // cause — so `none` stays plain; only when the class-blind call finds a
+    // home does the class-scoped emptiness become the fact worth naming.
+    if (cls !== 'default' && projectHome(roster, limits, pool) !== null) {
+      return { ...notPlaceable, class: cls };
+    }
+    return notPlaceable;
+  }
   return { kind: 'projected', wrapper: home.wrapper, score: home.score };
 }
 

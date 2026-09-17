@@ -124,6 +124,11 @@ export const TREE_FILES = [
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.
   'ccd/ccd-account-auth',
+  // The compaction card's helper (compaction-card spec §2). `_inst_files`
+  // places it beside the hook and BEFORE it, so the tree has to carry it or
+  // `_inst_atomic` dies naming the missing source and every describe here goes
+  // red for a fixture reason.
+  'ccd/compact-card.mjs',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',
@@ -154,19 +159,21 @@ export const TREE_FILES = [
   // `$CCRC_HERE/../deploy/` to measure what is (not) there. Without it in the
   // tree, that check would report a bug in ccrc on every fixture box.
   'deploy/gen-auth-hash.mjs',
-  // ── The two SKILL TREES and their two installers (worker-skill Task 4).
-  // `_inst_skills` places each tree into `~/.cc-sessions/` and then RUNS the
-  // installer it just placed beside it, so all four are read out of the tree
-  // this fixture builds. They are DIRECTORY entries for the same reason
-  // `deploy/systemd` is: the coordinator skill is a SKILL.md plus a
-  // `references/` directory whose contents its own installer refuses to run
-  // without, and a hand-listed fixture would go stale the moment a fourth
-  // reference lands.
+  // ── The three SKILL TREES and their three installers (worker-skill Task 4,
+  // reviewer-skill Task 10). `_inst_skills` places each tree into
+  // `~/.cc-sessions/` and then RUNS the installer it just placed beside it,
+  // so all six are read out of the tree this fixture builds. They are
+  // DIRECTORY entries for the same reason `deploy/systemd` is: the
+  // coordinator skill is a SKILL.md plus a `references/` directory whose
+  // contents its own installer refuses to run without, and a hand-listed
+  // fixture would go stale the moment a fourth reference lands.
   'ccd/coordinator-skill',
   'ccd/worker-skill',
+  'ccd/reviewer-skill',
   'ccd/install-coordinator-skill.sh',
   'ccd/install-worker-skill.sh',
-  // graphify Task 3: `_inst_graphify_skill` stages this beside the other two
+  'ccd/install-reviewer-skill.sh',
+  // graphify Task 3: `_inst_graphify_skill` stages this beside the other three
   // installers, through the same `_inst_atomic`. It ships alone — no
   // `ccd/graphify-skill` tree — because its SRC is assembled from the
   // installed package at run time, never vendored (spec §B).

@@ -22,7 +22,7 @@ const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, ...over,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
 });
 
 /** A run in the shape the `runs` frame actually carries one. `claimedBy` is
@@ -36,7 +36,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // non-null variants by spreading this builder; they must not re-add the field
   // here.
   project: 'ccrc-pwa', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'coord', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'coord', resumed: false, clearedAt: null,
   openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,

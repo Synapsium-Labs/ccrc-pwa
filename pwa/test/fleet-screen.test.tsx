@@ -84,7 +84,7 @@ const session = (over: Partial<FleetSession> = {}): FleetSession => ({
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
   version: '2.1.0',
   ...over,
 });
@@ -2246,7 +2246,8 @@ const RUN_FROZEN = 1_800_000_000_499;
 const runRow = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 1, program: 'build9b', programTitle: 'Build 9b', wave: 1, waveOf: 3,
   project: 'OpenClawHetzner', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'claude:OpenClawHetzner', resumed: false, clearedAt: null,
   openedAt: RUN_FROZEN - 1_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,

@@ -68,7 +68,13 @@ describe('the marker is DOTLESS, so no registry glob can eat it', () => {
   // Every registry glob in ccd is suffix-shaped and runs the same one-dot rule
   // (`[[ "$suffix" == *.* ]] && continue`) at THREE sites: `_reg_purge`,
   // `_ws_slug_free` and `_ws_slug_residue`. All three glob `"$REG/$id".*`,
-  // which requires a literal dot AFTER the id — so a
+  // which requires a literal dot AFTER the id — and since D-2605 the last two
+  // ALSO take a second, dot-LEADING pass over the private compaction families,
+  // so for those two the dot-skip is no longer the whole reason. The
+  // assertions below stay GREEN either way, because the marker is DOTLESS
+  // *and* matches no `.<id>.`-prefixed family — restated here rather than left
+  // standing, since a comment that goes on giving only the OLD reason is a lie
+  // no suite can catch. So a
   // dotless `<account>-authdead` is invisible to them even when a session id
   // collides with it byte for byte. Asserted rather than assumed, because the
   // collision is what a per-account marker in the session namespace risks and it

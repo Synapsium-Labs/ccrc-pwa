@@ -46,7 +46,7 @@ const fleetSession = (id: string, wrapper: string): FleetSession => ({
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
 });
 
 const emptySnap = (): SessionSnapshot => ({
@@ -442,6 +442,38 @@ describe('session store optimistic send', () => {
     // box the server has not re-measured.
     store.getState().retry(p.key);
     expect(store.getState().pending[0]!.submittable).toBeUndefined();
+  });
+
+  // THE SENTENCE FOLLOWS THE FLAG, not the code. A `verify-failed` the server
+  // marked submittable is the paste-chip collapse — the session DID take the
+  // text — so the pending must not carry the table's "never echoed it back"
+  // above a button that sends it.
+  it('a submittable verify-failed gets the collapsed sentence, not the table entry', async () => {
+    const chip = '[Pasted text #1]';
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: chip, submittable: true,
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('a long paragraph the box folded up');
+    const p = store.getState().pending[0]!;
+    expect(p.code).toBe('verify-failed');
+    expect(p.submittable).toBe(true);
+    expect(p.draft).toBe(chip);
+    expect(p.error).not.toMatch(/never echoed/);
+    expect(p.error).toMatch(/chip/);
+  });
+
+  it('and the same code WITHOUT the flag keeps the table entry', async () => {
+    const prompt = vi.fn().mockRejectedValue(new ApiError(409, {
+      ok: false, error: 'verify-failed', draft: 'somebody else was typing',
+    }));
+    const store = createSessionStore('s1', { api: { prompt } });
+
+    await store.getState().send('my message');
+    const p = store.getState().pending[0]!;
+    expect(p.submittable).toBeUndefined();
+    expect(p.error).toMatch(/never echoed/);
   });
 
   it('resolve() clears the flag too — the same box, re-measured or not', async () => {

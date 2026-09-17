@@ -68,6 +68,15 @@ describe('the platform block is one definition, spelled in two files', () => {
     expect(ccd).toMatch(/^REG="\$HOME\/\.cc-sessions"$/m);
   });
 
+  // NO EXEMPTION SET, and that is the point (controller ruling S3-R1). Routing
+  // slice 3 briefly shipped `_svc_gate` — the serviceability keep-or-take gate
+  // — outside the sentinels, and paid for it with a name-only entry here. An
+  // exemption set is a hole the width of whatever is in it: the guard exists
+  // to make a genuine platform helper appended below the END sentinel a red
+  // suite, and every name it is told to ignore is one that cannot red. The
+  // helper was renamed `_class_gate` instead, which is what it is named for
+  // anyway — the CLASS it gates, not launchd/systemd's "service".
+
   it('holds every _plat_/_svc_ definition INSIDE the sentinels, in both files', () => {
     // The pin above compares only the sliced region, so it is exactly as
     // strong as the region is complete. This is the check that makes

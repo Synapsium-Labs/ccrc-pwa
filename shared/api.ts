@@ -355,6 +355,91 @@ export interface FleetSession {
    *  it — and the first tick's `sweepUsage` re-derives it against the current
    *  one. */
   readonly usage: SessionUsage | null;
+  /** WHICH CARD this row renders on — a display decision, never an identity.
+   *  `project` above is unchanged and remains the primary key.
+   *
+   *  ADDITIVE; `FLEET_PROTO` is deliberately NOT bumped. `null` means THIS
+   *  SERVER DID NOT DECIDE — an older peer, or a snapshot revived from a build
+   *  predating the field — and the single reader falls back to `project`. Those
+   *  two conditions collapse deliberately: a caller does the identical thing
+   *  with both. What is NOT folded is "placed elsewhere" vs "placed home",
+   *  which a reader gets from `boardProject !== project` and needs no field.
+   *
+   *  A THIRD condition exists and does NOT reach this field as `null`, which is
+   *  a gap in what the wire can say rather than a third meaning for it: when
+   *  the server's placement read fails — `coordPlacementStamps` refusing, or
+   *  `node:sqlite` throwing on a closed connection or a lock race — every row
+   *  degrades to a NON-NULL `boardProject` equal to its own `project`
+   *  (`readCoordPlacements`, `server/src/fleet.ts`). A reader therefore cannot
+   *  tell "this server measured, and this row belongs at home" from "this
+   *  server could not measure at all". It renders identically today and is
+   *  recorded as wave 2's ~4 lines (D-2875): emit `null` on a failed read,
+   *  which is the vocabulary this field already has for exactly that. Stated
+   *  here because this docstring IS the wire contract, and a contract that
+   *  enumerates two producers while a third exists is false whatever the
+   *  renderer happens to do with it (D-2923). */
+  boardProject: string | null;
+  /**
+   * The routing record ccd owns for this session (routing slice 6, Task 4;
+   * MEASURED per controller ruling S6-R5, fix round 2) —
+   * `server/src/registry.ts`'s `SessionRecord.route`, carried straight onto
+   * the wire. Each of the seven `$REG/<id>.{class,effort,subagent,workflow,
+   * compact,degraded,inert}` files is read through `fieldMeasured`, so a
+   * transient agent-link failure is told apart from the file genuinely never
+   * having been written. `null` ONLY when all seven measure ABSENT — the
+   * ordinary state of a session ccd has never routed; NOT the same word
+   * `degraded` already carries elsewhere on this interface, which means a
+   * degraded ROW (a failed identity lookup) — the two never collide because
+   * the routing values ride this ONE nested object instead of flat fields
+   * (S6-R4). A read that measures UNREADABLE (rather than absent) on ANY of
+   * the seven also makes `route` non-null — an unreadable field is reported
+   * by name in `unreadable`, never silently folded into "never routed"
+   * (`route: null`) or "never set" (absent from `fields`).
+   *
+   *   - `fields` — the writable fields present (`ROUTE_WRITABLE_FIELDS`)
+   *     AND measured readable, values the raw trimmed strings the registry
+   *     holds. UNVALIDATED beyond that shape — this is a reading, not
+   *     `parseRouteFields`'s ingress guard, so the PWA validates nothing
+   *     and shows what ccd actually wrote, even a value a newer/older ccd
+   *     vocabulary does not recognise. A field named in `unreadable` is
+   *     ABSENT from `fields` — its measured value is unknown, not "unset".
+   *   - `degraded` — `$REG/<id>.degraded`'s word when measured readable,
+   *     `null` when measured absent OR unreadable (an unreadable
+   *     `.degraded` is named in `unreadable` instead).
+   *   - `inert` — `$REG/<id>.inert`'s comma list, split and restricted to
+   *     `ROUTE_WRITABLE_FIELDS` members, when measured readable; `[]` when
+   *     measured absent or unreadable (an unreadable `.inert` is named in
+   *     `unreadable` instead).
+   *   - `unreadable` — every one of the seven files (`RouteReadField`) whose
+   *     read measured UNREADABLE this pass AND which the registry listing
+   *     the record was built from NAMES (a read that failed on a file the
+   *     listing does not carry is measured ABSENT — `server/src/registry.ts`'s
+   *     listing rung, which every other measured registry field already
+   *     applies), `[]` when none did. A consumer
+   *     treats a field named here as UNKNOWN — no active picker row, no
+   *     queued badge — the same treatment an absent field already gets,
+   *     never a positive "ccd cleared it" or "ccd never set it" claim.
+   *     Required on every FRESHLY ASSEMBLED record; `reviveRoute` below is
+   *     the one reader tolerating its absence on an OLDER PERSISTED frame
+   *     (a `state-cache.json` a pre-fix-round-2 server wrote), defaulting
+   *     absent to `[]` — optional on the wire, not optional in what a live
+   *     read produces. The LIVE `fleet` WS frame carries the same
+   *     optionality and is NOT tolerant on its own: `pwa/src/stores/
+   *     fleet.ts`'s `asFleetMsg` casts the raw frame straight to `FleetMsg`
+   *     rather than routing it through `reviveFleetSession`, so a frame
+   *     from a pre-fix-round-2 server arrives with `route` non-null and
+   *     `unreadable` genuinely absent. `SessionScreen.tsx`'s
+   *     `routeUnreadable` (`routeInfo?.unreadable ?? []`) is the one reader
+   *     on that path and tolerates it the same way `reviveRoute` does
+   *     (whole-branch review fix wave, item #5).
+   *
+   * ADDITIVE, absence-permits: an older persisted `FleetSession[]` (a
+   * `state-cache.json` from before this task) revives with `route: null`
+   * through `reviveFleetSession` below — no `FLEET_PROTO` bump. */
+  readonly route: {
+    readonly fields: RouteFields; readonly degraded: string | null;
+    readonly inert: readonly RouteField[]; readonly unreadable: readonly RouteReadField[];
+  } | null;
 }
 
 /**
@@ -1768,13 +1853,23 @@ export interface ProjectReadiness extends ReadinessFacts {
  * A reader that folds the first two together has thrown away the difference
  * between "upgrade the server" and "wait two seconds".
  *
- * `pool` and `placement` follow the same absence rule with one fewer rung: the
- * key ABSENT means an older server that does not read project pools, and a
- * reader must render NOTHING for it — never `{state:'untagged'}`, which would
- * flag every project on the box as un-tagged worklist the day before the
- * feature ships (account pools, spec §5.4.5, §5.9). There is no `null` rung:
- * this build measures on every request, and its four states already contain
- * "we could not read it".
+ * `pool`, `placement` and `repo` follow the same absence rule with one fewer
+ * rung: the key ABSENT means an older server that does not read project pools
+ * (`pool`/`placement`) or does not retain the swept repo (`repo`), and a
+ * reader must render NOTHING for it — never `{state:'untagged'}` or
+ * `{state:'unmeasured'}`, either of which would flag every project on the box
+ * as un-tagged/unlabeled the day before the feature ships (account pools,
+ * spec §5.4.5, §5.9; the repo cell, board placement wave 1).
+ *
+ * There is no `null` rung for any of the three, but NOT for one reason
+ * (D-2923). `pool` and `placement` are measured on every request. `repo` is
+ * RETAINED: it is whatever `FleetWatcher.projectRepos` last held, written by a
+ * 120 s `sweepPr` and longer under backoff, so a present `repo` can be minutes
+ * old and a reader must not treat it as a reading taken just now. What makes
+ * the `null` rung unnecessary in both cases is the same: the states already
+ * contain "we could not read it" — `unreadable`/`malformed` for `pool`,
+ * `unmeasured` for `repo`, which is also the value a project that has never
+ * been swept carries.
  */
 export interface ProjectRow {
   name: string;
@@ -1782,7 +1877,51 @@ export interface ProjectRow {
   readiness?: ProjectReadiness | null;
   pool?: ProjectPoolWire;
   placement?: ProjectPlacement;
+  repo?: ProjectRepoWire;
 }
+
+/**
+ * What a project's REPOSITORY was measured to be — `_gh_repo_slug` of the
+ * project's main checkout, carried on the project row.
+ *
+ * **A RENDERER MUST NEVER SPELL `absent` AS "THIS PROJECT HAS NO
+ * REPOSITORY".** It means no usable origin was found AT THE PATH THE SWEEP
+ * LOOKED AT, and nothing more. That is the one sentence a wave-2 renderer
+ * needs from this type, so it leads (D-2923 — it was buried mid-paragraph
+ * below, which is where a renderer stops reading).
+ *
+ * THREE states, and no reader may fold one into another. `absent` is a
+ * MEASUREMENT — no usable origin at the path checked, which four projects on
+ * this fleet genuinely have — while `unmeasured` says no measurement happened.
+ * Folding them would paint a claim about the repository over a timeout.
+ *
+ * The label renders only on `named`. `absent` is deliberately NOT split into
+ * "no origin" and "unrecognized remote": a renderer treats them identically and
+ * `PrKeycap.tsx`'s no-remote sentence already owns that distinction.
+ *
+ * Why the leading sentence is bounded that way (coordinator ruling, fix round
+ * 1, Important 2). The path the sweep looks at is `$PROJECTS_ROOT/$project`,
+ * the argument `_gh_repo_slug` is given. `_gh_repo_slug` (`ccd/ccd`) returns its one
+ * failure for `no-remote` on at least two upstream conditions this type does
+ * not, and must not, distinguish: (1) the path is a git checkout with no
+ * `origin` remote configured, and (2) `git -C "$1"` cannot use the path AT
+ * ALL — missing, not a repository, or unreadable — which is a different fact
+ * than "no repository" and reads identically here on purpose, the same way
+ * "no origin" and "unrecognized remote" already do. A THIRD condition can
+ * reach `absent` from this server's own side rather than `ccd`'s: `listProjects`
+ * (`server/src/lifecycle.ts`) also admits projects discovered only through the
+ * registry, whose `workdir` need not live under `PROJECTS_ROOT` — so the
+ * sweep's fixed `$PROJECTS_ROOT/$project` guess can miss a project's REAL
+ * workdir entirely and measure `absent` for a project that has a perfectly
+ * good repository elsewhere. Fixing that is a `ccd`/registry-path question,
+ * not a wire question, and is out of this wave's scope (agent-first would
+ * change the deploy order); the sentence at the top of this docstring is what
+ * stands in for the fix until then.
+ */
+export type ProjectRepoWire =
+  | { state: 'named'; slug: string }
+  | { state: 'absent' }
+  | { state: 'unmeasured' };
 
 /**
  * What a project's pool tag (`~/.cc-sessions/pools/<project>` on the fleet box)
@@ -2372,6 +2511,61 @@ const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | 
   return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
 };
 
+/** `FleetSession.route`'s persistence contract (routing slice 6, Task 4).
+ *  Absent → null: an older snapshot predates this task entirely, same
+ *  "additive, absence-permits" degrade every other slice-6 addition takes.
+ *  Present-but-malformed rejects the WHOLE session — `reviveSwapBlocked`'s
+ *  stance, not `reviveAsk`'s: a route reading a caller cannot parse is not
+ *  the same fact as "no routing file at all", so it must not launder into
+ *  that answer. `fields` keeps only `ROUTE_WRITABLE_FIELDS` members with
+ *  string values (an unknown key or non-string value rejects); `degraded`
+ *  is free text with no vocabulary to check; `inert` keeps only
+ *  `ROUTE_WRITABLE_FIELDS` members, same restriction the live read applies.
+ *
+ *  `unreadable` (ruling S6-R5, fix round 2) is OPTIONAL on the wire, unlike
+ *  every other member here: an older persisted frame's `route` object
+ *  predates the key entirely (a `state-cache.json` a pre-fix-round-2 server
+ *  wrote), and that is "the reading never told us about an unreadable
+ *  field", not "the frame is malformed" — so absent degrades to `[]`,
+ *  the ONE exception to this function's own "present-but-malformed rejects
+ *  the whole session" stance, exactly because ABSENT is not "malformed"
+ *  here. Present-but-wrong-shape (not an array, or a member outside
+ *  `ROUTE_READ_FIELDS`) still rejects the whole session, same as `inert`.
+ *  THE ONE READER: no other call site parses `route.unreadable` off raw
+ *  JSON. */
+const reviveRoute = (
+  o: RawObj, k: string,
+): { fields: RouteFields; degraded: string | null; inert: RouteField[]; unreadable: RouteReadField[] } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  const fieldsRaw = asObj(s['fields'], `${k}.fields`);
+  const fields: RouteFields = {};
+  for (const [field, value] of Object.entries(fieldsRaw)) {
+    if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field)) throw new MalformedSnapshot(`${k}.fields`);
+    if (typeof value !== 'string') throw new MalformedSnapshot(`${k}.fields.${field}`);
+    fields[field as RouteField] = value;
+  }
+  const inertRaw = s['inert'];
+  if (!Array.isArray(inertRaw) || (inertRaw as unknown[]).some(
+    (x) => typeof x !== 'string' || !(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(x),
+  )) {
+    throw new MalformedSnapshot(`${k}.inert`);
+  }
+  const unreadableRaw = s['unreadable'];
+  let unreadable: RouteReadField[];
+  if (unreadableRaw === undefined) {
+    unreadable = [];
+  } else if (!Array.isArray(unreadableRaw) || (unreadableRaw as unknown[]).some(
+    (x) => typeof x !== 'string' || !(ROUTE_READ_FIELDS as readonly string[]).includes(x),
+  )) {
+    throw new MalformedSnapshot(`${k}.unreadable`);
+  } else {
+    unreadable = unreadableRaw as RouteReadField[];
+  }
+  return { fields, degraded: optStr(s, 'degraded'), inert: inertRaw as RouteField[], unreadable };
+};
+
 /** `FleetSession.ask`'s own persistence contract (Task 19, CORRECTED by fix
  *  round 1 / D-2311). Absent → null: an older snapshot predates the ask
  *  pre-emption lane entirely. Present but malformed — not an object, or
@@ -2670,6 +2864,12 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       started: optBool(o, 'started', true),
       spawnState: spawnRaw,
       usage: reviveUsage(o, 'usage'),
+      // Absent → null: an older server, or a snapshot from a build predating
+      // this field — the two collapse deliberately (see the field's own
+      // docstring above), since the single reader (`boardProject ?? project`)
+      // does the identical thing with both.
+      boardProject: optStr(o, 'boardProject'),
+      route: reviveRoute(o, 'route'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
@@ -3191,7 +3391,14 @@ export interface ProjectedHome {
  */
 export type ProjectPlacement =
   | { kind: 'projected'; wrapper: string; score: number }
-  | { kind: 'none'; pool: string | null }
+  /** `class` rides this arm only when the request that produced it named one
+   *  (`GET /api/projects?class=`) — the third meaning of `projectHome`'s own
+   *  `null` (D-2854): every eligible lane MEASURED UNSERVABLE for that class,
+   *  told apart on the wire from the untagged-pool and empty-pool `none`s an
+   *  older caller already knows. Absent, not `undefined` written out, so an
+   *  older reader that has never heard of a class sees exactly the shape it
+   *  always has. */
+  | { kind: 'none'; pool: string | null; class?: string }
   | { kind: 'unmeasurable' };
 
 /**
@@ -3729,6 +3936,20 @@ export function isRunState(v: unknown): v is RunState {
   return typeof v === 'string' && (RUN_STATES as readonly string[]).includes(v);
 }
 
+/** What a run IS (design 2026-09-14 §5.1): `'work'` — a wave's worker, the only
+ *  kind that existed before that design; `'review'` — a reviewer reading one
+ *  work run's finished wave and reporting, never ruling. `'unknown'` is the
+ *  designated we-do-not-know member on `RunState`'s own model (D-2795): NEVER
+ *  WRITTEN, it is what a `kind` token from a newer build reads as, and
+ *  `transitionsFor('unknown')` has no edges at all, so such a row can neither
+ *  advance nor dispatch until a build that knows the word reads it. */
+export type RunKind = 'work' | 'review' | 'unknown';
+export const RUN_KINDS: readonly RunKind[] = ['work', 'review', 'unknown'];
+/** Use THIS, never `RUN_KINDS.includes(x as RunKind)` — `isRunState`'s rule. */
+export function isRunKind(v: unknown): v is RunKind {
+  return typeof v === 'string' && (RUN_KINDS as readonly string[]).includes(v);
+}
+
 /**
  * The machine. A transition absent from this table is REFUSED, and the refusal
  * is an answer the caller reads — never a silent no-op, and never an
@@ -3792,6 +4013,84 @@ export const RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = 
   failed:            [],
   unknown:           [],
 });
+
+/**
+ * THE PARTITION OF `RunState` THE DISPATCH CAP READS (design 2026-09-14 §7.1).
+ * Three lists, spelled ONCE, and `run-states.test.ts` pins that every
+ * `RunState` sits in exactly one of them — so a future state cannot be
+ * silently UNCOUNTED, which is the dangerous direction for a cap (an
+ * uncounted busy session over-dispatches the fleet without a word).
+ *
+ * ACTIVE = a dispatched session is doing work: `dispatched`, `working`. Both
+ * kinds of run (`RunKind`) are busy in exactly these two. `unknown` is here
+ * for the cap's own safe direction: a row whose state this build cannot name
+ * COUNTS, wedging visibly and fixably, rather than not counting and
+ * over-dispatching silently — and that is today's behaviour too, since
+ * `unknown` was never among the terminal pair.
+ *
+ * IDLE = the coordinator's states: the session beneath them is idle by
+ * contract (a worker stops pushing at `wave-done`, worker skill clause 9), so
+ * it holds a workspace but not a fleet slot. `planned` has never been
+ * dispatched (D-13's own narrowing, kept); `awaiting-review`, `merging` and
+ * `closing` are waits on the coordinator, not on the worker — run 43 sat at
+ * `merging` for hours on 2026-09-14 with its worker idle throughout.
+ *
+ * TERMINAL = the pair nothing leaves. `store.ts` builds its SQL fragments
+ * from these by `.join`, the `TERMINAL_DELIVERY_SQL` idiom, and
+ * `single-definition.test.ts` refuses a second hand-written copy of either
+ * list anywhere under the four roots. `unknown` is NOT terminal: it has no
+ * outgoing edge in `RUN_TRANSITIONS` because nothing may transition a state
+ * this build cannot name — not because such a row is finished (D-2794).
+ */
+export const ACTIVE_RUN_STATES = ['dispatched', 'working', 'unknown'] as const satisfies
+  readonly RunState[];
+export const IDLE_RUN_STATES = ['planned', 'awaiting-review', 'merging', 'closing'] as const satisfies
+  readonly RunState[];
+export const TERMINAL_RUN_STATES = ['done', 'failed'] as const satisfies readonly RunState[];
+
+/**
+ * The REVIEW run's machine (design 2026-09-14 §5.2). A review run has no
+ * `awaiting-review`, `merging` or `closing`: it has nothing to review, merge
+ * or release-with-ceremony, and reusing those states would make the table lie
+ * about what a row is doing. `failed` is reachable from every non-terminal
+ * state, as in `RUN_TRANSITIONS`. `working -> done` is direct: the close
+ * route's review arm (Task 7 of the plan) skips the `closing` hop for this
+ * kind (`viaClosing: false`, the same skip the abandon-of-a-planned-run
+ * already takes).
+ *
+ * Every state is a key so the two tables have one shape and one reader; the
+ * three work-only states are dead ends here, never reached. Those three dead
+ * ends are unreachable by construction — `advanceInner` refuses every edge
+ * into them for this kind — so a review row can never need an exit from one;
+ * `run-states.test.ts` pins that every REACHABLE non-terminal review state
+ * has one.
+ */
+export const REVIEW_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned:           ['dispatched', 'failed'],
+  dispatched:        ['working', 'failed'],
+  working:           ['done', 'failed'],
+  'awaiting-review': [],
+  merging:           [],
+  closing:           [],
+  done:              [],
+  failed:            [],
+  unknown:           [],
+});
+
+/** No edges at all — what a run of a kind this build cannot name may do (D-2795). */
+export const NO_RUN_TRANSITIONS: Readonly<Record<RunState, readonly RunState[]>> = Object.freeze({
+  planned: [], dispatched: [], working: [], 'awaiting-review': [], merging: [], closing: [],
+  done: [], failed: [], unknown: [],
+});
+
+/**
+ * THE ONE READER of the transition tables. Every route and the store's own
+ * `advanceInner` consult this by the run's kind; nothing indexes
+ * `RUN_TRANSITIONS` or `REVIEW_RUN_TRANSITIONS` directly outside this file
+ * (pinned by `run-states.test.ts`'s source scan).
+ */
+export const transitionsFor = (kind: RunKind): Readonly<Record<RunState, readonly RunState[]>> =>
+  kind === 'work' ? RUN_TRANSITIONS : kind === 'review' ? REVIEW_RUN_TRANSITIONS : NO_RUN_TRANSITIONS;
 
 /** A unit inside a run. `'unknown'` is the we-do-not-know member, as above. */
 export type WorkItemState = 'pending' | 'claimed' | 'done' | 'failed' | 'abandoned' | 'unknown';
@@ -4404,6 +4703,111 @@ export function parseFetchedMailEnvelope(text: string): MailEnvelopeParse {
   return parseMailEnvelope(envelope);
 }
 
+/** One `<name>value</name>` member of a harness envelope, in ARRIVAL ORDER. */
+export interface EnvelopeMember { name: string; value: string }
+
+/**
+ * Split a harness envelope into its `<tag>…</tag>` members, or null when the
+ * text is not ENTIRELY such members — prose before, between or after any of
+ * them disqualifies it, and so does an unclosed tag.
+ *
+ * ONE DEFINITION, TWO READERS, for the reason `parseMailEnvelope` states about
+ * itself: the PWA holds no rule the server does not also hold. The transcript
+ * parser reads it to decide WHAT a record is; `parseTaskNotification` below
+ * reads it again to decide what the record SAYS.
+ *
+ * Structural, and deliberately NOT sufficient on its own — every caller must
+ * also find a member it NAMES. A bare "the content is all tag blocks" rule has
+ * zero false positives against every human turn measured on the fleet box and
+ * is still not safe, because no human turn measured there so much as BEGINS
+ * with `<`: the corpus never exercised the predicate, so it is no evidence
+ * about `<p>one</p>\n<p>two</p>` or a pasted `<config>`. The named member is
+ * what makes it safe; the corpus only says it is sufficient.
+ *
+ * Members come back IN ARRIVAL ORDER, because order is the thing the envelope
+ * read exists to stop mattering and a Map would silently collapse a repeat.
+ */
+export function envelopeMembers(text: string): EnvelopeMember[] | null {
+  const t = text.trim();
+  if (!t.startsWith('<')) return null;
+  const re = /<([a-z][a-z0-9-]*)>([\s\S]*?)<\/\1>/g;
+  const members: EnvelopeMember[] = [];
+  let outside = '';
+  let last = 0;
+  for (let m = re.exec(t); m !== null; m = re.exec(t)) {
+    outside += t.slice(last, m.index);
+    last = re.lastIndex;
+    // Both groups are mandatory in the pattern, so neither can be absent on a
+    // match; the defaults are here because the PWA compiles this file under
+    // `noUncheckedIndexedAccess` and the server does not.
+    members.push({ name: m[1] ?? '', value: m[2] ?? '' });
+  }
+  if (members.length === 0) return null;
+  outside += t.slice(last);
+  return outside.trim() === '' ? members : null;
+}
+
+/**
+ * What a task notification says: the harness's own summary and status, and
+ * every other member it wrote, kept by name.
+ *
+ * `summary` and `status` are null when the member is ABSENT — the card renders
+ * no such row rather than an empty one, exactly as `runLabel` refuses to say
+ * "run —" about a mail that belongs to no run. Measured over the fleet box's
+ * 13 notifications, both are present in all 13 and `summary` never exceeds 209
+ * bytes; `fields` is everything else, in arrival order, nothing dropped.
+ */
+export interface TaskNotification {
+  summary: string | null;
+  status: string | null;
+  fields: EnvelopeMember[];
+}
+
+export type TaskNotificationParse =
+  | { ok: true; notification: TaskNotification }
+  | { ok: false; why: 'not-a-notification' };
+
+/**
+ * Parse the harness's background-task report out of a transcript row.
+ *
+ * THE SAME SHAPE AS `parseMailEnvelope`, and for the same reason: a structured
+ * record the machine wrote was rendering as a wall of its own markup filed
+ * under the operator's name, and the fix is to read the structure once, in
+ * `shared/`, and let the delivery layer render it as what it is. A refusal
+ * falls through to the ordinary row — never a half-populated card.
+ *
+ * IT ASSERTS NOTHING ABOUT AUTHENTICITY. The transcript is a rank-3 source and
+ * a session can write this text into itself. Consequence of a forgery: one row
+ * looks like a task report. Named, accepted — the same sentence
+ * `parseMailEnvelope` carries, restated rather than inherited.
+ *
+ * The OUTER wrapper must be the whole record and must be named
+ * `task-notification`; the members inside it are read one level down. Both
+ * levels go through `envelopeMembers`, so a human pasting one of these plus a
+ * question keeps every word: the prose outside the block disqualifies it.
+ */
+export function parseTaskNotification(text: string): TaskNotificationParse {
+  const outer = envelopeMembers(text);
+  const body = outer?.find((m) => m.name === 'task-notification');
+  if (body === undefined) return { ok: false, why: 'not-a-notification' };
+  const members = envelopeMembers(body.value);
+  if (members === null) return { ok: false, why: 'not-a-notification' };
+  const take = (name: string): string | null => {
+    const m = members.find((x) => x.name === name);
+    return m === undefined ? null : m.value.trim();
+  };
+  return {
+    ok: true,
+    notification: {
+      summary: take('summary'),
+      status: take('status'),
+      fields: members
+        .filter((m) => m.name !== 'summary' && m.name !== 'status')
+        .map((m) => ({ name: m.name, value: m.value.trim() })),
+    },
+  };
+}
+
 /**
  * The declared ledger's two caps (Build 4, spec §3.1). BYTES for the title,
  * for `MAIL_SUBJECT_MAX_BYTES`'s own reason one block up: a title is one line
@@ -4472,13 +4876,19 @@ export const MAIL_REJECT_CODES = [
   // done-authority
   'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed', 'pr-unmeasurable',
   'no-handoff-commit',
+  // review-run verdicts (design 2026-09-14 §5.3)
+  'stale-review', 'report-unreadable',
 ] as const;
 export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 
 /**
- * The done-authority subset of `MAIL_REJECT_CODES` — the six a wave-done claim or
- * a forward advance can be refused with, as distinct from the ingress, peer-bound
- * and delivery families above.
+ * The done-authority subset of `MAIL_REJECT_CODES` — the eight a wave-done claim
+ * or a forward advance can be refused with, as distinct from the ingress,
+ * peer-bound and delivery families above: four a work run's claim alone
+ * (`stale-tip`, `pr-regressed`, `pr-unmeasurable`, `no-handoff-commit`), two
+ * shared by the branch resolution both verifiers run (`tip-unmeasurable`,
+ * `branch-unmeasurable`), two a review run's alone (`stale-review`,
+ * `report-unreadable`) (D-2797).
  *
  * The as-const idiom (`CLAIM_STATES`) rather than the union-first `PR_REASON_MAP`
  * one: the ARRAY is the single definition and the type follows it, because wave
@@ -4494,6 +4904,8 @@ export type MailRejectCode = (typeof MAIL_REJECT_CODES)[number];
 export const DONE_AUTHORITY_CODES = [
   'stale-tip', 'tip-unmeasurable', 'branch-unmeasurable', 'pr-regressed',
   'pr-unmeasurable', 'no-handoff-commit',
+  // review-run verdicts (design 2026-09-14 §5.3)
+  'stale-review', 'report-unreadable',
 ] as const satisfies readonly MailRejectCode[];
 export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 
@@ -4504,6 +4916,199 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
 // bind. A predicate with no caller is a guard that guards nothing and a second
 // place for the members to be spelled. It shipped in this wave's first draft with
 // zero callers and zero tests, and was deleted in review.
+
+/** Routing spec 2026-09-14 §5.5 — the subject a worker's done-claim mail
+ *  carries (`kind: 'status'`). ONE spelling: `runSignals` (`coord/store.ts`)
+ *  selects on it and the skills quote it. `close.ts`'s `wave-done-rejected`
+ *  is a different subject (the server's answer), deliberately not derived. */
+export const WAVE_DONE_SUBJECT = 'wave-done';
+
+/** The first-run suite word a worker reports (spec §6: "suite green on first
+ *  run" is a QUALITY signal; fix rounds are counted on the spend side). */
+export const SUITE_WORDS = ['green', 'red', 'unrun'] as const;
+export type SuiteWord = (typeof SUITE_WORDS)[number];
+
+/** The failure KIND a worker names when a check failed, so the coordinator can
+ *  choose the escalation rung (spec §3 "Escalation"): `shallow` raises effort,
+ *  `ceiling` raises class, `unclear` defaults to effort-first. */
+export const FAILURE_KINDS = ['shallow', 'ceiling', 'unclear'] as const;
+export type FailureKind = (typeof FAILURE_KINDS)[number];
+
+/** ONE signal line, three answers, never two. `absent` is a worker that sent
+ *  no such line (an older skill, or nothing to say); `unrecognised` is a line
+ *  that WAS sent with a word outside the vocabulary — a mechanism defect to
+ *  surface, which "absent" would hide. */
+export type SignalLine<T extends string> =
+  | { ok: true; value: T }
+  | { ok: false; why: 'absent' }
+  | { ok: false; why: 'unrecognised' };
+
+export interface WaveDoneSignals {
+  suite: SignalLine<SuiteWord>;
+  failure: SignalLine<FailureKind>;
+}
+
+const SIGNAL_LINE = /^(suite|failure): (\S+)$/;
+
+/**
+ * Read the two signal lines off a `wave-done` body (spec §5.5): the FIRST two
+ * lines only, in either order, exact grammar `key: word`. The walk stops at
+ * the first line that is not a signal line, so a `suite:` inside later prose
+ * or JSON is never read as a claim. The first of a repeated key wins.
+ *
+ * Never throws; never reads the envelope — the caller hands it `body`, which
+ * `parseMailEnvelope` returns verbatim below the `--` terminator, or the
+ * `mail.body` column, which is the same bytes.
+ */
+export function parseWaveDoneSignals(body: string): WaveDoneSignals {
+  let suite: SignalLine<SuiteWord> = { ok: false, why: 'absent' };
+  let failure: SignalLine<FailureKind> = { ok: false, why: 'absent' };
+  for (const raw of body.split('\n', 2)) {
+    const m = SIGNAL_LINE.exec(raw.replace(/\r$/, '').trimEnd());
+    if (!m) break;
+    const word = m[2] as string;
+    if (m[1] === 'suite') {
+      if (suite.ok || suite.why !== 'absent') continue;
+      suite = (SUITE_WORDS as readonly string[]).includes(word)
+        ? { ok: true, value: word as SuiteWord } : { ok: false, why: 'unrecognised' };
+    } else {
+      if (failure.ok || failure.why !== 'absent') continue;
+      failure = (FAILURE_KINDS as readonly string[]).includes(word)
+        ? { ok: true, value: word as FailureKind } : { ok: false, why: 'unrecognised' };
+    }
+  }
+  return { suite, failure };
+}
+
+/**
+ * The routing record's WRITABLE fields, in write order (routing spec
+ * 2026-09-14 §5.3, slice 4). `ccdargv.ts`'s `routeFlags` walks this exact
+ * array to build `--route field=value` pairs, so a field this array omits can
+ * never reach the wire and a field it lists can never be spelled a second way
+ * — ONE list, imported everywhere a caller needs the vocabulary rather than
+ * retyped (`single-definition.test.ts` scans for a hand-written sibling).
+ *
+ * `degraded` and `inert` are ccd's OWN fields (routing spec §5.2) and are
+ * deliberately absent: nothing on the wire ever sets them, so a body naming
+ * either is `unknown-field`, the same refusal an unrecognised word gets.
+ */
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact'] as const;
+export type RouteField = (typeof ROUTE_WRITABLE_FIELDS)[number];
+export type RouteFields = Partial<Record<RouteField, string>>;
+
+/**
+ * Every one of the SEVEN files a session's routing record reads from
+ * (routing slice 6, Task 4, ruling S6-R5): the five `ROUTE_WRITABLE_FIELDS`
+ * a route WRITE may name, plus the two ccd writes for status —
+ * `.degraded`/`.inert` — that a route WRITE may never name (see
+ * `ROUTE_WRITABLE_FIELDS`'s own docstring). Derived from `ROUTE_WRITABLE_FIELDS`,
+ * not a second hand-typed list, so `single-definition.test.ts`'s census
+ * still sees one vocabulary. This is the vocabulary `FleetSession.route.unreadable`
+ * names FROM — a route READ can fail on any of the seven, not only the five
+ * a caller may write.
+ */
+export const ROUTE_READ_FIELDS = [...ROUTE_WRITABLE_FIELDS, 'degraded', 'inert'] as const;
+export type RouteReadField = (typeof ROUTE_READ_FIELDS)[number];
+
+/** `parseRouteFields`'s OWN ingress bound (this brief's, not a mirror of a
+ *  ccd check): a body-level SHAPE cap, 32 bytes measured with `TextEncoder`
+ *  (bytes, not `.length`, for the same reason `ccd/ccd`'s `_route_bytes`
+ *  counts bytes for its refusal messages — a UTF-8 value's byte count and
+ *  character count differ). Measured against the real binary: neither
+ *  `_route_valid` (`ccd/ccd:14727-14760`, closed-vocabulary lookups only,
+ *  no length check) nor `_route_argv_check` (`ccd/ccd:14801-14840`, which
+ *  calls `_route_bytes` only to RENDER a byte count inside an already-decided
+ *  refusal) enforces a byte cap on a `--route` value — so this constant has
+ *  no counterpart on the box and is not "the same 32 bytes" as anything ccd
+ *  does; it exists solely so a wildly oversized body is refused before the
+ *  round trip. ccd's own vocabulary check is still the sole authority on
+ *  whether a value is a valid `class`/`effort`/etc. */
+const ROUTE_VALUE_MAX_BYTES = 32;
+
+/** SHAPE-only guard, this brief's OWN, not a mirror of a ccd validator: a
+ *  blank value or one carrying a control character is refused here before a
+ *  malformed body reaches the fleet. Measured against the real binary: the
+ *  only `[[:cntrl:]]` guard over a `--route` VALUE anywhere in `ccd/ccd` is
+ *  `cmd_route`'s over `--actor`/`--reason` (`ccd/ccd:6769-6771`, guarding
+ *  free-form log text against a forged journal line) — `_route_valid` has no
+ *  control-character arm at all, since it only ever looks a value up in a
+ *  closed vocabulary. */
+export const ROUTE_CONTROL_CHAR_RE = /[\x00-\x1f\x7f]/;
+
+/**
+ * SHAPE only — known keys, non-empty strings, no control characters, ≤ 32
+ * bytes each. The VALUES themselves (is `opus` a real class? is `high` a real
+ * effort rung?) are ccd's to refuse (`_route_valid` on the box), never
+ * duplicated here: this function's whole job is to keep a malformed body from
+ * reaching the fleet at all, not to pre-validate ccd's own vocabulary.
+ *
+ * `why` is `not-object` for a body that is not a plain object at all (an
+ * array, a primitive, `null`); `unknown-field`/`bad-value` name the offending
+ * `field` — two conditions a caller must be able to tell apart, so they never
+ * collapse onto one bare `false`.
+ */
+export type RouteFieldsParse =
+  | { ok: true; route: RouteFields }
+  | { ok: false; why: 'not-object' | 'unknown-field' | 'bad-value'; field?: string };
+
+export function parseRouteFields(v: unknown): RouteFieldsParse {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) {
+    return { ok: false, why: 'not-object' };
+  }
+  const route: RouteFields = {};
+  for (const [field, value] of Object.entries(v as Record<string, unknown>)) {
+    if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field)) {
+      return { ok: false, why: 'unknown-field', field };
+    }
+    if (typeof value !== 'string' || value.length === 0 || ROUTE_CONTROL_CHAR_RE.test(value)
+        // `TextEncoder`, not `.length`: a web global, not `node:*` — L0 may
+        // use it, and `.length` counts UTF-16 units, which would let a
+        // multi-byte value slip under a cap measured in bytes everywhere else
+        // in this file (`WORK_ITEM_TITLE_MAX`'s own reasoning).
+        || new TextEncoder().encode(value).length > ROUTE_VALUE_MAX_BYTES) {
+      return { ok: false, why: 'bad-value', field };
+    }
+    route[field as RouteField] = value;
+  }
+  return { ok: true, route };
+}
+
+/**
+ * The ONE spelling of a route refusal's `detail` string (routing spec §5.3,
+ * slice 4, fix round 2, finding #2 / controller ruling S4-R6). Two callers
+ * refuse a malformed `route` body in two different CURRENCIES — `server.ts`'s
+ * operator doors reply 400 with a `detail` field, `dispatch.ts` returns a
+ * typed `DispatchOutcome` carrying one — and that divergence is deliberate
+ * and stays at the call sites. The GRAMMAR of the sentence is not a
+ * divergence: it was written out twice, character for character, and a
+ * reworded `why` on one side would have silently produced two dialects of
+ * the same refusal. It lives here, beside the parse whose fields it renders.
+ *
+ * The `field`-less arm is real: `not-object` names no field (there was no
+ * object to have one), so appending an empty suffix is the honest rendering
+ * rather than the word `undefined`.
+ */
+export function routeParseDetail(p: Extract<RouteFieldsParse, { ok: false }>): string {
+  return `route: ${p.why}` + (p.field === undefined ? '' : ` ${p.field}`);
+}
+
+/**
+ * The ONE spelling of "a parsed route that named no field is the same thing
+ * as no route at all" (fix round 2, finding #2 / S4-R6), the second verbatim
+ * duplicate between `server.ts` and `dispatch.ts`.
+ *
+ * `{}` PARSES FINE — it is a real, distinct value from "never asked", meaning
+ * a caller handed up a route body that named nothing — but every downstream
+ * consumer treats it identically to `null`: `routeFlags(null)` and
+ * `routeFlags({})` both contribute zero tokens, there is no capability to
+ * gate on a flag that will never be sent, and there is no omission to
+ * journal. Collapsing the two HERE is therefore not an adapter narrowing a
+ * distinction it received — nothing downstream can act on the difference —
+ * and doing it in one place keeps both callers' `null` meaning the same word.
+ */
+export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
+  return Object.keys(r).length > 0 ? r : null;
+}
 
 /**
  * Every TYPED run-refusal code declared for `POST /api/runs`,
@@ -4536,8 +5141,8 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Seventeen codes exist below today; the next new one would be the
- * eighteenth, not the ninth.
+ * Eighteen codes exist below today; the next new one would be the
+ * nineteenth, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
@@ -4584,12 +5189,16 @@ export type DoneRejectCode = (typeof DONE_AUTHORITY_CODES)[number];
  * The last two are the ledger's (Build 4, spec §3.2): `unknown-item` — "an
  * item id that is not THIS RUN's", 404 — and `item-terminal` — the item
  * already settled, 409, refused rather than silently applied.
+ *
+ * `review-in-flight` — a second non-terminal review run named the same
+ * `reviews`, or a send-back while one is open (design 2026-09-14 §5.1, §9
+ * invariant 3).
  */
 export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid';
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -4597,6 +5206,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
+  'review-in-flight': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -4831,6 +5441,16 @@ export interface RunSummary {
   workspace: string | null;
   branch: string | null;
   state: RunState;
+  /** `'work'` or `'review'` (design 2026-09-14 §5.1). ADDITIVE; `FLEET_PROTO`
+   *  is not bumped. REQUIRED here because `hydrateRun` returns a literal and
+   *  must compute it; TOLERATED ABSENT at the one PWA reader (`runKindChip`,
+   *  `pwa/src/fleet/runWords.ts`) because an older server omits it — absence
+   *  means `'work'`, the only kind that older server knew. */
+  kind: RunKind;
+  /** On a review run, the id of the work run it reviews; `null` on a work run
+   *  — a first-class answer ("reviews nothing"), never a failed read. Set at
+   *  open, immutable. */
+  reviews: number | null;
   /** The ONE coordinator that owns this run: the tmux-derived session id of
    *  the session that opened it, stamped at `POST /api/runs`. That stamp is the
    *  mechanism behind the `claimed-by-another` refusal — a second coordinator,
@@ -4953,7 +5573,47 @@ export interface RunSummary {
  *  count of `mail_rejections` rows with a `DONE_AUTHORITY_CODES` code for this
  *  run — the rows `closeRun` writes for a refused wave-done — and
  *  `firstSubmission` is `closeRefusals === 0` once the run is done, null
- *  before. */
+ *  before.
+ *
+ *  `waveDoneMails` counts the `status`/`wave-done` mails the run's OWN worker
+ *  (`runs.sessionId`, never `claimedBy`) has sent on this run, and `signals`
+ *  is `parseWaveDoneSignals` over the LAST of them — the re-sent claim after a
+ *  rejection supersedes the refused one — or null when there are none, which
+ *  is a fourth condition beside the three each line carries (routing spec
+ *  §5.5, slice 2). Read at signal time from the mail row; nothing is written
+ *  at ingress, so the mail table stays the one record.
+ *
+ *  This read keys on the run's CURRENT `sessionId`, on purpose. A rebind (the
+ *  open route's `session-rebound` event, reachable only for a still-`planned`
+ *  run through `openRun`'s dup arm) leaves a predecessor's mail unread: that
+ *  session was never dispatched the wave, so its wave-done is not a
+ *  done-claim for dispatched work. A route that rebinds a DISPATCHED run
+ *  would have to widen this read to the session lineage — none does today
+ *  (S2-R1). */
+
+/**
+ * One `route:` run event, parsed (`parseRouteEventDetail`, routing spec
+ * 2026-09-14 §6 "Arms"). `at`/`causedBy` are the event ROW's own columns —
+ * never re-derived — so a `RoutingEvent` is traceable back to the exact
+ * `run_events` row it came from.
+ */
+export interface RoutingEvent {
+  readonly at: number;
+  readonly mode: RouteMode;
+  readonly field: string;
+  readonly from: string;
+  readonly to: string;
+  readonly kind: FailureKind | 'manual';
+  readonly causedBy: string;
+  /** The session this move targeted (routing slice 6) — the sixth,
+   *  ADDITIVE segment `routeEventDetail` writes. `null` on a pre-slice-6
+   *  five-segment event, which named no session at all: a reader that needs
+   *  to know whose trail this event belongs to falls back on the RUN's own
+   *  `sessionId` for those (`CoordStore.runsTouching`'s caller does exactly
+   *  that), never on this field alone. */
+  readonly session: string | null;
+}
+
 export interface RunSignals {
   readonly runId: number;
   readonly dispatchedAt: number | null;
@@ -4966,6 +5626,313 @@ export interface RunSignals {
   readonly activeMs: number | null;
   readonly closeRefusals: number;
   readonly firstSubmission: boolean | null;
+  readonly waveDoneMails: number;
+  readonly signals: WaveDoneSignals | null;
+  /** The fields the dispatcher seeded onto this run's FIRST WELL-FORMED
+   *  `arm:` event (routing spec §6), parsed by `parseArmEventDetail` — `null`
+   *  for an old run, a dispatch that carried no routing at all, OR a run
+   *  whose `arm:` rows are all malformed (fix round 2, finding #2,
+   *  controller ruling S5-R9). That last case is NOT the same fact as the
+   *  first two — "no routing was seeded" and "an arm event exists but could
+   *  not be parsed" are two conditions a reader handles differently — and
+   *  `armUnparsed` is what tells them apart: `arm === null && armUnparsed
+   *  === 0` is the former, `arm === null && armUnparsed > 0` is the latter. */
+  readonly arm: RouteFields | null;
+  /** The count of malformed `arm:` rows this run's trail carries BEFORE its
+   *  first well-formed one (0 when there is no arm row, or the first one
+   *  parses) — see `arm`'s own docstring for why this must not collapse
+   *  into `arm === null`. Rows after the first well-formed `arm:` are never
+   *  read at all (§6's first-wins rule), so they are never counted here
+   *  either. */
+  readonly armUnparsed: number;
+  /** Every `route:` event this run's trail carries, in order. A malformed
+   *  detail is skipped here and counted in `routingUnparsed`, never thrown —
+   *  a run with a non-empty `routing` changed routing mid-flight, which is
+   *  the READER's cue to report it apart from its arm's mean (§6); the wire
+   *  only ever carries the facts. */
+  readonly routing: RoutingEvent[];
+  readonly routingUnparsed: number;
+}
+
+/**
+ * `POST /api/runs/:id/route`'s wire body (routing spec 2026-09-14, slice 5,
+ * Task 2) — the coordinator's door onto the escalation/demotion ladders
+ * (`shared/routing-ladder.ts`). `why` becomes the verb's `--reason`
+ * (1..400 bytes, no control characters). Exactly ONE of `kind` (walk
+ * `escalate()`), `demote` (walk `demote()`) or `field`+`value` (the
+ * coordinator's own judgement, validated by ccd, not the ladder) — a body
+ * naming more or fewer than one is `bad-request`.
+ */
+export interface RunRouteBody {
+  readonly target: 'worker' | 'coordinator';
+  readonly why: string;
+  readonly kind?: FailureKind;
+  readonly demote?: 'class' | 'effort';
+  readonly field?: RouteField;
+  readonly value?: string;
+}
+
+/**
+ * The run-event/response word for a `route` door call — `RungTarget.mode`'s
+ * own three words (`shared/routing-ladder.ts`) plus `'manual'` for a
+ * `field`+`value` write the ladder never sees (S5-R1: the door derives the
+ * WORD it uses from `RungTarget.mode` at the call site, one source).
+ *
+ * `ROUTE_MODES` is the RUNTIME list this type derives from (S5-R6, this
+ * task): before, the four words were spelled twice — this union, hand-typed,
+ * and the door's own inline regex (`routes.ts:1918`) — so a fifth mode
+ * added to one and not the other would compile and parse silently wrong.
+ * One list now, and `parseRouteEventDetail`'s regex alternation is BUILT
+ * from it.
+ *
+ * `RungTarget['mode']` now derives from THIS type too (fix round 2, finding
+ * #5): `api.ts` is L0 and `peers-claims-l0.test.ts` pins it to its own
+ * single import line, so this file cannot import `routing-ladder.ts` even
+ * type-only — but the direction the other way is open, and
+ * `routing-ladder.ts` already imports `type { FailureKind } from './api.js'`
+ * for `escalate()`'s own `kind` parameter. `RungTarget.mode` rides the same
+ * import line, spelled `Exclude<RouteMode, 'manual'>` — the ladder itself
+ * never produces a manual move — so there is now exactly one place the
+ * three/four words are enumerated, not two kept in sync by hand.
+ */
+export const ROUTE_MODES = ['escalate', 'demote', 'reverse-demotion', 'manual'] as const;
+export type RouteMode = (typeof ROUTE_MODES)[number];
+
+/**
+ * A session id, as ccd mints and stamps one (`[A-Za-z0-9._-]+`) — never
+ * containing `:`, which is what lets the sixth segment below sit inside a
+ * `:`-delimited grammar without escaping.
+ *
+ * Fix round 1, finding #2: that charset is a fact about what ccd MINTS, not
+ * a guarantee about what reaches this file. `run.sessionId`/`run.claimedBy`
+ * (`store.ts`) come from `POST /api/runs`'s `claimedBy`/`sessionId` body
+ * fields, which are shape-checked only for "non-empty string" (routes.ts) —
+ * no charset guard — so an operator- or bug-supplied value carrying a `:`
+ * or a space would reach `routeEventDetail` and get written into a
+ * `route:` detail this regex's OWN sixth-segment group then refuses to read
+ * back, silently: `parseRouteEventDetail` returns `null`, the door's walk
+ * `continue`s past the record it just wrote, and `runSignals` counts it as
+ * `routingUnparsed` rather than as the write the door itself made. Exported
+ * so the door (`routes.ts`) can refuse a bad session SHAPE before it ever
+ * calls `routeEventDetail` — see `isSessionIdShape` below.
+ */
+const SESSION_ID_SEGMENT = '[A-Za-z0-9._-]+';
+const SESSION_ID_SHAPE_RE = new RegExp(`^${SESSION_ID_SEGMENT}$`);
+
+/**
+ * True iff `s` is a legal session-id SHAPE — the same charset
+ * `ROUTE_EVENT_DETAIL_RE`'s sixth segment accepts, so a value this returns
+ * `true` for is guaranteed to round-trip through `routeEventDetail`/
+ * `parseRouteEventDetail` unmangled. Callers that resolve a session id from
+ * a run row (`run.sessionId`/`run.claimedBy`) before writing a `route:`
+ * event MUST check this first (routing slice 6, fix round 1, finding #2) —
+ * the door answers `bad-session` rather than silently mis-writing a record
+ * its own reader will later refuse to parse.
+ */
+export function isSessionIdShape(s: string): boolean {
+  return SESSION_ID_SHAPE_RE.test(s);
+}
+
+/**
+ * The door's own regex, built from `ROUTE_MODES` and `FAILURE_KINDS`
+ * (S5-R6) rather than hand-typed a second time. Module-private: nothing
+ * outside this file has any business matching a `route:` detail itself —
+ * `parseRouteEventDetail` is the one reader.
+ *
+ * The sixth segment (routing slice 6, Task 1) — the session the move
+ * targeted — is OPTIONAL: `(?::(…))?` matches a five-segment detail (every
+ * event this door wrote before slice 6) exactly as before, and a
+ * six-segment one besides. Additive, never a `FLEET_PROTO` bump.
+ */
+const ROUTE_EVENT_DETAIL_RE = new RegExp(
+  `^route:(${ROUTE_MODES.join('|')}):([^:]+):([^:]+)->([^:]+):(${FAILURE_KINDS.join('|')}|manual)(?::(${SESSION_ID_SEGMENT}))?$`,
+);
+
+/**
+ * Parse a `route:<mode>:<field>:<from>-><to>:<kind|manual>[:<session>]`
+ * run-event detail — the door's own write (`routes.ts`, after a successful
+ * `ccd route`) — back into its fields. `null` on anything that does not
+ * match; the caller (`CoordStore.runRoutingEvents`, routing spec §6) counts
+ * a malformed detail rather than throwing, because a record this parser
+ * cannot read is still a fact worth surfacing as "unparsed", never a crash
+ * that would take the whole run's signals down with it.
+ *
+ * `session` answers `null` on a pre-slice-6, five-segment detail — the
+ * event named no session at all, a fact distinct from "this event's session
+ * was measured and happens to be absent", so a caller must never treat the
+ * two the same way (routing slice 6, Task 1).
+ */
+export function parseRouteEventDetail(detail: string): {
+  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual'; session: string | null;
+} | null {
+  const m = ROUTE_EVENT_DETAIL_RE.exec(detail);
+  if (!m) return null;
+  const [, mode, field, from, to, kind, session] = m as unknown as [string, string, string, string, string, string, string | undefined];
+  return { mode: mode as RouteMode, field, from, to, kind: kind as FailureKind | 'manual', session: session ?? null };
+}
+
+/**
+ * Format a `route:<mode>:<field>:<from>-><to>:<kind|manual>:<session>`
+ * run-event detail — `parseRouteEventDetail`'s round-trip partner (fix
+ * round 2, finding #4, controller ruling S5-R8: a grammar with a parser in
+ * this file gets a formatter beside it too, so a writer never hand-builds
+ * the string a reader elsewhere has to parse back). The door (`routes.ts`)
+ * calls this instead of its own template literal.
+ *
+ * `session` is REQUIRED here, never optional (routing slice 6, Task 1): the
+ * one production caller is the routing door, which has already refused
+ * `no-session` before it ever reaches this call, so every event this
+ * function writes carries a real session — the nullable `session` on
+ * `RoutingEvent`/`parseRouteEventDetail` exists for the READ side, to name
+ * an event this file did not write (a pre-slice-6, five-segment one).
+ */
+export function routeEventDetail(e: {
+  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual'; session: string;
+}): string {
+  return `route:${e.mode}:${e.field}:${e.from}->${e.to}:${e.kind}:${e.session}`;
+}
+
+/**
+ * Parse an `arm:<field>=<value> …` run-event detail — the dispatcher's own
+ * write (`dispatch.ts`, routing spec §6 "Arms": the fields it actually
+ * seeded onto a wave, recorded only once the fleet act that carried them
+ * succeeded) — back into `RouteFields`. One `field=value` word per field,
+ * SPACE-separated, in the order the writer wrote them (`ROUTE_WRITABLE_FIELDS`
+ * order) — this function does not sort, it only refuses a word outside the
+ * vocabulary, a duplicate field, or an empty value. `null` on anything
+ * malformed or empty, the same never-throw contract `parseRouteEventDetail`
+ * keeps.
+ */
+export function parseArmEventDetail(detail: string): RouteFields | null {
+  if (!detail.startsWith('arm:')) return null;
+  const rest = detail.slice('arm:'.length);
+  if (rest === '') return null;
+  const fields: RouteFields = {};
+  for (const word of rest.split(' ')) {
+    const eq = word.indexOf('=');
+    if (eq <= 0) return null;
+    const field = word.slice(0, eq);
+    const value = word.slice(eq + 1);
+    if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field) || value === ''
+        || fields[field as RouteField] !== undefined) {
+      return null;
+    }
+    fields[field as RouteField] = value;
+  }
+  return fields;
+}
+
+/**
+ * Format an `arm:<field>=<value> …` run-event detail — `parseArmEventDetail`'s
+ * round-trip partner (fix round 2, finding #4, controller ruling S5-R8).
+ * `ROUTE_WRITABLE_FIELDS` order regardless of the caller's own key order —
+ * the same rule `routeFlags` (`ccdargv.ts`) applies for the identical
+ * reason: the wire shape must not depend on `Object.keys` insertion order.
+ * The dispatcher (`dispatch.ts`) calls this instead of its own
+ * `armWords` helper, whose body moved here.
+ */
+export function armEventDetail(fields: RouteFields): string {
+  return `arm:${ROUTE_WRITABLE_FIELDS.filter((f) => fields[f] !== undefined)
+    .map((f) => `${f}=${fields[f]}`).join(' ')}`;
+}
+
+/**
+ * EIGHTH typed refusal union, admitted to `mail-routes.test.ts`'s kebab
+ * scanner through this exported guard rather than `NOT_CODES` — the
+ * standing reason every sibling union there gives: a guard accepts a member
+ * added later and still rejects a typo'd one. `POST /api/runs/:id/route`'s
+ * own refusals, checked together with the other seven and never merged: a
+ * route refusal is a run-scoped write like `RunRefuseCode`'s four routes,
+ * but that union's own docstring scopes itself to those four by name, so a
+ * fifth route's vocabulary gets its own union rather than silently widening
+ * one whose docstring would then be lying about its own membership.
+ *
+ * Fix round 2, finding #4: this union is NOT the route's complete answer
+ * set — it is only the subset of NEW kebab-case tokens
+ * `mail-routes.test.ts`'s scanner needed admitted (its regex matches only
+ * `[a-z]+(-[a-z]+)+`, i.e. lowercase words joined by at least one hyphen).
+ * Three of the route's own words are already declared in OTHER unions and
+ * so never needed a home here (`unknown-run`, `run-unreadable`,
+ * `bad-request`); two never match the scanner's regex at all (`unsupported`
+ * has no hyphen; `fleetFailed` is camelCase, not kebab). The route's FULL
+ * answer set — status code and word, for a client author who wants a
+ * decoder covering everything this door can send:
+ *
+ *   400 bad-request         — malformed body: bad `target`/`why`/manual
+ *                             field-value shape, or not exactly one of
+ *                             kind/demote/field+value
+ *   404 unknown-run         — no run with this id
+ *   503 run-unreadable      — `coord.run(id)` could not read the row
+ *   409 run-closed          — the run is not in a ROUTABLE state — every
+ *                             `RunState` outside `TERMINAL_RUN_STATES`
+ *                             (S5-R4; `shared/api.ts`), so `unknown` and
+ *                             every IDLE state route THROUGH this gate
+ *   409 no-session          — the resolved target (worker/coordinator)
+ *                             carries no session id on this run
+ *   409 bad-session          — the resolved target's session id (`run.sessionId`/
+ *                             `run.claimedBy`) is present but not a legal
+ *                             session-id SHAPE (`isSessionIdShape`, above this
+ *                             union in this file) — distinct from `no-session`
+ *                             (nothing there at all): a value here would
+ *                             silently fail to round-trip through
+ *                             `routeEventDetail`/`parseRouteEventDetail`'s
+ *                             `:`-delimited grammar (fix round 1, finding #2),
+ *                             so this door refuses it before ever writing one
+ *   501 unsupported         — the fleet does not report `route-v1`
+ *   409 no-record           — the target session's registry has no `.class`
+ *                             file at all (S5-R18: an absent `.effort`
+ *                             alongside a present `.class` is NOT this — it
+ *                             reads as `effort: 'auto'`, the record's own
+ *                             vocabulary for "no override, the model's
+ *                             default", never a refusal)
+ *   409 unrouteable-record  — `.class`/`.effort`/`.degraded` IS present and
+ *                             readable, but its content is not a legal
+ *                             vocabulary member (`CLASSES`/`EFFORT_LADDER` ∪
+ *                             `auto`/`ultracode`) — a DIFFERENT condition
+ *                             than `no-record` (which means no file at
+ *                             all): the record exists, it is only
+ *                             unroutable. Fix round 1, finding #1: ccd's
+ *                             `ROUTE_CLASSES` legally accepts `default`
+ *                             (folded to "no override" only inside ccd
+ *                             itself) and a torn/empty write trims to `''`
+ *                             — neither is a rung this ladder's index
+ *                             lookup may silently resolve to -1 (the floor)
+ *                             for
+ *   503 registry-unreadable — one of `.class`/`.effort`/`.degraded` is
+ *                             listed but unreadable — transient, not a
+ *                             fact about the record
+ *   409 ceiling              — the ladder (or the degraded-record guard)
+ *                             has nothing above the current rung to move to
+ *   409 floor                — `demote()` is already at the mechanical
+ *                             floor
+ *   409 no-effort-rungs      — the target is at `ultracode`, which has no
+ *                             effort rung of its own (the caller's job to
+ *                             pick a class)
+ *   502 fleetFailed          — the `route` verb itself refused (stderr in
+ *                             the body); NO run event is recorded
+ *   200 ok:true              — `{ applied: { session, mode, field, from,
+ *                             to, kind, effortReset } }`. `effortReset` is
+ *                             the COMPANION effort value a class rung wrote
+ *                             in the same argv (spec §3: a class rung resets
+ *                             effort to the new class's row, `auto` onto
+ *                             haiku), and `null` when the call wrote one
+ *                             field — an effort rung, or a manual write,
+ *                             which is forwarded exactly as typed
+ *
+ * `run-closed` collides, in SPELLING ONLY, with `store.ts`'s unrelated
+ * `releaseClaimsForRun` `endedBy` forensic value the scanner's `NOT_CODES`
+ * already allowlists — two different vocabularies that happen to share one
+ * English phrase; declared here too so a reader of THIS union's own
+ * members never needs to lean on that unrelated entry's coincidental
+ * tolerance.
+ */
+export const RUN_ROUTE_REFUSE_CODES = [
+  'no-session', 'bad-session', 'no-record', 'unrouteable-record', 'registry-unreadable', 'run-closed',
+  'ceiling', 'floor', 'no-effort-rungs',
+] as const;
+export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];
+export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
+  return typeof v === 'string' && (RUN_ROUTE_REFUSE_CODES as readonly string[]).includes(v);
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
@@ -5140,7 +6107,10 @@ export interface CoordCaps { maxConcurrentWorkers: number; maxSessionsPerDay: nu
  *
  *  Named here only since the operator dial shipped (D-1209): before that the
  *  shape existed solely as an inline structural type on one method, because
- *  `dispatchRun` was its only reader and never had to name it. */
+ *  `dispatchRun` was its only reader and never had to name it.
+ *
+ *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
+ *  `ACTIVE_RUN_STATES`. */
 export interface CoordCapsUsage { running: number; dispatchedIn24h: number }
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
@@ -6136,6 +7106,14 @@ export interface LifecycleMeas {
    *  classification, never free text (see `LifecycleDec.reason` for that).
    *  Both `rehome` writers set this. */
   readonly reason: string | null;
+  /** The registry entries a purge could NOT unlink, on a `_lc_fail` carrying
+   *  `purge-incomplete` (D-2782). Present ONLY on that condition: the purge
+   *  ran, the row is destroyed, the `purge` done-fact is already journaled,
+   *  and this names what is still on disk for a human to remove. `null` on
+   *  every other act, including the `purge-refused` refusal, where nothing was
+   *  removed and there is nothing to name — the two must not be told apart by
+   *  reading a sentence. It is prose for a person and never a parsed list. */
+  readonly unremoved: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -6157,6 +7135,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
+  unremoved: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -6324,7 +7303,10 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
-  | 'spawn-failed';            // _lc_fail: the undo landed, the session did not come back
+  | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
+  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
+  | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
+  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -6356,6 +7338,35 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
   'spawn-failed':
     'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
+  // D-2605. The act itself COMPLETED — this token only ever rides a `_lc_fail`
+  // from a post-action caller, or the non-fatal `_lc_refuse_return` from the
+  // one caller that reaches the purge before anything irreversible — so the
+  // sentence must not say "nothing happened". What it says is what is still
+  // TRUE: the registry row and its generation are still on disk, and re-running
+  // the verb is the whole remedy.
+  'purge-refused':
+    'The registry row could not be removed: this session\'s compaction lock was unavailable. Whatever the verb had already done is done; the row and its generation are still there. Re-run once the compaction settles.',
+  // D-2605, and the WHOLE POINT is that it is not the sentence above. A single
+  // token for both conditions told an operator to wait for a compaction that
+  // was not running and promised a row that no longer existed. Here the purge
+  // ran to its end: re-running the verb finds nothing to do and will not clear
+  // what is left, so the remedy is a hand and not a retry. The journal row's
+  // `detail` names the pathname; this sentence must not pretend to know it.
+  'purge-incomplete':
+    'The registry row was removed, but something beside it would not delete and is still on disk. The verb itself finished — re-running it will not clear the leftover; the journal entry names what is still there.',
+  // D-2605 fix round 3, and it is the THIRD sentence for a reason the first two
+  // make: `_reg_purge` answers 1 for a contended lock and 2 for a box that
+  // cannot take that lock at all, and until now both wore this map's
+  // `purge-refused` word — which told an operator on a flock-less box to wait
+  // for a compaction that is not running, on a row nothing will ever clear.
+  // MEASURED: `_compact_lock_acquire` returns 2 from `command -v` on ANY of
+  // `flock`, `mktemp` or `link` before it touches the lock file, so the
+  // pathname that sentence blames does not even exist there. This sentence
+  // names the cause instead, and its remedy is the PATH — never a wait. The
+  // journal row's `detail` carries the per-verb remedy; this one must not,
+  // because one map entry serves four callers.
+  'purge-mechanism-absent':
+    'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

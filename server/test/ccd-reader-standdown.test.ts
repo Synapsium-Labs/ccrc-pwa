@@ -324,7 +324,14 @@ const POPULATION: Record<string, GuardSpec> = {
     count: 1,
     guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
   },
-  _auto_compact_check: {
+  // WAS `_auto_compact_check` UNTIL THE MERGE WITH routing slice 4, which extracted
+  // `_idle_for_keystroke` and took the `esc to interrupt` grep with it. The census follows
+  // the PHRASE, not the function name: the row moved because the read moved, and the guard
+  // moved with it into the shared body so that slice 4's two new callers stand down too.
+  // `_auto_compact_check` keeps a guard of its own — it stands down BEFORE the pane read
+  // rather than after, which is the behaviour wave 2 shipped — but it no longer carries a
+  // phrase, so it is no longer a member of this population.
+  _idle_for_keystroke: {
     count: 1,
     guard: /(?<!!\s*)_pane_measurable\s+"\$id"\s*\|\|.*\breturn\b/,
   },

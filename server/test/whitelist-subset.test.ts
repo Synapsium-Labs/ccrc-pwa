@@ -75,6 +75,17 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // a real field=value so layer 2 proves the flagged shape is reachable under
   // the granted `['route','--session']` prefix.
   route: ['demo-quiet-basin', 'effort', 'high'],
+  // The SAME `['route','--session']` grant, second builder — `wsAdd`/
+  // `wsAddWorker`'s own precedent. The multi-pair form is what a writer with
+  // more than one field to set must use (ccd validates every pair before it
+  // writes any; N calls would half-apply), and it is enumerated separately so
+  // the repeated-`--set` shape cannot hide behind its single-field sibling.
+  routeSet: ['demo-quiet-basin', { class: 'opus', effort: 'high' }],
+  // The live-change form (slice 4, Task 5): same `['route','--session']`
+  // grant as `route`/`routeSet` above, `--apply` is a trailing token and
+  // trailing tokens are unconstrained by the agent's prefix, so no new grant
+  // is needed — this sample proves the flagged shape still crosses it.
+  routeApply: ['demo-quiet-basin', 'effort', 'high', null],
   // TERMINAL DRAWER wave 2. The mode is part of the argv, not a parameter the
   // route may omit: `cmd_win_size` asserts exactly four tokens.
   winSize: ['demo-quiet-basin', 'smallest'],
@@ -435,6 +446,11 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
+    // Pairs in `ROUTE_WRITABLE_FIELDS` order — `class` before `effort` — not
+    // the sample object's own key order, which happens to agree here; the
+    // out-of-order case is pinned in `dispatch-route.test.ts`.
+    routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
+    routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
     winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
   };
 
