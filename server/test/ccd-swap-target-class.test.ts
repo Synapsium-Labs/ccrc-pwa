@@ -63,7 +63,8 @@ const target = (cur: string, force = '', home = 'claude'): string =>
 // hard-blocked arm. The dispatch sink is swap.log rather than that file's
 // `ccd-calls` so one read answers both "did it move?" and "what did it say?".
 const BLOCKED = `
-  tmux() { case "\${1:-}" in
+  tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
+           case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -98,7 +99,8 @@ const swapLogOrEmpty = (): string => {
 // stubbed here, because the rc 6 this arm has to produce is the real
 // function's answer about the real seeded files.
 const QUIET = `
-  tmux() { case "\${1:-}" in
+  tmux() { case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
+           case "\${1:-}" in
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
