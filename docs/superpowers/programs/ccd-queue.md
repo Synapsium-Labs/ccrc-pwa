@@ -383,3 +383,93 @@ saying it "must not come back". Thirteen call sites, three reachable, one guarde
 **A rule stated six times in prose and violated thirteen times in code is a missing mechanism, not a
 knowledge-transfer failure.** D-71 has never had a red suite. That is someone's wave — surfaced to the
 operator, not taken here.
+
+---
+
+## Part A, corrected: the pin I ruled for was VACUOUS — the worker measured its own promise and refuted it
+
+Mail 1560, `ccrc-pwa-bright-canyon`, unprompted, against its own claim rather than against a ruling.
+My Part A ruling (`d9f1ce98`) said *ship (c), pin narrowed to the weakest honest form*, and it rested
+on one sentence from `partA-conflict.md`: *"It is mutation-measurable in both directions: delete the
+`-L` from the guard and the pin reds; make the `rm` unconditional and it reds."* **Both halves are
+false.** Measured by the worker's honesty reviewer and then independently by the worker: the narrowed
+pin is GREEN on HEAD, GREEN with the `rm` guarded by only `-L`, GREEN with it guarded by only `-d`,
+and GREEN with the `rm` unconditional. The old pin reddened all four. **Net: a mechanism removed and
+none added.**
+
+**I verified the cause myself, structurally, without the worker's branch.** `origin/main:ccd/ccd:77`
+is `if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi` — both tokens the narrowed pin demands, present
+unconditionally, INSIDE the span its regex extracts as `mvBody`, on a line A2 is forbidden to touch.
+A regex asking "are these tokens present" is therefore satisfied by that one line for **every** possible
+guarding of the `rm`. This needed no run: it was true when the option was written.
+
+**Ruling: behaviour, not a cleverer scan.** Ship the two behavioural cases. The alternative the worker
+offered — restore the original `not.toMatch` and drop A2's fix — is refused, and the reason is worth
+writing down because it looks like a symmetric choice and is not: main's helper contains no `rm` at
+all, so the original pin is a **presence ban** on `rm … "$2"`, green on main only because there is
+nothing to ban and red on any body that adds one, the correct fix included. The worker's own table says
+`HEAD → old pin RED`. Restoring it is not restoring a mechanism; it is (c) not shipping, and D-2187
+reopening. **Costs if wrong:** the TOCTOU fix ships with two behavioural cases instead of one regex.
+
+**What I demanded back, and why it is the same rule that caught this.** The six-row mutation table,
+scored per MECHANISM — case (a), case (b), the narrowed scan, A1 case 2 — including one row nobody has
+run: *refusal guard deleted, `rm` left exactly as HEAD has it.* That row decides whether the narrowed
+scan holds anything at all. If it reds, the scan was never a containment pin — it is a pin on the
+refusal guard's two tests still being PRESENT, which is real and which nothing else holds, and it gets
+re-titled to say so. If it is green, it holds nothing and it goes. **A pin whose NAME promises
+containment while its body cannot fail is worse than no pin:** the next reader sees a named assertion
+about containment and stops looking. "Its message states its own limit" is not enough — the message
+must name `ccd:77` as the line that satisfies it.
+
+### Three things the worker's own fix list did not reach, all measured here
+
+**The false quantifier is in a THIRD place, and that place is D-2189's own definition.** The worker
+found *"nothing in the tree creates a DIRECTORY at any of the eight"* false in A4's replacement text and
+is fixing both source copies. The same claim sits in
+`docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md:201-209` — *"(nothing
+in the tree creates a `directory` at any of those paths, so the race stays unreachable)"* — three lines
+after that paragraph names `$POOLS_DIR/$project` as one of those paths. Both of the worker's citations
+re-measured on `origin/main` and both hold: `ccd-project-pool.test.ts:103` mkdirSyncs `POOLS()/demo`,
+which is `ccd:6965`'s destination; `ccd-hold.test.ts:137,184,260,314` mkdirSync `$REG/<id>.hold`, which
+is `ccd:2111`'s destination under `_reg_set <id> hold`. **The defining copy is the load-bearing one** —
+it is what a later reader consults to learn what D-2189 was. This is `correcting-the-instance-is-not-
+correcting-the-claim` landing on a worker who had already applied it twice and stopped at the source.
+
+**The count is wrong by three, not one, and the entry's stated cause is incomplete.** Eight call sites,
+counted on `origin/main`: `ccd/ccd` 689, 2111, 3204, 6965, 16257 and `ccd/ccrc` 748, 5672, 6839. The
+plan's "five" is `ccd/ccd` **alone** — `ccd/ccrc`'s copy of the platform block was never counted. So
+*"a wave added a call site and left the quantifier standing"* accounts for exactly one of the three
+missing sites; the other two were never in the census. A tidy cause that explains a third of the error
+is its own defect.
+
+**The byte-identity pin constrains A4 in a way nothing in the plan says.** The atomicity paragraph is
+byte-identical in `ccd/ccd` and `ccd/ccrc` — that is A3's subject and `macos-platform.test.ts`'s
+assertion. So naming only `ccd/ccd`'s five makes the same bytes FALSE in `ccd/ccrc`, and naming eight
+without naming each site's FILE makes the same bytes assert something different in each home. Each
+named site carries its file, and the rewrite is read back in both copies.
+
+### Two smaller rulings
+
+**The failure-path destruction is disclosed with its CONDITION, not its verdict, and takes no number.**
+The fix runs `rm` before `mv`, so a failed `mv` now leaves the destination gone where it previously
+survived; the worker measured both revisions and confirmed it is unreachable from `_reg_set` today.
+"Unreachable today" is a measurement with an expiry date and nothing that re-measures it, so the
+paragraph names the condition that makes the price real — a caller whose destination matters and whose
+`src` may be absent. **No deviation number:** the price is intrinsic to option (c), which my own ruling
+chose. A disclosed property of the fix, not a departure from the brief. **Costs if wrong:** a future
+call site pays a loss the comment warned about in the abstract.
+
+**The plan file is the worker's, in the finish commit** — it is outside every Part's file list, so the
+edit is named in the wave-done rather than discovered by the review. Corrected in place without
+reflowing, because line-number citations into plans are load-bearing here and a reflow invalidates them
+silently. And NOT by blanket-replacing "four of the five" in that file: line 136 is a different five
+(the `cat`-fallback sites near D-2379). Each instance checked against its own subject.
+
+### The rule this replaces my ruling's ground with
+
+The conclusion of `d9f1ce98` stands — (c) ships. **Its stated ground does not.** I took a mutation
+claim as a fact because it was stated as one, and a sentence about what a table would show is not a
+table. Binding on both roles for the rest of this run: **a ruling that rests on a mutation claim cites
+the measurement, never the promise; a proposal offering a replacement mechanism arrives WITH the table.**
+The worker applied that to itself here, unprompted and at the cost of reopening work it had closed,
+which is the only reason the vacuity was found before the wave-done rather than by a reviewer after it.
