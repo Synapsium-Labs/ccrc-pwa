@@ -503,6 +503,59 @@ describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
       rmSync(d, { recursive: true, force: true });
     }
   });
+
+  // Final-round item 4 — the two disclosed prices this wave's own fix and
+  // header carry, pinned so neither can silently change in either direction.
+  // `chmod` is what makes the unlink FAIL below, and root defeats chmod.
+  it.skipIf(process.getuid?.() === 0)(
+    'when the guarded rm FAILS, the function does not answer 0 — the rm-fails price', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmfail-'));
+    const parent = path.join(d, 'parent');
+    try {
+      mkdirSync(parent);
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(parent, 'dst');
+      symlinkSync(real, dst);
+      // No write permission on the PARENT: unlink(2) needs it on the
+      // directory that holds the name, not on the symlink itself, so this
+      // makes `rm -f -- "$2"` fail without touching the symlink at all.
+      chmodSync(parent, 0o555);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmfail-6c2a');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success — this is the fix for D-2187\'s recurrence').not.toBe('0');
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink — the rm never removed it').toBe(true);
+      expect(readdirSync(dst), 'nothing was moved into the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmfail-6c2a');
+    } finally {
+      chmodSync(parent, 0o755);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('when src is absent, a symlink-to-directory dest is left GONE — the destination-gone price, disclosed', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-gone-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // Unlike the symlink-to-FILE case above, which stays resolvable: the
+      // guarded `rm` fires for THIS shape (symlink-to-directory) whether or
+      // not `src` exists, so a missing `src` leaves `dest` gone rather than
+      // intact — the pre-fix code left the symlink alone here. Disclosed in
+      // the header above `_plat_mv_notdir`; pinned here so it cannot drift
+      // in either direction without this case moving.
+      expect(existsSync(dst), 'the destination is GONE — the guarded rm ran before the doomed mv').toBe(false);
+      expect(readdirSync(real), 'the linked directory itself is untouched').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
 });
 
 // ── Everything below needs a real Darwin userland ────────────────────────
