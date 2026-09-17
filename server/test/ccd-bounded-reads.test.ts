@@ -671,6 +671,51 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(fs.readFileSync(escapeTarget, 'utf8'), 'no row may be appended through the link').toBe('UNTOUCHED');
   }, 20000);
 
+  it('get(): a LIVE SYMLINK at $REG/<id>.prnumber never yields the TARGET\'s value — the read side of the same escape', () => {
+    // D-2989 (review 71 CRITICAL 1), AND IT IS THE READ SIDE, which every
+    // case above missed. The three shipped F1 cases plant a FIFO, /dev/zero,
+    // /dev/null and a regular file — all WRITE-side, and all of them green
+    // against `get()`. `get()`'s own guard was `os.path.isfile`, which
+    // FOLLOWS the chain, so a link at `$REG/<id>.prnumber` resolving to a
+    // readable regular file returned THAT FILE'S bytes at rc 0 and
+    // `cmd_pr_state` persisted them into `.prhistory` as the outgoing PR.
+    // A fabricated value, from outside `$REG`, indistinguishable from a real
+    // field read. The control below is what makes this case load-bearing:
+    // it proves the assertion can SEE a foreign value, so the refusal above
+    // is a guard firing and not a test that could never observe the escape.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    const foreign = path.join(hp.home, 'escaped-prnumber-source');
+    fs.writeFileSync(foreign, '999');
+    fs.symlinkSync(foreign, path.join(REG(), `${id}.prnumber`));
+    hp.ghRows([mergedRow({ number: 601, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).toBe(0);
+    const histPath = path.join(REG(), `${id}.prhistory`);
+    const rows = fs.existsSync(histPath)
+      ? fs.readFileSync(histPath, 'utf8').trim().split('\n').filter(Boolean)
+        .map((l) => JSON.parse(l) as { pr: number })
+      : [];
+    expect(rows.map((x) => x.pr), "the link target's value must never be recorded as the outgoing PR")
+      .not.toContain(999);
+  }, 20000);
+
+  it('CONTROL for the case above: a REAL regular file holding the same value IS read, and IS recorded', () => {
+    // Without this the refusal proves nothing — a `get()` that returned None
+    // for everything would pass the case above just as well. Same value, same
+    // assertion, the only difference being the TYPE at the path.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(path.join(REG(), `${id}.prnumber`), '999');
+    hp.ghRows([mergedRow({ number: 601, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).toBe(0);
+    const rows = fs.readFileSync(path.join(REG(), `${id}.prhistory`), 'utf8')
+      .trim().split('\n').filter(Boolean).map((l) => JSON.parse(l) as { pr: number });
+    expect(rows.map((x) => x.pr), 'a regular file at the same path must still be read')
+      .toContain(999);
+  }, 20000);
+
   it("put(): a FIFO already at the pid-named tmp path (pid reuse) faults PROMPTLY rather than hanging the whole sweep", () => {
     // `put`'s tmp name embeds `os.getpid()`, unknowable to this test ahead of
     // the real interpreter starting — so a `python3` SHIM stands in first on

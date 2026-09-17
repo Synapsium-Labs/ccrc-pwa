@@ -309,6 +309,60 @@ disagreement is reported rather than resolved by picking one.
 
 ## Deviations found
 
+### D-2989 — the registry read sites answer rc 0 with a foreign file's bytes when a symlink stands at a field path
+**Review 71 CRITICAL 1, and the class is three READ-SIDE sites named by SHAPE, not by a count anyone was
+given.** Every one of them type-tested a `$REG/<id>.<field>` path with a test that FOLLOWS a symlink —
+bash `-f` in two, `os.path.isfile` in one — so a link resolving to any readable regular file anywhere
+returned THAT FILE'S bytes at rc 0, indistinguishable from a real field read, and `cmd_pr_state`
+persisted the value into `.prhistory`:
+
+| site | shape | before | after |
+|---|---|---|---|
+| `ccd/ccd` `_reg_get` | bash `[[ -f ]]` | rc 0, target's bytes | `&& ! -L` -> rc 1, its existing not-a-field arm |
+| `ccd/ccd` `_reg_read` | bash `[[ -f ]]` | rc 0, target's bytes | `[[ -L ]] && return 2` before the open |
+| `ccd/ccd` `_pr_py`'s `get()` | py `os.path.isfile` | the target's bytes | `lexists ∧ ¬S_ISREG(lstat)` -> `None` |
+
+`_reg_read` answers **2 and not 1** because something IS there and it is not absent — the verdict the
+DANGLING case already got. That the dangling case was already green is precisely why this survived two
+rounds: **a broken link is refused by `-f` for free, so a dangling-symlink case pins none of this.** The
+shape that was missing everywhere, and is now added per site, is a **symlink to an EXISTING REGULAR
+FILE**, each with a control proving the guard refuses a TYPE rather than the field.
+
+**Mutation table (measured per site, not as a class — `ccd-crosspool.test.ts`, `ccd-bounded-reads.test.ts`):**
+
+| mutant | suite | result |
+|---|---|---|
+| all three guards reverted | both | 3 failed / 164 passed — exactly the three new cases, both controls green |
+| `_reg_get` guard only | crosspool | 1 failed / 120 passed — the `_reg_get` case alone |
+| `_reg_read` guard only | crosspool | 1 failed / 120 passed — the `_reg_read` case alone |
+| `get()` guard only | bounded-reads | 1 failed / 45 passed — the `get()` case alone |
+
+**Why converting the two bash twins breaks no shipped caller, measured:** no shipped file creates a
+symlink at a registry field path — `git grep -nE "ln -s(fn)? .*(REG|cc-sessions)" -- ccd/` returns three
+hits and all three are comments; the only live `ln -sfn` calls (`ccd/ccrc`, the memory store's directory
+link) target a DIRECTORY, not a field. **That scan does NOT bound the population and must never be
+quoted as containment.** It answers "does converting break a shipped caller" (no). It cannot answer "can
+a link appear there": the registry is a flat directory under one UNIX user and anything with a shell can
+write it. Treating the scan as containment is the exact vacuity this wave exists to close.
+
+**Three shipped sentences were false and are corrected in the same commit as the guard** — a comment is
+a request, and all three were read as arguments during earlier audits of this very code:
+- `get()`'s *"never a fabricated value"*. It is the sentence that defeated two audits of the function it
+  describes. Replaced with what the guard now actually guarantees: any bytes returned came from a
+  regular file AT THIS PATH, never through a link to one elsewhere — and explicitly NOT that the field
+  is present, since absent and non-regular still share one `None`.
+- the `put`/`clear` containment paragraph (plan, and `ccd/ccd`'s own copy) concluding *"the collapse is
+  invisible AND harmless"*. It reasoned about the WRITE and concluded about the READ. Invisible, yes;
+  harmless, no.
+- `_reg_read`'s header, which stated that `-f` resolves a symlink CHAIN and then argued the test only
+  about MODE, as though the chain were incidental. Mode decides READ vs UNREADABLE; type decides whether
+  the path is a field at all.
+
+**Reported, NOT fixed (out of this wave's scope, carried with its instrument):** `ccd/ccd-usage-sweep.py`
+gates an `os.walk` + `os.remove` **delete** on `os.path.isdir`, which follows a symlink. Pre-existing,
+not in this wave's diff, and a delete-side instance of this same class — the next wave inherits it here
+rather than rediscovering it.
+
 ### D-2187 — `_plat_mv_notdir`'s Darwin arm answers 0 with its own postcondition false
 The contract is `# <src> <dest> -> 0 iff <src> is now at <dest>`. Measured on GNU coreutils 9.4,
 `mv -f -- src dest` with `dest` a **symlink to a directory** returns 0 with `dest` still the symlink and
@@ -707,10 +761,16 @@ conditions a caller handles differently, collapsed to one value. `CLAUDE.md` ban
 by name. It gets NO deviation number of its own: the review panel refuted that 2/3 and the coordinator
 agreed, because this entry is already the subject's home. It is written here because the deviations
 section is where the next reader looks, and a ban this repo states in its own conventions file should not
-be discoverable only by opening the function. **What contains it, measured:** for a FIFO, socket, device
-or symlink at `dst` the next `put`/`clear` silently replaces or unlinks it, exactly as though the field
-had never existed, so the collapse is invisible AND harmless; a DIRECTORY at `dst` is the one shape that
-still faults, at `os.replace`/`os.remove`, not at this read. Note the file's own asymmetry, deliberately
+be discoverable only by opening the function. **What contains it, measured — and the half this sentence used to
+get wrong (D-2989, review 71 CRITICAL 1):** for a FIFO, socket, device or symlink at `dst` the next
+`put`/`clear` silently replaces or unlinks it, exactly as though the field had never existed; a DIRECTORY
+at `dst` is the one shape that still faults, at `os.replace`/`os.remove`, not at this read. That is true
+of the WRITE and it was the whole argument, from which this sentence concluded the collapse was
+"invisible AND harmless". **It was not.** For a symlink at `dst` that RESOLVES to a readable regular
+file, the read returned that file's bytes at rc 0 — fabricated, from outside `$REG`, and persisted by
+`cmd_pr_state` into `.prhistory`. Invisible, yes; harmless, no. Reasoning about the write and concluding
+about the read is the defect, not the verdict it reached. `get()` now refuses every non-regular shape on
+an `lstat` before the open, so what remains is the absent/non-regular overload alone. Note the file's own asymmetry, deliberately
 unreconciled: `_check_models` in `ccd/ccrc-doctor-checks` takes the OPPOSITE position on the same class,
 giving a read it cannot trust its own distinct verdict.
 
