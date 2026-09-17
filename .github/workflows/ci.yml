@@ -253,6 +253,14 @@ jobs:
       - name: Install
         working-directory: server
         run: npm ci
+      # ══ TEMPORARY (round M4) — REMOVE WITH THE PROBE INSTRUMENTATION IN
+      # `test/session-hook.test.ts` THAT IT RUNS. Two questions no Linux leg can
+      # answer: WHY `resolves gtimeout when timeout is absent` never reaches the
+      # helper fork on this userland, and what this runner's own compact/cheap
+      # cost ratio is. `|| true` so the rest of this job still reports.
+      - name: TEMPORARY M4 probe — finding 6's cause and the Darwin cost ratio
+        working-directory: server
+        run: ./node_modules/.bin/vitest run test/session-hook.test.ts --reporter=verbose -t 'resolves gtimeout when timeout is absent|its OWN ratio' || true
       - name: Probe
         working-directory: server
         run: ./node_modules/.bin/vitest run test/script-shim-platform.test.ts test/compact-lock-darwin-probe.test.ts --reporter=verbose

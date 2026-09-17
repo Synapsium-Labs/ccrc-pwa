@@ -2744,7 +2744,46 @@ describe('the compaction card — PreCompact and the helper (spec §3.1)', () =>
     fs.copyFileSync(path.join(home, 'bin', 'gtimeout'), path.join(bin, 'gtimeout'));
     fs.chmodSync(path.join(bin, 'gtimeout'), 0o755);
     const { transcript } = plantSession({ lines: workLines(tree) });
-    run(preCompact(tree, transcript), { PATH: bin });
+    // ══ TEMPORARY M4 PROBE — REMOVE WITH THE ci.yml STEP THAT RUNS IT ══════
+    // This case is the one macOS failure whose cause round M4 must MEASURE
+    // rather than reason about: on the runner it dies `ENOENT …/gtimeout-argv`,
+    // i.e. the helper fork was never reached. `bash -x` into stderr, the
+    // minimal PATH's own listing, and a CONTROL run are what name the cause.
+    const probeEnv = {
+      ...process.env, HOME: home, PATH: bin, TMUX_PANE: '%1',
+      CLAUDE_CODE_SESSION_ID: 'uuid-1', CLAUDE_PID: '4242', CCRC_SESSION_GENERATION: GENERATION,
+    };
+    const tr = spawnSync('bash', ['-x', HOOK], {
+      input: JSON.stringify(preCompact(tree, transcript)), encoding: 'utf8', env: probeEnv });
+    const probe: string[] = [`=== M4 PROBE platform=${process.platform} status=${tr.status}`];
+    probe.push(`=== M4 PROBE binmin: ${fs.readdirSync(bin).sort().join(' ')}`);
+    for (const t of ['ls', 'find', 'flock', 'link', 'mktemp', 'touch', 'gtimeout', 'timeout', 'node', 'jq', 'stat', 'readlink', 'sed']) {
+      const w = spawnSync('bash', ['-c', `command -v ${t} || echo ABSENT`], { encoding: 'utf8', env: probeEnv });
+      probe.push(`=== M4 PROBE command -v ${t}: ${(w.stdout ?? '').trim()}`);
+    }
+    probe.push(`=== M4 PROBE REG: ${fs.readdirSync(path.join(home, '.cc-sessions')).sort().join(' ')}`);
+    probe.push(`=== M4 PROBE argv-present=${fs.existsSync(path.join(home, 'gtimeout-argv'))} card-present=${fs.existsSync(cardFile())}`);
+    probe.push(`=== M4 PROBE stdout: ${JSON.stringify(tr.stdout)}`);
+    const trace = (tr.stderr ?? '').split('\n');
+    probe.push(`=== M4 PROBE trace lines=${trace.length}; last 400:`);
+    probe.push(trace.slice(-400).join('\n'));
+    // THE CONTROL, in the same act: add `ls` to the minimal PATH and ask the
+    // same question again. `_hook_lock_same`'s Darwin arm is the only caller of
+    // `ls` in either shipped file, and `minimalPath` does not carry it. The
+    // row is reset to what `beforeEach` left (generation + helper) first, so
+    // the control is a FIRST compaction and not a second one.
+    const reg = path.join(home, '.cc-sessions');
+    for (const n of fs.readdirSync(reg)) if (n.includes('compact') && n !== 'compact-card.mjs') fs.rmSync(path.join(reg, n), { force: true });
+    fs.rmSync(path.join(home, 'gtimeout-argv'), { force: true });
+    fs.symlinkSync(realTool('ls'), path.join(bin, 'ls'));
+    const tr2 = spawnSync('bash', [HOOK], {
+      input: JSON.stringify(preCompact(tree, transcript)), encoding: 'utf8', env: probeEnv });
+    probe.push(`=== M4 PROBE control(+ls) status=${tr2.status}`
+      + ` argv-present=${fs.existsSync(path.join(home, 'gtimeout-argv'))}`
+      + ` card-present=${fs.existsSync(cardFile())}`);
+    probe.push('=== M4 PROBE end');
+    console.log(probe.join('\n'));
+    // ══ END TEMPORARY M4 PROBE ════════════════════════════════════════════
     expect(fs.readFileSync(path.join(home, 'gtimeout-argv'), 'utf8')).toMatch(/^8 node /);
     expect(fs.existsSync(cardFile())).toBe(true);
   });
@@ -3274,6 +3313,16 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
       const mid = Math.floor(s.length / 2);
       return s.length % 2 === 1 ? s[mid]! : (s[mid - 1]! + s[mid]!) / 2;
     };
+    // ══ TEMPORARY M4 PROBE — REMOVE WITH THE ci.yml STEP THAT RUNS IT ══════
+    // The Darwin bound this round owes has to come from a SAMPLE, not from the
+    // single ratio a failure message happened to print. This prints the two
+    // medians and the ratio on whatever platform runs it.
+    console.log(`=== M4 PROBE ratio platform=${process.platform}`
+      + ` cheap-median=${median(cheapTimes).toFixed(1)}ms compact-median=${median(compactTimes).toFixed(1)}ms`
+      + ` R=${(median(compactTimes) / median(cheapTimes)).toFixed(4)}`
+      + ` cheap=[${cheapTimes.map((x) => x.toFixed(0)).join(',')}]`
+      + ` compact=[${compactTimes.map((x) => x.toFixed(0)).join(',')}]`);
+    // ══ END TEMPORARY M4 PROBE ════════════════════════════════════════════
     expect(median(compactTimes) / median(cheapTimes)).toBeLessThan(4);
   });
 
