@@ -11,6 +11,8 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
+import { readSharesMeasured } from './shares.js';
+import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
   poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
@@ -26,8 +28,8 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
-         type ActorFlags, type CcdArgv } from './ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor,
+         stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -71,7 +73,7 @@ import {
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
   type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
-  programKickoffVerdict,
+  parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 
 /**
@@ -1626,10 +1628,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 17 request-id routes (13 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
-  // fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+  // fleet's baseline is 721 agent-WS operations [registry-read-census:fleet]
   // per call in remote mode, before conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
@@ -1642,7 +1644,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (23 [registry-read-census:fields] field reads; identity failures follow
+  // (30 [registry-read-census:fields] field reads; identity failures follow
   // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
@@ -1685,6 +1687,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * The PWA pickers' write, LIVE (routing spec 2026-09-14 §5.3, slice 4, Task
+   * 5). A tap on the model or effort sheet no longer types `/model <alias>`
+   * or `/effort <level>` into the pane directly — it writes ONE field of the
+   * routing record and asks ccd to apply it, session-only keystrokes, once
+   * the write itself has landed. `no-routing-keystroke-from-server.test.ts`
+   * is the census that keeps a slash command from creeping back into this
+   * file or `pwa/src`.
+   *
+   * Session-gated like `/prompt` directly above (NOT in `auth/gate.ts`'s
+   * `EXEMPT` table) — a picker tap is exactly as human-driven as a typed
+   * prompt, and `sessions-route-route.test.ts` pins the absence.
+   *
+   * `{field, value}`, one pair, never the multi-field `{route: {...}}` body
+   * the operator's own spawn/dispatch doors take (`parseOperatorRoute`
+   * above): the picker taps ONE control, and `routeApply` builds ONE `--set`.
+   * `parseRouteFields` is reused for its SHAPE guard only — built from the
+   * single named field so its `Object.keys(...).length !== 1` arm can never
+   * see more than the one key this body can produce, defensive against the
+   * function's own general contract rather than reachable from this route.
+   *
+   * 501 `unsupported`, never a silent drop, when the box has not advertised
+   * `route-apply-v1` — the operator tapped a live control and would otherwise
+   * see `{ok:true}` for a write nobody applied (`parseOperatorRoute`'s own
+   * docstring makes the same argument for the spawn-time `--route`).
+   */
+  app.post('/api/sessions/:id/route', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
+    const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
+    if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    const [field, value] = Object.entries(parsed.route)[0] as [string, string];
+    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
 
   /**
@@ -2038,6 +2079,49 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   };
 
+  /**
+   * `route?` on an OPERATOR's own body (`POST /api/sessions`, `POST
+   * /api/projects/:project/workspaces` — routing spec §5.3, slice 4).
+   * `refusePool`'s own shape just above: `reply: null` means the caller may
+   * proceed, with `.route` carrying the parsed value; anything else has
+   * ALREADY sent the reply.
+   *
+   * THIS DIFFERS FROM DISPATCH'S OWN RULE ON PURPOSE. `dispatch.ts`'s wave-1
+   * and wave-N≥2 arms OMIT a missing capability and JOURNAL it — an
+   * unattended coordinator wave must not fail outright on an old ccd. An
+   * operator who tapped a routing control and gets back today's plain argv,
+   * with no error and no journal a phone screen shows, has been silently
+   * downgraded and would never know it. So a bad shape is 400 and a box that
+   * cannot yet parse `--route` is 501 — never a quiet fallback to the argv
+   * `route === undefined` gets for free, which is `route === undefined`'s
+   * own case just below and the ONLY one that stays silent, because there was
+   * nothing asked for it to silently drop.
+   */
+  const parseOperatorRoute = (
+    reply: FastifyReply, route: unknown,
+  ): { reply: FastifyReply; route?: undefined } | { reply: null; route: RouteFields | null } => {
+    if (route === undefined) return { reply: null, route: null };
+    const parsed = parseRouteFields(route);
+    if (!parsed.ok) {
+      // `routeParseDetail` (`shared/api.ts`, fix round 2 finding #2): the
+      // refusal GRAMMAR is shared with `dispatch.ts`, which spelled the same
+      // template string out verbatim. The CURRENCY is not — a 400 reply here,
+      // a typed `DispatchOutcome` there — and that stays at each call site.
+      return { reply: reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: routeParseDetail(parsed) }) };
+    }
+    // An empty `{}` names no field — `wsAdd`/`wsAddWorker`'s reason for
+    // treating it as `routeFlags(null)` would anyway: there is nothing to gate
+    // the 501 on, so it is never spent asking whether the box can parse a flag
+    // this call was never going to send. `routeFieldsOrNull` is that collapse,
+    // shared with `dispatch.ts` for the same reason the grammar above is.
+    const fields = routeFieldsOrNull(parsed.route);
+    if (fields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
+    }
+    return { reply: null, route: fields };
+  };
+
   // F3 — the program-ready readiness join (program-leverage wave 3). Read ONCE
   // off the watcher, exactly the way `/api/fleet` above reads
   // `watcher?.currentPending()`: the expensive half (two skill files per
@@ -2055,7 +2139,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that arm means "not swept yet" and nothing else. Same shape of reasoning
   // as D-1024: the arm is kept because a build that could not express it could
   // never report the day it becomes reachable.
-  app.get('/api/projects', async () => {
+  app.get('/api/projects', async (req, reply) => {
+    // `?class=` (routing spec, slice 4, Task 6): the placement FORECAST by
+    // class, so a caller can ask "who could take this project running that
+    // class of model today" rather than only the class-blind default.
+    // Validated BEFORE any read — a bad value is refused, never silently
+    // treated as `default` — and `default` (or an absent query) takes the
+    // pre-slice-4 path with no shares read at all, so the answer stays
+    // byte-identical to what this route has always sent.
+    const q = req.query as { class?: unknown };
+    let cls: ModelClass | 'default' = 'default';
+    // Absent entirely (no key at all) is the ONLY silent case — an empty
+    // `?class=` is present and outside the vocabulary just as much as a
+    // misspelled one, so it is refused rather than quietly read as `default`.
+    if (q.class !== undefined) {
+      if (typeof q.class === 'string' && (q.class === 'default' || (CLASSES as readonly string[]).includes(q.class))) {
+        cls = q.class as ModelClass | 'default';
+      } else {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'class: not in the vocabulary' });
+      }
+    }
     const listed = await listProjects(deps.io, deps.cfg);
     // The pool half, composed HERE and never inside `listProjects`: that is the
     // fleet read (a readdir of the projects root unioned with registry
@@ -2071,9 +2174,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
     const limits = await readLimits(deps.io, deps.cfg);
+    // ONE shares read for the whole request, exactly the way `limits` above
+    // is one `readLimits` for every row — and skipped entirely for the
+    // default class, so a caller that never asked for a class never pays for
+    // a read whose answer it could not use.
+    const shares = cls === 'default' ? { kind: 'absent' as const } : await readSharesMeasured(deps.io, deps.cfg.registryDir);
+    const nowS = Math.floor(Date.now() / 1000);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
-      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, cls, shares, nowS) };
     };
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
@@ -2101,11 +2210,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   });
 
   app.post('/api/sessions', async (req, reply) => {
-    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown };
+    const body = (req.body ?? {}) as {
+      wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown; route?: unknown;
+    };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0
       || typeof body.project !== 'string' || body.project.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // BEFORE `knownId`/the revival logic below (routing spec §5.3, slice 4):
+    // a bad `route` body must never reach ccd, on either the creation or the
+    // revival arm — see `parseOperatorRoute`'s own docstring for why an
+    // operator's ask is refused rather than silently dropped.
+    const routed = parseOperatorRoute(reply, body.route);
+    if (routed.reply !== null) return routed.reply;
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
     // ONE bounded registry listing, two questions: is this a revival, and, only
     // for an ordinary creation, what is this project's tag. The predicate keeps
@@ -2133,8 +2250,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           return reply.code(501).send({ ok: false, error: 'unsupported' });
         }
         return runCcdOr502(reply, body.enable === false
-          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
-          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
+          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir, routed.route)
+          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir, routed.route));
       }
       const pool = poolFor(
         measured.poolsRead ? measured.pools : { listed: false },
@@ -2146,9 +2263,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // enable = start + systemd enable. The ternary picks the ENTRY rather than
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
+    //
+    // `routed.route` reaches EVERY arm below it — the crossPool branch just
+    // above (its own `startCross`/`enableCross` call), the creating arm and
+    // the revival arm (Task 2 made `start`/`enable` write the pairs whether
+    // the row is new or old) — so no arm this handler can take drops an
+    // operator's route (fix round 1, finding #1: the crossPool branch used to
+    // return before ever reaching `routed.route`, silently dropping it).
     return runCcdOr502(reply, body.enable === false
-      ? CCD_ARGV.start(body.wrapper, body.project, workdir)
-      : CCD_ARGV.enable(body.wrapper, body.project, workdir));
+      ? CCD_ARGV.start(body.wrapper, body.project, workdir, routed.route)
+      : CCD_ARGV.enable(body.wrapper, body.project, workdir, routed.route));
   });
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
@@ -2158,7 +2282,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+    const body = (req.body ?? {}) as { route?: unknown };
+    const routed = parseOperatorRoute(reply, body.route);
+    if (routed.reply !== null) return routed.reply;
+    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route));
   });
 
   /**

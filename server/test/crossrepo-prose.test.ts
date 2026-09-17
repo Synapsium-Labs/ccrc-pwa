@@ -563,12 +563,28 @@ describe('the legacy-flip measurement is recorded, whichever way it went', () =>
       .toMatch(/20\d\d-\d\d-\d\d/);
   });
 
-  it('and says the read was an operator act, because no route can serve it', () => {
+  it('says the historical read was an operator act, and names every route that now reads the trail', () => {
     const m = passage('the ledger measurement block', LEDGER, '## Measurements', '\n## ');
     expect(m, 'the measurement does not say where it was taken').toContain('coord.db');
-    // Grounded, so the sentence reds the day a route DOES serve the trail:
-    // if `runEvents` ever appears in the route file, this claim is stale.
-    expect(ROUTES, 'a route now reads runEvents — the ledger sentence calling this an ' +
-      'operator act is now false and must be corrected').not.toContain('runEvents');
+    // GROUNDED THE OTHER WAY NOW (routing slice 5, Task 2, 2026-09-16): this
+    // test used to pin `runEvents` absent from every route, with a comment
+    // predicting the day that stopped being true. That day arrived —
+    // `POST /api/runs/:id/route` legitimately reads it for its own ladder
+    // bookkeeping (`priorSameKind`/`lastDemotion`) — so the guard now DERIVES
+    // every route whose handler body mentions `runEvents` and requires the
+    // ledger to name each one, rather than reverting to a blanket claim
+    // nobody re-derives or silently deleting the check a second route would
+    // need.
+    const starts = [...ROUTES.matchAll(/app\.(get|post)\('([^']+)'/g)]
+      .map((h) => ({ key: `${h[1]!.toUpperCase()} ${h[2]!}`, at: h.index! }));
+    const runEventsRoutes = starts
+      .filter(({ at }, i) => ROUTES.slice(at, starts[i + 1]?.at ?? ROUTES.length).includes('runEvents'))
+      .map((h) => h.key);
+    expect(runEventsRoutes.length, 'no route reads runEvents any more — the ledger correction ' +
+      'naming one can be reverted to the original "no route can serve it" claim').toBeGreaterThan(0);
+    for (const route of runEventsRoutes) {
+      expect(m, `the ledger measurement block does not name ${route} as now reading runEvents`)
+        .toContain(route);
+    }
   });
 });

@@ -3,8 +3,25 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
+  isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS, type IdentityField, type LifecycleField,
+  type PrPhase, type RouteField, type RouteFields, type RouteReadField, type StopSurface,
 } from '../../shared/api.js';
+
+// Fix round 2, finding 3: the five writable-field reads used to bind
+// `ROUTE_FIELD_CLASS`/`_EFFORT`/`_SUBAGENT`/`_WORKFLOW`/`_COMPACT` to
+// `ROUTE_WRITABLE_FIELDS` BY POSITION (`const [a, b, c, d, e] = LIST`), an
+// identity that held only as long as nobody reordered the L0 list — and
+// `routeRawByField` below re-enumerated the same five names a second time,
+// kept honest only by its `Record<RouteField, …>` annotation, not by any
+// mechanism. Both are gone: `buildRecord`'s own Promise.all now maps
+// `ROUTE_WRITABLE_FIELDS` directly (`ROUTE_WRITABLE_FIELDS.map((f) =>
+// fieldMeasured(...))`), and the result is zipped back onto field names by
+// the SAME iteration — `ROUTE_WRITABLE_FIELDS.forEach((f, i) => …reads[i])`
+// — below, so no ordering assumption and no second list survive a reorder
+// of the L0 vocabulary. `single-definition.test.ts`'s ROUTE_WRITABLE_FIELDS
+// census (routing spec §5.3, slice 4) still scans every `[...]` literal
+// under the four roots for two or more of these five words QUOTED together;
+// nothing here quotes more than one at a time.
 
 // `IdentityField` moved to shared/api.ts (Task 2): `FleetSession.unmeasured`
 // carries the SAME evidence onto the wire, and a second, server-only
@@ -44,7 +61,7 @@ export interface SessionRecord {
    *    `'unreadable'` — the file is LISTED in the registry directory this read
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
-   *                     23 [registry-read-census:fields] field reads a session's
+   *                     30 [registry-read-census:fields] field reads a session's
    *                     read fires — so it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
@@ -244,6 +261,50 @@ export interface SessionRecord {
    *  file is proven not to exist. Only a measured `unreadable` still falls
    *  back to the listed-vs-not rung above. */
   lifecycleUnmeasured: readonly LifecycleField[];
+  /**
+   * The routing record ccd owns for this session — the SEVEN files
+   * `$REG/<id>.{class,effort,subagent,workflow,compact,degraded,inert}`
+   * (routing slice 6, Task 4), read alongside every other field on the same
+   * `Promise.all` so a routing read never costs a second round trip.
+   *
+   * MEASURED per controller ruling S6-R5 (fix round 2): every one of the
+   * seven reads through `fieldMeasured`, never the collapsing `field()`, so
+   * a transient agent-link failure on one or all seven is told apart from
+   * the file genuinely never having been written. `null` ONLY when all
+   * seven measure ABSENT — the ordinary state of a session ccd has never
+   * routed. A read that measures UNREADABLE on ANY of the seven also makes
+   * `route` non-null: that field is reported by name in `unreadable`, never
+   * silently folded into `route: null` ("never routed", a claim this read
+   * cannot support when the agent link merely dropped) or into an absent
+   * `fields`/`null` `degraded`/`[]` `inert` (which would assert "ccd never
+   * set this", equally unsupported). Otherwise:
+   *   - `fields` — the WRITABLE fields (`ROUTE_WRITABLE_FIELDS`) that
+   *     measured READABLE, values trimmed and otherwise UNCHECKED — this is
+   *     a raw registry read, not `parseRouteFields`'s ingress guard, so an
+   *     unparseable-by-ccd value still rides the wire rather than being
+   *     silently dropped. A field that measured unreadable is named in
+   *     `unreadable` instead of appearing here — never both.
+   *   - `degraded` — `.degraded`'s word when it measured readable; `null`
+   *     when it measured absent OR unreadable (the latter is ALSO named in
+   *     `unreadable`).
+   *   - `inert` — `.inert`'s comma-separated list, split and restricted to
+   *     `ROUTE_WRITABLE_FIELDS` members (a stray word ccd never writes is
+   *     dropped rather than laundered onto the wire as a routable field),
+   *     when `.inert` measured readable; `[]` when it measured absent or
+   *     unreadable (the latter is ALSO named in `unreadable`).
+   *   - `unreadable` — every one of the seven fields (`RouteReadField`)
+   *     whose read measured UNREADABLE this pass AND whose file the
+   *     directory listing this record was built from NAMES; `[]` when none
+   *     did. A read that failed on a file the listing does not carry is
+   *     measured ABSENT instead — the listing rung every other measured
+   *     field here already applies (`branchEvidence`, `held`, `stopped`,
+   *     `substrate`, `stranded`), and the reason an agent older than the
+   *     `absent` wire marker still answers `route: null` for a session ccd
+   *     has never routed.
+   */
+  route: {
+    fields: RouteFields; degraded: string | null; inert: RouteField[]; unreadable: RouteReadField[];
+  } | null;
 }
 
 /**
@@ -289,7 +350,7 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires 23
+ * the agent WS is enough (`readRegistry` fires 30
  * [registry-read-census:fields] field reads per session under one request
  * timeout). Held with an unreadable reason, never unheld: the consumer
  * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
@@ -452,8 +513,8 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (23 [registry-read-census:fields] field reads per session — a 24-session
-// fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+// (30 [registry-read-census:fields] field reads per session — a 24-session
+// fleet's baseline is 721 agent-WS operations [registry-read-census:fleet]
 // PER `readRegistry` call, before the conditional reconfirmation listing)
 // would otherwise log the same stuck field dozens of times a minute.
 // `warnOnce` is keyed `id#field`,
@@ -540,7 +601,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 }
 
 /**
- * One session's 23-field read [registry-read-census:fields] plus the
+ * One session's 30-field read [registry-read-census:fields] plus the
  * `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
@@ -548,6 +609,16 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * caller's directory listing, passed in rather than re-read here, for the
  * same "PRESENCE independently of whether the read succeeded" reason the
  * `held` field below already relies on.
+ *
+ * 23 -> 30 (routing slice 6, Task 4): seven routing fields — `.class`,
+ * `.effort`, `.subagent`, `.workflow`, `.compact` (`ROUTE_WRITABLE_FIELDS`)
+ * plus ccd's own `.degraded`/`.inert` — ride the wire as `SessionRecord.route`
+ * beside the live read-back the pane statusline already carries, so the
+ * routing UI can show the INTENDED value even before it has painted. Cost
+ * (measure-the-loop-not-the-function, not just this function): +7 reads ×
+ * the session count per sweep — a 24-session fleet's whole-registry sweep
+ * rises from 553 to 721 agent-WS operations per `readRegistry` call, before
+ * the conditional reconfirmation listing.
  *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
@@ -564,7 +635,8 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
+    routeFieldReads, degradedRead, inertRead] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -578,6 +650,18 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
     fieldMeasured(io, cfg.registryDir, id, 'stranded'),
+    // Routing slice 6, Task 4 (MEASURED per ruling S6-R5, fix round 2): the
+    // seven routing files, read through `fieldMeasured` rather than the
+    // collapsing plain reader — a transient agent-link failure is told apart
+    // from the file genuinely never having been written (fix round 2,
+    // finding 1). The five writable fields are read in ONE PASS over
+    // `ROUTE_WRITABLE_FIELDS` (fix round 2, finding 3) rather than five
+    // hand-typed calls bound back to field names by position; the result is
+    // zipped against `ROUTE_WRITABLE_FIELDS` by the SAME iteration below, so
+    // no ordering assumption and no second hand-written field-name list
+    // survive a reorder of the L0 vocabulary.
+    Promise.all(ROUTE_WRITABLE_FIELDS.map((f) => fieldMeasured(io, cfg.registryDir, id, f))),
+    fieldMeasured(io, cfg.registryDir, id, 'degraded'), fieldMeasured(io, cfg.registryDir, id, 'inert'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -728,6 +812,62 @@ async function buildRecord(
   // string exactly when the evidence is `'named'`.
   const branchName = branchEvidence === 'named' && branchRead.ok ? branchRead.content : null;
 
+  // Routing slice 6, Task 4 (MEASURED per ruling S6-R5, fix round 2): `route`
+  // is `null` ONLY when all seven reads measure ABSENT — a session ccd has
+  // never routed. A read that measures UNREADABLE on ANY of the seven also
+  // makes `route` non-null: that field's name goes into `unreadable` and is
+  // left OUT of `fields` (or, for `.degraded`/`.inert`, left at their
+  // absent-equivalent default) rather than laundering "the agent link
+  // dropped" into either "never routed" (`route: null`) or "never set"
+  // (absent from `fields`) — the two positive claims this read cannot make
+  // about an unreadable field. `allAbsent` starts true and only an `ok`
+  // (present) or `unreadable` (failed, not absent) read on ANY of the seven
+  // clears it — an `absent` read leaves it untouched, so it survives to
+  // `true` exactly when every one of the seven agreed.
+  //
+  // THE LISTING RUNG (whole-branch review, finding #1) — `routeReallyUnreadable`
+  // below. `unreadable` is the READ's answer, not this ladder's: every other
+  // MEASURED field in this function resolves it against `names` first
+  // (`branchEvidence`'s `names.includes(`${id}.branch`) ? 'unreadable' :
+  // 'absent'` rung, and the same one for `held`, `stopped`, `substrate` and
+  // `stranded`), because the listing this function opened with proves
+  // PRESENCE independently of whether the bytes came back. A file the
+  // listing does not name AND the read could not open is measured ABSENT —
+  // "never written", evidenced by the listing — never unmeasured. That is
+  // also what makes the compatibility argument stated at `branchEvidence`
+  // above hold for these seven: an agent older than the `absent` marker
+  // (`server/src/remote/io.ts`'s `absent: true`, the ONLY proof of absence
+  // on that wire) answers `unreadable` for every missing file, and without
+  // this rung all seven names landed in `route.unreadable` and `route` went
+  // non-null for a session ccd has NEVER routed — where the PWA reads a
+  // named-unreadable field as UNKNOWN and lights no picker row and no badge
+  // at all (`pwa/src/lib/models.ts`'s `RoutingOverride.unreadable`). Fully
+  // compatible with ruling S6-R5: a LISTED file whose read failed is still
+  // named in `unreadable`, and still makes `route` non-null.
+  const routeReallyUnreadable = (f: RouteReadField, r: MeasuredRead): boolean =>
+    !r.ok && r.reason === 'unreadable' && names.includes(`${id}.${f}`);
+  const routeFields: RouteFields = {};
+  const unreadable: RouteReadField[] = [];
+  let allAbsent = true;
+  ROUTE_WRITABLE_FIELDS.forEach((f, i) => {
+    const r = routeFieldReads[i]!;
+    if (r.ok) { routeFields[f] = r.content; allAbsent = false; }
+    else if (routeReallyUnreadable(f, r)) { unreadable.push(f); allAbsent = false; }
+    // Otherwise the field is measured absent — a proven ENOENT, or a read
+    // that failed on a file the listing does not carry: ordinary "never
+    // written", which leaves both untouched.
+  });
+  let degraded: string | null = null;
+  if (degradedRead.ok) { degraded = degradedRead.content; allAbsent = false; }
+  else if (routeReallyUnreadable('degraded', degradedRead)) { unreadable.push('degraded'); allAbsent = false; }
+  let inert: RouteField[] = [];
+  if (inertRead.ok) {
+    const inertList = inertRead.content.split(',').map((s) => s.trim()).filter(Boolean);
+    inert = inertList.filter((f): f is RouteField => (ROUTE_WRITABLE_FIELDS as readonly string[]).includes(f));
+    allAbsent = false;
+  } else if (routeReallyUnreadable('inert', inertRead)) { unreadable.push('inert'); allAbsent = false; }
+  const route: SessionRecord['route'] = allAbsent ? null : { fields: routeFields, degraded, inert, unreadable };
+
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
     started: startedRead.ok && startedRead.content === '1',
@@ -837,6 +977,7 @@ async function buildRecord(
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
     lifecycleUnmeasured,
     unmeasured,
+    route,
   };
 }
 
@@ -885,7 +1026,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
-  // `ccd ws-release` landing anywhere inside the 23-field-read window left
+  // `ccd ws-release` landing anywhere inside the 30-field-read window left
   // the name in the listing and no bytes behind it, indistinguishable at
   // `field()` alone from a read that failed — a perfectly ordinary release
   // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
@@ -943,9 +1084,9 @@ export type SingleRead =
 
 /**
  * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
- * `readdir` plus that id's 23 [registry-read-census:fields] field reads — 24
+ * `readdir` plus that id's 30 [registry-read-census:fields] field reads — 31
  * agent-WS operations [registry-read-census:single] in remote mode, instead of
- * `readRegistry`'s 553-operation baseline [registry-read-census:fleet] on a
+ * `readRegistry`'s 721-operation baseline [registry-read-census:fleet] on a
  * 24-session fleet. The conditional reconfirmation listing described below is
  * excluded from both baselines. This serves every caller that only asked "what does
  * the registry say about THIS session" and never needed uniqueness or a

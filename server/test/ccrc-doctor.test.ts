@@ -49,7 +49,7 @@ import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtu
 // One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
 // for the rule, and for why the /var/tmp control needs both spellings.
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
-import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -6368,6 +6368,21 @@ function writeSettingsEnv(home: string, suffix: string, env: Record<string, stri
   writeFileSync(join(d, 'settings.json'), JSON.stringify({ env }, null, 2));
 }
 
+/** Plants a fleet session id in the registry the routing check's live-session
+ *  census (Task 5) reads: `<id>.uuid` always (the census walks `$REG/*.uuid`
+ *  for ids), `<id>.class` only when `recorded` (the routing record). `live`
+ *  answers `claude-session@<id>.service` `active` through the generic
+ *  `fixture-unit-<unit>` file `stubSystemctl` (planted by `healthy()`)
+ *  already reads — omitted, the unit stays `inactive`/exit 3, a measured
+ *  not-live rather than a live session. */
+function plantSession(home: string, id: string, opts: { live: boolean; recorded: boolean }): void {
+  const reg = join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(join(reg, `${id}.uuid`), `${id}\n`);
+  if (opts.recorded) writeFileSync(join(reg, `${id}.class`), 'sonnet\n');
+  if (opts.live) writeFileSync(join(home, `fixture-unit-claude-session@${id}.service`), 'active\n');
+}
+
 describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
   const ROUTING_ROSTER = { version: 1, accounts: [
     { id: 'claude', label: 'team·max', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
@@ -6378,6 +6393,23 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     seedAccountsSh(home, ROUTING_ROSTER);
     return home;
   };
+  // THE SYSTEMD CENSUS IS LINUX-ONLY BY CONSTRUCTION, and so are the six
+  // cases below that drive it through `runDoctor`. `ccrc` recomputes CCD_OS
+  // from `$OSTYPE`/`uname` at source time (ccd/ccrc:109 onward), so on a Mac
+  // `_check_routing` takes its darwin arm — "unmeasured: this is a launchd
+  // box" — before `_have_systemctl` or the fixture `systemctl` is asked
+  // anything. MEASURED on CI's `test-macos` leg 2026-09-17 (run 35210902959,
+  // PR #116): four of the six red on a census-wording `toContain` that arm
+  // never produces, the fifth (fail-zero) red on the FAIL the launchd WARN
+  // displaces, and the sixth (the exit-1 stub) green for the wrong reason,
+  // its `unmeasured` coming from the launchd arm rather than the systemctl
+  // answer it stubs. Skipped on darwin rather than direct-sourced with
+  // CCD_OS=linux (which would run the loop on a Mac at the cost of the
+  // end-to-end `ccrc doctor` path the six exist to measure): the darwin arm
+  // is pinned on EVERY platform by the "on a launchd box" case further down,
+  // which sources the checks file directly, the end-to-end launchd line by
+  // the `itDarwin` case beside it, and the Linux legs run these six unchanged.
+  const NO_SYSTEMD_CENSUS = IS_DARWIN;
 
   it('routing: PASSES when no Anthropic lane\'s settings.json names a routing env key', () => {
     const home = routingBox('ccrc-doctor-routing-pass-');
@@ -6386,25 +6418,230 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const line = lineFor(runDoctor(home).stdout, 'routing');
     expect(line).toMatch(/^PASS routing: 1 Anthropic lane\(s\)/);
   });
-  it('routing: WARNS — never FAILS — on the lane whose settings.json pins CLAUDE_CODE_SUBAGENT_MODEL (controller ruling S1-R13)', () => {
-    // THE SEVERITY IS THE ASSERTION, and the reason is `ccrc update`. A FAIL
-    // here is not a finding about a misconfigured box: the key predates the
-    // routing record (the fleet's own 2026-09-07 subagent-routing ruling put it
-    // in settings.json on purpose), so an honouring box FAILs by construction —
-    // and `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
-    // `_ccrc_die` BEFORE `_upd_sweep`, half-landing every update on that box.
-    // So: WARN, naming the count, the lanes, and the CONSEQUENCE (the record's
-    // subagent field is overridden there), with a remedy that admits keeping it.
-    const home = routingBox('ccrc-doctor-routing-subagent-warn-');
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: WARNS — never FAILS — a stopped, unrecorded session does not inflate the live-session count (S1-R13; ruling S5-R12, fix round 2)', () => {
+    // CURRENT RATIONALE (ruling S5-R12, fix round 2 — replaces the S1-R13
+    // comment this test carried before the FAIL arm existed): the FAIL below
+    // fires ONLY over a measured, non-empty, FULLY-RECORDED live set (live
+    // >= 1 AND missing == 0). Any live session still lacking a routing
+    // record, OR no live session running at all, stays a WARN — the key
+    // predates the routing record (the fleet's own 2026-09-07
+    // subagent-routing ruling put it in settings.json on purpose), and
+    // `cmd_install` ends with `cmd_doctor`, whose rc `cmd_update` turns into
+    // `_ccrc_die` BEFORE `_upd_sweep`, half-landing every update on that box
+    // — so a FAIL here must be EARNED by a real, fully-recorded population,
+    // never fired the moment a session happens to be live and unrecorded,
+    // and never fired on an empty or not-yet-measured one either.
+    // This fixture plants one live, UNRECORDED session (which keeps this a
+    // WARN) alongside one STOPPED, unrecorded session, and asserts the
+    // stopped one moves neither the count nor the named ids — the mutation
+    // Task 5's step 5 checks for (counting stopped sessions towards
+    // `missing` would say "2", not "1", and would name `sess-stopped`).
+    const home = routingBox('ccrc-doctor-routing-subagent-warn-stopped-');
     writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-unrecorded', { live: true, recorded: false });
+    plantSession(home, 'sess-stopped', { live: false, recorded: false });
     const out = runDoctor(home).stdout;
     const line = lineFor(out, 'routing');
     expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
     expect(line).toContain('claude');
     expect(line, 'the consequence, not just the key')
       .toContain("the routing record's subagent field is overridden there until the key is removed");
+    expect(line, 'the census count that keeps this a WARN — stopped sessions must not inflate it')
+      .toContain('1 live session(s) carry no routing record (a `.class` field, `default` included) yet');
+    expect(line).toContain('sess-unrecorded');
+    expect(line, 'a stopped session is not a live one, and must not be named here')
+      .not.toContain('sess-stopped');
     expect(out).toContain('remedy: remove the key from those lanes');
     expect(out, 'the subagent key alone must never read as a FAIL').not.toMatch(/^FAIL routing: /m);
+  });
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: WARNS naming exactly 1 live session when one of two LIVE ids carries no routing record (brief fixture (a), fix round 2, finding #4)', () => {
+    // The brief's literal fixture (a): two LIVE ids, one WITHOUT `.class`.
+    // Distinct from the test above — both ids here are actually running, so
+    // this pins the `.class` filter on its own, independent of the
+    // measured-not-live filter the stopped-session test above pins.
+    const home = routingBox('ccrc-doctor-routing-subagent-warn-mixed-live-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-recorded', { live: true, recorded: true });
+    plantSession(home, 'sess-unrecorded', { live: true, recorded: false });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line, 'the .class filter — only the unrecorded LIVE id counts')
+      .toContain('1 live session(s) carry no routing record (a `.class` field, `default` included) yet');
+    expect(line).toContain('sess-unrecorded');
+    expect(line, 'the recorded live id must not be named as missing')
+      .not.toContain('sess-recorded');
+    expect(out, 'a mixed live population is not yet a measured FAIL').not.toMatch(/^FAIL routing: /m);
+  });
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: WARNS with its own zero-live wording when the census measures no live session at all (ruling S5-R12(2), fix round 2)', () => {
+    // A registry that is present, readable, and has zero live ids is a
+    // MEASURED zero — distinct from "unmeasured" (finding #2's old code
+    // FAILed here, which would abort `ccrc update` on a rebooted or dev box
+    // that never ran a session the key could have collided with). Two
+    // shapes both measure this: no `.uuid` files at all, and every planted
+    // id measuring stopped. Both are pinned here.
+    const emptyHome = routingBox('ccrc-doctor-routing-subagent-warn-zerolive-empty-');
+    writeSettingsEnv(emptyHome, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    mkdirSync(join(emptyHome, '.cc-sessions'), { recursive: true });
+    const emptyOut = runDoctor(emptyHome).stdout;
+    const emptyLine = lineFor(emptyOut, 'routing');
+    expect(emptyLine, emptyOut).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(emptyLine, 'the zero-live wording, in these words')
+      .toContain('no live session to measure the key against');
+    expect(emptyLine).toContain("it will override the first spawn's record until removed");
+    expect(emptyOut, 'a measured zero-live census is a WARN, never the FAIL reserved for a fully-recorded population')
+      .not.toMatch(/^FAIL routing: /m);
+
+    const stoppedHome = routingBox('ccrc-doctor-routing-subagent-warn-zerolive-stopped-');
+    writeSettingsEnv(stoppedHome, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(stoppedHome, 'sess-stopped', { live: false, recorded: false });
+    const stoppedOut = runDoctor(stoppedHome).stdout;
+    const stoppedLine = lineFor(stoppedOut, 'routing');
+    expect(stoppedLine, stoppedOut).toMatch(/^WARN routing: /);
+    expect(stoppedLine, 'the zero-live wording holds when the only planted id is measured stopped')
+      .toContain('no live session to measure the key against');
+    expect(stoppedOut, 'never the FAIL reserved for a fully-recorded population')
+      .not.toMatch(/^FAIL routing: /m);
+  });
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: appends "and N more" once the unrecorded live-id list is truncated past five (fix round 2, finding #6)', () => {
+    const home = routingBox('ccrc-doctor-routing-subagent-warn-truncated-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    for (let i = 1; i <= 6; i++) {
+      plantSession(home, `sess-${i}`, { live: true, recorded: false });
+    }
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line, 'six missing counted, only five ids named, the sixth marked as truncated')
+      .toContain('6 live session(s) carry no routing record (a `.class` field, `default` included) yet: sess-1 sess-2 sess-3 sess-4 sess-5 and 1 more');
+    for (let i = 1; i <= 5; i++) expect(line).toContain(`sess-${i}`);
+    expect(line, 'the truncated tail is never silently dropped').toContain('and 1 more');
+  });
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: the subagent-key FAILs once the live-session census measures zero unrecorded sessions', () => {
+    const home = routingBox('ccrc-doctor-routing-subagent-fail-zero-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-a', { live: true, recorded: true });
+    plantSession(home, 'sess-b', { live: true, recorded: true });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^FAIL routing: /);
+    expect(line).toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+    expect(line).toContain('claude');
+    expect(line, 'the measured-zero cause, not the missing-record one')
+      .toContain('every live session carries a routing record (a `.class` field, `default` included)');
+    expect(out).toContain('remedy: remove');
+    expect(out, 'a measured zero is a FAIL, not also a WARN about the same lane')
+      .not.toMatch(/^WARN routing: /m);
+  });
+  it.skipIf(NO_SYSTEMD_CENSUS)('routing: the subagent-key WARN says the live-session census is unmeasured rather than fabricate a zero', () => {
+    // `systemctl --user is-active` answering something other than 0 (active)
+    // or 3 (inactive/failed — a real, measured "not live") for a reason of
+    // its own — modelled here by a stub that exits 1 for every unit — must
+    // never be read as "no live sessions", which would flip a WARN straight
+    // to the FAIL Task 5 reserves for an actually measured zero.
+    const home = routingBox('ccrc-doctor-routing-subagent-unmeasured-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-a', { live: false, recorded: false });
+    stub(home, 'systemctl', 'exit 1');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: /);
+    expect(line, 'the reason, in these words').toContain('unmeasured');
+    expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
+  });
+  it.skipIf(process.getuid?.() === 0)(
+    'routing: the subagent-key WARN says unmeasured when the registry exists but cannot be searched — never fabricates a zero (fix round 1, finding #1)', () => {
+      // THE SAME D-1848 SHAPE `_check_pools` already guards on its own read of
+      // this registry, one level up: `[ -d "$reg" ]` on a mode-000 directory
+      // still answers TRUE (stat needs search on the PARENT, not on the dir
+      // itself), so `for sf in "$reg"/*.uuid` would silently match nothing and
+      // a present-but-unlistable registry would read as a measured zero — the
+      // exact fabricated zero this arm exists not to FAIL on. Skipped as root:
+      // root searches any directory, so the fixture cannot be built.
+      const home = routingBox('ccrc-doctor-routing-subagent-reg-unsearchable-');
+      writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+      plantSession(home, 'sess-a', { live: true, recorded: false });
+      const reg = join(home, '.cc-sessions');
+      chmodSync(reg, 0o000);
+      try {
+        const out = runDoctor(home).stdout;
+        const line = lineFor(out, 'routing');
+        expect(line, out).toMatch(/^WARN routing: /);
+        expect(line, 'the reason, in these words').toContain('unmeasured');
+        expect(line, 'the UNSEARCHABLE arm\'s own reason — on darwin the launchd arm also says `unmeasured`, so the substring alone would pass with this arm deleted')
+          .toContain('is not a searchable, readable directory');
+        expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
+      } finally {
+        chmodSync(reg, 0o755);
+      }
+    });
+  it('routing: PASSES regardless of the live-session census when no lane pins the subagent key, and never even calls systemctl (fix round 2, finding #3)', () => {
+    // The census is cheap by construction: it is evaluated only when `sub` is
+    // non-empty. With no lane pinning the key, neither WARN nor FAIL can
+    // reach the output whether the census ran or not — so a stub that would
+    // merely WARN/FAIL if reached proves nothing about cheapness. Proven
+    // instead with a RECORDING stub (the `curlCalls` shape) and an assertion
+    // that `systemctl --user is-active claude-session@…` was never invoked.
+    const home = routingBox('ccrc-doctor-routing-subagent-census-irrelevant-');
+    writeSettingsEnv(home, '.claude', { ANTHROPIC_MODEL: '' });
+    plantSession(home, 'sess-a', { live: true, recorded: false });
+    stub(home, 'systemctl', 'echo "$*" >> "$HOME/systemctl-calls"; exit 1');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^PASS routing: /);
+    const callsPath = join(home, 'systemctl-calls');
+    const calls = existsSync(callsPath) ? readFileSync(callsPath, 'utf8').split('\n').filter(Boolean) : [];
+    expect(calls.some((l) => l.includes('--user is-active claude-session@')), calls.join('\n')).toBe(false);
+  });
+  it('routing: on a launchd box the census is unmeasured and never invokes systemctl (fix round 2, finding #5)', () => {
+    // `_have_systemctl` on darwin tests for launchctl, not systemctl
+    // (ccd:615-618) — so without an explicit darwin check first, this arm
+    // would run an actual `systemctl` on a Mac (exit 127, misattributed as
+    // "answered neither active nor inactive"). CCD_OS=darwin must short
+    // this out before `_have_systemctl` or `systemctl` is asked anything.
+    //
+    // `ccrc` itself recomputes CCD_OS from `$OSTYPE`/`uname` UNCONDITIONALLY
+    // at source time (ccd/ccrc:109 onward — "COMPUTED ONCE... never
+    // re-probed"), so an inherited env var is clobbered before `_check_routing`
+    // ever runs and `runDoctor(home, [...], { CCD_OS: 'darwin' })` cannot
+    // reach this branch. Sourced directly instead, the same way
+    // `_check_fleet`'s isolated test above does — this file computes its own
+    // `CCRC_HERE` and needs nothing else from `ccrc` for this arm, since the
+    // darwin branch returns before `_have_systemctl` is ever asked anything.
+    const home = routingBox('ccrc-doctor-routing-subagent-darwin-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-a', { live: true, recorded: false });
+    stub(home, 'systemctl', 'echo "$*" >> "$HOME/systemctl-calls"; exit 127');
+    const r = spawnSync(BASH, ['-c', `set -uo pipefail; . ${shq(CHECKS_SRC)}; _check_routing`],
+      { encoding: 'utf8', env: { HOME: home, PATH: containedPath(home), LC_ALL: 'C', CCD_OS: 'darwin' } });
+    const out = r.stdout ?? '';
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: /);
+    expect(line, 'the reason names the launchd box, not a fabricated systemctl answer')
+      .toContain('launchd box');
+    expect(line).toContain('CCD_OS=darwin');
+    expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
+    const callsPath = join(home, 'systemctl-calls');
+    const calls = existsSync(callsPath) ? readFileSync(callsPath, 'utf8').split('\n').filter(Boolean) : [];
+    expect(calls, 'systemctl must never be invoked on a launchd box').toEqual([]);
+  });
+  itDarwin('routing: on a real launchd box, `ccrc doctor` itself says the census is unmeasured — the end-to-end line the six skipped cases used to show by failing', () => {
+    // The case above injects CCD_OS=darwin into a direct source of the checks
+    // file; this one lets `ccrc` compute it from the Mac it runs on and reads
+    // the doctor's own routing line, so the composition (ccd/ccrc:109 onward
+    // → `_check_routing`'s darwin arm) is pinned where it happens, not only
+    // in pieces (`macos-platform.test.ts` pins the block; the case above pins
+    // the arm). Before D-2988 this outcome was visible only as five red
+    // assertions on the macOS leg.
+    const home = routingBox('ccrc-doctor-routing-subagent-darwin-e2e-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-a', { live: true, recorded: false });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line, 'the reason names the launchd box, in the doctor\'s own words').toContain('launchd box (CCD_OS=darwin)');
+    expect(line, 'never a census count this box cannot measure').not.toContain('live session(s) carry no routing record');
+    expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
   });
   it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL — the arm that stays a FAIL, naming the lane', () => {
     const home = routingBox('ccrc-doctor-routing-effort-');

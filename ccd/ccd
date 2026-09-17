@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1937503d0bd0347b706409c78df25b4e9c9e4b8ea0a9cd9a5e81a9c4c1197196
+# ccrc:generated 1 sha256=25abf06ac1c8abc1158af96c5d56f9329a51e3d3107d9853c11c5f15690ed653
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1074,6 +1074,11 @@ SWAP_QUIET=600                  # preempt only sessions quiet this long (any sur
 SWAP_CEILING=98                 # own 5h/7d % at/above which every turn is paid overage: cut the
                                 # quiet wait short so we swap at the NEXT turn boundary, not 10min later
 SWAP_CEIL_QUIET=30              # seconds of idle required before a non-blocked relocation (return-home / ceiling)
+FABLE_SHARE_CEILING_PCT=40      # routing spec §5.4: the Fable share (percent of PRICED weekly usage, the sweep's
+                                # estimate — a proxy) at which a lane stops taking Fable-class sessions. The TWIN of
+                                # shared/serviceability.ts's FABLE_SHARE_CEILING_PCT; ccd-serviceable.test.ts pins
+                                # them equal. 40 until the operator sets it from measured share.
+SHARE_FRESH_S=28800             # a sweep pass older than this (two 4-hourly passes) measures nothing: unmeasured. Twin.
 SWAP_JITTER=120                 # max seconds of random delay before a dispatched swap actually runs.
                                 # The supervise tick evaluates EVERY session in one pass, so a
                                 # fleet-wide condition (a limit window rolling over, a spend cap
@@ -1194,11 +1199,14 @@ REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector r
 STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
 STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
 TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
-# Proactive auto-/compact: when an IDLE session's context passes COMPACT_THRESHOLD, send /compact
+# Proactive auto-/compact: when an IDLE session's context passes ITS threshold, send /compact
 # so it stays lean (the SessionStart(compact) hook restores git/plan/handoff context, so this is
 # non-destructive on both the Anthropic and gpt lanes). Only at a clean turn boundary; kill-switch
 # via AUTOCOMPACT_DISABLE_FILE.
-COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts
+COMPACT_THRESHOLD=50            # own context % at/above which an idle session auto-compacts, for a
+                                # session whose routing record hands `_route_get` no `compact` value —
+                                # the field absent, or present and refused by `_route_valid`
+                                # (routing spec §5.1; slice 6, Task 5) — the DEFAULT, not the only one
 COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also bounds the post-swap window)
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
 COMPACT_LANDING_WALL=80         # D-2014 — the ctx % at/above which the post-swap suppression stops
@@ -1260,13 +1268,64 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # `CCRC_SUBAGENT_CLASSES`, the roster projection of `shared/models.mjs`'s
 # `SUBAGENT_CLASSES`, so this file never holds a third spelling of that list.
 # `inert` is a comma list of FIELD NAMES a lane could not apply (`effort`,
-# `workflow`), never a value.
+# `workflow`, `subagent` — `ROUTE_INERTABLE` below), never a value. So the word
+# `subagent` means two different things in this block and both are right: as a
+# ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
+# inside an `inert` list it is the FIELD's name, stamped by a lane that composed
+# no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
 ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
+# THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
+# live pane — not a re-listing of `ROUTE_EFFORTS` for its own sake). The ORDER is
+# the measured fact and it is what `_route_type_effort` counts `Right` presses
+# against, so this list may not be derived from `ROUTE_EFFORTS` by stripping
+# words: that vocabulary is a SET whose order carries no claim, and two of its
+# words are not stops at all — `auto` is the absent-equivalent (nothing is
+# typed) and `ultracode` has no slider row (its plain form is session-only by
+# construction, D-2810). A level that is not a stop is `no-slider-stop`, its own
+# refusal word, never a guessed key.
+ROUTE_EFFORT_STOPS="low medium high xhigh max"
 ROUTE_WORKFLOWS="on off"
-ROUTE_INERTABLE="effort workflow"
-ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse notes for one id+field
+ROUTE_INERTABLE="effort workflow subagent"
+ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / route-skip notes for one
+                                # id+field. EQUAL TO `COMPACT_NOTE_FLOOR` BY CHOICE, NOT BY DERIVATION:
+                                # both bound the same load — the 5s supervisor tick across ~20 sessions
+                                # writing into the one `$REG/swap.log` a human reads — and each is free
+                                # to move without the other. Neither reads the other's constant.
+ROUTE_ACK_WAIT=5                # seconds `_route_ack_wait` polls the pane (one `sleep 1` per poll) for
+                                # Claude Code's own acknowledgement of a session-only `/effort` or
+                                # `/model`. The keystrokes land in under a second on a live pane; this
+                                # is the budget for a TUI mid-repaint, not for a session to become idle
+                                # — that question was already answered by `_idle_for_keystroke`.
+ROUTE_RETRY_BACKOFF=600         # seconds between two attempts to apply the SAME pending field to the
+                                # same session (controller ruling S4-R7). The applier types into a LIVE
+                                # pane, so an attempt that is never acknowledged — `/effort ultracode`
+                                # on a lane launched `{"enableWorkflows":false}`, a class the picker
+                                # does not list — is not free the way a skipped log line is: at the 5s
+                                # tick it would re-type twelve times a minute for ever. `_route_note`'s
+                                # floor bounds the swap.log LINE and nothing else.
+ROUTE_RETRY_MAX=3               # attempts at one pending field before the applier gives up and says so
+                                # (`apply-gave-up`). Three because the conditions this bounds are
+                                # PERMANENT ones — a refused slash command, an absent picker row — and
+                                # the transient ones (mid-turn, drafting, a session sitting out a limit)
+                                # are refused by the idle predicate and never counted as attempts at all.
+                                # The counter is cleared by any `cmd_route` write, by the settle's own
+                                # `routeapplied` stamp, and by the pending set becoming empty.
+ROUTE_COMPACT_QUIET=30          # seconds after the compactor typed `/compact` into a pane during which
+                                # the applier types NOTHING into that pane (final review finding 5).
+                                # The supervise tick runs `_auto_compact_check` and `_route_apply_check`
+                                # on one line and the compactor signals nothing when it has typed, so
+                                # the applier re-asked an idle predicate whose whole answer is a pane
+                                # capture and a `sessions/<pid>.json` read — both of which LAG the
+                                # keystroke just sent — and typed `/model` on top of a compaction: the
+                                # slash command taken as a message, or a half-typed picker draft that
+                                # blocks the next tick. The interlock is `lastcompact`, written by
+                                # `_auto_compact_check` itself immediately BEFORE its send-keys, so it
+                                # holds across PROCESSES as a shell variable could not — `ccd route
+                                # --apply` is the operator's own process, not the supervisor's. Far
+                                # inside `COMPACT_COOLDOWN`, so no session waits more than one
+                                # compaction's settling for a routing change.
 # Make `systemctl --user` reachable even from a non-interactive SSH context (no login session
 # sets these). Lingering keeps /run/user/$UID alive across logins/reboots.
 #
@@ -1984,12 +2043,15 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 17 matching LINES now, 11 of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 12 of
 # them call sites — the other six are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
 # of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
 # 17/11 after round 3, which rewrapped one prose mention and replaced another
-# with a grep anchor.
+# with a grep anchor, and 18/12 at routing slice 4, whose `_place_for_class`
+# asks the pool rule before it counts a class's unservable lanes — the
+# call-site half moving is the half that means something, and here it means a
+# new decision site consults the rule rather than assuming it.
 # CORRECTED (round 3): the round-2 sentence attributed its new mention to
 # `_swap_target`'s candidate loop, and the line was in `_auto_swap_check` —
 # the candidate-loop paragraph matches this grep zero times. The call-site
@@ -2283,8 +2345,21 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 142
-# invocations across 118 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 151
+# invocations across 127 non-comment lines.
+#
+# THE LAST MOVE WAS ROUTING SLICE 4's, and naming it is what stops the next
+# reader hunting for a merge that did not happen: the applier and its registry
+# bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
+# `_route_applied_get`, `_route_try_bump`, `_route_retry_ok`, and the keystroke
+# predicates `_idle_for_keystroke`/`_auto_compact_check` extracted beside them)
+# together with the `--route` argv writers (`cmd_route`'s field read and
+# `_route_argv_write`'s) added eight net call sites through this same fold, and
+# the sentence above was re-measured on the merged tree with the census test's
+# own scanner rather than counted by hand (controller ruling S4-R14). The
+# final review's fix wave added the ninth — `_route_compact_settling`'s
+# `lastcompact` read, the interlock that keeps the applier off a pane the
+# compactor just typed into — and re-measured the sentence the same way.
 #
 # THE NUMBER IS MACHINE-CHECKED NOW, AND ITS OWN HISTORY IS THE ARGUMENT (#69
 # review round 4 gate). TWO of the moves came from OUTSIDE this branch — the #70
@@ -5649,7 +5724,7 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
   return 1
 }
 
-_ws_least_loaded() {   # [project] -> the home-able account with the most headroom, or "" if none is placeable
+_ws_least_loaded() {   # [project] [class] -> the home-able account with the most headroom, or "" if none is placeable
   # UNKNOWN IS NOT ZERO. This used to read `[[ -z "$sc" ]] && sc=0`, so an
   # account _limit_score knows nothing about — no ~/.cc-limits/<w>.json at all —
   # scored 0 and beat every account that had honestly reported its pressure.
@@ -5729,13 +5804,18 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # `_limit_score`'s `:=0` defaults, which used to be cited beside it, are gone
   # — they were the mechanism of the gap, not a defence against it.)
   #
-  # THE FOUR CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
+  # THE FIVE CANDIDATE WALKS DO NOT AGREE, AND THE DISAGREEMENT IS ON PURPOSE
   # (PR #61, 2026-09-07; the count is corrected at the wave-2b merge, which
-  # added the fourth). Measured, so the number stops drifting: `grep -cE 'for
+  # added the fourth, and at routing slice 4, which added the fifth). Measured,
+  # so the number stops drifting: `grep -cE 'for
   # (w|cand) in (\$\(_pool_for|"\$\{CCRC_HOME_ABLE\[@\]\}")' ccd/ccd` finds
-  # 5 matching LINES, 4 of them walks — the fifth is prose, `_default_pool`'s
-  # own comment quoting the pattern. The four are `_ws_least_loaded`,
-  # `cmd_ws_add`'s refusal-reason builder, `_swap_target` and `_strand_why`.
+  # 6 matching LINES, 5 of them walks — the sixth is prose, `_default_pool`'s
+  # own comment quoting the pattern. The five are `_ws_least_loaded`,
+  # `cmd_ws_add`'s refusal-reason builder, `_swap_target`, `_strand_why` and
+  # `_place_for_class`. The fifth walks CCRC_HOME_ABLE for the same reason the
+  # builder does — it is COUNTING how many in-pool lanes measured unable to
+  # serve a class, which is a question about placement's own candidate set, and
+  # an overflow lane is not in it.
   # BOTH NUMBERS ARE PINNED — `ccd-auto-swap-pool.test.ts` re-runs this exact
   # pattern and requires both to still be true, the way `_pool_ok`'s own header
   # count is pinned in `ccd-pool-ok.test.ts`. CORRECTED at the fix round after
@@ -5791,10 +5871,17 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # home-able account also wins every tie. The server's `projectHome` ranks
   # ties by the same declaration order.
   #
-  # THE OPTIONAL POSITIONAL IS THE PROJECT (account pools, spec §5.5.2), and
-  # zero-arg keeps today's meaning EXACTLY: `_project_pool_state ""` answers
-  # `untagged` by its own first guard, `_pool_ok` returns 0 for `untagged`, and
-  # every pre-existing caller — the parity harness included — is byte-identical.
+  # THE OPTIONAL POSITIONALS ARE THE PROJECT, THEN THE CLASS (account pools,
+  # spec §5.5.2; the class positional is routing slice 3, spec §5.4), and the
+  # zero-arg AND one-arg calls both keep today's meaning EXACTLY:
+  # `_project_pool_state ""` answers `untagged` by its own first guard,
+  # `_pool_ok` returns 0 for `untagged`, and every pre-existing caller — the
+  # parity harness included — is byte-identical. The class positional
+  # defaults to `""` (`local cls="${2:-}"` below); an absent class or an
+  # explicit `default` are the SAME no-op — the serviceability filter later
+  # in this function never runs — so every caller in this slice, which never
+  # passes a class, walks the identical bytes it walked before this second
+  # positional existed.
   #
   # THE STATE IS READ ONCE, before the loop, and the WORD is passed to each
   # candidate: a loop over five accounts costs one `cat`, not five.
@@ -5811,6 +5898,10 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # in-pool lane is at ceiling or disabled" and "the tag is undecidable". There
   # is no second channel on this seam — stdout carries a wrapper name — so the
   # CALLER re-reads the state and names which it was (`cmd_ws_add`, below).
+  # WITH A CLASS it carries a THIRD meaning — "every in-pool lane measured
+  # unservable for the class" — which `cmd_ws_add`'s reason builder cannot yet
+  # name, because nothing on that path knows the class: slice 4's `ws-add
+  # --route` is what hands it one, and the arm lands with it.
   #
   # WHAT "" NEVER MEANS IS "every in-pool lane is condemned", and that is why
   # `cmd_ws_add`'s reason builder needs no auth-dead arm: this function answers
@@ -5818,12 +5909,20 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # does carry are things a human declared or must repair; a health verdict is a
   # measurement that can be wrong.
   local pps; pps=$(_project_pool_state "${1-}")
+  local cls="${2:-}"
   local best="" bs=1000 first="" firstm="" condemned="" w sc
   for w in "${CCRC_HOME_ABLE[@]}"; do
     _account_ok "$w" || continue
     # AFTER `_account_ok`, BEFORE EITHER FALLBACK: both must land on an IN-POOL
     # account, never on a cheaper-looking lane in another pool.
     _pool_ok "$w" "$pps" || continue
+    # POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), as a FILTER on
+    # eligibility like _pool_ok: a lane measured at the class's ceiling drops out
+    # here, before the condemned tier and before scoring; an UNMEASURED lane stays
+    # — unmeasured never becomes ineligible — and ranks by its own score. `default`
+    # (or no class) is today's walk byte for byte. projectHome (server/src/limits.ts)
+    # is the twin; projected-home.test.ts drives both over one fixture table.
+    _class_gate "$w" "$cls"; [[ $? -eq 1 ]] && continue
     # THE CONDEMNED TIER, AND THE SPLIT IS THE WHOLE GUARD. An auth-dead lane
     # must not be PREFERRED — it is a measurement that a credential no longer
     # authenticates — but it must stay ELIGIBLE, because that measurement can be
@@ -5875,6 +5974,41 @@ _ws_least_loaded() {   # [project] -> the home-able account with the most headro
   # something a human did or must fix before work can land. A health verdict is
   # neither: it is a MEASUREMENT, it can be wrong, and letting it empty this
   # function would let one bad probe run wedge every `ws-add` on the box.
+  # THE SERVICEABILITY FILTER ABOVE IS A NARROW, DELIBERATE EXCEPTION TO THAT
+  # RULE FOR THREE OF THE FOUR CLASSES, and the paragraph that stood here said
+  # the opposite of the code (final review finding 2). What holds for all four:
+  # `_serviceable` returning 2 (unmeasured) does not `continue` — an unmeasured
+  # lane stays eligible and ranks by its own score, exactly like an unmeasured
+  # `_limit_score` — so no ABSENCE of a measurement can empty this function.
+  #
+  # `fable` IS the case the old paragraph described, and only it: its rc 1 is
+  # the ROSTER's backend word or the sweep's share estimate against
+  # `FABLE_SHARE_CEILING_PCT`, neither of which is the lane's health, and one
+  # rung down reads a different figure against a different ceiling — so
+  # `_class_below` really is the remedy and an emptied pool really does mean
+  # "not on this rung".
+  #
+  # `opus`/`sonnet`/`haiku` DO NOT WORK THAT WAY. `_serviceable` reads
+  # `_limit_field "$w" seven` against `SWAP_CEILING` for all three — the same
+  # figure and the same ceiling `_avail` tests — so with one of those classes
+  # this function CAN answer "" for a health reason, on the fleet where every
+  # in-pool lane's week is measured at 98 or over. And `_class_below` cannot
+  # relieve it: all three rungs ask the identical question of the identical
+  # figure, so opus, sonnet and haiku answer unservable together. That is a
+  # REFUSAL ON A HEALTH MEASUREMENT, which is exactly what the tiers below
+  # exist to prevent — it is admitted here rather than repaired because it is
+  # what "this session must run at class X" MEANS: a rung the fleet cannot
+  # serve is not a destination, and placing anyway would put the session where
+  # its own routing record says it cannot run. Its blast radius is bounded by
+  # the caller: only a call that PASSES a class reaches it, `default` and the
+  # no-class call skip the filter entirely, and no shipped caller passes a
+  # class until slice 4's `ws-add --route` — which is where the operator-facing
+  # refusal has to be spelled (S3-R3's named obligation on `cmd_ws_add`'s
+  # reason builder). `projected-home.test.ts`'s `sonnet-over-SWAP_CEILING`
+  # case is the pin.
+  #
+  # The ordinary health tiers below (condemned included) are computed exactly
+  # as before and are untouched by this filter.
   # `_swap_target`'s rank-101 tier is the same ruling for the rescue lane.
   # The server's `projectHome` (server/src/limits.ts) makes both calls the same
   # way, and `projected-home.test.ts` drives the two over one seeded HOME so the
@@ -5933,7 +6067,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # `--actor` (`run:<id> dispatch`). Same ruling as `cmd_ws_hold`'s at
   # ccd:4801-4807, for the same reason — never put a second string on a verb
   # with nothing to say which one a reader is looking at.
-  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=()
+  local norc=0 lc_surface=none lc_actor='' lc_gs=0 lc_ga=0 lc_args=() lc_route=()
   while (( $# )); do
     case "$1" in
       --no-rc)     norc=1; shift ;;
@@ -5947,12 +6081,18 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
       # So what the check buys HERE is the honest usage line; the
       # never-terminating loop is what it buys the day an arm is reordered
       # to shift before it reads its value.
-      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+      --surface)   [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_gs=1; lc_surface="$2"; shift 2 ;;
       --surface=*) lc_gs=1; lc_surface="${1#--surface=}"; shift ;;
-      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]"
+      --actor)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
                    lc_ga=1; lc_actor="$2"; shift 2 ;;
       --actor=*)   lc_ga=1; lc_actor="${1#--actor=}"; shift ;;
+      # REPEATABLE, one field per flag — the shape `cmd_route --set` already
+      # has, so a dispatcher composing one argv for both verbs writes the same
+      # pairs. Validated below, before anything on disk is touched.
+      --route)     [[ $# -ge 2 ]] || die "usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]"
+                   lc_route+=("$2"); shift 2 ;;
+      --route=*)   lc_route+=("${1#--route=}"); shift ;;
       *)           lc_args+=("$1"); shift ;;
     esac
   done
@@ -5971,13 +6111,29 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # refusal still lands where nothing has been created yet.
   if (( lc_ga )); then
     [[ -n "${lc_actor//[[:space:]]/}" ]] || die "--actor must be non-blank"
+    # THE SAME REFUSAL `cmd_route` MAKES, for the same reason (controller ruling
+    # S1-R4, extended to this verb by S4-R2). This verb's `--actor` reaches
+    # `$REG/swap.log` VERBATIM through `_route_argv_write`'s `[actor=$actor]`,
+    # and that file is writable by every session on the box, so a newline in it
+    # writes a second, forged `route <id>: …` audit line — the exact shape
+    # `cmd_route` refuses. The journal arm needs no guard (`_lc_json` encodes);
+    # the log line is the hole. Refused HERE, above `_route_argv_check` and
+    # above every mint, so a forged actor leaves the box as it found it.
+    case "$lc_actor" in
+      *[[:cntrl:]]*) die "ws-add: --actor must not contain control characters" ;;
+    esac
     _lc_dec_ok "$lc_actor" || die "--actor is longer than $_LC_DEC_MAX bytes"
   fi
+  # ABOVE THE PROJECT POSITIONAL, AND THAT IS THE POINT — earlier than the disk
+  # floor, the placement read, the lock, the worktree and the row. A bad
+  # `--route` value is an argv a coordinator composed; this verb refuses it with
+  # the box exactly as it found it (spec §5.3).
+  (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
   # BOUND AFTER THE LOOP, NEVER BEFORE IT — this line sat ABOVE the strip in the
   # first cut of this task and `ws-add --no-rc <project>` bound `project` to
   # `--no-rc`, reproducing D-410 one flag to the left. `ccd-spawn-split.test.ts`
   # caught it, unedited, which is what that gate is for.
-  local project="${1:?usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] <project> [slug]}" slug="${2:-}"
+  local project="${1:?usage: ccd ws-add [--no-rc] [--surface <word>] [--actor <text>] [--route <field>=<value>]... <project> [slug]}" slug="${2:-}"
   _ws_project_valid "$project" \
     || die "invalid project '$project' — allowed chars: A-Za-z0-9 . _ -, and no LEADING dot (a dot-leading id aliases ccd's own hidden registry files — see _ws_project_valid)"
   local main="$PROJECTS_ROOT/$project"
@@ -5997,7 +6153,22 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # all-excluded refusal leave the box exactly as it found it. Pressure alone
   # never refuses (the all-pinned fixture rule stands); only every lane
   # failing _account_ok gets here.
-  local hw; hw=$(_ws_least_loaded "$project")
+  #
+  # PLACEMENT NOW KNOWS THE CLASS (routing spec §5.4). Two callers, told apart by
+  # `strict`: an explicit `--route class=` is a session that MUST run at that
+  # class, so it never falls back; the coordinator row's class is a default
+  # nobody typed, so it does. A DISPATCHED worker (`--no-rc`) that named no class
+  # gets neither — it keeps today's class-blind placement exactly.
+  #
+  # THE CLASS IS DERIVED FROM `ROUTE_COORDINATOR_ROW`, never respelled: the row
+  # is the one place spec §3's default is written down, and a second literal
+  # `fable` here would be a second place to change it.
+  local cls strict=1
+  cls=$(_route_argv_class "${lc_route[@]}")
+  if [[ -z "$cls" ]] && (( ! norc )); then
+    cls="${ROUTE_COORDINATOR_ROW%% *}"; cls="${cls#class=}"; strict=0
+  fi
+  local hw; hw=$(_place_for_class "$project" "$cls" "$strict")
   if [[ -z "$hw" ]]; then
     # TWO EMPTIES, TOLD APART HERE (spec §6). `_ws_least_loaded` answers "" for
     # "every in-pool lane is unusable" AND for "the tag is undecidable", and
@@ -6045,6 +6216,29 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         # (`_ws_least_loaded`'s loop) is the one an unquoted `$2` actually
         # changes, and stays quoted for the reason stated there.
         elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
+        # RC 1 ONLY, and the `$?` test rather than `!` is what makes that true.
+        # `_class_gate` answers 1 for a lane MEASURED unable to serve the class
+        # and 2 for one nobody measured — and an unmeasured lane is PLACEABLE,
+        # so `! _class_gate` would name it as the reason placement failed while
+        # `_ws_least_loaded` was perfectly willing to place there. That is a
+        # fabricated fact in a refusal message, which is exactly what spec §5.4
+        # forbids. With no class this arm cannot fire at all: `_class_gate`
+        # returns 0 for an empty class.
+        #
+        # THE `$?` TEST IS UNREACHABLE-EQUIVALENT TODAY, NOT UNTESTED — the same
+        # standing as the quoting on the `_pool_ok` arm above, and measured the
+        # same way rather than assumed. Rewriting it as `! _class_gate …` leaves
+        # `ccd-place-class.test.ts` 10/10 GREEN, and DELETING the arm reds its
+        # case (e), so the arm is exercised and it is the POLARITY that nothing
+        # can red. The reason is this loop's own `elif` order: a lane reaching
+        # here has already passed `_account_ok` and `_pool_ok`, and
+        # `_ws_least_loaded` applies the class filter after exactly those two —
+        # so a lane answering rc 2 here would have been PLACED and this builder
+        # would never have run. Keep the rc test anyway: it stops being
+        # equivalent the day either walk reorders its predicates, and the
+        # obligation it discharges (D-2854) is about the message, not about
+        # today's reachability.
+        elif _class_gate "$w" "$cls"; [[ $? -eq 1 ]]; then why+=" $w:class=$cls-unservable"
         fi
       done
     fi
@@ -6212,14 +6406,26 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
     # exactly what `cmd_swap`'s guard exists to refuse. Git merged both changes
     # with no conflict; `ccd-pool-ok.test.ts`'s "still places into a tagged
     # project when the pool has an account" is what said so.
-    _ws_least_loaded "$project" || true
+    # THE CLASS RIDES ALONG TOO (routing slice 4), for D-2592's exact reason one
+    # argument further out: the pre-flight above placed by class, and a re-pick
+    # that dropped it would silently overwrite that answer with a class-blind
+    # one — on the very fleet where the class is what made the pre-flight
+    # choose. TWO LINES, because the rung taken is a SECOND fact and a
+    # subshell's variable is lost: the lane, then `PLACE_DEGRADED_TO`. The
+    # parent splits them below.
+    _place_for_class "$project" "$cls" "$strict" || true
+    printf '\n%s' "$PLACE_DEGRADED_TO"
   ) || fresh_rc=$?
+  # `$( )` strips trailing newlines, so a re-pick that took no rung leaves ONE
+  # line and this is a no-op; one that did leaves two and both are read.
+  local fresh_deg=""
+  [[ "$fresh" == *$'\n'* ]] && { fresh_deg="${fresh#*$'\n'}"; fresh="${fresh%%$'\n'*}"; }
   (( fresh_rc != 9 )) \
     || die "$CCRC_ACCOUNTS_SH could not be re-read as an account projection, so this workspace cannot be placed on an account this box can still prove exists — regenerate it: ccrc install. The worktree $wt and the branch $branch EXIST and no registry row names them; adopt them once it is fixed with: ccd start <wrapper> $project $wt"
   # NAMES WHAT IS ALREADY ON DISK. Unlike the pre-flight refusal, this one
   # cannot leave the box as it found it: the worktree and the branch exist.
   [[ -n "$fresh" ]] \
-    || die "no account is available for placement any more — every lane this box knew at startup is now disabled, missing or gone from the roster. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled), then adopt them with: ccd start <wrapper> $project $wt"
+    || die "no account is available for placement any more${cls:+ for class $cls} — every lane this box knew at startup is now disabled, missing or gone from the roster${cls:+, or none of them still measures able to serve $cls and nor does the rung below it}. The worktree $wt and the branch $branch EXIST and no registry row names them: enable an account (rm $REG/<w>-disabled)${cls:+ or re-run without --route class=$cls}, then adopt them with: ccd start <wrapper> $project $wt"
   hw="$fresh"
   _reg_set "$id" wrapper "$hw";   _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$wt";   _reg_set "$id" uuid "$uuid"
@@ -6231,6 +6437,27 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # reap via _reg_purge's shape match. Absent = follow the box (D-99's
   # fail-safe direction, per session).
   (( norc )) && _reg_set "$id" rc off
+  # ── THE ROUTING RECORD (routing spec §5.3 for the argv, §4 for the default) ──
+  # Here rather than at the pre-flight because every one of these is a WRITE
+  # against `$id`, and `$id` does not exist until the lines above. The argv wins
+  # over the default outright: a dispatcher that named fields has said what this
+  # worker is for, and the coordinator row is what an OPERATOR spawn gets when
+  # nobody said anything. A dispatched worker (`--no-rc`) that named nothing gets
+  # NEITHER — its spawn line stays byte-identical to a pre-slice-1 one.
+  #
+  # THE ACTOR IS THE DECLARED ONE WHEN THERE IS ONE. The dispatch path already
+  # passes `--actor 'run:<id> dispatch'`, which is a truer answer than the verb's
+  # own name; `ws-add` is the fallback for a call that declared nothing.
+  if (( ${#lc_route[@]} )); then
+    _route_argv_write "$id" "${lc_actor:-ws-add}" argv "${lc_route[@]}"
+  elif (( ! norc )); then
+    _route_seed_default "$id" "$hw"
+  fi
+  # AFTER the record, never before it: `degraded` is a statement about a record
+  # that exists, and `_route_degrade` reads the standing stamp to decide whether
+  # it has anything to say. The rung is the one the RE-PICK took — the pick that
+  # actually placed this workspace.
+  [[ -n "$fresh_deg" ]] && _route_degrade "$id" "$cls" "$fresh_deg" "unservable: $cls on every in-pool lane at placement"
 
   # GIVEN BACK HERE, before the setup hook and long before the settle, for the
   # reason cmd_ws_reap states at its own close: `flock` treats two `open()`s of
@@ -7402,6 +7629,19 @@ EOF
   # §5.3). A server that sees this token may write routing fields through the
   # verb; a server that does not sees no route verb and passes nothing.
   echo route-v1
+  # route-argv-v1 — this ccd takes `--route <field>=<value>` on the three verbs
+  # that MINT a session (`ws-add`, `start`, `enable`), validates it before
+  # anything is created, and places by the class it names. A server that sees
+  # this token may compose routing fields onto a dispatch argv; one that does
+  # not passes none and journals that it could not.
+  echo route-argv-v1
+  # route-apply-v1 — this ccd takes `--apply` on `route`, and its supervise tick
+  # re-applies a pending routing record with the SESSION-ONLY keystrokes
+  # (`/effort` slider + `s`, `/model` picker + `s`), reading the acknowledgement
+  # back before recording anything as applied. A server that sees this token may
+  # ask for a live change; one that does not writes the record and lets the next
+  # settle apply it.
+  echo route-apply-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -7836,22 +8076,28 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
 }
 
 cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
-  # Routing spec 2026-09-14 §5.3. WRITES THE RECORD, NEVER A KEYSTROKE: this
-  # slice has no --apply (slice 4 adds it for the server's picker path only),
-  # so a coordinator running this against a worker types nothing into that
-  # worker's pane — ccd applies the fields at the next settle. Every value is
+  # Routing spec 2026-09-14 §5.3. WRITES THE RECORD; TYPES ONLY UNDER `--apply`.
+  # Without that flag — the COORDINATOR's form, and the default — a session
+  # running this against a worker types nothing into that worker's pane and ccd
+  # applies the fields at the next settle. With it, the record is written first
+  # and then applied to the LIVE pane with the session-only keystrokes, if and
+  # only if the pane answers the same idle predicate the compactor uses; a pane
+  # that is mid-turn, drafting or sitting out a limit is left alone, the refusal
+  # is recorded in `routeskip`, the verb says `queued`, and the supervise tick
+  # retries. Every value is
   # validated BEFORE anything is written, so a bad call is a `die` the caller
   # sees and an unchanged record, never a silently-absent field. The PREVIOUS
   # value is read VALIDATED: an unrecognised one is rendered as a byte count in
   # the log and the journal, never its bytes — the file is writable by any
   # session on the box and a multi-line value would forge log lines.
-  local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--actor <text>] [--reason <text>]"
-  local id="" actor="" reason="" kv f v cls eff old raw rc
+  local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--apply] [--actor <text>] [--reason <text>]"
+  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert
   local -a sets=()
   while (( $# )); do
     case "$1" in
       --session) [[ $# -ge 2 ]] || die "$usage"; id="$2"; shift 2 ;;
       --set)     [[ $# -ge 2 ]] || die "$usage"; sets+=("$2"); shift 2 ;;
+      --apply)   apply=1; shift ;;
       --actor)   [[ $# -ge 2 ]] || die "$usage"; actor="$2"; shift 2 ;;
       --reason)  [[ $# -ge 2 ]] || die "$usage"; reason="$2"; shift 2 ;;
       *)         die "$usage" ;;
@@ -7905,6 +8151,12 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # haiku+auto is not the refused pair — only haiku+a LEVEL is (controller
   # ruling S1-R5).
   [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class"
+  # THE STAMP FIRST, AND IT IS STILL BEFORE EVERY SIDE EFFECT THAT MATTERS: the
+  # last `die` is above this line, so a refused call leaves the record — and the
+  # stamp — exactly as it found them. What this writes is what the LAST SETTLE
+  # composed, so the fields written below are a divergence the applier types
+  # rather than one a tick swallows (`_route_apply_seed`'s own header).
+  _route_applied_before_write "$id"
   for kv in "${sets[@]}"; do
     f="${kv%%=*}"; v="${kv#*=}"
     # NO `|| raw=""`: `_reg_get` prints nothing on every failing arm, so the
@@ -7918,7 +8170,75 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
     echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
     echo "set $id $f=$v"
+    # A `degraded` STAMP IS ABOUT THE CLASS IT REPLACED, so a new class may void
+    # it — one reader for that decision, `_route_stale_degrade_clear`.
+    if [[ "$f" == class ]]; then _route_stale_degrade_clear "$id" "$v"; fi
   done
+  # THE OPERATOR ASKED FOR SOMETHING ELSE, SO THE BUDGET RESETS (ruling S4-R7).
+  # `routetries` counts attempts at ONE pending field; a write to this session
+  # changes what is pending — or re-states it deliberately, which is an operator
+  # saying "try again" — so a counter measured against the old record may not
+  # keep the new one from ever reaching the pane. Before the `--apply` gate, not
+  # after: the coordinator's plain form writes the record the tick will apply,
+  # and it must not inherit a spent budget either.
+  _route_tries_clear "$id"
+  (( apply )) || return 0
+  # THE SETTLE-APPLIED FIELDS ARE RECORDED AT WRITE TIME. `workflow`, `subagent`
+  # and `compact` have no keystroke — they are an argv `--settings` key, an env
+  # var and a field the compactor reads — so recording them here is not a claim
+  # that a pane was touched; it is the honest statement that the applier has
+  # nothing left to do about them. Without it a `--apply` that wrote only one of
+  # the three would leave this session pending for ever against a keystroke that
+  # does not exist. Gated on `--apply` because a plain `cmd_route` promises to
+  # touch nothing but the record.
+  #
+  # AND A FIELD THE `inert` STAMP NAMES IS NOT CLAIMED HERE EITHER (controller
+  # ruling S6-R3). This is the THIRD `routeapplied` writer — the spawn's
+  # composition and `_route_apply_seed` are the other two, and both already read
+  # the stamp before they claim a field. Unguarded, a `--apply` naming
+  # `subagent` or `workflow` on a session the last settle stamped
+  # `inert=subagent`/`inert=workflow` wrote `routeapplied … subagent=haiku`
+  # beside that stamp: two records of one session contradicting each other —
+  # `inert` saying this lane composed no `CLAUDE_CODE_SUBAGENT_MODEL`,
+  # `routeapplied` saying it did — until the next settle rewrote both. The
+  # sentence above stays true either way ("the applier has nothing left to do"),
+  # but silence and "applied" are two different reasons for it and the record may
+  # not collapse them.
+  #
+  # `compact` IS NEVER INERT — `ROUTE_INERTABLE` has no word for it, because it
+  # is a threshold ccd's own compactor reads rather than anything a lane composes
+  # — so its arm asks nothing and stays as it was.
+  #
+  # THE STAMP IS READ ONCE, through `_route_peek` (this loop writes no journal
+  # line of its own for the read, and the field is being read only to DECIDE) and
+  # through `_route_inert_has`, the one reader of the `inert` vocabulary.
+  inert=$(_route_peek "$id" inert)
+  for kv in "${sets[@]}"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    case "$f" in
+      workflow|subagent) _route_inert_has "$inert" "$f" || _route_applied_set "$id" "$f" "$v" ;;
+      compact)           _route_applied_set "$id" "$f" "$v" ;;
+    esac
+  done
+  # THE SAME PREDICATE THE COMPACTOR USES, and it is asked BEFORE any keystroke
+  # for the same three reasons that function gives: a mid-turn pane would take
+  # the slash command as a message, an occupied input box would swallow it, and
+  # a session sitting out a usage limit on its own loses that wait to ANY key
+  # (D-2229). `queued` is the honest answer in every one of those cases — the
+  # record is written, the tick will retry, and nothing was typed.
+  #
+  # THE COMPACTOR'S KEYSTROKE IS ASKED ABOUT FIRST, and from this process too:
+  # a supervisor tick may have sent `/compact` into this very pane a second ago
+  # and the idle predicate cannot see it yet (`_route_compact_settling`).
+  if _route_compact_settling "$id"; then
+    _route_note "$id" "$KS_WHY" "$KS_DETAIL"
+    echo "queued $id"
+  elif _pane_for_keystroke "$id" && _idle_for_keystroke "$id" "$KS_PANE" ""; then
+    _route_apply_now "$id" || echo "queued $id"
+  else
+    _route_note "$id" "$KS_WHY" "$KS_DETAIL"
+    echo "queued $id"
+  fi
 }
 
 # D-2925: `cmd_project_pool`'s `--pool` arm proved a registry-only project
@@ -14528,6 +14848,175 @@ _limit_field() {   # wrapper five|seven [maxage-secs] -> that limit %, or "" whe
 }
 _limit_five() { _limit_field "$1" five "${2:-0}"; }   # back-compat shim
 
+_class_below() {   # class -> stdout the class one rung DOWN (fable->opus->sonnet->haiku->nothing); nothing for haiku or an unknown word
+  # DERIVED from ROUTE_CLASSES (descending), never a fourth spelling of the four names: one rung down is the NEXT word.
+  # shared/serviceability.ts's classBelow walks CLASSES (ascending) to the same answers; ccd-serviceable.test.ts pins them.
+  #
+  # THE EMPTY WORD HAS NO RUNG BELOW IT, and the loop below cannot say so on its
+  # own: it seeds `prev=""` and matches on the FIRST word, so `_class_below ""`
+  # printed the TOP rung — the one answer that is a fabricated fact rather than
+  # a missing one (controller ruling S3-R1's sibling, S3-R2). `_swap_target`'s
+  # degrade pass asks this about a class it may not have (`pcls=$(_class_below
+  # "$cls")` with `cls` empty is the no-class walk), so the wrong answer there
+  # would silently apply a class nobody set.
+  [[ -z "${1:-}" ]] && return 0
+  local prev="" x
+  for x in ${ROUTE_CLASSES% default}; do
+    [[ "$prev" == "$1" ]] && { printf '%s' "$x"; return 0; }
+    prev="$x"
+  done
+  return 0
+}
+
+_share_pct() {   # wrapper -> stdout the sweep's Fable share for that account as an INTEGER percent; rc 0 figure | 1 no figure | 2 stale
+  # The sweep (ccd-usage-sweep) writes $REG/usage/sweep/latest.json: `perAccount.<id>.fableShare.estimate` is a FRACTION of
+  # the account's PRICED weekly usage (or null), `finishedAt` is %Y-%m-%dT%H:%M:%SZ. Nested JSON, so python3 (ccd's
+  # existing JSON tool, forty-one sites) rather than the flat-file grep `_limit_json_num` uses. floor(x*100+0.5), NOT
+  # Python's round(): that is banker's rounding and the TypeScript twin (server/src/shares.ts) would disagree at .5.
+  local f="$REG/usage/sweep/latest.json"
+  [[ -r "$f" ]] || return 1
+  LC_ALL=C.UTF-8 python3 - "$f" "$1" "$SHARE_FRESH_S" <<'PY'
+import calendar, json, sys, time
+f, acct, fresh = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    d = json.load(open(f))
+    at = calendar.timegm(time.strptime(d["finishedAt"], "%Y-%m-%dT%H:%M:%SZ"))
+    est = d["perAccount"][acct]["fableShare"]["estimate"]
+except Exception:
+    sys.exit(1)
+if not isinstance(est, (int, float)) or isinstance(est, bool):
+    sys.exit(1)
+if int(time.time()) - at > fresh:
+    sys.exit(2)
+print(int(est * 100 + 0.5))
+PY
+}
+
+_serviceable() {   # wrapper class -> rc 0 servable | 1 unservable | 2 unmeasured | 3 skipped (class default/empty); stdout: the figure (0, or 1 at the ceiling), `backend` (1, fable on a non-Anthropic lane), `no-figure`/`stale` (2)
+  # Routing spec §5.4, the bash twin of shared/serviceability.ts's serviceability(); one fixture table drives both
+  # (server/test/fixtures/serviceability.ts). THREE ANSWERS, NEVER TWO: an absent file, an absent row, a null estimate
+  # and a stale pass are all `unmeasured` — never servable (a fabricated fact) and never unservable (a fabricated
+  # refusal). `fable` on a lane whose backend is not Anthropic is unservable by the ROSTER's own word, before any
+  # figure is read — a codex lane's share estimate is 0 and reading that as "servable" would place Fable where there
+  # is none. Other classes read the lane's seven-day figure through _limit_field, which already retracts a rolled-over
+  # window, against SWAP_CEILING — the same test _avail makes, so a candidate _avail admits is servable for them.
+  local w="$1" c="${2:-}" fig rc
+  [[ -z "$c" || "$c" == default ]] && return 3
+  if [[ "$c" == fable ]]; then
+    _is_anthropic_backend "$w" || { printf 'backend'; return 1; }
+    fig=$(_share_pct "$w"); rc=$?
+    # EVERY NON-ZERO RC IS UNMEASURED, and the `*` arm is the whole fix (final
+    # review finding 1). This named 1 and 2 ALONE, so any other exit code fell
+    # through to the ceiling test below with `fig` EMPTY — and `[[ "" -ge 40 ]]`
+    # is FALSE in bash, so the function answered 0, SERVABLE, with no figure on
+    # stdout. A python3 that is missing, non-executable or OOM-killed (rc 127,
+    # 126, 137; this file's own SWAP_JITTER comment records a box-wide thrash
+    # event) therefore switched the Fable ceiling OFF for every lane on all four
+    # paths at once — the three `_swap_target` stay gates, its candidate loop,
+    # `_ws_least_loaded` and `_spawn_start`'s settle — with no journal row, no
+    # swap.log line and nothing else to see it by. That is the one answer this
+    # clause may never give: a fabricated fact, failing toward the exact edge
+    # the ceiling exists to protect (spec §2: a Fable session over its share
+    # ceiling bills usage credits). `no-figure` rather than a new why-word
+    # because the vocabulary is shared with the L0 twin, which has no
+    # interpreter to lose, and because that is literally what happened —
+    # nobody produced a figure. rc 2 keeps its own word.
+    case "$rc" in 0) ;; 2) printf 'stale'; return 2 ;; *) printf 'no-figure'; return 2 ;; esac
+    printf '%s' "$fig"
+    [[ "$fig" -ge "$FABLE_SHARE_CEILING_PCT" ]] && return 1
+    return 0
+  fi
+  fig=$(_limit_field "$w" seven)
+  [[ -z "$fig" ]] && { printf 'no-figure'; return 2; }
+  printf '%s' "$fig"
+  [[ "$fig" -ge "$SWAP_CEILING" ]] && return 1
+  return 0
+}
+
+_class_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (servable, or no class to apply) | 1 unservable | 2 unmeasured
+  # The shape every decision site needs: `skipped` folds into 0 because a session with no class has nothing to gate on.
+  #
+  # NAMED FOR THE CLASS, NOT FOR `_svc_` (controller ruling S3-R1). It shipped
+  # under the earlier spelling `_svc_gate`, and that cost `macos-platform.test.ts`
+  # a name-only exemption in the guard that holds every `_plat_`/`_svc_` definition
+  # inside the platform sentinels — `_svc_` is that guard's pinned launchd/systemd
+  # vocabulary, and a routing helper borrowing the prefix made a real platform
+  # helper's escape one `Set` entry away from unnoticed. The exemption is gone with the name.
+  [[ -z "${2:-}" || "$2" == default ]] && return 0
+  _serviceable "$1" "$2" >/dev/null
+  case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac
+}
+
+# `from` AND `to` NAME THE MOVE, NOT THE FIELD, which is why the two helpers
+# below read the `degraded` stamp at OPPOSITE ends of their own argument lists:
+# `_route_degrade id <intended> <rung-below> why` moves the session DOWN, so the
+# stamp it writes is `to`, while `_route_restore id <degraded> <intended> why`
+# moves it back UP, so the stamp it clears is `from`. Task 6 calls the second as
+# `_route_restore "$id" "$rdeg" "$rclass" "<why>"`, which is that order. NEITHER
+# journals a caller's word: both read the standing value with `_route_get` and
+# journal THAT (ruling S3-R5), because a caller naming the wrong end would
+# otherwise write a false audit row nothing can red.
+_route_degrade() {   # id from to why — stamp `degraded=<to>` and say so: one route journal row (actor ccd), one swap.log line
+  # THE ONLY WRITERS OF `degraded` ARE THIS AND `_route_restore` (spec §5.1:
+  # ccd's own stamp; `cmd_route` refuses the field outright). `_swap_target`
+  # writes NOTHING — its answer travels on rc and stdout, because its call site
+  # is a command substitution and a variable set inside one is lost — so the
+  # stamp, the journal row and the log line all happen HERE, at the caller,
+  # after the decision has been received.
+  local id="$1" from="$2" to="$3" why="$4" old
+  old=$(_route_get "$id" degraded)
+  [[ "$old" == "$to" ]] && return 0                          # standing already: nothing to write, nothing to say twice
+  _reg_set "$id" degraded "$to" || return 1
+  _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: ${old:-∅} -> $to"
+  echo "$(date '+%F %T') degrade $id: $from -> $to ($why)" >> "$REG/swap.log"
+}
+
+_route_restore() {   # id from to why — clear `degraded` (the intended class `to` is served again) and say so
+  # The `-e` test first, for the reason `_strand_clear` tests it first: the
+  # steady state of a session that never degraded must write nothing at all,
+  # not a journal row and a log line every five seconds.
+  #
+  # THE JOURNAL ROW IS MEASURED, NOT QUOTED (ruling S3-R5, fix round 1). This
+  # journalled the caller's `$from`, so a caller that named the wrong standing
+  # class wrote a false audit row that nothing in the tree could red — while
+  # its sibling above read the field. Both now read it; `$from`/`$to` reach the
+  # swap.log line only, where they say what the caller MEANT to do.
+  local id="$1" from="$2" to="$3" why="$4" old
+  [[ -e "$REG/$id.degraded" ]] || return 0
+  old=$(_route_get "$id" degraded)
+  rm -f -- "$REG/$id.degraded"
+  _lc_done route "$id" "" dec.actor ccd dec.reason "$why" detail "degraded: ${old:-∅} -> ∅"
+  echo "$(date '+%F %T') restore $id: $from -> $to ($why)" >> "$REG/swap.log"
+}
+
+# THE STAMP BELONGS TO THE MOVE, NOT TO THE DECISION (final review finding 4).
+# `_auto_swap_check` turns `_swap_target`'s rc 6 into a degrade, but EVERY gate
+# that can still decline the move sits below that point — `_avail "$target"`,
+# and on the affinity path the hold file, the mid-turn test, the at-a-prompt
+# test, the `status == idle` test and `SWAP_CEIL_QUIET`. Stamped at the
+# decision, a tick that declined wrote `degraded=<rung>` and journalled
+# "degraded: ∅ -> <rung>" for a session that stayed exactly where it was,
+# contradicting spec §5.1's definition of the field ("the class actually
+# served"). It is not cosmetic: while that stamp stands, a settle on the same
+# lane whose sweep pass has gone stale or absent takes the UNMEASURED arm,
+# honours the standing stamp ("it was measured when written") and composes
+# `--model <rung>` — a real class downgrade produced by a degrade that never
+# happened. The premise the ledger accepted it on ("every rc-6 path measured the
+# session's own lane unable to serve the class") is false in the commonest
+# case: when `_avail "$home"` fails, the first stay gate is never entered and
+# the class of `home` is never asked at all.
+#
+# So the rc-6 arm records the rung in two variables and this runs at each
+# `_dispatch_swap` site, where the move is certain. Ruling S3-R5's "a degrade
+# that cannot write its stamp stands still" is unchanged and now reads more
+# simply: rc 1 here means the caller returns without dispatching.
+_route_degrade_at_move() {   # id from to -> rc 0 if there is nothing to stamp or the stamp landed; rc 1, loudly, if it did not
+  [[ -n "${3:-}" ]] || return 0
+  _route_degrade "$1" "$2" "$3" "unservable: $2 on every candidate lane" && return 0
+  echo "$(date '+%F %T') degrade-unwritable $1: $2 -> $3 (stamp not written; standing still)" >> "$REG/swap.log"
+  return 1
+}
+
 _limit_score() {   # wrapper -> account pressure = max(5h%, 7d%); "" unless BOTH windows are measured
   # Weekly limits are as blocking as 5h ones (user directive 2026-07-05) — a target with a
   # free 5h window but an exhausted week is NOT a good landing spot, and an account nearing
@@ -14686,7 +15175,7 @@ _avail() {   # wrapper -> success if it has included-usage headroom (rate score 
   return 0                                                # no KNOWN half at the ceiling = assume free
 }
 
-_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule
+_swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = a name, or nothing = stay put; 1 = must leave and nothing can take it; 2/3/4 = NOBODY CAN SAY, and WHICH: 2 the crossing record, 3 the row's own `.project`, 4 the pool rule; 5 = NOBODY CAN SAY, the class window; 6 = a name, chosen one rung DOWN
   # THREE ANSWERS, NOT TWO (#67 review, S4/S5). `return 0` with empty stdout
   # used to mean BOTH "stay put, everything is fine" and "the crossing record
   # could not be read, so I decline to decide" — and the caller handles those
@@ -14718,6 +15207,13 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # that finds home recovered must go straight there instead of falling
   # through to the pool loop and picking some third lane.
   local id="$1" cur="$2" home="$3" force="${4:-}" hrc="${5:-0}" cand best="" best_score=999 obest="" obest_score=999 sc
+  # THE CLASS DIMENSION (routing spec §5.4). Read PURE — `_route_peek` writes no
+  # note and no floor marker; a decision function that may return before acting
+  # must not leave a trail (slice 1, fix round 2). `default` and no record are
+  # the same thing here: today's walk, byte for byte — every rc-2/3/4 pin in the
+  # pool suites holds by construction because nothing below runs without `cls`.
+  local cls src pass pcls unserv unmeas
+  cls=$(_route_peek "$id" class); [[ "$cls" == default ]] && cls=""
   # ── POOLS (§5.5.3) ───────────────────────────────────────────────────────
   # The project's tag is read ONCE per decision and the WORD is passed down, so
   # a loop over five candidates costs one `cat`, not five. `_project_pool_state`
@@ -14801,8 +15297,22 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # branch. It is kept as the explicit statement of intent beside the gate that
   # DOES decide — the home-recovered arm's own `[[ "$hrc" -eq 0 ]]` — and it is
   # THAT gate the hrc-2 cases pin.
+  #
+  # THE THREE STAY SHORTCUTS ARE GATED ON THE CLASS, and each keeps its own
+  # condition unchanged in front of the gate: a lane is asked whether it can
+  # SERVE the class only once it has already passed every test it passed
+  # before. The gate's three answers are the three answers this whole slice is
+  # about — keep/take (0), measured-unservable (1, fall through to the
+  # candidate loop: the session MUST LEAVE a lane that cannot serve its class),
+  # and UNMEASURED (2, rc 5: nobody decides, and the next tick tries again five
+  # seconds later). With no class `_class_gate` answers 0 for every lane, so
+  # all three lines below are today's lines byte for byte.
   if [[ "$hrc" -eq 0 && "$cur" == "$home" ]]; then
-    [[ -z "$force" ]] && { _avail "$home" && return 0; }                     # home is fine: stay
+    if [[ -z "$force" ]] && _avail "$home"; then                             # home is fine: stay — if it can serve the class
+      _class_gate "$home" "$cls"; src=$?
+      [[ "$src" -eq 0 ]] && return 0
+      [[ "$src" -eq 2 ]] && return 5
+    fi                                                                       # 1: home is at the class's ceiling — must leave; fall through
   else
     # disabled excludes home as a DESTINATION only — it never evacuates a
     # session already sitting on it, which is why the two "stay" branches
@@ -14814,10 +15324,31 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
     # affinity arm undoing it on the very next recovery.) The CROSSED home is
     # admitted, and only the crossed one: `_crosspool_valid` was asked about
     # `$home` specifically, so a marker written for `wrapper` cannot admit it.
-    [[ "$hrc" -eq 0 ]] \
+    if [[ "$hrc" -eq 0 ]] \
       && _account_ok "$home" && { [[ -n "$cross_home" ]] || _pool_ok "$home" "$pps"; } \
-      && _avail "$home" && { echo "$home"; return 0; }                       # home recovered: go back
-    [[ -z "$force" ]] && { _avail "$cur" && return 0; }                      # cur still works, home down: stay put
+      && _avail "$home"; then
+      _class_gate "$home" "$cls"; src=$?                                     # home recovered: go back — if it can serve the class
+      [[ "$src" -eq 0 ]] && { echo "$home"; return 0; }
+      # UNMEASURED REFUSES ONLY AN UNFORCED CALL, and only on THIS arm (ruling
+      # S3-R4, fix round 1). The arm carries no `[[ -z "$force" ]]` condition
+      # on purpose — a forced call that finds home recovered must go straight
+      # there rather than pick some third lane — and a bare `return 5` here
+      # re-imposed one in the worst direction: with `force` set, `cur != home`
+      # and home passing every other test, ONE unmeasured class figure for HOME
+      # aborted the whole decision, the tick took the `-ge 2` branch and
+      # `_strand_mark` wrote the classwindow sentence over a hard-blocked
+      # session the candidate loop could have rescued — a durable positive
+      # claim, which is the fabrication this rc exists to avoid. So: unmeasured
+      # stands still only when nothing is forcing the move; a forced call falls
+      # through to the must-leave loop, whose OWN pass-1 rc 5 still refuses to
+      # degrade on a wholly unmeasured fleet.
+      [[ "$src" -eq 2 ]] && { [[ -n "$force" ]] || return 5; }
+    fi
+    if [[ -z "$force" ]] && _avail "$cur"; then                              # cur still works, home down: stay put — if it can serve the class
+      _class_gate "$cur" "$cls"; src=$?
+      [[ "$src" -eq 0 ]] && return 0
+      [[ "$src" -eq 2 ]] && return 5
+    fi
   fi
   # must leave cur (home-but-down, away-and-cur-down, or forced with no recovered home): pick the
   # least-loaded AVAILABLE account.
@@ -14846,153 +15377,202 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   # The seam is the three `|| continue` lines immediately below. Being untagged buys a candidate
   # `_pool_ok` and nothing else — §5.7.3 says what that does and does not imply, and warns against
   # the "repair" that would undo it (D-1967).
-  for cand in $(_pool_for "$id"); do
-    [[ "$cand" == "$cur" ]] && continue
-    # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
-    # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
-    # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
-    # number here that had gone stale twice over; that fix was scoped to THIS
-    # region and the file still carries 143 lines of `ccd:NNNN` citations that
-    # nobody has re-measured — D-1957), so a filter placed there
-    # would let an other-pool wrapper land. AUTOMATIC MOVES NEVER CROSS — marker or no marker: the
-    # marker exempts the row from being MOVED, it does not license a new
-    # crossing, so any automatic move lands in pool. This ends a `wrapper`-
-    # recorded (`swap`/`start`) crossing on its own — the move changes `cur`,
-    # and `_crosspool_valid`'s account clause no longer matches it next tick.
-    # It does NOT end a `home`-recorded (`prefer`) crossing: this loop never
-    # touches `.home`, so `cross_home` keeps validating until something else
-    # changes `home`. (`_crosspool_tick` is what then removes an invalid
-    # marker and logs `crosspool-ended`.)
-    # rc 2 IS UNREACHABLE HERE BY CONSTRUCTION, and that is a derivation worth
-    # writing down rather than a guard worth adding (#69 review, S1).
-    # `_pool_ok`'s undecidable arm keys ONLY on `$2`, and `$pps` is read once
-    # per call to this function — so once the `-eq 2` return above has fired,
-    # this loop can only ever see rc 0 or 1. A guard here would be one no case
-    # could red. But it IS the second half of the same fold: delete the return
-    # above and `|| continue` silently skips every candidate, producing rc 1
-    # and the identical fabricated strand. Measured.
-    _pool_ok "$cand" "$pps" || continue
-    _account_ok "$cand" || continue
-    _avail "$cand" || continue
-    # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
-    # round 1 (finding 1), which is the identical magnet Task 6 removed from
-    # `_ws_least_loaded`: an account that never reports scored 0, beat every
-    # account that had honestly said how loaded it was, and — since it never
-    # reports — went on winning every rescue forever.
-    #
-    # 100 rather than skipping the candidate: this loop is the ESCAPE ROUTE,
-    # and a rescue that can only land on measured accounts strands a blocked
-    # session every time the fleet has gone quiet (see the ruling on `_avail`).
-    # Eligibility must survive; only preference changes.
-    #
-    # And unmeasured now has a SECOND source, routine rather than exceptional:
-    # since the provenance fix a candidate whose window has merely ended reads
-    # unmeasured too — EITHER window, since `_limit_score` answers "" unless
-    # both halves are measured. It stays eligible and ranks 100 here, which is
-    # the correct treatment — its old inferred 0 made it the preferred rescue
-    # destination on a fleet where nothing had run on it, which is the magnet
-    # this comment already describes, arriving by a third route. `_avail` above
-    # still admits it, and admits it for a reason that no longer depends on this
-    # function's score: it refuses only a KNOWN half at the ceiling.
-    #
-    # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
-    # — not one. This paragraph used to cite `_avail` alone ("has already
-    # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
-    # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
-    # does not reject on a SCORE any more, it refuses only a KNOWN half at the
-    # ceiling. The derivation that actually holds:
-    #
-    #   1. A candidate reaches the comparison below carrying a NUMBER only if
-    #      `_limit_score` returned one, and it returns one only when BOTH
-    #      halves are measured.
-    #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
-    #
-    # Both halves known and both < 98 makes their max <= 97, so every SCORED
-    # candidate outranks 100 — while 100 is still far below `best_score`'s 999
-    # sentinel, so an unmeasured candidate is picked the moment it is the only
-    # one left.
-    #
-    # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
-    # the split it is eligible and SCORELESS at the same time — one half at 40,
-    # the other's window merely ended: `_avail` admits it (no known half at the
-    # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
-    # tier at 100, NOT in the measured one, and that is correct — one known half
-    # bounds the truth only from below. A reader sent to `_avail` for the <= 97
-    # claim would conclude the opposite.
-    #
-    # Unmeasured candidates tie with each other at 100 and the strict `<` takes
-    # the first in pool order, i.e. roster declaration order, the same
-    # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
-    # this 100, apply INSIDE each bracket separately — the two brackets never
-    # compare scores against each other at all.
-    #
-    # The cost, stated: a fleet whose measured accounts all sit just under the
-    # ceiling now sends a rescue to a busy-but-known account instead of a quiet
-    # unknown one that might have been emptier. That is the same trade
-    # placement already makes, and the alternative is the magnet.
-    sc=$(_limit_score "$cand"); : "${sc:=100}"
-    # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
-    # than at the `_account_ok` line above, which is an unconditional
-    # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
-    # finds no candidate is left wedged on the dead account with no swap.log
-    # line, no swapblocked stamp and no notification — silent in every channel
-    # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
-    # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
-    # preference and must never cost eligibility.
-    #
-    # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
-    # This was `sc=100` — the same number as the `:=100` above — until fix round
-    # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
-    # TELEMETRY, because telemetry is written by a session rendering its
-    # statusline and nothing can run there. So its last sample ages out
-    # (`_limit_field` retracts a window that has ended), `_limit_score` answers
-    # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
-    # entire effect was the few hours in which a condemned lane still carried
-    # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
-    # marked lane earlier in roster order BEAT a healthy quiet one at the strict
-    # `-lt` below — a rescue landing on the account we have measured as dead.
-    # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
-    # tick of wrongness.
-    #
-    # THE FULL ORDER, derived rather than asserted — the derivation above
-    # applies unchanged, and this number extends it by exactly one:
-    #
-    #   measured  <= 97   both halves known (`_limit_score`) and neither at the
-    #                     ceiling (`_avail`) — see the two facts above
-    #   unmeasured   100   eligible, no score: never measured, window ended, or
-    #                     half-measured
-    #   auth-dead    101   eligible, and measured as not authenticating
-    #   sentinel     999   `best_score`'s initial value
-    #
-    # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
-    # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
-    # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
-    # is still far below the 999 sentinel, so a condemned candidate is picked
-    # the moment it is the only one left — eligibility is untouched by this
-    # change, only preference. That is the same rule the `:=100` above obeys and
-    # the reason this line is an assignment and not a `continue`.
-    #
-    # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
-    # walk below now sorts candidates into two: home-able ones compete for
-    # `best`, overflow ones for `obest`, and the brackets are consulted in
-    # that order. `sc=101` is assigned BEFORE the split deliberately, so a
-    # condemned lane ranks last IN ITS OWN bracket rather than being pushed
-    # out of the rotation: a condemned overflow lane still beats no
-    # destination at all, which is the same eligibility-vs-preference rule
-    # the paragraph above derives. The two changes compose because one sets
-    # the score and the other only chooses which bracket reads it.
-    _authdead "$cand" && sc=101
-    if _is_home_able "$cand"; then
-      [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
-    else
-      [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
-    fi
+  # TWO PASSES, ONE BODY. Pass 1 ranks the candidates that can serve the
+  # intended class. If it finds nothing and every refusal was MEASURED
+  # (unserv > 0, unmeas == 0), pass 2 re-ranks one rung DOWN and answers rc 6 —
+  # the caller stamps `degraded` and dispatches. If any refusal was UNMEASURED
+  # and nothing was found, the answer is rc 5: nobody degrades on a fabricated
+  # fact. No class: one pass, byte-identical to today, so `_pool_for`'s single
+  # `cat` per call becomes two only on the degrade pass and only for a session
+  # that HAS a class and found no lane able to serve it.
+  for pass in 1 2; do
+    pcls="$cls"; [[ "$pass" -eq 2 ]] && pcls=$(_class_below "$cls")
+    unserv=0; unmeas=0
+    for cand in $(_pool_for "$id"); do
+      [[ "$cand" == "$cur" ]] && continue
+      # THE FILTER LIVES HERE, AFTER `_pool_for`, AND NEVER INSIDE `_default_pool`:
+      # a hand-set `$REG/<id>.pool` candidate list bypasses `_default_pool`
+      # entirely (grep `ccd/ccd` for `^_pool_for()` — D-1913 replaced a line
+      # number here that had gone stale twice over; that fix was scoped to THIS
+      # region and the file still carries 143 lines of `ccd:NNNN` citations that
+      # nobody has re-measured — D-1957), so a filter placed there
+      # would let an other-pool wrapper land. AUTOMATIC MOVES NEVER CROSS — marker or no marker: the
+      # marker exempts the row from being MOVED, it does not license a new
+      # crossing, so any automatic move lands in pool. This ends a `wrapper`-
+      # recorded (`swap`/`start`) crossing on its own — the move changes `cur`,
+      # and `_crosspool_valid`'s account clause no longer matches it next tick.
+      # It does NOT end a `home`-recorded (`prefer`) crossing: this loop never
+      # touches `.home`, so `cross_home` keeps validating until something else
+      # changes `home`. (`_crosspool_tick` is what then removes an invalid
+      # marker and logs `crosspool-ended`.)
+      # rc 2 IS UNREACHABLE HERE BY CONSTRUCTION, and that is a derivation worth
+      # writing down rather than a guard worth adding (#69 review, S1).
+      # `_pool_ok`'s undecidable arm keys ONLY on `$2`, and `$pps` is read once
+      # per call to this function — so once the `-eq 2` return above has fired,
+      # this loop can only ever see rc 0 or 1. A guard here would be one no case
+      # could red. But it IS the second half of the same fold: delete the return
+      # above and `|| continue` silently skips every candidate, producing rc 1
+      # and the identical fabricated strand. Measured.
+      _pool_ok "$cand" "$pps" || continue
+      _account_ok "$cand" || continue
+      _avail "$cand" || continue
+      # POOL FIRST, THEN SERVICEABILITY, and after `_avail` for the same reason
+      # `_ws_least_loaded` puts it after `_pool_ok`: serviceability never widens
+      # eligibility, it only narrows it. A candidate `_avail` has already
+      # refused (a KNOWN window at `SWAP_CEILING`) never reaches the class
+      # question at all — which is why one rung always resolves for a fable
+      # session, and why pass 2 re-asking `_serviceable … opus` is a formality
+      # that keeps the two passes one body rather than two.
+      # ONE QUESTION, ONE SPELLING (ruling S3-R5, fix round 1). This asked
+      # `_serviceable` behind its own `[[ -n "$pcls" ]]` wrapper while the three
+      # stay gates above and `_ws_least_loaded` asked `_class_gate` — two
+      # spellings of the identical question inside one function, and the wrapper
+      # was a hand-rolled copy of the empty/`default` fold `_class_gate` already
+      # does. Measured behaviourally identical, and now said once: rc 0 is
+      # "servable, or no class to apply" and falls through to the ranking below.
+      _class_gate "$cand" "$pcls"
+      case $? in
+        1) unserv=$((unserv + 1)); continue ;;
+        # UNMEASURED BLOCKS ONLY THE INTENDED CLASS. On pass 1 an unmeasured
+        # lane means nobody can say whether to degrade — rc 5 below. On pass 2
+        # the degrade was ALREADY decided on measured refusals; what remains is
+        # placement at the rung below, where the placement rule holds:
+        # unmeasured never becomes ineligible, it ranks last (sc 100 below).
+        2) [[ "$pass" -eq 1 ]] && { unmeas=$((unmeas + 1)); continue; } ;;
+      esac
+      # UNMEASURED RANKS LAST, not first. This was `: "${sc:=0}"` until review
+      # round 1 (finding 1), which is the identical magnet Task 6 removed from
+      # `_ws_least_loaded`: an account that never reports scored 0, beat every
+      # account that had honestly said how loaded it was, and — since it never
+      # reports — went on winning every rescue forever.
+      #
+      # 100 rather than skipping the candidate: this loop is the ESCAPE ROUTE,
+      # and a rescue that can only land on measured accounts strands a blocked
+      # session every time the fleet has gone quiet (see the ruling on `_avail`).
+      # Eligibility must survive; only preference changes.
+      #
+      # And unmeasured now has a SECOND source, routine rather than exceptional:
+      # since the provenance fix a candidate whose window has merely ended reads
+      # unmeasured too — EITHER window, since `_limit_score` answers "" unless
+      # both halves are measured. It stays eligible and ranks 100 here, which is
+      # the correct treatment — its old inferred 0 made it the preferred rescue
+      # destination on a fleet where nothing had run on it, which is the magnet
+      # this comment already describes, arriving by a third route. `_avail` above
+      # still admits it, and admits it for a reason that no longer depends on this
+      # function's score: it refuses only a KNOWN half at the ceiling.
+      #
+      # 100 is exact, not a large-ish number, and it takes TWO facts to derive it
+      # — not one. This paragraph used to cite `_avail` alone ("has already
+      # rejected every candidate scoring >= SWAP_CEILING"), which stopped being
+      # the whole reason when `_avail` was separated from `_limit_score`: `_avail`
+      # does not reject on a SCORE any more, it refuses only a KNOWN half at the
+      # ceiling. The derivation that actually holds:
+      #
+      #   1. A candidate reaches the comparison below carrying a NUMBER only if
+      #      `_limit_score` returned one, and it returns one only when BOTH
+      #      halves are measured.
+      #   2. `_avail` above passed, so neither known half is >= SWAP_CEILING (98).
+      #
+      # Both halves known and both < 98 makes their max <= 97, so every SCORED
+      # candidate outranks 100 — while 100 is still far below `best_score`'s 999
+      # sentinel, so an unmeasured candidate is picked the moment it is the only
+      # one left.
+      #
+      # THE HALF-MEASURED CANDIDATE IS WHY FACT 1 HAS TO BE SAID OUT LOUD. Since
+      # the split it is eligible and SCORELESS at the same time — one half at 40,
+      # the other's window merely ended: `_avail` admits it (no known half at the
+      # ceiling) and `_limit_score` still answers "". It lands in the unmeasured
+      # tier at 100, NOT in the measured one, and that is correct — one known half
+      # bounds the truth only from below. A reader sent to `_avail` for the <= 97
+      # claim would conclude the opposite.
+      #
+      # Unmeasured candidates tie with each other at 100 and the strict `<` takes
+      # the first in pool order, i.e. roster declaration order, the same
+      # tie-break `_ws_least_loaded` and `projectHome` use. That tie-break, and
+      # this 100, apply INSIDE each bracket separately — the two brackets never
+      # compare scores against each other at all.
+      #
+      # The cost, stated: a fleet whose measured accounts all sit just under the
+      # ceiling now sends a rescue to a busy-but-known account instead of a quiet
+      # unknown one that might have been emptier. That is the same trade
+      # placement already makes, and the alternative is the magnet.
+      sc=$(_limit_score "$cand"); : "${sc:=100}"
+      # THE HEALTH SIGNAL JOINS THE UNMEASURED BLOCK, and joins it here rather
+      # than at the `_account_ok` line above, which is an unconditional
+      # `continue`. This loop is the ESCAPE ROUTE: a hard-blocked session that
+      # finds no candidate is left wedged on the dead account with no swap.log
+      # line, no swapblocked stamp and no notification — silent in every channel
+      # this tree has. `_account_ok`'s two conjuncts are operator INTENT and
+      # cannot be wrong; an auth probe is a MEASUREMENT and can be, so it may cost
+      # preference and must never cost eligibility.
+      #
+      # 101, ONE TIER WORSE THAN UNMEASURED, and the tier is the whole point.
+      # This was `sc=100` — the same number as the `:=100` above — until fix round
+      # 1 measured what that costs: an auth-dead lane CANNOT REFRESH ITS OWN
+      # TELEMETRY, because telemetry is written by a session rendering its
+      # statusline and nothing can run there. So its last sample ages out
+      # (`_limit_field` retracts a window that has ended), `_limit_score` answers
+      # "", and `sc` is ALREADY 100 from the line above. At `sc=100` this guard's
+      # entire effect was the few hours in which a condemned lane still carried
+      # fresh BOTH-halves telemetry; in the steady state it changed nothing, and a
+      # marked lane earlier in roster order BEAT a healthy quiet one at the strict
+      # `-lt` below — a rescue landing on the account we have measured as dead.
+      # With SWAP_COOLDOWN at 900s and a transcript copy per hop, that is not one
+      # tick of wrongness.
+      #
+      # THE FULL ORDER, derived rather than asserted — the derivation above
+      # applies unchanged, and this number extends it by exactly one:
+      #
+      #   measured  <= 97   both halves known (`_limit_score`) and neither at the
+      #                     ceiling (`_avail`) — see the two facts above
+      #   unmeasured   100   eligible, no score: never measured, window ended, or
+      #                     half-measured
+      #   auth-dead    101   eligible, and measured as not authenticating
+      #   sentinel     999   `best_score`'s initial value
+      #
+      # 101 therefore loses to every healthy candidate, MEASURED OR NOT, which is
+      # the correction: the gap 97 -> 100 is what keeps a score ahead of silence,
+      # and the gap 100 -> 101 is what keeps silence ahead of a verdict. And 101
+      # is still far below the 999 sentinel, so a condemned candidate is picked
+      # the moment it is the only one left — eligibility is untouched by this
+      # change, only preference. That is the same rule the `:=100` above obeys and
+      # the reason this line is an assignment and not a `continue`.
+      #
+      # AND IT APPLIES WITHIN EITHER BRACKET (merge with #61, 2026-09-08). The
+      # walk below now sorts candidates into two: home-able ones compete for
+      # `best`, overflow ones for `obest`, and the brackets are consulted in
+      # that order. `sc=101` is assigned BEFORE the split deliberately, so a
+      # condemned lane ranks last IN ITS OWN bracket rather than being pushed
+      # out of the rotation: a condemned overflow lane still beats no
+      # destination at all, which is the same eligibility-vs-preference rule
+      # the paragraph above derives. The two changes compose because one sets
+      # the score and the other only chooses which bracket reads it.
+      _authdead "$cand" && sc=101
+      if _is_home_able "$cand"; then
+        [[ "$sc" -lt "$best_score" ]] && { best="$cand"; best_score="$sc"; }
+      else
+        [[ "$sc" -lt "$obest_score" ]] && { obest="$cand"; obest_score="$sc"; }
+      fi
+    done
+    [[ -n "$best$obest" ]] && break                                              # found at this class
+    [[ -z "$cls" ]] && break                                                     # no class: nothing more to try
+    [[ "$unmeas" -gt 0 ]] && return 5                                            # a lane nobody measured: nobody decides
+    [[ "$unserv" -eq 0 || "$pass" -eq 2 ]] && break                              # nothing to degrade from, or already degraded once
+    [[ -z "$(_class_below "$cls")" ]] && break                                   # haiku has no rung below
   done
   # Keep the function's existing exit-code shape (empty stdout + non-zero exit when nothing
   # qualifies): a `return 0` only on the branch that actually echoes something, so falling off the
   # end with both brackets empty leaves the caller the same "no destination" signal as before.
-  [[ -n "$best" ]] && { echo "$best"; return 0; }
-  [[ -n "$obest" ]] && echo "$obest"
+  #
+  # THE RUNG IS ON THE EXIT CODE, NOT ON STDOUT. `$pass` is 2 only when the loop
+  # ran the degrade pass and found there — every other path breaks at pass 1 —
+  # so rc 6 says "this name is one rung DOWN from the intended class" while the
+  # name itself stays exactly what an rc-0 move would have carried. Nothing is
+  # stamped here: this function writes nothing, and `_auto_swap_check` is what
+  # turns rc 6 into the `degraded` stamp and the journal row.
+  if [[ -n "$best" ]]; then echo "$best"; elif [[ -n "$obest" ]]; then echo "$obest"; else return 1; fi
+  [[ "$pass" -eq 2 ]] && return 6
+  return 0
 }
 
 _pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
@@ -15161,6 +15741,7 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     crosspool) printf '%s' "the crossing record could not be read, so no destination could be computed" ;;
     project)   printf '%s' "the project's own registry field could not be read ($REG/$2.project), so no destination could be computed" ;;
     pool)      printf '%s' "the project's pool tag could not be read ($POOLS_DIR/$3), so no destination could be computed" ;;
+    classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
 }
@@ -15490,6 +16071,37 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # steady state of a healthy session writes nothing at all.
   [[ -n "$hard_blocked" ]] || _strand_clear "$id"
   target=$(_swap_target "$id" "$wrapper" "$home" "$hard_blocked" "$hrc"); strc=$?
+  # rc 6 IS A DECISION, handled BEFORE the `-ge 2` undecidable guard (routing
+  # spec §5.4): a destination chosen one rung DOWN because every lane was
+  # measured-unservable at the intended class. Put after that guard it would be
+  # read as a condition nobody could decide, strand the row with the word
+  # `rc6`, and throw away a destination that was measured. The rung is
+  # re-derived here (`_class_below` is deterministic and `_swap_target` writes
+  # nothing), the move then proceeds exactly as an rc 0 move would, and the
+  # stamp and journal row are written by the ONE writer — AT THE DISPATCH, not
+  # here (final review finding 4; `_route_degrade_at_move`'s header carries the
+  # argument). All this arm does is REMEMBER the rung, because between here and
+  # the two `_dispatch_swap` calls sit six gates that can still decline: the
+  # `_avail "$target"` re-measurement, and on the affinity path the hold file,
+  # the mid-turn test, the at-a-prompt test, the `status == idle` test and
+  # `SWAP_CEIL_QUIET`. `dto` empty means there is nothing to stamp, which is
+  # every non-rc-6 tick.
+  #
+  # AND THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R5, fix round 1), which is
+  # why `_route_degrade_at_move` is a GUARD at each dispatch site rather than a
+  # fire-and-forget call. The rc used to be discarded, so a registry write that
+  # did not land dispatched the session anyway: it would arrive on a lane chosen
+  # for the rung BELOW while the record still said the intended class, and
+  # `_spawn_start` would compose `--model $dfrom` on a lane just measured unable
+  # to serve it, with nothing in any channel saying why. On a failed stamp the
+  # honest move is not to move: say so in one swap.log line and stand still. The
+  # next tick re-measures and retries — `_route_degrade`'s standing-state
+  # debounce reads the FIELD, and nothing was written, so it is unaffected.
+  local dfrom="" dto=""
+  if [[ "$strc" -eq 6 ]]; then
+    dfrom=$(_route_peek "$id" class); dto=$(_class_below "$dfrom")
+    strc=0
+  fi
   if [[ "$strc" -ge 2 ]]; then
     # NOBODY CAN SAY — which is NOT "no destination exists". Stranding here
     # would be a fabricated positive claim (the #67 review's S5); returning
@@ -15543,6 +16155,7 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
         2) uword=crosspool ;;   # the crossing record, asked about cur and about home
         3) uword=project ;;     # the row's own registry field, re-read at the inner seam
         4) uword=pool ;;        # the pool rule against cur — the tag under `$POOLS_DIR`
+        5) uword=classwindow ;;   # the class window — the sweep's share for fable, the seven-day figure otherwise — on the lanes that could take the session
         *) uword="rc$strc" ;;   # deliberately unreachable: the next code added upstream
       esac
       _tick_undecidable "$id" "$uword"
@@ -15599,6 +16212,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # write while an exclusion is fresh, or fold the two writers into one) is
   # deferred.
   if [[ -n "$hard_blocked" ]]; then
+    # THE DEGRADE STAMP, AT THE MOVE (see `_route_degrade_at_move`). First in
+    # the block, so a stamp that cannot be written costs neither the gpt
+    # exclusion, nor `lastswap`, nor a swap.log line claiming a rescue.
+    _route_degrade_at_move "$id" "$dfrom" "$dto" || return 0
     # _is_valid_wrapper first, so a stale registry `wrapper` — an account since
     # dropped from the roster — cannot name the file this writes.
     # BACKEND, not placement: this row is the Codex lane's only "pool is full"
@@ -15653,6 +16270,10 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # statusUpdatedAt (ms) ticks on every busy<->idle transition, incl. web/mobile clients.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
   [[ -n "$sua" && $(( now * 1000 - sua )) -ge $(( SWAP_CEIL_QUIET * 1000 )) ]] || return 0
+  # AFTER THE LAST GATE THAT CAN DECLINE, for the reason the rescue arm stamps
+  # first in its own block: every `return 0` above this line is a move that did
+  # not happen, and `degraded` names the class actually served.
+  _route_degrade_at_move "$id" "$dfrom" "$dto" || return 0
   _reg_set "$id" lastswap "$now"
   echo "$(date '+%F %T') $aff_verb $id: $wrapper -> $target [home=$home]" >> "$REG/swap.log"
   _dispatch_swap "$id" "$target"
@@ -15779,6 +16400,164 @@ _route_bytes() {   # value -> its length in BYTES (controller ruling S1-R2).
   local LC_ALL=C
   printf '%s' "${#1}"
 }
+# ── `--route` ON THE VERBS THAT MINT A SESSION (routing spec §5.3, §4) ───────
+# `cmd_route` edits a record that already exists; these five helpers are what
+# `ws-add`, `start` and `enable` need to write one AT THE MINT, where a refusal
+# must leave the box exactly as it found it. The validation is `cmd_route`'s own,
+# said a second time rather than shared, for one reason: `cmd_route` reads the
+# STANDING record to refuse the haiku+effort pair across two calls, and there is
+# no standing record here. Every other arm is deliberately identical — line for
+# line, with ONE divergence: the two refusals here end `; nothing was touched`,
+# the promise only a pre-mint refusal can make. That parity is MEASURED, not
+# asked for: `ccd-route-argv.test.ts`'s last describe slices both bodies out of
+# this file and reds when either side drifts, in wording or in arms.
+ROUTE_COORDINATOR_ROW="class=fable effort=ultracode subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
+
+_route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the byte count (never the bytes)
+  # BEFORE ANY SIDE EFFECT. Every caller runs this above its first write — above
+  # the worktree, the branch, the registry row and the pane — so a coordinator
+  # that composed a bad argv gets a refusal and an untouched box, never a
+  # half-made workspace nobody asked for.
+  local kv f v rc cls="" eff="" seen=""
+  for kv in "$@"; do
+    [[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"
+    f="${kv%%=*}"; v="${kv#*=}"
+    _route_word_in "$f" "${ROUTE_FIELDS[*]}" || die "unknown routing field '$f' (want one of: ${ROUTE_FIELDS[*]})"
+    [[ "$f" == degraded || "$f" == inert ]] && die "'$f' is written by ccd only"
+    # ONE VALUE PER FIELD, and this refusal has NO counterpart in `cmd_route`
+    # (controller ruling S4-R4) — it is the one place the two validators are
+    # allowed to differ in ARMS rather than wording, because only this side
+    # feeds two consumers that read the same argv differently:
+    # `_route_argv_class` answers with the FIRST `class=` pair and decides
+    # PLACEMENT, `_route_argv_write` writes every pair and the LAST one wins
+    # the record. `--route class=opus --route class=haiku` therefore placed by
+    # `opus` and recorded `haiku` — a session whose lane was chosen for a class
+    # its own record denies. Refused instead of ranked: neither answer is more
+    # right than the other, and nothing was minted yet.
+    _route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "
+    # THREE ANSWERS, THREE SENTENCES — `cmd_route`'s rule, and its reasoning
+    # applies here unchanged: an unreadable vocabulary is not the caller's value
+    # being wrong, and folding the two tells an operator with a good `haiku` to
+    # go and fix `haiku`. The `*)` arm is rc 1 and any rc a future vocabulary
+    # arm invents; unknown is bad value, the fail-closed side.
+    _route_valid "$f" "$v"; rc=$?
+    case "$rc" in
+      0) ;;
+      2) die "route: this box's roster projection carries no subagent class list — re-run ccrc install" ;;
+      *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary; nothing was touched" ;;
+    esac
+    [[ "$f" == class ]] && cls="$v"
+    [[ "$f" == effort ]] && eff="$v"
+  done
+  # `auto` types nothing and is the ABSENT-equivalent (controller ruling S1-R5),
+  # so haiku+auto is not the refused pair — only haiku+a LEVEL is.
+  [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class; nothing was touched"
+  return 0
+}
+
+_route_argv_write() {   # id actor reason k=v... — write validated fields (the row exists), one route row + one log line each
+  # THE PREVIOUS VALUE IS READ, AND RENDERED EXACTLY AS `cmd_route` RENDERS IT
+  # (controller ruling S4-R3). The first cut printed `∅` unconditionally, on the
+  # argument that every caller had just minted the row — true then, false as of
+  # this round: `cmd_start`'s revival arm writes `--route` pairs against a
+  # record that already exists, and a hard-coded `∅` there would journal a
+  # first-write that did not happen and hide the value it replaced. `∅` is now
+  # the ABSENT case of the same three-condition read, so the mint arm's rows are
+  # byte-identical to what it wrote before.
+  #
+  # `_route_get`, not `_route_peek`: this read happens on a path that is about
+  # to WRITE, so an unrecognised standing value is a fact the journal should
+  # carry a note about — the opposite of `cmd_route`'s pair check, which may
+  # `die` before touching anything (its own comment argues that side).
+  # An unrecognised value is rendered as a byte COUNT, never its bytes: the file
+  # is writable by any session on the box and a multi-line value would forge
+  # log lines.
+  #
+  # AND THE `routeapplied` STAMP IS SEEDED FIRST, for the reason `cmd_route`
+  # states at its own call: a write against a record with no stamp would
+  # otherwise be swallowed by the applier's seed on the next tick — the wave
+  # N>=2 dispatch path (`CCD_ARGV.routeSet`) and `start --route` both land here.
+  local id="$1" actor="$2" reason="$3" kv f v raw old; shift 3
+  _route_applied_before_write "$id"
+  for kv in "$@"; do
+    f="${kv%%=*}"; v="${kv#*=}"
+    raw=$(_reg_get "$id" "$f" 2>/dev/null)
+    old=$(_route_get "$id" "$f")
+    if [[ -n "$raw" && -z "$old" ]]; then old="<$(_route_bytes "$raw") bytes, unrecognised>"; fi
+    _reg_set "$id" "$f" "$v" || die "could not write $f for $id — the record is unchanged from this field on"
+    _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> $v"
+    echo "$(date '+%F %T') route $id: $f ${old:-∅} -> $v [actor=$actor] ($reason)" >> "$REG/swap.log"
+    if [[ "$f" == class ]]; then _route_stale_degrade_clear "$id" "$v"; fi
+  done
+}
+
+_route_seed_default() {   # id wrapper — the coordinator row for an OPERATOR spawn that named no field
+  # ON EVERY LANE, INCLUDING A NON-ANTHROPIC ONE (controller ruling R1, on the
+  # slice-4 probe that settled S1-R10). The first cut of this gated the row on
+  # `_is_anthropic_backend` because nobody had run a class alias anywhere else;
+  # the probe then measured `--model <class>` being HONOURED on the codex lane
+  # and resolving through that lane's own `ANTHROPIC_DEFAULT_<CLASS>_MODEL` keys
+  # (research doc §6, row `S1-R10, slice 4`), so the gate would have withheld a
+  # record the lane can in fact apply. What such a lane cannot serve is caught
+  # where it is MEASURED — `_serviceable`'s backend answer at the settle — not
+  # guessed here.
+  #
+  # `_route_any` stays: a session that carries ANY field already has a record,
+  # and this must never overwrite one (spec §5.1).
+  _route_any "$1" && return 0
+  # shellcheck disable=SC2086
+  _route_argv_write "$1" spawn "coordinator row (default)" $ROUTE_COORDINATOR_ROW
+}
+
+_route_argv_class() {   # k=v... -> stdout the class= value among them, or nothing
+  local kv
+  for kv in "$@"; do [[ "$kv" == class=* ]] && { printf '%s' "${kv#class=}"; return 0; }; done
+  return 0
+}
+
+_place_for_class() {   # project class strict -> stdout the lane; PLACE_DEGRADED_TO=<rung> when placed one rung down; "" when nothing places.
+  # THE FIRST PRODUCTION CALLER THAT ASKS PLACEMENT WITH A CLASS. Slice 3 gave
+  # `_ws_least_loaded` the class positional and left every call site passing
+  # none; this is the site, and it adds exactly two things on top of it.
+  #
+  # THE RUNG BELOW, AND ONLY ON A MEASURED EMPTINESS. `_ws_least_loaded`'s ""
+  # carries three meanings (its own header enumerates them) and only one is a
+  # fact about the CLASS: at least one in-pool lane answered `_class_gate` rc 1.
+  # An rc-2 lane is placeable and would have BEEN placed, so if one is present
+  # here it failed an earlier filter — not a statement about the class, and
+  # degrading on it would be a fabricated fact (spec §5.4).
+  #
+  # `strict` IS WHO ASKED. 1 is an explicit `--route class=`: a session that must
+  # run at that class has no business on a rung the fleet cannot serve, so it
+  # refuses rather than lands somewhere its own record forbids. 0 is the
+  # coordinator row's class — nobody typed it — so when no rung places, today's
+  # class-blind rule decides and a gpt-only pool keeps placing operator spawns
+  # exactly where it placed them yesterday.
+  local project="$1" cls="${2:-}" strict="${3:-1}" hw below w unserv=0 pps
+  PLACE_DEGRADED_TO=""
+  hw=$(_ws_least_loaded "$project" "$cls")
+  if [[ -n "$hw" || -z "$cls" || "$cls" == default ]]; then printf '%s' "$hw"; return 0; fi
+  pps=$(_project_pool_state "$project")
+  for w in "${CCRC_HOME_ABLE[@]}"; do
+    _account_ok "$w" && _pool_ok "$w" "$pps" || continue
+    _class_gate "$w" "$cls"; [[ $? -eq 1 ]] && unserv=$((unserv + 1))
+  done
+  if (( unserv > 0 )); then
+    below=$(_class_below "$cls")
+    if [[ -n "$below" ]]; then
+      hw=$(_ws_least_loaded "$project" "$below")
+      [[ -n "$hw" ]] && { PLACE_DEGRADED_TO="$below"; printf '%s' "$hw"; return 0; }
+    fi
+  fi
+  (( strict )) && return 0
+  # CAPTURED, THEN PRINTED WITHOUT A NEWLINE — `_ws_least_loaded` answers with
+  # `echo` and the two arms above answer with `printf '%s'`. One seam, one
+  # shape: a caller that does not wrap this in `$( )` (the `fresh` re-pick in
+  # `cmd_ws_add`, which prints a SECOND line after it) must not be able to tell
+  # which arm answered by the bytes it gets.
+  hw=$(_ws_least_loaded "$project")
+  printf '%s' "$hw"
+}
 _route_reject_note() {   # id field len — journal an unrecognised value: the FIELD and the
   # byte COUNT, never the bytes (they are the untrusted input). Floored PER FIELD
   # through `routenote<field>` (a dotless suffix, so `_reg_purge` reaps it): two
@@ -15870,18 +16649,33 @@ _route_peek() {   # id field -> stdout the VALIDATED value, or nothing. PURE: no
   _route_valid "$f" "$v" && printf '%s' "$v"
   return 0
 }
-_route_effort_for() {   # id class -> stdout the effort to apply. Haiku 4.5 takes no effort
+_route_effort_for() {   # id class [quiet] -> stdout the effort to apply. Haiku 4.5 takes no effort
   # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
   # refused here with its own note and nothing is typed. `auto` is spec
   # §5.1's ABSENT-equivalent — haiku+auto types nothing and notes nothing,
   # same as haiku+absent; only haiku+a LEVEL is the refused pair (controller
   # ruling S1-R5, matched by `cmd_route`'s own pair check above).
-  local id="$1" cls="$2" e
-  e=$(_route_get "$id" effort)
+  #
+  # `quiet` IS A THIRD ARGUMENT AND NOT A SECOND FUNCTION (controller ruling
+  # S4-R9). The rule this applies is one rule; a peek-shaped copy of it beside
+  # this one is the drift that makes a gate and an applier disagree about the
+  # same record. What `quiet` removes is the WRITING, all of it: the journal
+  # read becomes `_route_peek` (no `route-reject`/`route-unmeasured` line, no
+  # floor marker) and the pair refusal becomes silent. Omitting the argument
+  # leaves every existing caller byte-for-byte what it was — the settle and
+  # `cmd_caps`' journaling read still say everything they said.
+  #
+  # WHO ASKS QUIETLY: `_route_wanted`, which runs on the 5s supervise tick for
+  # every live session. A tick may not write, and this used to: a haiku+level
+  # record left a `routenotepair` floor marker and a `route-refuse` line the
+  # first time the applier's own gate looked at it.
+  local id="$1" cls="$2" quiet="${3:-}" e
+  if [[ "$quiet" == quiet ]]; then e=$(_route_peek "$id" effort); else e=$(_route_get "$id" effort); fi
   if [[ "$cls" == haiku && "$e" == auto ]]; then
     e=""
   elif [[ "$cls" == haiku && -n "$e" ]]; then
-    _route_pair_note "$id"; e=""
+    [[ "$quiet" == quiet ]] || _route_pair_note "$id"
+    e=""
   fi
   printf '%s' "$e"
   return 0
@@ -15919,29 +16713,28 @@ _compact_note_clear() {   # id — the compactor is no longer declining, so the 
   return 0
 }
 
-_auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
-  # grown past COMPACT_THRESHOLD so it stays lean. Non-destructive: the SessionStart(compact) hook
-  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+# ── THE KEYSTROKE PREDICATE, ONE COPY (routing slice 4, Task 4) ──────────────
+# The compactor asked two questions before it typed anything: can this pane be
+# READ at all, and is the session at a clean IDLE turn boundary? Slice 4's
+# applier needs the identical two questions before it types `/effort` or
+# `/model`, and a second copy of them would drift — most dangerously at
+# `auto-continue`, where a stray keystroke cancels a limit wait a session is
+# sitting out on its own (D-2229).
+#
+# So they are ONE pair of functions with `_auto_compact_check` as their first
+# caller: EXTRACTED, not reimplemented. Every word, every sentence and every
+# ORDER below is the compactor's own, and `ccd-auto-compact.test.ts` — written
+# against the inline shape and untouched by this extraction — is the pin that
+# says so.
+#
+# THE ANSWER IS THREE GLOBALS, not one string. `KS_PANE` carries the capture the
+# caller then reads for itself (the compactor's `ctx` segment, the applier's
+# picker), and `KS_WHY`/`KS_DETAIL` carry the refusal's SLUG and its SENTENCE
+# apart — D-2013's split, and the reason the slug is stable enough to compare
+# while the sentence stays free to carry measured numbers.
+_pane_for_keystroke() {   # id — 0 with the last 8 pane rows in `KS_PANE`; 1 with `KS_WHY` one of
+  # pane-unreadable / pane-blank / auto-continue and `KS_DETAIL` its sentence.
   #
-  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
-  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
-  # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
-  # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
-  # this session at all" or "this session is over its threshold and we are declining anyway" —
-  # the two shapes that were silent, and the second is the one that matters.
-  [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
-  local id="$1" now last lastswap fromswap=0 prc pane pct wrapper spid sf st sua t
-  now=$(date +%s)
-  last=$(_reg_get "$id" lastcompact)
-  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
-  # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
-  # outright on the premise that "a swap landing already compacted from summary". It records a
-  # FLAG instead, and the premise is tested against the pane's own context reading below, once
-  # there is a reading to test it with. The arithmetic stays exactly where it was, on one
-  # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
-  # table pins that shape, and D-299's short-circuit is the reason it must not be split.
-  lastswap=$(_reg_get "$id" lastswap)
-  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
   # D-2013/D-2014 — THREE CONDITIONS, THREE REASONS, AND THE FIRST TWO ARE MEASURED RATHER THAN
   # NAMED. "tmux could not be asked" (dead pane, wedged server — the context is UNMEASURED and the
   # remedy is to go look at the substrate) is a different fact from "tmux answered and the pane is
@@ -15961,24 +16754,32 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # refusal — the session never compacts), and `grep -q "❯"` matches an older prompt line while a
   # dialog is up, which is how `/compact` gets typed into a menu. KEEP THE PIPELINE ON ONE LINE;
   # `ccd-auto-compact.test.ts` pins the 8-ROW window against exactly that regression.
-  #
-  # The third is `no-ctx-segment`: the pane was read fine and its statusline does not publish the
-  # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
-  # 3 of 19 panes are in that state, and nothing anywhere said so.
+  local id="$1" prc pane
+  KS_PANE=""; KS_WHY=""; KS_DETAIL=""
   pane=$(tmux capture-pane -t "$(_tmux "$id")" -p 2>/dev/null | tail -8); prc=$?
-  [[ "$prc" == 0 ]] || { _compact_note "$id" pane-unreadable "tmux capture-pane rc=$prc"; return 0; }
-  [[ -n "$pane" ]] || { _compact_note "$id" pane-blank "tmux capture-pane rc=0, empty capture"; return 0; }
-  _pane_auto_continue_armed "$pane" && { _compact_note "$id" auto-continue "Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 0; }
-  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
-  [[ "$pct" -ge "$COMPACT_THRESHOLD" ]] || { _compact_note_clear "$id"; return 0; }
-  # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
-  # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
-  # constant, which says exactly what 80%+ does and does not establish about the landing.
-  (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
-    && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
+  [[ "$prc" == 0 ]] || { KS_WHY=pane-unreadable; KS_DETAIL="tmux capture-pane rc=$prc"; return 1; }
+  [[ -n "$pane" ]] || { KS_WHY=pane-blank; KS_DETAIL="tmux capture-pane rc=0, empty capture"; return 1; }
+  _pane_auto_continue_armed "$pane" && { KS_WHY=auto-continue; KS_DETAIL="Claude Code is waiting out a limit on its own; a keystroke would cancel it (D-2229)"; return 1; }
+  KS_PANE="$pane"
+  return 0
+}
+
+_idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean idle turn boundary;
+  # 1 with `KS_WHY` one of mid-turn / no-prompt / no-pane-pid / status-unreadable /
+  # not-idle / quiet-unmeasured / not-quiet / drafting and `KS_DETAIL` its sentence.
+  #
+  # `ctxnote` IS THE CALLER'S OWN MEASUREMENT, spliced into the sentences rather
+  # than measured here: the compactor passes `ctx ${pct}%` and gets back byte for
+  # byte the details it used to build inline, while the applier — which has no
+  # context reading to offer and no business taking one — passes the empty string
+  # and the `${ctxnote:+…}` arms collapse the separator with it. One template,
+  # two callers, and neither has to know the other's vocabulary.
+  local id="$1" pane="$2" ctxnote="${3:-}" now wrapper spid sf st sua t
+  KS_WHY=""; KS_DETAIL=""
+  now=$(date +%s)
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
-  echo "$pane" | grep -q "esc to interrupt" && { _compact_note "$id" mid-turn "ctx ${pct}%"; return 0; }
-  echo "$pane" | grep -q "❯" || { _compact_note "$id" no-prompt "ctx ${pct}%"; return 0; }
+  echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
+  echo "$pane" | grep -q "❯" || { KS_WHY=no-prompt; KS_DETAIL="$ctxnote"; return 1; }
   wrapper=$(_reg_get "$id" wrapper)
   spid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   # D-2013 AT THE NARROWEST SEAM: "MEASURED BUSY" IS NOT "COULD NOT MEASURE". An earlier cut of
@@ -15989,7 +16790,7 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # wrong config directory, and the file may be absent or carry no `status` token. Every one of
   # those means GO LOOK AT THE BOX; `status=busy` means WAIT. So each gets its own slug, and the
   # detail carries the path/status that says which flavour it is.
-  [[ -n "$spid" ]] || { _compact_note "$id" no-pane-pid "tmux list-panes named no pane pid, ctx ${pct}%"; return 0; }
+  [[ -n "$spid" ]] || { KS_WHY=no-pane-pid; KS_DETAIL="tmux list-panes named no pane pid${ctxnote:+, $ctxnote}"; return 1; }
   sf="$(_cfg_dir "$wrapper")/sessions/$spid.json"
   # `-f` BEFORE THE GREP — same rung and same reason as `_auto_swap_check`'s
   # copy above, but NOT the same arm, and the difference is the whole point.
@@ -16023,36 +16824,800 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # DANGLING SYMLINK is not absence, and reporting it as "no status in" would
   # send the operator looking for a file that is not the problem.
   if [[ ! -e "$sf" && ! -L "$sf" ]]; then
-    _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0
+    KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1
   elif [[ ! -f "$sf" ]]; then
-    _compact_note "$id" status-unreadable "not a regular file: $sf, ctx ${pct}%"; return 0
+    KS_WHY=status-unreadable; KS_DETAIL="not a regular file: $sf${ctxnote:+, $ctxnote}"; return 1
   fi
   st=$(grep -oE '"status":"[a-z_-]+"' "$sf" 2>/dev/null | head -1 | cut -d'"' -f4)
-  [[ -n "$st" ]] || { _compact_note "$id" status-unreadable "no status in $sf, ctx ${pct}%"; return 0; }
-  [[ "$st" == "idle" ]] || { _compact_note "$id" not-idle "status=$st ctx ${pct}%"; return 0; }
+  [[ -n "$st" ]] || { KS_WHY=status-unreadable; KS_DETAIL="no status in $sf${ctxnote:+, $ctxnote}"; return 1; }
+  [[ "$st" == "idle" ]] || { KS_WHY=not-idle; KS_DETAIL="status=$st${ctxnote:+ $ctxnote}"; return 1; }
   # Quiet gate: only compact a session idle a beat — not the instant it goes idle, nor one just
   # touched from any surface (statusUpdatedAt ms ticks on every busy<->idle transition). Same
   # split for the same reason: a MISSING `statusUpdatedAt` is not "someone just touched it", and
   # `=~ ^[0-9]+$` (was `-n`) is also the D-299 guard on the operand the next line evaluates.
   sua=$(grep -oE '"statusUpdatedAt":[0-9]+' "$sf" 2>/dev/null | head -1 | cut -d: -f2)
-  [[ "$sua" =~ ^[0-9]+$ ]] || { _compact_note "$id" quiet-unmeasured "no statusUpdatedAt in $sf, ctx ${pct}%"; return 0; }
+  [[ "$sua" =~ ^[0-9]+$ ]] || { KS_WHY=quiet-unmeasured; KS_DETAIL="no statusUpdatedAt in $sf${ctxnote:+, $ctxnote}"; return 1; }
   [[ $(( now * 1000 - sua )) -ge $(( COMPACT_QUIET * 1000 )) ]] \
-    || { _compact_note "$id" not-quiet "ctx ${pct}%"; return 0; }
+    || { KS_WHY=not-quiet; KS_DETAIL="$ctxnote"; return 1; }
   # Don't clobber a half-typed message in the input box. `-e`: the reader needs
   # the escape codes to tell a real draft from the dim ghost-suggestion — see
   # `_pane_box_draft`, which refused every suggestion-showing session for ever
   # when it was handed a plain capture.
   t=$(_tmux "$id")
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
-    && { _compact_note "$id" drafting "ctx ${pct}%"; return 0; }
+    && { KS_WHY=drafting; KS_DETAIL="$ctxnote"; return 1; }
+  return 0
+}
+
+_auto_compact_check() {   # id — at a clean idle turn boundary, /compact a session whose own context has
+  # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. Non-destructive: the SessionStart(compact) hook
+  # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
+  #
+  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
+  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
+  # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
+  # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
+  # this session at all" or "this session is over its threshold and we are declining anyway" —
+  # the two shapes that were silent, and the second is the one that matters.
+  [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
+  local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t
+  now=$(date +%s)
+  last=$(_reg_get "$id" lastcompact)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$COMPACT_COOLDOWN" ]] && return 0
+  # D-2014 — MEASURE the landing compaction; do not assert it. This line used to `return 0`
+  # outright on the premise that "a swap landing already compacted from summary". It records a
+  # FLAG instead, and the premise is tested against the pane's own context reading below, once
+  # there is a reading to test it with. The arithmetic stays exactly where it was, on one
+  # `[[ ]]` line with its `=~ ^[0-9]` guard first — `ccd-arith-containment.test.ts`'s structural
+  # table pins that shape, and D-299's short-circuit is the reason it must not be split.
+  lastswap=$(_reg_get "$id" lastswap)
+  [[ "$lastswap" =~ ^[0-9]+$ && $((now - lastswap)) -lt "$COMPACT_COOLDOWN" ]] && fromswap=1
+  # THE PANE READ AND THE IDLE READ ARE `_pane_for_keystroke`/`_idle_for_keystroke` (slice 4,
+  # Task 4), the two halves of this function the applier needed word for word. The refusal words,
+  # their order and their sentences are unchanged — `$KS_WHY` is the slug this function used to
+  # pass `_compact_note` as a literal and `$KS_DETAIL` is the sentence it used to build inline,
+  # with `ctx ${pct}%` handed to the second call so every one of its details renders exactly as
+  # it did. WHAT STAYS HERE is everything BETWEEN them — `no-ctx-segment`, the threshold clear
+  # and `post-swap` — because those are the compactor's own arithmetic and not a keystroke
+  # question at all, and because keeping them between the two calls is what makes a
+  # below-threshold mid-turn pane record nothing, exactly as before.
+  _pane_for_keystroke "$id" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  pane="$KS_PANE"
+  # `no-ctx-segment` is the THIRD condition of the pane read and it stayed behind with the
+  # arithmetic that needs it: the pane was read fine and its statusline does not publish the
+  # number, so the session is permanently invisible to this function. Measured live 2026-09-08:
+  # 3 of 19 panes are in that state, and nothing anywhere said so.
+  pct=$(_pane_ctx_pct "$pane"); [[ -n "$pct" ]] || { _compact_note "$id" no-ctx-segment; return 0; }
+  # THE THRESHOLD IS THIS SESSION'S, NOT THE BOX'S (routing spec §5.1; slice 6, Task 5). The
+  # record's `compact` field is the number this comparison uses. The matrix gives a WORKER 40 so
+  # a dependent chain comes back under the wall between tasks (S6-R9), while a coordinator keeps
+  # the default.
+  #
+  # THE FIELD IS READ THROUGH `_route_get`, NOT `_reg_get` (controller ruling S6-R12). The
+  # routing record's fields have ONE validated reader and this is a routing field like any
+  # other: `_route_get` answers the value only when `_route_valid` accepts it — the `compact`
+  # arm admits two or three digits in 10–100 and nothing else — and answers NOTHING for a bad
+  # value, an unmeasurable vocabulary or a present-but-unreadable file, journalling each of the
+  # three through its own routing note (`_route_reject_note` names the field and a BYTE COUNT,
+  # never the bytes; `_route_unmeasured_note`; `_route_unread_note`). Reading it raw here would
+  # have given the field a SECOND, looser vocabulary — `5`, `0`, `007`, `120` and `99999` are
+  # all digits and none of them is a threshold this fleet admits — and would have folded
+  # absent, empty and unreadable into the one `""` those three notes exist to tell apart.
+  #
+  # SO THE REFUSAL'S JOURNAL IS THE ROUTING NOTE, not `compactskip`. A bad value used to write
+  # a `compact-skip … compact-field-invalid` line under `_compact_note`'s shared floor, where
+  # the next below-threshold tick's `_compact_note_clear` erased it: a routing refusal wearing
+  # the compactor's marker, cleared by the compactor's own success path. `_route_get`'s notes
+  # carry their own per-field floor marker (`routenotecompact`) and nothing here clears them.
+  #
+  # ABSENT (and every condition `_route_get` answers nothing for) MEANS `COMPACT_THRESHOLD`,
+  # which is every session that predates the field and every one the coordinator gives no
+  # threshold — a bad byte must never leave a session uncompactable.
+  thr=$(_route_get "$id" compact)
+  thr=${thr:-$COMPACT_THRESHOLD}
+  # THE DIGIT TEST IS FIRST AND INSIDE THE SAME `[[ ]]` as the arithmetic, which is the shape
+  # `ccd-arith-containment.test.ts`'s SITES table pins and the only shape that short-circuits
+  # before `-ge` EVALUATES its operand (D-299). `$thr` is a validated value or the default by
+  # the line above, so the guard is belt and braces today — it is what refuses the future edit
+  # that reads the field raw again.
+  [[ "$thr" =~ ^[0-9]+$ && "$pct" -ge "$thr" ]] || { _compact_note_clear "$id"; return 0; }
+  # D-2014, the decision the flag above deferred. Over threshold AND freshly landed: suppress only
+  # below COMPACT_LANDING_WALL. At or above it the suppression no longer earns its veto — see that
+  # constant, which says exactly what 80%+ does and does not establish about the landing.
+  (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
+    && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
+  _idle_for_keystroke "$id" "$pane" "ctx ${pct}%" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  # `wrapper` is read again here rather than carried out of the predicate: it is the log line
+  # below that wants it, and a predicate that answered a second value through a global would be
+  # a wider contract than "is this pane typeable" for one string.
+  wrapper=$(_reg_get "$id" wrapper)
+  t=$(_tmux "$id")
   # Nothing is being declined any more, so the field must go — the `auto-compact` line below is
   # this tick's record, and a surviving `compactskip` beside it would claim a refusal that did
   # not happen. Cleared BEFORE the send-keys for the same reason `_reg_set lastcompact` is: what
   # the registry says must not depend on whether tmux answered.
   _compact_note_clear "$id"
   _reg_set "$id" lastcompact "$now"
-  echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${COMPACT_THRESHOLD}% [wrapper=$wrapper]" >> "$REG/swap.log"
+  echo "$(date '+%F %T') auto-compact $id: ctx ${pct}% >= ${thr}% [wrapper=$wrapper]" >> "$REG/swap.log"
   tmux send-keys -t "$t" -l "/compact"; sleep 1; tmux send-keys -t "$t" Enter
+}
+
+# ── APPLYING THE RECORD TO A LIVE SESSION (routing spec §5.3; slice 4, Task 4) ─
+#
+# ccd IS THE ONE TYPER. The record is the arbiter and nothing above ccd — not
+# the server, not the PWA — sends `/effort` or `/model` into a pane; everything
+# below is the whole of the fleet's live-change machinery, reached from exactly
+# two places: `ccd route --apply` (the operator, once) and `_route_apply_check`
+# (the supervise tick, every 5s per live session).
+#
+# ONLY THE SESSION-ONLY FORMS, and that is a measurement rather than a
+# preference. `/effort high` typed plain PERSISTS: it writes
+# `modelSettings.<model-id>.effortLevel` into the LANE's settings.json, which
+# every other session on that account then inherits (D-2808, and D-2810 found
+# four such pins already on the fleet). The slider + `s` writes nothing — the
+# probe diffed settings.json before and after on both lanes. So the applier
+# drives the pickers even though typing an argument would be one line.
+#
+# WHAT IS APPLIED LIVE AND WHAT WAITS FOR THE SETTLE. `class` and `effort` have
+# a keystroke; `workflow`, `subagent` and `compact` do not — workflows are an
+# argv `--settings` key, the subagent floor is an env var, and `compact` is read
+# by the compactor itself. Those three are recorded applied the moment they are
+# WRITTEN, because the next spawn composes them from the same record, and a
+# field that waits for a keystroke that does not exist would keep this session
+# pending for ever.
+_route_note() {   # id reason [detail] — record why the applier declined this tick.
+  # `_compact_note`'s shape, line for line, and the split is the same one D-2013
+  # argues at length there: `$REG/<id>.routeskip` is the MARKER (`<epoch>
+  # <reason>`, rewritten the moment the reason CHANGES, removed by
+  # `_route_note_clear`) and `$REG/<id>.routenote` is the log floor's ANCHOR (a
+  # bare epoch, never cleared). Without that split a reason that FLAPS — an
+  # overlay hiding the statusline for one tick, a turn starting between two
+  # ticks — defeats the floor completely and writes a swap.log line every 5s.
+  #
+  # ITS OWN FIELDS, NOT THE COMPACTOR'S. A refusal to apply a routing change and
+  # a refusal to compact are two conditions an operator handles differently, so
+  # they never share `compactskip`: a below-threshold compaction tick clears
+  # `compactskip` and must leave a standing `routeskip` exactly where it was.
+  local id="$1" reason="$2" detail="${3:-}" rec prev now
+  now=$(date +%s)
+  rec=$(_reg_get "$id" routeskip)
+  prev="${rec#* }"; [[ "$rec" == "$prev" ]] && prev=""   # one-token (or empty): no reason half
+  [[ "$prev" == "$reason" ]] || _reg_set "$id" routeskip "$now $reason"
+  # THE FLOOR IS `_route_note_floored`, not a second copy of its arithmetic.
+  # `_compact_note` spells that `[[ "$nts" =~ ^[0-9]+$ && $((now - nts)) -lt … ]]`
+  # guard inline because it predates this file's own floor helper; writing it out
+  # a third time here would put a byte-identical line beside the helper's and
+  # leave the D-299 digit guard on it unpinned by anything (the structural table
+  # in `ccd-arith-containment.test.ts` anchors on the line's text and asserts the
+  # match is unique). One reader of `ROUTE_NOTE_FLOOR`, already guarded.
+  _route_note_floored "$id" routenote && return 0
+  echo "$(date '+%F %T') route-skip $id: $reason${detail:+ ($detail)}" >> "$REG/swap.log"
+  return 0
+}
+
+_route_note_clear() {   # id — the applier is no longer declining, so the MARKER must go; a stale
+  # `mid-turn` read as current is the same lie `_compact_note_clear` names. The
+  # ANCHOR (`routenote`) is deliberately left standing — clearing it is what let
+  # an alternating reason defeat the floor. Silent by construction.
+  [[ -e "$REG/$1.routeskip" ]] && rm -f -- "$REG/$1.routeskip"
+  return 0
+}
+
+# ── `routeapplied`: what this pane is ACTUALLY running ───────────────────────
+# A space-separated `field=value` word list in `$REG/<id>.routeapplied`. It is
+# the only thing that makes the tick cheap: the record says what is WANTED and
+# this says what LANDED, so the comparison that decides whether to touch tmux at
+# all is two registry reads. It is written by the settle (from what `_spawn_start`
+# COMPOSED) and by the applier (on a read-back acknowledgement, never on the
+# send-keys alone), and by nothing else.
+_route_applied_set() {   # id field value — rewrite the list with <field> replaced or appended
+  local id="$1" f="$2" v="$3" cur out="" w
+  local -a words=()
+  cur=$(_reg_get "$id" routeapplied 2>/dev/null)
+  # `read -a`, not `for w in $cur`: the file is writable by any session on the
+  # box (one UNIX user — attribution, not authentication), and an unquoted
+  # expansion would GLOB a value carrying `*` against this directory.
+  read -r -a words <<< "$cur"
+  for w in ${words[@]+"${words[@]}"}; do
+    [[ "$w" == "$f="* ]] && continue
+    out="${out:+$out }$w"
+  done
+  _reg_set "$id" routeapplied "${out:+$out }$f=$v"
+}
+
+_route_applied_get() {   # id field -> stdout the recorded value, or nothing. Always 0.
+  local id="$1" f="$2" w
+  local -a words=()
+  read -r -a words <<< "$(_reg_get "$id" routeapplied 2>/dev/null)"
+  for w in ${words[@]+"${words[@]}"}; do
+    [[ "$w" == "$f="* ]] && { printf '%s' "${w#*=}"; return 0; }
+  done
+  return 0
+}
+
+_route_inert_has() {   # <inert list> field -> 0 iff the comma list names the field
+  # ONE READER OF THE `inert` VOCABULARY for every consumer of the stamp. The
+  # list is a comma-separated set of FIELD NAMES drawn from `ROUTE_INERTABLE`
+  # (`_route_valid`'s `inert` arm), so membership is a word test and never a
+  # substring one: `*effort*` would also match a future `noeffort`.
+  local list="$1" f="$2"
+  _route_word_in "$f" "${list//,/ }"
+}
+
+_route_wanted() {   # id -> stdout "<class> <effort>": the two values the applier would type.
+  # ONE SPELLING, read by both the cheap pending check and the applier itself —
+  # two copies of "what does this record ask for" is exactly the drift that would
+  # make the tick loop for ever on a field it then declines to type.
+  #
+  # AN ABSENT FIELD IS AN EMPTY WORD, AND THAT IS NOT `default`/`auto`
+  # (controller ruling S4-R8). Three conditions, three answers: the field is
+  # ABSENT (nothing is pending for it and nothing is ever typed for it), or it
+  # carries the explicit word `default`/`auto` (the picker's `Default` row; the
+  # lane decides the level), or it carries a real value. Collapsing the first two
+  # is what made a live session carrying only `compact=off` get `/model` + Enter
+  # + `s` on the first tick, overriding a model a human had picked by hand. The
+  # settle has always drawn the same line — `[[ -n "$rclass" && "$rclass" !=
+  # default ]]` composes no `--model` for either, but it composes nothing for an
+  # absent class the way it composes nothing for `default`, and now says so in
+  # its `routeapplied` stamp too.
+  #
+  # THE CLASS SERVED, NEVER THE INTENDED ONE: a `degraded` stamp means this lane
+  # measured unable to serve `class`, and typing the intended class into the
+  # picker would ask the pane for a model the settle already ruled out (and, on
+  # the fable rung, one the picker does not even list).
+  #
+  # AN INERT FIELD IS NOT WANTED AT ALL (controller ruling S4-R9). `inert` is the
+  # settle's own statement that this lane could not apply the field; a tick that
+  # then typed it would contradict the record on disk, and the `routeapplied`
+  # stamp beside it would claim a state nobody set. `class` is never inert —
+  # `ROUTE_INERTABLE` has no word for it — so only the effort arm asks. `subagent`
+  # IS inertable (slice 6 Task 3) and still does not ask here, for a different
+  # reason: this function answers the two values THE APPLIER TYPES, and the
+  # subagent is an env key on the spawn's argv with no picker behind it. Its
+  # inert stamp is read where it is claimed instead — `_route_apply_seed` and
+  # `_spawn_start`'s `routeapplied` line.
+  #
+  # IT WRITES NOTHING. Five registry READS and no write: `_route_peek` for
+  # `class` and `degraded` and `inert`, and `_route_effort_for … quiet`, which is
+  # a sixth read (`effort`) through the same pure reader. That is the whole
+  # contract this function owes `_route_apply_pending`, which runs on every live
+  # session every five seconds.
+  local id="$1" cls deg eff
+  cls=$(_route_peek "$id" class)
+  deg=$(_route_peek "$id" degraded)
+  [[ -n "$deg" ]] && cls="$deg"
+  eff=$(_route_effort_for "$id" "$cls" quiet)
+  _route_inert_has "$(_route_peek "$id" inert)" effort && eff=""
+  printf '%s %s' "$cls" "$eff"
+  return 0
+}
+
+_route_pending_word() {   # id -> "<field>=<value>" for the FIRST field the applier would type, or nothing
+  # THE ONE PLACE "is this field pending" is decided, so the cheap gate, the
+  # applier and the give-up note can never disagree about WHICH field is stuck.
+  # Class first, then effort — `_route_apply_now`'s own order (D-2811).
+  local id="$1" want cls eff
+  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  [[ -n "$cls" && "$cls" != "$(_route_applied_get "$id" class)" ]] && { printf 'class=%s' "$cls"; return 0; }
+  [[ -n "$eff" && "$eff" != "$(_route_applied_get "$id" effort)" ]] && { printf 'effort=%s' "$eff"; return 0; }
+  return 0
+}
+
+_route_apply_pending() {   # id -> 0 iff the record asks for a class or effort `routeapplied` does not record
+  # REGISTRY READS ONLY, AND THAT IS NOW TRUE (controller ruling S4-R9; it was
+  # not, and the comment here said it was — `_route_wanted` reached
+  # `_route_effort_for`, which could leave a `routenotepair` marker and a
+  # `route-refuse` line on a tick). The reads: `_route_any`'s seven `-e` stats,
+  # then `_route_wanted`'s four (`class`, `degraded`, `effort`, `inert`) and one
+  # or two `_route_applied_get`s. This is the tick's first act on every live
+  # session — ~20 sessions x 12 ticks a minute — so the healthy answer, nothing
+  # pending, has to cost a few stats and no tmux at all.
+  local id="$1"
+  _route_any "$id" || return 1
+  [[ -n "$(_route_pending_word "$id")" ]] && return 0
+  return 1
+}
+
+_route_apply_seed() {   # id [why] -> 0 iff it SEEDED `routeapplied` (the tick's caller then returns)
+  # A RECORD THAT PREDATES THE APPLIER IS NOT AN UNAPPLIED RECORD (controller
+  # ruling S4-R8). Every routing record on this fleet was applied by its last
+  # settle's argv — that is what `_spawn_start` composes — but until slice 4
+  # nothing WROTE that down, so a session whose record was set before this code
+  # shipped carries no `routeapplied` file at all. Typing on first sight would
+  # drive the picker on every such session at once, for no change: the pane is
+  # already running what the record asks for.
+  #
+  # So the first tick that finds a record with no stamp WRITES THE STAMP FROM THE
+  # SERVED VALUES AND TYPES NOTHING, and says so in one swap.log line. From the
+  # next tick on the file exists and the ordinary comparison decides — a
+  # DIVERGENT write after the seed (`ccd route --set effort=high`) is pending and
+  # is typed at the next idle tick, which is the whole point of seeding rather
+  # than suppressing.
+  #
+  # WHAT IS SEEDED IS WHAT `_route_wanted` ANSWERS, not the record's raw fields:
+  # the class SERVED (a `degraded` stamp wins), the effort past the haiku filter,
+  # and nothing at all for a field that is absent or named in `inert`. Written
+  # any other way the seed would itself leave something pending.
+  #
+  # THE GATE BELOW IS A PROXY, AND EVERY WRITER MAINTAINS IT (final review
+  # finding 1). "No stamp" only MEANS "predates the applier" at the deploy
+  # moment: `_spawn_start` DELETES the stamp for a session with no record, so
+  # every never-routed session on the fleet carries no file, and the FIRST
+  # routing write to one of them — the operator's `--apply`, the coordinator's
+  # plain `ccd route`, a wave N>=2 dispatch — would be SEEDED on the next tick
+  # and never typed: recorded applied without a keystroke, nothing pending, no
+  # retry. So `_route_applied_before_write` seeds from the values served BEFORE
+  # any routing write, which is exactly what this ruling asserts about them, and
+  # the write that follows is the divergence this function's third paragraph
+  # promises. The two callers are therefore the tick (where the swap.log line
+  # says the record predates the applier) and every writer (where it says what
+  # it seeded and why); `why` is that sentence, never a fact this function
+  # measured.
+  #
+  # AN EMPTY SEED IS SILENT. A session with NO record at all was served nothing,
+  # so the stamp claims nothing and there is no line to write — the tick can
+  # never reach that state (`_route_apply_pending` returned first), and a writer
+  # reaching it is a session being routed for the very first time.
+  [[ -e "$REG/$1.routeapplied" ]] && return 1
+  local id="$1" why="${2:-record predates the applier}" want cls eff sub wf cmp inert words=""
+  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  [[ -n "$cls" ]] && words="class=$cls"
+  [[ -n "$eff" ]] && words="${words:+$words }effort=$eff"
+  # `_route_peek`, not `_route_get`: the seed runs on a supervise tick and a tick
+  # writes no journal line (the rule `_route_apply_pending` states above).
+  inert=$(_route_peek "$id" inert)
+  sub=$(_route_peek "$id" subagent)
+  _route_inert_has "$inert" subagent || { [[ -n "$sub" ]] && words="${words:+$words }subagent=$sub"; }
+  wf=$(_route_peek "$id" workflow)
+  _route_inert_has "$inert" workflow || { [[ -n "$wf" ]] && words="${words:+$words }workflow=$wf"; }
+  cmp=$(_route_peek "$id" compact); [[ -n "$cmp" ]] && words="${words:+$words }compact=$cmp"
+  _reg_set "$id" routeapplied "$words"
+  [[ -n "$words" ]] && echo "$(date '+%F %T') routeapplied-seeded $id: $words ($why)" >> "$REG/swap.log"
+  return 0
+}
+
+_route_applied_before_write() {   # id — the stamp must EXIST before any routing field is written
+  # ONE CALL, TWO WRITERS (`cmd_route` and `_route_argv_write`), and it is what
+  # makes `_route_apply_seed`'s gate honest — that function's own header argues
+  # the whole case. Called AFTER validation and BEFORE the first `_reg_set`, so
+  # a refused call still touches nothing and the values it stamps are the ones
+  # the last settle actually composed.
+  _route_apply_seed "$1" "seeded at a route write: this is what the last settle composed"
+  return 0
+}
+
+_route_stale_degrade_clear() {   # id class — drop a `degraded` stamp that cannot have been measured for THIS class
+  # THE STAMP IS A STATEMENT ABOUT THE PREVIOUS CLASS (final review finding 4).
+  # `_route_wanted` answers the class SERVED, never the intended one, which is
+  # right while the intent is unchanged and wrong the moment it changes: with
+  # `class=fable degraded=opus` already applied, an operator tapping Sonnet got
+  # the record rewritten, ZERO keystrokes, no refusal word and a pane still
+  # running opus — the tap silently a no-op until some later settle.
+  #
+  # THE TEST IS THE SETTLE'S OWN (ruling S3-R7), and this is now its one reader:
+  # a stamp that is not one rung below the class now intended cannot have been
+  # the measurement for it. `default` has no rung below it here — the lane
+  # decides that class, so any standing stamp is about a class nobody intends
+  # any more — where `_class_below` would answer `haiku` for the word's position
+  # in `ROUTE_CLASSES`.
+  #
+  # CLEARED, NOT REFUSED: ccd re-stamps at the next settle if the new class is
+  # unservable too, and `_route_restore` says so in the journal and in swap.log,
+  # so nothing about the degrade is lost quietly.
+  local id="$1" cls="$2" deg below=""
+  deg=$(_route_get "$id" degraded)
+  [[ -n "$deg" ]] || return 0
+  [[ -n "$cls" && "$cls" != default ]] && below=$(_class_below "$cls")
+  [[ "$deg" == "$below" ]] && return 0
+  _route_restore "$id" "$deg" "$cls" "stale: the intended class is now ${cls:-∅}"
+}
+
+_route_compact_settling() {   # id -> 0 iff the compactor typed into this pane inside ROUTE_COMPACT_QUIET
+  # THE ONE COLLISION THE DESIGN NEVER CONSIDERED (final review finding 5). The
+  # supervise tick runs `_auto_compact_check "$id"; _route_apply_check "$id"` on
+  # one line: the compactor ends by sending `/compact` + Enter and signals
+  # nothing, and the applier then re-asks an idle predicate that reads a pane
+  # capture and a `sessions/<pid>.json` — neither of which has moved yet — and
+  # types `/model` into a pane mid-compaction. `_route_note`'s own words for
+  # that hazard: a mid-turn pane takes the slash command as a message.
+  #
+  # `lastcompact` IS THE SIGNAL, and it is deliberately not a shell variable:
+  # `_auto_compact_check` writes it immediately before its send-keys (and before
+  # tmux can fail, for the reason stated there), so the interlock also holds
+  # between PROCESSES — the operator's `ccd route --apply` is not the
+  # supervisor's process and could collide the same way.
+  #
+  # ITS REFUSAL IS A NOTE, NEVER AN ATTEMPT (ruling S4-R7): nothing was typed and
+  # the condition clears itself within `ROUTE_COMPACT_QUIET`, so spending the
+  # retry budget on it would exhaust a session that was merely compacting.
+  #
+  # D-299: the digit guard is FIRST inside the `[[ ]]`, so a torn or hand-edited
+  # `lastcompact` never reaches the arithmetic (`ccd-arith-containment.test.ts`
+  # carries this site in its structural table).
+  local id="$1" last now
+  last=$(_reg_get "$id" lastcompact 2>/dev/null)
+  now=$(date +%s)
+  [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$ROUTE_COMPACT_QUIET" ]] || return 1
+  KS_WHY=compacting
+  KS_DETAIL="a /compact was typed into this pane less than ${ROUTE_COMPACT_QUIET}s ago"
+  return 0
+}
+
+_route_tries_clear() {   # id — drop the bounded-retry counter (controller ruling S4-R7)
+  # THREE THINGS CLEAR IT and they are the three that make a further attempt
+  # MEAN something again: a `cmd_route` write to this session (the operator
+  # changed what is being asked for, with or without `--apply`), the settle's own
+  # `routeapplied` stamp (a fresh spawn composed the record into the argv, so
+  # whatever the pane refused is moot), and the pending set becoming empty.
+  [[ -e "$REG/$1.routetries" ]] && rm -f -- "$REG/$1.routetries"
+  return 0
+}
+
+_route_try_bump() {   # id — count ONE attempt that reached the pane and was not acknowledged
+  # WHAT COUNTS AS AN ATTEMPT is exactly the set of refusals that came back FROM
+  # THE PANE — `apply-unconfirmed`, `no-picker-row`, `no-slider-stop`. A refusal
+  # from `_pane_for_keystroke`/`_idle_for_keystroke` (mid-turn, drafting, an
+  # occupied box, a session sitting out a usage limit) never gets here: nothing
+  # was typed, the condition is transient by construction, and counting it would
+  # exhaust the budget on a session that was simply busy.
+  local id="$1" rec n now
+  now=$(date +%s)
+  rec=$(_reg_get "$id" routetries 2>/dev/null)
+  n="${rec%% *}"
+  if [[ "$n" =~ ^[0-9]+$ ]]; then n=$((n + 1)); else n=1; fi
+  _reg_set "$id" routetries "$n $now"
+  return 0
+}
+
+_route_retry_ok() {   # id -> 0 iff the applier may type this tick (controller ruling S4-R7)
+  # THE FLOOR BOUNDS THE LOG LINE; THIS BOUNDS THE KEYSTROKES. `_route_note`'s
+  # `ROUTE_NOTE_FLOOR` makes a standing refusal quiet, which is a different thing
+  # from making it cheap: before this, a permanently unapplyable field — `/effort
+  # ultracode` on a lane launched `{"enableWorkflows":false}`, which Claude Code
+  # refuses verbatim, or `class=fable` on a lane whose picker lists no Fable row —
+  # re-entered the applier every 5s and typed a whole key sequence into a live
+  # pane twelve times a minute, for ever, silently after the first note. Worse,
+  # the class arm's early return starved the effort arm, so a stuck class also
+  # meant an effort that never landed.
+  #
+  # THREE ANSWERS, NOT TWO: never attempted (type), inside the backoff (wait,
+  # silently — the note for this condition was already written by the attempt
+  # that set the counter), and at the cap (say `apply-gave-up` once per floor
+  # and type nothing until something clears the counter).
+  local id="$1" rec n ts now
+  rec=$(_reg_get "$id" routetries 2>/dev/null)
+  [[ -n "$rec" ]] || return 0
+  n="${rec%% *}"; ts="${rec##* }"
+  now=$(date +%s)
+  # D-299: BOTH TOKENS ARE GUARDED `=~ ^[0-9]+$` FIRST inside each `[[ ]]`, so a
+  # torn or hand-edited counter never reaches an arithmetic context (`$REG` is
+  # writable by any session on this box — attribution, not authentication). And
+  # because neither guarded line can then fire, the third drops the unreadable
+  # counter rather than wedging the applier on bytes it cannot read.
+  [[ "$n" =~ ^[0-9]+$ && "$n" -ge "$ROUTE_RETRY_MAX" ]] && { _route_note "$id" apply-gave-up "$(_route_pending_word "$id") after $n attempts"; return 1; }
+  [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && $((now - ts)) -ge "$ROUTE_RETRY_BACKOFF" ]] && return 0
+  [[ "$n" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ ]] || { _route_tries_clear "$id"; return 0; }
+  return 1
+}
+
+_route_ack_wait() {   # tmuxname regex [rows] -> 0 iff the pane shows the acknowledgement inside the window
+  # THE READ-BACK IS THE MEASUREMENT. A `send-keys` that returns 0 proves tmux
+  # accepted the bytes and nothing more — the TUI may have been mid-repaint, a
+  # dialog may have eaten them, the slash command may have been refused outright
+  # (`Ultracode needs dynamic workflows enabled`, measured verbatim on a lane
+  # launched with `{"enableWorkflows":false}`). So nothing is recorded applied
+  # until Claude Code says so in its own words, and a silent pane is
+  # `apply-unconfirmed` rather than a lie in the registry.
+  #
+  # `rows` BOUNDS THE READ TO THE BOTTOM OF THE PANE, and it is half of binding
+  # an acknowledgement to the act that earned it (final review finding 3). A
+  # whole-pane grep also matches a banner far up the scrollback — the defect
+  # `_pane_for_keystroke`'s own header argues at length, one seam over — so a
+  # caller that KNOWS where its acknowledgement renders says so. The default
+  # `+1` is `tail`'s "from the first line", i.e. the whole visible pane, byte
+  # for byte what every caller got before this parameter existed.
+  local t="$1" re="$2" rows="${3:-+1}" i
+  for ((i = 0; i < ROUTE_ACK_WAIT; i++)); do
+    tmux capture-pane -t "$t" -p 2>/dev/null | tail -n "$rows" | grep -qE "$re" && return 0
+    sleep 1
+  done
+  return 1
+}
+
+_route_escape() {   # id — leave the pane as we found it after an unacknowledged sequence
+  # THE TARGET IS DERIVED HERE, FROM THE REGISTRY ID, and that is the whole
+  # reason this function takes an id rather than the tmux name its callers
+  # already hold (controller ruling S4-R14). `ccd-account-pane.test.ts` reads
+  # every key-sending call in this file and requires each target to be `$t` or
+  # `$(_tmux "$id")`, because `_tmux` can only ever name `cc-<id>` — so no ccd
+  # typer can reach an auth pane (`cc-auth-<id>`), whose whole safety property is
+  # that nothing types into it. A bare `"$1"` here would be a literal target as
+  # far as that scan is concerned, and a caller one refactor away could hand it
+  # any pane name at all.
+  #
+  # CONTROLLER RULING S4-R9. A `send-keys` that is never acknowledged has one of
+  # two shapes and both leave something OPEN: the slider is still up, or the
+  # `Change effort level?` dialog is, or the model picker is. Returning 1 with
+  # the UI standing hands the next actor a pane where a plain keystroke — the
+  # compactor's `/compact`, a nudge, a human — lands inside a picker instead of
+  # the prompt. And nothing downstream can tell: `_idle_for_keystroke`'s
+  # `grep -q ❯` cannot distinguish a picker's cursor row from the prompt, so the
+  # pane reads IDLE while it is nothing of the kind.
+  #
+  # ONCE, not until-clear. One `Escape` closes each of the three shapes measured
+  # (D-2808, D-2811 and the slice-4 picker probe); a loop would be a second,
+  # unmeasured claim, and pressing Escape at a bare prompt is a no-op anyway.
+  local t; t=$(_tmux "$1")
+  tmux send-keys -t "$t" Escape; sleep 1
+  return 0
+}
+
+_route_type_effort() {   # id level -> 0 acknowledged | 1 unconfirmed | 2 no slider stop
+  # `ultracode` HAS NO SLIDER DELTA and needs none: it is the one level whose
+  # PLAIN form is session-only by construction (D-2810, measured — the ack reads
+  # `(this session only)` and settings.json is byte-identical), because there is
+  # no settings key to save it into. Every other level rides the slider.
+  #
+  # `Left`x7 THEN `Right`xN, and the 7 is not arbitrary: the slider does NOT
+  # wrap (measured), so seven lefts pin the marker at `low` from any starting
+  # position on a six-stop scale and the rights then count from a known origin.
+  #
+  # N IS THE LEVEL'S POSITION IN `ROUTE_EFFORT_STOPS`, DERIVED (controller ruling
+  # S4-R9). The `case` that used to sit here — `low) n=0 ;; medium) n=1 ;; …` —
+  # was a second hand-kept enumeration of the effort vocabulary in the same file
+  # as the first, and the kind that rots quietly: a stop inserted in the middle
+  # of the measured order would leave every level above it pointing one row low,
+  # and the only symptom is a pane running the wrong effort.
+  # The ID, not the tmux name (ruling S4-R14, and `_route_escape`'s own note):
+  # every target this function presses a key into is `_tmux`'s answer, so the
+  # auth-pane scan in `ccd-account-pane.test.ts` can see it derive.
+  local id="$1" level="$2" t n i
+  t=$(_tmux "$id")
+  local -a stops=()
+  if [[ "$level" == ultracode ]]; then
+    tmux send-keys -t "$t" -l "/effort ultracode"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+    _route_ack_wait "$t" "ultracode.*this session only" && return 0
+    _route_escape "$id"; return 1
+  fi
+  read -r -a stops <<< "$ROUTE_EFFORT_STOPS"
+  n=-1
+  for ((i = 0; i < ${#stops[@]}; i++)); do [[ "${stops[i]}" == "$level" ]] && { n="$i"; break; }; done
+  # A LEVEL WITH NO STOP IS ITS OWN CONDITION, not `apply-unconfirmed`. Nothing
+  # is typed, so there is no pane to go and look at, and no Escape to press.
+  if (( n < 0 )); then
+    KS_WHY=no-slider-stop
+    KS_DETAIL="effort=$level is not one of the measured slider stops ($ROUTE_EFFORT_STOPS)"
+    return 2
+  fi
+  tmux send-keys -t "$t" -l "/effort"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+  for ((i = 0; i < 7; i++)); do tmux send-keys -t "$t" Left; sleep 1; done
+  for ((i = 0; i < n; i++)); do tmux send-keys -t "$t" Right; sleep 1; done
+  tmux send-keys -t "$t" -l "s"; sleep 1
+  # BOTH SHAPES ARE TOLERATED. On Opus 5 a conversation that already has turns
+  # gets a second dialog — `Change effort level? … 1. Yes, switch to <level>` —
+  # because the cached prefix has to be re-read; on Fable 5.1 the same two-turn
+  # history showed none (measured, D-2808). Confirm it if it is there.
+  if tmux capture-pane -t "$t" -p 2>/dev/null | grep -q "Yes, switch"; then
+    tmux send-keys -t "$t" Enter; sleep 1
+  fi
+  _route_ack_wait "$t" "Set effort level to $level.*\(this session only\)" && return 0
+  _route_escape "$id"; return 1
+}
+
+_route_picker_rows() {   # pane -> one row per line: <n>\t<cursor 0|1>\t<label>\t<description>
+  # THE ONE SANITISER the picker arithmetic depends on, `_pane_ctx_pct`'s role
+  # one seam over: `<n>` is a `[0-9]+` capture and nothing else from the pane
+  # reaches an arithmetic context. Do not add a second guard downstream.
+  #
+  # The measured row shapes, both lanes: `1. Default (recommended)  Sonnet 5 ·
+  # Efficient for routine tasks`, `3. Fable ✔  Fable 5.1 · Most capable…`, and on
+  # the codex lane `2. gpt-5.6-sol ✔  Custom Opus model` — a LABEL, an optional
+  # `✔` marking the current model, then two-or-more spaces, then a DESCRIPTION.
+  # The cursor row carries `❯`. Splitting on the FIRST double space rather than a
+  # greedy match is deliberate: a description may itself contain single spaces
+  # and a greedy label would swallow all of it.
+  local line n cur rest label desc
+  while IFS= read -r line; do
+    [[ "$line" =~ ^[[:space:]]*(❯[[:space:]]*)?([0-9]+)\.[[:space:]]+(.*)$ ]] || continue
+    cur=0; [[ -n "${BASH_REMATCH[1]}" ]] && cur=1
+    n="${BASH_REMATCH[2]}"; rest="${BASH_REMATCH[3]}"
+    label="${rest%%  *}"
+    if [[ "$label" == "$rest" ]]; then desc=""; else desc="${rest#*  }"; fi
+    desc="${desc#"${desc%%[![:space:]]*}"}"                 # ltrim
+    label="${label%"${label##*[![:space:]]}"}"              # rtrim
+    label="${label%✔}"
+    label="${label%"${label##*[![:space:]]}"}"              # rtrim again, without the tick
+    printf '%s\t%s\t%s\t%s\n' "$n" "$cur" "$label" "$desc"
+  done <<< "$1"
+  return 0
+}
+
+_route_re_quote() {   # text -> stdout the same text as a LITERAL extended regular expression
+  # THE SUBJECT COMES OFF THE PANE, not out of a closed vocabulary, so it can
+  # carry regex metacharacters: `Default (recommended)` does, and an unescaped
+  # `(` makes `grep -E` refuse the whole pattern — which no caller could tell
+  # apart from "the pane never acknowledged it".
+  printf '%s' "$1" | sed 's/[][\\.*^$(){}?+|]/\\&/g'
+}
+
+_route_ack_subject() {   # label desc want -> stdout the ERE naming the model the selected row sets
+  # THE ACKNOWLEDGEMENT IS BOUND TO THE ROW `s` WAS PRESSED ON (final review
+  # finding 3). `Set model to .* for this session only` binds NO subject, so any
+  # earlier model acknowledgement still on the pane — a human's own `/model` tap
+  # minutes ago, a previous applier run — satisfied it, and `class` was recorded
+  # applied against a pane still running the old model. Nothing is pending after
+  # that, so the retry budget is never spent and the next look is the settle's.
+  #
+  # WHICH WORD THE ACK CARRIES IS MEASURED, AND THE TWO LANES DIFFER (research
+  # doc row 232, verbatim): the Anthropic lane answers `Set model to Haiku 4.5
+  # for this session only` — the DESCRIPTION's model name, on a row LABELLED
+  # `Haiku` — and the codex lane answers `Set model to gpt-5.6-terra …`, which
+  # is that row's LABEL. Both readings of the one row we selected are offered
+  # and either confirms it; neither is invented here, and a row carrying only a
+  # label (the picker shapes this tree's own fixtures use) binds on that.
+  #
+  # THE `Default` ROW NAMES NO MODEL OF ITS OWN. Where its description carries
+  # the ` · ` model name the bind is the same as any other row's; where it does
+  # not (`Use the default model (currently …)`) there is nothing on the row to
+  # bind to, and that ONE row keeps the loose subject rather than failing shut
+  # on every `class=default` apply. An unbindable acknowledgement is stated
+  # here, not silently narrowed into a refusal.
+  local label="$1" desc="$2" want="$3" model=""
+  [[ "$desc" == *" · "* ]] && model="${desc%% · *}"
+  if [[ -n "$model" ]]; then printf '(%s|%s)' "$(_route_re_quote "$label")" "$(_route_re_quote "$model")"
+  elif [[ -n "$label" && "$want" != Default ]]; then _route_re_quote "$label"
+  else printf '.*'
+  fi
+}
+
+_route_type_model() {   # id class wrapper -> 0 acknowledged | 1 unconfirmed | 2 no picker row
+  # THE CURSOR IS READ, NEVER ASSUMED. The picker opens on the CURRENT model's
+  # row, not on row 1, and `Up` on row 1 WRAPS to the last row on both lanes
+  # (measured) — so "press Up×N to pin at the top" walks somewhere unpredictable
+  # and then presses `s` on it. The only sound drive is to parse the rows, find
+  # the cursor, find the target, and press the delta.
+  #
+  # WHICH ROW IS THE TARGET differs by backend, because the lanes label their
+  # rows differently. An Anthropic lane labels them by CLASS (`Sonnet`, `Opus`,
+  # `Haiku`, `Fable`, plus `Default (recommended)`), so the first word of the
+  # label is the class's display word — derived by capitalising the class, never
+  # a fifth hand-kept spelling of `ROUTE_CLASSES`. A codex lane labels them by
+  # model ID and puts the class in the DESCRIPTION (`Custom Opus model`), so
+  # that is what is matched there; `default` is the `Default` row on both.
+  #
+  # A CLASS THE PICKER DOES NOT LIST IS NOT A FAILURE OF THIS FUNCTION. `fable`
+  # is offered only while it is already the current model (measured: the same
+  # entitled lane launched `--model opus` lists four rows and no Fable), so a
+  # live change TO fable is a RELAUNCH, not a keystroke. Escape out, answer 2,
+  # and let the tick record it and the settle apply it.
+  # The ID, not the tmux name — `_route_type_effort`'s note, same reason.
+  local id="$1" cls="$2" w="$3" t rows n cur label desc want target=0 curs=0 i tlabel="" tdesc=""
+  t=$(_tmux "$id")
+  tmux send-keys -t "$t" -l "/model"; sleep 1; tmux send-keys -t "$t" Enter; sleep 1
+  rows=$(_route_picker_rows "$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -12)")
+  if [[ "$cls" == default || -z "$cls" ]]; then want="Default"; else want="${cls^}"; fi
+  while IFS=$'\t' read -r n cur label desc; do
+    [[ -n "$n" ]] || continue
+    [[ "$cur" == 1 ]] && curs="$n"
+    # THE ROW'S OWN WORDS ARE KEPT, not just its number: `_route_ack_subject`
+    # binds the acknowledgement to the model this row selects, and the loop
+    # variables hold the LAST row read by the time it is asked.
+    if [[ "$want" == Default ]] || _is_anthropic_backend "$w"; then
+      [[ "${label%% *}" == "$want" ]] && { target="$n"; tlabel="$label"; tdesc="$desc"; }
+    else
+      [[ "$desc" == *"Custom $want model"* ]] && { target="$n"; tlabel="$label"; tdesc="$desc"; }
+    fi
+  done <<< "$rows"
+  # TWO SENTENCES, ONE SLUG — `status-unreadable`'s shape one seam over. "This
+  # picker lists no row for the class" and "this capture carries no cursor row at
+  # all" send an operator to different places, and the remedy for both is the
+  # same (leave it to the settle), so they share the word and differ in the
+  # detail the swap.log line carries.
+  if [[ "$target" == 0 || "$curs" == 0 ]]; then
+    _route_escape "$id"
+    KS_WHY=no-picker-row
+    if [[ "$curs" == 0 ]]; then KS_DETAIL="class=$cls, the capture carries no cursor row"
+    else KS_DETAIL="class=$cls"; fi
+    return 2
+  fi
+  if (( target > curs )); then
+    for ((i = curs; i < target; i++)); do tmux send-keys -t "$t" Down; sleep 1; done
+  elif (( curs > target )); then
+    for ((i = target; i < curs; i++)); do tmux send-keys -t "$t" Up; sleep 1; done
+  fi
+  tmux send-keys -t "$t" -l "s"; sleep 1
+  # THE SUBJECT IS THE ROW'S, AND THE READ IS THE PICKER'S OWN WINDOW — the same
+  # twelve rows this function captured the picker from, because the
+  # acknowledgement renders where the picker stood, above the prompt. The two
+  # together are what stop a stale `Set model to …` further up the pane
+  # confirming a change that never happened (final review finding 3).
+  _route_ack_wait "$t" "Set model to $(_route_ack_subject "$tlabel" "$tdesc" "$want").*for this session only" 12 && return 0
+  _route_escape "$id"; return 1
+}
+
+_route_apply_now() {   # id -> 0 everything wanted is applied | 1 something is still pending
+  # CLASS FIRST, THEN EFFORT, and the order is a measurement: a session-only
+  # effort SURVIVES a model change (D-2811 — `Sonnet 5 with medium effort` after
+  # `/model sonnet`), so applying the effort first and the class second would
+  # still be correct but would pay the model picker's own effort control the
+  # chance to move it. Class first is the order with nothing to re-check.
+  #
+  # NOTHING IS RECORDED APPLIED WITHOUT AN ACKNOWLEDGEMENT, except the one case
+  # where there is nothing to acknowledge: `effort=auto` is spec §5.1's
+  # absent-equivalent and types NOTHING at all — the live level stands until the
+  # next settle composes the argv. Recording it applied is what stops the tick
+  # re-deciding that every 5 seconds.
+  #
+  # AN ABSENT FIELD IS NEVER TYPED (controller ruling S4-R8) and NEITHER IS AN
+  # INERT ONE (S4-R9): `_route_wanted` answers an EMPTY word for both, and the
+  # `-n` on each arm below is what turns that word into "nothing to do here".
+  # This is not the same as `default`/`auto`, which are real values the record
+  # states and which each have their own no-keystroke handling.
+  #
+  # EVERY REFUSAL THAT CAME BACK FROM THE PANE COUNTS AS AN ATTEMPT
+  # (`_route_try_bump`, ruling S4-R7): `apply-unconfirmed`, `no-picker-row` and
+  # `no-slider-stop` are the three, and they are exactly the ones that can be
+  # PERMANENT. The idle predicate's refusals never reach this function.
+  local id="$1" w want cls eff have rc
+  w=$(_reg_get "$id" wrapper)
+  want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
+  have=$(_route_applied_get "$id" class)
+  if [[ -n "$cls" && "$cls" != "$have" ]]; then
+    _route_type_model "$id" "$cls" "$w"; rc=$?
+    case "$rc" in
+      0) _route_applied_set "$id" class "$cls"; _route_note_clear "$id" ;;
+      2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
+      *) _route_note "$id" apply-unconfirmed "class=$cls"; _route_try_bump "$id"; return 1 ;;
+    esac
+  fi
+  have=$(_route_applied_get "$id" effort)
+  if [[ -n "$eff" && "$eff" != "$have" ]]; then
+    if [[ "$eff" == auto ]]; then
+      _route_applied_set "$id" effort auto
+      _route_note_clear "$id"
+    else
+      _route_type_effort "$id" "$eff"; rc=$?
+      case "$rc" in
+        0) _route_applied_set "$id" effort "$eff"; _route_note_clear "$id" ;;
+        # rc 2 is `no-slider-stop` — a level with no stop on the measured slider
+        # (S4-R9). Its own refusal word rather than `apply-unconfirmed`, because
+        # the remedy is different: nothing was typed at all and no acknowledgement
+        # was ever possible, so an operator reading `apply-unconfirmed` would go
+        # looking at a pane that never saw a keystroke.
+        2) _route_note "$id" "$KS_WHY" "$KS_DETAIL"; _route_try_bump "$id"; return 1 ;;
+        *) _route_note "$id" apply-unconfirmed "effort=$eff"; _route_try_bump "$id"; return 1 ;;
+      esac
+    fi
+  fi
+  return 0
+}
+
+_route_apply_check() {   # id — the supervise tick's applier. Always 0: a tick never fails the loop.
+  # CHEAP WHEN NOTHING IS PENDING, which is the steady state of every session on
+  # the fleet. The registry comparison comes FIRST and returns before any tmux
+  # call at all; only a genuinely pending field pays a pane read.
+  #
+  # FIVE GATES, IN THIS ORDER, and the order is the whole design:
+  #   1. nothing pending — clear the marker AND the retry counter, return.
+  #   2. a record with no `routeapplied` file at all — SEED it from the served
+  #      values and type nothing (S4-R8): the record predates the applier and the
+  #      pane is already running what its last settle composed.
+  #   3. the bounded retry (S4-R7) — a field that has been refused by the pane
+  #      `ROUTE_RETRY_MAX` times, or refused inside `ROUTE_RETRY_BACKOFF`, does
+  #      not get typed again this tick. This is BEFORE the pane read on purpose:
+  #      a session that has given up should not even be captured.
+  #   4. the compactor's own keystroke (final review finding 5) — this tick may
+  #      have sent `/compact` into this pane moments ago, on the line above this
+  #      one, and the idle predicate's inputs both LAG that keystroke.
+  #   5. the idle predicate, whose refusals are notes and never attempts.
+  _route_apply_pending "$1" || { _route_note_clear "$1"; _route_tries_clear "$1"; return 0; }
+  _route_apply_seed "$1" && return 0
+  _route_retry_ok "$1" || return 0
+  _route_compact_settling "$1" && { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  _pane_for_keystroke "$1" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  _idle_for_keystroke "$1" "$KS_PANE" "" || { _route_note "$1" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  _route_apply_now "$1"
+  return 0
 }
 
 # Two readings of the input box from one normalised pane: `_pane_box_draft`
@@ -16570,26 +18135,95 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # keys, both composed below on the Anthropic arm. The settle's keystroke
   # (`_inject_spawn_effort`) is the NO-RECORD path only — a pre-slice-1
   # session with nothing composed here.
-  local routeflags="" routeenv="" rclass rsub rwf reff inert=""
+  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
   if _route_any "$id"; then
-    rclass=$(_route_get "$id" class); reff=$(_route_effort_for "$id" "$rclass")
+    rclass=$(_route_get "$id" class)
+    # THE CLASS SERVED (routing spec §5.4, last paragraph; §5.1 `degraded`). The
+    # intended class stays in `class`; THIS settle re-measures the lane it is
+    # landing on and decides what to compose: servable → clear a standing stamp
+    # (the intended class is restored the moment a lane can serve it); measured
+    # unservable → stamp one rung down and compose that; UNMEASURED → compose
+    # what stands (a standing stamp was measured when written; no stamp means
+    # the intended class) and write nothing — nobody degrades on a fabricated
+    # fact. `_route_degrade`/`_route_restore` are the only writers and write
+    # once: a second settle on the same lane says nothing twice.
+    local rdeg="" below srv why
+    if [[ -n "$rclass" && "$rclass" != default ]]; then
+      # A STANDING STAMP IS STALE THE MOMENT THE INTENDED CLASS MOVES (ruling
+      # S3-R7): after fable->degraded opus->reroute to `class haiku`, this
+      # settle on an UNMEASURED lane would otherwise compose `--model opus` — a
+      # rung ABOVE the class just asked for, from a measurement about a class
+      # nobody intends anymore. The decision itself now lives in
+      # `_route_stale_degrade_clear`, which the routing WRITERS also call (final
+      # review finding 4); this stays the backstop for a stamp that went stale
+      # by some other route, and the read below is what that call left behind.
+      _route_stale_degrade_clear "$id" "$rclass"
+      rdeg=$(_route_get "$id" degraded)
+      # THE WORD, NOT JUST THE RC (ruling S3-R6). `_serviceable`'s rc 1 has TWO
+      # causes — the figure at the ceiling, or `backend` (fable on a
+      # non-Anthropic lane) — and its stdout already names which; discarding it
+      # would let a `class fable` session on a codex lane journal a permanent
+      # route row asserting a ceiling figure nobody read. `local why` is
+      # declared above, on its own line, so this bare assignment's `$?` is
+      # `_serviceable`'s own rc, not `local`'s.
+      why=$(_serviceable "$wrapper" "$rclass"); srv=$?
+      # WHAT A DEGRADE BUYS DIFFERS BY CLASS, and only the fable rung changes
+      # ELIGIBILITY (final review finding 2, the settle's half of it).
+      # `fable`'s rc 1 is the share ceiling or the roster's backend word, so
+      # `opus` on that same lane really is servable where fable was not. For
+      # `opus`/`sonnet`/`haiku` the ceiling IS `SWAP_CEILING` on the lane's own
+      # seven-day figure, so every remaining rung asks the identical question
+      # of the identical figure and answers unservable together: the rung drop
+      # lands on a lane that measures exactly as unservable for the new class
+      # as for the old one. Composing it is still right, for a DIFFERENT
+      # reason, and the reason was nowhere in tracked text until this
+      # paragraph: a cheaper class spends the shared weekly window more slowly,
+      # which is the only lever left once the lane itself is already chosen.
+      # A SPEND argument, not an eligibility one —
+      # `ccd-route-degrade.test.ts`'s `class opus … --model sonnet` case is a
+      # rung drop that buys exactly that and nothing else. At `haiku` the
+      # ladder bottoms out (`below` empty), nothing is stamped, and the
+      # intended class is composed unchanged.
+      case "$srv" in
+        0) [[ -n "$rdeg" ]] && _route_restore "$id" "$rdeg" "$rclass" "servable: $rclass on $wrapper at settle"; rdeg="" ;;
+        1) below=$(_class_below "$rclass")
+           if [[ -n "$below" ]]; then
+             # THE STAMP IS A WRITE THAT CAN FAIL (ruling S3-R7, mirroring
+             # `_auto_swap_check`'s rc-6 arm). Unlike a tick, a settle cannot
+             # stand still — it must compose SOMETHING for the spawn about to
+             # happen — so on an unwritable stamp it composes the INTENDED
+             # class (the record, unable to say otherwise, is the arbiter) and
+             # says so in one swap.log line; the next settle re-measures and
+             # retries.
+             if _route_degrade "$id" "$rclass" "$below" "unservable ($why): $rclass on $wrapper at settle"; then
+               rdeg="$below"
+             else
+               echo "$(date '+%F %T') degrade-unwritable $id: $rclass -> $below at settle on $wrapper (stamp not written; composing $rclass)" >> "$REG/swap.log"
+               rdeg=""
+             fi
+           fi ;;
+      esac
+      [[ -n "$rdeg" ]] && rclass="$rdeg"
+    fi
+    reff=$(_route_effort_for "$id" "$rclass")   # keyed on the class SERVED: a rung down to haiku takes no effort
     rsub=$(_route_get "$id" subagent); rwf=$(_route_get "$id" workflow)
     [[ "$reff" == ultracode ]] && rwf=on
     # `--model` IS COMPOSED ON EVERY BACKEND, and the reason it is not gated to
     # Anthropic lanes is that the record has no way to say otherwise: `inert` is
-    # a list of FIELD NAMES drawn from `ROUTE_INERTABLE` (`effort workflow`) and
-    # its vocabulary has no word for `class`, so gating the flag here would make
-    # a non-Anthropic session's model silently unset with no channel saying so —
-    # the overloaded silence the inert stamp below exists to remove.
+    # a list of FIELD NAMES drawn from `ROUTE_INERTABLE` (`effort workflow
+    # subagent`) and its vocabulary has no word for `class`, so gating the flag
+    # here would make a non-Anthropic session's model silently unset with no
+    # channel saying so — the overloaded silence the inert stamp below exists to
+    # remove.
     #
-    # WHAT IS UNMEASURED IS WHAT THE ALIAS MEANS THERE (controller ruling
-    # S1-R10). Spec §5.2 says a class alias "maps onto the lane's tiers through
-    # its materialiser"; nobody has run it. The slice 4 plan opens with the
-    # headless probe that settles it — `--model opus` on a gpt lane against that
-    # lane's materialised default, reading `modelUsage` back — and it runs
-    # BEFORE any writer in this tree targets such a lane. Until then a class on a
-    # non-Anthropic lane is composed on a claim, not on a measurement, and this
-    # comment is where that is said.
+    # WHAT THE ALIAS MEANS THERE IS NOW MEASURED (controller ruling S1-R10,
+    # settled by the slice-4 probe: research doc §6, row `S1-R10, slice 4`,
+    # measured 2026-09-15 on Claude Code 2.1.273). On the codex lane `--model
+    # <class>` is HONOURED and resolves through that lane's own
+    # `ANTHROPIC_DEFAULT_<CLASS>_MODEL` keys in its config dir's settings.json —
+    # so the flag names a CLASS and the lane materialises the id, exactly the
+    # shape spec §5.2 assumed. `opus` is the one alias that probe cannot tell
+    # apart from the lane default, by construction: both map to the same id.
     [[ -n "$rclass" && "$rclass" != default ]] && routeflags="--model $rclass"
     # BACKEND, not placement: the subagent env is Claude Code's own; on another
     # backend the lane's settings.json materialiser owns the subagent (spec
@@ -16607,26 +18241,31 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # decides — and is the one word `_route_effort_for` can hand back
       # un-transformed for a non-haiku class (Task 7's --settings ruling,
       # controller ruling S1-R8).
-      if [[ "$rwf" == on ]]; then
-        if [[ "$reff" == ultracode ]]; then
-          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true,\"ultracode\":true}'"
-        else
-          routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true}'"
-        fi
-      fi
+      # `workflow=off` NOW COMPOSES `{"enableWorkflows":false}` AND STAMPS NO
+      # INERT (slice 4, Task 1 decision b). Slice 1 could not compose the false
+      # key because only the TRUE one had been measured, so `off` composed
+      # nothing and the record said `inert=workflow` rather than claim a state it
+      # had not set. Slice 4 measured it (2026-09-15, Claude Code 2.1.273, a
+      # Fable-entitled lane): the flag is HONOURED and it is a real lever —
+      # `/effort ultracode` is refused verbatim (`Ultracode needs dynamic
+      # workflows enabled`) and `/config` matches no `workflow` row at all, one
+      # row further than the true flag withdraws. Nothing is written to
+      # settings.json on either arm. So the field IS applied now and the inert
+      # stamp would be false. NOT reachable for ultracode: `$rwf` was forced to
+      # `on` above, so an ultracode record never arrives here with `off`.
+      #
+      # ONE `case`, so `--settings` is composed exactly once and always BEFORE
+      # `--effort` — `ccd-route-spawn.test.ts`'s ruled-form test asserts
+      # `--model X --settings Y --` as one contiguous substring.
+      case "$rwf" in
+        on)  if [[ "$reff" == ultracode ]]; then
+               routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true,\"ultracode\":true}'"
+             else
+               routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":true}'"
+             fi ;;
+        off) routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":false}'" ;;
+      esac
       [[ -n "$reff" && "$reff" != auto ]] && routeflags="${routeflags:+$routeflags }--effort $reff"
-      # `workflow=off` COMPOSES NOTHING AND SAYS SO (controller ruling S1-R12).
-      # Absence composes nothing here too, so an `off` that composed nothing
-      # would leave the record claiming a state it never set — the spawn would
-      # be byte-identical to one that never named `workflow` at all, and the
-      # lane's own settings.json would still decide. `{"enableWorkflows":false}`
-      # is UNMEASURED (Task 7 measured the true key, not the false one), so it
-      # is not composed on a guess; the honest channel is the one Task 6 already
-      # built for fields that were not applied, and `inert` is by FIELD NAME, so
-      # `workflow` is exactly the word for it. Slice 4 measures the false key and
-      # clears this stamp. NOT for ultracode: `$rwf` was forced to `on` above,
-      # so an ultracode record never reaches this line with `off`.
-      [[ "$rwf" == off ]] && inert="workflow"
     else
       # WHAT IS STAMPED INERT HERE IS `$reff` — the effort AFTER
       # `_route_effort_for`'s haiku filtering, which is the decision and not an
@@ -16637,8 +18276,66 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # excluded here exactly as `--effort` above excludes it.
       [[ -n "$reff" && "$reff" != auto ]] && inert="effort"
       [[ "$rwf" == on ]] && inert="${inert:+$inert,}workflow"
+      # AND `subagent`, WHICH THIS ARM COMPOSES NOTHING FOR EITHER (slice 6 Task 3,
+      # closing slice 4's deferred minor). `routeenv` is built on the Anthropic arm
+      # ALONE — `CLAUDE_CODE_SUBAGENT_MODEL` is Claude Code's own env key and the
+      # comment above already says another backend's settings.json materialiser owns
+      # the subagent there — so until now a record carrying `subagent=sonnet` had that
+      # field dropped in SILENCE on this lane, the one overloaded silence left beside
+      # the two the stamp had already removed. The order is `effort,workflow,subagent`
+      # — the order the existing stamp already spelled its two words, with the new one
+      # APPENDED — so every standing stamp keeps its bytes. It is not a composition
+      # order and must not be read as one: the Anthropic arm above composes `routeenv`
+      # (the subagent) FIRST, `--settings` (the workflow) second and `--effort` last.
+      [[ -n "$rsub" ]] && inert="${inert:+$inert,}subagent"
     fi
     if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi
+    # THE SETTLE IS AN APPLICATION, and this is it saying so (slice 4, Task 4).
+    # `$REG/<id>.routeapplied` records what THIS spawn composed, so the applier's
+    # tick — which compares the record against this file — finds nothing pending
+    # on a pane that has just come up carrying exactly what the record asked for.
+    # Without it every fresh spawn would be re-typed through the pickers within
+    # five seconds of settling, for no change at all.
+    #
+    # WHAT IS WRITTEN IS WHAT WAS COMPOSED, not what was intended: `$rclass` is
+    # already the class SERVED (a degrade stamped above replaced it) and `$reff`
+    # is already past `_route_effort_for`'s haiku filter. `default` and `auto` are
+    # real words the record can state — the picker's `Default` row, "the lane
+    # decides the level" — and they are written when the record states them.
+    #
+    # AN ABSENT FIELD IS OMITTED, NOT SPELLED `default`/`auto` (controller ruling
+    # S4-R8). The three conditions are distinct and `_route_wanted` now answers
+    # all three the same way this stamp writes them, which is what keeps the two
+    # comparable: a record that never mentioned `class` composed no `--model` and
+    # claims no class. `subagent` and `workflow` were already treated this way.
+    #
+    # AND EVERY FIELD THE `inert` STAMP NAMES IS OMITTED TOO (controller ruling
+    # S4-R9). Written unconditionally, this line put `effort=high` beside
+    # `inert=effort` on a non-Anthropic lane — two records of the same spawn
+    # contradicting each other, because `--effort`/`--settings` are composed only
+    # on the Anthropic arm above while the stamp claimed them on both. The
+    # sentence this comment opens with is true again: what is written is what was
+    # composed. `_route_wanted` skips the same fields, so an inert field is
+    # neither claimed applied nor typed — and `subagent`, which joined the
+    # vocabulary in slice 6 Task 3, is never typed by anything: its guard here
+    # keeps this stamp from claiming an env key the else-branch above did not
+    # compose.
+    rapplied="${rclass:+class=$rclass}"
+    _route_inert_has "$inert" effort   || rapplied="${rapplied:+$rapplied }${reff:+effort=$reff}"
+    rapplied="${rapplied% }"
+    _route_inert_has "$inert" subagent || { [[ -n "$rsub" ]] && rapplied="${rapplied:+$rapplied }subagent=$rsub"; }
+    _route_inert_has "$inert" workflow || { [[ -n "$rwf" ]] && rapplied="${rapplied:+$rapplied }workflow=$rwf"; }
+    _reg_set "$id" routeapplied "$rapplied"
+    # THE RETRY COUNTER DIES WITH THE SPAWN IT COUNTED (ruling S4-R7): whatever
+    # the old pane refused to be typed, this argv composed, so the next tick's
+    # comparison is against a fresh fact and deserves fresh attempts.
+    _route_tries_clear "$id"
+  else
+    # NO RECORD, NOTHING COMPOSED, NOTHING CLAIMED. A leftover `routeapplied`
+    # from a record that has since been removed would make the applier compare
+    # against a file describing a spawn nobody would make again.
+    rm -f -- "$REG/$id.routeapplied"
+    _route_tries_clear "$id"
   fi
   resenv="$resenv${routeenv:+ $routeenv}"
   local launchflags="$rcflag${routeflags:+${rcflag:+ }$routeflags}"
@@ -17288,16 +18985,28 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # strips `--surface`: `$# -ge 2` is what distinguishes the creating form from
   # the id form, so a flag left in argv would make `ccd start --cross-pool <id>`
   # read as a creation and mint `--cross-pool-<id>`.
-  local cross="" args=()
+  #
+  # `--route` IS STRIPPED HERE FOR THE SAME REASON, and it takes a VALUE, so the
+  # arity check is not optional: ccd runs under `set -uo pipefail` with no `-e`,
+  # and a `shift 2` past the end of argv shifts nothing (see `cmd_ws_add`'s own
+  # measurement of this shape). Like `--cross-pool` it stays out of the usage
+  # line, which names the two POSITIONAL forms this verb takes.
+  local cross="" args=() route=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cross-pool) cross=1; shift ;;
+      --route)      [[ $# -ge 2 ]] || die "usage: ccd start <id> | ccd start <wrapper> <project> [workdir]"
+                    route+=("$2"); shift 2 ;;
+      --route=*)    route+=("${1#--route=}"); shift ;;
       --)           shift; args+=("$@"); break ;;
       *)            args+=("$1"); shift ;;
     esac
   done
   set -- "${args[@]}"    # bash >= 4.4: an empty array here is not an unbound-
                          # variable error under `set -u`, as in cmd_swap.
+  # BEFORE ANY WRITE, and before the two forms diverge: a bad value must leave
+  # the registry exactly as it found it whichever form was typed (spec §5.3).
+  (( ${#route[@]} )) && _route_argv_check "${route[@]}"
   local id wrapper="" project="" workdir=""
   if [[ $# -ge 2 ]]; then
     wrapper="$1"; project="$2"; workdir="${3:-}"
@@ -17432,6 +19141,24 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
       _svc_enable "claude-session@$id" 2>/dev/null \
         || echo "ccd: warn: could not enable boot-persistence for $id" >&2
     fi
+    # THE NAMED PAIRS ARE WRITTEN ON THIS ARM TOO (controller ruling S4-R3,
+    # final review finding 2). S4-R3's fix sat BELOW this return, so the silent
+    # drop it was raised to close was still live for the commonest case of all:
+    # `ccd enable --route class=opus claude demo` against a LIVE session printed
+    # `already running`, wrote nothing, journaled nothing and exited 0 — and the
+    # PWA renders that exit 0 as `{ok:true}` under a "Starting …" toast, so an
+    # operator who sets Class/Effort in the new-session sheet for a wrapper and
+    # project already running watched a write that never happened succeed.
+    #
+    # The pairs were validated at the top of this verb, before either positional
+    # form was resolved, and the record exists by construction here — a live
+    # session has a row — so this is `ccd route`'s write reached through the
+    # verb the operator was already typing, exactly as the minting arm below
+    # describes it. Nothing is TYPED: `--route` is not `--apply`, and the
+    # supervise tick applies what this writes at the next idle pane.
+    if (( ${#route[@]} )); then
+      _route_argv_write "$id" start argv "${route[@]}"
+    fi
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
   fi
   # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
@@ -17477,6 +19204,38 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   [[ -n "$project" ]] && _reg_set "$id" project "$project"
   _reg_set "$id" workdir "$workdir"; _reg_set "$id" uuid "$uuid"
   _ws_seed_home "$id" "$wrapper"
+  # ── THE ROUTING RECORD: THE ARGV ALWAYS, THE DEFAULT ONLY AT A MINT ─────────
+  # TWO CONDITIONS, TWO ARMS (controller ruling S4-R3). The first cut wrote
+  # NEITHER on a revival, so `ccd enable --route class=opus claude demo` on a
+  # session that already had a row validated the pair, wrote nothing, journaled
+  # nothing, printed nothing and exited 0 — a request the operator watched
+  # succeed and that changed no byte. That is the overloaded seam this tree
+  # forbids: "you named fields" and "you named none" are not the same act.
+  #
+  # NAMED PAIRS ARE WRITTEN WHETHER THE ROW IS NEW OR OLD. They were validated
+  # at the top of this verb, before either positional form was resolved, and
+  # `_route_argv_write` reads the standing value so the row it journals says
+  # what it replaced. This is `ccd route`'s write reached through the verb the
+  # operator was already typing; the record still belongs to the session.
+  #
+  # THERE ARE TWO SUCH WRITE SITES, and this is the one a REVIVAL takes. The
+  # other is the already-running arm above, which returns before this line ever
+  # runs — the half S4-R3's first cut missed (final review finding 2).
+  #
+  # THE DEFAULT IS STILL MINT-ONLY. `$regw` empty is this verb's own "this row
+  # did not exist" proxy — the same one the pool policy above uses, with the
+  # same caveat stated there — and re-seeding the coordinator row over a
+  # coordinator's considered fields at every restart would make the record mean
+  # nothing.
+  #
+  # `start` is the actor on both arms, including the one `cmd_enable` reaches:
+  # that verb forwards the pairs here rather than parsing them twice, and its own
+  # `enable` lifecycle row already records that boot-persistence was asked for.
+  if (( ${#route[@]} )); then
+    _route_argv_write "$id" start argv "${route[@]}"
+  elif [[ -z "$regw" ]]; then
+    _route_seed_default "$id" "$wrapper"
+  fi
   # The crossing marker for a creating `--cross-pool`. `_ws_seed_home` above
   # already pinned home to this wrapper, so the marker's account clause is
   # satisfied by BOTH `wrapper` and `home` from the first tick onward.
@@ -17796,25 +19555,44 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
   # read as seventeen simultaneous deaths — every supervisor exited, systemd
   # restarted each one into `cmd_ensure`, and the fleet churned against a
   # substrate that had refused to answer, not pronounced anything dead.
-  local beat=0 unknown_run=0 tick=5
+  #
+  # THE BEAT COUNTS REAL SECONDS — the sleep it is ABOUT to take plus the work
+  # this tick actually spent. The tick helpers BLOCK for far longer than the
+  # tick: `_route_apply_check` types a session-only `/effort` or `/model` one
+  # key at a time with a `sleep 1` between keystrokes (the pacing the TUI was
+  # measured to need) and then polls `ROUTE_ACK_WAIT` seconds for the
+  # acknowledgement — ~20s for a slider, ~30s when class and effort are both
+  # pending — and `_auto_compact_check` sends `/compact` the same way. Against
+  # the old `beat=$((beat + tick))`, five ASSUMED seconds a tick, six such
+  # ticks are 120-150 REAL seconds between stamps: at or past the 120-second
+  # freshness window `_session_state` classifies by, so a perfectly healthy
+  # session reads `unsupervised` on the fleet board because its supervisor was
+  # busy moving a slider. It is the `unknown)` arm's failure (below) reached by
+  # a second route, and the remedy is the same one stated honestly: measure the
+  # seconds instead of assuming them. The worst gap is then 30s plus one tick's
+  # own duration.
+  local beat=0 unknown_run=0 tick=5 t0 spent
   while :; do
+    t0=$(date +%s)
     _session_probe "$id"
     case "$PROBE_VERDICT" in
       gone) break ;;   # the ONLY exit — a session tmux itself pronounced dead (D-310)
       live)
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
-        _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"
-        beat=$((beat + tick))
+        _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; _route_apply_check "$id"
+        spent=$(date +%s); spent=$((spent - t0)); (( spent < 0 )) && spent=0   # a backwards clock is not negative work
+        beat=$((beat + tick + spent))
         (( beat >= 30 )) && { _reg_set "$id" supervised "$(date +%s)"; beat=0; }
         ;;
       unknown)
         # Not death — refusal to guess (spec §1). Mark, keep the heartbeat honest EVERY
-        # tick (beat counts ASSUMED seconds; a 30s sleep against beat+=5 stamps every 180
-        # real seconds and ages all 17 rows into orphan mid-fault — the false dead by a
-        # slower route), skip the tick helpers (each shells into the tmux that just did
-        # not answer), and back off: 17 supervisors hammering a wedged server every 5s is
-        # a thundering herd against a component already unwell.
+        # tick — this arm accrues no beat at all, because a 30s backoff sleep counted
+        # through a 30-second beat as a 5-second tick stamps every 180 real seconds and
+        # ages all 17 rows into orphan mid-fault (the false dead by a slower route) —
+        # skip the tick helpers (each shells into the tmux that just did not answer),
+        # and back off: 17 supervisors hammering a wedged server every 5s is a
+        # thundering herd against a component already unwell.
         unknown_run=$((unknown_run + 1))
         _substrate_mark "$id"
         _reg_set "$id" supervised "$(date +%s)"; beat=0
@@ -19308,10 +21086,18 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # STRIPPED BEFORE `_id`, and that ordering is the whole point: `_id "$1" "$2"`
   # on an unstripped argv mints `--cross-pool-<wrapper>` and this verb journals
   # `enable` against a session id that does not exist.
-  local cross="" args=()
+  #
+  # `--route` IS FORWARDED, NOT PARSED. This loop strips it only so the arity
+  # rule below counts POSITIONALS, and hands the pairs back to `cmd_start`
+  # unchanged — one parser, one validation, one set of journal rows saying
+  # `start`. A second parse here would be a second vocabulary to keep in step.
+  local cross="" args=() route=()
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --cross-pool) cross=1; shift ;;
+      --route)      [[ $# -ge 2 ]] || die "usage: ccd enable <id> | ccd enable <wrapper> <project> [workdir]"
+                    route+=(--route "$2"); shift 2 ;;
+      --route=*)    route+=("$1"); shift ;;
       --)           shift; args+=("$@"); break ;;
       *)            args+=("$1"); shift ;;
     esac
@@ -19327,7 +21113,7 @@ cmd_enable() {   # <id>  |  <wrapper> <project> [workdir]
   # shared tx: tx is for one intent/outcome PAIR, never for a call tree, and
   # folding these would report one act where two happened.
   _lc_done enable "$id" ""
-  cmd_start ${cross:+--cross-pool} "$@" || return $?
+  cmd_start ${cross:+--cross-pool} "${route[@]}" "$@" || return $?
   echo "enabled boot-persistence for $id"
 }
 

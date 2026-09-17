@@ -4436,9 +4436,117 @@ _check_routing() {
   fi
   rc=0
   if [ -n "$sub" ]; then
-    _dr_warn routing "$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed" \
-      "remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
-    rc=2
+    # THE LIVE-SESSION CENSUS (Task 5). `sub`'s WARN predates the routing
+    # record entirely (S1-R13's own comment above), so it cannot stay a WARN
+    # forever: once every LIVE session already carries a routing record
+    # (`$reg/<id>.class`), the key is no longer inert-by-accident — it is the
+    # only thing still overriding a record that exists. That is the FAIL this
+    # arm was always missing, and it is evaluated ONLY here, because a census
+    # nobody will read if `sub` is empty is a census not worth running.
+    #
+    # THREE ANSWERS, matching `_svc_is_active`'s own three-way shape one level
+    # up: `systemctl --user is-active claude-session@<id>.service` exits 0
+    # (live), 3 (systemd's own "not active" — inactive or failed, a measured
+    # NOT-live), or anything else (the manager did not answer the question at
+    # all). Collapsing the third into the second would let an unreachable bus
+    # or a missing systemctl fabricate the very zero this arm FAILs on — the
+    # false PASS `_svc_is_active`'s own comment names, one severity over. So
+    # `$reg` absent (the SERVER box owns no `~/.cc-sessions` at all — this
+    # doctor also runs there, `_check_pools` above is the same measurement one
+    # check up), a launchd box (this census is systemd-shaped and never asks
+    # launchctl anything — see the darwin branch below), no service manager
+    # on this box, or an `is-active` that answers neither 0 nor 3 for some id
+    # — each makes the census UNMEASURED, and the arm stays WARN saying so,
+    # never FAIL on a fabricated zero.
+    #
+    # RULING S5-R12 (controller, fix round 2): the census FAILs ONLY when it
+    # measured a real, fully-recorded population — live >= 1 AND missing == 0.
+    # A registry that measures ZERO live sessions at all is its OWN WARN,
+    # distinct from both "unmeasured" and "missing > 0": nothing was observed
+    # to be overridden, so FAILing there (as this arm used to) would abort
+    # `ccrc update` before `_upd_sweep` on a rebooted or dev box that never
+    # ran a session the key could have collided with.
+    local reg="$HOME/.cc-sessions" sf id scrc missing=0 shown=0 missing_ids="" \
+      live=0 census=measured why=""
+    local _sub_lead="$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed"
+    # RULING S5-R19: "carries a routing record" here means "has a `.class`
+    # field" — `default` included, because the operator's own choice of "no
+    # override" is still a record. This census asks a DIFFERENT question
+    # than `POST /api/runs/:id/route` does ("is on a rung of the ladder") —
+    # both are right, they just answer different things about the same file.
+    local _sub_remedy="remove the key from those lanes' settings.json once every session carries a routing record (a \`.class\` field, \`default\` included), or keep it and treat the record's subagent field as inert on them"
+    # `$reg` UNSEARCHABLE IS NOT `$reg` ABSENT, and the absence branch below
+    # cannot tell them apart — the same D-1848 shape `_check_pools` above
+    # already guards against on its own registry read, checked FIRST here for
+    # the identical reason: `-d "$reg"` on a mode-000 directory still answers
+    # TRUE (stat needs search on the PARENT, not on the dir itself), so `for
+    # sf in "$reg"/*.uuid` below would silently match nothing and this census
+    # would read a present-but-unlistable registry as a measured zero — the
+    # exact fabricated zero this arm exists not to FAIL on.
+    if { [ -e "$reg" ] || [ -L "$reg" ]; } && { [ ! -d "$reg" ] || [ ! -x "$reg" ] || [ ! -r "$reg" ]; }; then
+      census=unmeasured
+      why="$reg is not a searchable, readable directory, so no id under it could be enumerated"
+    elif [ ! -d "$reg" ]; then
+      census=unmeasured
+      why="no session registry at $reg (a server box that runs no fleet sessions of its own owns none)"
+    elif [ "${CCD_OS:-linux}" = darwin ]; then
+      # `_have_systemctl` answers "can this box supervise a session at all",
+      # so on darwin it tests for launchctl, not systemctl (ccd:615-618) — it
+      # answers TRUE on an ordinary Mac (launchctl present) and would let the
+      # `else` branch below invoke a `systemctl` that plain does not exist
+      # there (exit 127, misread by the loop as "answered neither active nor
+      # inactive"). Never call it: a launchd box is unmeasured for this
+      # systemd-shaped census, full stop — checked here, before
+      # `_have_systemctl` is asked anything.
+      census=unmeasured
+      why="this is a launchd box (CCD_OS=darwin) and the live-session census needs systemctl --user, which launchd boxes don't run"
+    elif ! _have_systemctl; then
+      census=unmeasured
+      why="systemctl is not on PATH, so no unit could be asked whether it is live"
+    else
+      for sf in "$reg"/*.uuid; do
+        [ -e "$sf" ] || continue
+        id="${sf##*/}"; id="${id%.uuid}"
+        systemctl --user is-active "claude-session@$id.service" >/dev/null 2>&1; scrc=$?
+        if [ "$scrc" -eq 0 ]; then
+          live=$((live + 1))
+          if [ ! -e "$reg/$id.class" ]; then
+            missing=$((missing + 1))
+            if [ "$shown" -lt 5 ]; then
+              missing_ids="${missing_ids:+$missing_ids }$id"; shown=$((shown + 1))
+            fi
+          fi
+        elif [ "$scrc" -eq 3 ]; then
+          continue   # measured: not live (systemd's own inactive/failed)
+        else
+          census=unmeasured
+          why="systemctl --user is-active answered neither active nor inactive for claude-session@$id.service (exit $scrc)"
+          break
+        fi
+      done
+    fi
+    if [ "$census" = unmeasured ]; then
+      _dr_warn routing "$_sub_lead — whether every live session already carries one is unmeasured: $why" "$_sub_remedy"
+      rc=2
+    elif [ "$missing" -eq 0 ] && [ "$live" -ge 1 ]; then
+      # RULING S5-R12(1): live >= 1 AND missing == 0 — a real, fully-recorded
+      # population. This is the ONLY FAIL left in this arm; dropping either
+      # half of the guard turns a zero-live or a not-yet-measured box into a
+      # fabricated FAIL.
+      _dr_fail routing "an Anthropic lane's settings.json pins CLAUDE_CODE_SUBAGENT_MODEL ($sub) while every live session carries a routing record (a \`.class\` field, \`default\` included) — the key overrides the record's subagent field; remove it" \
+        "remove CLAUDE_CODE_SUBAGENT_MODEL from $sub' settings.json — every live session already carries a routing record (a \`.class\` field, \`default\` included); ccrc update stops at this verdict until the key is gone"
+      return 1
+    elif [ "$live" -eq 0 ]; then
+      # RULING S5-R12(2): live == 0, measured — its own WARN, worded so it
+      # reads as neither "unmeasured" nor "missing > 0".
+      _dr_warn routing "$_sub_lead — no live session to measure the key against; it will override the first spawn's record until removed" "$_sub_remedy"
+      rc=2
+    else
+      local _sub_trunc=""
+      [ "$missing" -gt "$shown" ] && _sub_trunc=" and $((missing - shown)) more"
+      _dr_warn routing "$_sub_lead — $missing live session(s) carry no routing record (a \`.class\` field, \`default\` included) yet: $missing_ids$_sub_trunc" "$_sub_remedy"
+      rc=2
+    fi
   fi
   if [ -n "$unread" ]; then
     _dr_warn routing "could not read settings.json for: $unread" "chmod u+r <home>/settings.json, or check by hand for CLAUDE_CODE_SUBAGENT_MODEL and CLAUDE_CODE_EFFORT_LEVEL"

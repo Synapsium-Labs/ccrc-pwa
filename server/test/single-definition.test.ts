@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
-  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS,
 } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -3120,6 +3120,79 @@ describe('one scratch-slug predicate — four prefixes, three bash sites, one mi
       .map(rel)
       .sort();
     expect(holders).toEqual(['server/test/scratchSlugs.ts']);
+  });
+});
+
+// ROUTE_WRITABLE_FIELDS, routing spec 2026-09-14 §5.3 (slice 4, Task 3). The
+// task brief's own docstring on the constant (`shared/api.ts`) claims
+// "single-definition.test.ts scans for a hand-written sibling" — a claim
+// that was FALSE from the commit that added it (fix round 1, finding #3):
+// nothing in this file ever named `ROUTE_WRITABLE_FIELDS` or its five words
+// until this describe. The idiom is `the provider table`'s above
+// (:963-1027) — a declaration scan plus an array-literal scan, both over the
+// same four ROOTS — applied to this list instead of `PROVIDER_IDS`.
+describe('ROUTE_WRITABLE_FIELDS — one list, one home (routing spec §5.3, slice 4)', () => {
+  // The positive control, same shape as `the name list this scans is real,
+  // and is the roster` above: a scan for a field nothing spells passes
+  // everything.
+  const FIELDS = ROUTE_WRITABLE_FIELDS;
+
+  it('the field list this scans is real, and is the routing record\'s own list', () => {
+    expect(FIELDS.length).toBe(5);
+    expect(FIELDS).toContain('class');
+  });
+
+  it('ROUTE_WRITABLE_FIELDS is declared in exactly one file under the four roots', () => {
+    const RE = /^\s*(?:export\s+)?const\s+ROUTE_WRITABLE_FIELDS\b/m;
+    const holders = ALL.filter((f) => RE.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  // The fingerprint every historical copy in this file shares
+  // (`enumeratesAsArray`, :859-865, and the provider table's own copy of it,
+  // :998-1004): two or more of the five field names quoted inside the SAME
+  // `[...]` array literal. `shared/api.ts`'s own definition trips this scan
+  // too — it IS such a literal — so the assertion is "in exactly one file",
+  // not "nowhere", exactly as the brief's Step 3 states it ("do not respell
+  // them in a test either; import").
+  //
+  // ONE EXEMPTION, BY NAME, AND IT IS A DIFFERENT VOCABULARY — the same shape
+  // as `PROBE_KINDS`'s exemption above (:989-1004). `server/src/commands.ts`'s
+  // `BUILTINS` table (the PWA's slash-command picker, session-only keystrokes
+  // per this slice's own constraints doc) lists `compact` and `effort` as
+  // COMMAND NAMES a person can type, which is two of this list's five words —
+  // measured, this trips the raw scan. It is not a restatement of the
+  // routing record's writable-field vocabulary: `BUILTINS` names KEYSTROKES,
+  // this list names RECORD FIELDS a body may set, and neither derives from
+  // the other (`subagent`, `workflow` and `class` are not slash commands;
+  // `model`, `clear`, `context`, `cost`, `resume` are not routable fields).
+  // The exemption is the ARRAY LITERAL, not the file, in case a real second
+  // copy of the routing list ever lands beside it.
+  const EXEMPT_BUILTINS = /export const BUILTINS: SlashCommand\[\] = \[[\s\S]*?\n\];/;
+  const scannable = (src: string): string => src.replace(EXEMPT_BUILTINS, '');
+  const enumeratesAsArray = (src: string): boolean => {
+    for (const m of src.matchAll(/\[[^\]]*\]/gs)) {
+      const hits = FIELDS.filter((w) => new RegExp(`['"]${w}['"]`).test(m[0]));
+      if (hits.length >= 2) return true;
+    }
+    return false;
+  };
+
+  it('the BUILTINS exemption is live — commands.ts trips the raw scan and not the exempted one', () => {
+    // THE EXEMPTION IS CHECKED, not assumed (the provider table's own lesson,
+    // :1017-1021): if `BUILTINS` is renamed, moved, or loses its two-word
+    // overlap, this goes red rather than silently exempting a line that no
+    // longer matches anything.
+    const commands = readFileSync(path.join(ccrcRoot, 'server/src/commands.ts'), 'utf8');
+    expect(enumeratesAsArray(commands),
+      'BUILTINS no longer trips this scan — delete the exemption above it').toBe(true);
+    expect(enumeratesAsArray(scannable(commands)),
+      'server/src/commands.ts enumerates route fields somewhere OTHER than BUILTINS').toBe(false);
+  });
+
+  it('no source file under the four roots restates the five fields as an array literal, except shared/api.ts', () => {
+    const holders = ALL.filter((f) => enumeratesAsArray(scannable(readFileSync(f, 'utf8')))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
   });
 });
 
