@@ -7856,8 +7856,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `ccd/ccd` re-measures 22 -> 124 here. Task 11 still owns re-anchoring the
     // citations themselves; this is a RE-MEASUREMENT of the census only, per
     // the assertion's own mandate, never a rule change. No D-number (S6-R11).
+    // RE-MEASURED AGAIN at Task 6, on the same standing rule and with no
+    // ruling id of its own: Task 5's two hunks into `ccd/ccd` (`+3` at
+    // `:1143`, `+32` at `:16543`) landed after S6-R10's measurement, taking
+    // `ccd/ccd` 124 -> 125. The movement is TWO references and it nets to one:
+    // the `+35` below `:16543` moved README's `genrc == 1` anchor, which was
+    // RE-ANCHORED BY CONTENT here rather than parked (`ccd/ccd:17992-17994` ->
+    // `:18027-18029`, the three bytes byte-identical at both trees) because
+    // README's own entry is an equality with empty, not a debt; and the `+3`
+    // below `:1143` newly stales two `**Files:**`-visible plan references and
+    // un-stales one.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 124,
+      'ccd/ccd': 125,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -7876,9 +7886,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    // 59 -> 161, the sum of the re-measured map above (S6-R10): the headline
-    // is a MECHANISM, not a separate number, so it moves with `ccd/ccd`.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(161);
+    // 59 -> 161 (S6-R10) -> 162 (Task 6), the sum of the re-measured map
+    // above: the headline is a MECHANISM, not a separate number, so it moves
+    // with `ccd/ccd`.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(162);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8292,6 +8303,23 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // RE-MEASURED against the tree, never adjusted to keep a number green;
     // Task 11 still owns re-anchoring the citations themselves. No D-number
     // (S6-R11).
+    // RE-MEASURED AGAIN at Task 6 (the whole-slice ship), applying S6-R11's
+    // standing rule to an instance its list could not name — no ruling id of
+    // its own, because nothing about the rule changed. Task 5's two hunks into
+    // `ccd/ccd` — `+3` lines at `:1143` (the compact tunables) and `+32` at
+    // `:16543` (`_auto_compact_check`'s threshold read) — landed AFTER S6-R10
+    // re-measured this set, so the joined-row stale set moves 51 -> 48. Every
+    // one of the seven movers is a COINCIDENCE of those two shifts, in the
+    // class this comment already records, and each was MEASURED at both trees
+    // rather than inferred: `:2455` -> `:2433-2439` (`:2455` now holds a `rc 2
+    // is MECHANISM ABSENCE` comment; `:2433-2439` now holds `_reg_purge`'s
+    // usage-family `rm -f` block, which offers the `rm` its row quotes), and
+    // `:13561`, `:13560-13562`, `:13573-13575` (one of its two sites) and
+    // `:5385-5388` each stopped failing because the `+3` shift slid a
+    // different comment line under the anchor — not because anything was
+    // re-anchored. `:19131` starts failing for the mirror reason, below the
+    // `+35`. Nothing here is a repair and no rule changed; Task 11 still owns
+    // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         'server/test/ccd-ws-reap.test.ts:344',
@@ -8303,13 +8331,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13561',
         'ccd/ccd:13567',
         'ccd/ccd:13673',
-        'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
         'ccd/ccd:19120',
+        'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13650-13652',
@@ -8331,18 +8358,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8609',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
-        'ccd/ccd:13573-13575',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
         'ccd/ccd:2874',
         'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
-        'ccd/ccd:2455',
+        'ccd/ccd:2433-2439',
         'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
-        'ccd/ccd:5385-5388',
         'ccd/ccd:4642-4653',
         'ccd/ccd:5819-5823',
       ]);
@@ -8375,6 +8400,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // RULING S6-R10 (fix round 2): re-measured against both re-measured
     // passes above — routing slices 2-6's growth of `ccd/ccd` put 24 more
     // sites within reach of another pass; no rule changed.
+    // RE-MEASURED AGAIN at Task 6, 29 -> 28, and it is DERIVED: this list is
+    // the intersection of the set above with the two passes above it, so
+    // Task 5's `+3`/`+32` hunks move it mechanically — `spec:2125
+    // ccd/ccd:19131` enters and `spec:2210 ccd/ccd:13573-13575` and
+    // `spec:2222 ccd/ccd:5385-5388` leave, the same three movers, at the same
+    // spec lines. No ruling id and no rule change.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
         'spec:2123 ccd/ccd:13573-13575',
@@ -8386,6 +8417,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
         'spec:2125 ccd/ccd:19120',
+        'spec:2125 ccd/ccd:19131',
         'spec:2204 ccd/ccd:12032-12034',
         'spec:2204 ccd/ccd:12032-12034',
         'spec:2209 ccd/ccd:13809',
@@ -8400,12 +8432,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8609',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
-        'spec:2210 ccd/ccd:13573-13575',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
         'spec:2222 ccd/ccd:5725',
-        'spec:2222 ccd/ccd:5385-5388',
       ]);
   });
 
