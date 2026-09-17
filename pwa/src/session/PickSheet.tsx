@@ -32,6 +32,15 @@ export function PickSheet({ open, onClose, eyebrow, title, options, onPick }: Pi
             <span className="opt-body">
               <span className="opt-label">{o.label}</span>
               {o.sublabel && <span className="opt-desc">{o.sublabel}</span>}
+              {o.active && o.degradedTo !== undefined && (
+                // Whole-branch review M1: ccd's `.degraded` stamp — no lane
+                // could serve the intended class, so it served one rung down
+                // (spec §5.4). It sits BESIDE the intended row, inside the
+                // body rather than in the right-hand marker slot, because
+                // that slot is `inertOnThisLane`'s and a degraded field can
+                // be inert too — two different facts, never one line.
+                <span className="opt-degraded">serving {o.degradedTo} (share ceiling)</span>
+              )}
             </span>
             {o.active && o.inertOnThisLane && (
               // S6 Task 4: ccd's `.inert` names this field on the session's

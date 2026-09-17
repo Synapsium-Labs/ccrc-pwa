@@ -397,6 +397,86 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     }
   });
 
+  // Whole-branch review M1: `route.degraded` rode the wire with no PWA
+  // reader at all — ccd's own record of the class it IS serving because no
+  // candidate lane could serve the intended one (spec §5.4's
+  // `measured-unservable` arm). The intended class stays the active row (it
+  // is still what was asked for, and ccd restores it at the next settle on
+  // a lane that can serve it); the served class is said BESIDE it.
+  it('the degraded class is named beside the intended one — "serving <class> (share ceiling)"', () => {
+    renderScreen({
+      model: 'Haiku 4.5', // the pane is serving the degraded class
+      route: { fields: { class: 'opus' }, degraded: 'haiku', inert: [], unreadable: [] },
+    });
+    openModelSheet();
+
+    const opus = screen.getByRole('button', { name: /Opus 5/ });
+    expect(opus.className).toContain('opt--selected');
+    expect(opus.textContent).toContain('serving Haiku 4.5 (share ceiling)');
+    // On the INTENDED row and nowhere else — the Haiku row is not active and
+    // says nothing about itself.
+    expect(screen.getByRole('button', { name: /Haiku 4\.5$/ }).textContent).not.toContain('share ceiling');
+  });
+
+  it('a degraded stamp naming the intended class itself says nothing — "serving Opus 5" beside active Opus 5 is no claim', () => {
+    renderScreen({
+      model: 'Opus 5',
+      route: { fields: { class: 'opus' }, degraded: 'opus', inert: [], unreadable: [] },
+    });
+    openModelSheet();
+
+    expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+    expect(screen.queryByText(/share ceiling/)).not.toBeInTheDocument();
+  });
+
+  it('degraded: null renders no note at all — the control', () => {
+    renderScreen({
+      model: 'Sonnet 5',
+      route: { fields: { class: 'opus' }, degraded: null, inert: [], unreadable: [] },
+    });
+    openModelSheet();
+
+    expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+    expect(screen.queryByText(/share ceiling/)).not.toBeInTheDocument();
+  });
+
+  it('the note rides the CLASS picker only — `.degraded` is a class, so the effort sheet never shows it', () => {
+    renderScreen({
+      effort: 'medium',
+      route: { fields: { effort: 'high' }, degraded: 'haiku', inert: [], unreadable: [] },
+    });
+    openEffortSheet();
+
+    expect(screen.getByRole('button', { name: /^High/ }).className).toContain('opt--selected');
+    expect(screen.queryByText(/share ceiling/)).not.toBeInTheDocument();
+  });
+
+  it('a degraded class field that is ALSO inert says both — two facts, two lines', () => {
+    renderScreen({
+      model: 'Haiku 4.5',
+      route: { fields: { class: 'opus' }, degraded: 'haiku', inert: ['class'], unreadable: [] },
+    });
+    openModelSheet();
+
+    const opus = screen.getByRole('button', { name: /Opus 5/ });
+    expect(opus.textContent).toContain('serving Haiku 4.5 (share ceiling)');
+    expect(opus.textContent).toContain('inert on this lane');
+  });
+
+  it('an unreadable class field lights no row, so it names no degradation either', () => {
+    // `route.unreadable` naming `class` means nothing is known about the
+    // intended class this pass — there is no intended row to put the note
+    // beside, and a note floating alone would read as a claim about a class
+    // nobody measured.
+    renderScreen({
+      model: 'Haiku 4.5',
+      route: { fields: {}, degraded: 'haiku', inert: [], unreadable: ['class'] },
+    });
+    openModelSheet();
+
+    expect(screen.queryByText(/share ceiling/)).not.toBeInTheDocument();
+  });
+
   // Fix round 2, finding 2: once `route` rides the wire, it is the WHOLE
   // STORY for every field on this session — a tap must never ALSO arm the
   // local 60s "not confirmed" toast, which would contradict the very

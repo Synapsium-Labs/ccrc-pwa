@@ -546,7 +546,14 @@ export function SessionScreen({
         title="Choose a model"
         options={modelOptions(
           wrapper, live?.model ?? null,
-          routeInfo ? { intended: classIntended, inert: classInert, unreadable: classUnreadable } : undefined,
+          routeInfo
+            ? {
+              intended: classIntended, inert: classInert, unreadable: classUnreadable,
+              // Whole-branch review M1: `.degraded` is a CLASS, so it reaches
+              // the model picker alone — the effort sheet below passes none.
+              degraded: routeInfo.degraded,
+            }
+            : undefined,
         )}
         onPick={(o) => void pick(o)}
       />

@@ -2130,6 +2130,17 @@ button.metachip:active {
   color: var(--ink-tertiary);
   flex: none;
 }
+/* Whole-branch review M1: the `.degraded` note under the intended class —
+   one rung of ink quieter than the label, wrapping with the body rather
+   than competing with the right-hand marker slot. `--ink-tertiary`, the
+   token `.opt-inert` (the other routing marker on this row) already uses:
+   it grounds against the sheet's own surface, so contrast.test.ts MEASURES
+   this rule instead of adding it to the uncovered census the way an
+   unmeasurable `--status-*` token would. */
+.opt-degraded {
+  font: var(--weight-regular) var(--text-2xs) / 1.3 var(--font-mono);
+  color: var(--ink-tertiary);
+}
 .opt-wait {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   color: var(--status-busy-text);

@@ -703,6 +703,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, Task 4: the model/effort picker's 'inert on this lane' marker, rendered inside <Sheet>'s .sheet-panel (Sheet.tsx:59), which paints background: var(--bg-sheet) (primitives.css:141) with no colour of its own. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same shape as fleet.css's .pool-note/.route-field-label on the same .sheet-panel ground. Registered rather than left in the uncovered census: the ground is recoverable by reading the component, so calling it unmeasurable would be false.",
   },
+  'chat.css .opt-degraded': {
+    under: ['var(--bg-sheet)'],
+    why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

@@ -45,6 +45,17 @@ export interface RoutingOverride {
    *  already null and the wire-derived queued check already requires a
    *  non-null `intended` to fire. */
   unreadable?: boolean;
+  /** Routing slice 6, Task 4, whole-branch review M1: ccd's own `.degraded`
+   *  stamp for this session (`FleetSession.route.degraded`) — the class it
+   *  IS serving because no candidate lane could serve the intended one
+   *  (spec §5.4's `measured-unservable` arm: ccd degrades one class rung for
+   *  the relaunch and stamps the class it served). It is a CLASS, so only
+   *  `modelOptions` consults it; the effort picker passes nothing. The
+   *  intended class stays in `fields` and is restored at the next settle on
+   *  a lane that can serve it, which is exactly why this is rendered BESIDE
+   *  the intended row rather than by moving the active row onto the served
+   *  class — the record still says what was asked for. */
+  degraded?: string | null;
 }
 
 export interface PickOption {
@@ -68,6 +79,17 @@ export interface PickOption {
    *  `SessionScreen` never treats an inert field as queued (there is nothing
    *  to wait for a confirmation that will never come). */
   inertOnThisLane?: boolean;
+  /** Whole-branch review M1: the DISPLAY LABEL of the class ccd is serving
+   *  instead of this row's own — set on the ACTIVE row only, and only when
+   *  `RoutingOverride.degraded` names a class DIFFERENT from that row's
+   *  alias. Same-class is not rendered: "serving Opus 5" beside an active
+   *  Opus 5 row states nothing, and a stale stamp ccd has already restored
+   *  from would otherwise read as a live ceiling. The label comes from THIS
+   *  wrapper's own option list (`GPT-5.6 Luna`, not `haiku`, on the gpt
+   *  lane); a class no row here carries falls back to the raw stamped word
+   *  rather than being dropped — a degradation the reader cannot name is
+   *  still a degradation. */
+  degradedTo?: string;
 }
 
 /** Model chooser rows. `current` is the pane statusline display name
@@ -86,6 +108,7 @@ export function modelOptions(wrapper: string, current: string | null, routing?: 
   const intended = routing?.intended ?? null;
   const inert = routing?.inert ?? false;
   const unreadable = routing?.unreadable ?? false;
+  const degraded = routing?.degraded ?? null;
   const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => {
     const active = unreadable ? false : intended !== null ? alias === intended : (key !== '' && c.includes(key));
     return {
@@ -93,21 +116,30 @@ export function modelOptions(wrapper: string, current: string | null, routing?: 
       ...(active && inert ? { inertOnThisLane: true } : {}),
     };
   };
+  /** Whole-branch review M1: the `.degraded` stamp, attached to the ACTIVE
+   *  row as a LABEL. Resolved over the finished list (a row cannot name
+   *  another row's label while it is being built) and only where the served
+   *  class differs from the row's own — see `PickOption.degradedTo`. */
+  const withDegraded = (opts: PickOption[]): PickOption[] => {
+    if (degraded === null) return opts;
+    const label = opts.find((o) => o.route.value === degraded)?.label ?? degraded;
+    return opts.map((o) => (o.active && o.route.value !== degraded ? { ...o, degradedTo: label } : o));
+  };
   if (wrapper === 'gpt') {
-    return [
+    return withDegraded([
       row('GPT-6 Astra', 'fable', 'astra', 'Fable class'),
       row('GPT-5.6 Sol', 'opus', 'sol', 'Opus class'),
       row('GPT-5.6 Terra', 'sonnet', 'terra', 'Sonnet class'),
       row('GPT-5.6 Luna', 'haiku', 'luna', 'Haiku class'),
-    ];
+    ]);
   }
-  return [
+  return withDegraded([
     row('Opus 5', 'opus', 'opus'),
     row('Sonnet 5', 'sonnet', 'sonnet'),
     row('Fable 5', 'fable', 'fable'),
     row('Haiku 4.5', 'haiku', 'haiku'),
     row('Default', 'default', ''),
-  ];
+  ]);
 }
 
 /** The model row's own `readback` for a routing `class` alias, on the given

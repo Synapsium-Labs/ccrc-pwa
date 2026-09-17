@@ -102,6 +102,39 @@ describe('modelOptions', () => {
   it('matches a tier name case-insensitively, as the pane may title-case it', () => {
     expect(modelOptions('gpt', 'GPT-6 Astra').filter((o) => o.active).map((o) => o.label)).toEqual(['GPT-6 Astra']);
   });
+
+  // Whole-branch review M1: `route.degraded` — the class ccd IS serving when
+  // no lane could serve the intended one (spec §5.4). `degradedTo` carries a
+  // LABEL off THIS wrapper's own list, never the bare alias, so the gpt lane
+  // names the tier a reader of that pane would recognise.
+  describe('the degraded-class note (whole-branch review M1)', () => {
+    const noted = (w: string, intended: string, degraded: string | null): (string | undefined)[] =>
+      modelOptions(w, null, { intended, inert: false, degraded })
+        .filter((o) => o.active).map((o) => o.degradedTo);
+
+    it('names the served class by its label on this wrapper, on the intended row alone', () => {
+      expect(noted('claude', 'opus', 'haiku')).toEqual(['Haiku 4.5']);
+      expect(noted('gpt', 'opus', 'haiku')).toEqual(['GPT-5.6 Luna']);
+    });
+
+    it('sets nothing when the stamp names the intended class itself, or is absent', () => {
+      expect(noted('claude', 'opus', 'opus')).toEqual([undefined]);
+      expect(noted('claude', 'opus', null)).toEqual([undefined]);
+      // Omitted entirely — the S6-R4 "nothing changes" shape — is the same
+      // answer as an explicit null, never a crash or a stray note.
+      expect(modelOptions('claude', null, { intended: 'opus', inert: false })
+        .filter((o) => o.active).map((o) => o.degradedTo)).toEqual([undefined]);
+    });
+
+    it('falls back to the raw stamped word for a class no row here carries — a degradation it cannot name is still one', () => {
+      expect(noted('claude', 'opus', 'ludicrous')).toEqual(['ludicrous']);
+    });
+
+    it('attaches to no row at all when the class read was unreadable — no active row to sit beside', () => {
+      expect(modelOptions('claude', 'Haiku 4.5', { intended: null, inert: false, unreadable: true, degraded: 'haiku' })
+        .filter((o) => o.degradedTo !== undefined)).toEqual([]);
+    });
+  });
 });
 
 describe('effortOptions', () => {
