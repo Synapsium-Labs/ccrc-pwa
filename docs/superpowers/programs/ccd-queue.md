@@ -1977,3 +1977,58 @@ gh api repos/<org>/<repo>/pulls/136/commits --paginate -q '.[].commit.message' \
 not have remembered, which is exactly why the rule exists: a hand-written squash body REPLACES the
 generated one, and the generated body is the only thing that aggregates the squashed commits'
 trailers. Both lines go in, and `git log -1 origin/main` gets read back afterwards.
+
+## 2026-09-17 23:2x UTC — the merge landed and the window is OPEN; review 81 dispatched narrow
+
+Round 7 green at `9dfd8483`: server 6/6 shards (10,605 passed), agent 300/300, pwa 2668/2668.
+
+**I verified the window myself.** `origin/main` is `f06abdce`; `git merge-base --is-ancestor
+origin/main HEAD` exits **0**, `merge-tree` is clean — **the PR's merge ref IS this tree.** Census
+`ccd/ccd` 145 / total 184. And the generated marker verifies: sha256 of the shipped body with line 2
+removed is `8aa0c8b641553762…`, exactly the marker, recomputed by me rather than taken.
+
+### The merge was resolved by RULE, and each rule earned its keep
+
+- **`ccd/ccd`'s one conflict was the `# ccrc:generated` marker** — a digest OF THE MERGED BODY, which
+  **neither side ever hashed**, so neither side was takeable. Placeholdered and recomputed last.
+- **`README.md`: a first-match resolution would have silently taken main's new site.**
+  `_reg_generation_init "$id" \` occurs **twice with identical bytes** — `:19588` in `cmd_ensure` and
+  `:9408` in `cmd_ws_restore`, #148's own new third respawn path. Resolved by ENCLOSING FUNCTION. The
+  worker also asserted both sides' PROSE identical (anchors normalised, then compared) *before*
+  substituting numbers, so "swap the anchors" could not silently drop a prose change.
+- **`session-hook.test.ts`: no side picked on merit** — the two sides compared STRUCTURALLY first
+  (comments and derived values stripped): three hunks identical in structure, the fourth differing
+  only in the number inside the same assertion. Checked, not assumed, *after a blanket take-theirs
+  earlier in this wave nearly dropped a mechanism.*
+- Files the branch contributes nothing to took MAIN, **verified by sha rather than by the absence of a
+  conflict** — an absent conflict is not evidence of equality.
+
+**And the four derived values came from the instrument, not from a diff.** vitest truncates, and
+transcribing 54+38 entries out of a truncated diff is the fiction-by-inference that produced the
+`usage-sweep:272` error. So: a temporary `console.log` of each derived expression, **ONE run** (both
+`|`-row lists are one measurement and must not come from different runs), then the file restored from
+a pre-probe copy and verified `diff -q` — never `git checkout --`.
+
+### One known prose red, ruled at zero marginal cost
+
+Round 6's EDIT 2 block — **my bytes** — says `merge-base --is-ancestor` exits **1**. At the shipping
+tree it exits **0**, *because merging is what made main an ancestor again.* Every count in that
+paragraph is still exact and its instruction ("derive it, THREE dots") is right always; only the
+justifying clause is momentarily false.
+
+**Ruled: it is fixed in the same act as the re-derive that main's next move will force anyway.**
+Clause 12 requires a review before merge; a review takes 1–2h; main moves roughly hourly. **So the
+review guarantees the window closes and a final re-derive is coming regardless** — the clause rides
+that act for free. If main somehow holds still, it ships and is carried. Review 81 is told the ruling
+and invited to contradict it.
+
+### F6, and a distinction worth keeping
+
+The worker corrected `+418` → the measured `458 31` (net **+427**) **only in the comment act 2 was
+already rewriting**, leaving three siblings at `:8262`, `:8337`, `:8720` untouched — because
+*repeating a figure it had just measured false would be minting*. I agree: correcting a falsehood you
+are already touching is finishing the edit; going looking for its siblings is a new round. F6 stays
+declared.
+
+Review run **81** dispatched to `ccrc-pwa-warm-canyon`, five items, explicitly told to be FAST and to
+scale the panel to a two-commit diff — the window is the scarce resource, not thoroughness.
