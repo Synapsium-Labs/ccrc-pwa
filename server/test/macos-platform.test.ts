@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
@@ -450,6 +450,55 @@ describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
       expect(lstatSync(dst).isDirectory()).toBe(true);
       expect(readdirSync(dst), 'the destination directory must stay empty').toEqual([]);
       expect(readdirSync(d)).toContain('src');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // R1 (fix round 2): the narrowed ccd-reg-set-atomic scan cannot prove the
+  // `rm` is CONTAINED in its guard — it only sees that the tokens exist
+  // somewhere in the body, and the pre-existing, untouched refusal guard
+  // supplies both of them unconditionally. These two cases are the
+  // behavioural replacement: neither dest shape below is a directory (the
+  // refusal guard never fires for them), so whether the `rm` actually ran —
+  // and whether it ran on a shape it was never meant to touch — is visible
+  // ONLY in whether the destination survives a `mv` that then fails.
+  it('refuses when src is missing and leaves a plain-file dest untouched, byte-for-byte', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-plainfile-'));
+    try {
+      const dst = path.join(d, 'dst');
+      writeFileSync(dst, 'original-bytes-7a2c');
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A plain file is neither `-L` nor `-d`, so the guarded `rm` must never
+      // fire here. An UNCONDITIONAL `rm` (the mutant the narrowed scan
+      // cannot see, because the untouched refusal guard supplies both
+      // `-L "$2"` and `-d "$2"` tokens elsewhere in the body) removes `dst`
+      // before the doomed `mv` runs, so this is the case that reds it.
+      expect(lstatSync(dst).isFile(), 'dest must still be a plain file').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'dest bytes must be exactly what they were').toBe('original-bytes-7a2c');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when src is missing and leaves a symlink-to-file dest resolvable', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-symfile-'));
+    try {
+      const real = path.join(d, 'real-file');
+      writeFileSync(real, 'target-bytes-4e1b');
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A symlink-to-FILE is `-L` but not `-d`, so a guard narrowed to `-L`
+      // alone (dropping the `-d` half) fires here where the real guard would
+      // not — that is exactly the mutation this case reds.
+      expect(existsSync(dst), 'the name must still be resolvable — nothing may unlink it out from under a failed mv').toBe(true);
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the same symlink').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'the link target must be unchanged').toBe('target-bytes-4e1b');
     } finally {
       rmSync(d, { recursive: true, force: true });
     }

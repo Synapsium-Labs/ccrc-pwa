@@ -139,13 +139,33 @@ esac
 # NOT ATOMIC THE WAY `-T` IS, and written down rather than hidden: between the
 # test and the rename another process could create a directory at the
 # destination. Measured repo-wide (D-2189): this function has EIGHT
-# executable call sites across ccd and ccrc, not one, and only two of them
-# write the canonical `$REG/<id>.<field>` shape (`_reg_set`, `_acct_rehome`)
-# — the other six write elsewhere under `$REG` (a subdirectory, a dot-leading
-# name, an `<id>-disabled` marker) or entirely outside it (a launchd plist
-# under `$HOME/Library/LaunchAgents`). The race stays unreachable TODAY
-# because nothing in the tree creates a DIRECTORY at any of the eight — a
-# measured fact about today's call sites, not a guarantee about future ones.
+# executable call sites across ccd and ccrc — the paragraph this replaces
+# claimed it was the destination's ONLY WRITER, which undercounted the call
+# sites themselves, not a cardinal it ever stated. The eight:
+# `_svc_write_session_plist` (in each file, to a launchd plist under
+# `$HOME/Library/LaunchAgents` — outside `$REG` entirely), `_reg_set` (to
+# `$REG/<id>.<field>`, canonical), `_lc_err` (to `$REG/.lifecycle/errors`, a
+# subdirectory), `cmd_project_pool` (to `$REG/pools/<project>`, a
+# subdirectory), `cmd_supervise` (to `$REG/.<id>.starts`, dot-leading),
+# `_acct_mark_off` (to `$REG/<id>-disabled`, a marker) and `_acct_rehome` (to
+# `$REG/<id>.<field>`, canonical). Only `_reg_set` and `_acct_rehome` write
+# the canonical shape; the other six write elsewhere under `$REG` or outside
+# it entirely. The race stays unreachable TODAY: every directory that sits
+# at one of the eight destinations exists BEFORE this function is ever
+# called (test fixtures included), so the refusal guard's `[ -d ]` arm sees
+# it and returns 1 — the race this paragraph is about is a directory
+# appearing INSIDE the window between the test and the rename, not one any
+# of the eight call sites creates. A measured fact about today's call sites,
+# not a guarantee about future ones.
+#
+# ONE MORE PRICE, undisclosed until now: the `rm` above runs BEFORE the `mv`,
+# so a call with `dest` a symlink-to-directory and `src` absent leaves the
+# destination GONE, where the pre-fix behavior left the symlink intact
+# (measured against both revisions). Reachability from `_reg_set` is nil
+# today — the `ln -s` census holds, no symlink is ever created at
+# `$REG/<id>.<field>` — but the price is real for the one destination shape
+# this `rm` covers, so it is disclosed here rather than only in a mutation
+# table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
     if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi

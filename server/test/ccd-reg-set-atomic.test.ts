@@ -63,9 +63,18 @@ describe('_reg_set writes atomically', () => {
     // THE RENAME MOVED ONE FRAME DEEPER when macOS arrived: BSD `mv` has no
     // `-T`, so the GNU call this used to scan for now lives in
     // `_plat_mv_notdir`, whose Linux arm IS that call and whose Darwin arm
-    // reproduces its refusal. The invariant is unchanged and so is the
-    // strength of this check — it just has to follow the indirection, and it
-    // pins BOTH ends so neither can be loosened alone.
+    // reproduces its refusal. The invariant on THIS end — that `_reg_set`
+    // reaches the destination through the rename helper and nothing else —
+    // is unchanged. The OTHER end is not: D-2187 (A2) loosened
+    // `_plat_mv_notdir`'s own body alone, on purpose, to add its one
+    // narrowly-guarded `rm`, and the scan below states that limit rather
+    // than hiding it — it can no longer prove BOTH ends stay pinned
+    // together. The real proof that the loosened end stays honest lives in
+    // macos-platform.test.ts's "_plat_mv_notdir's Darwin arm, forced from
+    // Linux (D-2187)" describe: the symlink-to-directory and real-directory
+    // cases (A1), plus the plain-file and symlink-to-file cases added
+    // alongside this scan's narrowing (R1) to replace the mechanism this
+    // narrowing removed.
     expect(body, 'the destination is reached by the rename helper only')
       .toMatch(/_plat_mv_notdir\s+"\$tmp"\s+"\$REG\/\$1\.\$2"/);
     const mvBody = /_plat_mv_notdir\(\)\s*\{([\s\S]*?)\n\}/.exec(ccd)?.[1] ?? '';
