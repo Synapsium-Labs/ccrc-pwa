@@ -956,3 +956,20 @@ mechanism caught its author rather than a worker.
   the placement correctly stays put. Raised by the final fix wave, which restamped on reclaim, noticed
   the spec still said "at open time", and refused both to edit the spec and to mint itself a number —
   the right call on both counts.
+
+D-2987 issued 2026-09-17 by `POST /api/ledger/deviations` (floor now 2988), at integration rather than
+during execution — the first of this plan's numbers that is nobody's defect.
+
+- **D-2987 — Task 1's migration is `MIGRATIONS[11]`, not `MIGRATIONS[10]` as every task in this plan
+  spells it.** PR #108 (review runs) merged while this branch was in flight and took
+  `user_version 10 -> 11` for `runs.kind`/`runs.reviews`. Task 1's text, and the several later tasks
+  that cite it, name slot 10. Both entries at one `user_version` is not a naming quibble: `db.ts`'s
+  loop runs `for (v = current; v < COORD_SCHEMA_VERSION; v++)`, so whichever entry sits second at a
+  given version never executes against a database that has already passed it, and one of the two
+  columns is simply never created — silently, on exactly the live `~/.ccrc/coord.db` that cannot be
+  re-migrated. RULED at the merge: main's entry keeps the slot it already shipped, this plan's moves
+  to `MIGRATIONS[11]` / `user_version 11 -> 12`, and `COORD_SCHEMA_VERSION = MIGRATIONS.length`
+  follows on its own — the derivation this file's Task 1 chose precisely so a renumber costs no
+  hand-edited constant. Nothing about the migration's content moved. The plan's own task text is left
+  as written: it is a snapshot of what was planned, and the shipped comment in `schema.ts` records
+  both the slot and why it moved, which is the copy a reader is told to trust.
