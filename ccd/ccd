@@ -67,14 +67,30 @@ esac
 # `-T` treats a symlink-to-directory as the NAME and replaces it, where
 # `[ -d ]` follows the link and would refuse a rename GNU performs.
 #
+# A SYMLINK-TO-DIRECTORY DEST IS THE ONE SHAPE GNU'S `-T` REPLACES THAT BARE
+# `mv -f` DOES NOT (D-2187): measured on GNU coreutils 9.4, `mv -f -- src dest`
+# with `dest` a symlink to a directory returns 0 with `dest` still the same
+# symlink and `src` moved INSIDE the linked directory — the postcondition
+# (`0 iff src is now at dest`) is false while the exit code says otherwise.
+# Every other destination shape (symlink-to-file, dangling symlink, plain
+# file) already replaces correctly; only this one needs help, so the
+# `rm -f -- "$2"` below is scoped to exactly that shape — guarded on BOTH
+# `-L` and `-d`, never unconditional — not a general unlink-before-rename.
+#
 # NOT ATOMIC THE WAY `-T` IS, and written down rather than hidden: between the
 # test and the rename another process could create a directory at the
-# destination. Nothing in ccd can reach that window — every destination is
-# `$REG/<id>.<field>`, and this function is its only writer — so the race is
-# unreachable here rather than tolerated.
+# destination. Measured repo-wide (D-2189): this function has EIGHT
+# executable call sites across ccd and ccrc, not one, and only two of them
+# write the canonical `$REG/<id>.<field>` shape (`_reg_set`, `_acct_rehome`)
+# — the other six write elsewhere under `$REG` (a subdirectory, a dot-leading
+# name, an `<id>-disabled` marker) or entirely outside it (a launchd plist
+# under `$HOME/Library/LaunchAgents`). The race stays unreachable TODAY
+# because nothing in the tree creates a DIRECTORY at any of the eight — a
+# measured fact about today's call sites, not a guarantee about future ones.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
     if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi
+    if [ -L "$2" ] && [ -d "$2" ]; then rm -f -- "$2"; fi
     mv -f -- "$1" "$2"
   else
     mv -fT -- "$1" "$2"
