@@ -3,10 +3,19 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network, no locks, no waiting. A hook that can slow or break a
-# session is worse than no hook. Consumed read-only by the ccrc server via
-# the agent (whitelist: .cc-sessions is readable; nothing here needs a
-# grant). Non-fleet sessions (no tmux, foreign session name) exit silently.
+# all, no network — and on the HOT PATH, no locks and no waiting. TWO declared
+# exceptions, both OFF the hot path and both in the compaction arms alone:
+# the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
+# locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
+# permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
+# (COMPACT_LOCK_WAIT_SERVE on compact SessionStart, the one acquisition a human
+# is waiting on) and never held across a fork the arm does not reap. A miss
+# publishes nothing; there is no unlocked fallback. Every OTHER event — every
+# PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
+# still takes no lock and waits on nothing. A hook that can slow or break a
+# session is worse than no hook. Consumed read-only by the ccrc server via the agent
+# (whitelist: .cc-sessions is readable; nothing here needs a grant). Non-fleet
+# sessions (no tmux, foreign session name) exit silently.
 set -uo pipefail
 
 # ── epoch milliseconds, on two userlands ────────────────────────────────
@@ -39,6 +48,17 @@ _hook_epoch_ms() {
   if [[ "$t" =~ ^[0-9]{13,}$ ]]; then printf '%s' "$t"; else printf '%s000' "$(date +%s)"; fi
 }
 
+_hook_timeout() {
+  local bin
+  for bin in timeout gtimeout; do
+    if command -v "$bin" >/dev/null 2>&1; then
+      "$bin" "$@"
+      return $?
+    fi
+  done
+  return 127
+}
+
 # ── THE THREE ENVELOPES: R1's card, R5's deny, R6's nudge ─────────────────
 # Claude Code reads a hook's stdout as a PER-EVENT CONTRACT — on SessionStart it
 # is context to inject, on PreToolUse it is a permission decision OR context
@@ -54,20 +74,35 @@ _hook_epoch_ms() {
 # arm, and whichever one the arm chose is printed from ONE site at the end of
 # the file, after the hookstate rename lands (D-1689) — at most one line per
 # event, never both. Every failure path in any of them prints NOTHING; this
-# file's standing contract (exit 0 on every path, no network, no locks, no
-# waiting) is unchanged. Every read below is a local file or a git ref.
-_hook_emit_context() {   # <text> -> one JSON line on stdout, or nothing at all
-  local j=""
-  # THE TOTAL CLIP LIVES HERE, at the ONE site every subject passes through.
+# file's standing contract (exit 0 on every path, no network, and on the hot
+# path no locks and no waiting) is unchanged except the two declared
+# compaction-arm exceptions the header states — the hookstate-first bounded
+# helper wait, and D-2605's bounded stable-lock acquisition. Every read below
+# is a local file or a git ref.
+_hook_emit_context() {   # <standing> [<compact>] -> one JSON line on stdout, or nothing at all
+  local j="" text=""
+  # THE STANDING CLIP LIVES HERE, at the ONE site every subject passes through.
   # A per-subject clip is one each new subject can forget; this one cannot be.
   # It is also what stands between an operator-controlled field and `jq`'s own
   # MAX_ARG_STRLEN (measured 131072 on this box: at 130442 bytes of card the
   # exec fails, `|| return 0` swallows it, and the hook prints NOTHING —
   # deleting the graphify card for that session too).
-  set -- "${1:0:$CARD_MAX_CHARS}"
-  j=$(jq -cn --arg c "$1" \
+  text="${1:0:$CARD_MAX_CHARS}"
+  # THE SECOND CLIP (compaction-card spec §3.3), in the SAME site: the compact
+  # subject is appended AFTER the standing clip, under its own ceiling, and the
+  # sum is pinned at CARD_TOTAL_MAX_CHARS — derived from the two ceilings, never
+  # a third budget. A pathological GM_NODES (D-1899) still loses only the
+  # standing tail; the compact card behind it is intact.
+  if [ -n "${2:-}" ]; then
+    text="${text:+$text }${2:0:$COMPACT_CARD_MAX_CHARS}"
+    text="${text:0:$CARD_TOTAL_MAX_CHARS}"
+  fi
+  # RETURNS 1 when the envelope could not be built — nothing was printed, and
+  # the SessionStart arm must not stamp `served` for a card that never went
+  # out. Every existing caller ignores the code, so nothing else changes.
+  j=$(jq -cn --arg c "$text" \
     '{hookSpecificOutput:{hookEventName:"SessionStart", additionalContext:$c}}' 2>/dev/null) \
-    || return 0
+    || return 1
   printf '%s\n' "$j"
 }
 
@@ -619,9 +654,25 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   local ok='ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-'
   tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
   [ -n "$tp" ] || return 0
-  d=$(dirname -- "$tp") || return 0
+  # THE PARENT AND GRANDPARENT ARE TAKEN BY PARAMETER EXPANSION, NOT `dirname`.
+  # Two reasons, and the first is the contract above this function: a `dirname`
+  # fork is an EXTERNAL, and on a PATH that does not carry one it writes
+  # `dirname: command not found` to the hook's stderr — which is not silent, and
+  # this function runs on every SessionStart including compact, so that line
+  # lands in the middle of the compaction arms' own silence (measured: two
+  # `minimalPath` fixtures went red on exactly that stderr, and `dirname` is not
+  # in that helper's tool list). A `2>/dev/null` would hide the noise; the
+  # expansion removes the fork. The second is cost — two fewer subshells per
+  # SessionStart across ~20 live sessions.
+  #
+  # THE EXPANSION IS NOT `dirname`, and the `*/*` guard is not the only difference. That guard covers the
+  # slashless payload the comment below calls "shaped any other way": `dirname` would say `.`, whose parent
+  # can never end in `/projects`. MEASURED, the two answer the shape the harness sends identically
+  # (`<config dir>/projects/<slug>/<uuid>.jsonl`); where they differ on such a payload the expansion is the
+  # STRICTER and this function refuses anyway: a doubled slash at `*/projects` below, a trailing at `[ -d ]`.
+  case "$tp" in */*) d=${tp%/*} ;; *) return 0 ;; esac
   [ -d "$d" ] || return 0
-  projects=$(dirname -- "$d") || return 0
+  case "$d" in */*) projects=${d%/*} ;; *) return 0 ;; esac
   # The harness's layout, ASSERTED rather than assumed: a transcript lives at
   # `<config dir>/projects/<slug>/<uuid>.jsonl`, so its grandparent is the
   # `projects` directory this home files every pair under. A payload shaped
@@ -867,6 +918,1428 @@ _hook_hold_card() {
   return 0
 }
 
+# ── THE COMPACTION CARD: WHICH CONTEXT IS COMPACTING (spec §3.0) ─────────
+# The three compaction payloads carry the PARENT'S session_id and
+# transcript_path and no agent field — for a subagent's compaction exactly as
+# for the main thread's (measured 2026-09-09 on 2.1.266: five headless runs,
+# byte-identical key sets; `prompt_id` is the parent's on a subagent's rows
+# too). So the hook asks the filesystem, and ONLY HERE, at PreCompact: from
+# this moment the compacting context writes nothing for ≥79 s, so any later
+# arm would see it as the quietest file, never the newest. The rule is
+# LIVENESS, not recency:
+#   manual trigger            → main   (only the main thread takes /compact)
+#   no live agent file        → main   (an auto-compaction fires right after a write)
+#   one live agent, parent quiet → that subagent
+#   anything else             → ambiguous — two contexts wrote inside the window
+#                               and nothing says which one stopped to compact
+# `ambiguous` is an ANSWER: no card (a sibling's card is wrong context, and
+# wrong context is worse than none), a measurement that says so, and a count
+# on the corpus. It is the honest answer for a Workflow fan-out — seven and
+# eight agents of one session, measured, writing every 4–6 s for 13–39 min —
+# so a subagent card is reachable only for a SOLO live subagent. The rule
+# records what it saw (CS_LIVE_N, CS_PARENT_LIVE) beside its verdict, so every
+# journal line can be audited offline against the transcripts.
+# A subagent's transcript is `<transcript minus .jsonl>/subagents/**/
+# agent-<id>.jsonl` (Agent-tool subagents directly in it, Workflow agents one
+# `workflows/<run>/` deeper); `<transcript minus .jsonl>` IS
+# `<dirname>/<session_id>`, so no second payload read is needed.
+# `find -mmin` is on GNU and BSD alike; `-printf` is not, and this file's
+# header declares two userlands. `find` itself is new to this file and guarded
+# like `jq` at the top: a box without it says NOTHING rather than a silent
+# `main` for every compaction.
+_hook_compact_scope() {   # <transcript_path> <trigger> -> CS_SCOPE CS_TRANSCRIPT CS_AGENT CS_LIVE_N CS_PARENT_LIVE ; rc 1 = nothing may be said
+  CS_SCOPE=""; CS_TRANSCRIPT=""; CS_AGENT=""; CS_LIVE_N=""; CS_PARENT_LIVE=""
+  local tp="$1" trig="$2" dir="" f="" live="" n=0 mins=$(( COMPACT_LIVE_S / 60 ))
+  [[ -n "$tp" && -f "$tp" && -r "$tp" ]] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  if [[ "$trig" == manual ]]; then CS_SCOPE="main"; CS_TRANSCRIPT="$tp"; return 0; fi
+  dir="${tp%.jsonl}/subagents"
+  if [[ -d "$dir" ]]; then
+    while IFS= read -r f; do
+      [[ -n "$f" ]] || continue
+      n=$(( n + 1 )); live="$f"
+    done < <(find "$dir" -name 'agent-*.jsonl' -mmin "-$mins" 2>/dev/null)
+  fi
+  CS_LIVE_N="$n"
+  if (( n == 0 )); then CS_SCOPE="main"; CS_TRANSCRIPT="$tp"; return 0; fi
+  if (( n > 1 )); then CS_SCOPE="ambiguous"; return 0; fi
+  # The parent's own liveness decides only here, beside exactly one live
+  # agent, and is recorded only when it decided.
+  if [ -n "$(find "$tp" -mmin "-$mins" 2>/dev/null)" ]; then CS_PARENT_LIVE="true"; CS_SCOPE="ambiguous"; return 0; fi
+  CS_PARENT_LIVE="false"
+  [[ -f "$live" && -r "$live" ]] || return 1
+  f="${live##*/}"; f="${f#agent-}"; f="${f%.jsonl}"
+  # SHAPE-GATED, like every other string this file quotes: the id lands in the
+  # set, the journal and (Plan B) the wire. A name this refuses is unspeakable
+  # and the arm says nothing — `case` plus `${#x}`, the file's own idiom.
+  case "$f" in ''|*[!A-Za-z0-9_-]*) return 1 ;; esac
+  (( ${#f} <= CCRC_ID_MAX )) || return 1
+  CS_SCOPE="subagent"; CS_TRANSCRIPT="$live"; CS_AGENT="$f"
+  return 0
+}
+
+# The hookstate writer's own tmp+mv idiom, MIGRATED TO THE §3.4 TARGET FAMILY
+# GRAMMAR (D-2605): `compactset.<pid>.<nonce>.hook-write.tmp` after the literal
+# `.<id>.` prefix. The pre-D-2605 name this replaces was `.$id.$$.${1##*/}.tmp`,
+# which expands to `.<id>.<pid>.<id>.compactset.tmp` — the id occurring TWICE,
+# not the bare `<pid>.compactset.tmp` an earlier draft assumed — and it is
+# matched by nothing but the narrow, age-gated transition allowance below.
+# Migrating it is what lets PreCompact's sweep be EXACT: a temp left by a hook
+# killed between the printf and the `mv` is now a name the sweep can recognise
+# by grammar rather than by a `*compact*.tmp` glob that would also match a
+# stranger. The braces put the REDIRECTION's failure under the 2>/dev/null too
+# (D-1691). The temp is a DOTFILE beside its target — invisible to every
+# suffix-shaped registry glob — and `<pid>` plus the nonce keep two hooks apart.
+_hook_write_atomic() {   # <path> <nonce> <text> -> 0 written whole; 1 nothing left behind
+  local base="${1##*/}"; base="${base#"$id."}"
+  local tmp="$REG/.$id.$base.$$.$2.hook-write.tmp"
+  { printf '%s\n' "$3" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 1; }
+  mv -f "$tmp" "$1" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  return 0
+}
+
+# THE EXACT FAMILY GRAMMAR (spec §3.4, "Exact lifecycle family inventory").
+# Given a basename with the LITERAL `.<id>.` prefix already stripped, answer
+# whether an AGED instance of it is this row's private compaction residue that
+# a lock-holding sweep may remove. Exactness is the point: the pre-D-2605 sweep
+# was `-name ".$id.*compact*.tmp"`, a glob that matches by coincidence rather
+# than by family, and under the widened `_ws_slug_free` an unmatched residue
+# reads FREE and re-hands the slug with a stranger's claim still present.
+#
+# The literal-prefix strip is what keeps a NESTED id out: `.demo.x.foo` and
+# `.demo-x.foo` are different strings, and a suffix that did not strip keeps
+# its leading dot, which no arm below can match — so an unrecognised name is
+# LEFT ALONE rather than guessed at.
+_hook_family_sweepable() {   # <suffix after the literal `.<id>.` strip> -> 0 iff aged private residue
+  case "$1" in
+    # THE PERMANENT LOCK, first and by name: it deliberately outlives the row,
+    # spans generations and safe slug reuse, and no compliant path sweeps it.
+    compactions.lock) return 1 ;;
+    compactset.*.stage|compactcard.*.stage) return 0 ;;
+    compactset.*.stage.part|compactcard.*.stage.part) return 0 ;;
+    compactset.*.hook-write.tmp|compactcard.*.hook-write.tmp) return 0 ;;
+    compactcard.*.session-claim.tmp) return 0 ;;
+    compactpost.*.claim) return 0 ;;
+    compactions.lock-init.*|compactions.lock-open.*) return 0 ;;
+    compactserved-source.*) return 0 ;;
+    # THE FINAL SERVED MARKER, and its cell says both things at once: PostCompact
+    # removes it under its own validated final lock after it has been READ, and a
+    # later locked AGE sweep reclaims one whose PostCompact never came — a missing
+    # helper, a timed-out one, a refused shape gate. Without this arm the only
+    # thing that ever reclaimed such a marker was `_reg_purge`, i.e. row
+    # destruction, so every compaction that failed to settle left one permanent
+    # file on a live row. The two patterns are disjoint: `compactserved.` cannot
+    # match `compactserved-source.`, the character after the stem differing.
+    compactserved.*) return 0 ;;
+    generation-init.*|generation-read.*) return 0 ;;
+    compactions-stage.*.tmp|compactions-snapshot.*.tmp) return 0 ;;
+    # ── THE TRANSITION ALLOWANCE, exactly two legacy grammars ────────────
+    # Both are pre-D-2605 producers this task migrated, and both are matched
+    # only after the exact literal-ID strip, only past the age bound, and only
+    # under a validated stable lock. Nothing else legacy is admitted, and this
+    # allowance is what keeps a hook killed across the upgrade from leaving a
+    # permanent dot-leading file.
+    # ANCHORED ON A DECIMAL HEAD (r3 A-I2), exactly as the ccd twin
+    # `_ws_private_family` already is (D-2801). The literal `.<id>.` strip is
+    # not enough for THESE TWO ARMS: both patterns begin with a bare `*`, so a
+    # second legal id nested under this one — `demo-quiet-basin.x-y` when this
+    # row is `demo-quiet-basin`, the shape a dotted project DIRECTORY name
+    # makes legal — still matches after the strip. MEASURED before this anchor:
+    # one ordinary PreCompact for `demo-quiet-basin` deleted the neighbour's
+    # `.demo-quiet-basin.x-y.999.compactcard-claim.tmp` and
+    # `.demo-quiet-basin.x-y.777.demo-quiet-basin.x-y.compactset.tmp`, while
+    # correctly keeping its target-family `compactpost` claim — every target
+    # arm above names its family word first, so only these two leaked. The
+    # consequence is the chain this function's header traces: the neighbour's
+    # residue gone makes its slug read FREE under the widened `_ws_slug_free`
+    # while its row may be half-purged. A legacy name's first component is the
+    # WRITER'S PID, and a nested id's first component is the rest of its id, so
+    # requiring a pure decimal head separates them.
+    #
+    # The claim grammar is pinned EXACTLY — decimal head, then the grammar and
+    # nothing else. "Exactly two components" is the WRONG exactness test here
+    # because the grammar itself carries a dot: measured on the ccd twin, that
+    # spelling rejected the real `999.compactcard-claim.tmp`. The set grammar
+    # carries the id in the MIDDLE and cannot be pinned that way, so one
+    # contrived collision remains and is STATED rather than hidden — the same
+    # one `_ws_private_family` discloses: an id whose own trailing component is
+    # all digits (project `demo-quiet-basin.99`, slug `9`) presents a decimal
+    # head after this id's strip. Legal, and its cost is one reclaimed legacy
+    # tmp of a neighbour, inside the upgrade window.
+    *.compactset.tmp)                        # `<pid>.<id>.compactset.tmp`
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;
+    *.compactcard-claim.tmp)                 # `<pid>.compactcard-claim.tmp`
+      [[ "${1#*.}" == "compactcard-claim.tmp" ]] || return 1
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;
+  esac
+  return 1
+}
+
+# ── THE PERMANENT STABLE LOCK (spec §3.4, "Stable lock") ─────────────────
+# ONE mutex per registry row — `$REG/.<id>.compactions.lock` — deliberately
+# spanning row generations and safe slug reuse. No path here unlinks, replaces,
+# repairs, truncates, recreates or sweeps it; it is not slug residue precisely
+# because it outlives the row. Two properties are what make it a real mutex
+# rather than a pathname race, and each is pinned:
+#
+#  1. CANONICAL IS NEVER OPENED AT ITS OWN PATHNAME. `exec {fd}<>"$lock"` is
+#     create-capable, so two racers can each create a DIFFERENT inode at the
+#     same pathname and each be told by `flock` that it holds "the" lock —
+#     nothing about either flock call looks wrong afterwards. Canonical is
+#     published exactly once, by POSIX `link` off a private `mktemp` source
+#     (measured on this box: `link src existing` is rc 1 `File exists` and
+#     changes nothing; `link src fresh` is rc 0 and the two names share one
+#     inode), and every acquisition afterwards opens a private hard-link ALIAS.
+#     So no acquisition ever has a create-capable operation at canonical, and
+#     every owner flocks the one canonical inode.
+#  2. THE WAIT IS A PARAMETER, `flock -w "$1"`. This helper spells no constant
+#     of its own, which is what lets COMPACT_LOCK_WAIT_SERVE (the one
+#     acquisition a human waits on) and COMPACT_LOCK_WAIT (every other) be two
+#     independently callable bounds through one code path. A helper that
+#     hard-coded either would make the other unreachable, and no behaviour test
+#     distinguishes "waited 2 s because it was asked to" from "waited 2 s
+#     because that is all it knows".
+#
+# MECHANISM ABSENCE IS NOT CONTENTION. `command -v flock` is asked BEFORE any
+# acquire is attempted, because a contended `flock -w` and a missing binary
+# both spell their failure `1` (measured: uncontended acquire 0, contended
+# acquire 1, `command -v` on a PATH without the binary 1), so the distinction
+# can live only in WHICH probe answered — never in an exit status. `rc 2` is
+# that condition and `rc 1` an ordinary refusal; the three hook arms treat
+# rc 2 as fail-CLOSED (spec §3.4, "Platform outcome"), which is why this file
+# still publishes no compaction artifact on a box without `flock`.
+_hook_lock_same() {   # <fd> <canonical> -> 0 iff the FD's target and canonical are one regular inode
+  local fd="$1" lock="$2" p=""
+  if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
+  elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
+  else return 1; fi
+  # `-f` and `-ef` both FOLLOW the /proc symlink, so these read the FD's own
+  # target: a FIFO, a directory and a symlink at canonical each fail here
+  # (measured), and a canonical REPLACED since the open fails `-ef`.
+  [[ -f "$p" ]] || return 1
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || return 1
+  return 0
+}
+
+# ── IS AN ABSENT CANONICAL A FIRST-EVER MINT, OR A LATER DISAPPEARANCE? ──
+# §4: "a later canonical disappearance/replacement refuses, never recreates
+# it." Without this the two are indistinguishable and the mint arm publishes a
+# SECOND inode at the same pathname while a live holder still owns the first —
+# two processes each told by `flock` that it holds "the" lock, which is the
+# exact hazard this file's header says the link-based design exists to remove.
+# MEASURED before this function existed, with two real processes: holder
+# acquires (canonical inode 167576), a stranger unlinks canonical, a second
+# acquirer runs -> `RC=0`, canonical recreated at inode 167577.
+#
+# TWO ARMS, BECAUSE ONE OF THEM CANNOT SEE THE SCENARIO §4 NAMES.
+#
+#  (a) AN ACQUISITION IN FLIGHT leaves its exact-family alias on disk between
+#      its `link` and the `rm -f` that follows its `exec`. Short, but a real
+#      window, and a real on-disk state a fixture can construct.
+#
+#  (b) A LIVE HOLDER PAST ITS ACQUIRE LEAVES NO NAME AT ALL. MEASURED: with a
+#      real process holding this lock, `$REG` lists exactly
+#      `.<id>.compactions.lock`, and ZERO `lock-open` aliases — the acquire
+#      unlinks its alias immediately and deliberately, so (a) alone is blind to
+#      the very race the spec names. What the holder does keep is a DESCRIPTOR
+#      on the unlinked inode, and Linux names it: MEASURED,
+#      `/proc/<pid>/fd/<n>` reads back
+#      `…/.<id>.compactions.lock-open.<pid>.<r>.<r> (deleted)` while the holder
+#      lives, and nothing after it is killed.
+#
+# EXACT FAMILY, NEVER A SUBSTRING: the literal `.<id>.compactions.lock-open.`
+# prefix, so a NESTED id (`demo.quiet` beside `demo`, legal because project
+# directory names may hold dots) answers only for itself.
+#
+# ARM (b) IS GATED THREE TIMES, because it is the only expensive thing in this
+# file. First on an ABSENT canonical, which is out of contract and essentially
+# never true. Then on `$REG/<id>.generation`, the same witness `_reg_purge`
+# gates its own fail-open on: minted only by a flock-capable row creation, so
+# its ABSENCE proves no hook on this row ever held this lock and the absent
+# canonical is an ordinary first-ever mint. Then on `/proc` and `find` being
+# there at all — `find` is asked for rather than assumed, and where `-lname`
+# or `-quit` is missing the expression simply finds nothing and this function
+# answers "first-ever mint", which is the pre-D-2605 behaviour and is stated as
+# a residual rather than hidden behind a refusal this arm could not justify.
+#
+# WHAT IS STILL UNDETECTED, stated rather than implied: a live holder on a row
+# with NO generation. The only in-design holder of that shape is row creation
+# itself, between its own acquire and its `_reg_generation_init` — and row
+# creation owns the slug exclusively for that window, so there is no second
+# actor for it to race.
+_hook_lock_vanished() {   # -> 0 iff an ABSENT canonical is a LATER disappearance, not a first-ever mint
+  local f
+  for f in "$REG/.$id.compactions.lock-open."*; do
+    { [ -e "$f" ] || [ -L "$f" ]; } && return 0
+  done
+  # THE ROW MUST BE LIVE BEFORE ANYTHING EXPENSIVE RUNS. `<id>.generation` is
+  # the same witness `_reg_purge` gates its fail-open on: it is minted only by a
+  # flock-capable row creation, so its ABSENCE proves no hook on this row ever
+  # held this lock and an absent canonical is an ordinary first-ever mint. With
+  # it absent this function is one glob and no fork, which is what every real
+  # `ws-add` and `start` pays.
+  [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
+  [ -d /proc ] || return 1
+  command -v find >/dev/null 2>&1 || return 1
+  # ONE FORK, NOT ONE PER DESCRIPTOR. MEASURED on this box (517 processes, 2662
+  # `/proc/<pid>/fd` entries): a bash loop calling `readlink` per entry takes
+  # 7.8-8.4 s — longer than COMPACT_LOCK_WAIT itself — while this single
+  # `find -lname … -quit` takes 0.16 s. `-lname` matches the SYMLINK TARGET,
+  # which for an unlinked file reads `<pathname> (deleted)`, so the exact-family
+  # prefix still matches.
+  [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
+             -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1
+  return 0
+}
+
+_hook_lock_init() {   # <canonical> -> 0 canonical exists and validates; 1 otherwise
+  local lock="$1" src=""
+  # EEXIST MEANS VALIDATE THE INCUMBENT — never open it, never recreate it.
+  if [ -e "$lock" ] || [ -L "$lock" ]; then
+    [[ -f "$lock" && ! -L "$lock" ]] || return 1
+    return 0
+  fi
+  # The template's terminal `XXXXXX` is a template, not a pathname: the created
+  # basename is `.<id>.compactions.lock-init.<mktemp6>` (measured, six chars,
+  # mode 600 under the subshell's `umask 077`).
+  src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) || return 1
+  [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
+  link "$src" "$lock" 2>/dev/null || true
+  # THE SOURCE GOES ON EVERY HANDLED RESULT — success, EEXIST and failure
+  # alike — so the first publish can never leak a private file.
+  rm -f "$src" 2>/dev/null || true
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  return 0
+}
+
+_hook_lock_acquire() {   # <wait-seconds> -> 0 acquired (HOOK_LOCK_FD set); 1 refused; 2 mechanism absent
+  local lock="$REG/.$id.compactions.lock" al="" fd="" tries=0
+  HOOK_LOCK_FD=""
+  # WHY, NOT A SECOND STATUS. Every one of this file's five acquire sites reads
+  # the acquire as a boolean (`|| return 0`) and ccd's five read the VALUE, with
+  # two FUNCTIONS across three of those sites — `cmd_start`, and `_spawn_start`,
+  # which holds two of them — falling through an unknown code into a silent
+  # continue, so a third numeric status would be a distinct refusal nobody
+  # distinguishes. (SIX and “two of ccd's five” is what stood here for several
+  # rounds, and both were wrong by census: §3.1 gives PreCompact two acquires,
+  # §3.3 SessionStart one and §3.4 PostCompact two, which is five, and the two
+  # fall-through FUNCTIONS own three SITES between them. A scan in
+  # `session-hook.test.ts` now counts both files and reads the numerals out of
+  # this sentence and the spec's, so neither can drift from the code again.) The condition is carried in a named
+  # out-parameter instead, the way `GC_DIRTY_WHY` and `_WS_NESTED_WHY` already
+  # carry theirs, and cleared on entry so a stale one is never read as this
+  # call's.
+  HOOK_LOCK_WHY=""
+  command -v flock  >/dev/null 2>&1 || return 2
+  command -v mktemp >/dev/null 2>&1 || return 2
+  command -v link   >/dev/null 2>&1 || return 2
+  # REFUSE BEFORE THE MINT, so "recreates no canonical" is a mechanism and not
+  # an intention: nothing has been created at this point, so the refusal owns
+  # nothing to clean up and the holder's inode is never displaced.
+  if [ ! -e "$lock" ] && [ ! -L "$lock" ] && _hook_lock_vanished; then
+    HOOK_LOCK_WHY=canonical-vanished
+    return 1
+  fi
+  _hook_lock_init "$lock" || return 1
+  # An absent exact-family alias, NEVER precreated: two independent decimal
+  # $RANDOM components, and a candidate collision retries rather than adopting
+  # a stranger's name.
+  while (( tries < 8 )); do
+    al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  link "$lock" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  # A failed `exec` redirection returns 1 and does NOT exit a non-interactive
+  # bash (measured); the `2>/dev/null` is what keeps this file's stderr-silence
+  # contract, since the failure message is printed by the shell itself.
+  # `{ exec …; } 2>/dev/null`, NEVER `exec … 2>/dev/null`. MEASURED, and it is
+  # a real defect rather than a style point: `exec` with redirections and NO
+  # COMMAND applies them to THE SHELL, permanently — so the bare form silences
+  # this process's stderr for the rest of the run, not just for the open.
+  # (Caught by `ccd-spawn-split.test.ts`'s operator-facing resume warning going
+  # missing on the ccd side; the same idiom is here, where the contract is
+  # silence anyway and nothing would have reddened.) A `{ …; }` group is not a
+  # subshell, so the `{fd}` assignment still lands in this scope, and a failed
+  # open still returns 1.
+  { exec {fd}<>"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  # THE ALIAS GOES NOW, on success and on every handled failure below: the FD is
+  # the only reference this process keeps, so a completed acquisition leaves
+  # zero owned artifacts and a crash leaves at most one aged, exact-family name.
+  rm -f "$al" 2>/dev/null || true
+  _hook_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  flock -w "$1" "$fd" 2>/dev/null || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  _hook_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  HOOK_LOCK_FD="$fd"
+  return 0
+}
+
+# ── THE GENERATION GATE (spec §3.1 step 5, §3.3, §3.4) ───────────────────
+# `$REG/<id>.generation` is the row's AUTHORIZATION, minted once by ccd's row
+# creation and handed to this process in its environment by `_spawn_start`.
+# Every lifecycle arm validates the two against each other UNDER THE LOCK,
+# before it inspects, reads, claims, deletes, emits or publishes anything.
+#
+# IT FAILS CLOSED, and the cost is disclosed rather than hidden: a session
+# whose spawn could not read a generation — a pre-D-2605 row, or a spawn whose
+# acquire was contended — publishes NO compaction artifact for its whole life,
+# until its next respawn. That is the property ccd's own fail-open at
+# `_reg_purge` is gated on: absence of the generation proves no hook on that row
+# ever received one, so no hook arm ever ran the lifecycle and there is nothing
+# for a destructive verb to race.
+#
+# WHY THE ENVIRONMENT AND THE FILE BOTH: the environment value is what this
+# PANE was authorized with, the file is what the ROW is authorized with now, and
+# a mismatch means the row was purged and re-created under a pane that outlived
+# it. Publishing then would write one session's measurement into another's slot.
+# The read goes through the same owned hard-link alias ccd's side uses — never a
+# bare `cat` on a pathname that can be replaced between the test and the read.
+_hook_generation_ok() {   # -> 0 iff this pane's generation is the row's current one
+  local want="${CCRC_SESSION_GENERATION:-}" p="$REG/$id.generation" al="" fd="" tries=0 got=""
+  [[ -n "$want" ]] || return 1
+  [[ "$want" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  [[ -f "$p" && ! -L "$p" && -r "$p" ]] || return 1
+  command -v link >/dev/null 2>&1 || return 1
+  while (( tries < 8 )); do
+    al="$REG/.$id.generation-read.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$p" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  { exec {fd}<"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  # 37, not 36: a 37-character read SEES a trailing LF or a longer file, where a
+  # 36-character one would silently accept the first 36 bytes of either.
+  IFS= read -r -N 37 got <&"$fd" 2>/dev/null || true
+  # STILL THE SAME INODE: a canonical replaced since the `link` is a different
+  # row's authorization wearing this name.
+  if ! _hook_lock_same "$fd" "$p"; then { exec {fd}<&-; } 2>/dev/null; return 1; fi
+  { exec {fd}<&-; } 2>/dev/null || true
+  [[ "$got" == "$want" ]] || return 1
+  return 0
+}
+
+_hook_lock_release() {   # <fd> -> close it; the flock lifts when the LAST reference closes
+  local fd="${1-}"
+  # An empty operand is `ambiguous redirect` (measured), so the guard is real
+  # rather than defensive; closing an already-closed descriptor is rc 0.
+  [[ -n "$fd" ]] || return 0
+  { exec {fd}>&-; } 2>/dev/null || true
+  return 0
+}
+
+# ── THE PRE-MUTATION IDENTITY RE-CHECK (spec §3.4, stable lock item 3) ────
+# Item 3 asks the holder to prove its descriptor still names canonical BEFORE
+# EACH MUTATION, not only across its own `flock`. The acquire's paired checks
+# cannot stand in for that, and the gap is MEASURED rather than argued (r3 R1),
+# in a fixture $REG with the SHIPPED acquire on both sides:
+#
+#   holder H acquires (rc 0) and a stranger's `flock -n` on canonical answers
+#   1 — H really holds it. A same-UID actor then UNLINKS canonical and mints a
+#   fresh inode at the same pathname off a private `mktemp` source, exactly as
+#   the acquire itself mints one: inode 1591479 -> 1591427. A second acquirer S
+#   runs the same shipped acquire and GETS IT — rc 0, fd 11, no `WHY` — while H
+#   is still alive and still inside its section. CONTROL, same fixture with the
+#   replacement suppressed: S answers rc 1. So the instrument is real, and the
+#   two processes genuinely hold one pathname's mutex at once.
+#
+# D-2793 refuses a canonical DISAPPEARANCE, and this is a REPLACEMENT: the
+# acquire's `[ -e "$lock" ]` arm is satisfied, the vanished probe never runs,
+# and every identity check the acquire makes compares the NEW inode with
+# itself. Nothing in the acquire CAN see it, because by the time it happens the
+# acquire has returned. Only the holder can, and only by asking again.
+#
+# The check itself is `_hook_lock_same`, unchanged and uncopied — the identity
+# predicate has one definition, and this is a NAME for calling it at a second
+# moment, not a second implementation of it.
+#
+# WHY THERE IS NO ccd TWIN, MEASURED RATHER THAN OMITTED. The same rule was
+# built for `_reg_purge` and then REFUSED on the measurement, because that
+# function has no placement where the check both helps and stays truthful:
+#
+#   - Before its unconditional purge-done journal emit (named in ccd, never
+#     here: `ccd-lifecycle-sites.test.ts` forbids this file from containing a
+#     lifecycle-emitter identifier at all, comments included, because its
+#     exit-0 contract is absolute) is the only spot where a
+#     refusal can honestly answer 1 ("nothing deleted, no purge fact"), and
+#     there it is ADJACENT to the acquire's own post-`flock` identity check —
+#     nothing runs between them, so it closes a zero-width window.
+#   - Before the unlink loop is where the window is real (the emit's own
+#     `_reg_get` children have run by then), and there NO status in
+#     `_reg_purge`'s vocabulary is true: 1 and 2 both assert no purge fact, 3
+#     asserts the row IS destroyed. A refusal told by any of them fabricates a
+#     cause, which is the defect D-2782 was minted to end.
+#   - Measured, the before-emit form also reds two shipped guards that exist on
+#     purpose: `ccd-lifecycle-purge`'s "the acquisition is the ONE statement
+#     before the unconditional emit" (nothing there may GATE the purge) and
+#     this suite's canonical-write census, which read the guard's own release
+#     as an early unlock and reported two later unlinks as lock-free.
+#
+# So the ccd side's residual is STATED rather than closed: a canonical
+# replacement landing between `_reg_purge`'s emit and its unlinks is not
+# refused today, and closing it needs a fourth status and four caller arms.
+_hook_lock_still_canonical() {   # <fd> -> 0 iff this descriptor is STILL the canonical inode
+  _hook_lock_same "${1-}" "$REG/.$id.compactions.lock"
+}
+
+# ── PreCompact (spec §3.1): THE SET ALWAYS, THE CARD WITH A GRAPH ────────
+# Called from the very end of this file, AFTER the hookstate rename: the
+# `working` stamp lands first and never waits on the helper (Task 6's sole
+# deadline is locally resolved as `timeout` or `gtimeout`). Prints nothing —
+# stage 1. Every failure is silent and total for what comes after it.
+_hook_compact_pre() {
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local tp="" trig="" set="$REG/$id.compactset" cardf="$REG/$id.compactcard" doc="" at="" nonce="" rc=0 helper_rc=0 lockfd=""
+  local aged="" cand="" suffix="" setstage="" cardstage="" ownhead="" ovl="false"
+  local mins=$(( COMPACT_CARD_MAX_AGE / 60 ))
+  tp=$(jq -r '.transcript_path // empty' <<<"$payload" 2>/dev/null) || return 0
+  trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
+  _hook_compact_scope "$tp" "$trig" || return 0
+  # MEASURED OUTSIDE THE LOCK, DELIBERATELY (spec §3.1, round 7 option A).
+  # Scope resolution and the graph measurement both fork and can be slow, and
+  # neither reads nor writes a canonical artifact — holding the row's mutex
+  # across them would serialise every sibling context of this session behind
+  # work that has nothing to exclude. The source-order pin over this function
+  # asserts exactly that: the acquire below sits AFTER both of these calls and
+  # BEFORE the overlap `find`.
+  rc=0; _hook_graph_measure || rc=$?
+  # ACQUIRE. From here to the release, this arm owns the row: the overlap
+  # verdict, the sweep and the initial canonical publication are one
+  # uninterrupted section, so no sibling can publish between the check and the
+  # act. A refusal (rc 1) or an absent mechanism (rc 2) publishes NOTHING —
+  # there is no unlocked fallback, which is what keeps §10's "no second
+  # lock-free concurrency regime" true.
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # STEP 5: the generation, validated UNDER the lock and before any inspection.
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
+  # OVERLAP (spec §3.0). One slot per session id, and every context of the
+  # session writes it. An unconsumed set still inside the in-flight window
+  # means another compaction is in flight (or failed inside the window), and
+  # no later arm can tell which context it serves — so BOTH degrade: this one
+  # is ambiguous and the earlier one's card is removed. The helper makes the
+  # verdict durable by re-reading the slot before each of its own writes.
+  # ONE `find`, two subjects: an unconsumed canonical set inside the window, and
+  # a young PostCompact claim, which is the same evidence one settlement step
+  # later — a compaction whose set has already been claimed is still in flight.
+  if [ -n "$(find "$REG" -maxdepth 1 \( -name "$id.compactset" -o -name ".$id.compactpost.*.claim" \) -mmin "-$mins" 2>/dev/null)" ]; then
+    CS_SCOPE="ambiguous"; CS_TRANSCRIPT=""; CS_AGENT=""; ovl="true"
+  fi
+  # ITEM 3 (r3 R1), and the first of this section's three: `find` ran between
+  # the acquire and here, so this is a fresh moment and it gets a fresh proof.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
+  [[ "$CS_SCOPE" != ambiguous ]] || rm -f "$cardf"
+  # THE SWEEP — EXACT FAMILY, age-gated, under this held lock. A hook killed
+  # between a temp write and its rename leaves a dot-leading private file
+  # invisible to `_reg_purge`'s dot-free loop, so somebody must reap it; but
+  # the pre-D-2605 `-name ".$id.*compact*.tmp" -delete` reaped by COINCIDENCE,
+  # and it is the code this task replaces, not merely re-comments. Candidates
+  # are enumerated by one `find` into a variable — `$( )` is synchronous, where
+  # a `< <( )` process substitution's child is not a child this shell waits for,
+  # which matters inside a held lock section — and each basename is then
+  # matched against the exact family grammar.
+  aged=$(find "$REG" -maxdepth 1 -name ".$id.*" -mmin "+$mins" 2>/dev/null) || aged=""
+  # ITEM 3 again, and for the `find` alone: it is a synchronous child, which is
+  # the window a replacement lands in. The LOOP is outside item 3 — it mutates
+  # only private `.<id>.` family members, never a canonical pathname.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
+  while IFS= read -r cand; do
+    [[ -n "$cand" ]] || continue
+    suffix="${cand##*/}"; suffix="${suffix#".$id."}"
+    _hook_family_sweepable "$suffix" || continue
+    rm -f "$cand" 2>/dev/null || true
+  done <<<"$aged"
+  at=$(_hook_epoch_ms)
+  nonce="compact-${at}-${$}-${RANDOM}-${RANDOM}"
+  # `at` is the epoch-ms measurement. The nonce is the collision-resistant slot
+  # identity, preserved in the set head and passed to the helper/card line 1.
+  # `overlap` IS THE ONLY CHANNEL §3.0 GIVES POSTCOMPACT to tell an
+  # overlap-DEGRADED set from a genuinely ambiguous verdict: the branch above
+  # writes the same `scope` for both, and the two prescribe different records
+  # (a forced one may attribute nothing at all). It is published HERE and only
+  # here. The Task-1–8 helper rewrites the set WITHOUT this member, which §3.0
+  # rules legacy-compatible ordinary/false — and that is sound rather than
+  # merely tolerated, because a `true` value never reaches the helper at all:
+  # the ambiguous return below sits between this publication and the helper
+  # fork, so every set the helper rewrites had `overlap:false`.
+  doc=$(jq -cn --arg scope "$CS_SCOPE" --arg agent "$CS_AGENT" --arg t "$CS_TRANSCRIPT" \
+      --arg pl "$CS_PARENT_LIVE" --arg ln "$CS_LIVE_N" --arg nonce "$nonce" --arg ovl "$ovl" \
+      --arg cwd "$GM_CWD" --arg built "$GM_BUILT" --arg fresh "$GM_FRESH" --argjson at "$at" \
+      '{v:1, at:$at, nonce:$nonce, scope:$scope, overlap:($ovl == "true"),
+        agent:(if $agent=="" then null else $agent end),
+        transcript:(if $t=="" then null else $t end),
+        parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end),
+        liveAgents:(if $ln=="" then null else ($ln|tonumber) end),
+        cwd:(if $cwd=="" then null else $cwd end),
+        built:(if $built=="" then null else $built end),
+        fresh:(if $fresh=="" then null else $fresh end),
+        steered:false, files:null, stats:null}' 2>/dev/null) || { _hook_lock_release "$lockfd"; return 0; }
+  # ITEM 3, the third: `date` and `jq` both ran since the last proof, and this
+  # is the section's one canonical PUBLICATION.
+  _hook_lock_still_canonical "$lockfd" || { _hook_lock_release "$lockfd"; return 0; }
+  _hook_write_atomic "$set" "$nonce" "$doc" || { _hook_lock_release "$lockfd"; return 0; }
+  # RELEASE BEFORE THE HELPER FORK (spec §3.1, round 6/7). A held `flock`
+  # descriptor is inherited across fork/exec in bash — measured, an exec'd
+  # child's `/proc/self/fd` lists the parent's lock fd, and the lock lifts only
+  # when EVERY referencing descriptor closes — so a helper that outlived its
+  # deadline would hold this row's mutex with it. Every child forked ABOVE this
+  # line is synchronous and reaped inside the section, which is what makes
+  # holding the descriptor across them compliant.
+  _hook_lock_release "$lockfd"; lockfd=""
+  [[ "$CS_SCOPE" != ambiguous ]] || return 0
+  [ "$rc" -eq 0 ] && _hook_gate_tree || return 0
+  [ -f "$COMPACT_HELPER" ] || return 0
+  # STEP 10. TWO PRIVATE STAGE PATHS THIS ARM NAMES ITSELF, and NO canonical
+  # pathname anywhere in the helper's argv — the load-bearing property of
+  # round 7's option A. `--parent-live`/`--live-agents` carry the two §3.0
+  # provenance values verbatim, because with `--set` gone the helper has no
+  # other channel to learn them and deriving them from `--scope` would be a
+  # different measurement wearing the same name. There is no `--trigger`: the
+  # record's trigger comes from the PostCompact payload at `measure` time.
+  setstage="$REG/.$id.compactset.$$.$nonce.stage"
+  cardstage="$REG/.$id.compactcard.$$.$nonce.stage"
+  _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" card \
+    --transcript "$CS_TRANSCRIPT" --cwd "$GM_CWD" \
+    --graph "$GM_CWD/graphify-out/graph.json" \
+    --labels "$GM_CWD/graphify-out/.graphify_labels.json" \
+    --set-stage "$setstage" --card-stage "$cardstage" \
+    --parent-live "$CS_PARENT_LIVE" --live-agents "$CS_LIVE_N" \
+    --max-chars "$COMPACT_CARD_MAX_CHARS" --max-files "$COMPACT_WORKSET_MAX" \
+    --built "$GM_BUILT" --fresh "$GM_FRESH" --scope "$CS_SCOPE" --at "$at" --nonce "$nonce" \
+    ${CS_AGENT:+--agent "$CS_AGENT"} >/dev/null 2>&1
+  helper_rc=$?
+  # STEP 11. REACQUIRE. A miss leaves the two stages exactly where they are, as
+  # age-eligible exact-family residue a later lock-holding sweep reclaims, and
+  # publishes nothing — never an unlocked rename.
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # STEP 12, first half: the generation AGAIN. The row can be purged and
+  # re-created while the helper runs, and a rename taken on that authority
+  # would publish this pane's measurement into another session's slot.
+  if ! _hook_generation_ok; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
+  # STEP 12, SECOND HALF: WHAT THE CANONICAL PATHNAME NOW HOLDS, asked before
+  # it is opened (r3 A-I1). Across the helper window this arm holds no lock by
+  # design, so the object at `$set` on reacquire may be anything a same-UID
+  # stranger left there — and `2>/dev/null` silences NOTHING for the read
+  # below: a FIFO blocks in open(2) rather than failing, so the redirection
+  # never returns. Measured, that parks this process INSIDE the held stable
+  # lock for ever, and because Task 9 put `_reg_purge` under the same lock it
+  # takes the row's whole destruction path with it — every later PreCompact,
+  # PostCompact and compact SessionStart, plus `ccd ws-rm`, `ccd forget`,
+  # `ccd ws-gc --prune`, `ccd ws-reap` and `ws-add`/`start` for that slug,
+  # refuse that row permanently. That is the wedge §3.4's fail-open ruling
+  # exists to prevent, reached by an unbounded hang instead of a refusal.
+  # The sibling arms already ask exactly this — PostCompact's settlement
+  # (`[[ -f "$set" && ! -L "$set" && -r "$set" ]]`) and the serve arm's
+  # `[[ -f "$set" && -r "$set" ]]` — and this was the only arm without it and
+  # the only one whose failure had no bound.
+  #
+  # A FAILURE HERE READS "THE SLOT IS NOT OURS", the same disposition as the
+  # nonce miss below: drop this process's own stages and publish nothing. An
+  # ABSENT set keeps today's semantics EXACTLY rather than gaining a new one —
+  # the redirection already failed silently, `ownhead` already stayed empty and
+  # the nonce test below already published nothing — the arm simply now says so
+  # before the open rather than after it.
+  if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
+  # STEP 12. THE COMPARE-AND-SWAP. Re-read the canonical set's HEAD with the
+  # bounded, fork-free `read -N` idiom this file already uses on the serve side
+  # and require the nonce to still be ours. Bash has no `slotIsMine`
+  # counterpart and does not need one: because this check and the renames below
+  # sit inside the SAME held section, they are one compare-and-swap — which
+  # round 6's helper-side check, whose act was a separate later write, could
+  # never be. A sibling that published its own verdict while the helper ran
+  # owns the slot now, and this arm publishes NOTHING over it.
+  IFS= read -r -N 4096 ownhead 2>/dev/null < "$set"
+  # ITEM 3, before the two renames: the reacquire proved identity at ITS
+  # moment, and the whole helper window sat before it. The disposition is this
+  # arm's own — drop this process's stages, publish nothing.
+  if ! _hook_lock_still_canonical "$lockfd"; then
+    rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+    _hook_lock_release "$lockfd"; return 0
+  fi
+  if [[ "$ownhead" =~ \"nonce\":\"([^\"]+)\" ]] && [[ "${BASH_REMATCH[1]}" == "$nonce" ]]; then
+    # STEP 13. CARD BEFORE SET, one uninterrupted section. In stage 2 the print
+    # and the `steered` stamp sit between these two renames; Plan A runs
+    # neither, so the helper's staged `steered:false` is published unchanged.
+    if [[ "$helper_rc" == 0 ]]; then
+      mv -f "$cardstage" "$cardf" 2>/dev/null || true
+      # ITEM 3, BETWEEN THE TWO RENAMES (r4 A-M2). `mv` is an external binary,
+      # so the card rename above FORKED: the proof at step 12 is no longer this
+      # moment, and the two renames used to share it across that child. Only
+      # the rc 0 arm needs this one — the rc 3 arm below branches away before
+      # the card rename and reaches its own rename with step 12's proof and
+      # nothing forked in between.
+      #
+      # WHAT A REFUSAL HERE LEAVES, and why it is safe to take: the card is
+      # published and the canonical set still holds STEP 7's own publication —
+      # the same nonce, with `files`/`stats` null because the helper's staged
+      # set never replaced it. The serve arm inspects exactly that pair (card
+      # line 1 against the set's head nonce) and serves it; and it is already
+      # today's state whenever the set-stage rename below fails, which that
+      # line's own `|| true` tolerates. So the intermediate state is one the
+      # next arm already handles, and the proof costs it nothing. (Spelled
+      # without the rename's own text: the item-3 source scan anchors on that
+      # statement and counts its occurrences, and a comment quoting it is a
+      # third hit.)
+      if ! _hook_lock_still_canonical "$lockfd"; then
+        rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+        _hook_lock_release "$lockfd"; return 0
+      fi
+      mv -f "$setstage" "$set" 2>/dev/null || true
+    elif [[ "$helper_rc" == 3 ]]; then
+      mv -f "$setstage" "$set" 2>/dev/null || true
+    fi
+  fi
+  # ONLY THIS PROCESS'S OWN STAGES, on every non-publishing outcome — a failed
+  # reconfirm, a non-0/3 exit, a timeout — and a no-op after a successful
+  # rename. The `.part` names are the helper's own mid-write residue.
+  rm -f "$cardstage" "$setstage" "$cardstage.part" "$setstage.part" 2>/dev/null || true
+  # STEP 14.
+  _hook_lock_release "$lockfd"; lockfd=""
+  return 0
+}
+
+# ── PostCompact (spec §3.4): SETTLE, MEASURE, COMMIT ONE JOURNAL LINE ─────
+# The compaction's sole authoritative measurement, and the one phase whose lock
+# miss loses something UNRECOVERABLE rather than something a later aged sweep
+# repairs — which is why it takes the same COMPACT_LOCK_WAIT settlement uses
+# rather than a shorter bound of its own.
+#
+# THE TWO BRANCHES ARE DISTINGUISHED BY A PATHNAME TEST, NOT BY A `link`
+# RETURN CODE. A genuinely absent canonical set and a present-but-unlinkable
+# one both surface as a failing `link` in bash, and folding them together
+# silently unmeasures whichever population is absent. Under option A that test
+# now has exactly ONE meaning, too: every canonical existence transition and
+# every existence test happens inside a held stable-lock section, and no
+# PreCompact-side rollback survives to compose with, so "absent under this
+# lock" means nothing was ever published for this compaction.
+_hook_compact_post() {
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local set="$REG/$id.compactset" journal="$REG/$id.compactions"
+  local summary="" trig="" lockfd="" claim="" snap="" stage="" jfd="" claimfd=""
+  # Cleared on entry for the reason every out-parameter in this tree is: a
+  # value from a previous call read as this one's is the fabricated fact.
+  POST_CLAIM_FD=""
+  local present=0 meas="" rec="" nonce="" cand="" served="false" tries=0 head="" old=""
+  local aged=0 norm=""
+  summary=$(jq -r '.compact_summary // empty' <<<"$payload" 2>/dev/null) || return 0
+  [[ -n "$summary" ]] || return 0
+  trig=$(jq -r '.trigger // "auto"' <<<"$payload" 2>/dev/null) || trig="auto"
+  [[ "$trig" == manual || "$trig" == auto ]] || trig="auto"
+  command -v find   >/dev/null 2>&1 || return 0
+  command -v touch  >/dev/null 2>&1 || return 0
+  command -v mktemp >/dev/null 2>&1 || return 0
+  [ -f "$COMPACT_HELPER" ] || return 0
+
+  # ── SETTLEMENT, under the row's mutex ──────────────────────────────────
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  _hook_generation_ok || { _hook_lock_release "$lockfd"; return 0; }
+  if [ -e "$set" ] || [ -L "$set" ]; then present=1; fi
+  if (( present )); then
+    if ! [[ -f "$set" && ! -L "$set" && -r "$set" ]]; then _hook_lock_release "$lockfd"; return 0; fi
+    while (( tries < 8 )); do
+      claim="$REG/.$id.compactpost.$$.$RANDOM.$RANDOM.claim"
+      [ -e "$claim" ] || [ -L "$claim" ] || break
+      claim=""; tries=$(( tries + 1 ))
+    done
+    [[ -n "$claim" ]] || { _hook_lock_release "$lockfd"; return 0; }
+    # NEVER PRECREATED: `link` is the create, so exactly one process can win
+    # this name, and the claim is this compaction's private copy of canonical.
+    link "$set" "$claim" 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
+    [[ "$claim" -ef "$set" ]] || { rm -f "$claim" 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    # THE ORIGINAL AGE, MEASURED HERE AND NOWHERE LATER (spec §3.0's fourth
+    # normalisation trigger). It has to be read before the `touch` below,
+    # because HARD LINKS SHARE MTIME: after that stamp the claim — and the
+    # inode canonical used to name — both read young, and the pre-settlement
+    # age is unrecoverable. This is the measurement `command -v find` above is
+    # the guard for; without it that guard guards nothing.
+    #
+    # An aged set is still CLAIMED and still consumed. Age gates only what may
+    # be ATTRIBUTED: a PreCompact that went inert for one of its documented
+    # silent reasons leaves a PREVIOUS compaction's set standing, and copying
+    # its transcript, agent and cwd onto this compaction's line is a wrong
+    # record — worse than a missing one. A `find` that answers nothing, for any
+    # reason, reads AGED, which is the direction that attributes less.
+    [ -n "$(find "$set" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ] || aged=1
+    # UNLINK CANONICAL BEFORE TOUCHING THE CLAIM, and the order is the whole
+    # point: HARD LINKS SHARE MTIME (measured), so a `touch` taken while both
+    # names still point at one inode would age canonical too, and a sibling's
+    # overlap check would then read this settled compaction as still in flight.
+    # ITEM 3, before the settlement's own two mutations: a `find` ran just
+    # above for the age measurement, so the proof is taken again here. The
+    # disposition is the one the `rm` failure below already uses.
+    if ! _hook_lock_still_canonical "$lockfd"; then
+      rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    if ! rm -f "$set" 2>/dev/null; then
+      # Only the VERIFIED claim goes; canonical's bytes and mtime are untouched.
+      rm -f "$claim" 2>/dev/null || true
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # ITEM 3, BETWEEN THE UNLINK AND THE TOUCH (r4 A-M2). `rm` is an external
+    # binary, so the unlink above FORKED and the proof at the top of this pair
+    # is no longer this moment. The `touch` is not a canonical write — by then
+    # the claim is the only name for those bytes — but it IS read outside this
+    # process: PreCompact's overlap `find` measures `.$id.compactpost.*.claim`
+    # by mtime, so stamping it under a lock that stopped naming canonical
+    # publishes a settlement verdict this process no longer has the right to.
+    #
+    # WHAT A REFUSAL HERE LEAVES, and why it is safe to take: canonical is
+    # unlinked and the claim is RETAINED, untouched, holding the only verified
+    # copy of those bytes at the set's own original mtime. That is exactly the
+    # terminal state the failed-`touch` restore below already leaves whenever
+    # its no-clobber `link` collides or cannot be proved, and the overlap
+    # measurement a sibling takes off the untouched claim is the value it would
+    # have read off canonical itself. A later PostCompact finds no canonical
+    # set and takes the absent-set branch, which attributes nothing; the claim
+    # is a §3.4 target family and an aged sweep under a later held lock
+    # reclaims it. The refusal must NOT attempt the restore below: `link
+    # "$claim" "$set"` is a canonical mutation and this proof has just said
+    # this descriptor may not take one.
+    if ! _hook_lock_still_canonical "$lockfd"; then
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    if ! touch "$claim" 2>/dev/null; then
+      # ITEM 3, AND THE `touch` ABOVE IS THE FORK (r5 R4-M4). The restore below
+      # WRITES a canonical pathname — the block before the `touch` already calls
+      # `link "$claim" "$set"` a canonical mutation — and `touch` is an external
+      # binary, so the proof taken two statements up is no longer this moment.
+      # Without this one a stranger that replaced the lock inside that fork
+      # would see this process publish canonical with no row mutex and then, on
+      # a successful `-ef`, unlink the claim holding the only verified copy of
+      # those bytes: the exact state the proof above the `touch` was added to
+      # forbid, reachable one `touch` later.
+      #
+      # ON A FAILED PROOF THERE IS NO RESTORE AND NO REMOVAL, which is not a new
+      # terminal state: it is the one this arm already reaches whenever the
+      # no-clobber `link` collides or cannot be proved — canonical unlinked, the
+      # claim RETAINED untouched at the set's own original mtime, no journal
+      # line, the row released. A later PostCompact finds no canonical set and
+      # takes the absent-set branch, which attributes nothing, and the claim is
+      # a §3.4 target family an aged sweep under a later held lock reclaims.
+      if ! _hook_lock_still_canonical "$lockfd"; then
+        _hook_lock_release "$lockfd"; return 0
+      fi
+      # RESTORE canonical only by no-clobber `link`, and only onto an absent
+      # pathname. If the restore collides, fails, or cannot be proved, the
+      # occupant is never overwritten and the only verified copy of these bytes
+      # is never discarded — the claim is RETAINED as exact recovery residue.
+      if link "$claim" "$set" 2>/dev/null && [[ "$claim" -ef "$set" ]]; then
+        rm -f "$claim" 2>/dev/null || true
+      fi
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # THE RETAINED CLAIM FD. From here the helper's input is this descriptor's
+    # own bytes — an FD-derived private snapshot — never canonical and never a
+    # reopened claim pathname.
+    { exec {claimfd}<"$claim"; } 2>/dev/null || { _hook_lock_release "$lockfd"; return 0; }
+    # A PRIVATE EXCLUSIVE FILE, created by a no-clobber redirection — NOT an
+    # `mktemp` row. The §3.4 table reserves `mktemp` for the three families
+    # whose name must be unguessable (the lock init source, the marker source,
+    # the generation source); this one is already private by construction, its
+    # name carrying this process's pid and two `$RANDOM` components, and it
+    # takes no `XXXXXX` template. (Measured: spelling it as `mktemp` with this
+    # name fails outright — mktemp requires at least three trailing `X`s — and
+    # the arm silently committed nothing.)
+    tries=0; snap=""
+    while (( tries < 8 )); do
+      snap="$REG/.$id.compactions-snapshot.$$.$RANDOM.$RANDOM.tmp"
+      [ -e "$snap" ] || [ -L "$snap" ] || break
+      snap=""; tries=$(( tries + 1 ))
+    done
+    [[ -n "$snap" ]] || { { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0; }
+    if ! { ( umask 077; set -C; : > "$snap" ); } 2>/dev/null || [[ ! -f "$snap" || -L "$snap" ]]; then
+      { exec {claimfd}<&-; } 2>/dev/null; _hook_lock_release "$lockfd"; return 0
+    fi
+    # A FAILED COPY TAKES THE SAME DISPOSITION AS A FAILED SNAPSHOT CREATION
+    # eight lines above — return WITHOUT committing, leaving the verified claim
+    # as residue. The alternative this replaces cleared `$snap` and fell
+    # through, which reached the no-set record from a compaction that HAD a
+    # set and then discarded the claim holding the only surviving copy of those
+    # bytes (canonical is already unlinked here). That gave §3.4's absent
+    # branch a SECOND meaning, and an adapter may not narrow a distinction it
+    # received: the no-set branch is entered from the PATHNAME test alone.
+    if ! { cat <&"$claimfd" > "$snap"; } 2>/dev/null; then
+      { exec {claimfd}<&-; } 2>/dev/null || true
+      rm -f "$snap" 2>/dev/null || true      # this process's own, and only it
+      _hook_lock_release "$lockfd"; return 0
+    fi
+    # NOT CLOSED HERE. §3.4's settlement sentence requires the final
+    # transaction to revalidate "generation and claim-FD/current-path
+    # identity", and an FD closed at the snapshot cannot answer the second
+    # half: between the release below and the final reacquire the lock is not
+    # held — `measure` runs there by design — so the claim PATHNAME is
+    # unguarded for that window, and unlinking it by name afterwards is an
+    # unlink of whatever now wears the name. The descriptor is the only thing
+    # that still names the inode this process linked.
+    POST_CLAIM_FD="$claimfd"
+  fi
+  _hook_lock_release "$lockfd"; lockfd=""
+
+  # ── MEASURE, outside the lock, with the lock descriptor already closed ──
+  # `measure` reads the summary from a PIPE: under `set -uo pipefail` a failed
+  # `jq` fails the pipeline and this arm stops, so a zero is never recorded for
+  # a summary that was never read.
+  #
+  # ── §3.0 NORMALISATION, DECIDED ONCE, BEFORE `measure` IS CALLED ───────
+  # `norm` empty means the claim is ordinary and provenance-ELIGIBLE and is
+  # passed with `--set`; otherwise it holds the ONE `scope` the normalized
+  # record commits, and `measure` runs WITHOUT `--set` so `cited`, `setSize`
+  # and all six provenance fields are null either way. The three tests are in
+  # §3.0's own precedence order and AGE IS LAST AND WINS — stated in prose
+  # there precisely because JOURNAL_RECORD_PRED accepts both spellings, so the
+  # predicate is not the mechanism that decides it.
+  #
+  # THE GRAMMAR IS NOT RE-SPELLED HERE. `NORMAL_PROVENANCE` already carries
+  # §3.0's four-row table plus the per-field shapes; the set document uses the
+  # same member names and lacks only `trigger`, which the record takes from
+  # THIS payload — so the check is that definition applied to the claim with
+  # this run's trigger spliced in. A jq that fails for any reason (a malformed
+  # document, unparseable bytes) leaves `norm` set, which is the direction that
+  # attributes nothing.
+  #
+  # THE ONE THING `NORMAL_PROVENANCE` DOES NOT COVER, spelled here because it
+  # is a property of the CLAIM and not of the record: `files`. §4's row says a
+  # set any of whose `files[]` entries lacks a non-empty string `path` is
+  # "measured as NO set", and §3.0 lists it as a normalisation trigger — but
+  # `NORMAL_PROVENANCE` validates trigger/scope/agent/transcript/parentLive/
+  # liveAgents/cwd/built and never looks at `files`, and the RECORD has no
+  # `files` member for it to reach. Without this fourth clause a set with valid
+  # provenance and one malformed entry was passed with `--set` and committed
+  # `scope` plus six non-null provenance fields where §4 requires seven nulls;
+  # the predicate accepts that line, so only this decision can refuse it. It is
+  # spelled in the DIRECTION that attributes nothing: anything but a `files`
+  # that is absent, or an array every element of which is an object with a
+  # non-empty string `path`, sets `norm`.
+  if [[ -n "$snap" ]]; then
+    if (( aged )); then
+      norm="null"
+    elif jq -e '.overlap == true' "$snap" >/dev/null 2>&1; then
+      norm="ambiguous"
+    elif ! jq -e --arg trig "$trig" "$JOURNAL_RECORD_PRED_DEFS"'
+            (.overlap == null or .overlap == false)
+            and (. + {trigger: $trig} | NORMAL_PROVENANCE)
+            and (.files == null or (.files | type == "array"
+                 and all(.[]; type == "object"
+                              and (.path | type == "string")
+                              and (.path | length > 0))))' "$snap" >/dev/null 2>&1; then
+      norm="null"
+    fi
+  fi
+  if [[ -n "$snap" && -z "$norm" ]]; then
+    meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
+             --set "$snap" --trigger "$trig" 2>/dev/null) || meas=""
+  else
+    meas=$(printf '%s' "$summary" | _hook_timeout "$COMPACT_HELPER_TIMEOUT" node "$COMPACT_HELPER" measure \
+             --trigger "$trig" 2>/dev/null) || meas=""
+  fi
+  # EXACTLY ONE DOCUMENT, and a cheap shape gate BEFORE the strictly stronger
+  # record predicate below — `jq -ce -s` over the helper's raw stdout.
+  if ! printf '%s' "$meas" | jq -ce -s "length == 1 and (.[0] | $COMPACT_SHAPE_PRED)" >/dev/null 2>&1; then
+    _hook_compact_post_abandon "$claim" "$snap"; return 0
+  fi
+
+  # ── THE FINAL TRANSACTION, under a reacquired lock ──────────────────────
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT" || { _hook_compact_post_abandon "" "$snap"; return 0; }
+  lockfd="$HOOK_LOCK_FD"
+  # REVALIDATED before the one act no later sweep can repair.
+  _hook_generation_ok || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  # `served` IS MARKER-DERIVED, never copied from a set: looked up here, under
+  # the final lock, from the separately validated safe nonce this claim
+  # carries. An unsafe or missing nonce forms no marker path and reads false.
+  if [[ -n "$snap" ]]; then
+    IFS= read -r -N 4096 head 2>/dev/null < "$snap"
+    if [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]]; then
+      # THE GATE CAME FIRST AND `nonce` IS ASSIGNED ONLY INSIDE IT (r3 A-M2).
+      # The capture used to sit here, outside the grammar test, and the commit
+      # path 106 lines below builds `rm -f "$REG/.$id.compactserved.$nonce"`
+      # from it — so an unsafe value DID form a marker pathname, which is the
+      # opposite of what the comment above and §3.3 step 2 both say ("it gates
+      # a PATH COMPONENT ... a nonce this refuses forms no marker path at
+      # all"). MEASURED on the shipped arm: a canonical set carrying
+      # `"nonce":"x/../victim"`, a directory at `$REG/.<id>.compactserved.x`
+      # and a file at `$REG/victim` — one PostCompact committed its record and
+      # DELETED `$REG/victim`, a registry file that is not a marker. It grants
+      # no capability an out-of-contract same-UID writer does not already have,
+      # which is why it is Minor; what it did was falsify a shipped invariant
+      # for the sake of two moved lines.
+      #
+      # `cand` is the local the gate reads. `nonce` stays EMPTY on a refusal,
+      # and the `[[ -z "$nonce" ]] ||` guard on the removal path then means
+      # exactly what its own comment already claimed.
+      cand="${BASH_REMATCH[1]}"
+      # `-f` AND NOT `-L`, never a bare `-e`: this is the READING end of the
+      # marker the compact SessionStart arm publishes, and a bare existence
+      # test answers `served:true` for a symlink to anything and `served:false`
+      # for a dangling one — a durable claim about a compaction derived from an
+      # object that is not a marker. The two ends spell one definition. (The
+      # publishing function is deliberately NOT named here: a scan beside the
+      # retained-serve-lock pin asserts that no function body in this file
+      # mentions it, which is how "its only call site is top level" is
+      # measured.)
+      if [[ "$cand" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]]; then
+        nonce="$cand"
+        if [[ -f "$REG/.$id.compactserved.$nonce" && ! -L "$REG/.$id.compactserved.$nonce" ]]; then served="true"; fi
+      fi
+    fi
+  fi
+  # THE SIXTEEN-KEY RECORD: the helper's measurement ENRICHED with the six
+  # provenance fields copied from the set, and with `served` overridden by the
+  # marker. Without a set every one of the six is null, which is §3.0's
+  # normalized no-set grammar and NOT the same answer as `"main"`.
+  if [[ -n "$snap" && -z "$norm" ]]; then
+    rec=$(jq -cn --argjson m "$meas" --slurpfile s "$snap" --argjson sv "$served" \
+      '$s[0] as $set | $m + {served: $sv,
+        cwd: $set.cwd, built: $set.built, agent: $set.agent,
+        transcript: $set.transcript, parentLive: $set.parentLive, liveAgents: $set.liveAgents}' 2>/dev/null) || rec=""
+  else
+    # ONE SPELLING FOR BOTH NO-`--set` POPULATIONS — the genuinely absent
+    # canonical set (`snap` empty, `norm` empty, `served` still its false
+    # initialiser) and a normalized claim (`norm` set, `served` MARKER-derived,
+    # exactly as §3.0 requires of every normalization case). `cited`/`setSize`
+    # are NOT overridden: `measure` without `--set` already answers null for
+    # both, and overriding them here would hide a helper that did not.
+    rec=$(jq -cn --argjson m "$meas" --argjson sv "$served" --arg norm "$norm" \
+      '$m + {served: $sv, scope: (if $norm == "ambiguous" then "ambiguous" else null end),
+             cwd: null, built: null, agent: null,
+             transcript: null, parentLive: null, liveAgents: null}' 2>/dev/null) || rec=""
+  fi
+  [[ -n "$rec" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  printf '%s' "$rec" | jq -ce "$JOURNAL_RECORD_PRED_DEFS JOURNAL_RECORD_PRED" >/dev/null 2>&1 \
+    || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+
+  # THE STAGE: a never-precreated exact table name, validated as this writer's
+  # own regular non-symlink file.
+  tries=0; stage=""
+  while (( tries < 8 )); do
+    stage="$REG/.$id.compactions-stage.$$.$RANDOM.$RANDOM.tmp"
+    [ -e "$stage" ] || [ -L "$stage" ] || break
+    stage=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$stage" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0; }
+  if ! { ( umask 077; set -C; : > "$stage" ); } 2>/dev/null; then
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap"; return 0
+  fi
+  # VALIDATED AS THIS WRITER'S OWN regular non-symlink file before a byte of
+  # the old journal is copied into it.
+  [[ -f "$stage" && ! -L "$stage" ]] || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  old=""
+  if [ -e "$journal" ] || [ -L "$journal" ]; then
+    [[ -f "$journal" && ! -L "$journal" && -r "$journal" ]] \
+      || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    { exec {jfd}<"$journal"; } 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    { cat <&"$jfd" > "$stage"; } 2>/dev/null \
+      || { { exec {jfd}<&-; } 2>/dev/null; _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+    # `$( )` STRIPS EVERY TRAILING NEWLINE (measured), and a journal always ends
+    # in one — so a bare `old=$(cat …)` loses exactly the byte that makes the
+    # length equality below exact, and the SECOND record of a session's life is
+    # refused while the first commits. The `printf x` sentinel plus `${old%x}`
+    # is what keeps the prefix byte-exact.
+    old=$(cat "$stage" 2>/dev/null; printf x) || old="x"
+    old="${old%x}"
+  fi
+  { printf '%s\n' "$rec" >> "$stage"; } 2>/dev/null \
+    || { [[ -n "$jfd" ]] && { exec {jfd}<&-; } 2>/dev/null; _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  # THE RAW VALIDATOR over the WHOLE stage, plus exactly one additional line
+  # byte-equal to the object — so a commit that appended twice, or appended
+  # something the predicate would not accept, never reaches canonical.
+  if ! jq -ce -R -s --arg rec "$rec" --arg old "$old" \
+        "$JOURNAL_RECORD_PRED_DEFS $JOURNAL_STAGE_PRED" < "$stage" >/dev/null 2>&1; then
+    [[ -n "$jfd" ]] && { exec {jfd}<&-; } 2>/dev/null
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+  fi
+  # THE FD COMPARE-AND-SWAP: an initially PRESENT journal must still be the same
+  # retained regular FD, and an initially ABSENT one must still be absent.
+  if [[ -n "$jfd" ]]; then
+    if ! _hook_lock_same "$jfd" "$journal"; then
+      { exec {jfd}<&-; } 2>/dev/null
+      _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+    fi
+    { exec {jfd}<&-; } 2>/dev/null || true
+  elif [ -e "$journal" ] || [ -L "$journal" ]; then
+    _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0
+  fi
+  # ITEM 3, before the journal commit: this section reacquired, then read and
+  # wrote a private stage through several synchronous children. Same handler as
+  # a failed `mv`, because the outcome is the same one — nothing committed, and
+  # this arm's own residue cleaned up.
+  _hook_lock_still_canonical "$lockfd" || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  mv -f "$stage" "$journal" 2>/dev/null || { _hook_compact_post_fail "$lockfd" "$claim" "$snap" "$stage"; return 0; }
+  # COMMITTED. Claim and marker cleanup happens ONLY here, under the
+  # successfully reacquired and validated lock — never on a failure path.
+  #
+  # THE CLAIM IS CONSUMED BY IDENTITY, NOT BY NAME (§3.4 settlement). The
+  # retained descriptor and the current pathname must still be one regular
+  # inode; if they are not, the name was replaced while the lock was down and
+  # the occupant is a stranger's file this arm has no licence to delete. The
+  # record still commits — it was built from the snapshot, which is
+  # FD-derived — and the stranger is left exactly where it was.
+  if [[ -n "$claim" ]] && [[ -n "${POST_CLAIM_FD:-}" ]] \
+     && _hook_lock_same "$POST_CLAIM_FD" "$claim"; then
+    rm -f "$claim" 2>/dev/null || true
+  fi
+  _hook_post_claim_close
+  [[ -z "$snap" ]]  || rm -f "$snap"  2>/dev/null || true
+  [[ -z "$nonce" ]] || rm -f "$REG/.$id.compactserved.$nonce" 2>/dev/null || true
+  _hook_lock_release "$lockfd"
+  return 0
+}
+
+# NO UNLOCKED CLEANUP. When the final lock is not safely held, the verified
+# claim and the exact marker are LEFT as residue for a later aged recovery
+# under a validated lock — discarding the only verified copy of a compaction's
+# set because this process could not take a lock is the one thing this arm may
+# not do. Only this process's own snapshot goes, and only because nothing else
+# can ever read it.
+_hook_compact_post_abandon() {   # <claim> <snapshot>
+  # The retained claim descriptor goes on this path too — see
+  # `_hook_compact_post_fail`'s note. The CLAIM FILE is deliberately left:
+  # abandoning is what "leave the only verified copy as recovery residue"
+  # means, and a descriptor is not a copy.
+  _hook_post_claim_close
+  [[ -z "${2-}" ]] || rm -f "$2" 2>/dev/null || true
+  return 0
+}
+
+# The final lock IS held here, so this path may consume this process's own
+# stage and snapshot — but it still leaves the claim and the marker, because a
+# noncommit means the measurement has not been recorded and the evidence must
+# outlive the attempt.
+_hook_compact_post_fail() {   # <lockfd> <claim> <snapshot> [<stage>]
+  # THE RETAINED CLAIM DESCRIPTOR GOES HERE TOO, and it rides a named global
+  # rather than a fifth positional: this helper has fifteen call sites, and a
+  # new positional threaded through all of them is fifteen chances to pass the
+  # wrong thing. `POST_CLAIM_FD` is set beside the `exec` that opens it and
+  # cleared by whoever closes it, so "is it still open" has exactly one answer.
+  _hook_post_claim_close
+  [[ -z "${4-}" ]] || rm -f "$4" 2>/dev/null || true
+  [[ -z "${3-}" ]] || rm -f "$3" 2>/dev/null || true
+  _hook_lock_release "${1-}"
+  return 0
+}
+
+_hook_post_claim_close() {   # close the retained claim FD, once, from anywhere
+  [[ -n "${POST_CLAIM_FD:-}" ]] || return 0
+  local fd="$POST_CLAIM_FD"
+  POST_CLAIM_FD=""
+  { exec {fd}<&-; } 2>/dev/null || true
+  return 0
+}
+
+# ── SessionStart(compact) (spec §3.3): SERVE THE CARD ONCE, TO ITS SET ────
+# This arm cannot tell which context it serves (§3.0: the compactor has been
+# silent for ≥79 s by now) and NEVER resolves. It serves the card iff the card
+# is the set's own — line 1 of the card is the set's `nonce` — and consumes it.
+# An aged card belongs to no compaction that can still arrive and is REMOVED
+# (a dot-free registry file that outlives its use would hold the slug); a
+# crossed pair — another nonce, or no set — serves nothing and leaves the card
+# for the overlap check or the age bound to retire. THE ONLY CLIP LIVES IN THE
+# EMITTER (`_hook_emit_context`'s `${2:0:$COMPACT_CARD_MAX_CHARS}`) — a second
+# slice here was a duplicate in series with it: each was a complete substitute
+# for the other, so neither alone was pinnable (fix-round I1). The bounded
+# `read -N COMPACT_CARD_MAX_CHARS+64` below is not that clip; it is the real
+# cost guard — measured on a 100 MB card, 114 ms vs 17,370 ms for a `cat` fork
+# (152x) — and stays, uncoupled from the emitter's own slice.
+#
+# UNDER THE ROW'S MUTEX, FOR ITS WHOLE BODY (spec §3.3, D-2605). The acquire
+# sits immediately after the operator-off guard and before the FIRST existence
+# or age inspection, because every one of them — the card's `-f`, the age
+# `find`, the set's head read, the claim, the restore, the deletion — is a
+# check whose act follows it, and a sibling publishing in between is exactly
+# what the mutex excludes. The FD is RETAINED across the whole section rather
+# than taken per step: this arm forks (the age `find`, the `( set -C; : > … )`
+# subshell, `mv`, `link`, `rm`, the emitter's `jq`), and a held `{fd}<>`
+# descriptor is NOT close-on-exec — measured, an exec'd child's
+# `/proc/self/fd` lists the parent's lock fd — but every one of those children
+# is SYNCHRONOUS and reaped inside the section, so none can outlive it. The
+# close-before-fork rule APPLIES here and is SATISFIED; it is not disapplied.
+# Backgrounding anything inside `_hook_compact_card_locked` would break that.
+#
+# The bound is COMPACT_LOCK_WAIT_SERVE, not COMPACT_LOCK_WAIT: this is the one
+# acquisition a human is waiting on, and a miss costs one unserved card and
+# nothing durable. The split lives in the two call sites, never in the acquire
+# helper, which takes its wait as its first positional.
+_hook_compact_card() {   # sets CARD_COMPACT; silent on every path
+  CARD_COMPACT=""; COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
+  [ -e "$COMPACT_CARD_OFF" ] && return 0
+  local lockfd=""
+  _hook_lock_acquire "$COMPACT_LOCK_WAIT_SERVE" || return 0
+  lockfd="$HOOK_LOCK_FD"
+  # Validated under the lock and BEFORE the first existence or age inspection,
+  # which is what "before any lifecycle observation or mutation" means here.
+  if ! _hook_generation_ok; then _hook_lock_release "$lockfd"; return 0; fi
+  _hook_compact_card_locked || true
+  # THE LOCK IS RETAINED PAST THIS RETURN only when a card is actually going to
+  # be printed: the marker that records the fact of serving belongs to the same
+  # held section that claimed the card, and the print sits between them at the
+  # one site this file prints from. On every other path the descriptor is
+  # closed here, which is the single release site for those paths.
+  if [ -n "$CARD_COMPACT" ]; then COMPACT_SERVE_FD="$lockfd"; return 0; fi
+  _hook_lock_release "$lockfd"
+  return 0
+}
+
+_hook_compact_card_locked() {   # the retained-lock body; sets CARD_COMPACT
+  local f="$REG/$id.compactcard" set="$REG/$id.compactset" claim="" head="" nonce="" raw="" line1="" body=""
+  # `! -L` IS PART OF WHAT A CARD IS, not an extra (§3.3 step 2: "inspect the
+  # regular/non-symlink card and canonical set"). `-f` DEREFERENCES, so without
+  # it a symlink standing here passes, `mv -f "$f" "$claim"` below renames THE
+  # SYMLINK onto the no-clobber placeholder, the `read` follows it, and a body
+  # that is not a card is emitted whenever the target's first line satisfies
+  # the nonce — while the aged branch below deletes whatever object stands
+  # there. The marker's reading end already argues this exact class in
+  # its own comment, and PreCompact and the PostCompact settlement already
+  # spell it on the set. The two ends of the card contract now spell ONE
+  # definition of what a card IS, as the two ends of the marker already do.
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 0
+  command -v find >/dev/null 2>&1 || return 0
+  # ITEM 3 in the retained-lock body, ON THE FAR SIDE OF THE FORK (r4 A-M2).
+  # `HOOK_LOCK_FD` is the descriptor the caller acquired and still holds; this
+  # function has no local for it.
+  #
+  # MEASURE, THEN PROVE, THEN REMOVE. The proof used to sit ABOVE the age
+  # `find`, and `find` forks: the moment it proved was not the moment of the
+  # removal, so a same-UID replacement landing inside that child left the aged
+  # canonical card deleted under a descriptor that no longer named canonical —
+  # the exact window R1 closed everywhere else. PreCompact's structurally
+  # identical pattern already does it this way and says so in its own comment
+  # (the overlap `find`, then a fresh proof, then `rm -f "$cardf"`).
+  #
+  # THE PROOF SITS ON THE REMOVING PATH ONLY, because that is the only path
+  # with a mutation here: the serving path's mutation is the `mv` below, and
+  # that one carries its own proof immediately before it. On a failed proof
+  # the arm says nothing and the caller releases, which is this body's own
+  # disposition on every other refusal.
+  if [ -z "$(find "$f" -mmin "-$(( COMPACT_CARD_MAX_AGE / 60 ))" 2>/dev/null)" ]; then
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    rm -f "$f"
+    return 0
+  fi
+  # ARGUED, UNPINNABLE (fix-round M3): measured on this box, deleting this
+  # guard changes nothing observable — a missing/unreadable `$set` makes the
+  # `read < "$set"` below fail its redirection silently (swallowed same as a
+  # `2>/dev/null` command failure; `head` stays "" and the nonce regex below
+  # fails), so no test can redden it here, the way D-2417's dropped guards
+  # could not. Kept anyway, unlike those: this file declares two userlands
+  # (header, line 1), and whether a failed stdin redirection stays silent
+  # is shell-and-platform behaviour this box's bash cannot prove for every
+  # `sh`/`bash` a fleet box might run. One cheap `[[ ]]` against that risk.
+  #
+  # `! -L` here is NOT in that argued-unpinnable class and is pinned with the
+  # card's: §3.3 step 2 names the set beside the card, and a symlink here is
+  # read through for the nonce the marker path is built from.
+  [[ -f "$set" && ! -L "$set" && -r "$set" ]] || return 0
+  IFS= read -r -N 4096 head 2>/dev/null < "$set"
+  [[ "$head" =~ \"nonce\":\"([^\"]+)\" ]] || return 0
+  nonce="${BASH_REMATCH[1]}"
+  # THE SAFE-NONCE GATE (spec §3.3 step 2), spelled for the engine that RUNS
+  # it. This is bash, so the anchor is `$` — NEVER `\z`: POSIX ERE has no `\z`
+  # escape and `regcomp` reads it as a literal `z`, so measured on bash 5.2.21
+  # the `\z` spelling REJECTS every well-formed nonce and ACCEPTS exactly one
+  # ending in a literal `z` — nothing would ever be served and every journal
+  # record would read `served:false` forever. `$` is sufficient here, not
+  # merely tolerable: measured, it matches the well-formed nonce and rejects
+  # the trailing-`z` form, a trailing LF, and an embedded LF followed by more
+  # text. (jq/Oniguruma's `\z` in the journal predicates is correct THERE and
+  # is unchanged; jq's `$` would not be, since it accepts a trailing LF.)
+  #
+  # It gates a PATH COMPONENT: the marker and its source are both named from
+  # this string, so a nonce this refuses forms no marker path at all.
+  [[ "$nonce" =~ ^compact-[0-9]+-[0-9]+-[0-9]+-[0-9]+$ ]] || return 0
+  # ATOMIC CLAIM (consume-once, spec §3.3 step 3, fix-round M1): a bare
+  # read-then-`rm` lets every one of N concurrent SessionStart(compact)
+  # racers (the main thread and its live subagents can all hit this arm
+  # close together) read the card before the first one deletes it, serving
+  # the same bytes to N contexts — measured against the pre-fix code, 8
+  # concurrent racers per trial: 2 of 3 isolated trials served the card to 2
+  # racers instead of 1. `mv` wins
+  # the pathname for exactly one racer; a losing `mv` (ENOENT — another racer
+  # already claimed it) serves nothing. The claim is PROVISIONAL: a crossed
+  # pair or a body-less nonce restores the card (spec's "the card stays")
+  # through the same regular-placeholder-then-no-clobber-`link` idiom this
+  # function itself uses below — the `( set -C; : > "$claim" )` placeholder and
+  # the `link "$claim" "$f"` restore beside it. (This sentence used to point at
+  # `_hook_compact_rollback_card`, a function D-2605 deleted along with its one
+  # call site; a reader following the pointer found nothing.) Only a matching,
+  # non-empty pair keeps the claim consumed. Dot-prefixed, pid-scoped and named to the
+  # §3.4 target grammar, so an orphaned claim (this process killed mid-read) is
+  # reclaimed, AGED and under a held lock, by `_hook_family_sweepable`'s
+  # `compactcard.*.session-claim.tmp` arm. This sentence used to say such a
+  # claim is swept by PreCompact's existing `.$id.*compact*.tmp` glob; that
+  # glob went with the rest of the pre-D-2605 sweep, which matched by
+  # coincidence rather than by family — and the very next paragraph, announcing
+  # the migration to this name, already contradicted it.
+  # MIGRATED TO THE §3.4 TARGET GRAMMAR (D-2605). The shipped shape was
+  # `.<id>.<pid>.compactcard-claim.tmp`, a name matched by neither PreCompact's
+  # exact-family sweep nor `_reg_purge`'s exact cleanup, so a SessionStart
+  # killed between its no-clobber `: >` and its `mv` — or between the `mv` and
+  # the `rm` — leaked a permanent dot-leading file, and under the widened
+  # `_ws_slug_free` an unmatched residue reads FREE and re-hands the slug with
+  # a stranger's claim still present. The nonce is available here because step
+  # 2 above validated it before step 3 claims.
+  claim="$REG/.$id.compactcard.$$.$nonce.session-claim.tmp"
+  ( set -C; : > "$claim" ) 2>/dev/null || return 0
+  # ITEM 3, AND ON THIS PATH IT IS THE FIRST ONE. The sentence here used to read
+  # "`find` and the nonce read sit between the proof above and this one" — and
+  # r4 A-M2 made that false in the same commit that moved the proof: the only
+  # proof above now sits INSIDE the aged branch, which returns, so nothing on
+  # the serving path runs it. What stands between the section's acquire and
+  # this line is the age `find`'s fork, the set's head read and the placeholder
+  # subshell; this is where canonical actually moves, so this is where it is
+  # proved.
+  #
+  # AND THE REFUSAL TAKES ITS OWN PLACEHOLDER WITH IT (r4 A-M1). The line above
+  # creates `$claim`; a bare `return 0` here left a zero-byte file behind, and
+  # it is not inert residue: the name matches `_ws_private_family`'s
+  # `compactcard.*` arm, so `_ws_slug_free` reads the slug NOT FREE and
+  # `ccd ws-add` refuses to re-hand it until an aged sweep under a later lock
+  # reclaims it (bounded by COMPACT_CARD_MAX_AGE, so a delay rather than a
+  # wedge). This was the ONE refusal past the placeholder that left its own
+  # artifact: the losing `mv`, the crossed nonce and the body-less card below
+  # all remove it already, and §3.4's table gives this family
+  # "restore/remove under retained stable lock" as its cleanup — and the lock
+  # IS still held here.
+  _hook_lock_still_canonical "$HOOK_LOCK_FD" || { { rm -f "$claim"; } 2>/dev/null || true; return 0; }
+  if ! { mv -f "$f" "$claim"; } 2>/dev/null; then
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  IFS= read -r -N $(( COMPACT_CARD_MAX_CHARS + 64 )) raw 2>/dev/null < "$claim"
+  line1="${raw%%$'\n'*}"
+  if [[ "$line1" != "$nonce" ]]; then
+    # ITEM 3, AND THE `mv` ABOVE IS THE FORK (r5 R4-M4). This restore WRITES a
+    # canonical pathname, and `mv` is an external binary, so the proof taken
+    # before the claim is no longer this moment. ON A FAILED PROOF, NO RESTORE
+    # AND NO REMOVAL: the claim is RETAINED, holding the only copy of the card's
+    # bytes — removing it here would discard them under a lock that stopped
+    # naming canonical — and the caller releases, as it does on every other
+    # refusal in this body. The claim is a `compactcard.*` private family, so an
+    # aged sweep under a later held lock reclaims it, bounded by
+    # COMPACT_CARD_MAX_AGE: a delay rather than a wedge.
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    # POSIX `link source target` creates exactly target or fails EEXIST —
+    # unlike `ln`, a directory at target cannot receive a child named after
+    # the source.
+    { link "$claim" "$f"; } 2>/dev/null || true
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  body="${raw#*$'\n'}"
+  if [[ "$body" == "$raw" ]]; then                    # a nonce with no text after it
+    # ITEM 3, ITS OWN, NOT THE TWIN'S (r5 R4-M4). This is the same restore in a
+    # different arm, and the crossed-nonce arm above RETURNS — so its proof never
+    # runs on this path and cannot stand in for this one. Same fork (`mv`), same
+    # disposition on a failed proof: no restore, no removal, claim RETAINED, the
+    # caller releases.
+    _hook_lock_still_canonical "$HOOK_LOCK_FD" || return 0
+    { link "$claim" "$f"; } 2>/dev/null || true
+    { rm -f "$claim"; } 2>/dev/null || true
+    return 0
+  fi
+  { rm -f "$claim"; } 2>/dev/null || true
+  body="${body%"${body##*[![:space:]]}"}"
+  CARD_COMPACT="$body"
+  # Carried to the marker publication, which happens after the PRINT and
+  # inside this same held section. Set only on the one path that actually
+  # serves, so nothing else can mint a marker.
+  COMPACT_SERVE_NONCE="$nonce"
+  return 0
+}
+
+# THE FACT OF SERVING (spec §3.3 step 5) — A MARKER, NOT A SET REWRITE.
+# What stood here rewrote `set.served` with `jq`, which is exactly the act
+# D-2605 forbids: THE CANONICAL SET IS NEVER REWRITTEN. Two writers racing on
+# one document is how a compaction loses a record or marks the wrong set
+# served, and no amount of temp-then-rename care fixes a design that has two
+# authors for one artifact. The fact of serving is now recorded by PUBLISHING A
+# SEPARATE NAME — `$REG/.<id>.compactserved.<nonce>` — from a DISJOINT private
+# source, so the set stays byte-identical from PreCompact's publication until
+# PostCompact claims it, and `measure` derives `served` from the marker's
+# existence under the final lock.
+#
+# THE ORDER IS EMIT-THEN-MARK, and it is deliberate: a crash between the print
+# and the marker leaves an honest FALSE NEGATIVE (the card reached the model,
+# the journal says it did not) rather than a lie in the other direction, which
+# would make `cited` uninterpretable exactly where it matters.
+#
+# Idempotence: only an extant marker for the SAME nonce is idempotent — `link`
+# is no-clobber (measured, rc 1 `File exists`, nothing changed), so a repeat
+# leaves the first marker standing and removes only its own source.
+_hook_compact_mark_served() {
+  local marker="" src=""
+  # The nonce reached here through §3.3 step 2's bash validator, so it is
+  # already a safe path component; an unsafe or empty one forms NO marker path
+  # at all and the compaction simply reads `served:false`.
+  [[ -n "$COMPACT_SERVE_NONCE" ]] || return 0
+  # THE SECOND VALIDATION §3.3 step 5 NAMES — "before unlock and only after
+  # successful output, revalidate environment generation and publish the exact
+  # nonce marker". The arm held the lock from the claim through the print, so
+  # the window this closes is narrow, but it is the one arm whose specified
+  # DOUBLE validation was absent: a marker is a durable fact about a row, and
+  # the row this pane was authorized for is the only row it may write one for.
+  _hook_generation_ok || return 0
+  marker="$REG/.$id.compactserved.$COMPACT_SERVE_NONCE"
+  command -v mktemp >/dev/null 2>&1 || return 0
+  src=$( umask 077; mktemp "$REG/.$id.compactserved-source.$COMPACT_SERVE_NONCE.XXXXXX" 2>/dev/null ) || return 0
+  [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 0; }
+  link "$src" "$marker" 2>/dev/null || true
+  # EEXIST MEANS VALIDATE THE INCUMBENT — §3.3 step 5's "same-nonce extant
+  # marker is idempotent ONLY AFTER it validates as a regular, non-symlink
+  # final marker under this lock". THE VALIDATION IS AT THE READING END, and
+  # that placement is measured rather than chosen for convenience.
+  #
+  # Written HERE it can have no effect, because §3.4's own marker-source rule
+  # unlinks the source "on success, on `EEXIST` after validating …, and on
+  # every handled failure" — all three — so validate-then-unlink and unlink do
+  # the same thing to the same file, and this arm returns 0 either way.
+  # MEASURED, in a throwaway copy: a mutant deleting a
+  # `[[ -f "$marker" && ! -L "$marker" ]] || { rm -f "$src"; return 0; }`
+  # placed here leaves the suite GREEN, while the control mutant in the same
+  # run — loosening the reading end back to a bare `-e` — reds. A guard no
+  # input can distinguish is not a guard; it is a comment with a semicolon.
+  #
+  # What the requirement is ABOUT is real and is enforced where it bites: an
+  # occupant that is a symlink or a directory makes this `link` fail EEXIST and
+  # NO marker is published, and a bare `[ -e … ]` at the lookup then derives a
+  # durable `served` from that object — `true` for a symlink to anything,
+  # `false` for a dangling one. `_hook_compact_post`'s lookup asks
+  # `-f && ! -L`, so the two ends spell one definition of what a marker IS.
+  # Reachable only through an out-of-contract same-UID writer, which is why
+  # neither end complains: this one publishes nothing and returns 0.
+  #
+  # THE SOURCE GOES ON EVERY HANDLED RESULT — success, EEXIST and failure —
+  # so the disjoint name never becomes residue of its own.
+  rm -f "$src" 2>/dev/null || true
+  return 0
+}
+
+# The retained serve lock's ONE release site. `_hook_compact_card` keeps the
+# descriptor open past its own return when, and only when, a card is going to
+# be printed, because the marker above must be published inside the SAME held
+# section that claimed the card and the print sits between them.
+_hook_compact_serve_end() {
+  [[ -n "$COMPACT_SERVE_FD" ]] || return 0
+  _hook_lock_release "$COMPACT_SERVE_FD"
+  COMPACT_SERVE_FD=""
+  return 0
+}
+
 [[ -n "${HOME:-}" ]] || exit 0
 REG="$HOME/.cc-sessions"
 
@@ -964,6 +2437,205 @@ CCRC_CARD_OFF="$HOME/.ccrc/ccrc-card-off"
 # fields that ARE gated. Raising the bound is the cheap answer;
 # drop-whole-subject logic on the hot path is not, and was refused.
 CARD_MAX_CHARS=2400
+# ── THE COMPACTION CARD (spec 2026-09-09-graphify-compaction-card-design.md) ──
+# Three registry files per session, every suffix DOT-FREE so `_reg_purge`'s
+# loop (`ccd/ccd`: every dot-free `$REG/<id>.<suffix>` except `archived` and
+# `reaping`) unlinks them with the row: `.compactset` (PreCompact writes it,
+# PostCompact consumes it), `.compactcard` (PreCompact writes it when the tree
+# has a graph the gate would trust; SessionStart(compact) serves it ONCE and
+# deletes it), `.compactions` (the per-session journal PostCompact appends —
+# it copies the existing file into a private stage, re-validates every line it
+# already held and commits by rename, but it never interprets a record or
+# derives state from one). That dot-free shape is what `_ws_slug_free`'s FIRST pass
+# scans and what `_ws_slug_residue` names — the two are widened together, and a
+# comment naming only one of the pair re-creates the half-widening defect in
+# prose — but since D-2605 neither stops there: both take a SECOND pass over
+# the dot-LEADING `.<id>.…` private families, which the `"$REG/$id".*` glob
+# (id, then a dot) is structurally blind to. So every arm removes what it will
+# not serve — an aged card, an aged set — and PreCompact sweeps this id's aged
+# private residue by EXACT FAMILY (`_hook_family_sweepable`), never by the
+# `.compact*.tmp` glob it used to use, which matched by coincidence rather than
+# by grammar. Those names lead with a dot and are therefore invisible to
+# `_reg_purge`'s own dot-free loop, which is why somebody here must reap them.
+# The kill-switch is the same shape as GRAPH_GATE_OFF and CCRC_CARD_OFF: a file
+# the operator touches by hand, honoured by all three arms.
+COMPACT_CARD_OFF="$HOME/.ccrc/compact-card-off"
+COMPACT_HELPER="$HOME/.cc-sessions/compact-card.mjs"
+COMPACT_CARD_MAX_CHARS=4000
+# DERIVED, NEVER A THIRD BUDGET. `CARD_MAX_CHARS` above stays the FIRST clip
+# and the standing subjects' whole ceiling — it is the only defence for the
+# ungated `GM_NODES` (D-1899) and must not move. The compact subject is
+# appended AFTER that clip, under its own ceiling, and this is a pin on the SUM
+# the emitter may print: it cannot cut what the two clips admitted, and
+# `session-hook.test.ts` holds it under the harness's 10,000-char spill
+# (2.1.266 spills SessionStart context to disk above `Pdr=1e4`).
+CARD_TOTAL_MAX_CHARS=$(( CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS ))
+# THE IN-FLIGHT WINDOW, WHICH DECIDES A DIFFERENT THING PER ARTIFACT. An aged
+# CARD belongs to no compaction that can still arrive and is removed UNREAD
+# (a dot-free registry file that outlives its use would hold the slug). An aged
+# canonical SET is NOT removed unread: PreCompact publishes over it and
+# PostCompact still claims and measures it — age decides only its provenance
+# eligibility, never whether it is read. An unconsumed set YOUNGER than this at
+# PreCompact means another compaction of this session is in flight (spec §3.0,
+# overlap). Argued from the longest compaction measured
+# on this fleet — 826 s, gpt lane, 2026-09-08 — times 1.45.
+COMPACT_CARD_MAX_AGE=1200
+# LIVENESS (spec §3.0). A transcript written inside this window is a live
+# context. Measured: a working agent writes a row every 4–6 s and pauses over
+# 79 s in 1–2% of rows; a compacting context writes nothing for ≥79 s; a parent
+# waiting on a fan-out writes nothing at all; and at its own auto-compaction the
+# parent's last row is 0.8 s old at p50, 3.7 s at p95, never 120 s (n=216).
+# Used as `find -mmin` minutes.
+COMPACT_LIVE_S=120
+# THE ONE WAIT THIS FILE ALLOWS (spec §6, amendment R2 of the header's
+# contract): both helper calls use `_hook_timeout`, which resolves `timeout`
+# or `gtimeout`, for at most this many seconds, off the hot path — PreCompact
+# and PostCompact bracket a compaction
+# of at least 79 s — and after the hookstate write has landed. Argued from
+# measured inputs (node startup ~0.05 s, a 70 MB graph parsed and indexed in
+# ~1.5 s, a 16 MiB window mined in well under a second through a basename
+# index) at roughly twice their sum, and RE-MEASURED on this box's real graphs
+# before it shipped — the p95 and peak RSS are recorded here by Task 6 of
+# plans/2026-09-10-graphify-compaction-card-plan-a.md: ccrc 9,543,597-byte graph
+# p95 0.36 s / 104,384 KiB RSS; largest admissible graph (MekWarLive,
+# 70,434,955 bytes) p95 1.05 s / 332,184 KiB RSS (five fresh-nonce runs each,
+# 2026-09-10).
+COMPACT_HELPER_TIMEOUT=8
+COMPACT_WORKSET_MAX=12
+# ── THE TWO STABLE-LOCK BOUNDS (spec §2, §3.4) ───────────────────────────
+# Both are passed to `_hook_lock_acquire` as its FIRST POSITIONAL, never
+# spelled inside it: that parameterization is the whole reason two bounds can
+# coexist through one acquire path, and a helper carrying either constant in
+# its own body would make the other unreachable.
+#
+# COMPACT_LOCK_WAIT is every acquisition EXCEPT compact SessionStart's:
+# PreCompact's two sections, PostCompact's settlement and its final journal
+# transaction (round 7 retired the separate final constant — both are off the
+# hot path and both lose a durable artifact on a miss, so they share one
+# bound), and `ccd`'s own row-creation, `_spawn_start` and `_reg_purge`
+# acquisitions, which carry a twinned literal of the same value.
+#
+# MEASURED, NOT ARGUED (Task 9, 2026-09-14, fleet box `openclaw`, load ~5.8,
+# fixture HOME — never the live one). What a waiter can be blocked behind is
+# ONE HELD SECTION, so each section is timed at its own acquire and release
+# rather than the arm being timed end to end, n=30 per section:
+#
+#   PreCompact section 1 (overlap + exact sweep + initial publish)
+#                                  p50 22.12 ms   p95 27.59 ms   max 28.75 ms
+#   PreCompact section 2 (reconfirm + the two renames)
+#                                  p50  8.39 ms   p95 11.02 ms   max 12.57 ms
+#   compact SessionStart (retained, whole body incl. the marker)
+#                                  p50 24.98 ms   p95 31.75 ms   max 32.59 ms
+#
+# THE DERIVATION: the bound stands at 5 s only if it is at least 8x the worst
+# measured p95. Worst p95 = 31.75 ms, so the floor this rule sets is 254 ms;
+# 5 s is 158x it, and COMPACT_LOCK_WAIT_SERVE's 2 s is 63x. The headroom is
+# deliberate and is not slack to be trimmed: only a SAME-ROW sibling contends
+# (one registry row is one session's contexts), and the cost of a miss is a
+# lost durable artifact, so the bound is set to make a miss mean "something is
+# genuinely wedged" rather than "the box was busy".
+COMPACT_LOCK_WAIT=5
+# COMPACT_LOCK_WAIT_SERVE is compact SessionStart's ALONE — the one
+# acquisition a human is waiting on, at the top of a resumed session. A miss
+# there costs one unserved card and nothing durable, so it gives up sooner
+# than every other arm rather than making the session wait. Measured above:
+# 2 s is 63x the worst held-section p95, so an ordinary uncontended serve
+# never approaches it and a miss here really is contention.
+COMPACT_LOCK_WAIT_SERVE=2
+# ── THE JOURNAL RECORD PREDICATE (spec §3.4, "Journal contract") ─────────
+# ONE predicate gates BOTH the merged record before it is staged and every
+# physical line of the staged file, so a line that reaches `$REG/<id>.compactions`
+# has passed the same test twice — once as an object and once as bytes.
+#
+# SIXTEEN KEYS, and `(keys|sort) == [...]` rather than a presence check: an
+# extra key is as much a defect as a missing one, and there is NO `n` — D-2605
+# removes the persisted ordinal, a reader derives it from committed physical
+# JSONL position.
+#
+# `\z`, NOT `$`, AND ONLY HERE. These anchors run in jq's Oniguruma, where `\z`
+# is end-of-string; jq's `$` would accept a trailing LF. The bash arms in this
+# file must use `$` instead, because POSIX ERE has no `\z` and `regcomp` reads
+# it as a literal `z` — the two engines take opposite spellings and neither may
+# borrow the other's (spec §3.4, "Which regex engine anchors what").
+#
+# Every integer requirement spells `floor == .` explicitly: jq has one number
+# type, so `1.0` and `1` compare equal and a bare `type == "number"` would admit
+# a fractional count.
+JOURNAL_RECORD_PRED_DEFS='
+def NONNEG_INT: type == "number" and . >= 0 and floor == .;
+def NONEMPTY_STRING: type == "string" and length > 0;
+def SAFE_AGENT: type == "string" and length >= 1 and length <= 128
+  and test("^[A-Za-z0-9_-]+\\z");
+def BUILT: type == "string" and test("^[0-9a-f]{7,40}\\z");
+def NULL_PROVENANCE:
+  . as $o | $o.cwd == null and $o.built == null and $o.agent == null
+  and $o.transcript == null and $o.parentLive == null and $o.liveAgents == null;
+def NORMAL_PROVENANCE:
+  . as $o
+  | (($o.cwd == null) or ($o.cwd | NONEMPTY_STRING))
+    and ($o.built == null or (($o.built | BUILT) and $o.cwd != null))
+    and ($o.agent == null or ($o.agent | SAFE_AGENT))
+    and ($o.transcript == null or ($o.transcript | NONEMPTY_STRING))
+    and ($o.parentLive == null or ($o.parentLive | type == "boolean"))
+    and ($o.liveAgents == null or ($o.liveAgents | NONNEG_INT))
+    and (
+      (($o.trigger == "manual" and $o.scope == "main")
+       and $o.agent == null and ($o.transcript | NONEMPTY_STRING)
+       and $o.parentLive == null and $o.liveAgents == null)
+      or (($o.trigger == "auto" and $o.scope == "main")
+          and $o.agent == null and ($o.transcript | NONEMPTY_STRING)
+          and $o.parentLive == null and $o.liveAgents == 0)
+      or (($o.trigger == "auto" and $o.scope == "subagent")
+          and ($o.agent | SAFE_AGENT) and ($o.transcript | NONEMPTY_STRING)
+          and $o.parentLive == false and $o.liveAgents == 1)
+      or (($o.trigger == "auto" and $o.scope == "ambiguous")
+          and $o.agent == null and $o.transcript == null
+          and (($o.parentLive == true and $o.liveAgents == 1)
+               or ($o.parentLive == null and ($o.liveAgents | NONNEG_INT) and $o.liveAgents >= 2)))
+    );
+def JOURNAL_RECORD_PRED:
+  type == "object"
+  and ((keys | sort) == ["agent", "at", "built", "chars", "cited", "cwd", "fences", "filesChars",
+                          "liveAgents", "parentLive", "scope", "served", "setSize", "steered",
+                          "transcript", "trigger"])
+  and (.at | NONNEG_INT) and (.chars | NONNEG_INT) and (.fences | NONNEG_INT)
+  and (. as $o | ($o.filesChars == null or (($o.filesChars | NONNEG_INT) and $o.filesChars <= $o.chars)))
+  and (. as $o | (($o.cited == null and $o.setSize == null)
+       or (($o.cited | NONNEG_INT) and ($o.setSize | NONNEG_INT) and $o.cited <= $o.setSize)))
+  and (.trigger == "auto" or .trigger == "manual")
+  and (.scope == "main" or .scope == "subagent" or .scope == "ambiguous" or .scope == null)
+  and (.steered | type == "boolean") and (.served | type == "boolean")
+  and (NORMAL_PROVENANCE
+       or (NULL_PROVENANCE and (.scope == null or .scope == "ambiguous")
+           and .cited == null and .setSize == null));
+'
+# THE RAW BYTES of the staged file, read with `-R -s` so the predicate sees the
+# whole thing as ONE string and can say something about its physical shape:
+# every line is a complete JSON object the record predicate accepts, the file
+# ends in exactly one LF, the pre-append bytes are still its exact prefix, and
+# the ONLY thing added is this record plus one LF — a length equality, which is
+# what makes "exactly one additional line" exact rather than approximate.
+JOURNAL_STAGE_PRED='
+. as $raw
+| ($raw | endswith("\n"))
+  and ($raw | startswith($old))
+  and (($raw | length) == (($old | length) + ($rec | length) + 1))
+  and (($raw | split("\n"))[0:-1] as $lines
+       | ($lines | length) > 0
+         and all($lines[]; (length > 0) and ((fromjson? // false) | JOURNAL_RECORD_PRED))
+         and ($lines[-1] == $rec))
+'
+# ONE SPELLING of the shape a `compaction` object must have (spec §3.4, "shape
+# gates, both directions"). WHAT IT IS FOR, restated against the shipped code:
+# it is a CHEAP SHAPE SANITY GATE on the helper's raw stdout — `jq -ce -s`,
+# exactly one document — applied BEFORE the strictly stronger
+# `JOURNAL_RECORD_PRED` validates the merged record. It is not a persistence
+# mechanism and not a read-back: the sentences this replaces said the hook adds
+# `n` to the object and that a value is read back from hookstate, and D-2605
+# forbids BOTH — there is no hookstate compaction cache and no persisted
+# ordinal, a reader derives ordinal from committed physical JSONL position.
+# Never re-spelled.
+COMPACT_SHAPE_PRED='(type=="object" and (.chars|type)=="number" and (.fences|type)=="number" and (.at|type)=="number" and (.trigger=="auto" or .trigger=="manual") and (.steered|type)=="boolean" and (.served|type)=="boolean" and ((.filesChars|type)=="number" or .filesChars==null) and ((.cited|type)=="number" or .cited==null) and ((.setSize|type)=="number" or .setSize==null) and (.scope=="main" or .scope=="subagent" or .scope=="ambiguous" or .scope==null))'
 # BOUNDED AND ANCHORED. The project string is registry text that lands verbatim
 # in a prompt, so it is gated on a SHAPE rather than clipped to a length: a
 # value this refuses is UNSPEAKABLE and the card says nothing, rather than
@@ -989,10 +2661,17 @@ CARD_MAX_CHARS=2400
 # interpolate a bracket-class variable the way `case` can: this constant, the
 # session-id gate `[[ "$id" =~ ^[A-Za-z0-9._-]+$ ]]` near the bottom of this
 # file, and the hold's shape gate `^program:[A-Za-z0-9._-]+ wave:...` in
-# `_hook_hold_card`. And `single-definition.test.ts` does not scan `ccd/` at
-# all — its four roots are the TypeScript packages, as this branch's own README
-# addition says. Keeping the three in step is a reading discipline, not a
-# mechanism; if you widen one, widen the other two by hand.
+# `_hook_hold_card`. And `single-definition.test.ts`'s four `ROOTS` are the
+# TypeScript packages, so they do not cover `ccd/` — BUT A SECOND BASH CORPUS
+# DOES: `bashRoots` is `[<repo>/ccd, <repo>/deploy]`, `BASH` is every bash file
+# under them plus `install.sh`, `holdersOf` filters that corpus on non-comment
+# lines, and this file and `ccd/ccd` are pinned as members BY NAME. (The
+# sentence this replaces said the test "does not scan `ccd/` at all", which is
+# measurably false against the shipped test and told the next reader no
+# mechanism existed where one does.) Keeping the three `CCRC_PROJ_CLASS`
+# spellings in step is therefore a reading discipline only because nobody has
+# written that rule — not because no mechanism could express it; if you widen
+# one, widen the other two by hand.
 CCRC_PROJ_CLASS='A-Za-z0-9._-'
 CCRC_PROJ_MAX=64
 CCRC_ID_MAX=128
@@ -1196,14 +2875,33 @@ case "$event" in
     # must happen even for `source == compact` (which returns early below):
     # a compacted session is still a session whose home may be unconverged.
     _hook_memory_converge || true
-    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD=""
+    # INITIALISED HERE, BESIDE THE SUBJECTS, not inside `_hook_compact_card`:
+    # that function runs only on `source == compact`, while
+    # `_hook_compact_serve_end` below runs on EVERY SessionStart, and this file
+    # is `set -u`. An initialiser that lived only on the compact path would
+    # make every other SessionStart die on an unbound variable — the worst
+    # shape this file can fail in, since the server reads the state it writes.
+    CARD_GRAPH=""; CARD_HOLD=""; CARD_CCRC=""; CARD_COMPACT=""; CARD=""
+    COMPACT_SERVE_FD=""; COMPACT_SERVE_NONCE=""
     _hook_graph_card || true
     _hook_hold_card  || true
     _hook_ccrc_card  || true
+    # THE FOURTH SUBJECT, compact only (compaction-card spec §3.3): a card
+    # describes the compacted context and nothing else, so startup, resume
+    # and clear never read the file. It is passed to the emitter SEPARATELY —
+    # the standing three keep their clip, the card gets its own (D-1899).
+    [[ "$src" == compact ]] && { _hook_compact_card || true; }
     CARD="$CARD_GRAPH"
     [ -z "$CARD_HOLD" ] || CARD="${CARD:+$CARD }$CARD_HOLD"
     [ -z "$CARD_CCRC" ] || CARD="${CARD:+$CARD }$CARD_CCRC"
-    [ -z "$CARD" ] || _hook_emit_context "$CARD"
+    # The stamp follows the PRINT, never the intent: only an emitter that
+    # returned 0 with a compact subject in hand records `served`.
+    if [ -n "$CARD$CARD_COMPACT" ]; then
+      if _hook_emit_context "$CARD" "$CARD_COMPACT" && [ -n "$CARD_COMPACT" ]; then _hook_compact_mark_served || true; fi
+    fi
+    # THE RETAINED SERVE LOCK ENDS HERE, on every path through this arm — the
+    # marker, when one was published, was the last act inside it.
+    _hook_compact_serve_end || true
     [[ "$src" == compact ]] && exit 0
     state="done" ;;
   Stop)
@@ -1467,4 +3165,10 @@ mv -f "$tmp" "$f" 2>/dev/null || { rm -f "$tmp"; exit 0; }
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# The two compaction arms run LAST, after the `working`/`done` stamp is on
+# disk: each calls the helper under one locally resolved deadline, and the
+# state write must never wait on either. Nothing below prints — PostCompact's
+# whole output is a journal line on disk, and this file's contract is silence.
+if [[ "$event" == PreCompact  ]]; then _hook_compact_pre  || true; fi
+if [[ "$event" == PostCompact ]]; then _hook_compact_post || true; fi
 exit 0

@@ -186,7 +186,7 @@ export function reviveDec(v: unknown): LifecycleDec | null {
  * `task-29-report.md`.
  *
  * What the brief's "ten declared, rest lives in raw" design intent survives
- * as: any key a future ccd emits that is NOT one of these twenty-eight still
+ * as: any key a future ccd emits that is NOT one of these twenty-NINE still
  * never reaches `meas` — it is still recoverable only from `raw`, verbatim.
  */
 export function reviveMeas(v: unknown): LifecycleMeas | null {
@@ -206,6 +206,9 @@ export function reviveMeas(v: unknown): LifecycleMeas | null {
     // Account pools wave 2b (Task 6 fix round 1) — the two `rehome` emitters'
     // fields; see `LifecycleMeas.home`/`.pool`/`.reason`'s own docstrings.
     home: s(o, 'home'), pool: s(o, 'pool'), reason: s(o, 'reason'),
+    // D-2605 fix round 2 (D-2782) — what a `purge-incomplete` failure could
+    // not unlink; see `LifecycleMeas.unremoved`'s own docstring.
+    unremoved: s(o, 'unremoved'),
   };
 }
 
