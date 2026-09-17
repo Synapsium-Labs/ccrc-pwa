@@ -359,7 +359,102 @@ disagreement is reported rather than resolved by picking one.
 
 ## Deviations found
 
-### D-2989 — the registry read sites answer rc 0 with a foreign file's bytes when a symlink stands at a field path
+### D-2989 — a type test on a `$REG` path followed by a read of that path
+
+**THE CLASS IS THE PAIRING, AND THE FIRST NAMING WAS WRONG.** This entry originally named the class by
+the FIELD-PATH GRAMMAR, `$REG/<id>.<field>`. That grammar **excludes `$REG/<wrapper>-authdead` by
+construction** while the defect there is identical, and it excludes the pools registry, `.reaped/`,
+`.lifecycle/`, `usage/` and every glob-expanded row as well. A class named by a spelling cannot contain
+a defect that wears a different spelling. The class is:
+
+> a TYPE TEST on **any** path under `$REG`, followed by a **READ of that same path**.
+
+Both halves are required. A type test with no following read fabricates nothing. A read with no type
+test is a different defect — that is why `ccd/session-hook.sh`'s bare `cwd=$(cat "$REG/$id.workdir")`
+is NOT in this class, and folding it in would make the class unbounded again, which is the naming
+error repeating itself in the other direction.
+
+**WHY THE PAIRING IS THE DEFECT:** bash `-f`/`-e`/`-r`/`-s`/`-d`, python `os.path.isfile`/`isdir`/
+`exists` and node `existsSync`/`statSync` **all follow symlinks**. A link planted at the tested `$REG`
+path passes the test, and the following read returns another file's bytes at rc 0 — indistinguishable
+from a real read. The fix is a test that does NOT follow: bash `! -L`, python
+`stat.S_ISREG(os.lstat(p).st_mode)`, node `lstatSync`.
+
+**THE INSTRUMENT, so the next reader re-measures rather than inherits a number.** Per file, find that
+file's own spelling of the registry root (`REG=`, `_SVC_REG=`, `reg=`, `$HOME/.cc-sessions`), then pair
+type tests against reads of the same path:
+
+    git -C <repo> ls-files ccd/ | while read -r f; do
+      /bin/grep -nE '\[\[? *-[efrsdx] |os\.path\.(isfile|isdir|exists)|existsSync|statSync' "$f"
+    done
+    # then, per hit, read forward for a read of the SAME path (cat, $(<p), read <p, jq/grep/awk p,
+    # source p, python open(p), node readFileSync) with no -L / lstat / S_ISREG in between.
+
+Run 42 ran it as a 7-agent census — four independent lenses (bash `-f`/`-e`; bash `-r`/`-s`/`-d`/glob;
+python + node; indirect/multi-level) then three adversarial verifiers (both-halves-present;
+would-a-symlink-actually-change-the-answer; reachability-and-blast-radius), each defaulting to
+NOT-IN-CLASS when uncertain. A site below is listed only where a MAJORITY of verifiers held it in class
+and no verifier found it already guarded.
+
+**FIXED THIS WAVE — five bodies, each with its own mutation row:**
+
+| body | before | after |
+|---|---|---|
+| `ccd/ccd` `_reg_get` | `[[ -f ]]` | `&& ! -L` -> rc 1, its existing not-a-field arm |
+| `ccd/ccd` `_reg_read` | `[[ -f ]]` | `[[ -L ]] && return 2` before the open |
+| `ccd/ccd` `_pr_py`'s `get()` | `os.path.isfile` | `lexists ∧ ¬S_ISREG(lstat)` |
+| `ccd/ccd` `_authdead` | `[[ -f "$f" ]]` | `[[ -f "$f" && ! -L "$f" ]]` |
+| `ccd/ccd-telemetry-keepalive` `_authdead` | `[ -f "$f" ]` | a separate `[ -L "$f" ] && return 1` rung |
+
+The last two are ONE contract in two bodies. `ccd/ccd`'s header claimed the sibling "already opens with
+`[ -f "$f" ] || return 1`" and that this copy "was the one left behind" — measured, the sibling carried
+the SAME following test and the SAME defect, so `-f` was never what was missing. A class closed in one
+body of a two-body contract is closed nowhere.
+
+**DECLARED, NOT FIXED — the measured remainder, with what each one reaches.** This is a declaration
+because the round that found it was bounded to `_authdead` plus a re-census; it is not a claim that
+these are harmless. Four of them are destructive and one writes into a model's context.
+
+| site | votes | what a fabricated value there reaches |
+|---|---|---|
+| `ccd/ccd:1735` | 4/5 | WRONG-POOL PLACEMENT — the worst non-destructive consequence in this census. CLAUDE.md: `_project_pool_state` is ccd's ONLY reader of the project pool |
+| `ccd/ccd:6846` | 3/3 | cmd_ws_rm's refusal: the fabricated bytes go into `_lc_refuse destroy "$id" held "held: $_hold_reason — release first: …"`, i.e. the operator-visible  |
+| `ccd/ccd:7307` | 3/3 | COSMETIC — cmd_ws_rename's refusal is already decided at ccd/ccd:7302 `if [[ -e "$REG/$id.hold" ]]`. The value lands only in the wire JSON at ccd/ccd: |
+| `ccd/ccd:8012` | 3/3 | AUDIT RECORD, AND IT OUTLIVES ITS SUBJECT — worse than the other four hold sites. The value goes into ccd/ccd:8016 `_lc_done release "$id" "" meas.hel |
+| `ccd/ccd:8334` | 2/2 | SMALLEST OF THE REAL ONES. Single caller, ccd/ccd:8471 inside cmd_project_pool's `--pool` arm: `[[ -d "$PROJECTS_ROOT/$project" ]] || _reg_project_glo |
+| `ccd/ccd:12532` | 4/5 | READ *AND* WRITE THROUGH THE LINK — the only candidate in the census that CLOBBERS a foreign file rather than merely misreading one. Caller: ccd/ccd:1 |
+| `ccd/ccd:12582` | 4/5 | A DESTRUCTIVE ARM, AND THE SELF-CONSISTENCY IS WHAT MAKES IT BITE — the widest radius in this census. On cmd_ws_reap's RESUME path: 12860 `tombtip=$(_ |
+| `ccd/ccd:12633` | 4/5 | THE CONSENTED-CHILD SET ON A REAP RESUME. Callers: ccd/ccd:13037 `rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json")` and 13390 `childlines=$(_w |
+| `ccd/ccd:12703` | 3/3 | COSMETIC — cmd_ws_reap's held-refusal is decided at ccd/ccd:12698 `if [[ -e "$REG/$id.hold" ]]`, before any read. Fabricated bytes reach only ccd/ccd: |
+| `ccd/ccd:14947` | 3/3 | FABRICATED PLACEMENT HEADROOM FOR THE FABLE CLASS. Single caller: ccd/ccd:14977 `fig=$(_share_pct "$w"); rc=$?` inside `_serviceable`, whose own comme |
+| `ccd/ccd:21366` | 3/3 | COSMETIC — the refusal is decided at ccd/ccd:21361 `if [[ -e "$REG/$id.hold" ]]`; the value only fills ccd/ccd:21369-21370 `_lc_refuse forget "$id" he |
+| `ccd/ccd-graph-sweep:88` | 3/3 | GRAPH FRESHNESS ONLY — nothing destructive, nothing the PWA renders. `_gs_session_on` is called at ccd-graph-sweep:201 (a `.claude/worktrees` candidat |
+| `ccd/ccd-graph-sweep:297` | 3/3 | `_gs_busy` at :1069 gates `_gs_row "$tree" "$BUSY_OUTCOME"` — the sweep's decision not to touch a tree. A symlink to any fresh JSON carrying a live `. |
+| `ccd/ccd-telemetry-keepalive:521` | 3/3 | AN ACCOUNT'S KEEPALIVE TURN. Caller: ccd-telemetry-keepalive:680 `sess_why="$(_ka_session_on "$acct")"; sess_rc=$?`. The function's own header (510-51 |
+| `ccd/ccd-usage-sweep.py:272` | 2/3 | THE TOOL'S ONLY DESTRUCTIVE PATH, BY ITS OWN DOCSTRING (lines 238-244: "This is the tool's ONLY destructive path, so an id whose `ts` is absent, unrea |
+| `ccd/ccrc-api:275` | 3/3 | MUTED, AND THE REASON IS WORTH STATING. DERIVED_ID comes from the tmux pane (271-274), not from the file, so `who` at ccrc-api:404 is unaffected; only |
+| `ccd/ccrc-doctor-checks:3063` | 3/3 | ADVISORY DIAGNOSTIC ONLY. `reg_rows` is consumed at ccrc-doctor-checks:3164 `if [ ! -d "$proot/$n" ] && ! _pool_has_line "$n" "$reg_rows"; then p_stal |
+| `ccd/ccrc-doctor-checks:3145` | 3/3 | Doctor's per-tag pools verdict (`p_malformed`/`p_unread`/the reported tag). A symlink at $REG/pools/<project> resolving to any ≤64-byte file matching  |
+| `ccd/session-hook.sh:456` | 3/3 | BYTES INTO A PEER'S MODEL CONTEXT — the widest non-destructive radius here. Callers: session-hook.sh:480 `_ct_read "$REG/$id.project"` and 531/547 (`_ |
+
+**RULED EXPLICITLY, because the round asked for these two by name:**
+- **The five hold rungs** (`ccd/ccd:6846`, `:7307`, `:8012`, `:12703`, `:21366`) **are in the class and
+  are NOT fixed here.** In all five the HELD/not-held decision is the separate `-e` gate above them —
+  "doubt reads as HELD", fail-shut and deliberate — so a symlink cannot unwedge a refusal. What it
+  fabricates is the reason TEXT. Four of the five are therefore cosmetic; `:8012` is not, because
+  `cmd_ws_release` persists it into the lifecycle journal as the measured hold, where it outlives its
+  subject and reaches the wire.
+- **`ccd/session-hook.sh:198` is NOT in the class**, and that is a measurement, not an exemption: it is
+  `cwd=$(cat "$REG/$id.workdir" 2>/dev/null)` with **no type test at all**. An unguarded read is a
+  different shape. The hook's real in-class site is `_ct_read` (`:456`), which the census found
+  independently and which carries the widest non-destructive radius in this table.
+
+**WHOSE ERROR THE NAMING WAS.** The coordinator asked for the class by shape, accepted a grammar that
+could not contain it, and then recorded "D-2989 is CLOSED" on a verification of the FIX rather than of
+the CLASS — and said so unprompted when the re-census surfaced `_authdead`. It is recorded here because
+the headline is what a later reader carries, and that one claimed more than had been measured.
+
+### D-2989(a) — the original field-path census, kept because its mutation rows still hold
 **Review 71 CRITICAL 1, and the class is three READ-SIDE sites named by SHAPE, not by a count anyone was
 given.** Every one of them type-tested a `$REG/<id>.<field>` path with a test that FOLLOWS a symlink —
 bash `-f` in two, `os.path.isfile` in one — so a link resolving to any readable regular file anywhere
@@ -521,21 +616,35 @@ the census at the branch tip, and citing DIFFERENT BYTES between the two trees. 
 
 **This is the indictment of the repair method, and it is why the scope CONTRACTS rather than expands.**
 The repair takes its work list from the census's FAILING set. These twelve are green. **The method can
-never reach them** — not through more care, and not through another round. Two of the twelve (`:6478`,
-`:13020`) are caught by `main`'s new anchored-by-shortness assertion and are repaired in this round's
-final commit. **The other ten are DECLARED HERE, NOT REPAIRED.**
+never reach them** — not through more care, and not through another round.
 
-**The instrument, because a declaration without one is just another number that goes stale silently** —
-compare the cited BYTES, never the anchor's spelling, between the two trees:
+**THE TWO/TEN SPLIT THIS ENTRY USED TO ASSERT IS WITHDRAWN, AND IT WAS WRONG IN BOTH DIRECTIONS.** It
+said two of the twelve were repaired and ten declared. In fact the repair moved far more than two of
+them, and then the whole re-point LEFT THIS WAVE (the ruling on review 76). **The number that ships is
+ZERO**, and it needs no counting to verify: both corpus documents are byte-identical to `origin/main`,
+so no re-point of this branch's survives in any of the twelve, or anywhere else. That is the one form
+of this claim that cannot go stale — it is a property of the shipping tree, checkable with `diff`.
 
-    for a in <anchor…>; do
-      diff <(git show dfa167d7:ccd/ccd | sed -n "${a}p") \
-           <(git show <tip>:ccd/ccd    | sed -n "${a}p") >/dev/null || echo "MOVED: $a"
+**THE INSTRUMENT WAS BROKEN FOR EVERY RANGE ANCHOR, measured.** The comparison below used
+`sed -n "${a}p"`, and for a range `a` such as `3050-3070` that is not a sed address — it is
+`unknown command: '-'`, exit 1, **empty output on both sides**. `diff` of two empty results succeeds,
+so every range anchor in this list was silently scored UNMOVED. Four of the twelve are ranges. **A diff
+of two FAILED commands reports "equal"** — the comparator answered confidently about the unmeasured,
+which is the same shape as every other defect this wave has been about. Corrected:
+
+    for a in <anchor…>; do                      # a is "N" or "N-M"
+      diff <(git show <base>:ccd/ccd | sed -n "${a//-/,}p") \
+           <(git show <tip>:ccd/ccd  | sed -n "${a//-/,}p") >/dev/null || echo "MOVED: $a"
     done
 
-A repaired ten with no instrument is worth less than a declared ten with one: the declaration is
-INHERITABLE and re-runnable at any future tip, which is exactly the property every number this wave
-typed turned out to lack.
+Verify the fix before trusting it: `sed -n '3050-3070p'` exits 1 with no output, `sed -n '3050,3070p'`
+returns 21 lines. **And guard the comparator itself** — a comparison whose inputs may fail must check
+that both sides were produced, or it reports agreement between two absences.
+
+**The two instruments that DO work, and are what the next wave should inherit:** `main`'s own
+anchored-by-shortness assertion in `session-hook.test.ts`, which names a specific anchor and reds when
+one rots (it is what found `ccd/ccd:2964`), and the range-corrected byte comparison above. Both are
+re-runnable at any future tip. Neither is a number.
 
 **Run 70's framing of its own four does not hold** — it said they "left the failing set"; all four were
 already green at `d59f93d7`. The substance was right and the arithmetic around it was not. Recorded
