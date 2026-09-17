@@ -9655,6 +9655,12 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # of them was running on the live fleet host with nothing installing it.
   local tree="$BOX_TREE_DIR"
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
+  # The compaction card's helper, 0644 (compaction-card spec §2): a script
+  # `node` runs under the hook's `timeout`, never executed directly. Before the
+  # hook for the reason deploy.sh's agent lane states at its own copy — the
+  # hook's guard for it is silent, so only this order makes a half-finished
+  # converge fail in the harmless direction.
+  _inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644
   _inst_atomic "$tree/ccd/session-hook.sh" "$HOME/.cc-sessions/session-hook.sh" 755
   _inst_atomic "$tree/ccd/install-session-hooks.sh" "$HOME/.cc-sessions/install-session-hooks.sh" 755
   _inst_atomic "$tree/deploy/notify.sh" "$HOME/.cc-sessions/notify.sh" 755
@@ -9667,7 +9673,7 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   _inst_atomic "$tree/ccd/tmux.conf" "$HOME/.tmux.conf" 644
   _inst_keep_aside "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
   _inst_atomic "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh" 755
-  echo "install: files: session hooks, notify.sh, tmux.conf and the statusline in place"
+  echo "install: files: session hooks, the compaction-card helper, notify.sh, tmux.conf and the statusline in place"
 }
 
 # ── _inst_stamp_shipped — the release-artifact arm (stage 4, Task 6) ──────
@@ -10981,6 +10987,7 @@ _upd_backup() {
   _upd_backup_copy "$BOX_TREE_DIR/agent/dist"      agent-dist
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
+  _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
   # `~/.ccrc/memory` is the SOLE live copy of every project's durable
@@ -11625,6 +11632,7 @@ _uninst_cc_sessions() {
     return 0
   fi
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
+    "$reg/compact-card.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" \
     "$reg/install-graphify-skill.sh" \

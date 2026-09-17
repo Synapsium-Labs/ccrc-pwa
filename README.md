@@ -2177,7 +2177,8 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   `built_at_commit` is the last key of an 8 MB `graph.json`, so it is read with `tail -c 4096`, never
   by parsing the file; the node count comes off `GRAPH_REPORT.md`'s summary line with `head -c 4096`,
   because neither the census nor `manifest.json` carries one (D-1246); the freshness pair are git ref
-  reads. **Stdout is this card on `SessionStart`, the search gate's deny on a gated `PreToolUse`
+  reads. **Stdout is this card on `SessionStart` — with the compaction card appended
+  to it on the `compact` source alone (R8, below) — the search gate's deny on a gated `PreToolUse`
   (R5, below) and the Read nudge's `additionalContext` on a nudged one (R6, below) — at most one of
   those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
@@ -2411,6 +2412,12 @@ bug that does not exist. `_hook_emit_context` is also the one site that clips th
 `CARD_MAX_CHARS` (2400) is a different bound for a different job than the `<600` assertion elsewhere in the
 suite, which taints one repo-controlled field alone (the graph sweep's refusal reason) and stays exactly as
 it is; `CARD_MAX_CHARS` is the ceiling on graphify + hold + co-tenant + their two one-space joins together.
+Since the compaction card landed (R8, below) it is the FIRST of two clips rather than the only one, and the
+arithmetic below is untouched by that: `_hook_emit_context` takes an optional SECOND argument, clips the
+standing subjects to `CARD_MAX_CHARS` exactly as before, clips that second subject to its own
+`COMPACT_CARD_MAX_CHARS` (4000), and bounds the joined envelope by `CARD_TOTAL_MAX_CHARS` — DERIVED as
+`CARD_MAX_CHARS + 1 + COMPACT_CARD_MAX_CHARS` (6401) and never a third budget kept in step by hand.
+`CARD_MAX_CHARS` is still the only defence the ungated node count has, which is why it does not move.
 It is argued from the **structural** worst case, not the live one: the worst combination measured on this
 fleet is 593 + 592 + 176 + 2 = 1363, but the worst the code can produce with every gated field at its own
 cap, re-measured end-to-end against a fixture HOME rather than hand-counted (2026-09-08, correcting the fix
@@ -2460,6 +2467,79 @@ Unlike `graphQueries`/`graphGateDenials`, neither reaches `FleetSession` or any 
 object literal built from those names, with no key census — an unknown key is simply never looked at.
 Both counters live only in the raw `~/.cc-sessions/<id>.hookstate.json` file on the fleet box:
 hookstate-only, no server change, no PWA-visible chip.
+
+**The compaction card and its journal (R8).** Compaction is the one moment a session loses what it knew,
+which is why the graph card above is served on the `compact` source like any other. Since
+`docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md` (Plan A) the hook does two more
+things at that moment: it builds a SECOND card — the files this context was working in, with their symbols,
+community and dependents read out of the same graph — and it MEASURES the compaction, writing one line to a
+per-session journal. Three arms of `ccd/session-hook.sh` do it, and **none of them opens a new output
+channel**: the card rides the one `additionalContext` envelope `SessionStart` already prints — the compact
+arm calls `_hook_emit_context "$CARD" "$CARD_COMPACT"` (`ccd/session-hook.sh:2900`), which appends the second
+subject under its own `COMPACT_CARD_MAX_CHARS` ceiling (`:97`) before the single `jq -cn` print (`:103-105`) — and `PreCompact` and
+`PostCompact` print nothing at all. `PreCompact` decides whose transcript is compacting and publishes the
+working set, `SessionStart(compact)` serves the card once beside the graph card in that one envelope, and
+`PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
+the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
+does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
+`purge-mechanism-absent` (`shared/api.ts:6560-6562`), each with an operator sentence of its own at `:6600`,
+`:6608` and `:6621`, which the session History tab renders through `lcRefusalWord`
+(`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
+plan's job.
+
+- **What lands on the fleet box.** Four dot-free registry files per session id, beside the
+  `hookstate.json` above, and one dot-leading mutex: `~/.cc-sessions/<id>.compactset` (the working set
+  `PreCompact` publishes, consumed by `PostCompact`), `<id>.compactcard` (the card itself — served ONCE and
+  deleted), `<id>.compactions` (the journal `PostCompact` appends — it copies the existing file into a
+  private stage, re-validates every line it already held and commits by rename, but it never interprets a
+  record or derives state from one), `<id>.generation` (the row's authorization, below) and
+  `.<id>.compactions.lock` (one permanent mutex per row, deliberately not slug residue). The helper that
+  builds the card is plain node beside the hook,
+  `~/.cc-sessions/compact-card.mjs`, installed by `deploy.sh`'s agent lane and by `ccrc install`, backed up
+  by `ccrc update` and removed by `ccrc uninstall` — all four doors, so a box an operator believes is off
+  ccrc really is.
+- **Reading the journal.** It is JSONL: one complete JSON object per physical line, appended in order.
+  Each record carries exactly SIXTEEN keys and no ordinal — a reader derives which compaction a line was
+  from its physical position in the file, because a persisted counter under concurrent writers is derived
+  state with a race of its own. The keys are the measurement (`at`, `chars`, `filesChars`, `fences`,
+  `cited`, `setSize`), the verdict (`trigger`, `scope`, `served`, `steered`) and six provenance fields
+  (`cwd`, `built`, `agent`, `transcript`, `parentLive`, `liveAgents`). `scope` is `main`, `subagent`,
+  `ambiguous` or null: the hook answers `ambiguous` where it cannot tell whose transcript compacted rather
+  than guessing, and a record it cannot vouch for carries ALL six provenance fields null rather than some
+  of them — a partial list is refused outright and the line is never written. Every field is a fact about
+  the transcript, so a journal can be audited offline against the transcripts themselves. Nothing in
+  `server/src`, `agent/src`, `pwa/src` or `shared/` reads a `.compactions` file — measured — so `jq` over
+  `~/.cc-sessions/<id>.compactions` on the fleet box is the whole reading interface there is today. The
+  scope is SHIPPED SOURCE and the narrowing is the measurement, not a hedge: five files under `server/test`
+  do read or name the artifact, so the wider claim is false where this one is true.
+- **The lock and the generation.** Every compaction-lifecycle mutation runs under that one per-row mutex,
+  which is published by a private `mktemp` source plus a POSIX hard link and is NEVER opened at its
+  canonical pathname — each holder opens a verified private alias and re-checks the descriptor against the
+  canonical inode before it mutates anything. `<id>.generation` is an immutable UUID minted when the row is
+  created and exported into the pane's environment as `CCRC_SESSION_GENERATION`; an arm whose copy does not
+  match the row's refuses. THREE states leave a pane without that copy — a row created before this shipped
+  has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
+  rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
+  to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
+  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:16330-16332`, the `genrc == 1` arm); the
+  generation-absent row and the off-`PATH` box are SILENT — the acquire succeeds or fails without ever
+  reaching that warning — and the absence of the artifacts is the only signal there. Adding the missing
+  warning is a `ccd/ccd` change, which this documentation pass does not make.
+- **What a purge does now.** `_reg_purge` takes the same mutex, so a row cannot be destroyed underneath a
+  hook that is mid-transaction. It answers with THREE distinct statuses rather than a boolean — a pre-emit
+  lock refusal (nothing deleted, no purge fact), a mechanism-absent refusal on a row that still holds a
+  generation, and a post-emit removal failure, where the row IS destroyed, the purge fact IS journaled and
+  the pathname that would not go is named. All four callers — `ws-rm`, `ws-reap`'s tail, `ws-gc --prune`'s
+  dead-registry arm and `forget` — branch on the value. In practice: on a box with no usable `flock(1)`,
+  `ws-rm`, `forget` and `ws-gc --prune` refuse a row that still holds a generation instead of racing it —
+  the remedy is to re-run from a `PATH` where `flock` resolves — while a row with NO generation purges
+  exactly as it did before, because no hook on it ever held one. `ws-add`, `ws-restore` and `ws-reap` keep
+  the fail-closed refusals they already shipped.
+- **Silence, and the kill-switch.** Every arm is silent by contract: a missing `flock`, an absent helper,
+  an expired eight-second helper deadline or lock contention is a MISSED MEASUREMENT — no journal line —
+  never a failed hook and never a word on stdout or stderr. `PreCompact` and `PostCompact` print nothing at
+  all. The operator's off switch is `~/.ccrc/compact-card-off`, the same shape as `~/.ccrc/graph-gate-off`
+  and `~/.ccrc/ccrc-card-off`: touched by hand, honoured by all three arms, no deploy and no token.
 
 **The reading's instrument.** `~/.local/bin/graph-gate-snapshot` is the operator's own hourly carrier —
 outside every checkout, no repo lane, no vitest — that reads the registry and every session's hookstate

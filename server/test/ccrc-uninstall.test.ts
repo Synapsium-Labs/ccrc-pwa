@@ -212,6 +212,9 @@ function plantInstalledBox(home: string): void {
   mkdirSync(join(reg, 'coordinator-skill'), { recursive: true });
   mkdirSync(join(reg, 'worker-skill'), { recursive: true });
   mkdirSync(join(reg, 'reviewer-skill'), { recursive: true });
+  // The compaction card's helper (compaction-card spec §2): `_inst_files`
+  // places it, so `_uninst_cc_sessions` is the sweep that must remove it.
+  writeFileSync(join(reg, 'compact-card.mjs'), '// fixture helper\n', { mode: 0o644 });
   writeFileSync(join(reg, 'session-hook.sh'), '#!/bin/sh\n# hook\n', { mode: 0o755 });
   writeFileSync(join(reg, 'install-session-hooks.sh'), '#!/bin/sh\n# old installed copy\n', { mode: 0o755 });
   writeFileSync(join(reg, 'notify.sh'), '#!/bin/sh\n# notify\n', { mode: 0o755 });
@@ -457,7 +460,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     writeFileSync(join(home, '.cc-sessions', 'mail-disabled'), 'operator switch\n');
     const r = runVerb(home, 'uninstall', ['--force']);
     expect(r.code, r.stderr).toBe(0);
-    for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh',
+    for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
       'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
       'install-graphify-skill.sh',
       'coordinator-skill', 'worker-skill', 'reviewer-skill']) {
