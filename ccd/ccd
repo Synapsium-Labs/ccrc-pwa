@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=f6380eb8ff8d215827c961dfc28c46950ad61b236712dab992c94e1b03b34260
+# ccrc:generated 1 sha256=f1e71ab262d715b415a95eb38d34e4e52fd1ea456f9252b2cf3d3a89ceb62f1c
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -18830,10 +18830,13 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
-  # A FRESH MEASURE, NOT A REDUNDANT ONE — this is the site the `_auto_compact_check`
-  # comment above names as where a re-measure IS meaningful: REDRIVE_WAIT_S seconds of
-  # real `sleep 1`s sit between the top-of-function guard and here, so the pane can have
-  # gone narrow in the meantime. But its NEGATIVE answer is not "auto-continue armed" —
+  # A FRESH MEASURE, NOT A REDUNDANT ONE, and this is the site where that is true:
+  # REDRIVE_WAIT_S seconds of real `sleep 1`s sit between the top-of-function guard and
+  # here, so the pane can have gone narrow in the meantime. (A comment in
+  # `_auto_compact_check` used to make the contrast and name this site; routing slice 4
+  # moved the call it was about into `_pane_for_keystroke`, where its premise is untrue
+  # for that helper's other two callers, so it was dropped rather than relocated. The
+  # argument survives here, where it is still about this function's own wait loop.) But its NEGATIVE answer is not "auto-continue armed" —
   # that would be `_pane_auto_continue_armed`'s own inverted answer to the SAME
   # unmeasurable pane, naming a cause (Claude Code's own recovery timer) this line never
   # detected. Logged as its own sentence — distinct wording from this same
