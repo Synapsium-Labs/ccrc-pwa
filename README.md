@@ -2521,7 +2521,7 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:16330-16332`, the `genrc == 1` arm); the
+  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:16610-16612`, the `genrc == 1` arm); the
   generation-absent row and the off-`PATH` box are SILENT — the acquire succeeds or fails without ever
   reaching that warning — and the absence of the artifacts is the only signal there. Adding the missing
   warning is a `ccd/ccd` change, which this documentation pass does not make.
