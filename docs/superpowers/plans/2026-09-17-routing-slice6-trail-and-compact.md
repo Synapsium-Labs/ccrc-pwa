@@ -104,7 +104,25 @@
 
 ## Deviations found
 
-None at plan time. Numbers are issued by the allocator during execution and defined here in the same act. Known departures this plan will record: the six-segment grammar's five-segment tolerance (an older event attributed to its run's worker only); D-2957's run-scoped rule closed.
+Issued by the allocator on 2026-09-17 after the whole-slice review and defined in the same act: D-2961 through D-2977 (17 departures; the block's unspent tail is never spelled). Per-task commits: Task 1 c7d716c1, 2dd75489, 33ad0489; Task 2 fe6a56ee, 7eca64d3; Task 3 61d54dcd, a775c60e; Task 4 5f3671b3, 838fe78d, 5ba53361; the final fix waves 0d87d579, f15b9eaf, 4852fc31. Task 5 (the `compact` field) was CARRIED under ruling S6-R2: its gate, the graphify compaction card, is PR #134, open and unmerged at the mint. Rulings S6-R1..S6-R5 and the ones the final review added are in the SDD ledger (archived in the session scratchpad as sdd-archive/slice6-ledger.md).
+
+- **D-2961** (sixth-segment-fallback) — the `route:` event gained a sixth segment (the session id); a five-segment event still parses (`session: null`) and is attributed to its run's WORKER only — a coordinator-targeted five-segment event is indistinguishable and is ignored (one comment says so).
+- **D-2962** (session-shape-at-the-door) — `isSessionIdShape` (shared/api.ts, the same charset as the grammar's sixth group) refuses a malformed `run.sessionId`/`claimedBy` at the door with 400 before it can enter the `:`-delimited grammar; the plan assumed the charset without enforcing it.
+- **D-2963** (run-scoped-test-retired) — run-route-route.test.ts's case asserting the run-scoped rule (D-2957's) was retired and replaced; D-2957 is CLOSED by the session walk.
+- **D-2964** (red-first-skipped-session-trail) — the new suite's seven door tests were written against the implementation; mutation evidence (quoted) substituted.
+- **D-2965** (picker-refactor-no-red) — the effortOptions derivation was behaviour-preserving, so no red-first step; the hand-written order literal and the measured splice mutation stand in.
+- **D-2966** (gptlane-fixture-extraction) — ccd-route-spawn.test.ts's three inline codex-lane roster literals were rewritten onto one `gptLane()` helper rather than copied twice more.
+- **D-2967** (seed-subagent-guard) — `_route_apply_seed`, the other `routeapplied` writer, gained the same `_route_inert_has` guard for the subagent word (the brief named the spawn site; its own clause 'the routeapplied seed omits it' covers it).
+- **D-2968** (apply-loop-inert-guard) — `cmd_route --apply`'s post-write `routeapplied` loop skips `workflow` and `subagent` when the session's inert stamp names them (S6-R3) — `workflow` had been unguarded there since slice 4.
+- **D-2969** (route-object-on-the-wire) — the routing values ride ONE object `FleetSession.route` ({ fields, degraded, inert } | null) rather than three top-level fields, because `degraded` already names a degraded ROW in that type's vocabulary (S6-R4); `null` = none of the seven files exist.
+- **D-2970** (measured-routing-reads) — the seven registry reads are MEASURED: `route: null` only when all seven are absent; `unreadable: RouteField[]` names failed reads (optional on the wire); the plan's reads folded absent and unreadable (S6-R5).
+- **D-2971** (badge-agreement-vocabulary) — the wire-derived queued badge treats a recorded `auto`/`default` and an unknown read-back as agreeing (ccd types nothing for them), or it would light for ever.
+- **D-2972** (fixtures-gain-route-null) — 25 pwa test fixtures spelling a FleetSession literal gained `route: null` (the required field's compile error is the wire discipline working).
+- **D-2973** (field-read-census-30) — the per-session registry field-read census rose 23 → 30 (31 single / 721 fleet at 24 sessions), the cost stated at buildRecord.
+- **D-2974** (routing-reads-listing-rung) — the seven measured routing reads take the registry's LISTING rung like every other measured field: an unreadable read of a file the listing does not name is ABSENT (`routeReallyUnreadable`), so a never-routed session answers `route: null` on an older agent too; S6-R5's tests now seed the file they degrade.
+- **D-2975** (degraded-class-reader) — the session screen's model sheet names the served class beside the intended one ('serving <degraded>') and the class arm of the wire badge agrees on the served class; the plan carried no reader for `route.degraded`.
+- **D-2976** (subagent-inert-departs-5.2) — spec §5.2 said `subagent` 'applies through the lane's materialiser, where settings.json wins' on a non-Anthropic lane; measured, ccd applies subagent ONLY through CLAUDE_CODE_SUBAGENT_MODEL on the Anthropic arm, so Task 3's inert stamp is the truth and the spec sentence is corrected at the mint (S6-R7).
+- **D-2977** (census-cost-accepted) — the 23→30 field-read raise multiplies across five whole-registry readers (~+168 agent-link reads per whole-fleet pass at 24 sessions); accepted with the cost stated and measured live at the gate; the listing-backed skip for absent files is carried (S6-R6).
 
 ## Carried
 

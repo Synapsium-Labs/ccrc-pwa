@@ -254,9 +254,10 @@ Never `CLAUDE_CODE_EFFORT_LEVEL`: it overrides everything and cannot be changed 
 <alias>` maps onto the lane's tiers through its materialiser); `effort` levels other than
 `ultracode` apply through the same `/effort` keystroke the picker sends there today; `effort:
 ultracode` and `workflow` are inert (the spawn injector's backend gate exists for ultracode, and
-the effort picker already hides ultracode on that lane), and ccd stamps `inert=ultracode,workflow`
-rather than pretending; `subagent` applies through the lane's materialiser, where `settings.json`
-wins.
+the effort picker already hides ultracode on that lane), and ccd stamps `inert=effort,workflow,subagent` (field names, never values)
+rather than pretending; `subagent` is inert there too — ccd composes `CLAUDE_CODE_SUBAGENT_MODEL`
+only on an Anthropic lane (amended by routing slice 6, D-2976: the "materialiser where
+`settings.json` wins" mechanism this paragraph described was never built).
 
 ### 5.3 Writers
 
