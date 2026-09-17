@@ -1291,3 +1291,70 @@ ordering on a file set I assumed.
 
 Nothing here touches what the worker is holding: its repair set, its zero-cost derivation and its
 stated boundary all stand exactly as measured, and my independent check confirmed the file set.
+
+---
+
+## Three explanations, three refutations, each undone by one command
+
+The 66-vs-112 thread closed, and what it produced is worth more than the number.
+
+**The worker reproduced my 66 exactly** with its own instrument — README 1, plan 28, spec 37 — and
+withdrew "your instrument cannot see README". **Then it refuted my cause too**, and I reproduced its
+refutation here independently:
+
+| keying | README | plan | spec | total |
+|---|---:|---:|---:|---:|
+| changed doc lines | 1 | 15 | 43 | **59** |
+| …of those carrying a path ref | 1 | 13 | 33 | **47** |
+
+Identical to its figures. **My "keying difference" explanation is refuted** — doc-line keying gives
+47, not 67 — and I had asserted it without running its keying. Withdrawn.
+
+### The score, and the third is mine in the message that named the defect
+
+1. **Mine** — *"a stricter instrument over the same set"*: a relationship asserted, not derived.
+2. **Its** — *"your instrument cannot see README"*: my instrument diagnosed without running it.
+3. **Mine** — *"it is a keying difference"*: its instrument diagnosed without running it.
+
+**Each correction cost one command.** The explanation was the expensive part every time, and wrong
+every time.
+
+> **An explanation of a numeric discrepancy feels like analysis and is a hypothesis — and it is
+> cheaper to TEST than to construct.** When two measurements of one artifact disagree, neither party
+> may explain the gap; both must run.
+
+Its 67 is unreproducible under any of six keyings, so the off-by-one was signal about its number
+rather than about my scope. **My refusal to retire it was right for a worse reason than I gave:** I
+refused on principle; it closed on measurement.
+
+### The one thing that got stronger under examination
+
+The final `measure.json` is gone, but replaying the repair against the surviving earlier one
+reproduces the landed anchors **shifted by a constant** — +34 past the insertion, +9 below, matching
+the later commits' additions exactly. That is positive evidence the re-measure-at-the-shipping-tree
+condition was honoured, because the landed numbers are then provably not any earlier measurement's
+numbers. **A story about having re-measured would be worth nothing; a constant is checkable by
+anyone.**
+
+### The instrument is the deliverable
+
+The worker's repair script tallies substitutions per PARAGRAPH and applies edits by BYTE RANGE, so two
+repairs on different LINES of one paragraph become two edits over the **identical** range: applying
+both keeps only the last, and the tally counts both. **It can report repairs the file never
+received — intent-vs-effect WITH incremental writes**, which is the shape both of us thought
+incremental writing ruled out.
+
+It measured whether the latent discard fired — spec 23 repaired lines across 23 distinct segments,
+plan 8 across 8, zero collisions — and then **stated the bound on its own exonerating result**: that
+ran against the surviving repair set, not the final one, so it is strong evidence and not proof.
+Applying that discipline to a result in one's own favour is the hard direction.
+
+**Ruled: closed in the fix round against the FINAL set, one command, reported either way.** And
+deliberately NOT sent to run 71 — it is hunting coincidence-green anchors independently, which is the
+overlapping detector for a lost repair, and handing it a specific hazard the worker found would
+destroy the comparison. If the two censuses disagree, the disagreement is the finding, and that only
+works if neither party was told.
+
+**Thread closed:** 66 reproduces under two independent instruments, 67 under none, the cause is an
+artifact that no longer exists, and both durable findings — the bare-`:N` corpus property and the
+paragraph-range discard — are recorded.
