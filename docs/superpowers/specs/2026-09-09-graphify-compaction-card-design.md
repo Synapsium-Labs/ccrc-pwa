@@ -101,8 +101,8 @@ that status rather than on a boolean — `_rm_prc` (`ccd/ccd:6478`), `_rt_prc` (
 and `_fg_prc` (`:19131`). §4's mechanism-absent row and §3.4's decline paragraph describe those arms as they
 stood BEFORE that build, and the ledger's D-2782 and D-2793 record the build itself. **Task 10** shipped the
 helper beside the hook through every door the hook goes through: `install_atomic ccd/compact-card.mjs` in the
-agent lane (`deploy/deploy.sh:639`) with the backup clause one door above it (`cp -a
-~/.cc-sessions/compact-card.mjs`, `deploy/deploy.sh:561`), `_inst_atomic` in `ccrc install`
+agent lane (`deploy/deploy.sh:648`) with the backup clause one door above it (`cp -a
+~/.cc-sessions/compact-card.mjs`, `deploy/deploy.sh:570`), `_inst_atomic` in `ccrc install`
 (`ccd/ccrc:9663`), `_upd_backup_copy` in `ccrc update` (`ccd/ccrc:10990`), and the matching removal line
 `"$reg/compact-card.mjs"` in `ccrc uninstall`'s own list (`ccd/ccrc:11635`). **Task 11** is this documentation
 pass, the Step-1 contract sweep and the committed-byte audit; it builds no mechanism at all and edits no

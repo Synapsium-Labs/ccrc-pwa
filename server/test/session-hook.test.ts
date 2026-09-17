@@ -7838,7 +7838,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
       'server/test/ccd-workspaces.test.ts': 5,
-      'deploy/deploy.sh': 1,
+      // `deploy/deploy.sh` 2 since the SECOND merge of main (03ecda65, #114): nine
+      //   lines inserted at deploy.sh:508 moved Task 10's `deploy/deploy.sh:560` —
+      //   "the only survivor" among its `- Modify:` bullets — below its referent.
+      //   Frozen, like the rest of that paragraph; the two spec anchors into the
+      //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
+      'deploy/deploy.sh': 2,
       'ccd/ccrc': 2,
       'shared/api.ts': 1,
     });
@@ -7847,7 +7852,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(58);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(59);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8031,7 +8036,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // 24,688-byte freeze, so Task 11 could not repair them either — and
         // nor could merge fix M2, which measured all four as MOVED by the merge
         // (`deploy/deploy.sh` +49 lines, `ccd/ccrc` +4,567) and left every one
-        // of them where the freeze requires.
+        // of them where the freeze requires. The SECOND merge (03ecda65) then
+        // took the last survivor: `deploy/deploy.sh:560` is nine lines below
+        // its backup clause now, so all FIVE of the two bullets' references
+        // are stale, and named here.
+        'deploy/deploy.sh:560',
         'deploy/deploy.sh:629',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
@@ -8039,9 +8048,9 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       ]);
     // D-2849's OWN FOUR, named rather than counted, so that a set that keeps
     // its length while losing one of them still reds.
-    const D2849 = ['deploy/deploy.sh:629', 'ccd/ccrc:5217', 'ccd/ccrc:6531', 'ccd/ccrc:7129-7130'];
+    const D2849 = ['deploy/deploy.sh:560', 'deploy/deploy.sh:629', 'ccd/ccrc:5217', 'ccd/ccrc:6531', 'ccd/ccrc:7129-7130'];
     expect(D2849.filter((k) => set.includes(k)),
-      'the four references Task 10\'s own **Files:** paragraph falsifies (D-2849)').toEqual(D2849);
+      'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)').toEqual(D2849);
     // AND THE REACH THIS PASS ADDS, which is the whole reason it exists: the
     // references the census NEVER reports, at any line, because an exemption
     // swallows them. One is D-2849's; the other answers the open question
