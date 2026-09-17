@@ -330,7 +330,7 @@ describe('POST /api/runs/:id/route', () => {
       ['route', '--session', sid, '--set', 'effort=xhigh', '--actor', `run:${id} coordinator`,
         '--reason', 'escalate shallow: checks failed'],
     ]);
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:effort:auto->xhigh:shallow');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:escalate:effort:auto->xhigh:shallow:${sid}`);
   });
 
   it('kind: shallow on a worker at opus·high escalates effort to xhigh, one run event', async () => {
@@ -350,7 +350,7 @@ describe('POST /api/runs/:id/route', () => {
         '--reason', 'escalate shallow: checks failed'],
     ]);
     const events = w.coord.runEvents(id);
-    expect(events.map((e) => e.detail)).toContain('route:escalate:effort:high->xhigh:shallow');
+    expect(events.map((e) => e.detail)).toContain(`route:escalate:effort:high->xhigh:shallow:${sid}`);
   });
 
   it('kind: ceiling on a degraded session answers 409 ceiling — the record already intends the served class', async () => {
@@ -385,7 +385,7 @@ describe('POST /api/runs/:id/route', () => {
       ['route', '--session', sid, '--set', 'effort=medium', '--actor', `run:${id} coordinator`,
         '--reason', 'demote: slow down'],
     ]);
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:demote:effort:high->medium:manual');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:demote:effort:high->medium:manual:${sid}`);
   });
 
   // Final review, finding #1: A CLASS RUNG IS TWO `--set` PAIRS IN ONE ARGV.
@@ -419,7 +419,7 @@ describe('POST /api/runs/:id/route', () => {
       ['route', '--session', sid, '--set', 'class=opus', '--set', 'effort=high',
         '--actor', `run:${id} coordinator`, '--reason', 'escalate ceiling: a design flaw it could not see'],
     ]);
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:class:sonnet->opus:ceiling');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:escalate:class:sonnet->opus:ceiling:${sid}`);
   });
 
   it('demote: class off sonnet lands on haiku with effort=auto in the same argv — the pair ccd refuses when it arrives without one', async () => {
@@ -444,7 +444,7 @@ describe('POST /api/runs/:id/route', () => {
       ['route', '--session', sid, '--set', 'class=haiku', '--set', 'effort=auto',
         '--actor', `run:${id} coordinator`, '--reason', 'demote: three clean waves'],
     ]);
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:demote:class:sonnet->haiku:manual');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:demote:class:sonnet->haiku:manual:${sid}`);
   });
 
   it('a second kind: shallow after a demotion reverses it first — reverse-demotion, no ladder move', async () => {
@@ -474,7 +474,7 @@ describe('POST /api/runs/:id/route', () => {
     expect(res.json()).toEqual({
       ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', effortReset: null },
     });
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:reverse-demotion:effort:medium->high:shallow');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:reverse-demotion:effort:medium->high:shallow:${sid}`);
   });
 
   // Final review, finding #3, controller ruling S5-R17: a `reverse-demotion`
@@ -497,7 +497,7 @@ describe('POST /api/runs/:id/route', () => {
 
     const demoted = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
     expect(demoted.statusCode).toBe(200);
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:demote:effort:high->medium:manual');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:demote:effort:high->medium:manual:${sid}`);
 
     // Out of band: something other than this door (the PWA class picker,
     // ccd itself) wrote `.effort` directly — no run event records it, so
@@ -516,7 +516,7 @@ describe('POST /api/runs/:id/route', () => {
         '--reason', 'escalate shallow: failed again'],
     ]);
     const details = w.coord.runEvents(id).map((e) => e.detail);
-    expect(details).toContain('route:escalate:effort:low->medium:shallow');
+    expect(details).toContain(`route:escalate:effort:low->medium:shallow:${sid}`);
     expect(details.some((d) => d?.startsWith('route:reverse-demotion:'))).toBe(false);
   });
 
@@ -550,7 +550,7 @@ describe('POST /api/runs/:id/route', () => {
     expect(res.json()).toEqual({
       ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh', kind: 'shallow', effortReset: null },
     });
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:effort:high->xhigh:shallow');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:escalate:effort:high->xhigh:shallow:${sid}`);
   });
 
   it('a manual write on a different field leaves a standing demotion in place — it still reverses on the next failure', async () => {
@@ -579,7 +579,7 @@ describe('POST /api/runs/:id/route', () => {
     expect(res.json()).toEqual({
       ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', effortReset: null },
     });
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:reverse-demotion:effort:medium->high:shallow');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:reverse-demotion:effort:medium->high:shallow:${sid}`);
   });
 
   // Final review, finding #2: THE LADDER'S HISTORY IS THIS RUN'S, AND A WAVE
@@ -622,9 +622,9 @@ describe('POST /api/runs/:id/route', () => {
       ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'high', to: 'xhigh',
         kind: 'shallow', effortReset: null },
     });
-    expect(w.coord.runEvents(waveTwo).map((e) => e.detail)).toEqual(['route:escalate:effort:high->xhigh:shallow']);
+    expect(w.coord.runEvents(waveTwo).map((e) => e.detail)).toEqual([`route:escalate:effort:high->xhigh:shallow:${sid}`]);
     // …and wave 1's own trail is untouched by wave 2's call.
-    expect(w.coord.runEvents(waveOne).map((e) => e.detail)).toContain('route:demote:effort:high->medium:manual');
+    expect(w.coord.runEvents(waveOne).map((e) => e.detail)).toContain(`route:demote:effort:high->medium:manual:${sid}`);
   });
 
   it('manual field/value writes the argv as given and records mode manual with from "?"', async () => {
@@ -642,7 +642,7 @@ describe('POST /api/runs/:id/route', () => {
       ['route', '--session', sid, '--set', 'subagent=opus', '--actor', `run:${id} coordinator`,
         '--reason', 'manual: operator judgement'],
     ]);
-    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:manual:subagent:?->opus:manual');
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain(`route:manual:subagent:?->opus:manual:${sid}`);
   });
 
   it('a ccd refusal on a manual write answers 502 fleetFailed and records NO run event', async () => {

@@ -46,8 +46,8 @@ describe('CoordStore.runSignals — arm and routing (routing spec §6, slice 5)'
     expect(s.arm).toEqual({ class: 'opus', effort: 'high' });
     expect(s.routingUnparsed).toBe(0);
     expect(s.routing).toEqual([
-      { at: 1_100_000, mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', causedBy: 'coordinator' },
-      { at: 1_200_000, mode: 'manual', field: 'class', from: '?', to: 'sonnet', kind: 'manual', causedBy: 'operator' },
+      { at: 1_100_000, mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', causedBy: 'coordinator', session: null },
+      { at: 1_200_000, mode: 'manual', field: 'class', from: '?', to: 'sonnet', kind: 'manual', causedBy: 'operator', session: null },
     ]);
   });
 
@@ -64,7 +64,7 @@ describe('CoordStore.runSignals — arm and routing (routing spec §6, slice 5)'
     const s = coord.runSignals(id)!;
     expect(s.routingUnparsed).toBe(1);
     expect(s.routing).toEqual([
-      { at: 1_100_000, mode: 'demote', field: 'class', from: 'opus', to: 'sonnet', kind: 'manual', causedBy: 'coordinator' },
+      { at: 1_100_000, mode: 'demote', field: 'class', from: 'opus', to: 'sonnet', kind: 'manual', causedBy: 'coordinator', session: null },
     ]);
   });
 
@@ -110,13 +110,24 @@ describe('armEventDetail / routeEventDetail round-trip their own parsers (shared
     expect(parseArmEventDetail(armEventDetail(f))).toEqual(f);
   });
 
-  it('routeEventDetail(e) parses back to e — an escalate event', () => {
-    const e = { mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow' } as const;
+  it('routeEventDetail(e) parses back to e — an escalate event, with a session', () => {
+    const e = { mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', session: 'demo-worker' } as const;
     expect(parseRouteEventDetail(routeEventDetail(e))).toEqual(e);
   });
 
-  it('routeEventDetail(e) parses back to e — a manual event', () => {
-    const e = { mode: 'manual', field: 'class', from: '?', to: 'sonnet', kind: 'manual' } as const;
+  it('routeEventDetail(e) parses back to e — a manual event, with a session', () => {
+    const e = { mode: 'manual', field: 'class', from: '?', to: 'sonnet', kind: 'manual', session: 'demo-coord' } as const;
     expect(parseRouteEventDetail(routeEventDetail(e))).toEqual(e);
+  });
+
+  // Routing slice 6, Task 1: the sixth segment is ADDITIVE — a five-segment
+  // detail (every `route:` event this door ever wrote before this task) is
+  // still a valid parse, and its `session` is `null`, never the same value
+  // a caller would read off a MEASURED-absent session (there is no such
+  // thing here — the point is this event named no session at all).
+  it('a five-segment route: detail (pre-slice-6) still parses, with session: null', () => {
+    expect(parseRouteEventDetail('route:escalate:effort:medium->high:shallow')).toEqual(
+      { mode: 'escalate', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', session: null },
+    );
   });
 });

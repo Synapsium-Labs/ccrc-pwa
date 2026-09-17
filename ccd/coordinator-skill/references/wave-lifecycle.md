@@ -578,15 +578,15 @@ before the ladder applies. Never `ccd route` (clause 1) and never `--apply` (cla
 rule and spec §8 row 5). Every call that CHANGES a record is one run event and one journal row;
 a refusal — the ladder's answers included — records neither.
 
-**The reversal is bookkeeping THIS RUN owns, and a wave is one run row.** The door derives "the
-last unreversed demotion" — and the same-kind count that gates `max` — from this run's own event
-trail, so the sentence above holds exactly INSIDE one wave and not across a wave boundary: a
-demotion taken on wave N's run is not reversed by a failed check you report against wave N+1's
-run, and the same-kind count starts again at zero with each new run. Carry it yourself when it
-matters: `"$API" runs signals "<the previous wave's run id>"` lists that run's `routing` events,
-and if the demotion still stands, walk it back by hand with
-`{"target":"worker","field":"<class|effort>","value":"<the rung it was demoted from>","why":"…"}`
-before you report the new failure.
+**The reversal follows the SESSION, across every wave.** The door derives "the last unreversed
+demotion" — and the same-kind count that gates `max` — by walking every run that names the target
+session, worker or coordinator, in the order each `route:` event landed: a demotion taken on wave
+N's run IS reversed by a failed check you report against wave N+1's run, on the same session, and
+the same-kind count carries forward with it rather than restarting at zero. (D-2957, the run-scoped
+rule this paragraph used to state, is CLOSED by routing slice 6 — the `route:` event now names its
+own session, so the door can walk the session's whole trail instead of one run's rows.) Nothing
+here changes what you send: report the failure against the CURRENT wave's run id as always, and
+the door reads the session's history for you — there is no by-hand carry left to do.
 
 **A class rung is two fields in one write.** An escalation or demotion that moves `class` resets
 effort in the SAME call (spec §3 — effort names do not transfer across classes): to `high`, or to
@@ -802,10 +802,10 @@ TERMINAL state — `done` or `failed`; every other state, including `unknown` an
 routable and refuses later on its true reason), `ceiling`/`floor`/`no-effort-rungs` (the ladder, or the
 degraded-record guard, has nowhere to move this request to — an answer, not an error),
 `unsupported` (501, the fleet host predates `route-v1`), `fleetFailed` (502, ccd refused the write
-— no run event is recorded on a refusal). Any failed check reverses the run's own last unreversed
-demotion before the ladder applies to the new failure — that bookkeeping is derived from THIS
-run's event trail, not sent by the caller and not read across the runs of earlier waves (§4
-above).
+— no run event is recorded on a refusal). Any failed check reverses the target SESSION's last
+unreversed demotion before the ladder applies to the new failure — that bookkeeping is derived
+from the session's own event trail, across every run it touches as worker or coordinator, not sent
+by the caller (§4 above).
 
 ## Build 9 — peers, claims, deviations (wave 7 surface)
 

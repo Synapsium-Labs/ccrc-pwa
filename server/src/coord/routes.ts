@@ -1743,9 +1743,11 @@ export function registerCoordRoutes(
    * (`degraded ?? class` — a degraded lane serves the DEGRADED class, and the
    * ladder must compute from what is actually running, not what the record
    * still intends) and effort off the registry, derive `priorSameKind` and
-   * `lastDemotion` from this run's OWN event trail (S5-R2: that bookkeeping
-   * is this door's, not the ladder's), and answer whatever `escalate()`/
-   * `demote()` answers. `field`+`value` is the coordinator's own judgement —
+   * `lastDemotion` from the target SESSION's own event trail — every run it
+   * touches, worker or coordinator (`coord.runsTouching`, routing slice 6,
+   * Task 1; that bookkeeping is this door's, not the ladder's), and answer
+   * whatever `escalate()`/`demote()` answers. `field`+`value` is the
+   * coordinator's own judgement —
    * no registry read, no ladder call, `value` is SHAPE-checked by
    * `parseRouteFields` (fix round 1, finding #3 — the same guard the picker's
    * sibling route reuses) and then reaches ccd unvalidated on VOCABULARY
@@ -1945,32 +1947,41 @@ export function registerCoordRoutes(
         // or kind added to one can never silently go unrecognised by the
         // other.
         //
-        // THE SCOPE IS THIS RUN, AND A WAVE IS ONE RUN ROW (final review,
-        // finding #2). `runEvents(id)` reads one run's rows, while the rung
-        // itself is a property of the SESSION, which is resumed across waves
-        // — so both derivations above are per-wave: a demotion taken on wave
-        // N's run is not reversed by a failure reported against wave N+1's,
-        // and `priorSameKind` (the `max` gate) restarts at zero with each new
-        // run. Widening it is not a one-line change and is deliberately NOT
-        // attempted here: a run's `route:` events name a FIELD, never the
-        // session they were about, and one run can route both its worker
-        // (`run.sessionId`) and its coordinator (`run.claimedBy`) — so
-        // resolving the trail across a session's runs needs the event grammar
-        // to carry the session first, or it would attribute one session's
-        // demotion to the other. What IS fixed is the promise: the
-        // coordinator's own reference (`ccd/coordinator-skill/references/
-        // wave-lifecycle.md` §4) now states this run scope and tells a
-        // coordinator how to carry a standing demotion across a wave
-        // boundary by hand, instead of promising a reversal this door cannot
-        // see.
-        const events = coord.runEvents(id);
+        // THE SCOPE IS THE SESSION, ACROSS EVERY RUN IT TOUCHES (routing
+        // slice 6, Task 1 — D-2957, the run-scoped rule final review left
+        // here, is CLOSED by this walk). The rung the ladder's history is
+        // about belongs to the SESSION, not to one run row, so this reads
+        // the union of `runEvents(r.id)` over `coord.runsTouching(sid)` —
+        // every run where `sid` is the worker OR the coordinator, any
+        // state — ordered by `at` then run id so two events landed in the
+        // same millisecond still replay in the order their rows were
+        // written.
+        //
+        // A SIX-SEGMENT event (`routeEventDetail` writes one on every call
+        // from here on) names its own session, so it counts iff
+        // `evSession === sid` — the one comparison that lets a run route
+        // both its worker and its coordinator without attributing one's
+        // history to the other. A FIVE-SEGMENT event (every one this door
+        // wrote before slice 6) names none, so it is attributed to the
+        // run's own `sessionId` — the worker — because that is the only
+        // role a pre-slice-6 write could ever have targeted; a
+        // coordinator-targeted five-segment event sitting on that same run
+        // is indistinguishable from a worker-targeted one and is IGNORED
+        // here rather than guessed at.
+        const touching = coord.runsTouching(sid);
+        const trail = touching
+          .flatMap((r) => coord.runEvents(r.id).map((e) => ({ ...e, runId: r.id })))
+          .sort((a, b) => (a.at - b.at) || (a.runId - b.runId));
         let lastDemotion: Demotion | null = null;
         let priorSameKind = 0;
-        for (const e of events) {
+        for (const e of trail) {
           if (e.detail === null) continue;
           const parsed = parseRouteEventDetail(e.detail);
           if (parsed === null) continue;
-          const { mode: evMode, field: evField, from: evFrom, to: evTo, kind: evKind } = parsed;
+          const { mode: evMode, field: evField, from: evFrom, to: evTo, kind: evKind, session: evSession } = parsed;
+          const eventRun = touching.find((r) => r.id === e.runId)!;
+          const belongsToSid = evSession !== null ? evSession === sid : eventRun.sessionId === sid;
+          if (!belongsToSid) continue;
           if (evMode === 'demote') {
             lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
           } else if (evMode === 'reverse-demotion') {
@@ -2058,7 +2069,7 @@ export function registerCoordRoutes(
       // construction. The reset is visible in the journal (ccd writes one
       // `route` row per `--set` pair), in the `--reason` text the ladder
       // composed ("… effort reset to <value>"), and on the response below.
-      coord.recordRunEvent(id, 'coordinator', routeEventDetail({ mode, field, from, to, kind: kind ?? 'manual' }));
+      coord.recordRunEvent(id, 'coordinator', routeEventDetail({ mode, field, from, to, kind: kind ?? 'manual', session: sid }));
       return reply.code(200).send({
         ok: true, applied: { session: sid, mode, field, from, to, kind: kind ?? null, effortReset },
       });

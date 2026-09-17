@@ -2288,17 +2288,17 @@ describe('the routing door in the references (routing slice 5, Task 4)', () => {
     expect(flat(section4)).toMatch(
       /Every call that CHANGES a record is one run event and one journal row; a refusal — the ladder's answers included — records neither\./,
     );
-    // Final review, finding #2: the reversal sentence above promises a
-    // cross-wave behaviour the door does not have — its `lastDemotion` and
-    // same-kind count are derived from ONE run's events, and a wave is one
-    // run row. §4 now says so where the coordinator acts, and names the
-    // by-hand carry. Each claim is bound to its own subject rather than one
-    // wide regex over the section (memory: a-substring-pin-binds-no-subject).
+    // Routing slice 6, Task 1: the run-scoped sentence final review left
+    // here (D-2957) is CLOSED — `lastDemotion` and the same-kind count are
+    // now derived from the target SESSION's event trail, across every run
+    // it touches, not ONE run's events. §4 now says so where the
+    // coordinator acts. Each claim is bound to its own subject rather than
+    // one wide regex over the section (memory: a-substring-pin-binds-no-subject).
     const scope = flat(section4);
-    expect(scope).toContain('The reversal is bookkeeping THIS RUN owns, and a wave is one run row.');
-    expect(scope).toMatch(/demotion taken on wave N's run is not reversed by a failed check you report against wave N\+1's run/);
-    expect(scope).toMatch(/same-kind count[\s\S]{0,80}starts again at zero with each new run/);
-    expect(scope).toMatch(/runs signals[\s\S]{0,120}`routing` events/);
+    expect(scope).toContain('The reversal follows the SESSION, across every wave.');
+    expect(scope).toMatch(/demotion taken on wave N's run IS reversed by a failed check you report against wave N\+1's run, on the same session/);
+    expect(scope).toMatch(/same-kind count carries forward with it rather than restarting at zero/);
+    expect(scope).toMatch(/D-2957[\s\S]{0,80}CLOSED by routing slice 6/);
     // Finding #1: a class rung writes TWO fields, and the answer says which.
     expect(scope).toContain('A class rung is two fields in one write.');
     expect(scope).toMatch(/resets\s+effort in the SAME call[\s\S]{0,140}`auto` onto haiku/);

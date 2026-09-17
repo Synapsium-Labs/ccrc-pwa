@@ -5391,6 +5391,13 @@ export interface RoutingEvent {
   readonly to: string;
   readonly kind: FailureKind | 'manual';
   readonly causedBy: string;
+  /** The session this move targeted (routing slice 6) — the sixth,
+   *  ADDITIVE segment `routeEventDetail` writes. `null` on a pre-slice-6
+   *  five-segment event, which named no session at all: a reader that needs
+   *  to know whose trail this event belongs to falls back on the RUN's own
+   *  `sessionId` for those (`CoordStore.runsTouching`'s caller does exactly
+   *  that), never on this field alone. */
+  readonly session: string | null;
 }
 
 export interface RunSignals {
@@ -5478,45 +5485,69 @@ export const ROUTE_MODES = ['escalate', 'demote', 'reverse-demotion', 'manual'] 
 export type RouteMode = (typeof ROUTE_MODES)[number];
 
 /**
+ * A session id, as ccd mints and stamps one (`[A-Za-z0-9._-]+`) — never
+ * containing `:`, which is what lets the sixth segment below sit inside a
+ * `:`-delimited grammar without escaping.
+ */
+const SESSION_ID_SEGMENT = '[A-Za-z0-9._-]+';
+
+/**
  * The door's own regex, built from `ROUTE_MODES` and `FAILURE_KINDS`
  * (S5-R6) rather than hand-typed a second time. Module-private: nothing
  * outside this file has any business matching a `route:` detail itself —
  * `parseRouteEventDetail` is the one reader.
+ *
+ * The sixth segment (routing slice 6, Task 1) — the session the move
+ * targeted — is OPTIONAL: `(?::(…))?` matches a five-segment detail (every
+ * event this door wrote before slice 6) exactly as before, and a
+ * six-segment one besides. Additive, never a `FLEET_PROTO` bump.
  */
 const ROUTE_EVENT_DETAIL_RE = new RegExp(
-  `^route:(${ROUTE_MODES.join('|')}):([^:]+):([^:]+)->([^:]+):(${FAILURE_KINDS.join('|')}|manual)$`,
+  `^route:(${ROUTE_MODES.join('|')}):([^:]+):([^:]+)->([^:]+):(${FAILURE_KINDS.join('|')}|manual)(?::(${SESSION_ID_SEGMENT}))?$`,
 );
 
 /**
- * Parse a `route:<mode>:<field>:<from>-><to>:<kind|manual>` run-event detail
- * — the door's own write (`routes.ts`, after a successful `ccd route`) —
- * back into its five fields. `null` on anything that does not match; the
- * caller (`CoordStore.runRoutingEvents`, routing spec §6) counts a malformed
- * detail rather than throwing, because a record this parser cannot read is
- * still a fact worth surfacing as "unparsed", never a crash that would take
- * the whole run's signals down with it.
+ * Parse a `route:<mode>:<field>:<from>-><to>:<kind|manual>[:<session>]`
+ * run-event detail — the door's own write (`routes.ts`, after a successful
+ * `ccd route`) — back into its fields. `null` on anything that does not
+ * match; the caller (`CoordStore.runRoutingEvents`, routing spec §6) counts
+ * a malformed detail rather than throwing, because a record this parser
+ * cannot read is still a fact worth surfacing as "unparsed", never a crash
+ * that would take the whole run's signals down with it.
+ *
+ * `session` answers `null` on a pre-slice-6, five-segment detail — the
+ * event named no session at all, a fact distinct from "this event's session
+ * was measured and happens to be absent", so a caller must never treat the
+ * two the same way (routing slice 6, Task 1).
  */
 export function parseRouteEventDetail(detail: string): {
-  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual';
+  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual'; session: string | null;
 } | null {
   const m = ROUTE_EVENT_DETAIL_RE.exec(detail);
   if (!m) return null;
-  const [, mode, field, from, to, kind] = m as unknown as [string, string, string, string, string, string];
-  return { mode: mode as RouteMode, field, from, to, kind: kind as FailureKind | 'manual' };
+  const [, mode, field, from, to, kind, session] = m as unknown as [string, string, string, string, string, string, string | undefined];
+  return { mode: mode as RouteMode, field, from, to, kind: kind as FailureKind | 'manual', session: session ?? null };
 }
 
 /**
- * Format a `route:<mode>:<field>:<from>-><to>:<kind|manual>` run-event
- * detail — `parseRouteEventDetail`'s round-trip partner (fix round 2,
- * finding #4, controller ruling S5-R8: a grammar with a parser in this file
- * gets a formatter beside it too, so a writer never hand-builds the string
- * a reader elsewhere has to parse back). The door (`routes.ts`) calls this
- * instead of its own template literal.
+ * Format a `route:<mode>:<field>:<from>-><to>:<kind|manual>:<session>`
+ * run-event detail — `parseRouteEventDetail`'s round-trip partner (fix
+ * round 2, finding #4, controller ruling S5-R8: a grammar with a parser in
+ * this file gets a formatter beside it too, so a writer never hand-builds
+ * the string a reader elsewhere has to parse back). The door (`routes.ts`)
+ * calls this instead of its own template literal.
+ *
+ * `session` is REQUIRED here, never optional (routing slice 6, Task 1): the
+ * one production caller is the routing door, which has already refused
+ * `no-session` before it ever reaches this call, so every event this
+ * function writes carries a real session — the nullable `session` on
+ * `RoutingEvent`/`parseRouteEventDetail` exists for the READ side, to name
+ * an event this file did not write (a pre-slice-6, five-segment one).
  */
 export function routeEventDetail(e: {
-  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual';
+  mode: RouteMode; field: string; from: string; to: string; kind: FailureKind | 'manual'; session: string;
 }): string {
-  return `route:${e.mode}:${e.field}:${e.from}->${e.to}:${e.kind}`;
+  return `route:${e.mode}:${e.field}:${e.from}->${e.to}:${e.kind}:${e.session}`;
 }
 
 /**

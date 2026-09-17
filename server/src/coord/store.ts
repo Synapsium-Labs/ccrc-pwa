@@ -923,6 +923,24 @@ export class CoordStore {
   }
 
   /**
+   * Every run this session touches — as WORKER (`sessionId`) or as
+   * COORDINATOR (`claimedBy`) — ANY state, ordered by id (routing spec
+   * 2026-09-14 §3, routing slice 6, Task 1). This is the routing door's
+   * (`routes.ts`) own read: the ladder's history ("the last unreversed
+   * demotion", the same-kind count that gates `max`) is a property of the
+   * SESSION, not of one run row, so the door walks the union of
+   * `runEvents(r.id)` over what this method answers rather than one run's
+   * trail alone. A session can be the worker of one run and the
+   * coordinator of another at once — both belong in the walk, which is why
+   * this is an OR, not an either/or pick.
+   */
+  runsTouching(sessionId: string): { id: number; sessionId: string | null; claimedBy: string | null }[] {
+    return this.db.prepare(
+      'SELECT id, sessionId, claimedBy FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
+    ).all(sessionId, sessionId) as { id: number; sessionId: string | null; claimedBy: string | null }[];
+  }
+
+  /**
    * The whole reclaim commit, as ONE transaction — `dispatchRun`/`closeRun`'s
    * shape (D-277's argument applied to a batch instead of a sequence). It is
    * ONE `tx()` and it calls no public method that opens its own:
@@ -2180,6 +2198,12 @@ export class CoordStore {
       if (e.detail.startsWith('route:')) {
         const parsed = parseRouteEventDetail(e.detail);
         if (parsed === null) { routingUnparsed++; continue; }
+        // `parsed.session` (routing slice 6, Task 1) rides the spread below
+        // unchanged — this walk needs no session-aware branch of its own,
+        // because it is `runSignals`'s per-RUN trail, not the routing
+        // door's per-SESSION one (`routes.ts`'s own walk over
+        // `runsTouching`); `RoutingEvent.session` is simply carried through
+        // for whoever reads a run's `routing` array off the wire.
         routing.push({ at: e.at, causedBy: e.causedBy, ...parsed });
       }
     }
