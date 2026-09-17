@@ -1864,8 +1864,8 @@ describe('ccrc doctor: services', () => {
 
 describe('ccrc doctor: services knows about the account-health timer', () => {
   itLinux('warns — with its OWN consequence — when the probe timer is installed and stopped', () => {
-    // §A.7's parenthesis, measured: `known` (ccd/ccrc-doctor-checks:808) is a
-    // hardcoded three-name list, and a timer outside it is a unit this box runs
+    // §A.7's parenthesis, measured: `_check_services`'s `known` is a
+    // hand-written list, and a timer outside it is a unit this box runs
     // and doctor never asks about. WARN is the right class for the same reason
     // cap-scopes' is — a stopped probe is degradation, not a box that is down —
     // but the SENTENCE cannot be shared: cap-scopes' says "panes spawned while
@@ -1911,11 +1911,12 @@ describe('ccrc doctor: services knows about the account-health timer', () => {
 });
 
 describe('ccrc doctor: services knows about the telemetry keepalive timer', () => {
-  // F4 (fix-wave 2026-09-07): `ccd-account-health.timer` joined `known` with
-  // its own consequence sentence, and at the time the `*)` arm's comment
-  // reasoned about a fifth unit joining next — `ccd-telemetry-keepalive.timer`
-  // was that fifth unit, and a stopped keepalive is silent (no error, just
-  // telemetry going stale) unless doctor names it.
+  // F4 (fix-wave 2026-09-07): `ccd-account-health.timer` and
+  // `ccd-telemetry-keepalive.timer` joined `known` in ONE commit (d0064e6e),
+  // which in the same act wrote the `*)` arm's "the day a fifth unit joins
+  // it" — so that sentence was stale the instant it was written, which is
+  // exactly what D-2192 books. A stopped keepalive is silent (no error,
+  // just telemetry going stale) unless doctor names it; hence this block.
   itLinux('warns — with its OWN consequence — when the keepalive timer is installed and stopped', () => {
     const home = healthy('ccrc-doctor-services-keepalive-timer-');
     writeUnitFile(home, 'ccd-telemetry-keepalive.timer');
@@ -1954,10 +1955,10 @@ describe('ccrc doctor: services knows about the models catalogue timer', () => {
   // but `_check_services`'s `known` array never named it, so a dead
   // models-refresh timer read as a silent PASS. Membership in `installed` is
   // gated on the unit FILE existing, so this fixture case is what proves the
-  // fix is not a no-op — measured RED without the `known` entry on
-  // 2026-09-09, on a scratch worktree of main (350 passed | 3 skipped,
-  // D-2191); this suite has grown since, so do not expect that count to
-  // still match a live run.
+  // fix is not a no-op: D-2191 measured that adding the name to `known`
+  // alone changes nothing any suite can see. No suite count is quoted here
+  // on purpose — two attempts at one went stale or conflated two different
+  // runs. The mutation table is the measurement; a number here is not.
   itLinux('warns — with its OWN consequence — when the models timer is installed and stopped', () => {
     const home = healthy('ccrc-doctor-services-models-timer-');
     writeUnitFile(home, 'ccrc-models.timer');

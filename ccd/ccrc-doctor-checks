@@ -816,11 +816,14 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
 # (`~/.ccrc/graph-sweep.json`), and `_check_name` covers `ccrc-ddns.timer` by
 # re-measuring the DNS record the timer maintains rather than the timer's own
 # state. `ccd-usage-sweep.timer` is, measured, in NEITHER design — this file
-# asks about it nowhere, and nor is it alone: the 7 timer-fired oneshot
-# `.service` siblings of every timer this file names (one per timer,
-# `ccd-usage-sweep.service` among them) are out of BOTH designs BY
-# CONSTRUCTION, not omission — a timer-fired oneshot is never `active`
-# between runs, so polling one here would be a false positive.
+# asks about it nowhere. The timer-fired oneshot `.service` siblings (one
+# per timer) are out of THIS design BY CONSTRUCTION rather than by omission:
+# a timer-fired oneshot is never `active` between runs, so polling one here
+# would be a false positive. That does not leave them uncovered — the EFFECT
+# design reaches a job through its OUTPUT, and the output is the service's,
+# not the timer's, so `ccd-graph-sweep.service` and `ccrc-ddns.service` are
+# exactly as covered as their timers: the service is what writes
+# `~/.ccrc/graph-sweep.json` and what sets the DNS record those two read.
 _check_services() {
   local dir="$CCRC_UNIT_DIR" u st why rc=0
   local -a ok=() installed=()
