@@ -269,3 +269,54 @@ for the second time in this wave. A4 names the eight. **Open question, not a req
 has a flag that replaces a symlink-to-directory as a NAME the way `-T` does, it beats the `rm` outright
 and leaves the pin untouched — untestable from Linux, the macOS leg is 40 minutes and not required, so
 answer it in the wave-done or record it unanswered.
+
+## 2026-09-17 02:5x UTC — second deviation request: **REFUSED, and that is the finding.** It is D-71, already general.
+
+Worker mail 1556: a TAB-delimited row protocol in `ccrc-doctor-checks` collapses empty fields, because
+**tab is bash IFS *whitespace* whatever IFS is set to** — a run of them is one delimiter and every
+field after an empty column shifts left. Found by the Part C implementer, reproduced by the reviewer,
+reproduced a third time by the worker before asking. **I reproduced it myself on bash 5.2.21 before
+ruling:** `printf 'id\tOK\t\t0\t\n' | IFS=$'\t' read -r a b c d e` gives `c=[0] d=[] e=[]`, and the
+`\x1f` form gives `c=[] d=[0] e=[]`, which is the intended parse.
+
+**Ruled: NO NEW NUMBER. This is `D-71`, and D-71 is already stated in the GENERAL form.** From
+`2026-08-15-stage2b-ccrc-cli-and-doctor.md:52`: *"**Any tab-delimited record with possibly-empty
+fields must not use `read` with `IFS` alone** — this idiom appears wherever a bash reader parses a
+generated record."* That is not narrower than the worker's proposed subject; it IS the subject, written
+thirteen months ago and restated twice — `2026-08-17-stage2c-wrapper-generation.md:83` and
+`2026-09-07-account-connections-wave1-fleet-box.md:3716`, **the second of which already enumerates the
+worker's `_wrap_parse_shape` site with four siblings**. Minting would be a duplicate definition of a
+live subject and would raise the floor for nothing. Costs if wrong: the entry cites an older number
+than it might have, and the fix is unchanged either way.
+
+**The finding is worth MORE as a recurrence, and that is what goes in the plan.** The idiom is banned
+in three plans and at least six in-file comments — `ccrc-doctor-checks:2372` says in so many words that
+it *"must not come back"* — and I counted **THIRTEEN live `IFS=$'\t' read` call sites** across
+`ccd`, `ccrc`, `ccrc-doctor-checks` and `ccrc-adopt` at `origin/main` `03ecda65`. A rule stated six
+times in prose and violated thirteen times in code is not a knowledge-transfer failure, it is a
+**missing mechanism**: this tree's own doctrine is *"a comment is a request; a red suite is a
+mechanism"*, and D-71 has never had one. Recorded here as the thing someone should take; not minted
+into this wave, which is a docs/shim wave and no departure from its plan.
+
+**One improvement on D-71 the worker should claim.** D-71's own remedy was *split the fields by hand*.
+Theirs — move both sides of the protocol to `\x1f` — is better, because a non-whitespace delimiter
+preserves empty fields natively and nothing downstream has to remember. A new remedy for an old
+deviation belongs against that deviation.
+
+**I took the measurement the worker correctly refused to widen into.** They wrote *"Reachability of
+those three depends on whether their middle fields can go empty and I have NOT measured that — I am
+not widening the wave to find out."* Right call. So a fan-out is measuring it at MY cost against
+read-only copies of the four files at `origin/main` in my own scratchpad — one tracer per producer,
+adversarial refutation of every *reachable* verdict, and a completeness critic that re-derives the site
+list independently. The worker pastes the confirmed list into their disclosure paragraph and fixes
+nothing outside Part C.
+
+**Two ledger notes from the same mail, both recorded.** (1) **Part D's R1 fix had a SECOND DOOR** —
+resolving `timeout`/`gtimeout` closed "neither present", but a binary that IS present and refuses `-k`
+(busybox-shaped) leaves four cases green at rc 125 while measuring nothing; measured with a shim, 29
+failed / 4 passed, the four being `expect(r.code).not.toBe(0)` assertions a refusing shim satisfies.
+Being closed by probing with a known-124 command instead of testing presence. Same class as D-2840, and
+that attribution is correct. (2) **Part C's fix round shipped six behaviour changes with ZERO new
+cases** — restoring the pre-fix file leaves the models block 10/10 green, so the whole round was a
+green mutation. Round 2 is dispatched with the tests as its deliverable; it must not close without a
+mutation row per behaviour change.
