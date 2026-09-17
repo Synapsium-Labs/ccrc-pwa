@@ -111,6 +111,69 @@ unanchored targets". It does not reproduce — the tree gains ONE new target con
 direction is the dangerous one, because **wave 3 is the anchoring wave and sizes directly from those
 two sentences**: a worker expecting a `-t cc-` scan that over-reds would build one that under-covers.
 
+### #117 went CONFLICTING, and the re-run I ordered raced my own fix by 39 seconds (2026-09-17)
+
+**The worker caught a coordinator error and it was worth catching.** After `f27c8a86` (#130) landed I
+re-ran #117's failed legs, believing main was repaired. Measured, both timestamps independently:
+
+| event | time |
+|---|---|
+| `f27c8a86` merged | `2026-09-16T22:57:36Z` |
+| #117 run `35114677020` attempt 2 started | `2026-09-16T22:58:15Z` |
+
+**Thirty-nine seconds.** GitHub recomputes `refs/pull/N/merge` asynchronously after a base push, so
+attempt 2 almost certainly checked out a merge ref that predated the very fix it was meant to prove.
+The worker flagged that last clause as INFERENCE rather than measurement, correctly. What settles it
+is the mixed result: `test (pwa)` and `test (server)` both went GREEN with nothing on the branch
+touched — the inherited-red diagnosis confirming itself — while the ONE leg whose fix landed inside
+that window stayed red. A uniformly stale snapshot could not do that.
+
+**The lesson is not "wait longer", it is that a re-run is a MEASUREMENT and needs its base named.**
+A CI colour is a fact about a tree, and for a `pull_request` run that tree is a merge ref GitHub
+builds when it gets round to it — never the base sha you just pushed. Re-running within seconds of a
+base merge measures the old world and reads as the new one.
+
+**It is moot now anyway: #117 is CONFLICTING.** Main has moved **eighteen** commits past the
+merge-base `98236c81`, and five files conflict — `ccd/ccd`, `server/src/ccdargv.ts`,
+`server/test/ccd-archive.test.ts`, `server/test/ccd-arith-containment.test.ts`,
+`server/test/whitelist-subset.test.ts`. While a PR is conflicting GitHub cannot compute its merge ref
+at all, so **no re-run can answer anything** until the merge is done.
+
+**THE MERGE IS THE WORKER'S, AND THE REASON IS MECHANICAL.** `ccd`'s `is_ours` binds a workspace to a
+PR by ancestry from the workspace's **LOCAL** tip. A coordinator-side `update-branch` authors a merge
+commit on the REMOTE while the local tip stays put, reachability fails, the sweep falls back to an
+older PR, and every close earns `pr-regressed` naming a PR two waves stale — measured on account-pools
+run 47, not theory. A worker's own push moves local and remote together, so the binding never breaks.
+Brief sent as mail 1657.
+
+**The conflict is SEMANTIC and this programme already has its number.** `ecbb8b22` (#116, routing
+slices 2–6) touches all five files by itself; three compaction-card commits (`dfa167d7`, `2f9deae2`,
+`bd2bf57a`) touch `ccd/ccd` on top. Slice **1** is exactly what D-2775/D-2776/D-2777 were written
+about — a gated verb, a capability token and a bypass fixture appearing between the plan's drafting
+and its execution. Slices 2–6 have now done it again, so the brief rules the same way D-2776 does:
+**append to what main has; never write the plan's literal array**, and re-derive every population
+from the merged tree rather than copying a count from the plan, the mail, or an earlier commit.
+
+Two facts measured for the worker so it does not have to:
+- **The bypass fixtures do NOT collide.** Main still ends at `g11-route-without-session`;
+  `g12-win-size-without-session` is free and D-2775's ruling stands unchanged through the merge.
+- **`KNOWN_CAPABILITY_TOKENS` is not where the plan implies.** It now lives in
+  `server/src/ccdargv.ts`, `server/test/ccd-archive.test.ts` and `ccd/ccd`, held equal by a parity
+  check — all three in or beside the conflict set, so resolving one and not the others reds the
+  parity rather than the file that was edited.
+
+**The merged tree is a tree nobody has run**, neither parent being it. Wave 2's acceptance was
+measured at `436d773d` and stands for THE WORK; it asserts nothing about the merge, which is new code
+by construction. The brief asks for suites on the merged tree, the re-stamped `ccd/ccd` verifyMarker,
+and anything the merge forced a DECISION rather than a transcription — and forbids fixing any of the
+six wave-3 entries inside the resolution, because a fix smuggled into a conflict resolution is
+invisible to review.
+
+**The done-claim is not invalidated by the tip moving.** `close` takes the fingerprint in its REQUEST
+BODY and verifies it then (`close.ts:251`), which is why run 62 reads `handoffCommit: null` while
+sitting at `awaiting-review` — nothing is stored from the advance. The new tip simply becomes the
+fingerprint run 62 closes with.
+
 ### main is GREEN again, and wave 2's PR is unblocked (2026-09-16)
 
 `main` was red on **three independent breaks from three different merged PRs**, and a PR inherits them
