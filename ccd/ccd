@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=2b776c51a86eb6cc4d2aee10ea526e5da2f922b38db6ee457507220128baa971
+# ccrc:generated 1 sha256=b0a9859cc6570bc86de072c9e15da57cd2c0122c83dd13907c5e74970f39701a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -100,6 +100,15 @@ esac
 # appearing INSIDE the window between the test and the rename, not one any
 # of the eight call sites creates. A measured fact about today's call sites,
 # not a guarantee about future ones.
+# THE INSTRUMENT FOR THE FIXTURE HALF, because a sentence about fixtures
+# that names no way to re-measure itself is the shape F14 ruled against and
+# F3 then caught again:
+#   git grep -nE "mkdirSync\(.*(REG\(\)|cc-sessions)" -- 'server/test/*.ts'
+# Every hit that lands on a `$REG/<id>.<field>` path rather than on `$REG`
+# itself is one to read — today `<id>.hold` (`ccd-hold`, `ccd-auto-swap-hold`)
+# and `<id>.<WEDGE>` (`ccd-lifecycle-purge`), all of them in per-test SETUP,
+# which is precisely the ordering claimed above. This does not bound future
+# fixtures; it is a command that ANSWERS, which is what the claim lacked.
 #
 # ONE MORE PRICE, undisclosed until now: the `rm` below runs BEFORE the `mv`,
 # so a call with `dest` a symlink-to-directory and `src` absent leaves the
@@ -124,9 +133,15 @@ esac
 # symlink-to-DIRECTORY is created at any of the eight BY ANY `ln -s` IN THE
 # SHIPPED FILES — which is the whole of what the census measured, and is
 # strictly narrower than the "anywhere in the tree" this sentence claimed
-# until F14 (review run 69): the census excludes test fixtures BY
-# CONSTRUCTION, and fixtures create links with `symlinkSync`, which no
-# `ln -s` scan can see. NO CLAIM IS MADE ABOUT FIXTURES HERE, and not for
+# until F14 (review run 69): the census's SCOPE IS THE SHIPPED FILES, and
+# that one reason is the whole of it. A SECOND reason stood here and was
+# FALSE (F3, review run 71) — it said fixtures create links with
+# `symlinkSync`, "which no `ln -s` scan can see". Measured:
+# `git grep -c -F 'ln -s' -- 'server/test/*.ts'` answers 30 across 13 files,
+# three of them in the file this wave itself created. It is deleted and NOT
+# replaced: one true reason is the whole warrant, and stacking a third is
+# how this paragraph acquired a false one twice.
+# NO CLAIM IS MADE ABOUT FIXTURES HERE, and not for
 # cost: an absence over them would rest on a census nothing in this tree
 # maintains, so it would go false the moment one is added. The plan records
 # what run 69 measured about them, and when. What was wrong was the WARRANT,
@@ -2569,7 +2584,7 @@ COMPACT_LOCK_WAIT=5
 # have DIFFERENT callers' rulings (§3.4, "Platform outcome"), which is why they
 # may not be folded together here.
 _compact_lock_same() {   # <fd> <canonical> -> 0 iff one regular inode. `-ef` (dev+ino) decides through /proc; through /dev/fd — Darwin, MEASURED on macOS 25.6 arm64: stat(/dev/fd/N) answers the fdesc DEVICE (1245178674) with the file's inode, stat(lock) 16777230 — dev differs, so the inode alone decides there (`ls -i` is POSIX, so no platform arm is needed).
-  local fd="$1" lock="$2" p=""
+  local fd="$1" lock="$2" p="" a="" b=""   # `a`/`b` declared here (F20, review 71): both were assigned bare below, leaking into the caller's scope
   if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
   elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
   else return 1; fi
