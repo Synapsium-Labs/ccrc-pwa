@@ -4201,8 +4201,24 @@ if mode == 'state':
         # before `clear`/the next `put` overwrite them — nothing upstream of
         # this `state` mode has read $REG for anything but rows_in()'s stdin,
         # so there was no read helper here to reuse.
+        #
+        # D-2380: `open()` opens BY NAME with no regard for TYPE — a FIFO with
+        # no writer, or an unbounded character device, at `$REG/<id>.<field>`
+        # blocks in open(2)/read(2) forever, and this is reached from
+        # `cmd_pr_state`'s per-id loop, so one poisoned field hangs the whole
+        # sweep rather than one row. `except FileNotFoundError` alone cannot
+        # catch this — `open()` itself blocks, the handler is never reached.
+        # `os.path.isfile` (follows symlinks, `os`'s twin of bash `-f`) is
+        # checked BEFORE any attempt to open, so a non-regular shape answers
+        # `None` on a type check alone — the same answer an absent field
+        # already gives, never a fabricated value. `FileNotFoundError` stays
+        # caught for the ordinary TOCTOU race (removed between this check and
+        # the open).
+        p = os.path.join(reg, id_ + '.' + field)
+        if not os.path.isfile(p):
+            return None
         try:
-            with open(os.path.join(reg, id_ + '.' + field)) as f:
+            with open(p) as f:
                 return f.read()
         except FileNotFoundError:
             return None
@@ -4365,7 +4381,22 @@ if mode == 'state':
     # races, never add a refusal that stops a phase from ever updating.
     lock_f = None
     try:
-        lock_f = open(os.path.join(reg, '.prstate-' + id_ + '.lock'), 'a')
+        # D-2380: same class as `get()` above — `open(path, 'a')` opens BY
+        # NAME and blocks forever on a FIFO with no writer; the `except
+        # OSError` below cannot fire for a block, only for an error, so it
+        # does NOT cover this. Guarded only when something is already there
+        # (`os.path.exists`): the FIRST-EVER lock file for a session must
+        # still be free to be CREATED by this open (the very case the
+        # comment above this block argues about), so an ABSENT path is not
+        # refused here, only a PRESENT non-regular one — which raises the
+        # same `OSError` this `try` already turns into "proceed unlocked",
+        # so the guarantee that block states ("this guard may only remove
+        # races, never add a refusal that stops a phase from ever updating")
+        # holds unchanged.
+        lock_p = os.path.join(reg, '.prstate-' + id_ + '.lock')
+        if os.path.exists(lock_p) and not os.path.isfile(lock_p):
+            raise OSError('refusing to open a non-regular-file pr-state lock: ' + lock_p)
+        lock_f = open(lock_p, 'a')
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
     except OSError:
         if lock_f is not None:
@@ -4392,7 +4423,26 @@ if mode == 'state':
                 if old_num is not None and old_num != number:
                     rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
                            'recordedAt': int(time.time())}
-                    with open(os.path.join(reg, id_ + '.prhistory'), 'a') as f:
+                    # D-2380: THE THIRD OPEN in this mode — the plan's own
+                    # cardinal named two (`get()` and the lock above); this
+                    # append is the third, corrected in place here rather
+                    # than taking a new deviation number (controller ruling).
+                    # Same class, same guard: `open(path, 'a')` opens BY NAME
+                    # and blocks forever on a FIFO with no writer, and this is
+                    # the ONE write in this mode with no `try`/`except` of its
+                    # own (it sits inside the outer `try` whose only handler
+                    # is the `finally` that releases the lock), so an
+                    # uncaught fault here is a FAULT, not a silent skip — a
+                    # strict improvement over a hang either way, because it is
+                    # bounded and visible on stderr, even though it costs this
+                    # one row's update rather than merely the append. Guarded
+                    # only when present-and-not-regular, exactly like the
+                    # lock above: the first-ever prhistory file must still be
+                    # free to be CREATED.
+                    hist_p = os.path.join(reg, id_ + '.prhistory')
+                    if os.path.exists(hist_p) and not os.path.isfile(hist_p):
+                        raise OSError('refusing to append to a non-regular-file prhistory: ' + hist_p)
+                    with open(hist_p, 'a') as f:
                         f.write(json.dumps(rec) + '\n')
             clear('prnumber')
             put('prphase', phase)
