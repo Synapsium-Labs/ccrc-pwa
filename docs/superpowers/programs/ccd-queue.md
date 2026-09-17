@@ -768,3 +768,68 @@ The worker called my finding on the safe/reachable split *"a better finding than
 It is not. It called the arithmetic impossible; I only found which of my own sentences was lying.
 Without its line I would not have re-read that paragraph, and "the headline disagrees with its own list"
 is not something anyone notices about their own prose unprompted.
+
+---
+
+## Review run 69 reported — and the close refuses for a reason that is not the report
+
+**The review is complete and sound:** 12 confirmed, 2 refuted, **0 unexamined**, `unverifiedLenses: []`
+— every lens returned, so nothing here is silence dressed as approval. 330 server files with one red
+file, agent 18/18, pwa 89/89, three builds and three `bash -n` green. 16 findings, plus the 2 the
+panel's majority killed reported beside them rather than dropped.
+
+### The close is blocked by the agent's read whitelist, and the error word names the wrong cause
+
+`runs close 69` refuses **deterministically, twice**:
+`{"error":"report-unreadable","detail":"…/warm-prairie/.ccrc-review/69-76897187.md: could not be read
+(unreadable)"}`. The file is 22,749 bytes, mode 664, every path component traversable; I read it.
+Traced in source rather than guessed:
+
+- `agent/src/whitelist.ts:83-88` — the READ whitelist is exactly `$HOME/.cc-sessions`,
+  `$HOME/.cc-limits`, `$HOME/.cc-clips`, anything under `projectsRoot`, and the `~/.claude*` glob.
+  **A git worktree at `<home>/worktrees/…` is under none of them.**
+- `agent/src/server.ts:322-324` — `case 'stat'` runs `checkPath(req.path, cfg, 'read')` and answers
+  `fail(req.id, 'forbidden')` when it fails.
+- `server/src/coord/fingerprint.ts:313-316` — `statMeasured` reports anything that is not a proven
+  ENOENT as `unreadable`, which `verifyReviewDone` renders as `report-unreadable`.
+
+**So a PERMISSION REFUSAL arrives as an I/O failure.** Two findings, both for the operator:
+
+1. **Review runs are structurally unclosable when the report follows the template.**
+   `references/review-brief.md` says *"Report to: an absolute path under YOUR worktree"* — and on a
+   two-box fleet that names a location the close route can never stat. **This defect is mine twice
+   over:** I copied that line into run 69's brief, and it is in the shipped template.
+2. **`forbidden` rendered as `report-unreadable`** is an overloaded null at a seam — the shape
+   `CLAUDE.md` bans outright — living inside the review machinery that exists to enforce such things.
+   The refusal itself cost nothing; **the wrong word cost the whole diagnosis cycle**, because it sent
+   me to look at the file, its permissions and its size before the path.
+
+**Remedy for this run, and why the reviewer does it rather than me:** the report is copied
+byte-for-byte (sha256-verified) to `<projects-root>/.ccrc-reviews/`, which is under
+`projectsRoot`, outside every repo, so no checkout is polluted — and **the reviewer re-emits
+`review-done` with the new path**. I could relocate it and close in ten seconds; I am not going to.
+Clause 12 says I close with the REVIEWER'S OWN `{reviewedTip, report}`, and **a coordinator that
+manufactures the evidence the server checks has turned a verification into a formality.** The documented
+remedy — close `failed`, open a fresh review — is refused: it would burn a complete review and hit the
+same wall, because the new reviewer would follow the same template.
+
+### Three corrections to my brief, all accepted, one serious
+
+- **B-2 is the serious one: whole-branch item (1) was half false and following it literally would have
+  broken the tree.** I wrote that `ccd/ccd` *and* `ccd/ccrc` carry `# ccrc:generated`.
+  `ccd/ccrc:63-67` forbids that marker by name — *"`ccrc` is, and stays, hand-written"* — and the file
+  correctly answers `foreign`. A brief instruction that would have caused damage.
+- **B-1: the brief's net stat describes `9b53f221`, eight commits behind the tip** (11 files,
+  2386/133 at the tip). **The third time this run** I have published a number without naming its tree,
+  after writing that rule myself.
+- **B-3:** the wave-done names "three failing files"; it is one failing FILE with four failing
+  assertions — three real, one a documented load flake green 3/3 in isolation at both base and tip.
+
+### F1 verified independently, and my first probe tested the wrong half
+
+`os.path.isfile` FOLLOWS symlinks, so `put()`'s tmp guard does not fire for a LIVE symlink. My first
+reproduction renamed a fresh tmp onto a symlink destination — which replaces the link and lands nothing
+outside — and would have let me mis-refute a correct critical finding. **The escape is at the WRITE,
+not the rename:** with `tmp` itself a live symlink, `isfile` passes, `open(tmp,'w')` writes *through*
+the link, and the field's bytes land outside `$REG`. Measured here end to end. The `exists`→`lexists`
+fix closed the DANGLING case only; the second conjunct still follows the link.
