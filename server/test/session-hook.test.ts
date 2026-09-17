@@ -279,7 +279,23 @@ const minimalPath = (omit: string[]): string => {
     // them, so a PATH that omits them makes the arms genuinely refuse — which
     // is what `minimalPath(['flock'])` is FOR, and what every OTHER caller of
     // this helper must not accidentally get.
-    'flock', 'mktemp', 'touch']) {
+    'flock', 'mktemp', 'touch',
+    // `ls` JOINED THAT SET WITH THE /dev/fd INODE FALLBACK, AND ONLY DARWIN
+    // FORKS IT. `_hook_lock_same` decides identity with `-ef` (dev+ino) through
+    // `/proc/self/fd/<n>`; where there is no `/proc` it reaches the descriptor
+    // through `/dev/fd/<n>`, whose stat answers the fdesc DEVICE, so `-ef` is
+    // false for the very inode it holds and `ls -i` is what decides. On Linux
+    // that arm never runs, so omitting `ls` here was invisible — and on macOS
+    // it made EVERY acquisition under this PATH refuse. MEASURED on the
+    // `probe-macos` leg at b856a939 with the hook under `bash -x`:
+    // `command -v ls: ABSENT`, then `ls -i -- /dev/fd/11` → `a=` → `return 1`
+    // out of `_hook_lock_same`, `return 1` out of the acquire, and PreCompact's
+    // arm gave up before the helper fork — `resolves gtimeout when timeout is
+    // absent` died `ENOENT …/gtimeout-argv` for that reason and no other. The
+    // CONTROL was run in the same act: the same PATH with `ls` symlinked in
+    // published the card and the argv. This is a FIXTURE gap, not a userland
+    // difference — `ls -i` is POSIX and both userlands ship it.
+    'ls']) {
     if (omit.includes(t)) continue;
     const real = execFileSync('sh', ['-c', `command -v ${t}`], { encoding: 'utf8' }).trim();
     if (real) fs.symlinkSync(real, path.join(bin, t));
