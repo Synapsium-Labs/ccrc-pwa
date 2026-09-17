@@ -665,11 +665,11 @@ _hook_memory_converge() {   # -> converge this (home, project) pair; prints noth
   # expansion removes the fork. The second is cost — two fewer subshells per
   # SessionStart across ~20 live sessions.
   #
-  # THE `*/*` GUARD IS THE DIFFERENCE BETWEEN THE TWO SPELLINGS, and it decides
-  # nothing this function did not already decide: a `transcript_path` with no
-  # slash in it is the relative payload the comment below calls "shaped any
-  # other way", and both spellings answer it by doing nothing — `dirname` would
-  # say `.`, whose own parent can never end in `/projects`.
+  # THE EXPANSION IS NOT `dirname`, and the `*/*` guard is not the only difference. That guard covers the
+  # slashless payload the comment below calls "shaped any other way": `dirname` would say `.`, whose parent
+  # can never end in `/projects`. MEASURED, the two answer the shape the harness sends identically
+  # (`<config dir>/projects/<slug>/<uuid>.jsonl`); where they differ on such a payload the expansion is the
+  # STRICTER and this function refuses anyway: a doubled slash at `*/projects` below, a trailing at `[ -d ]`.
   case "$tp" in */*) d=${tp%/*} ;; *) return 0 ;; esac
   [ -d "$d" ] || return 0
   case "$d" in */*) projects=${d%/*} ;; *) return 0 ;; esac

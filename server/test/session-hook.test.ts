@@ -7786,27 +7786,44 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // they appear under (A) -> (B) and not here.
     // RE-MEASURED against the tree, never adjusted to keep a number green.
     //
-    // THE MERGE WITH `origin/main` MOVES IT AGAIN, 55 -> 58 OVER THE SAME
-    // THREE-DOCUMENT CORPUS (merge fix round M2), and the movement is measured
-    // as separate causes rather than reported as one number. The merge
-    // (`6e84524a`, 41 commits of main) grew every file this corpus cites —
-    // `ccd/ccd` 16,832 -> 19,334 lines, `ccd/session-hook.sh` 2,954 -> 3,174,
-    // `shared/api.ts` 6,092 -> 7,188, `ccd/ccrc` 7,344 -> 11,911,
-    // `deploy/deploy.sh` 1,151 -> 1,200 and
-    // `server/test/ccd-workspaces.test.ts` 1,525 -> 1,540 — so BOTH sides'
-    // anchors moved: the branch's spec/plan anchors by main's insertions and
-    // main's own README anchors by the branch's.
+    // THE MERGE WITH `origin/main` MOVES IT AGAIN, 55 -> 59 OVER THE SAME
+    // THREE-DOCUMENT CORPUS (merge fix round M2, then the SECOND merge of main),
+    // and the movement is measured as separate causes rather than reported as one
+    // number. The merge (`6e84524a`, 41 commits of main) grew every file this
+    // corpus cites — `ccd/ccd` 16,832 -> 19,334 lines, `ccd/session-hook.sh`
+    // 2,954 -> 3,158, `shared/api.ts` 6,092 -> 7,188, `ccd/ccrc` 7,344 -> 11,911,
+    // `deploy/deploy.sh` 1,151 -> 1,200 and `server/test/ccd-workspaces.test.ts`
+    // 1,525 -> 1,530 — so BOTH sides' anchors moved: the branch's spec/plan
+    // anchors by main's insertions and main's own README anchors by the branch's.
+    // THOSE SIX ARE THE MERGE COMMIT'S OWN COUNTS, each measured
+    // `git show 6e84524a:<file> | wc -l` — two of them used to be quoted at THIS
+    // tip's value, which credited main with a fix round's lines (gate 1 C-M3).
+    // Three grew again afterwards and each delta belongs to its own commit:
+    // `ccd/session-hook.sh` -> 3,174 at M1's `fbbf6907` (+16),
+    // `server/test/ccd-workspaces.test.ts` -> 1,540 at M1b's `525dd92d` (+10),
+    // `deploy/deploy.sh` -> 1,209 at the SECOND merge `03ecda65` (+9).
     //   (A) branch base (`fcf2c660`) + this rule    55   the pre-merge census
     //   (B) merged tip  (`c7cc7348`) + this rule   251   the merge's shifts alone
-    //   (C) this tip                 + this rule    58   what this map asserts
-    // (B) -> (C) IS -193, AND EVERY REPAIR IS A SHIFT PROVEN BY BYTE-EQUALITY
-    // rather than by arithmetic: for each reference, the block it named at the
-    // branch base was located byte-identically in the merged file, with
-    // symmetric context expanded until the match was UNIQUE, and the anchor
-    // moved to where those bytes now stand. No number was obtained by adding a
-    // file's delta, and no reference was moved whose base bytes were not its
-    // referent — an anchor already stale at `fcf2c660` is pre-merge debt and
-    // stays where the pre-merge census left it.
+    //   (C) this tip                 + this rule    59   what this map asserts
+    // (B) -> (C) IS -192, IN TWO STEPS AND NOT ONE: M2's repairs take 251 to 58,
+    // and then the SECOND merge's nine lines at `deploy/deploy.sh:508` drop Task
+    // 10's frozen `deploy/deploy.sh:560` below its referent, which adds the 59th.
+    // EVERY REPAIR IS A SHIFT PROVEN BY BYTE-EQUALITY rather than by arithmetic:
+    // for each reference, the block it named at the branch base was located
+    // byte-identically in the merged file, with symmetric context expanded until
+    // the match was UNIQUE, and the anchor moved to where those bytes now stand.
+    // No number was obtained by adding a file's delta.
+    // AND THE RULE FOR WHAT WAS NOT MOVED, stated as it was applied rather than as
+    // the round's headline put it (gate 1 B-M1): a reference was LEFT when the
+    // base bytes at its number were never its referent, because following those
+    // bytes points the sentence at a stranger. BEING ALREADY RED AT `fcf2c660`
+    // WAS NOT THE CRITERION — measured by that lens, 14 of the 82 re-pointed
+    // anchors were already failing this audit at the branch base and were moved
+    // anyway. `ccd/ccd:5059` -> `:5797` is the clearest, and re-measured here:
+    // both the base line and the tip line are `  fi`, one BELOW the
+    // `die "no account available for placement…"` its clause names, so that
+    // repair carried a pre-merge off-by-one across the merge rather than
+    // creating it.
     // TWO references could not move that way and were measured BY NAME instead,
     // because main edited inside the block rather than above it:
     // `ccd/ccd:2399-2450` -> `:3037-3089` (`_reg_purge`'s purge sequence; main
@@ -7815,12 +7832,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 29 of the 30 lines are byte-identical and the 30th is a comment carrying a
     // `ccd:<n>` citation of its own that main re-anchored).
     //
-    // WHAT THE 58 ARE, relative to the pre-merge 55. Every entry is one of the
+    // WHAT THE 59 ARE, relative to the pre-merge 55. Every entry is one of the
     // two classes this map already carried, at the number the referent now
     // stands at — no class is new and no rule changed:
     //   `ccd/ccd` 23 -> 22, `ccd/session-hook.sh` 19 -> 21,
     //   `server/test/ccd-workspaces.test.ts` 5, `ccd/compact-card.mjs` 4,
-    //   `server/test/ccd-ws-reap.test.ts` 2 and `deploy/deploy.sh` 1 unmoved.
+    //   `server/test/ccd-ws-reap.test.ts` 2 unmoved, and `deploy/deploy.sh` 1 -> 2
+    //     with the SECOND merge of main — the map's own note below says how.
     //   `ccd/ccrc` 1 -> 2: the merge's edits to `ccd/ccrc` moved `_inst_files`'
     //     body out from under `ccd/ccrc:5217`, so the sub-rule-A exemption that
     //     covered it at the base is gone and the reference is now VISIBLE to
@@ -8046,8 +8064,8 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccrc:6531',
         'ccd/ccrc:7129-7130',
       ]);
-    // D-2849's OWN FOUR, named rather than counted, so that a set that keeps
-    // its length while losing one of them still reds.
+    // D-2849's OWN FIVE (its 2026-09-17 append), named rather than counted, so a set
+    // that keeps its length while losing one of them still reds.
     const D2849 = ['deploy/deploy.sh:560', 'deploy/deploy.sh:629', 'ccd/ccrc:5217', 'ccd/ccrc:6531', 'ccd/ccrc:7129-7130'];
     expect(D2849.filter((k) => set.includes(k)),
       'the five references Task 10\'s own **Files:** paragraph falsifies (D-2849, and its 2026-09-17 append)').toEqual(D2849);
