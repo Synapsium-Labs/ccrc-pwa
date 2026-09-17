@@ -41,8 +41,9 @@ wave-1 open that adopts a workspace the operator made by hand.
 programme now stores, and `ledgerAbsPath` is ONLY that home's programme ledger by
 ABSOLUTE path. It is not the home repository root, it is not the plan path, and a
 coordinator must not derive either from it. Both response fields are `null` while
-the programme stores no home. The server tolerates an absent `homeProject` for one
-deploy generation and records that it did; send it on every open anyway. A
+the programme stores no home. The server refuses an open with no `homeProject`
+outright, `400 bad-request` with `detail: 'homeProject is required'` — the
+legacy generation that tolerated it ended 2026-09-16; send it on every open. A
 programme that stores no home takes the FIRST home any open sends — first writer
 wins, recorded as `home-project-backfilled` on that run — and nothing in the API
 can change it afterwards: a later open sending a different value is refused
@@ -101,11 +102,16 @@ with the run now `dispatched`, or a refusal:
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
 | `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
 
-**Caps count runs, not holds.** Concurrency counts dispatched non-terminal runs,
-not held workspaces: a terminal producer retained on a hold and a planned
-undispatched consumer consume no running-worker slot. Each actual dispatch still
-consumes daily budget, and a dispatched non-terminal consumer consumes one
-concurrency slot. Each refusal's own numbers are the authority, and the two
+**Caps count ACTIVE runs, not holds and not merely non-terminal ones.**
+Concurrency counts dispatched runs whose state is ACTIVE — `dispatched`,
+`working`, `unknown` — so a terminal producer retained on a hold, a planned
+undispatched consumer, and a run parked IDLE at `awaiting-review`, `merging` or
+`closing` all consume no running-worker slot. **An idle run gives its slot back
+WITHOUT closing** (D-2803); before wave 6 of review-runs it held one until it
+reached a terminal state, and prose written against that older rule is wrong
+rather than merely imprecise. Each actual dispatch still consumes daily budget,
+and a dispatched run consumes one concurrency slot for as long as it stays
+active. Each refusal's own numbers are the authority, and the two
 carry DIFFERENT ones: `cap-concurrency` carries `limit` and `running`, while
 `cap-daily` carries `limit` and `used` — it never carries `running`, so a
 coordinator refused `cap-daily` that goes looking for one is reading a field
@@ -228,8 +234,8 @@ of that in a brief buys nothing and spends the one budget a brief is short of
 the plan file's path, the tasks or task range this wave owns, **the execution
 skill the worker should invoke** (`superpowers:executing-plans` or
 `superpowers:subagent-driven-development`), the interfaces earlier waves
-settled, the deviations already ledgered, and whatever your review of the last
-handoff decided.
+settled, the deviations already ledgered, and whatever the last review run's
+report, and your ruling on it, decided.
 
 **Every brief for a wave in ANOTHER project carries three immutable-plan
 coordinates:** `homeRepoRoot`, the absolute path to the home repository root;
@@ -472,14 +478,17 @@ refused.
 | reject.code | meaning |
 |---|---|
 | `stale-tip` | the branch moved after the claim was written |
-| `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way) |
+| `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way). On a REVIEW run's close it can also mean the reviewed run itself cannot be measured (it names no run, is gone, or has no session); the answer there is `{"state":"failed"}` on the review run, not a re-submit. |
 | `branch-unmeasurable` | the workspace's branch could not be resolved: the live registry has a row for this session and the row's own branch field is null — either listed with bytes that did not come back (transient) or absent (not). Not evidence either way; the run is unchanged. Re-submit once the registry reads clean. If it keeps answering this, the session's registry row needs a human — the run row's frozen branch column is deliberately not used as a guess |
 | `pr-regressed` | the PR is not in the phase the claim asserted |
 | `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) — but see below: this is ALSO what a malformed submission of your own gets, before any I/O runs |
-| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays your ordinary review, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
+| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays the review run's job, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
 | `unknown-run` | the run id is wrong |
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
+| `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
+| `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
+| `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 
 **`pr-unmeasurable` has two causes, and they need different responses.** The
 server returns it both for a transient re-read failure (`detail` reads like
@@ -563,7 +572,7 @@ an operator/DB act, not a client one — or address the mail with an explicit
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
-1. Review the handoff commit the way you would review any commit.
+1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
    Commit it.

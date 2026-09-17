@@ -236,25 +236,58 @@ export function timeOf(ts: string): string {
 // card (like a tool call) — expandable when you actually want the recap.
 const COMPACTION_RE = /^\s*(?:\[[^\]]*]\s*)?This session is being continued from a previous conversation/;
 
-function CompactionCard({ text }: { text: string }): ReactNode {
+/** The fold, now used by TWO callers: the /compact recap above, and a `system`
+ *  row that carries a BODY rather than a label (see the system branch below).
+ *  Both are noise to a reader driving the session and neither may be thrown
+ *  away, which is the same card rather than a second one.
+ *
+ *  EVERY DEFAULT IS THE COMPACTION CARD'S OWN, so that call site passes nothing
+ *  and its DOM — classes, glyph, label, hint, and the class ORDER in
+ *  `compaction compaction--open` — is what it was.
+ *
+ *  `raw` renders the body as text rather than Markdown. The parser hands a
+ *  `system` row a `text: string` and declares no format for it, so reading it
+ *  as Markdown is the delivery layer inventing one: a literal `*` becomes
+ *  emphasis and disappears, a `|` row becomes a table, and the newlines this
+ *  card exists to keep collapse under Markdown's own `white-space: normal`. */
+function FoldedCard({
+  text,
+  label = 'Context compacted',
+  glyph = '⤺',
+  hint = 'show summary',
+  variant = '',
+  raw = false,
+}: {
+  text: string;
+  label?: string;
+  glyph?: string;
+  hint?: string;
+  /** Extra class on the card, for a rule one caller needs and the other must
+   *  not get (`.compaction--sys` clamps a label that can be any length). */
+  variant?: string;
+  raw?: boolean;
+}): ReactNode {
   const [open, setOpen] = useState(false);
+  const cls = ['compaction', variant, open ? 'compaction--open' : ''].filter((c) => c !== '').join(' ');
   return (
-    <div className={open ? 'compaction compaction--open' : 'compaction'}>
+    <div className={cls}>
       <button
         type="button"
         className="compaction-head"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
       >
-        <span className="compaction-glyph" aria-hidden="true">⤺</span>
-        <span className="compaction-label">Context compacted</span>
-        <span className="compaction-hint">{open ? 'hide' : 'show summary'}</span>
+        <span className="compaction-glyph" aria-hidden="true">{glyph}</span>
+        <span className="compaction-label">{label}</span>
+        <span className="compaction-hint">{open ? 'hide' : hint}</span>
       </button>
-      {open && (
-        <div className="compaction-body msg-assist">
-          <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{text}</Markdown>
-        </div>
-      )}
+      {open && (raw
+        ? <pre className="compaction-body compaction-raw">{text}</pre>
+        : (
+          <div className="compaction-body msg-assist">
+            <Markdown remarkPlugins={[remarkGfm, remarkAlerts]} components={mdComponents}>{text}</Markdown>
+          </div>
+        ))}
     </div>
   );
 }
@@ -321,12 +354,40 @@ export function MessageBubble({
         </p>
       );
     }
+    // A system row whose text runs to more than ONE LINE cannot be told by the
+    // pill below, and the pill does not fail loudly — it lies quietly.
+    // `.sys-divider` declares no `white-space`, so every newline COLLAPSES into
+    // one run; it is 11px mono at `--tracking-caps`, the tracking meant for
+    // uppercase eyebrows; it is centred; and `--r-full` clamps to a ~175px lens
+    // once the box is tall, whose curved corners cut inside the line boxes. The
+    // harness injects skill bodies of tens of KB and hundreds of lines into the
+    // user channel, so a multi-line system row is now the ordinary case.
+    //
+    // THE PREDICATE IS THE NEWLINE, not a size: it is derived from what the pill
+    // can actually render — one line — rather than tuned to a corpus. Nothing is
+    // dropped. The first line becomes the label, which is the only part a pill
+    // could ever have carried honestly, and the whole text is one tap away
+    // VERBATIM, as text rather than Markdown.
+    const nl = event.text.indexOf('\n');
+    if (nl >= 0) {
+      const first = event.text.slice(0, nl).trim();
+      return (
+        <FoldedCard
+          text={event.text}
+          label={first === '' ? 'system message' : first}
+          glyph="≡"
+          hint="show"
+          variant="compaction--sys"
+          raw
+        />
+      );
+    }
     return <p className="sys-divider">{event.text}</p>;
   }
 
   // Compaction recap (user- or assistant-kind): fold it away by default.
   if (COMPACTION_RE.test(event.text)) {
-    return <CompactionCard text={event.text} />;
+    return <FoldedCard text={event.text} />;
   }
 
   if (event.kind === 'user') {

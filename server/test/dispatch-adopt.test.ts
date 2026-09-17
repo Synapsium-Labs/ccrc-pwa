@@ -512,7 +512,7 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     });
     await h.dispatch();
     // `toRunSummary` is a spread that strips `prLineage` and (since Task 1's
-    // migration 11) `coordProject`, and nothing else, so this asserts the
+    // migration 12) `coordProject`, and nothing else, so this asserts the
     // field is on `RunSummary` rather than server-internal.
     const wire: RunSummary = toRunSummary(okRun(h.coord.run(h.runId))!);
     expect(wire.dispatchStartedAt).toBe(NOW);

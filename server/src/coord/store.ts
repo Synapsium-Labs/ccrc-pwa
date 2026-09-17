@@ -18,7 +18,8 @@ import {
   CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_AUTHORITY_CODES,
   isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
   isLifecycleOutcome,
-  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunState, isWorkItemState,
+  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
+  isWorkItemState,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
   // exactly one home — `shared/api.ts`, beside the body it labels. Its own
@@ -28,7 +29,7 @@ import {
   isPositiveDecimalSafeInteger,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
-  RUN_TRANSITIONS, TERMINAL_DELIVERY_STATES,
+  IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
@@ -36,7 +37,7 @@ import {
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
-  type RunHealth, type RunItemTally, type RunSignals, type RunState,
+  type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
   type WorkItemState,
 } from '../../../shared/api.js';
@@ -44,12 +45,6 @@ import {
 /** One entry in `$REG/<id>.prhistory` (ccd/ccd:2252-2253). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader. */
 export interface PrLineageEntry { pr: number; branch: string; phase: string; recordedAt: number }
-
-/** The run states nothing can leave — DERIVED from `RUN_TRANSITIONS` (a state
- *  with no outgoing edge IS terminal), never a second hand-written list of the
- *  same two words. Adding a terminal state to the table is enough. */
-const TERMINAL_RUN_STATES: readonly RunState[] =
-  (Object.keys(RUN_TRANSITIONS) as RunState[]).filter((s) => RUN_TRANSITIONS[s].length === 0);
 
 /**
  * A run row as the STORE reads it: `RunSummary` (the wire shape) plus
@@ -62,7 +57,7 @@ const TERMINAL_RUN_STATES: readonly RunState[] =
  * knowledge of `.prhistory`'s shape, so this stays a server-side supertype
  * rather than growing the wire type.
  *
- * `coordProject` (migration 11) is the same idea for a second field: the
+ * `coordProject` (migration 12) is the same idea for a second field: the
  * coordinator's project, stamped at open time from a registry read the caller
  * made, kept here for the board-placement policy to read server-side. It is
  * NOT one of the design's two wire additions, so it stays off `RunSummary`
@@ -96,7 +91,7 @@ export type { CoordPlacementStamp };
 /** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
  *  material `RunSummary`'s own docstring says is "deliberately absent" from
  *  the wire shape — "neither small nor something that changes on every
- *  frame." Also strips `coordProject` (migration 11, Task 1): the
+ *  frame." Also strips `coordProject` (migration 12, Task 1): the
  *  coordinator's project, stamped for the board-placement policy to read
  *  server-side, and NOT one of that design's two wire additions — see
  *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
@@ -111,7 +106,7 @@ type HoldReasonRefusal = Extract<HoldReasonVerdict, { ok: false }>;
 
 export type OpenRunResult =
   | { id: number; program: string; state: RunState; holdReason: string }
-  | { refused: 'claimed-by-another'; by: string }
+  | { refused: 'claimed-by-another' | 'review-in-flight'; by: string }
   | HoldReasonRefusal;
 
 /** A fresh run's exact id is known only after its INSERT. Throwing this private
@@ -325,10 +320,10 @@ export type AsksByChildResult =
  *  nullability survives unchanged. */
 interface RunRowDb {
   idText: string; program: string; programTitle: string;
-  waveText: string; waveOfText: string | null;
+  waveText: string; waveOfText: string | null; reviewsText: string | null;
   homeProject: string | null;
   project: string; sessionId: string | null; workspace: string | null; branch: string | null;
-  state: string; claimedBy: string | null;
+  state: string; kind: string; claimedBy: string | null;
   resumed: number; clearedAt: number | null; openedAt: number;
   dispatchStartedAt: number | null; dispatchedAt: number | null; closedAt: number | null;
   handoffCommit: string | null;
@@ -352,7 +347,7 @@ interface RunRowDb {
 const RUN_ROW_COLUMNS =
   'CAST(r.id AS TEXT) AS idText, r.program, p.title AS programTitle, p.homeProject AS homeProject, ' +
   'CAST(r.wave AS TEXT) AS waveText, CAST(r.waveOf AS TEXT) AS waveOfText, r.project, r.sessionId, ' +
-  'r.workspace, r.branch, r.state, r.claimedBy, ' +
+  'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
@@ -382,32 +377,39 @@ const persistedInt = (text: string, column: string): PersistedInt => {
     : { ok: false, detail: `${column} is not a positive safe integer` };
 };
 
-/** The three persisted integers every run-shaped read carries, proven. */
-interface RunNumbers { id: number; wave: number; waveOf: number | null }
+/** The four persisted integers every run-shaped read carries, proven. */
+interface RunNumbers { id: number; wave: number; waveOf: number | null; reviews: number | null }
 
 type RunNumbersResult = { ok: true; nums: RunNumbers } | { ok: false; detail: string };
 
-/** `RunRowDb`'s (and `openRunsForSession`'s narrower row's) three integers,
+/** `RunRowDb`'s (and `openRunsForSession`'s narrower row's) four integers,
  *  measured together so the two reads cannot come to disagree about which
  *  columns are in the domain or how they are worded. */
 const measureRunNumbers = (
-  r: { idText: string; waveText: string; waveOfText: string | null },
+  r: { idText: string; waveText: string; waveOfText: string | null; reviewsText: string | null },
 ): RunNumbersResult => {
   const id = persistedInt(r.idText, 'run id');
   if (!id.ok) return id;
   const wave = persistedInt(r.waveText, 'run wave');
   if (!wave.ok) return wave;
+  // Same NULL rule as `waveOf`: absent is legitimate (every work run), and
+  // `persistedInt` must not be asked to answer "absent" as well as "unrepresentable".
+  const reviews: { ok: true; value: number | null } | { ok: false; detail: string } =
+    r.reviewsText === null ? { ok: true, value: null } : persistedInt(r.reviewsText, 'run reviews');
+  if (!reviews.ok) return reviews;
   // NULL IS DECIDED HERE, not inside `persistedInt` — `waveOf` is legitimately
   // absent (the two documented display forms omit it), and a helper that had to
   // answer "absent" as well as "present but unrepresentable" would be the
   // overloaded value this whole change exists to remove.
-  if (r.waveOfText === null) return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: null } };
+  if (r.waveOfText === null) {
+    return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: null, reviews: reviews.value } };
+  }
   const waveOf = persistedInt(r.waveOfText, 'run waveOf');
   if (!waveOf.ok) return waveOf;
-  return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: waveOf.value } };
+  return { ok: true, nums: { id: id.value, wave: wave.value, waveOf: waveOf.value, reviews: reviews.value } };
 };
 
-/** A `RunRowDb` whose three integers are proven — what `healthFor` and
+/** A `RunRowDb` whose four integers are proven — what `healthFor` and
  *  `hydrateRun` take now that the numeric ids do not exist until after
  *  validation. The order is: read rows -> validate every row -> on any failure
  *  return the refusal -> only then `healthFor` -> then hydrate. */
@@ -444,6 +446,19 @@ const OUTSTANDING_STATES_SQL = "('queued','delivered')";
  *  this wave, and recorded as an open design question
  *  (D-1406). */
 const TERMINAL_DELIVERY_SQL = `('${TERMINAL_DELIVERY_STATES.join("','")}')`;
+
+/** The cap's predicate, NEGATIVE over everything that is not active — the idle
+ *  and terminal lists, both L0, joined the way `TERMINAL_DELIVERY_SQL` is
+ *  (design 2026-09-14 §7.1 as corrected by D-2803): a raw state token this build
+ *  cannot name is neither idle nor terminal and so COUNTS, which is the safe
+ *  direction for a cap and the reason `unknown` sits in `ACTIVE_RUN_STATES`. */
+const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES].join("','")}')`;
+/** Every "still open" predicate in this file — `runs()`, `programOpenRunCount`,
+ *  `openRunsForSession`, the strands query, `advanceInner`'s `closedAt` CASE —
+ *  names this fragment and never the literal pair (D-2800), except the
+ *  strands query, which binds the same L0 constant as bound placeholders
+ *  (D-2794). */
+const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
 
 /** `setDeliveryEnvelope`'s answer — `SetWorkItemResult`'s shape, for
  *  `SetWorkItemResult`'s reason. `'absent'` and `'terminal'` are kept apart
@@ -574,7 +589,7 @@ const DELIBERATE_CANCEL_ERRORS_SQL =
 const ABANDONED_PARK_SQL =
   "(d.state = 'rejected' " +
   `AND COALESCE(d.lastError, '') NOT IN ${DELIBERATE_CANCEL_ERRORS_SQL} ` +
-  "AND COALESCE(rr.state, '') NOT IN ('done','failed'))";
+  `AND COALESCE(rr.state, '') NOT IN ${TERMINAL_RUN_STATES_SQL})`;
 
 /**
  * The READ-side "still needs a human's attention" predicate (fix, review
@@ -779,6 +794,17 @@ export class CoordStore {
      *  OPTIONAL: during the legacy generation an open carries none, and the
      *  column then stays NULL rather than taking a guess. */
     homeProject?: string;
+    /** Design 2026-09-14 §5.1. Absent means `'work'` — every caller that
+     *  predates review runs. `'unknown'` is refused at the route; the store
+     *  writes only the two real kinds. */
+    kind?: Extract<RunKind, 'work' | 'review'>;
+    /** The work run a review run reads. Required by the ROUTE when
+     *  `kind:'review'`; written as-is here. MUST name an existing run — the
+     *  route proves it before calling (400 `reviews names no run`); the FK
+     *  is enforced at runtime, so a dangling id here would throw SQLite's
+     *  constraint error rather than answer in words, which is why no other
+     *  caller may pass one. */
+    reviews?: number | null;
     /** The project of the session in `claimedBy`, measured by the CALLER from
      *  the registry and stamped here for the run's whole life. Optional, and
      *  its absence is a real answer: an older row, or an open where the
@@ -824,8 +850,8 @@ export class CoordStore {
         const dup = this.db.prepare(
           "SELECT CAST(id AS TEXT) AS idText, state FROM runs " +
           "WHERE program = ? AND wave = ? AND (waveOf IS ?) " +
-          "AND claimedBy = ? AND state = 'planned' ORDER BY id LIMIT 1",
-        ).get(input.program, input.wave, input.waveOf, input.claimedBy) as
+          "AND claimedBy = ? AND state = 'planned' AND kind = ? ORDER BY id LIMIT 1",
+        ).get(input.program, input.wave, input.waveOf, input.claimedBy, input.kind ?? 'work') as
           { idText: string; state: string } | undefined;
         if (dup) {
           // Read as TEXT first: node:sqlite otherwise throws while converting an
@@ -848,21 +874,28 @@ export class CoordStore {
             holdReason: hold.reason,
           };
         }
+        // Design 2026-09-14 §5.1: one review run per work run at a time. Inside
+        // the transaction so two opens cannot both pass the read; AFTER the dup
+        // arm so a retried open of the same planned review row stays idempotent.
+        if (input.kind === 'review') {
+          const inflight = this.reviewInFlightFor(input.reviews ?? -1);
+          if (inflight !== null) return { refused: 'review-in-flight' as const, by: String(inflight) };
+        }
         const now = Date.now();
         this.db.prepare(
           'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
           'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
         ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, coordProject) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
-          input.coordProject ?? null,
+          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -943,11 +976,15 @@ export class CoordStore {
    * the program, and those are not the same question.
    *
    * SO THIS `WHERE` CARRIES NO STATE PREDICATE AT ALL, and the omission is a
-   * decision rather than an oversight (D-1135): this file holds two disagreeing
-   * answers to "terminal" — `TERMINAL_RUN_STATES` is DERIVED from
-   * `RUN_TRANSITIONS` and yields three words, while eight SQL predicates here
-   * hand-write two — and a method that needed the word would have to pick one.
-   * Ruling R1 means this one does not, so it does not inherit the disagreement.
+   * decision rather than an oversight (D-1135): this file used to hold two
+   * disagreeing answers to "terminal" — a private derivation from
+   * `RUN_TRANSITIONS` that yielded three words, while eight SQL predicates
+   * here hand-wrote two — and a method that needed the word would have had to
+   * pick one. Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is
+   * L0's own pair (`shared/api.ts`), imported rather than derived, and it
+   * agrees with the hand-written predicates by construction. Ruling R1 means
+   * this method still carries no state predicate at all, so it does not
+   * inherit whatever `TERMINAL_RUN_STATES` names.
    *
    * A row whose `claimedBy` IS NULL STAYS NULL. `reconstruct` mints rebuilt runs
    * that way because it cannot know who will resume the program, and D-12's
@@ -1513,6 +1550,10 @@ export class CoordStore {
    * validated against the registry: it is attribution, not authentication
    * (spec:26-30), and pretending otherwise in a column comment would be the
    * kind of claim this repo has already had to retract elsewhere.
+   *
+   * The table consulted is the run's KIND's (`transitionsFor`, design
+   * 2026-09-14 §5.2) — this is the LAST gate; the routes' checks are the
+   * first, and both read one table.
    */
   advance(runId: number, to: RunState, causedBy: string, detail?: string): AdvanceResult {
     return tx(this.db, () => this.advanceInner(runId, to, causedBy, detail));
@@ -1526,16 +1567,17 @@ export class CoordStore {
    *  atomicity across more than one state write must call THIS, inside its
    *  own single `tx()`, never the public `advance` twice. */
   private advanceInner(runId: number, to: RunState, causedBy: string, detail?: string): AdvanceResult {
-    const row = this.db.prepare('SELECT state FROM runs WHERE id = ?').get(runId) as
-      { state: string } | undefined;
+    const row = this.db.prepare('SELECT state, kind FROM runs WHERE id = ?').get(runId) as
+      { state: string; kind: string } | undefined;
     if (!row) return { ok: false as const, error: 'unknown-run' as const };
     const from = isRunState(row.state) ? row.state : 'unknown';
-    if (!(RUN_TRANSITIONS[from] as readonly string[]).includes(to)) {
+    const kind = isRunKind(row.kind) ? row.kind : 'unknown';
+    if (!(transitionsFor(kind)[from] as readonly string[]).includes(to)) {
       return { ok: false as const, error: 'bad-transition' as const, from, to };
     }
     const now = Date.now();
     this.db.prepare(
-      "UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ('done','failed') THEN ? ELSE closedAt END " +
+      `UPDATE runs SET state = ?, closedAt = CASE WHEN ? IN ${TERMINAL_RUN_STATES_SQL} THEN ? ELSE closedAt END ` +
       'WHERE id = ?',
     ).run(to, to, now, runId);
     this.db.prepare(
@@ -1890,6 +1932,7 @@ export class CoordStore {
    * on a per-row one.
    */
   strandedClear(sessionId: string): boolean {
+    // D-2794: the pair is L0's; an `unknown` row is LIVE here, as everywhere.
     const row = this.db.prepare(
       'SELECT 1 AS x FROM run_events e JOIN runs r ON r.id = e.runId ' +
       `WHERE r.sessionId = ? AND e.detail = ? AND r.state NOT IN (${TERMINAL_RUN_STATES.map(() => '?').join(', ')}) ` +
@@ -2013,7 +2056,7 @@ export class CoordStore {
    * DOM list, plus a per-row `unreadMailCount` subquery apiece.
    *
    * The clamp is asymmetric ON PURPOSE: an ACTIVE run (`state NOT IN
-   * ('done','failed')`) is never dropped by it, however old — the live
+   * TERMINAL_RUN_STATES_SQL`) is never dropped by it, however old — the live
    * board's whole job is showing every run still moving, and a program that
    * has been open for a year is exactly the one an operator most needs to
    * see, not the one to hide behind a LIMIT. Only the FINISHED half — which
@@ -2028,14 +2071,14 @@ export class CoordStore {
     if (!opts.includeClosed) {
       return this.hydrateRuns(this.db.prepare(
         `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
-        "WHERE r.state NOT IN ('done','failed') ORDER BY r.id",
+        `WHERE r.state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY r.id`,
       ).all() as unknown as RunRowDb[]);
     }
     const n = clampMailLimit(opts.closedLimit ?? 500);
     return this.hydrateRuns(this.db.prepare(
       `SELECT ${RUN_ROW_COLUMNS} FROM runs r JOIN programs p ON p.slug = r.program ` +
-      "WHERE r.state NOT IN ('done','failed') OR r.id IN " +
-      "(SELECT id FROM runs WHERE state IN ('done','failed') ORDER BY id DESC LIMIT ?) " +
+      `WHERE r.state NOT IN ${TERMINAL_RUN_STATES_SQL} OR r.id IN ` +
+      `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?) ` +
       'ORDER BY r.id',
     ).all(n) as unknown as RunRowDb[]);
   }
@@ -2127,16 +2170,17 @@ export class CoordStore {
    * "no exclusion" call and the excluding call are ONE query, not two.
    */
   openRunsForSession(sessionId: string, excludeRunId?: number): OpenSiblingsResult {
-    // Three of the four columns are CAST to TEXT and proven, for
+    // Four of the five columns are CAST to TEXT and proven, for
     // `RUN_ROW_COLUMNS`'s reason (D-2545) — this read's three consumers are all
     // DESTRUCTIVE decision points, so an unrepresentable row here must refuse
     // in words rather than throw out of a sweep or a fleet act.
     const rows = this.db.prepare(
       'SELECT CAST(id AS TEXT) AS idText, program, CAST(wave AS TEXT) AS waveText, ' +
-      'CAST(waveOf AS TEXT) AS waveOfText FROM runs ' +
-      "WHERE sessionId = ? AND state NOT IN ('done','failed') AND id != ? ORDER BY id",
+      'CAST(waveOf AS TEXT) AS waveOfText, CAST(reviews AS TEXT) AS reviewsText FROM runs ' +
+      `WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} AND id != ? ORDER BY id`,
     ).all(sessionId, excludeRunId ?? -1) as unknown as
-      { idText: string; program: string; waveText: string; waveOfText: string | null }[];
+      { idText: string; program: string; waveText: string; waveOfText: string | null;
+        reviewsText: string | null }[];
     const siblings: OpenSibling[] = [];
     for (const r of rows) {
       const m = measureRunNumbers(r);
@@ -2178,7 +2222,7 @@ export class CoordStore {
   openCoordinatorIds(): string[] {
     return (this.db.prepare(
       'SELECT DISTINCT claimedBy FROM runs ' +
-      "WHERE claimedBy IS NOT NULL AND state NOT IN ('done','failed')",
+      `WHERE claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).all() as { claimedBy: string }[]).map((r) => r.claimedBy);
   }
 
@@ -2328,13 +2372,34 @@ export class CoordStore {
    *  answered to know whether the run it just closed was the LAST one: zero
    *  remaining means nothing under this program can dispatch, mail, or hold
    *  a workspace open any more, so `resolveCoordinator`'s "exactly one
-   *  active program" guard (D-26) must stop counting it. Mirrors
-   *  `capsUsage().running`'s own `state NOT IN ('done','failed')` predicate,
-   *  scoped to one program instead of the whole fleet. */
+   *  active program" guard (D-26) must stop counting it. NOT the same
+   *  question `capsUsage().running` asks since design 2026-09-14 §7.1 (as
+   *  corrected by D-2803): that one now names `INACTIVE_RUN_STATES_SQL`
+   *  (idle ∪ terminal, dispatched/working/unknown sessions only survive it),
+   *  while this one still names `TERMINAL_RUN_STATES_SQL`'s complement
+   *  (every non-terminal state, IDLE included) — a program with every run
+   *  parked at `awaiting-review` is still open, and must stay so. */
   programOpenRunCount(program: string): number {
     return (this.db.prepare(
-      "SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ('done','failed')",
+      `SELECT count(*) AS c FROM runs WHERE program = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL}`,
     ).get(program) as { c: number }).c;
+  }
+
+  /** The one NON-TERMINAL review run naming `workRunId`, or null (design
+   *  2026-09-14 §5.1 — "one review run per work run at a time"). Read fresh at
+   *  both decision points that need it: the review OPEN (inside `openRun`'s own
+   *  transaction) and the send-back ADVANCE (routes). `TERMINAL_RUN_STATES_SQL`
+   *  is L0's pair; an `unknown`-state review run is LIVE here (D-2794).
+   *
+   *  An unrepresentable id answers null — D-2545's family; the route's `run()`
+   *  read of the same row will refuse first on every path that reaches it. */
+  reviewInFlightFor(workRunId: number): number | null {
+    const row = this.db.prepare(
+      `SELECT CAST(id AS TEXT) AS idText FROM runs WHERE reviews = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id LIMIT 1`,
+    ).get(workRunId) as { idText: string } | undefined;
+    if (!row) return null;
+    const id = Number(row.idText);
+    return isPositiveDecimalSafeInteger(id) ? id : null;
   }
 
   programs(): { slug: string; title: string; state: ProgramState }[] {
@@ -2383,15 +2448,16 @@ export class CoordStore {
    *  column goes through its guard here, never a cast, so this is also the
    *  one place that rule could be forgotten for a future column.
    *
-   *  It takes a MEASURED row rather than a raw one (D-2545) so that the three
+   *  It takes a MEASURED row rather than a raw one (D-2545) so that the four
    *  persisted integers cannot arrive here unproven: the proof is a
    *  precondition of the type, not a step a future caller could skip. */
   private hydrateRun(m: MeasuredRunRow, health: RunHealth): RunRow {
     const row = m.row;
     return {
-      // The three PROVEN integers (D-2545), never `Number(row.…)` here: this
-      // method is handed a row whose id, wave and waveOf have already been
-      // measured, precisely so it cannot be the place the proof is forgotten.
+      // The four PROVEN integers (D-2545), never `Number(row.…)` here: this
+      // method is handed a row whose id, wave, waveOf and reviews have already
+      // been measured, precisely so it cannot be the place the proof is
+      // forgotten.
       id: m.nums.id, program: row.program, programTitle: row.programTitle,
       // Straight off the `programs` join, on `programTitle`'s idiom: a free-form
       // project name, no vocabulary to read it through. NULL means the programme
@@ -2400,6 +2466,8 @@ export class CoordStore {
       wave: m.nums.wave, waveOf: m.nums.waveOf, project: row.project,
       sessionId: row.sessionId, workspace: row.workspace, branch: row.branch,
       state: isRunState(row.state) ? row.state : 'unknown',
+      kind: isRunKind(row.kind) ? row.kind : 'unknown',
+      reviews: m.nums.reviews,
       // `runs.claimedBy` — TEXT, nullable — read straight through on
       // `sessionId`/`workspace`/`branch`'s idiom two lines up, with no guard
       // of its own: it is a free-form tmux-derived session id, not an enum, so
@@ -2437,7 +2505,7 @@ export class CoordStore {
       health,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
       // Read straight through, on `homeProject`'s idiom: a free-form project
-      // name stamped once at open time (migration 11), never re-derived here.
+      // name stamped once at open time (migration 12), never re-derived here.
       // NULL means "not stamped" — an older row, or an open whose registry
       // read came back absent/unlistable — and `RunRow`'s own docstring says
       // this stays off the wire (`toRunSummary` strips it alongside
@@ -2738,8 +2806,8 @@ export class CoordStore {
    */
   capsUsage(now: number = Date.now()): { running: number; dispatchedIn24h: number } {
     // `dispatchedAt IS NOT NULL` (deviation D-13, found in Task 3 review):
-    // `state NOT IN ('done','failed')` alone also matched `planned` — the
-    // state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
+    // a bare "state is not terminal" predicate alone also matched `planned` —
+    // the state `openRun` writes and Task 9's `ambiguous-dispatch` refusal
     // deliberately leaves a run in, with no session and no workspace. Three
     // botched dispatches on one program would otherwise pin `running` at the
     // default `maxConcurrentWorkers` forever. In normal dispatch flow
@@ -2749,8 +2817,17 @@ export class CoordStore {
     // other writer, and for the same reason — it too holds a live session,
     // just one the database lost track of rather than one `markDispatched`
     // just minted.
+    //
+    // Since design 2026-09-14 §7.1 (as corrected by D-2803) the predicate
+    // excludes the IDLE and TERMINAL lists — `state NOT IN idle ∪ terminal`
+    // — so a run at `awaiting-review`, `merging` or `closing` stops counting
+    // the moment it gets there: the session beneath those states is idle by
+    // contract, and an idle worker holding a fleet slot is what blocked
+    // wave 6 of account-pools on 2026-09-14 (runs 39/40, 110 h at
+    // awaiting-review). D-13's principle is kept and sharpened: this names
+    // the runs whose session is WORKING.
     const running = (this.db.prepare(
-      "SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ('done','failed')",
+      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
     ).get() as { c: number }).c;
     const dispatchedIn24h = (this.db.prepare(
       'SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND dispatchedAt > ?',
@@ -4646,18 +4723,19 @@ export class CoordStore {
    *  derived answer follows a handover for free while a stored id would name
    *  a corpse.
    *
-   *  `state NOT IN ('done','failed')` is COPIED from `openRunsForSession`
-   *  (`:1560`) and `openCoordinatorIds` (`:1575-1581`), never
-   *  `TERMINAL_RUN_STATES`: that constant is derived from `RUN_TRANSITIONS`,
-   *  which gives `'unknown'` an empty outgoing-edge list and so calls it
-   *  terminal — but every shipped session-keyed query in this file counts an
-   *  `'unknown'` row (a token a newer build wrote and this one degrades on
-   *  read) as OPEN. `openCoordinatorIds`'s own docstring rules on exactly this
-   *  divergence and says it "stays latent only while new predicates copy the
-   *  SQL spelling instead of re-deriving one" — this is that copy, not a
-   *  fresh derivation, so it agrees with `close.ts`'s `survivorOf` (built on
-   *  `openRunsForSession`) on which run of a session is open, including on an
-   *  `'unknown'` row.
+   *  `state NOT IN ${TERMINAL_RUN_STATES_SQL}` used to be COPIED, hand-written,
+   *  from `openRunsForSession` (`:2048`) and `openCoordinatorIds`
+   *  (`:2098-2103`), deliberately never the OLD `TERMINAL_RUN_STATES`: that
+   *  constant used to be derived from `RUN_TRANSITIONS`, which gives
+   *  `'unknown'` an empty outgoing-edge list and so called it terminal — but
+   *  every shipped session-keyed query in this file counts an `'unknown'` row
+   *  (a token a newer build wrote and this one degrades on read) as OPEN.
+   *  Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is L0's own
+   *  pair (`shared/api.ts`) and does NOT call `'unknown'` terminal either, so
+   *  the divergence this paragraph used to warn about is gone: this query now
+   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `close.ts`'s
+   *  `survivorOf` (built on `openRunsForSession`) on which run of a session is
+   *  open, including on an `'unknown'` row.
    *
    *  ORDER BY id DESC is a CONVENTION, not a guarantee: nothing in the schema
    *  forbids two open runs naming one sessionId, and the coordinator protocol
@@ -4668,7 +4746,7 @@ export class CoordStore {
    *  ASC (fix round 1, finding 2). */
   parentOfSession(childId: string): string | null {
     const row = this.db.prepare(
-      "SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ('done','failed') " +
+      `SELECT claimedBy FROM runs WHERE sessionId = ? AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
       'ORDER BY id DESC LIMIT 1',
     ).get(childId) as { claimedBy: string | null } | undefined;
     return row?.claimedBy ?? null;
@@ -4676,7 +4754,7 @@ export class CoordStore {
 
   /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID
    *  DOMAIN (`isPositiveDecimalSafeInteger`) — are CAST to TEXT and proven,
-   *  exactly as `RUN_ROW_COLUMNS` does for its three.
+   *  exactly as `RUN_ROW_COLUMNS` does for its four.
    *
    *  THE BOUNDARY, said out loud because the next reader will ask: the four
    *  epoch-millisecond columns (`at`, `askAt`, `answeredAt`, `releasedAt`) are

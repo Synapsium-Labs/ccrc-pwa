@@ -7,7 +7,7 @@ and **follows a session across account/wrapper swaps**
 (the thing claude.ai's own app can't do). Weigh every feature by the loop it serves:
 spec → plan → subagent execution with per-PR review lenses + whole-branch pass → coordinated multi-wave programs.
 
-**`README.md` (~2875 lines) is the canonical system overview. This file is only the non-obvious operational rules
+**`README.md` (~3100 lines) is the canonical system overview. This file is only the non-obvious operational rules
 — read the README for anything below in depth.** Deep design lives in `docs/superpowers/specs/` (esp.
 `2026-08-10-architecture-ddd-clean-solid.md`, `2026-08-07-build7-fleet-coordination-design.md`).
 
@@ -148,6 +148,18 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   peer omitting a field, through a SINGLE reader per field. Reading a persisted `FleetSession[]` from an older
   build goes through `reviveFleetSession` (returns a literal, so a new field is a compile error until every path
   computes it). `FLEET_PROTO_MIN` is a dormant kill-switch.
+- **Account pools — both sides optional, `ccd` is the authority.** An account carries an optional `pool`
+  (`accounts.json`, emitted as `_ccrc_pool` into `accounts.sh`, so a cross-box disagreement is visible);
+  a project carries one at `~/.cc-sessions/pools/<project>` — a DOTLESS registry subdirectory, never
+  `$REG/<project>.<x>` (ids are `<wrapper>-<project>`, so a project named `acct-a-demo` would write
+  session `acct-a-demo`'s own field). Serve iff either side is untagged or the names are equal:
+  **untagged = unconstrained, and tagging can only tighten.** `ccd` decides at every placement, tick and
+  manual verb; the server REFUSES (409/503), FORECASTS and composes the wire, and **never places a
+  session or writes the marker**. `_project_pool_state` is ccd's ONLY reader (`server/src/pools.ts` is
+  the server's own) and answers four words — `named <n>`/`untagged`/`unreadable`/`malformed`, always
+  rc 0 — and an undecidable tag never folds into `untagged`. `--cross-pool` is NOT `--force` (transcript
+  loss); `.crosspool`/`.stranded`/`.strandnotify` purge with the row. Fixtures are `pool-a`/`pool-b`; real
+  pool names are operator DATA that NOTHING scans for — `topology-clean` has no pool class — so keep them out by hand.
 
 ## Coordination (Build 7) invariants a coder must NOT break
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather
@@ -179,6 +191,10 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   that one file is invisible to the set that pins the doors. The second IS in that file's `SESSION_ONLY`
   set, and `box-token-census.test.ts` now checks this sentence against it in both directions (D-1231).
   Don't assume — read the guards.
+- **The dispatch cap counts ACTIVE runs** (`ACTIVE_RUN_STATES` in `shared/api.ts`: `dispatched`, `working`,
+  `unknown`) — a run at `awaiting-review`/`merging`/`closing`/`planned` holds no slot, and `advance -> working`
+  from an idle state is cap-checked (design 2026-09-14 §7). `run-states.test.ts` pins that every `RunState` is
+  classified exactly once; never add a state without placing it.
 - **Mail delivery is idle-gated, reference-based, never awaited:** what lands in a session is a one-line nudge;
   the body lives in the durable store, fetched over `GET /api/mail/:id`. On mail rows use the DELIVERY id for
   `:id` in ack/fetch — **never the mail row's own id** (two separate autoincrement sequences).
@@ -191,7 +207,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its eleven clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its twelve clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
@@ -203,6 +219,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   invokes it, so a wave brief carries WAVE SPECIFICS — plan path, task range, interfaces, deviations — never the
   standing protocol. The one exception is deliberate: the branch-discipline sentence is said in both, because a
   skill reaches a home only once its installer has run there.
+- **So does the reviewer** (`ccd/reviewer-skill/SKILL.md`, `ccrc-reviewer`, ten clauses pinned by
+  `server/test/reviewer-skill.test.ts`; no `references/` of its own). A review run (design 2026-09-14) is
+  dispatched by the coordinator on a verified wave-done; the reviewer reads the worker branch at one measured
+  tip in its OWN worktree and mails one report; the coordinator rules. `REVIEWER_KICKOFF_PREFIX` prefixes its
+  brief exactly as the worker's does.
 
 ## Open on `main` — do NOT assume these are fixed
 `MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in

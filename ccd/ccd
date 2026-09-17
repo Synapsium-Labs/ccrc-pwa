@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d1606d93a70713ed9d5ea5fb7e9b45b577f961fba938ec94b6192234382133f9
+# ccrc:generated 1 sha256=8ed3ce4899d5dc4193b356bbcc186197dc8b8b6848b8528528f7dec1ed3b3629
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1327,10 +1327,15 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # one would be a new dependency class); CLEARED by that probe on a 403, by a
 # successful spawn (`_spawn_settle`), and by an operator `rm`.
 #
-# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob:
-# `_reg_purge`, `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*`
-# and skip any suffix containing a dot, so `$REG/claude-authdead` is invisible
-# to all three even when a session id spells it exactly.
+# DOTLESS AND PER-ACCOUNT, which is what keeps it out of every registry glob —
+# and since D-2605 that takes TWO clauses rather than one. `_reg_purge`,
+# `_ws_slug_free` and `_ws_slug_residue` all glob `"$REG/$id".*` and skip any
+# suffix containing a dot; `_ws_slug_free` and `_ws_slug_residue` ALSO take a
+# second pass over the dot-LEADING `.<id>.` private compaction families, so for
+# those two the dot-skip is no longer the whole reason. `$REG/claude-authdead`
+# is invisible to all three because it is DOTLESS (nothing follows an id to
+# match `"$REG/$id".*`) AND because it matches no `.<id>.`-prefixed private
+# family — not because of the dot-skip alone.
 #
 # NOT `-disabled`. That name is OPERATOR intent, has no writer in this tree, and
 # both its conjuncts in `_account_ok` are things a human did. This one is a
@@ -1674,10 +1679,10 @@ _account_measured() {
 # the general per-lane kill-switch, not a second mechanism beside it.
 _gpt_enabled() { _account_ok gpt; }
 _codex_lane_status() {   # human-readable state of ONE Codex lane (for `ccd ls`)
-  # PARAMETERISED 2026-09-14, was `_gpt_status` with `gpt` written in five
-  # places. The footer it feeds described one lane by name while the roster had
-  # carried two Codex lanes since 2026-09-10, so `gpt2` — which at the time of
-  # this change was the lane actually holding sessions — had no line at all.
+  # PARAMETERISED 2026-09-14, was named _gpt_status — unbackticked because that
+  # function no longer exists. `gpt` was written in five places; the footer it
+  # feeds described one lane by name while the roster had carried two Codex lanes
+  # since 2026-09-10, so `gpt2` — the lane then holding sessions — had no line.
   #
   # The prose below is Codex's own usage story ("Codex weekly cap", the 5h
   # cooldown, ccgpt-usage's JSON shape), which is a fact about THAT backend and
@@ -2346,15 +2351,522 @@ _reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
     meas.project "$(_reg_get "$1" project)"
   _reg_set "$1" started 1
 }
-_usage_purge() {   # id — the usage sidecar (routing spec 2026-09-14 §6) is keyed by
-  # the ccd id, so a REUSED id must never inherit a dead session's reading. Exact
-  # names, never a glob: `_reg_purge's own unanchored-glob hazard (an id that is
-  # a prefix of another) applies to this directory too. Always 0 — a purge that
-  # cannot remove a sidecar is not a reason to stop purging the row.
-  rm -f -- "$REG/usage/$1.json" 2>/dev/null
-  rm -f -- "$REG/usage/.$1."*.tmp 2>/dev/null
-  [[ -d "$REG/usage/$1.agents" ]] && rm -rf -- "$REG/usage/$1.agents" 2>/dev/null
+_usage_purge() {   # id — the usage sidecar (routing spec 2026-09-14 §6) is keyed by the ccd id, so a REUSED id must
+  # never inherit a dead session's reading. Exact names, never a glob: `_reg_purge`'s own unanchored-glob hazard (an
+  # id that is a prefix of another) applies to this directory too. EXACTLY ONE CALLER, `_reg_purge`, whose dynamic
+  # scope carries `_pg_urc` — so every removal below is RECORDED through `_reg_purge_unremoved` and raises THAT
+  # function's status to 3. This one still returns 0: a refused removal is not a reason to stop purging the row.
+  rm -f -- "$REG/usage/$1.json" 2>/dev/null || _reg_purge_unremoved "$REG/usage/$1.json"
+  rm -f -- "$REG/usage/.$1."*.tmp 2>/dev/null || _reg_purge_unremoved "$REG/usage/.$1.*.tmp"
+  [[ -d "$REG/usage/$1.agents" ]] && { rm -rf -- "$REG/usage/$1.agents" 2>/dev/null || _reg_purge_unremoved "$REG/usage/$1.agents"; }
   return 0
+}
+
+# ── THE PERMANENT STABLE LOCK, ccd's side (D-2605, spec §3.4) ────────────
+# The SAME `$REG/.<id>.compactions.lock` inode the hook takes, reached through
+# the same protocol, because the thing being excluded is a compaction-artifact
+# publisher and the hook is the other one. ccd carries its OWN literal of the
+# bound rather than sourcing the hook's: the two files ship as separate
+# `install_atomic` targets, so a shared spelling would have a window where one
+# side carries it and the other does not. They are TWINNED and pinned
+# value-equal over the bash corpus.
+COMPACT_LOCK_WAIT=5
+
+# The `link`-off-canonical, open-the-alias, unlink-the-alias protocol, spelled
+# once. Canonical is NEVER opened at its own pathname — `exec {fd}<>"$lock"` is
+# create-capable, and two racers each creating a different inode at one
+# pathname would each be told by `flock` that they hold "the" lock.
+#
+# rc 2 is MECHANISM ABSENCE, established by `command -v flock` BEFORE any
+# acquire is attempted; rc 1 is an ordinary refusal or a timeout. Measured,
+# both a contended `flock -w` and a missing binary spell their failure `1`, so
+# the distinction can live only in WHICH probe answered. The two conditions
+# have DIFFERENT callers' rulings (§3.4, "Platform outcome"), which is why they
+# may not be folded together here.
+_compact_lock_same() {   # <fd> <canonical> -> 0 iff one regular inode. `-ef` (dev+ino) decides through /proc; through /dev/fd — Darwin, MEASURED on macOS 25.6 arm64: stat(/dev/fd/N) answers the fdesc DEVICE (1245178674) with the file's inode, stat(lock) 16777230 — dev differs, so the inode alone decides there (`ls -i` is POSIX, so no platform arm is needed).
+  local fd="$1" lock="$2" p=""
+  if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
+  elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
+  else return 1; fi
+  [[ -f "$p" ]] || return 1
+  [[ -f "$lock" && ! -L "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || { [[ "$p" != /proc/* ]] && a=$(ls -i -- "$p" 2>/dev/null) && b=$(ls -i -- "$lock" 2>/dev/null) && [[ -n "${a%% *}" && "${a%% *}" == "${b%% *}" ]]; } || return 1
+  return 0
+}
+
+# THE CCD-SIDE TWIN of `_hook_lock_vanished` (`ccd/session-hook.sh`), which
+# carries the full argument and the measurements. In short: §4 requires a later
+# canonical disappearance to REFUSE rather than mint a second inode at the same
+# pathname under a live holder, and the two conditions are only distinguishable
+# by finding the holder. (a) an acquisition in flight still has its exact-family
+# alias on disk; (b) a holder past its acquire has unlinked the alias and keeps
+# only a descriptor — MEASURED, `$REG` then lists the canonical file and nothing
+# else, while `/proc/<pid>/fd/<n>` reads back that alias pathname with
+# ` (deleted)` after it. Gated on an ABSENT canonical, so the `/proc` walk never
+# runs on an ordinary acquire.
+_compact_lock_vanished() {   # <id> -> 0 iff an ABSENT canonical is a LATER disappearance
+  local id="$1" f
+  for f in "$REG/.$id.compactions.lock-open."*; do
+    { [ -e "$f" ] || [ -L "$f" ]; } && return 0
+  done
+  # GATED ON A LIVE ROW, then on one `find` rather than a fork per descriptor —
+  # the hook-side twin carries the measurements (8 s against 0.16 s on this
+  # box). `<id>.generation` absent proves no hook on this row ever held this
+  # lock, which is the same argument `_reg_purge`'s own fail-open rests on.
+  [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
+  [ -d /proc ] || return 1   # AND WHERE THERE IS NO `/proc`, §4'S RULE IS NOT ENFORCED HERE EITHER — the hook-side twin's own gate carries the full argument and the residue's reasoning. In short: this is the only probe that can see a holder past its acquire, so on a box without `/proc` (Darwin) a later canonical disappearance under a live holder reads as a first-ever mint, the acquire mints a second inode at the one pathname, and `_reg_purge`, `cmd_ws_add`, `cmd_start` and `_spawn_start` all proceed where §4 says they must refuse. Recorded platform residue, not a defect to be papered over: the refusal-side cases are Linux-only and say so.
+  command -v find >/dev/null 2>&1 || return 1
+  [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
+             -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1
+  return 0
+}
+
+_compact_lock_acquire() {   # <id> <wait> -> 0 + COMPACT_LOCK_FD; 1 refused; 2 mechanism absent
+  local id="$1" wait="$2" lock="$REG/.$1.compactions.lock" al="" fd="" tries=0 src=""
+  COMPACT_LOCK_FD=""
+  # WHY, NOT A SECOND STATUS — see `_hook_lock_acquire`'s note. `cmd_start` and
+  # `_spawn_start` both fall through an unrecognised code into a silent
+  # continue, so a new numeric value would be a refusal nobody distinguishes
+  # and two spawn paths would quietly treat it as mechanism absence. Cleared on
+  # entry so a stale one is never read as this call's.
+  #
+  # AND IT IS A NARROW CLAIM (r5 R4-M3, corrected r6 R5-M1, r7 R6-I1/R6-M1).
+  # Status 1 leaves this function from many distinct states; COMPACT_LOCK_WHY is
+  # written at FIVE assignment sites over FOUR distinct tokens, and THIS COMMENT
+  # IS THE ONLY PLACE THAT CENSUS IS KEPT — the four durable purge callers point
+  # here instead of restating it, because every caller-side copy of it went
+  # stale the moment a site was added (r7 R6-M1). `lock-path-occupied` owns TWO
+  # of the five: the mint-time occupied test just below and the post-`link`
+  # re-test near the end of this block, which observe the identical condition
+  # one instant apart and deserve the identical remedy. Every token means one
+  # thing to a caller: THIS acquire measured a state of `$REG` that no amount of waiting
+  # changes, so "re-run once the compaction settles" is a fabricated remedy
+  # there. An EMPTY `WHY` is STILL NOT a proof of ordinary contention: the
+  # `{ exec {fd}<>"$al"; }` open further below can fail on an out-of-contract
+  # MODE this user cannot open (not only the `flock -w` timeout this empty
+  # default is actually written for), and that residue is KNOWN to contain a
+  # durable state — a lock inode this user has no permission to open never
+  # becomes openable by waiting — not merely folded in as an unlikely race
+  # alongside the timeout. Callers key on the VALUE, and an unrecognised one
+  # is not contention either.
+  COMPACT_LOCK_WHY=""
+  command -v flock  >/dev/null 2>&1 || return 2
+  command -v mktemp >/dev/null 2>&1 || return 2
+  command -v link   >/dev/null 2>&1 || return 2
+  if [ -e "$lock" ] || [ -L "$lock" ]; then
+    # OCCUPIED, NOT CONTENDED. Something that is not a regular file holds the
+    # lock pathname: a symlink (dangling or not, which is why `-L` is tested
+    # separately above), a directory, a FIFO. ccd never writes through it and
+    # never replaces it, so no compaction settles and no wait ends this — the
+    # remedy is a human removing the object, which is why it carries a token.
+    [[ -f "$lock" && ! -L "$lock" ]] || { COMPACT_LOCK_WHY=lock-path-occupied; return 1; }
+  elif _compact_lock_vanished "$id"; then
+    # REFUSE BEFORE THE MINT: nothing has been created yet, so the refusal owns
+    # nothing to clean up and the live holder's inode is never displaced.
+    COMPACT_LOCK_WHY=canonical-vanished
+    return 1
+  else
+    # A RUNTIME FAILURE, NOT MECHANISM ABSENCE. `command -v mktemp` succeeded
+    # above, so status 2 was already ruled out. `mktemp` answering non-zero
+    # HERE means it could not create the private source it mints the lock
+    # from in `$REG` — the USUAL cause is `$REG` being full, read-only or not
+    # writable by this user, but this reports ANY failure of that one
+    # command, not only that cause: a failed fork (`RLIMIT_NPROC`, pid
+    # exhaustion on a box that runs ~20 live sessions) or fd exhaustion
+    # answers the identical non-zero and is not a property of `$REG` at all —
+    # folded in here because the acquire cannot tell them apart, not because
+    # they share a remedy (r6 R5-M2). A wait frees neither, so this one
+    # carries a token too.
+    src=$( umask 077; mktemp "$REG/.$id.compactions.lock-init.XXXXXX" 2>/dev/null ) \
+      || { COMPACT_LOCK_WHY=lock-source-refused; return 1; }
+    [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
+    link "$src" "$lock" 2>/dev/null || true      # EEXIST: validate, never recreate
+    rm -f "$src" 2>/dev/null || true
+    # THE SAME CONDITION ONE INSTANT LATER — OR A PUBLISH THAT NEVER HAPPENED
+    # (r6 R5-M1, split r7 R6-I1). This re-test is a DISJUNCTION, and its two
+    # halves are different states owed different remedies, so each now gets its
+    # own token instead of collapsing into one:
+    #   - SOMETHING IS THERE. A stranger can win the lock pathname between the
+    #     `[ -e "$lock" ]` test above and here — mkdir a directory over it, say
+    #     — and this re-test is what catches that: without the token, an EMPTY
+    #     `WHY` sent all four durable callers to the contention arm for a
+    #     pathname nothing here will ever unoccupy, which is the same
+    #     false-twice remedy `lock-path-occupied`'s own arm exists to give
+    #     instead.
+    #   - NOTHING IS THERE. The `link` above swallows EVERY errno behind
+    #     `|| true`, and `command -v link` at the top of this function already
+    #     ruled out the binary being absent — so a publish that failed because
+    #     `$REG` is full, over quota, read-only, or was renamed between the
+    #     `mktemp` and the `link` arrives here with the pathname EMPTY.
+    #     MEASURED on the pre-split form with a `link` shim answering non-zero:
+    #     it answered `lock-path-occupied` on exactly that state, and every
+    #     clause of the remedy that token renders was false — no symlink, no
+    #     directory, no object at all to remove by hand. That state is a
+    #     sibling of `lock-source-refused` three lines up rather than of the
+    #     occupied one, and `lock-publish-failed` is its own token.
+    #
+    #     AND THE CAUSE LIST ABOVE IS NOT THE WHOLE ROUTE (r8 R8-M1). An EMPTY
+    #     pathname is also what a `link` that SUCCEEDED looks like after a
+    #     stranger unlinks the lock in the instant between the `link` and this
+    #     re-test — MEASURED with a shim that publishes for real and then
+    #     removes what it published: the same `lock-publish-failed`, with a
+    #     healthy `$REG` and no failure of anything. This guard measures a
+    #     STATE, never an act, so the token's remedy is worded to the state and
+    #     enumerates the `$REG` causes as the usual ones alone.
+    if [[ ! -f "$lock" || -L "$lock" ]]; then
+      if [ -e "$lock" ] || [ -L "$lock" ]; then COMPACT_LOCK_WHY=lock-path-occupied
+      else COMPACT_LOCK_WHY=lock-publish-failed
+      fi
+      return 1
+    fi
+  fi
+  while (( tries < 8 )); do
+    al="$REG/.$id.compactions.lock-open.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$lock" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  # `{ exec …; } 2>/dev/null`, NEVER `exec … 2>/dev/null`. MEASURED: `exec`
+  # with redirections and NO COMMAND applies them to THE SHELL, permanently, so
+  # the bare form silences ccd's stderr for the rest of the process — which is
+  # how `_spawn_start`'s operator-facing "--resume … left no session" warning
+  # vanished under this function's first draft, caught by
+  # `ccd-spawn-split.test.ts`. A `{ …; }` group is not a subshell, so the
+  # `{fd}` assignment still lands here and a failed open still returns 1.
+  { exec {fd}<>"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  _compact_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  flock -w "$wait" "$fd" 2>/dev/null || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  _compact_lock_same "$fd" "$lock" || { { exec {fd}>&-; } 2>/dev/null; return 1; }
+  COMPACT_LOCK_FD="$fd"
+  return 0
+}
+
+_compact_lock_release() {   # <fd>
+  local fd="${1-}"
+  [[ -n "$fd" ]] || return 0
+  { exec {fd}>&-; } 2>/dev/null || true
+  return 0
+}
+
+_compact_lock_why_remedy() {   # <id> <verb> -> the ONE sentence a durable
+                                # purge caller journals for the CURRENT
+                                # COMPACT_LOCK_WHY (r6 R5-M3). ONE renderer
+                                # consulted by all four durable callers
+                                # (`ws-rm`, `ws-reap`, `ws-gc --prune`,
+                                # `forget`) instead of four copies, so a
+                                # single caller's text drifting from the
+                                # others is impossible rather than merely
+                                # unpinned — the reviewer's own named
+                                # alternative to a fifth `LEGS` fixture.
+                                #
+                                # `<id>` IS THE ROW ID, spelled however the
+                                # caller already spells it: `ws-gc --prune`
+                                # passes `$project-$slug`, the other three
+                                # pass the literal `$id`. `<verb>` selects only
+                                # the SHAPE of the two clauses that are
+                                # caller-specific rather than token-specific:
+                                #   - the RE-RUN clause, empty `WHY` only:
+                                #     `ws-gc --prune` sweeps many rows and
+                                #     names none in a re-run command; `ws-reap`
+                                #     names none either (nothing about a
+                                #     completed reap is re-run); `ws-rm` and
+                                #     `forget` each name themselves and `$id`.
+                                #   - the SURVIVING-STATE clause, every token:
+                                #     `ws-rm`/`forget`/`ws-reap` have already
+                                #     torn the workspace down, so "$REG/$id.*
+                                #     and $REG/$id.generation still stand" is
+                                #     the true residue; `ws-gc --prune`
+                                #     DECLINES before anything irreversible
+                                #     (`_lc_refuse_return`, never `_lc_fail`),
+                                #     so "the registry row is untouched" is
+                                #     the true fact there instead — a
+                                #     different claim, not a style choice.
+  local id="$1" verb="$2" tail sentence=""
+  if [[ "$verb" == 'ws-gc --prune' ]]; then
+    tail="the registry row is untouched"
+  else
+    tail="$REG/$id.* and $REG/$id.generation still stand"
+  fi
+  case "${COMPACT_LOCK_WHY:-}" in
+    '')
+      case "$verb" in
+        'ws-gc --prune') sentence="$REG/.$id.compactions.lock was unavailable; $tail" ;;
+        ws-reap) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run once the compaction settles" ;;
+        *) sentence="$REG/.$id.compactions.lock was unavailable. $tail; re-run ccd $verb $id once the compaction settles" ;;
+      esac ;;
+    canonical-vanished)
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help; $tail, and if no holder remains, restore $REG/.$id.compactions.lock by hand"
+      else
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock has been unlinked while a live holder still owns its inode, and ccd will not mint a second one over it, so no compaction can settle and a re-run cannot help. $tail; if no holder remains, restore $REG/.$id.compactions.lock by hand and re-run"
+      fi ;;
+    lock-path-occupied)
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help; $tail, and the remedy is to confirm no holder remains and then remove that object by hand"
+      else
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock is not a regular file: a symlink, directory or other object holds the lock pathname, and ccd neither writes through it nor replaces it, so no compaction can settle and a re-run cannot help. $tail; confirm no holder remains, then remove that object by hand and re-run"
+      fi ;;
+    lock-source-refused)
+      # r6 R5-M2: the guard cannot distinguish `$REG` itself refusing the
+      # write from a failed fork or fd exhaustion elsewhere on the box, so
+      # this reports the MEASUREMENT and offers the cause as the usual one,
+      # never the only one, and never claims a re-run cannot help "until" a
+      # repair — only "while" whatever actually failed still holds.
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds; $tail — repair $REG"
+      else
+        sentence="$COMPACT_LOCK_WHY — $REG/.$id.compactions.lock does not exist and ccd could not create the private source it mints the lock from in $REG; the usual cause is $REG being full, read-only or not writable by this user, but any failure of the mint is reported here, and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+      fi ;;
+    lock-publish-failed)
+      # r7 R6-I1: the `link` that publishes the private source AS the lock
+      # swallows every errno, so this is the one refusal that leaves NOTHING at
+      # the lock pathname — which is why it cannot wear `lock-path-occupied`'s
+      # sentence, every clause of which asserts an object is there and asks a
+      # human to remove it.
+      #
+      # AND IT NAMES THE STATE, NOT AN ACT (r8 R8-M1, finishing what r7 began).
+      # The wording this replaces said the publish "could not be published",
+      # which is an ACT this guard never observes: the re-test reaches this
+      # token whenever the pathname is EMPTY, and a `link` that SUCCEEDED and
+      # was unlinked by a stranger one instant later arrives here too —
+      # MEASURED through the real harness with a `link` shim that publishes for
+      # real and then removes what it published, which answers exactly this
+      # token. Every clause of the act-wording is false in that state: the
+      # publish happened, `$REG` is healthy, and "repair $REG" is unperformable.
+      # So this says what the guard saw — nothing at the pathname — offers the
+      # `$REG` causes as the usual ones rather than the only ones, and names the
+      # second route explicitly, for the same reason `lock-source-refused`
+      # above reports its measurement instead of its likeliest cause.
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds; $tail — repair $REG"
+      else
+        sentence="$COMPACT_LOCK_WHY — the private lock source was minted but nothing stands at $REG/.$id.compactions.lock; the usual cause is $REG being full, over quota, read-only or moved, but any state that leaves the lock unpublished is reported here — including one removed the instant after it was created — and a re-run cannot help while that holds. $tail; repair $REG, then re-run"
+      fi ;;
+    *)
+      if [[ "$verb" == 'ws-gc --prune' ]]; then
+        sentence="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer; $tail — inspect $REG/.$id.compactions.lock by hand"
+      else
+        sentence="$COMPACT_LOCK_WHY — the acquire named a condition this caller carries no remedy for, so it is not ordinary contention and a wait is not the answer. $tail; inspect $REG/.$id.compactions.lock by hand"
+      fi ;;
+  esac
+  # FAIL CLOSED, NEVER EMPTY (r7 R6-I3). Every arm above assigns `sentence`, so
+  # on a tree where each token has an arm this line is unreachable — which is
+  # exactly why it is here. MEASURED before it existed: delete the catch-all
+  # arm, hand the helper an out-of-vocabulary token, and `sentence` stayed
+  # UNSET; ccd runs `set -uo pipefail` with no `-e`, so the production capture
+  # form (`_rm_why=$(_compact_lock_why_remedy …)`, stdout only) swallowed the
+  # unbound-variable death in the subshell and the durable journal line ended
+  # "could not be purged: " with nothing after the colon. A remedy that says
+  # nothing is worse than one that says it has nothing to say, so this names
+  # the token and the pathname a human can look at instead.
+  #
+  # AND IT CARRIES THE RESIDUE, because the residue is not a remedy (r8 R8-M2).
+  # This line said what ccd does not know and stopped there, dropping the one
+  # clause every other arm carries — what SURVIVED the act this sentence
+  # follows. `$tail` is computed above the `case`, before any token is read, so
+  # it is true for every token there will ever be and for this line by
+  # construction: `ws-gc --prune` declined before anything irreversible and its
+  # row is untouched; the other three have already torn the workspace down and
+  # own the registry residue instead. Having no remedy to give is no reason to
+  # withhold a fact the caller measured. A SINGLE form is still right here
+  # because this line prescribes no re-run — that is the clause the verb
+  # selects, and it is the one thing this condition genuinely cannot supply.
+  [[ -n "$sentence" ]] || sentence="${COMPACT_LOCK_WHY:-(the acquire named no condition)} — ccd carries no remedy text for this condition; $tail — inspect $REG/.$id.compactions.lock by hand"
+  printf '%s' "$sentence"
+}
+
+_compact_lock_why_short() {   # -> the SHORT clause the `ws-gc --prune` sweep's
+                              # STDOUT TALLY names for the CURRENT
+                              # COMPACT_LOCK_WHY (r8 R8-M3).
+                              #
+                              # THE SWEEP REPORT AND THE DURABLE RECORD DID NOT
+                              # AGREE. One line after `_pr_why` renders the
+                              # token-specific remedy into the journal, the
+                              # status-1 arm told the human reading the report
+                              # "the compaction lock was unavailable" — the
+                              # CONTENTION story — unconditionally, i.e. for
+                              # `canonical-vanished`, `lock-path-occupied`,
+                              # `lock-source-refused` and `lock-publish-failed`
+                              # alike: the four conditions the durable record
+                              # beside it explicitly refuses to call contention.
+                              # The shape was already available — the status-2
+                              # sibling distinguishes its own cause in the same
+                              # report — and the sweep is the surface an
+                              # operator actually watches.
+                              #
+                              # KEYED ON THE SAME TOKENS AS THE REMEDY HELPER,
+                              # and `(d1e)` derives the vocabulary from the
+                              # acquire and requires an arm here for every one
+                              # of it, exactly as it does there — so the two
+                              # renderers cannot drift and a fifth condition
+                              # cannot gain a remedy while keeping the
+                              # contention tally.
+                              #
+                              # NO ARGUMENTS AND NO INTERMEDIATE VARIABLE. The
+                              # short form carries nothing caller-specific: the
+                              # row id is already in the tally line the caller
+                              # builds, and the re-run and surviving-state
+                              # clauses the verb selects belong to the DURABLE
+                              # sentence, not to a one-line report row. And
+                              # every arm is its own `printf`, so there is no
+                              # `sentence` to leave unset and no fail-closed
+                              # line to add: the `*)` arm IS the guard the
+                              # remedy helper needs one for.
+                              #
+                              # AND EVERY ARM NAMES A STATE, NOT AN ACT (wb
+                              # R9-M1). `lock-publish-failed`'s short form said
+                              # the lock "was never published" — the act-wording
+                              # its own durable twin deliberately dropped one
+                              # round earlier, because the post-`link` re-test
+                              # reaches this token whenever the pathname is
+                              # EMPTY, which includes a publish that SUCCEEDED
+                              # and was unlinked one instant later. Two
+                              # renderers keyed on one vocabulary were telling
+                              # an operator two incompatible stories about one
+                              # state, and this is the one on the surface an
+                              # operator watches.
+  case "${COMPACT_LOCK_WHY:-}" in
+    '')                  printf '%s' "the compaction lock was unavailable" ;;
+    canonical-vanished)  printf '%s' "$COMPACT_LOCK_WHY — the compaction lock was unlinked under a live holder" ;;
+    lock-path-occupied)  printf '%s' "$COMPACT_LOCK_WHY — something that is not a regular file holds the compaction lock pathname" ;;
+    lock-source-refused) printf '%s' "$COMPACT_LOCK_WHY — ccd could not create the private source it mints the compaction lock from" ;;
+    lock-publish-failed) printf '%s' "$COMPACT_LOCK_WHY — nothing stands at the compaction lock pathname" ;;
+    *)                   printf '%s' "$COMPACT_LOCK_WHY — a condition this sweep carries no short form for" ;;
+  esac
+}
+
+# ── ROW GENERATION: immutable authorization (D-2605, spec §3.4) ──────────
+# `$REG/<id>.generation` is AUTHORIZATION and nothing else — not `.uuid`, not a
+# payload `session_id`, not journal data, and it never occurs in the sixteen-key
+# record. Exactly 36 lowercase ASCII UUID bytes and NO terminal LF.
+#
+# WHY THE BYTE COUNT IS A CONTRACT rather than a convention: an invalid PRESENT
+# generation is never repaired, replaced or removed — so a writer that shipped
+# 37 bytes (the trailing LF `_plat_uuid` emits on both its branches) would fail
+# the grammar on every later read, nothing could mint over it, and no compliant
+# cleanup would unlink it. The row would be wedged for ever. Measured on this
+# box: `cat /proc/sys/kernel/random/uuid` is 37 bytes on disk, `$( )` capture is
+# 36 characters, and a 37-byte file is rejected by the grammar below because
+# bash's `$` anchor refuses a trailing LF.
+_reg_generation_valid() {   # <value> -> 0 iff exactly the 36-byte lowercase UUID grammar
+  [[ "${1-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || return 1
+  (( ${#1} == 36 )) || return 1
+  return 0
+}
+
+# CLASSIFY THE PATHNAME BEFORE READING IT. Genuine absence is the ONLY condition
+# that may mint, so it has to be distinguishable from every present-invalid one
+# — and a DANGLING SYMLINK is present-and-invalid, never absent, which is why
+# `-L` is asked beside `-e` — the same one-expression pairing `_reg_read`
+# (`grep -n '^_reg_read()' ccd/ccd`) uses to classify a field before it reads
+# it, and the concrete form `_compact_lock_acquire` spells for canonical. (This
+# sentence used to credit `_reg_field_state`, a name that has never existed on
+# either tree, so the argument rested on a precedent a reader could not check;
+# the argument itself is unchanged and stands on its own.) Folding `-L` into
+# absence would let a mint clobber a name somebody else owns.
+#
+# The value is read through an OWNED HARD-LINK ALIAS on a retained FD, never
+# `_reg_get`, `_reg_read` or a bare `cat`: those name the canonical path twice
+# (once to test, once to read) and a replacement between the two is invisible
+# to them. The same-inode recheck after the read is what closes that.
+_reg_generation_read() {   # <id> -> 0 + REG_GENERATION; 1 present-but-invalid; 2 genuinely absent
+  # `"$REG/$1.generation"`, NOT `"$REG/$id.generation"`, and the distinction is
+  # MEASURED rather than stylistic: `local` DECLARES every name in the statement
+  # before it performs any assignment, so under ccd's `set -u` an initialiser
+  # that references an earlier name in the SAME `local` dies with `id: unbound
+  # variable`. (Measured on bash 5.2.21; it is also why `_compact_lock_acquire`
+  # above spells its own path off `$1`.)
+  local id="$1" p="$REG/$1.generation" al="" fd="" tries=0 v=""
+  REG_GENERATION=""
+  if [ ! -e "$p" ] && [ ! -L "$p" ]; then return 2; fi
+  [[ -f "$p" && ! -L "$p" && -r "$p" ]] || return 1
+  command -v link >/dev/null 2>&1 || return 1
+  while (( tries < 8 )); do
+    al="$REG/.$id.generation-read.$$.$RANDOM.$RANDOM"
+    [ -e "$al" ] || [ -L "$al" ] || break
+    al=""; tries=$(( tries + 1 ))
+  done
+  [[ -n "$al" ]] || return 1
+  link "$p" "$al" 2>/dev/null || return 1
+  [[ -f "$al" && ! -L "$al" ]] || { rm -f "$al" 2>/dev/null; return 1; }
+  { exec {fd}<"$al"; } 2>/dev/null || { rm -f "$al" 2>/dev/null; return 1; }
+  rm -f "$al" 2>/dev/null || true
+  # 37, NOT 36: a 37-character read is what SEES a trailing LF or a longer file,
+  # where a 36-character one would silently accept the first 36 bytes of either.
+  IFS= read -r -N 37 v <&"$fd" 2>/dev/null || true
+  # STILL THE SAME INODE, before the value is trusted: a canonical replaced
+  # since the `link` is a different row's authorization wearing this name.
+  if ! _compact_lock_same "$fd" "$p"; then { exec {fd}<&-; } 2>/dev/null; return 1; fi
+  { exec {fd}<&-; } 2>/dev/null || true
+  _reg_generation_valid "$v" || return 1
+  REG_GENERATION="$v"
+  return 0
+}
+
+# GENUINE ABSENCE ONLY. Mints from a validated `_plat_uuid`, writes the no-LF
+# bytes to a private `mktemp` source under `umask 077`, and publishes by
+# NO-CLOBBER `link` — so two racers cannot both win, and EEXIST means
+# reclassify the incumbent rather than repair it. The source goes on every
+# handled result.
+_reg_generation_mint() {   # <id> -> 0 published or an incumbent stands; 1 refused
+  local id="$1" p="$REG/$1.generation" src="" v=""
+  command -v mktemp >/dev/null 2>&1 || return 1
+  command -v link   >/dev/null 2>&1 || return 1
+  v=$(_plat_uuid 2>/dev/null) || return 1
+  # THE STRIP IS THE WRITER'S JOB, not the generator's: `_plat_uuid` emits a
+  # trailing LF on BOTH branches. `$( )` already removes it; the byte check
+  # below is what turns that from an accident into a mechanism.
+  _reg_generation_valid "$v" || return 1
+  src=$( umask 077; mktemp "$REG/.$id.generation-init.XXXXXX" 2>/dev/null ) || return 1
+  [[ -f "$src" && ! -L "$src" ]] || { rm -f "$src" 2>/dev/null; return 1; }
+  { printf '%s' "$v" > "$src"; } 2>/dev/null || { rm -f "$src" 2>/dev/null; return 1; }
+  [[ "$(wc -c < "$src" 2>/dev/null | tr -d ' ')" == 36 ]] || { rm -f "$src" 2>/dev/null; return 1; }
+  link "$src" "$p" 2>/dev/null || true
+  rm -f "$src" 2>/dev/null || true
+  return 0
+}
+
+# THE ONE MINTING SITE'S ENTRY POINT, called by row creation and by nobody else.
+# `_spawn_start` READS AND VALIDATES; it never mints. A row with no generation
+# is answered by the standing fail-closed rule downstream, never by a mint at
+# spawn time — minting there would hand a fresh authorization to a row that was
+# purged or reused in the gap.
+_reg_generation_init() {   # <id> -> 0 the row carries a valid generation; 1 refused
+  local rc=0
+  _reg_generation_read "$1"; rc=$?
+  case "$rc" in
+    0) return 0 ;;
+    1) return 1 ;;     # PRESENT-INVALID is never repaired, replaced or removed
+    *) ;;              # genuine absence: the only mint condition
+  esac
+  _reg_generation_mint "$1" || return 1
+  _reg_generation_read "$1"      # EEXIST reclassifies: read back whoever won
+}
+
+# ONE RECORDER for every tracked unlink in `_reg_purge` below, so its STATUS
+# and the pathname it blames can never disagree. A site that set `_pg_urc`
+# without appending the path — or appended without setting it — would hand the
+# caller either a failure it cannot describe or a description of a failure the
+# caller never hears about, and describing a failure the caller cannot see is
+# the fabricated-cause defect this whole seam exists to remove.
+#
+# `_pg_urc` is `_reg_purge`'s own `local`, reached here through bash's dynamic scope. TWO sites reach it —
+# `_reg_purge`'s own unlinks and `_usage_purge`, whose only call site is inside `_reg_purge` — so it is still
+# ONE dynamic extent, and why this is defined immediately beside it: a caller outside that extent would be
+# assigning into whatever `_pg_urc` happened to be in scope, which is not a mechanism.
+#
+# THE SEPARATOR IS PROSE, NOT A GRAMMAR. `$REG/<id>.<suffix>`, `$REG/.<id>.<suffix>` and — since
+# the sidecar removals became tracked — `$REG/usage/<id>.json`, `$REG/usage/.<id>.*.tmp` (the GLOB
+# PATTERN, never an expansion) and `$REG/usage/<id>.agents` are the shapes that reach here. Ids are
+# `<project>-<slug>` and every suffix is dot-free or a private family, so no pathname carries a
+# comma today — but nothing DEPENDS on that: the value is a sentence for a human and for the
+# journal's `detail`, and nothing parses it back into a list.
+_reg_purge_unremoved() {   # path — record one refused unlink AND the status it implies
+  _pg_urc=3
+  REG_PURGE_UNREMOVED="${REG_PURGE_UNREMOVED:+$REG_PURGE_UNREMOVED, }$1"
 }
 
 _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
@@ -2462,7 +2974,67 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # even for a row that has nothing left, where the id alone is the record. No
   # `verb` either: this function cannot see its caller, and guessing one would
   # be the fabricated fact the design exists to refuse.
-  # `_lc_done` returns 0 on every path, so nothing here can gate the purge.
+  # ── D-2605: THE STABLE LOCK, and it is the ONE new statement allowed to
+  # stand between this function's opening brace and the unconditional
+  # unconditional purge-done emit below. Nothing else may go here: the landed
+  # `ccd-lifecycle-purge.test.ts` "is unconditional" pin checks only
+  # emit-before-unlink-loop and the absence of a trailing `||`/`&&`, and both
+  # stay GREEN under a silently inserted conditional guard — which is why that
+  # test is strengthened with a source scan in the same commit rather than left
+  # as the sole protection.
+  #
+  # MECHANISM ABSENCE IS GATED ON THE GENERATION, not blanket. `<id>.generation`
+  # is the witness that this row's hooks were ever handed one: it is minted ONLY
+  # by a flock-capable row creation, deleted LAST by this function, and replaced
+  # on safe reuse. So a PRESENT generation proves the row's hooks may hold this
+  # lock now, and destroying the row under them would be the race the lock
+  # exists to exclude — refuse. An ABSENT generation proves no hook on this row
+  # ever received one, so no hook arm ever ran the lifecycle and there is
+  # nothing to race — proceed. The permanent lock is NOT the witness: it spans
+  # generations and is minted even by a purge against a never-existed id, so it
+  # proves history rather than a live regime, and gating on it would wedge a
+  # genuinely flock-less box fleet-wide.
+  # ── THREE NONZERO STATUSES, BECAUSE THERE ARE THREE CONDITIONS ───────────
+  # A caller that cannot tell them apart has to guess, and every caller guessed
+  # the same wrong one: that a nonzero meant the lock. Measured on this tree
+  # before the split — a dead-reg row plus ONE un-removable field made
+  # `_ws_gc_prune_row` journal `outcome:"refused"`, `refusal:"purge-refused"`,
+  # `detail:"…compactions.lock was unavailable; the registry row is untouched"`
+  # while the lock had been HELD, the row was destroyed, `uuid`/`project`/
+  # `workspace`/`branch`/`workdir`/`generation` were all gone and a `purge`
+  # done-fact was already on disk. Every clause of that record was false.
+  #
+  #   1  PRE-EMIT LOCK REFUSAL.        Nothing deleted, no purge fact.
+  #   2  MECHANISM ABSENT + a live generation. Nothing deleted, no purge fact.
+  #   3  POST-EMIT REMOVAL FAILURE.    The row IS destroyed, the purge fact IS
+  #      journaled, and `REG_PURGE_UNREMOVED` names what still stands.
+  #
+  # 1 and 2 are the two halves of "nothing happened"; 3 is the opposite of
+  # both, and it is the one a caller must not report as a refusal — `_lc_fail`'s
+  # own rule is that a refusal precedes anything irreversible and a failure
+  # follows it, and by the time any `rm -f` can fail the emit has already gone.
+  local _pg_fd="" _pg_rc=0 _pg_urc=0
+  # CLEARED ON ENTRY, unconditionally. `ccd` sources itself into its tests and
+  # a shell may purge twice; a stale pathname from the previous call read as
+  # this one's would be exactly the fabricated fact the split exists to end.
+  REG_PURGE_UNREMOVED=""
+  _compact_lock_acquire "$1" "$COMPACT_LOCK_WAIT"; _pg_rc=$?
+  if (( _pg_rc == 2 )); then
+    # MECHANISM ABSENT. Fail open only on a generation-ABSENT row.
+    if [ -e "$REG/$1.generation" ] || [ -L "$REG/$1.generation" ]; then return 2; fi
+  elif (( _pg_rc != 0 )); then
+    return 1
+  else
+    _pg_fd="$COMPACT_LOCK_FD"
+  fi
+  # `_lc_done` returns 0 on every path, and this emit still carries no condition
+  # of its own and still precedes the unlink loop — so nothing HERE gates the
+  # purge. What gates it now sits one level up: since D-2605 the whole function
+  # runs under the row's stable compaction lock, so a lock miss yields no purge,
+  # no purge-done fact, and an `_lc_fail` from the post-action callers. A
+  # REMOVAL failure is a different condition and reaches nothing above: the
+  # unlink loop runs strictly after this emit, so by the time any `rm -f` can
+  # fail the fact is already journaled.
   _lc_done purge "$1" "" \
     meas.project        "$(_reg_get "$1" project)" \
     meas.workspace      "$(_reg_get "$1" workspace)" \
@@ -2482,8 +3054,20 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
     [[ -e "$f" ]] || continue
     suffix="${f#"$REG/$id."}"
     [[ "$suffix" == *.* ]] && continue
-    [[ "$suffix" == archived || "$suffix" == reaping ]] && continue
-    rm -f "$f"
+    # `generation` IS A MECHANISM, NOT AN OUTCOME (D-2605): it is a dot-free
+    # suffix like any other field, so without this arm the loop deletes it in
+    # ordinary glob order and "generation last" is a no-op comment.
+    [[ "$suffix" == archived || "$suffix" == reaping || "$suffix" == generation ]] && continue
+    # A REMOVAL FAILURE IS ITS OWN CONDITION (spec §3.4), AND ITS OWN STATUS.
+    # Every unlink from here down is tracked and the function returns 3 — never
+    # the 1 a pre-emit lock refusal returns — if any of them failed. The EMIT
+    # above stays unconditional and unmoved, so the purge-done fact is already
+    # on disk by the time any of this can fail, and such a run reports the fact
+    # WITH a failure status and the un-removable pathname in
+    # `REG_PURGE_UNREMOVED`: the row may be destroyed and something beside it
+    # may still be standing, which is neither of the two "nothing happened"
+    # conditions. The four callers branch on the value, not on the boolean.
+    rm -f "$f" || _reg_purge_unremoved "$f"
   done
   # `hookstate.json` (session-hook.sh's `$REG/$id.hookstate.json`, the
   # session-status file the Claude Code hooks write on every tool call) is an
@@ -2496,15 +3080,33 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # produced by a field name instead of a project directory name. Removed
   # explicitly here rather than exempted from the loop's filter, so the
   # nested-id guard stays a single, simple rule.
-  rm -f "$REG/$id.hookstate.json"
-  _usage_purge "$id"
-  rm -f "$REG/$id.reaping"
+  rm -f "$REG/$id.hookstate.json" || _reg_purge_unremoved "$REG/$id.hookstate.json"
+  _usage_purge "$id"   # its three sidecar removals are tracked too — see its own header
+  rm -f "$REG/$id.reaping" || _reg_purge_unremoved "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the
   # marker, because `reaping` standing beside a missing `archived` is precisely
   # the wedge this ordering exists to prevent. It is also what makes the order
   # observable to a test — nothing else about two adjacent unlinks is.
-  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived"
+  [[ -e "$REG/$id.reaping" ]] || rm -f "$REG/$id.archived" || _reg_purge_unremoved "$REG/$id.archived"
+  # THE DOT-LEADING PRIVATE COMPACTION FAMILIES, which the loop above cannot
+  # see (its glob is `"$REG/$id".*` — id, then a dot) and which would otherwise
+  # hold the slug for ever under the widened `_ws_slug_free`. The permanent
+  # lock is skipped BY NAME: it spans row generations and safe reuse by design.
+  local pf psuffix
+  for pf in "$REG/.$id".*; do
+    [[ -e "$pf" ]] || continue
+    psuffix="${pf#"$REG/.$id."}"
+    _ws_private_family "$psuffix" || continue
+    rm -f "$pf" || _reg_purge_unremoved "$pf"
+  done
+  # GENERATION LAST, after the archived/reaping tail and after every private
+  # family — and OUTSIDE the loop above, which skips it. It is the row's
+  # authorization: while it stands, a hook holding it can still take the lock,
+  # so it is the last thing to go.
+  rm -f "$REG/$id.generation" || _reg_purge_unremoved "$REG/$id.generation"
+  _compact_lock_release "$_pg_fd"
+  return "$_pg_urc"
 }
 _substrate_mark() {   # id — record "this supervisor could not reach tmux" ($REG/<id>.substrate)
   # ONE writer per file: this row's supervisor — and the FIRST WRITE WINS. The epoch is
@@ -2675,7 +3277,7 @@ _json_str() {   # value -> a JSON string literal (quote/backslash/control safe)
   # NON-ZERO now means one thing only: python3 could not be RUN. Callers must
   # check it — a bare `$(_json_str …)` inside a printf argument list swallows the
   # status by construction, which is how the hole above got printed — and both
-  # callers that build a whole record (`_ws_manifest`, `cmd_ws_audit`) probe once
+  # callers that build a whole record (`_ws_archive_manifest`, `cmd_ws_audit`) probe once
   # up front and refuse rather than checking nineteen substitutions.
   #
   # MUTATION SURVIVOR, disclosed and measured: `LC_ALL=C.UTF-8` can be deleted
@@ -3219,7 +3821,7 @@ _lc_json() {   # cap uid ns act outcome id tx badact badoutcome obsjson [k v]...
   # The only OTHER python3 encoder in this block is `_lc_obs_json`, which builds
   # the obs FRAGMENT once per process. A third is a defect.
   #
-  # NO `_json_str probe … || die` up front, unlike `_ws_manifest` and
+  # NO `_json_str probe … || die` up front, unlike `_ws_archive_manifest` and
   # `cmd_ws_audit`: D7 forbids this path from dying, and the caller's own
   # non-zero branch already covers the same condition.
   LC_ALL=C.UTF-8 python3 -c '
@@ -3443,6 +4045,37 @@ _lc_refuse() {   # act id token detail [k v]... — EMITS, THEN DIES. Never retu
   local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4 2>/dev/null || :
   _lc_emit "$a" refused "$i" "" refusal "$tok" detail "$msg" "$@"
   die "$msg"
+}
+
+_lc_refuse_return() {   # act id tx token detail [k v]... — EMITS, THEN RETURNS
+  # THE NON-FATAL SIBLING, and it exists because `_lc_refuse` cannot be reused
+  # where the caller must keep going: that one "EMITS, THEN DIES. Never
+  # returns." `ws-gc --prune` sweeps a list of rows, and a refusal on one row
+  # must not kill the sweep at the first declining row.
+  #
+  # THE NAME CARRIES ITS DISTINGUISHING PROPERTY, deliberately. The earlier
+  # spelling, `_lc_refused`, sat ONE CHARACTER from `_lc_refuse` while differing
+  # in ARITY — five positionals against four — and in FATALITY. A mistyped call
+  # would shift every argument by one AND kill the sweep at the first declining
+  # row: the exact outcome this emitter exists to prevent.
+  #
+  # IT CARRIES A `tx`, where `_lc_refuse` passes a literal empty one. That is
+  # what lets it close a minted transaction: `_ws_gc_prune_row`'s dead-reg arm
+  # has already emitted `_lc_intent destroy … "$lctx"` by the time it learns
+  # `_reg_purge` refused, and a decline reported only through `_gc_declined` —
+  # a printf report row, not a lifecycle emit — would leave that intent with
+  # ZERO terminal facts, permanently, on every sweep.
+  #
+  # Same `refusal`/token spelling discipline as `_lc_refuse` above, and for the
+  # same reason: `ccd-wsaudit-nonpoison.test.ts` harvests four token shapes over
+  # THIS WHOLE BLOCK'S TEXT, comments included, so neither the emitter's name
+  # nor anything written about it may spell one of them. (That suite's own
+  # source is where the four are enumerated; quoting them here would be the
+  # very poisoning it exists to refuse — measured, an earlier draft of this
+  # comment did exactly that and reddened it.)
+  local a="${1-}" i="${2-}" t="${3-}" tok="${4-}" msg="${5-}"; shift 5 2>/dev/null || :
+  _lc_emit "$a" refused "$i" "$t" refusal "$tok" detail "$msg" "$@"
+  return 0
 }
 
 _lc_surface_norm() {   # word -> the DECLARED surface, or NOTHING when none was
@@ -4625,6 +5258,75 @@ _ws_project_valid() {   # project -> 0 when it is a legal project name to CREATE
 # recycled by ws-reap) rather than costing the next workspace its archive and
 # reap gates. Refusing to build is the safe direction, it is visible — `ws-add`
 # names the files below — and `rm` on the named files reclaims it.
+# THE PRIVATE COMPACTION FAMILIES (D-2605, spec 3.4's inventory), asked of a
+# basename whose literal `.<id>.` prefix has ALREADY been stripped. These are
+# dot-LEADING, so the `"$REG/$id".*` glob below — id, then dot — is
+# structurally blind to every one of them, and a slug handed back while one is
+# still present is a slug re-handed with a stranger's claim on it.
+#
+# THE PERMANENT LOCK IS THE SOLE EXCLUSION, and by name rather than by shape:
+# it deliberately outlives the row, spanning generations and safe reuse, so it
+# proves history and never a live regime. Gating reuse on it would wedge every
+# ever-purged id forever.
+_ws_private_family() {   # <suffix after the literal `.<id>.` strip> -> 0 iff it BLOCKS slug reuse
+  case "$1" in
+    compactions.lock) return 1 ;;
+    compactset.*|compactcard.*|compactpost.*) return 0 ;;
+    compactserved.*|compactserved-source.*) return 0 ;;
+    compactions.lock-init.*|compactions.lock-open.*) return 0 ;;
+    compactions-stage.*|compactions-snapshot.*) return 0 ;;
+    generation-init.*|generation-read.*) return 0 ;;
+    # ── THE TRANSITION ALLOWANCE, exactly the two legacy grammars ────────
+    # `_hook_family_sweepable` (`ccd/session-hook.sh`) already carries these,
+    # but that sweep runs only from a LIVE row's PreCompact. Without them here,
+    # a row upgraded across the D-2605 deploy that carries legacy residue and is
+    # then purged by `ws-rm`, `forget` or `ws-gc --prune` keeps
+    # `$REG/.<id>.<pid>.<id>.compactset.tmp` (or the claim) FOR EVER: the purge's
+    # private-family loop skips it, and no PreCompact will ever run for that id
+    # again. Both begin with the pid, so no target-family arm above can match
+    # them — every one of those requires the family word first.
+    #
+    # BLOCKING SLUG REUSE ON THEM IS CORRECT, not a side effect to be split
+    # away. This predicate answers one question — "is this dot-leading name
+    # private residue of a row that did not finish?" — and legacy residue is
+    # residue: a slug handed back while it stands is handed back with a
+    # stranger's claim on it, which is the whole property the dot-leading pass
+    # exists to establish. The cost is the same bounded one the header above
+    # already discloses (a slug, recycled by ws-reap, with `ws-add` naming the
+    # file), and it is paid only inside the upgrade window.
+    #
+    # ANCHORED ON THE DECIMAL PID, not a bare `*`. MEASURED while writing this:
+    # the bare `*.compactcard-claim.tmp` arm — which is what
+    # `_hook_family_sweepable` still carries — makes `_reg_purge` of
+    # `demo-quiet-basin` delete `.demo-quiet-basin.x-y.999.compactcard-claim.tmp`,
+    # a DOTTED NESTED id's legacy residue, because after the literal `.<id>.`
+    # strip that basename still ends in the grammar. That is the exact cross-id
+    # hazard the `*.*` skip on the dot-free pass exists to prevent, reintroduced
+    # through the transition allowance. A legacy name's first component is the
+    # WRITER'S PID, and a nested id's first component is the rest of its id, so
+    # requiring a pure decimal head separates them.
+    #
+    # The claim grammar is pinned EXACTLY — decimal head, then the grammar and
+    # nothing else. The set grammar carries the id in the middle and cannot be,
+    # so one contrived collision remains and is stated rather than hidden: an id
+    # whose own trailing component is all digits (project `demo-quiet-basin.99`,
+    # slug `9`) presents a decimal head after this id's strip. Legal, and its
+    # cost is one reclaimed legacy tmp of a neighbour, inside the upgrade window.
+    *.compactcard-claim.tmp)
+      # The grammar itself carries a dot, so "exactly two components" is the
+      # wrong exactness test here — measured, it rejected the real
+      # `999.compactcard-claim.tmp`. What exactness means is that everything
+      # after the head IS the grammar.
+      [[ "${1#*.}" == "compactcard-claim.tmp" ]] || return 1
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;                            # `<pid>.compactcard-claim.tmp`
+    *.compactset.tmp)
+      [[ "${1%%.*}" =~ ^[0-9]+$ ]] || return 1
+      return 0 ;;                            # `<pid>.<id>.compactset.tmp`
+  esac
+  return 1
+}
+
 _ws_slug_free() {   # project slug -> 0 when no registry file exists for the id
   local id="$1-$2" f suffix
   for f in "$REG/$id".*; do
@@ -4635,16 +5337,45 @@ _ws_slug_free() {   # project slug -> 0 when no registry file exists for the id
     [[ "$suffix" == *.* ]] && continue
     return 1
   done
+  # THE DOT-LEADING PRIVATE FAMILIES (D-2605). The literal `.<id>.` prefix is
+  # what keeps a NESTED id out: `.demo-quiet.` and `.demo-quiet-mesa.` are
+  # different strings, so this glob cannot reach across ids the way a substring
+  # match would — the same hazard the dot-free check above was built to avoid.
+  for f in "$REG/.$id".*; do
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/.$id."}"
+    _ws_private_family "$suffix" || continue
+    return 1
+  done
   return 0
 }
 
-_ws_slug_residue() {   # project slug -> the field names the registry still holds
+# EVERY REASON `_ws_slug_free` CAN REFUSE IS A REASON THIS CAN NAME. Widening
+# only the first breaks `cmd_ws_add`'s shipped contract — its refusal NAMES
+# WHAT IT FOUND, and an unwidened residue answers the empty string, so the
+# operator is told a slug is in use and handed nothing to reclaim while
+# `_ws_slug_new` skips that slug forever.
+#
+# It emits complete `$REG`-relative BASENAMES — dot-free fields as
+# `<id>.<field>`, private families as `.<id>.<suffix>` — rather than bare
+# suffixes, because the caller prints them as a list rooted once. The old
+# `$REG/<id>.{...}` brace template could not express a dot-LEADING name at all,
+# and measured, its `, ` separator already defeated the brace expansion it
+# implied even for the dot-free case: `echo prefix.{uuid,workdir}` expands,
+# `echo prefix.{uuid, workdir}` prints the braces literally.
+_ws_slug_residue() {   # project slug -> the $REG-relative basenames the registry still holds
   local id="$1-$2" f suffix out=""
   for f in "$REG/$id".*; do
     [[ -e "$f" ]] || continue
     suffix="${f#"$REG/$id."}"
     [[ "$suffix" == *.* ]] && continue
-    out+="${out:+, }$suffix"
+    out+="${out:+, }$id.$suffix"
+  done
+  for f in "$REG/.$id".*; do
+    [[ -e "$f" ]] || continue
+    suffix="${f#"$REG/.$id."}"
+    _ws_private_family "$suffix" || continue
+    out+="${out:+, }.$id.$suffix"
   done
   printf '%s' "$out"
 }
@@ -5088,11 +5819,15 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # The refusal NAMES WHAT IT FOUND. `_ws_slug_free` is an any-field check
   # (round-3 P1), so it also refuses a slug whose only trace is the residue of
   # an interrupted purge — and "slug in use" on its own would send the operator
-  # looking for a workspace that is not there. The field list is the reclaim
+  # looking for a workspace that is not there. The list is the reclaim
   # instruction: those are the files, in $REG, and nothing else holds the slug.
+  # A PLAIN LIST ROOTED ONCE (D-2605), not the old `$REG/<id>.{...}` brace
+  # template: since `_ws_slug_free` now also refuses on the dot-LEADING private
+  # compaction families, the template's dot-AFTER-the-id shape could name no
+  # such file, and every path it printed for one would not exist.
   [[ -n "$slug" ]] && { _ws_slug_valid "$slug" || die "invalid slug '$slug'"; \
                         _ws_slug_free "$project" "$slug" \
-                          || die "slug in use: $slug — $REG/$project-$slug.{$(_ws_slug_residue "$project" "$slug")}"; }
+                          || die "slug in use: $slug — in $REG: $(_ws_slug_residue "$project" "$slug")"; }
   [[ -z "$slug" ]] && { slug=$(CCD_WS_SLUG="${CCD_WS_SLUG:-}" _ws_slug_new "$project") \
                         || die "could not find a free slug for $project"; }
 
@@ -5136,6 +5871,40 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
 
   local id="$project-$slug"
+  # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
+  # The acquire comes BEFORE the first `_reg_set`, and a MISS FAILS CLOSED:
+  # this verb dies with a retryable message naming the lock and leaves NOTHING
+  # — no `.uuid`, no `.generation`, no partial row — so nothing irreversible
+  # has happened and re-running is the whole remedy. That is the opposite
+  # disposition from `_spawn_start`'s contended miss, and deliberately: there,
+  # failing closed would wedge a rescue swap on a compaction lock; here, there
+  # is nothing to wedge and a half-written row is the worse outcome.
+  #
+  # The lock is CLOSED before the setup hook and before `_spawn_start`, which
+  # takes its own — it guards the residue check and the generation mint, and
+  # nothing else.
+  local gfd=""
+  # THE REMEDY CLAUSE IS CONDITIONAL because the remedy is. Ordinary contention
+  # clears by itself and `retry` is the whole answer; a SET COMPACT_LOCK_WHY is
+  # one of three out-of-contract states of `$REG` — the permanent lock unlinked
+  # under a live holder, a non-regular object occupying the lock pathname, or a
+  # `$REG` that would not take the mint source — and a retry can succeed in
+  # none of them, so saying only "retry" is the same fabricated remedy the
+  # purge callers' messages carried (D-2782).
+  #
+  # IT NAMES THE TOKEN AND STOPS (r5 R4-M3). This is transient stderr, not a
+  # durable journal line, so it carries no per-cause remedy the way the four
+  # `_reg_purge` callers now do. What it must not do is what it used to: spell
+  # out the canonical-vanished cause as though the token could only ever be
+  # that one, which stopped being true the moment the acquire gained two more.
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT" \
+    || die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was created; retry${COMPACT_LOCK_WHY:+ — EXCEPT that a retry cannot help here: the acquire measured $COMPACT_LOCK_WHY, a state of $REG that no wait changes. Inspect $REG/.$id.compactions.lock and $REG by hand: ccd will not mint a second lock inode over a live holder, will not write through an object occupying that pathname, and cannot mint at all into a $REG that refuses the write}"
+  gfd="$COMPACT_LOCK_FD"
+  if ! _reg_generation_init "$id"; then
+    _compact_lock_release "$gfd"
+    die "$REG/$id.generation is present and invalid — refusing to build a workspace on it; inspect it by hand"
+  fi
+  _compact_lock_release "$gfd"; gfd=""
   local uuid; uuid=$(_plat_uuid)
   # ── THE PICK IS RE-TAKEN HERE, AND NOT MERELY RE-VALIDATED ────────────────
   # `$hw` was chosen in the pre-flight, above — deliberately, so that an
@@ -5691,7 +6460,74 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
     echo "warn: no worktree record for $workdir; registry says branch '$reg_branch', which still exists — not deleting it unverified. If it is finished: git -C $main branch -d $reg_branch" >&2
   fi
 
-  _reg_purge "$id"                                                          # finding F3
+  # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS — THE VALUE ─────────
+  # It reached here AFTER irreversible action, so both nonzero conditions are a
+  # FAILURE, not a refusal — that is `_lc_fail`'s documented distinction from
+  # `_lc_refuse`: a refusal precedes anything irreversible, a failure follows
+  # it. Reporting either as a suppressed success is the exact false success
+  # `_reg_purge`'s own "never claims success" rule forbids.
+  #
+  # BUT THEY ARE TWO DIFFERENT FAILURES, and a boolean `if !` told the operator
+  # the same story for both. 1/2 means the purge never started: the row stands
+  # whole and re-running is the entire remedy. 3 means it ran and did not
+  # finish: the row is GONE, the purge fact is in this journal, and something
+  # `rm -f` would not take is still on disk — a message telling that operator
+  # to wait for a compaction to settle prescribes a wait for a compaction that
+  # is not running and promises state that no longer exists.
+  local _rm_prc=0
+  _reg_purge "$id" || _rm_prc=$?                                           # finding F3
+  if (( _rm_prc == 3 )); then
+    _lc_fail destroy "$id" "$lctx" purge-incomplete \
+      "the workspace was torn down and the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd ws-rm $id\` will not take it, remove it by hand" \
+      verb ws-rm dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
+    echo "ccd: $id: torn down and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
+    return 1
+  elif (( _rm_prc == 2 )); then
+    # STATUS 2 IS NOT STATUS 1 (r3 A-I3). `_reg_purge` has answered the two
+    # apart since D-2782 and every caller collapsed them, so a flock-less box
+    # was told its lock "was unavailable" and to "re-run once the compaction
+    # settles" — both false there, and measured: `_compact_lock_acquire`
+    # returns 2 from `command -v` BEFORE it touches the lock file, so the
+    # pathname the old sentence named does not exist, and no compaction runs or
+    # can run. The remedy spec §3.4 traces for THIS verb is the PATH and
+    # nothing else: `ws-rm`'s re-run skips the dirty/foreign gates once
+    # `[[ -d "$workdir" ]]` is false, so it has no second precondition to meet.
+    _lc_fail destroy "$id" "$lctx" purge-mechanism-absent \
+      "the workspace was torn down, but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so the lock was never consulted and the lock file may not even exist — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run \`ccd ws-rm $id\` from a PATH that resolves flock, mktemp and link" \
+      verb ws-rm dec.reason "$reason"
+    echo "ccd: $id: torn down, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
+    return 1
+  elif (( _rm_prc != 0 )); then
+    # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
+    # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
+    # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
+    # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
+    # the default sentence below is written for it. WHICH states carry a token,
+    # and what an EMPTY `WHY` does and does not prove, are NOT restated here
+    # (r7 R6-M1): that census lives in ONE place, the header comment on
+    # _compact_lock_acquire, which is the only writer of the variable. The copy
+    # that used to stand here went stale inside a single round — it mis-counted
+    # the assignment sites the acquire had just grown, and called the whole
+    # untokened residue a race at the mint after the acquire had named a
+    # durable member of it — so this caller points instead of repeating, and a
+    # numeral about the code is made in exactly one place. What this caller
+    # needs from the variable is only that nothing clobbers it between
+    # `_reg_purge`'s return and here.
+    # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # OWN remedy and gives an unrecognised one the catch-all: a condition
+    # named at the acquire must never silently inherit "wait and re-run",
+    # which is the defect that let one sentence stand for two conditions.
+    # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
+    # acquire sites, one level up; this is it one level down, where the
+    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # consult, so this caller's text cannot drift from theirs.
+    local _rm_why; _rm_why=$(_compact_lock_why_remedy "$id" ws-rm)
+    _lc_fail destroy "$id" "$lctx" purge-refused \
+      "the workspace was torn down, but the registry row could not be purged: $_rm_why" \
+      verb ws-rm dec.reason "$reason"
+    echo "ccd: $id: torn down, registry NOT purged — see the lifecycle journal" >&2
+    return 1
+  fi
 
   # AFTER `_reg_purge`, so the `done` line sits after the terminal act. Note
   # this workspace now has TWO records for one removal — the D3 backstop's
@@ -5751,7 +6587,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # `cmd_ws_reap` already writes every one of its ~30 refusals this way.
   #
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:5113) and `cmd_ws_reap` (ccd:5952).
+  # same reason, as `cmd_ws_audit` (ccd:10967) and `cmd_ws_reap` (ccd:11919).
   # Every refusal below quotes its detail inside a printf ARGUMENT LIST, where a
   # failure is a swallowed status and an empty argument — `"detail":,` — i.e. a
   # document the server reports as a parse error rather than as the refusal it
@@ -10147,7 +10983,7 @@ cmd_ws_audit() {   # ccd ws-audit --session <id> — read-only about the WORKSPA
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]] || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `_ws_manifest` (ccd:5260). Nineteen `_json_str` substitutions
+  # same reason, as `_ws_archive_manifest` (ccd:8133). Nineteen `_json_str` substitutions
   # below sit inside printf ARGUMENT LISTS, where a failure is a swallowed status
   # and an empty argument, i.e. `"path":,` — a document that authorises deletions
   # and does not parse, at exit 0. Bytes can no longer fail the encode (see
@@ -11091,7 +11927,7 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   [[ $id =~ ^[A-Za-z0-9._-]+$ ]]    || die "bad session id"
 
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:8041) and `_ws_manifest` (ccd:5260).
+  # same reason, as `cmd_ws_audit` (ccd:10967) and `_ws_archive_manifest` (ccd:8133).
   # This is the THIRD caller that builds a whole record, and the record it
   # builds is the TOMBSTONE: the one document that outlives the workspace, and
   # the only thing left naming the transcript once step (i) has removed the
@@ -12158,7 +12994,75 @@ _ws_reap_tail() {   # id resumed-phase — the journalled destructive sequence
     [[ -n "$cdir" && -n "$croot" && "$cdir" == "$croot/$id" ]] && rm -rf "$cdir"
   fi
 
-  _reg_purge "$id"                                                         # (i) LAST, finding F3
+  # ── D-2605: THIS CALLER READS THE STATUS TOO ───────────────────────────
+  # `_ws_reap_tail` is post-action by construction — the worktree, branch and
+  # clips are already gone by the time it runs — so a refusal here is a
+  # FAILURE. It is unreachable on a FLOCK-less box, and deliberately so:
+  # `cmd_ws_reap` dies at its own `command -v flock` gate (`ccd/ccd:10897`,
+  # re-measured r6 — this citation had already drifted to :10732 before this
+  # round, and this round's own line insertions moved it further) and
+  # `_lc_refuse` "EMITS, THEN DIES. Never returns."
+  #
+  # BUT NOT ON EVERY MECHANISM-ABSENT BOX, and the sentence that stood here
+  # said it was — "this branch answers CONTENTION only, never mechanism
+  # absence". MEASURED (r3 A-I3), on a generation-present row: `_reg_purge`
+  # answers 2 when ANY of `flock`, `mktemp` or `link` is unresolvable, because
+  # `_compact_lock_acquire` gates all three (`:1812-1814`), while
+  # `cmd_ws_reap`'s gate names `flock` alone. So a box with `flock` and without
+  # `mktemp` or `link` reaches HERE with status 2, and the status-2 arm below
+  # is live code, not decoration. What remains true is the narrower claim the
+  # old sentence overshot: this verb cannot be the flock-absence caller, which
+  # is why §3.4's "two post-action callers" list for THAT condition is right.
+  # THE VALUE, not the boolean (D-2605): 3 is a purge that RAN and left
+  # residue, and it is the opposite of the 1 this branch used to assume. See
+  # `cmd_ws_rm`'s note for the argument; the disposition is the same here.
+  local _rt_prc=0
+  _reg_purge "$id" || _rt_prc=$?                                           # (i) LAST, finding F3
+  if (( _rt_prc == 3 )); then
+    _lc_fail reap "$id" "$lctx" purge-incomplete \
+      "the reap completed — worktree, branch and clips are gone — and the registry row WAS purged, this journal's own purge fact being the record of it, but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running will not take it, remove it by hand" \
+      verb ws-reap meas.branch "$branch" meas.unremoved "$REG_PURGE_UNREMOVED"
+    echo "ccd: $id: reaped and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
+    return 1
+  elif (( _rt_prc == 2 )); then
+    # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3), and the
+    # header above for why this arm is reachable here at all.
+    _lc_fail reap "$id" "$lctx" purge-mechanism-absent \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — mktemp or link could not be resolved on the PATH ccd ran with (a missing flock is refused earlier, by ws-reap's own gate), so the lock was never consulted — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run from a PATH that resolves mktemp and link" \
+      verb ws-reap meas.branch "$branch"
+    echo "ccd: $id: reaped, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
+    return 1
+  elif (( _rt_prc != 0 )); then
+    # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
+    # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
+    # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
+    # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
+    # the default sentence below is written for it. WHICH states carry a token,
+    # and what an EMPTY `WHY` does and does not prove, are NOT restated here
+    # (r7 R6-M1): that census lives in ONE place, the header comment on
+    # _compact_lock_acquire, which is the only writer of the variable. The copy
+    # that used to stand here went stale inside a single round — it mis-counted
+    # the assignment sites the acquire had just grown, and called the whole
+    # untokened residue a race at the mint after the acquire had named a
+    # durable member of it — so this caller points instead of repeating, and a
+    # numeral about the code is made in exactly one place. What this caller
+    # needs from the variable is only that nothing clobbers it between
+    # `_reg_purge`'s return and here.
+    # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # OWN remedy and gives an unrecognised one the catch-all: a condition
+    # named at the acquire must never silently inherit "wait and re-run",
+    # which is the defect that let one sentence stand for two conditions.
+    # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
+    # acquire sites, one level up; this is it one level down, where the
+    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # consult, so this caller's text cannot drift from theirs.
+    local _rt_why; _rt_why=$(_compact_lock_why_remedy "$id" ws-reap)
+    _lc_fail reap "$id" "$lctx" purge-refused \
+      "the reap completed — worktree, branch and clips are gone — but the registry row could not be purged: $_rt_why" \
+      verb ws-reap meas.branch "$branch"
+    echo "ccd: $id: reaped, registry NOT purged — see the lifecycle journal" >&2
+    return 1
+  fi
   # `WsTombstone` stays reap's, and this line names it so `GET /api/lifecycle`
   # can join the two through the already-whitelisted `$REG/.reaped/` read —
   # the tombstone's first CONSUMER. No `_ws_tombstone` call is added to any
@@ -12300,6 +13204,16 @@ _ws_line_safe() { printf '%s' "${1//[[:cntrl:]]/?}"; }
 _gc_row()       { printf '  %-10s %s\n' "$1" "$(_ws_line_safe "$2")"; }
 _gc_reclaimed() { GC_RECLAIMED=$(( GC_RECLAIMED + 1 )); _gc_row reclaimed "$1"; }
 _gc_declined()  { GC_DECLINED=$((  GC_DECLINED  + 1 )); _gc_row declined  "$1"; }
+# A THIRD LABEL, AND DELIBERATELY NOT A THIRD COUNTER (D-2605). `_reg_purge`
+# status 3 — the row destroyed, the purge fact journaled, something beside it
+# un-removable — is neither of the two words above: `reclaimed` would count a
+# wedge as a success and `declined` would say nothing was removed, which is
+# false. So the ROW gets its own label, where the operator reads what happened,
+# and the TALLY borrows `GC_DECLINED`, because the footer's job is to say
+# whether any row needs reading and an incomplete purge is emphatically one
+# that does. Rule (2) above is kept: exactly one increment per announced
+# action, arithmetic over events rather than `grep -c` over rendered text.
+_gc_incomplete() { GC_DECLINED=$(( GC_DECLINED + 1 )); _gc_row incomplete "$1"; }
 
 # WHY the last `_ws_gc_dirty` said "do not touch". Round-3 verification P2: the
 # refusal below is right and stays, but the function is a BOOLEAN and its two
@@ -12659,9 +13573,97 @@ _ws_gc_prune_row() {   # state project slug path already-pruned
       local lctx; lctx=$(_lc_tx)
       _lc_intent destroy "$project-$slug" "$lctx" verb ws-gc \
         meas.project "$project" meas.workspace "$slug" meas.state dead-reg
-      _reg_purge "$project-$slug"                                          # finding F3
-      _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
-      _gc_reclaimed "dead registry entry $project-$slug" ;;
+      # ── D-2605: THE ONE CALLER THAT MAY DECLINE ─────────────────────────
+      # It reaches `_reg_purge` as its FIRST destructive act — measured, the
+      # sequence above is `_lc_tx`, `_lc_intent destroy`, then this — so a
+      # refusal precedes anything irreversible and IS a refusal. Left
+      # status-blind (which is how this arm shipped) it answered a refusal with
+      # a completed `destroy` plus an operator-facing `reclaimed` line while the
+      # registry row and its `.generation` still stood, repeated on every sweep.
+      #
+      # `_gc_declined` ALONE is not enough: it is `GC_DECLINED=$(( … )); _gc_row
+      # declined "$1"` — a printf report row, not a lifecycle emit — so a
+      # decline reported only through it leaves the `intent destroy` above with
+      # ZERO terminal facts, permanently. Hence exactly one
+      # `_lc_refuse_return`, carrying that same minted `$lctx`, beside it: no
+      # `_lc_done destroy`, no `_gc_reclaimed`, and the sweep CONTINUES to the
+      # next row, which is why the emitter returns rather than dying.
+      #
+      # AND IT MAY ONLY DECLINE FOR 1 OR 2 (D-2605). Status 3 is a purge that
+      # already ran: the `_lc_done purge` fact is on disk and the row's fields
+      # are gone, so `_lc_refuse_return` — whose whole meaning is "before
+      # anything irreversible" — would emit `outcome:"refused"` about an act
+      # that was completed and irreversible, with a detail claiming the row is
+      # untouched. That is the reverse of the truth and it was measured on this
+      # tree: one un-removable field under a HELD lock produced exactly that
+      # record. A status-3 row therefore gets `_lc_fail destroy`, the word for
+      # an act that started and broke.
+      local _pr_prc=0
+      _reg_purge "$project-$slug" || _pr_prc=$?                            # finding F3
+      if (( _pr_prc == 3 )); then
+        _lc_fail destroy "$project-$slug" "$lctx" purge-incomplete \
+          "the registry row WAS purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands" \
+          verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg \
+          meas.unremoved "$REG_PURGE_UNREMOVED"
+        _gc_incomplete "dead registry entry $project-$slug — the row is gone, but $REG_PURGE_UNREMOVED could not be removed and needs a hand"
+      elif (( _pr_prc == 2 )); then
+        # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3). The
+        # DISPOSITION is unchanged and deliberately so: this caller reaches
+        # `_reg_purge` before anything irreversible, so it still DECLINES with
+        # `_lc_refuse_return` and still tallies as declined. Only the token and
+        # the detail change, because only the cause and the remedy do.
+        _lc_refuse_return destroy "$project-$slug" "$lctx" purge-mechanism-absent \
+          "the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so $REG/.$project-$slug.compactions.lock was never consulted and may not exist — while $REG/$project-$slug.generation is present; the registry row is untouched, and waiting changes nothing" \
+          verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
+        _gc_declined "dead registry entry $project-$slug — this box cannot take the compaction lock at all (flock, mktemp or link is off the PATH); nothing was removed"
+      elif (( _pr_prc != 0 )); then
+        # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
+        # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
+        # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
+        # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
+        # the default sentence below is written for it. WHICH states carry a
+        # token, and what an EMPTY `WHY` does and does not prove, are NOT
+        # restated here (r7 R6-M1): that census lives in ONE place, the header
+        # comment on _compact_lock_acquire, which is the only writer of the
+        # variable. The copy that used to stand here went stale inside a single
+        # round — it mis-counted the assignment sites the acquire had just
+        # grown, and called the whole untokened residue a race at the mint
+        # after the acquire had named a durable member of it — so this caller
+        # points instead of repeating, and a numeral about the code is made in
+        # exactly one place. What this caller needs from the variable is only
+        # that nothing clobbers it between `_reg_purge`'s return and here.
+        # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to
+        # ITS OWN remedy and gives an unrecognised one the catch-all: a
+        # condition named at the acquire must never silently inherit "wait
+        # and re-run", which is the defect that let one sentence stand for
+        # two conditions. That is the same argument `cmd_ws_add` and
+        # `cmd_start` make at their own acquire sites, one level up; this is
+        # it one level down, where the record is DURABLE — and it is the ONE
+        # renderer all four durable callers consult, so this caller's text
+        # cannot drift from theirs. `<id>` is `$project-$slug` here, this
+        # caller's own spelling of the row id, and `<verb>` selects both the
+        # RE-RUN clause (this sweep never re-runs against one row) and the
+        # surviving-state clause: this arm DECLINES before anything
+        # irreversible, so "the registry row is untouched" is the true
+        # residue, not "$REG/$id.* … still stand".
+        local _pr_why; _pr_why=$(_compact_lock_why_remedy "$project-$slug" 'ws-gc --prune')
+        _lc_refuse_return destroy "$project-$slug" "$lctx" purge-refused \
+          "$_pr_why" \
+          verb ws-gc meas.project "$project" meas.workspace "$slug" meas.state dead-reg
+        # AND THE SWEEP'S OWN REPORT ROW SAYS THE SAME THING THE JOURNAL DOES
+        # (r8 R8-M3). This line said "the compaction lock was unavailable"
+        # unconditionally — the contention story — one line after `_pr_why`
+        # rendered a durable remedy that, for four of the five tokens,
+        # explicitly refuses to call the condition contention. The short form
+        # is a SECOND RENDERER keyed on the same tokens rather than a second
+        # copy of the sentence, so the tally and the journal cannot drift; the
+        # status-2 sibling above already distinguishes its own cause here.
+        local _pr_short; _pr_short=$(_compact_lock_why_short)
+        _gc_declined "dead registry entry $project-$slug — $_pr_short; nothing was removed"
+      else
+        _lc_done destroy "$project-$slug" "$lctx" verb ws-gc
+        _gc_reclaimed "dead registry entry $project-$slug"
+      fi ;;
     reg-broken)
       # `_ws_gc_scan` deliberately reconstructed NOTHING for this row (see
       # there), so there is no id to purge and this arm must not invent one.
@@ -15295,11 +16297,45 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # COLORTERM=truecolor so Claude Code emits 24-bit colour (it otherwise quantises
   # to 256, collapsing its palette). tmux passes it through to the terminal-drawer
   # xterm once the server has the RGB terminal-feature (see hardening/tmux.conf).
+  # ── D-2605: the row's generation, read under the mutex, CLOSED BEFORE the
+  # fork ────────────────────────────────────────────────────────────────────
+  # It READS AND VALIDATES; it never MINTS. Minting is row creation's alone: a
+  # mint here would hand a fresh authorization to a row that was purged or
+  # REUSED in the gap, and a row with no generation is answered by the standing
+  # fail-closed rule downstream instead.
+  #
+  # THE LOCK IS CLOSED BEFORE EITHER `_tmux_new_session` COMMAND IS BUILT OR
+  # RUN, and that is not tidiness. The tmux server daemon — or anything it
+  # spawns — can outlive this critical section, a held `{fd}<>` descriptor is
+  # inherited across fork/exec, and no compliant path may rely on tmux calling
+  # `closefrom()`. Releasing first is safe because every lifecycle arm already
+  # refuses on an environment/canonical generation mismatch under its own lock,
+  # so a row purged or reused in the gap is simply refused downstream.
+  #
+  # A CONTENDED MISS FAILS OPEN, deliberately. Failing closed here was
+  # REJECTED: a rescue swap contending with the outgoing pane's own PreCompact,
+  # which can hold the lock for seconds, would not come back up — and a swap
+  # must never wedge on a compaction lock. The cost is stated plainly rather
+  # than swallowed, because a contended hold at spawn time is itself an anomaly
+  # and the resulting inertness cannot self-heal by any later event. It is
+  # self-consistent with the generation gate rather than an exception to it: a
+  # session with no generation cannot hold this lock, so there is no publisher
+  # the missed acquisition could have raced.
+  local genfd="" genenv="" genval="" genrc=0
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; genrc=$?
+  if (( genrc == 0 )); then
+    genfd="$COMPACT_LOCK_FD"
+    if _reg_generation_read "$id"; then genval="$REG_GENERATION"; genenv="CCRC_SESSION_GENERATION='$genval' "; fi
+    _compact_lock_release "$genfd"; genfd=""
+  elif (( genrc == 1 )); then
+    echo "ccd: warn: $id: could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s;" \
+         "spawning without CCRC_SESSION_GENERATION — this session's compaction lifecycle is inert until its next respawn" >&2
+  fi
   # `_tmux_new_session`, not a bare `tmux new-session`: this is the call that
   # can create the server, and it is AFTER everything that can `die`, so a spawn
   # that is going to abort never leaves a scope behind.
   _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-    "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
+    "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags $sidflag --dangerously-skip-permissions"
   # THE PRICE OF A MONOTONE `started`, PAID AUTOMATICALLY INSTEAD OF BY HAND.
   # Nothing in ccd ever clears the field: there is no registry delete/unset
   # helper at all — `ccd-reg-claim.test.ts` greps this file for one and pins
@@ -15340,8 +16376,24 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # pane than the attempt it is replacing. (This is the copy that gets
       # forgotten: `ccd-spawn-split.test.ts` pins this line's argv on its own,
       # not merely the pair.)
+      # ITS OWN ACQUISITION, immediately before the retry's own fork, and
+      # closed before it — the primary read above happened before a `sleep` and
+      # a `has-session`, so its answer is stale by now. It requires THE SAME
+      # value this invocation already saw: a row purged and re-created in the
+      # gap has a different generation, and exporting that one would authorize
+      # this pane against a row it does not belong to.
+      local rgenfd="" rgenrc=0
+      genenv=""
+      _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; rgenrc=$?
+      if (( rgenrc == 0 )); then
+        rgenfd="$COMPACT_LOCK_FD"
+        if [[ -n "$genval" ]] && _reg_generation_read "$id" && [[ "$REG_GENERATION" == "$genval" ]]; then
+          genenv="CCRC_SESSION_GENERATION='$genval' "
+        fi
+        _compact_lock_release "$rgenfd"; rgenfd=""
+      fi
       _tmux_new_session -d -s "$tname" -x 220 -y 50 \
-        "cd '$workdir' && exec env COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
+        "cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
@@ -16033,6 +17085,44 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
         || echo "ccd: warn: could not enable boot-persistence for $id" >&2
     fi
     echo "already running: $id (find on claude.ai by name: $id)"; return 0
+  fi
+  # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────
+  # The acquire comes BEFORE the first `_reg_set`, and a MISS FAILS CLOSED:
+  # this verb dies with a retryable message naming the lock and leaves NOTHING
+  # — no `.uuid`, no `.generation`, no partial row — so nothing irreversible
+  # has happened and re-running is the whole remedy. That is the opposite
+  # disposition from `_spawn_start`'s contended miss, and deliberately: there,
+  # failing closed would wedge a rescue swap on a compaction lock; here, there
+  # is nothing to wedge and a half-written row is the worse outcome.
+  #
+  # The lock is CLOSED before the setup hook and before `_spawn_start`, which
+  # takes its own — it guards the residue check and the generation mint, and
+  # nothing else.
+  #
+  # …AND A MISS IS TWO CONDITIONS, not one. `_compact_lock_acquire` answers rc 2
+  # for MECHANISM ABSENCE and rc 1 for a refusal, deliberately, because §3.4's
+  # platform outcome gives them opposite dispositions here: row creation is NOT
+  # gated on the mechanism at all — it skips generation initialization and
+  # CONTINUES — since gating pre-existing registry work on a mechanism it never
+  # required would import a new failure mode into unrelated code. `cmd_start`
+  # has no `command -v flock` probe of its own, so a bare `||` caught both and
+  # `ccd start` was impossible on a flock-less userland, told to retry a 5 s
+  # timeout that had not happened. The retryable message belongs to rc 1 alone;
+  # no binary arrives because you ran the verb again. `_spawn_start` and
+  # `_reg_purge` already branch this way; `cmd_ws_add` is the deliberate
+  # opposite and dies, because it MINTS the generation.
+  local gfd="" _cs_rc=0
+  _compact_lock_acquire "$id" "$COMPACT_LOCK_WAIT"; _cs_rc=$?
+  if (( _cs_rc == 1 )); then
+    # Same conditional remedy as `cmd_ws_add`'s, and for the same reason.
+    die "could not take $REG/.$id.compactions.lock within ${COMPACT_LOCK_WAIT}s — nothing was written; retry${COMPACT_LOCK_WHY:+ — EXCEPT that a retry cannot help here: the acquire measured $COMPACT_LOCK_WHY, a state of $REG that no wait changes. Inspect $REG/.$id.compactions.lock and $REG by hand: ccd will not mint a second lock inode over a live holder, will not write through an object occupying that pathname, and cannot mint at all into a $REG that refuses the write}"
+  elif (( _cs_rc == 0 )); then
+    gfd="$COMPACT_LOCK_FD"
+    if ! _reg_generation_init "$id"; then
+      _compact_lock_release "$gfd"
+      die "$REG/$id.generation is present and invalid — refusing to start on it; inspect it by hand"
+    fi
+    _compact_lock_release "$gfd"; gfd=""
   fi
   local uuid; uuid=$(_reg_get "$id" uuid); [[ -z "$uuid" ]] && uuid=$(_plat_uuid)
   _reg_set "$id" wrapper "$wrapper"
@@ -18028,7 +19118,65 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
     meas.project "$(_reg_get "$id" project)" meas.uuid "$(_reg_get "$id" uuid)"
   _ws_unsupervise "$id"
   tmux kill-session -t "$(_tmux "$id")" 2>/dev/null || true
-  _reg_purge "$id"
+  # ── D-2605: THIS CALLER READS `_reg_purge`'s STATUS ─────────────────────
+  # It reached here AFTER irreversible action, so a refusal is a FAILURE, not a
+  # refusal — that is `_lc_fail`'s documented distinction from `_lc_refuse`: a
+  # refusal precedes anything irreversible, a failure follows it. Reporting it
+  # as a suppressed success is the exact false success `_reg_purge`'s own
+  # "never claims success" rule forbids, and reporting it as a bare decline
+  # would say nothing was touched, which is false. The message names WHAT
+  # COMPLETED and that the registry row and its generation still stand.
+  # THE VALUE, not the boolean (D-2605) — see `cmd_ws_rm`'s note.
+  local _fg_prc=0
+  _reg_purge "$id" || _fg_prc=$?
+  if (( _fg_prc == 3 )); then
+    _lc_fail forget "$id" "$lctx" purge-incomplete \
+      "the session was unsupervised, its pane killed and the registry row purged — this journal's own purge fact is the record of it — but $REG_PURGE_UNREMOVED could not be removed and still stands; re-running \`ccd forget $id\` will not take it, remove it by hand" \
+      verb forget dec.reason "$reason" meas.unremoved "$REG_PURGE_UNREMOVED"
+    echo "ccd: $id: unsupervised, killed and purged, but $REG_PURGE_UNREMOVED could not be removed — see the lifecycle journal" >&2
+    return 1
+  elif (( _fg_prc == 2 )); then
+    # STATUS 2 IS NOT STATUS 1 — see `cmd_ws_rm`'s note (r3 A-I3). The REMEDY
+    # differs from ws-rm's, which is why it is written out rather than shared:
+    # `forget`'s own liveness precondition is `_session_verdict`, whose
+    # `unknown` arm is an `_lc_refuse` that EMITS THEN DIES, so a re-run from a
+    # flock-capable PATH still refuses unless a tmux server is answering.
+    _lc_fail forget "$id" "$lctx" purge-mechanism-absent \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: the compaction lock's MECHANISM is absent on this box — flock, mktemp or link could not be resolved on the PATH ccd ran with, so the lock was never consulted and the lock file may not even exist — while $REG/$id.generation is present, so the purge refused rather than race a hook that may hold it. $REG/$id.* and $REG/$id.generation still stand; waiting changes nothing — re-run \`ccd forget $id\` from a PATH that resolves flock, mktemp and link, and only while a tmux server is answering, because forget refuses outright on an unknown session verdict" \
+      verb forget dec.reason "$reason"
+    echo "ccd: $id: unsupervised and killed, registry NOT purged — the compaction lock mechanism is absent; see the lifecycle journal" >&2
+    return 1
+  elif (( _fg_prc != 0 )); then
+    # STATUS 1 FOLDS SEVERAL CONDITIONS, AND COMPACT_LOCK_WHY NAMES ONLY THE
+    # ONES A RE-RUN CANNOT CURE (r5 R4-M3, correcting r4 A-M3's "STATUS 1 IS
+    # TWO CONDITIONS"). `_compact_lock_acquire` returns 1 from many distinct
+    # states. ONE of them, the `flock -w` timeout, is ordinary contention, and
+    # the default sentence below is written for it. WHICH states carry a token,
+    # and what an EMPTY `WHY` does and does not prove, are NOT restated here
+    # (r7 R6-M1): that census lives in ONE place, the header comment on
+    # _compact_lock_acquire, which is the only writer of the variable. The copy
+    # that used to stand here went stale inside a single round — it mis-counted
+    # the assignment sites the acquire had just grown, and called the whole
+    # untokened residue a race at the mint after the acquire had named a
+    # durable member of it — so this caller points instead of repeating, and a
+    # numeral about the code is made in exactly one place. What this caller
+    # needs from the variable is only that nothing clobbers it between
+    # `_reg_purge`'s return and here.
+    # `_compact_lock_why_remedy` (r6 R5-M3) keys each token to ITS
+    # OWN remedy and gives an unrecognised one the catch-all: a condition
+    # named at the acquire must never silently inherit "wait and re-run",
+    # which is the defect that let one sentence stand for two conditions.
+    # That is the same argument `cmd_ws_add` and `cmd_start` make at their own
+    # acquire sites, one level up; this is it one level down, where the
+    # record is DURABLE — and it is the ONE renderer all four durable callers
+    # consult, so this caller's text cannot drift from theirs.
+    local _fg_why; _fg_why=$(_compact_lock_why_remedy "$id" forget)
+    _lc_fail forget "$id" "$lctx" purge-refused \
+      "the session was unsupervised and its pane killed, but the registry row could not be purged: $_fg_why" \
+      verb forget dec.reason "$reason"
+    echo "ccd: $id: unsupervised and killed, registry NOT purged — see the lifecycle journal" >&2
+    return 1
+  fi
   _lc_done forget "$id" "$lctx" verb forget dec.reason "$reason"
   echo "forgot $id — registry entry removed; the transcript and any pasted images are kept"
 }

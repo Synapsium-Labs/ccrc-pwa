@@ -3,7 +3,7 @@ import { StrictMode } from 'react';
 import { act, cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { RUN_STATES, SPAWN_STALL_MS, type CoordCapsView, type FleetSession, type RunSummary } from '../../shared/api';
 import { RunsScreen } from '../src/screens/RunsScreen';
-import { CROSSING_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, waveLabel } from '../src/fleet/runWords';
+import { CROSSING_GLYPH, REVIEW_GLYPH, RUN_ORDER, RUN_WORD, crossingNote, dispatchWindow, itemTallyLabel, programWave, programsWithOpenRun, resumeNote, runForSession, runHomeProject, runItems, runKindChip, waveLabel } from '../src/fleet/runWords';
 import { spawnChip, spawnVerdictChip } from '../src/fleet/spawnWords';
 import { api } from '../src/lib/api';
 import { createFleetStore, type FleetStore } from '../src/stores/fleet';
@@ -30,7 +30,8 @@ const r = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
@@ -1465,5 +1466,44 @@ describe('the run row names its repo', () => {
     board(r({ project: 'other-repo', homeProject: null }));
     expect(document.querySelector('.run-project')?.textContent).toBe('other-repo');
     expect(document.querySelector('.run-crossing')).toBeNull();
+  });
+});
+
+describe('runKindChip — the one tolerant reader of RunSummary.kind (design 2026-09-14 §8)', () => {
+  it('is silent on a work run, and on a row from a server that has never heard of kind', () => {
+    expect(runKindChip(r({ kind: 'work', reviews: null }))).toBeNull();
+    const older = { ...r() } as Partial<RunSummary>; delete older.kind; delete older.reviews;
+    expect(runKindChip(older)).toBeNull();
+  });
+  it('names the reviewed run on a review row, with a glyph and a word', () => {
+    expect(runKindChip(r({ kind: 'review', reviews: 47 })))
+      .toEqual({ glyph: REVIEW_GLYPH, word: 'reviews #47', title: 'a review run: reads run #47 at one measured tip and reports; the coordinator rules' });
+  });
+  it('still marks a review row whose reviews column could not be read as a review', () => {
+    expect(runKindChip(r({ kind: 'review', reviews: null }))!.word).toBe('review');
+  });
+  it('says unknown for a kind this build cannot name — never a blank cell', () => {
+    expect(runKindChip(r({ kind: 'unknown', reviews: null }))!.word).toBe('unknown kind');
+  });
+});
+
+describe('the run board marks review runs (design 2026-09-14 §8)', () => {
+  const board = (over: Partial<RunSummary>): void => {
+    const store = makeStore();
+    act(() => { store.setState({ runs: [r({ ...over })], runsFrameSeen: true }); });
+    render(<RunsScreen store={store} loadRuns={async () => ({ runs: [] })} loadCaps={NO_CAPS} />);
+  };
+  it('renders no kind chip on a work row', () => {
+    board({ kind: 'work', reviews: null });
+    expect(document.querySelector('.run-kind')).toBeNull();
+  });
+  it('renders the chip with BOTH cues on a review row and names the reviewed run', () => {
+    board({ kind: 'review', reviews: 47 });
+    const chip = document.querySelector('.run-kind');
+    expect(chip).not.toBeNull();
+    expect(chip!.querySelector('.run-kind-glyph')?.textContent).toBe(REVIEW_GLYPH);
+    expect(chip!.querySelector('.run-kind-glyph')?.getAttribute('aria-hidden')).toBe('true');
+    expect(chip!.textContent).toContain('reviews #47');
+    expect(chip!.getAttribute('title')).toContain('coordinator rules');
   });
 });

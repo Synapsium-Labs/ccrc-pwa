@@ -22,7 +22,7 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -33,7 +33,7 @@ import {
   parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
 } from '../../../shared/api.js';
@@ -255,20 +255,28 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 }
 
 /**
- * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
- * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
- * live coordinator has redeployed and the field is required.
+ * THE LEGACY GENERATION, as one constant (design §3 F2), and the switch that
+ * ends it. `true` ACCEPTED an absent `homeProject` on `POST /api/runs` and
+ * recorded a `legacy-home-project` run event, leaving the programme row's home
+ * NULL; `false` refuses the open `400 bad-request` with
+ * `detail: 'homeProject is required'` (D-2349, D-2744).
  *
- * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
- * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
- * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
- * one generation (`coord/token.ts`, `server.ts`), then removed.
+ * FLIPPED TO `false` on operator ruling D-2867, the spec's seven-day criterion
+ * waived: 8 of the 15 opens since the 2026-09-14 deploy omitted the field, the
+ * last at 2026-09-15T07:38:57Z — the trail is in
+ * `docs/superpowers/programs/home-project-flip.md`'s `## Measurements`. Both
+ * branches of `homeProjectVerdict` stay in the tree and both stay tested
+ * (`home-project.test.ts`) — this is a value change, never a deletion. The
+ * ROUTE's `legacy` arm below is now unreachable, since the only
+ * `legacyAccepted` the route ever passes is this constant; it stays as the
+ * record of what `true` did.
  *
  * Read ONCE, at the single call site below, and passed as an argument to
- * `homeProjectVerdict` rather than read inside it — which is what makes the
- * OTHER branch testable before it ships. `home-project.test.ts` drives both.
+ * `homeProjectVerdict` rather than read inside it — which is what keeps the
+ * OTHER branch testable after the flip as it was before it.
+ * `home-project.test.ts` drives both.
  */
-export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+export const HOME_PROJECT_LEGACY_ACCEPTED = false;
 
 /** What the open route must DO about the body's `homeProject` and the
  *  programme's stored one. SIX answers, none folded into another: `write` and
@@ -1141,13 +1149,24 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
+    const { program, title, claimedBy, sessionId, homeProject, kind, reviews } = body;
+    // Design 2026-09-14 §5.1 / D-2799. `kind` absent is 'work' — every caller
+    // that predates review runs. Checked BEFORE the shape guard below: that
+    // guard's own project/wave relaxation reads `kind !== 'review'` and would
+    // otherwise fold an invalid `kind` into "this is a work-shaped body" and
+    // answer the generic bare `bad-request` (no field named) rather than this
+    // one's own detail.
+    if (!(kind === undefined || kind === 'work' || kind === 'review')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'kind must be work or review' });
+    }
     if (typeof program !== 'string' ||
         typeof title !== 'string' || title.trim() === '' ||
-        typeof project !== 'string' || project.trim() === '' ||
+        (kind !== 'review' && (typeof body.project !== 'string' || body.project.trim() === '')) ||
+        (body.project !== undefined && typeof body.project !== 'string') ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        !isPositiveDecimalSafeInteger(wave) ||
-        !(waveOf === undefined || waveOf === null || isPositiveDecimalSafeInteger(waveOf)) ||
+        (kind !== 'review' && !isPositiveDecimalSafeInteger(body.wave)) ||
+        (body.wave !== undefined && !isPositiveDecimalSafeInteger(body.wave)) ||
+        !(body.waveOf === undefined || body.waveOf === null || isPositiveDecimalSafeInteger(body.waveOf)) ||
         !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
         // Present-and-not-a-string is a malformed body. The VALUE is shaped
         // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
@@ -1157,14 +1176,51 @@ export function registerCoordRoutes(
         !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // `kind`'s own vocabulary was already proven above, before this guard.
+    // Each further refusal below names its field so the caller can tell
+    // "malformed JSON" from "you sent the wrong thing".
+    const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
+    if (runKind === 'work' && reviews !== undefined) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
+    }
+    if (runKind === 'review' && !isPositiveDecimalSafeInteger(reviews)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews must name the work run under review (a positive run id)' });
+    }
     // A programme names one ledger file, so separators, dot components, and
     // display-label punctuation are refused before the value reaches storage or
-    // `ledgerPath`. Every programme consumer below reads this one shaped value.
+    // `ledgerPath`. Every programme consumer below reads this one shaped value —
+    // MOVED above the review arm (Task 5 review I2): `program` compared raw
+    // against the reviewed run's own (already-shaped, since every open shapes
+    // it) `program` let a whitespace-padded slug pass a work open and fail an
+    // otherwise-identical review open of the same programme.
     const programShape = shapeProgramSlug(program);
     if (!programShape.ok) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
     }
     const programSlug = programShape.slug;
+
+    // A review run's project, wave and waveOf are the REVIEWED run's — read off
+    // its row, never off this body, which may only agree (D-2799). The body's
+    // own shape guard above already accepted `project`/`wave` as it always
+    // did; here the review arm overrides them with the measured values.
+    let project = body.project as string, wave = body.wave as number, waveOfBody = body.waveOf;
+    if (runKind === 'review') {
+      if (sessionId !== undefined) {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' });
+      }
+      const target = coord.run(reviews as number);
+      if (!target.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: target.detail });
+      if (target.run === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews names no run' });
+      const t = target.run;
+      if (t.kind !== 'work') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a work run, not one of kind ${t.kind}` });
+      if (t.state !== 'awaiting-review') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a run at awaiting-review, not ${t.state}` });
+      if (t.program !== programSlug) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
+      if (t.claimedBy !== claimedBy) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'claimedBy must be the reviewed run\'s coordinator' });
+      if (body.project !== undefined && body.project !== t.project) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `project must be the reviewed run's (${t.project})` });
+      if (body.wave !== undefined && body.wave !== t.wave) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `wave must be the reviewed run's (${t.wave})` });
+      if (body.waveOf !== undefined && body.waveOf !== null && body.waveOf !== t.waveOf) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `waveOf must be the reviewed run's (${t.waveOf})` });
+      project = t.project; wave = t.wave; waveOfBody = t.waveOf;
+    }
 
     // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
     // `setProgramHome` (through the verdict's own `home`), the response —
@@ -1175,7 +1231,7 @@ export function registerCoordRoutes(
       if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
       home = shaped.home;
     }
-    const waveOfVal = (waveOf ?? null) as number | null;
+    const waveOfVal = (waveOfBody ?? null) as number | null;
 
     // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
     // repository, and reusing it for a wave in another is the one crossing this
@@ -1210,12 +1266,13 @@ export function registerCoordRoutes(
     }
     if (homeVerdict.kind === 'required') {
       // Its OWN sentence (D-2349), not the body-shape guard's bare
-      // `bad-request` 36 lines up: two conditions whose remedies differ —
-      // "your JSON is
-      // malformed" versus "this build requires a home" — must not reach the
-      // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
-      // true; the day wave 3 flips the constant, this is the one refusal the
-      // flip exists to produce. Pinned by `home-project.test.ts`'s scan.
+      // `bad-request` above: "your JSON is malformed" and "this build
+      // requires a home" have different remedies and must not reach the
+      // caller as one value. LIVE since 2026-09-16 (D-2867): every
+      // otherwise well-formed open with no `homeProject` gets this — a
+      // malformed body still gets the shape guard's answer first, a session
+      // bound elsewhere `409 project-mismatch`. Pinned by
+      // `home-project.test.ts`'s scan and `home-project-required.test.ts`.
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
 
@@ -1242,6 +1299,7 @@ export function registerCoordRoutes(
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
+      kind: runKind, reviews: runKind === 'review' ? (reviews as number) : null,
       ...(home !== undefined ? { homeProject: home } : {}),
       ...(coordProject !== undefined ? { coordProject } : {}) });
     if ('kind' in opened) {
@@ -1256,11 +1314,12 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
 
-    // The backfill and the legacy acceptance are RECORDED, not merely done:
-    // wave 3's flip is dated by `run_events` showing zero `legacy-home-project`
-    // rows over seven consecutive days, and a fact nothing wrote down cannot
-    // date anything. `recordRunEvent` writes `fromState === toState`, so the
-    // notify lane skips it and no push impersonates a transition.
+    // The backfill is RECORDED, not merely done — and the legacy acceptance
+    // was too, while the constant was `true`, which is what let the flip be
+    // dated from `run_events` at all (it was ruled early instead, D-2867; the
+    // trail is in `docs/superpowers/programs/home-project-flip.md`).
+    // `recordRunEvent` writes `fromState === toState`, so the notify lane
+    // skips it and no push impersonates a transition.
     if (homeVerdict.kind === 'backfill') {
       tx(coord.db, () => {
         coord.setProgramHome(programSlug, homeVerdict.home);
@@ -1543,6 +1602,7 @@ export function registerCoordRoutes(
    * both as "the ordinary case, not a failure") re-measures NOTHING, the
    * same D-49 reasoning close's own abandon path already uses: retreating to
    * `working` asserts no new claim of doneness for the server to check.
+   * It does take the CAP check when it comes from an idle state (design 2026-09-14 §7.2) — retreating asserts no doneness, but it does re-occupy a fleet slot.
    */
   app.post('/api/runs/:id/advance', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1585,11 +1645,40 @@ export function registerCoordRoutes(
     }
     const run = read.run;
     if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
+    if (!(transitionsFor(run.kind)[run.state] as readonly RunState[]).includes(to)) {
       return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
     }
     if (run.sessionId === null) {
       return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
+    }
+
+    // Design 2026-09-14 §9 invariant 3 — the pair never disagrees. A work run
+    // under review cannot be moved back to `working` until its review run is
+    // terminal: the coordinator closes R (done, or failed if it died) BEFORE
+    // sending W back, so a report and the tip it describes stay one pair.
+    // Checked ahead of the cap: a definite refusal before a contingent one.
+    if (to === 'working' && run.kind === 'work') {
+      const inflight = coord.reviewInFlightFor(id);
+      if (inflight !== null) {
+        return reply.code(409).send({ ok: false, reject: { code: 'review-in-flight', reviewRunId: inflight } });
+      }
+    }
+
+    // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
+    // `capsUsage().running`, so the one legal edge back INTO an active state
+    // — `awaiting-review`/`merging` -> `working`, a review sending work back
+    // or a lost merge race — must take the cap check dispatch takes, or the
+    // exclusion is a bypass. `dispatched -> working` is not checked: that run
+    // is already counted. The numbers come from `capsMeasured` (D-2805), the
+    // one reader both routes share; this file's own `.capsUsage(` stays the
+    // caps view's alone, as `coord-caps-route.test.ts` pins.
+    if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
+      const { overConcurrency } = capsMeasured(coord);
+      if (overConcurrency !== null) {
+        // Fields spelled, not spread, to match dispatch.ts's frame; capsMeasured owns the arithmetic.
+        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
+          limit: overConcurrency.limit, running: overConcurrency.running } });
+      }
     }
 
     // Forward motion toward a review claim re-measures; retreating to
