@@ -321,7 +321,7 @@ cases** — restoring the pre-fix file leaves the models block 10/10 green, so t
 green mutation. Round 2 is dispatched with the tests as its deliverable; it must not close without a
 mutation row per behaviour change.
 
-## 2026-09-17 03:0x UTC — the D-71 reachability audit: **13 sites, 10 safe, THREE reachable**, one guarded by a false comment
+## 2026-09-17 03:0x UTC — the D-71 reachability audit: **13 sites, 9 safe, FOUR reachable across three findings**, one guarded by a false comment
 
 The measurement the worker correctly refused to widen into, taken at my cost. Ten agents against
 read-only copies of the four files at `origin/main` `03ecda65` in my own scratchpad — never a live
@@ -355,7 +355,7 @@ describes the PREVIOUS incarnation of this bug as a **"FABRICATED SUCCESS LINE"*
 called this site safe; **the critic caught that its argument was a non-sequitur from the guard it
 quoted**, which is the whole reason a completeness critic is in the harness.
 
-**The ten that are safe**, briefly, because a safe verdict is a measurement too: the five
+**The nine that are safe**, briefly, because a safe verdict is a measurement too: the five
 `_wrap_parse_shape` readers are gated by `WRAPPER_ID_RE`/`WRAPPER_SUFFIX_SAFE_RE`, neither of which
 accepts empty, and every consumer checks `ok = ok` before touching a later field; `ccd:3646` puts the
 free-form reflog subject LAST by design; `ccd:10029` is reached only after `is_merged` proves the oid
@@ -379,7 +379,7 @@ its first space — and that length is the sort key for the deepest-first orderi
 only order in which each child's own `worktree remove` actually removes it.
 
 **The finding under all of them.** D-71 is banned in three plans and at least six in-file comments, one
-saying it "must not come back". Thirteen call sites, three reachable, one guarded by a false claim.
+saying it "must not come back". Thirteen call sites, four reachable, one guarded by a false claim.
 **A rule stated six times in prose and violated thirteen times in code is a missing mechanism, not a
 knowledge-transfer failure.** D-71 has never had a red suite. That is someone's wave — surfaced to the
 operator, not taken here.
@@ -562,3 +562,59 @@ per-file map keyed on `ccd/ccd` — a file every programme in this repo edits �
 (*"THE CITATION DEBT this task creates"*) from rot an unrelated wave caused in the same file.
 Its owning programme is complete and the Task 11 it names as the owner of closing the debt
 has already run. **The next wave to touch `ccd/ccd` meets it exactly as run 42 did.**
+
+---
+
+## Wave 1 handed off — and the worker corrected my own arithmetic before I did
+
+Mail 1567, `wave-done`. Fingerprint `{branchTip 76897187…, prNumber 136, prPhase open, handoffCommit
+76897187…}`, `suite: red`, `failure: ceiling`. **Re-measured, not taken:** `git -C <worker worktree>
+rev-parse HEAD` reads `7689718713b78dfc89532bf490e930089a9bbc18` on `ws/bright-canyon`, identical to
+both claimed fields; `gh pr view 136` reads OPEN, head `ws/bright-canyon@76897187`, base `main`,
+MERGEABLE. `advance → working` then `advance → awaiting-review` both accepted. **Review run 69 opened
+(`kind:'review'`, `reviews:42`) and dispatched to a fresh session, `ccrc-pwa-warm-prairie`**, with the
+held-out panel as its shape and one wave-specific lens: the mutation claims ARE the deliverable here,
+so every guard gets reversed in a copy and its named case must red.
+
+### THE CORRECTION I OWE, and it is against me
+
+The worker's wave-done carries six self-corrections. Two of them land on my own published work.
+
+**1. My D-71 transcript is unrunnable, and I published it as "reproduced it myself".** I printed
+`printf '\t/home/u/.claude-x\n' | IFS=$'\t' read -r a d` and reported the parent's variables.
+**Measured here, bash 5.2.21, `lastpipe` off:** the last element of a pipeline runs in a subshell, so
+the parent reads `a=[X] d=[X] f=[X]` — the values it held before. That command cannot have produced
+what I showed. **The FINDING is untouched and the exact output reproduces** under the runnable form:
+
+```
+$ IFS=$'\t' read -r a d <<< $'\t/home/u/.claude-x'; f="$d/settings.json"
+  a=[/home/u/.claude-x] d=[] f=[/settings.json]
+```
+
+…including the `f=[/settings.json]` I reported, which is the DERIVED `$d/settings.json` with `d`
+empty — so the report was coherent and only its stated instrument was false. That distinction is the
+whole of `a-measurement-is-only-a-fact-with-its-tool`, and I broke it while quoting it.
+
+**2. My safe/reachable split was arithmetically impossible, and my own ledger held both halves of the
+contradiction.** I published *"13 sites, 10 safe, THREE reachable"* — while the paragraph headed
+**"The ten that are safe"** enumerated **nine**: five `_wrap_parse_shape` readers, `ccd:3646`,
+`ccd:10029`, `ccd:12619`, `ccrc:2722`. And the reachable section names **four site anchors across
+three findings**, because R3 is `ccd:12850` AND `:12917`. 9 + 4 = 13. The true split is **nine safe,
+four reachable sites, three findings**, and the three instances above are corrected in place.
+
+**This is the exact defect I ruled on twice today in other people's work** — #134's census records its
+own version of it (*"this sentence read 198 while its own map summed to 200 … a reader re-measuring
+the debt took 198 as the figure to close and was two short"*), and its remedy was to assert the sum so
+the headline cannot drift from the enumeration. I had no such mechanism on my own paragraph, and a
+headline nobody derives from its list is a claim nobody measures. **The rule, on me: a count in a
+sentence is derived from the list beside it or it is not written.**
+
+Credit where it is owed: the worker found both, unprompted, in a `wave-done` it could have spent on
+its own result. That is the second time in one run it has corrected a claim of mine at its own cost.
+
+### What is still open
+
+Three census cases stay red, cross-plan, and the step-one sizing measurement is running under the
+prove-repair-absorb ruling — it arrives as its own mail. The README anchor it was authorised to repair
+is repaired by byte-equality and that assertion now passes. Every change is under `ccd/`, so this is
+**AGENT-FIRST at deploy time**; nothing is deployed and the worker has stopped pushing.
