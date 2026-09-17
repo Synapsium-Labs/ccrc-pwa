@@ -292,10 +292,8 @@ wins.
   both skills carry the verbatim clause that a session "never types into another session's pane by
   any other means", and the record is the arbiter, so ccd applies the change on its own supervise
   tick or at the next settle without any session having caused a keystroke. `--apply` is reachable
-  only from the server's picker path, where the actor is the server. (amended by routing slice 5:
-  clause 1 forbids a coordinator running ccd to change fleet state, so the decision goes through
-  the server's door and the verb is the server's call; the departure is recorded in the slice 5
-  plan's ledger)
+  only from the server's picker path, where the actor is the server. (amended by routing slice 5, D-2947: clause 1 forbids a coordinator running ccd to change fleet state,
+  so the decision goes through the server's door and the verb is the server's call)
 - **The verb.** `ccd route --session <id> --set <field>=<value> [--apply]` is enrolled in
   `agent/src/whitelist.ts`'s `REQUIRED_VERB_FLAG` as `'route': '--session'` and granted as the
   two-token prefix `['route','--session']`, for the reason `coord-pause` and `project-pool` are: a
