@@ -1120,6 +1120,59 @@ describe('the purge callers read its status (spec §3.4, "Locked purge and hones
     expect(fn).toContain('spawning without CCRC_SESSION_GENERATION');
     expect(fn).toContain('inert until its next respawn');
   });
+
+  // ── THE UPGRADE TRANSITION: a row that predates the generation mechanism ──
+  // Every row created before D-2605 shipped has NO `.generation` file at all,
+  // and the sentence the warning above ends with — "inert until its next
+  // respawn" — is a promise about those rows. It is only true if a respawn
+  // MINTS. Measured on the live fleet 2026-09-17, hours after the card was
+  // deployed: 31 of 34 live sessions had no generation, and none of them could
+  // gain one, because the only two minting call sites are `cmd_ws_add` and
+  // `cmd_start` while the systemd unit reaches neither — it runs
+  // `ccd supervise`, which calls `cmd_ensure`, which spawns without minting.
+  it('a row with NO generation GAINS one on the supervised path — the respawn the warning promises', () => {
+    const id = 'demo-still-river';
+    // The pre-upgrade row, exactly: every field a supervised restart needs and
+    // no generation, which is what the old ccd left behind.
+    h.sh(`_reg_set ${id} wrapper claude
+      _reg_set ${id} workdir "$HOME"
+      _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000
+      _reg_set ${id} started 1`);
+    const gp = path.join(h.home, '.cc-sessions', `${id}.generation`);
+    expect(fs.existsSync(gp), 'the fixture starts WITHOUT one, as a pre-upgrade row does').toBe(false);
+    // THE UNIT'S OWN PATH, not a convenient shortcut: `claude-session@.service`
+    // runs `ccd supervise <id>`, `cmd_supervise` sets CCD_IN_UNIT and calls
+    // `cmd_ensure`. Driving `cmd_ensure` with that variable set IS the
+    // supervised respawn, and it is the only respawn the fleet ever performs.
+    h.sh(`${CAPTURE} sleep() { :; }; _spawn_settle() { :; }; CCD_IN_UNIT=1 cmd_ensure ${id} 2>/dev/null`);
+    expect(fs.existsSync(gp), 'the supervised respawn minted the row its generation').toBe(true);
+    const gen = fs.readFileSync(gp, 'utf8');
+    expect(gen, 'and it is the 36-byte grammar every arm validates against').toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+    // AND IT REACHED THE PANE. A mint the spawn does not carry would leave the
+    // hook's env-vs-file comparison with nothing to compare, which is the same
+    // inertness by another route.
+    const cmds = capturedCommands();
+    expect(cmds.length, 'the respawn built at least one launch line').toBeGreaterThan(0);
+    for (const [i, c] of cmds.entries()) {
+      expect(c, `launch line ${i + 1} carries the row's own generation`)
+        .toContain(`CCRC_SESSION_GENERATION='${gen}' `);
+    }
+  }, 30_000);
+
+  it('and an ABSENT generation is said out loud, not only a contended one', () => {
+    // The warning above covers rc 1, a contended lock, which is rare. The
+    // common case — the file is simply not there — took the `genrc == 0` arm,
+    // read nothing, and spawned in silence. Measured on the live fleet: the
+    // string "spawning without CCRC_SESSION_GENERATION" appears in no log on
+    // the box, while 31 sessions were spawning without one.
+    const id = 'demo-still-river';
+    h.sh(`_reg_set ${id} wrapper claude
+      _reg_set ${id} workdir "$HOME"
+      _reg_set ${id} uuid deadbeef-0000-4000-8000-000000000000`);
+    const out = h.sh(`${CAPTURE} sleep() { :; }; _spawn_start ${id} resume 2>&1 1>/dev/null || true`);
+    expect(out, 'the spawn names the id and the condition').toContain(id);
+    expect(out, 'and says the lifecycle is inert').toMatch(/CCRC_SESSION_GENERATION/);
+  }, 30_000);
 });
 
 // ── D-2605: ONE TERMINAL FACT PER MINTED TRANSACTION (spec §3.4, §5) ──────

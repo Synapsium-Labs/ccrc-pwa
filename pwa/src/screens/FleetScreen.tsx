@@ -441,36 +441,6 @@ export function FleetScreen({
       <header className="fleet-head">
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
-          {/* The class chooser (routing spec, slice 5, Task 6): forecasts
-              EVERY card's placement for one class at a time, the same
-              `GET /api/projects?class=` this build has carried since slice 4
-              but with no caller until now. "Coordinator row" (unset) is the
-              class-blind fetch every build before this task has always sent;
-              "Default" asks explicitly for the record's own "no override"
-              word — the projects handler (`server.ts`) treats it identically
-              to the unset fetch (no per-class shares read, byte-identical
-              answer), so choosing it changes nothing about what renders, only
-              what the `+` posts. The four classes are `CLASSES` reversed —
-              the same capability order `NewSessionSheet`'s own routing row
-              uses — never a hand-typed list, so a class this build adds or
-              drops shows up here for free. */}
-          <select
-            className="route-select fleet-class-select"
-            aria-label="Class"
-            value={classFilter}
-            onChange={(e) => {
-              const next = e.target.value as '' | 'default' | ModelClass;
-              setClassFilter(next);
-              classFilterRef.current = next;
-              void refreshProjects();
-            }}
-          >
-            <option value="">Coordinator row</option>
-            <option value="default">Default</option>
-            {[...CLASSES].reverse().map((c) => (
-              <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-            ))}
-          </select>
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its
@@ -501,6 +471,46 @@ export function FleetScreen({
           <NotificationBell />
         </div>
       </header>
+      {/* ITS OWN ROW, not a member of `.fleet-head-right` — a layout
+          measurement, argued in full beside `.fleet-class-row` in
+          fleet.css. In one line: the head's right group has 294px at
+          390px and its other four items need 244px of that, while this
+          control's widest option, "Coordinator row", measures 167px. It
+          never fit, and the head overflowed the viewport by 225px at
+          390px and 219px at 700px for as long as it sat there. Nothing
+          about what the control DOES changes by moving it. */}
+      <div className="fleet-class-row">
+        {/* The class chooser (routing spec, slice 5, Task 6): forecasts
+            EVERY card's placement for one class at a time, the same
+            `GET /api/projects?class=` this build has carried since slice 4
+            but with no caller until now. "Coordinator row" (unset) is the
+            class-blind fetch every build before this task has always sent;
+            "Default" asks explicitly for the record's own "no override"
+            word — the projects handler (`server.ts`) treats it identically
+            to the unset fetch (no per-class shares read, byte-identical
+            answer), so choosing it changes nothing about what renders, only
+            what the `+` posts. The four classes are `CLASSES` reversed —
+            the same capability order `NewSessionSheet`'s own routing row
+            uses — never a hand-typed list, so a class this build adds or
+            drops shows up here for free. */}
+        <select
+          className="route-select fleet-class-select"
+          aria-label="Class"
+          value={classFilter}
+          onChange={(e) => {
+            const next = e.target.value as '' | 'default' | ModelClass;
+            setClassFilter(next);
+            classFilterRef.current = next;
+            void refreshProjects();
+          }}
+        >
+          <option value="">Coordinator row</option>
+          <option value="default">Default</option>
+          {[...CLASSES].reverse().map((c) => (
+            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+          ))}
+        </select>
+      </div>
 
       <FleetHostBanner />
 

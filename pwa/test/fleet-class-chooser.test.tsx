@@ -202,4 +202,37 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     const labels = Array.from(select.options).map((o) => o.value);
     expect(labels).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
   });
+
+  it('renders outside the fleet head, on a row of its own', () => {
+    // Where this control LIVES is a layout fact with a measured cause, not a
+    // cosmetic one: `.fleet-head-right`'s four other items need 244px of
+    // min-content and the group has 294px at 390px, while this select is
+    // sized to its widest option, "Coordinator row", at 167px. While it sat
+    // in the head the fleet screen overflowed the viewport by 225px at 390px
+    // and 219px at 700px — measured in Chromium against this component's own
+    // rendered markup. Nothing about its BEHAVIOUR is different out here,
+    // which is why the rest of this suite is untouched; the assertions below
+    // exist so a future tidy-up cannot quietly put it back.
+    vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+      if (String(url).includes('/api/accounts')) return accountsRoute();
+      if (String(url).includes('/api/projects')) {
+        return new Response(JSON.stringify({ roots: [], projects: [] }),
+          { status: 200, headers: { 'content-type': 'application/json' } });
+      }
+      return new Response('{}', { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+      sessions: [session()] });
+
+    const select = screen.getByLabelText('Class');
+    expect(select.closest('.fleet-head'), 'the class chooser is back inside the fleet head')
+      .toBeNull();
+    expect(select.closest('.fleet-class-row'), 'the class chooser lost its own row')
+      .not.toBeNull();
+    // The head itself is still there and still carries the items that DO fit,
+    // so this is not passing merely because the header stopped rendering.
+    expect(document.querySelector('.fleet-head .fleet-head-right')).not.toBeNull();
+  });
 });
