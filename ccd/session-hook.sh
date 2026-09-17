@@ -1115,12 +1115,12 @@ _hook_lock_same() {   # <fd> <canonical> -> 0 iff the FD's target and canonical 
   if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
   elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
   else return 1; fi
-  # `-f` and `-ef` both FOLLOW the /proc symlink, so these read the FD's own
-  # target: a FIFO, a directory and a symlink at canonical each fail here
-  # (measured), and a canonical REPLACED since the open fails `-ef`.
+  # `-f` and `-ef` both FOLLOW the /proc symlink, so these read the FD's own target; through /dev/fd (Darwin, MEASURED
+  # on macOS 25.6: stat(/dev/fd/N) carries the fdesc DEVICE with the file's inode, so `-ef` is false while the inode
+  # matches) the inode alone decides, via POSIX `ls -i`. A FIFO, directory or symlink at canonical still fails `-f`;
   [[ -f "$p" ]] || return 1
   [[ -f "$lock" && ! -L "$lock" ]] || return 1
-  [[ "$p" -ef "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || { [[ "$p" != /proc/* ]] && a=$(ls -i -- "$p" 2>/dev/null) && b=$(ls -i -- "$lock" 2>/dev/null) && [[ -n "${a%% *}" && "${a%% *}" == "${b%% *}" ]]; } || return 1
   return 0
 }
 
@@ -1182,7 +1182,7 @@ _hook_lock_vanished() {   # -> 0 iff an ABSENT canonical is a LATER disappearanc
   # it absent this function is one glob and no fork, which is what every real
   # `ws-add` and `start` pays.
   [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
-  [ -d /proc ] || return 1
+  [ -d /proc ] || return 1   # AND WHERE THERE IS NO `/proc`, §4'S RULE IS NOT ENFORCED — stated here rather than left to be inferred from the gate. Arm (b) is the ONLY arm that can see a holder past its own acquire, so on such a box (Darwin ships no `/proc` at all) a later canonical disappearance under a live holder is indistinguishable from a first-ever mint: this function answers "first-ever mint", the acquire MINTS a second inode at the one pathname, and two processes can each be told by `flock` that they hold "the" lock — the hazard this file's header says the link-based design removes, standing on that platform. It is RECORDED platform residue rather than repaired here: `lsof` is the only candidate detector and its deleted-path reporting there is unmeasured, while failing CLOSED on the ambiguity would refuse every first-ever mint, because canonical is minted lazily while the generation is minted at row creation. The cases that assert the rule are Linux-only for this reason and each says so.
   command -v find >/dev/null 2>&1 || return 1
   # ONE FORK, NOT ONE PER DESCRIPTOR. MEASURED on this box (517 processes, 2662
   # `/proc/<pid>/fd` entries): a bash loop calling `readlink` per entry takes

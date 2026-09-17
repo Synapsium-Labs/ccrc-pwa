@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=bd5a1bf94911a9f79f812ad5353bde87a5d0a9a27fee789ef34068dc4de1ce27
+# ccrc:generated 1 sha256=62aca4ea428cdacc7ac8dd2122d813df407599384149f9b0490e45752fca2278
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2458,14 +2458,14 @@ COMPACT_LOCK_WAIT=5
 # the distinction can live only in WHICH probe answered. The two conditions
 # have DIFFERENT callers' rulings (§3.4, "Platform outcome"), which is why they
 # may not be folded together here.
-_compact_lock_same() {   # <fd> <canonical> -> 0 iff one regular inode
+_compact_lock_same() {   # <fd> <canonical> -> 0 iff one regular inode. `-ef` (dev+ino) decides through /proc; through /dev/fd — Darwin, MEASURED on macOS 25.6 arm64: stat(/dev/fd/N) answers the fdesc DEVICE (1245178674) with the file's inode, stat(lock) 16777230 — dev differs, so the inode alone decides there (`ls -i` is POSIX, so no platform arm is needed).
   local fd="$1" lock="$2" p=""
   if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
   elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
   else return 1; fi
   [[ -f "$p" ]] || return 1
   [[ -f "$lock" && ! -L "$lock" ]] || return 1
-  [[ "$p" -ef "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || { [[ "$p" != /proc/* ]] && a=$(ls -i -- "$p" 2>/dev/null) && b=$(ls -i -- "$lock" 2>/dev/null) && [[ -n "${a%% *}" && "${a%% *}" == "${b%% *}" ]]; } || return 1
   return 0
 }
 
@@ -2489,7 +2489,7 @@ _compact_lock_vanished() {   # <id> -> 0 iff an ABSENT canonical is a LATER disa
   # box). `<id>.generation` absent proves no hook on this row ever held this
   # lock, which is the same argument `_reg_purge`'s own fail-open rests on.
   [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
-  [ -d /proc ] || return 1
+  [ -d /proc ] || return 1   # AND WHERE THERE IS NO `/proc`, §4'S RULE IS NOT ENFORCED HERE EITHER — the hook-side twin's own gate carries the full argument and the residue's reasoning. In short: this is the only probe that can see a holder past its acquire, so on a box without `/proc` (Darwin) a later canonical disappearance under a live holder reads as a first-ever mint, the acquire mints a second inode at the one pathname, and `_reg_purge`, `cmd_ws_add`, `cmd_start` and `_spawn_start` all proceed where §4 says they must refuse. Recorded platform residue, not a defect to be papered over: the refusal-side cases are Linux-only and say so.
   command -v find >/dev/null 2>&1 || return 1
   [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
              -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1
