@@ -34,34 +34,34 @@ so the suites run against one tree.
 
 ## Part A — `_plat_mv_notdir`'s Darwin arm
 
-- [ ] **A1.** Add a case to a suite that RUNS ON LINUX proving the defect, RED first. Drive the Darwin arm
+- [x] **A1.** Add a case to a suite that RUNS ON LINUX proving the defect, RED first. Drive the Darwin arm
       by setting `CCD_OS=darwin` after sourcing the platform block; do NOT add it to
       `macos-platform.test.ts`'s `describe.skipIf(!IS_DARWIN)` block, which never executes here (D-2188).
       The case: `dest` a symlink to a directory, `src` a regular file → the function must answer 0 only
       if `src` is now AT `dest`.
-- [ ] **A2.** Fix the arm: when `"$2"` is a symlink to a directory, `rm -f -- "$2"` before the `mv -f`.
+- [x] **A2.** Fix the arm: when `"$2"` is a symlink to a directory, `rm -f -- "$2"` before the `mv -f`.
       Keep the change to that one shape — every other shape already behaves (D-2187).
-- [ ] **A3.** Mirror the identical bytes into `ccd/ccrc`'s copy of the platform block and confirm
+- [x] **A3.** Mirror the identical bytes into `ccd/ccrc`'s copy of the platform block and confirm
       `macos-platform.test.ts`'s byte-identity assertion still passes.
-- [ ] **A4.** Correct the atomicity paragraph's destination claim (D-2189). Do not widen it into a new
+- [x] **A4.** Correct the atomicity paragraph's destination claim (D-2189). Do not widen it into a new
       assurance — state what is true and name the call sites.
-- [ ] **A5.** Mutation table: delete the `rm -f` line, measure A1 RED, restore, measure green.
+- [x] **A5.** Mutation table: delete the `rm -f` line, measure A1 RED, restore, measure green.
 
 ## Part B — `_check_services`' unit coverage
 
-- [ ] **B1.** Add `ccrc-models.timer` to `known` in `ccd/ccrc-doctor-checks` (D-2190).
-- [ ] **B2.** Add the fixture case FIRST and measure it RED without B1 — the addition alone is a measured
+- [x] **B1.** Add `ccrc-models.timer` to `known` in `ccd/ccrc-doctor-checks` (D-2190).
+- [x] **B2.** Add the fixture case FIRST and measure it RED without B1 — the addition alone is a measured
       no-op against the current suite (D-2191), so shipping it without a case ships a request, not a
       mechanism. Follow the fixture pattern already in `ccrc-doctor.test.ts` for a unit-file-present box.
-- [ ] **B3.** Give the timer its own `case` arm sentence rather than letting it fall to `*)`. Use the
+- [x] **B3.** Give the timer its own `case` arm sentence rather than letting it fall to `*)`. Use the
       reporting session's wording, attributed: a dead timer means every lane's catalogue goes stale and
       nothing says so.
-- [ ] **B4.** Correct the `*)` arm's comment, which says "the day a fifth unit joins it" while five are
+- [x] **B4.** Correct the `*)` arm's comment, which says "the day a fifth unit joins it" while five are
       already listed (D-2192).
-- [ ] **B5.** Record, in the file, that this check has TWO coverage designs and which one each unit uses
+- [x] **B5.** Record, in the file, that this check has TWO coverage designs and which one each unit uses
       (D-2193). Do not implement the census route here — it belongs with the catalogue's own contract,
       which this repo does not own.
-- [ ] **B6.** Mutation table: remove `ccrc-models.timer` from `known`, measure B2 RED, restore.
+- [x] **B6.** Mutation table: remove `ccrc-models.timer` from `known`, measure B2 RED, restore.
 
 ## Part C — the catalogue freshness check (contract supplied by the reporting session)
 
@@ -70,32 +70,32 @@ which for a catalogue is the failure that bites. The reporting session owns the 
 and supplied the contract, measured on `origin/main` at `ee1d6228`; it is recorded here so the check is
 built against a stated contract rather than an inference.
 
-- [ ] **C1.** Add a `models` freshness check as its OWN function, not a stub. The reporting session's
+- [x] **C1.** Add a `models` freshness check as its OWN function, not a stub. The reporting session's
       Plan 2 adds a separate per-lane `models` arm (orphan registry, settings-block drift, LiteLLM
       `.prev` mismatch); keeping them separate means the two PRs never touch the same lines.
-- [ ] **C2.** Loop population: every `~/.ccrc/models/<id>.classes.json` whose `<id>` is a roster row.
+- [x] **C2.** Loop population: every `~/.ccrc/models/<id>.classes.json` whose `<id>` is a roster row.
       Only lanes WITH a registry are ever probed (`ccrc models refresh --all` filters on `hasRegistry`;
       anthropic lanes have none by design). A registry with no `<id>.json` is "never probed" — WARN with
       the remedy `ccrc models refresh <id>`, NOT a freshness failure. An ORPHAN registry (id in no roster
       row) is Plan 2's item; skip it here.
-- [ ] **C3.** The predicate, verbatim from the contract:
+- [x] **C3.** The predicate, verbatim from the contract:
 
           fresh := stale == false AND (now - fetchedAt) <= 3*3600
 
       `fetchedAt` is UNIX SECONDS (the probe writes `int(time.time())`) — compare with `date +%s`, never
       with the millisecond stamps the server side uses elsewhere. Three periods, because the timer is
       `OnUnitActiveSec=60min` with `TimeoutStartSec=300`: one missed hourly run must never warn.
-- [ ] **C4.** Two sentences, one WARN each, `stale` picking which — and WARN not FAIL in both arms,
+- [x] **C4.** Two sentences, one WARN each, `stale` picking which — and WARN not FAIL in both arms,
       because the lane keeps serving from its registry:
       - `stale:false` and `fetchedAt` older than 3 h → nobody rewrote the file; the timer is not reaching
         this lane. Remedy: `systemctl --user status ccrc-models.timer`, then `ccrc models refresh <id>`.
         **This is the silent case Part B's `known` line cannot see.**
       - `stale:true` → the timer runs and the provider did not answer. Quote `lastError` and the age of
         `fetchedAt`. Warn regardless of age: the env block has already lost its window key.
-- [ ] **C5.** PASS text names the lanes and ages ("models: 1 lane, gpt catalogue 41 min old"), in the
+- [x] **C5.** PASS text names the lanes and ages ("models: 1 lane, gpt catalogue 41 min old"), in the
       same shape as the services PASS — so a box that answers PASS cannot be one whose loop ran over
       nothing. The POPULATION is what that PASS is really asserting.
-- [ ] **C6.** Mutation table: stop the clock (age the fixture past 3 h with `stale:false`) and measure
+- [x] **C6.** Mutation table: stop the clock (age the fixture past 3 h with `stale:false`) and measure
       C4's first arm RED; set `stale:true` on a fresh catalogue and measure the second arm RED.
 
 ---
@@ -116,14 +116,14 @@ written outside that pattern.
 **Order is by blast radius, and D1 is not optional.** A hang here is not a wrong answer that a later
 read corrects — it is a process that never returns, holding whatever it holds.
 
-- [ ] **D1. `source "$CCRC_ACCOUNTS_SH"` (ccd:1090) — the module top level (D-2377).** Guards are `-e`
+- [x] **D1. `source "$CCRC_ACCOUNTS_SH"` (ccd:1090) — the module top level (D-2377).** Guards are `-e`
       (1081) and `-r` (1083); both are true for a FIFO and for a character device, and `source` opens by
       name. **This runs in every `ccd` process on the box** — each `ccd supervise` unit at startup and at
       every restart, every `ccd` the agent shells out under the exec whitelist (so every PWA tap), every
       terminal invocation. Add `-f` to the existing ladder as its own arm with its own `die` sentence, so
       the operator is told the roster is not a regular file rather than told nothing for ever. The
       existing comment reasons carefully about a DANGLING symlink and never reaches this shape.
-- [ ] **D2. The hold family — five sites, one shape (D-2378).** `cmd_ws_rm` (4975), `cmd_ws_rename`
+- [x] **D2. The hold family — five sites, one shape (D-2378).** `cmd_ws_rm` (4975), `cmd_ws_rename`
       (5360), `cmd_ws_release` (6000), `cmd_ws_reap` (10403), `cmd_forget` (16697). Each tests
       `[[ -e "$REG/$id.hold" ]]` — **deliberately `-e`, and the polarity is right**: ccd:10400 says
       *"`-e` not `-f`: an unreadable-but-present hold still refuses — the fail-shut polarity is that
@@ -135,7 +135,7 @@ read corrects — it is a process that never returns, holding whatever it holds.
       answers the existing `<unreadable — treat as held>` fallback for a non-regular file. The `|| echo`
       fallbacks already written at four of the five sites are DEAD today for this input — `cat` never
       returns to fail — and become live with the fix.
-- [ ] **D3. `_ws_status` (ccd:3112) — one unguarded reader of four (D-2379).** The census of
+- [x] **D3. `_ws_status` (ccd:3112) — one unguarded reader of four (D-2379).** The census of
       `<cfg>/sessions/<pid>.json` readers is four: `_sync_uuid` (12216, `-f`), `_auto_swap_check` (13410,
       `-f`, added by #69 round 3), `_auto_compact_check` (13590, a three-rung ladder that also names
       WHICH shape it refused) — and `_ws_status`, which has **no type test at all** before
@@ -143,26 +143,32 @@ read corrects — it is a process that never returns, holding whatever it holds.
       "status-unknown"`), `_ws_reap_eval` and `cmd_ws_reap` — destructive-verb gates. This is the
       instance our own round left behind when it fixed its sibling, and it is the reason this part exists
       as a class sweep rather than a one-line fix.
-- [ ] **D4. `_pr_py`'s two Python opens (ccd:3773 get(), ccd:3936 lock) (D-2380).** Same class, other
+- [x] **D4. `_pr_py`'s two Python opens (ccd:3773 get(), ccd:3936 lock) (D-2380).** Same class, other
       language, and the language makes it worse: `except FileNotFoundError` (3773) and `except OSError`
       (3938) are **dead code for this input**, because `open()` itself blocks and the except never runs.
       3936 opens `'a'`, which blocks until a READER appears. Reached from `cmd_pr_state`'s per-id loop,
       so one poisoned registry field hangs the whole PR-state sweep. Guard with `os.path.isfile` (or
       `stat.S_ISREG`) before each open, and say so where the comment block at 3888-3907 enumerates this
       open's outcomes — it reasons about every branch where `open` RETURNS and none where it does not.
-- [ ] **D5. `_transcript_stalled_pair` (ccd:14316) — D-2347, the one that started this.** One line:
+      **Landed as FOUR opens, not two — D-2380 corrected in place below**: `get()` and the lock are
+      the two named here; the prhistory append and `put()`'s own tmp-file open are the same class,
+      undercounted by the same D-2475 staleness, extended in place with no new number (worker clause 6).
+- [x] **D5. `_transcript_stalled_pair` (ccd:14316) — D-2347, the one that started this.** One line:
       `[[ -r "$f" ]]` becomes `[[ -f "$f" && -r "$f" ]]`. **Measured end to end on a clean worktree cut
       from `origin/main` at `24f32a18`** — mutation table in D-2381 below.
-- [ ] **D6. The red-first cases, before any of D1–D5.** Follow `ccd-project-pool.test.ts`: a bounded
+      **VERIFIED this wave, not implemented this wave** — this fix already landed in PR #78, before
+      this wave started; this wave re-measured it (and its byte-identical twin `_transcript_limit_banner`)
+      by mutation and confirmed both pins are still live (see D-2381).
+- [x] **D6. The red-first cases, before any of D1–D5.** Follow `ccd-project-pool.test.ts`: a bounded
       helper plus FIFO, symlink-to-FIFO, symlink-to-`/dev/zero` and directory cases per site, each
       double-bounded (helper bound AND a vitest per-test timeout). **A red that hangs is not a red** — it
       is a CI timeout, and on a load-sensitive suite it burns the whole run. Measure every case RED
       first; a case that is green before the fix is pinning nothing.
-- [ ] **D7. Mutation table.** Per site: revert the guard, measure that site's case RED, restore, measure
+- [x] **D7. Mutation table.** Per site: revert the guard, measure that site's case RED, restore, measure
       green. **One row per site you actually fixed** — the count is whatever your own census returned, not a
       number carried from this document (D-2475). Do not batch — a single table entry covering "the class"
       cannot tell which guard is unpinned.
-- [ ] **D8. The remaining sites, DISCLOSED not silently dropped.** The sweep also named
+- [x] **D8. The remaining sites, DISCLOSED not silently dropped.** The sweep also named
       `_ws_archive_manifest`'s `prhistory` open (6779), `_attic_project`'s `sed` (7120), `cmd_ws_add`'s
       three `grep`s of `info/exclude` (4654) and `cmd_supervise`'s darwin start-limit arm (14970, dead on
       a Linux fleet). Fix them here if D1–D5 land cheaply; if not, they stay named in D-2376 with a
@@ -199,13 +205,19 @@ would add a comment, not a mechanism. Both arms are pure bash and CAN be pinned 
 linux by driving `CCD_OS=darwin` after sourcing the platform block, which is what A1 does.
 
 ### D-2189 — the atomicity paragraph's destination claim is false at four of five call sites
+**Cardinal corrected in place (the D-2475 shape) — the conclusion survives, only the count was wrong.**
 It reads *"every destination is `$REG/<id>.<field>`, and this function is its only writer — so the race is
-unreachable here rather than tolerated."* Measured against `origin/main`, four of five destinations are
-outside `$REG`: `$plist`, `$_LC_DIR/errors`, `$_sl_file`, and `$POOLS_DIR/$project` — **which
-account-pools wave 2a added.** The conclusion survives (nothing in the tree creates a *directory* at any
-of those paths, so the race stays unreachable); the argument that proves it does not. This is the
-misattribution class, and this instance is ours: a wave added a call site and left the quantifier
-standing.
+unreachable here rather than tolerated."* The original count ("four of five") was `ccd/ccd` alone and
+missed three call sites in `ccd/ccrc`. Re-derived repo-wide by symbol (`/bin/grep -rn -F
+'_plat_mv_notdir' ccd/ccd ccd/ccrc`, then read each hit's enclosing function to exclude the definition
+and comment lines): **eight executable call sites**, five in `ccd/ccd` (`_svc_write_session_plist`,
+`_reg_set`, `_lc_err`, `cmd_project_pool`, `cmd_supervise`) and three in `ccd/ccrc`
+(`_svc_write_session_plist`, `_acct_mark_off`, `_acct_rehome`). **Six of the eight** write outside the
+canonical `$REG/<id>.<field>` shape; only `_reg_set` and `_acct_rehome` write it. The conclusion survives
+unchanged (nothing in the tree creates a *directory* at any of the eight, so the race stays unreachable);
+the argument that proves it does not, which is the misattribution class this entry is itself an instance
+of — a wave (`account-pools` wave 2a, which added `cmd_project_pool`) added a call site and left the
+quantifier standing, and this plan then quoted only half the file split.
 
 ### D-2190 — `_check_services` never asks about `ccrc-models.timer`
 `known` is a hardcoded five-unit list, and `installed` is built only from it, so a unit outside it never
@@ -259,6 +271,53 @@ Contract supplied by `claude-OpenClawHetzner`, who owns the probe; measured by t
 can close from the `known` list alone, which is why Part C exists as its own arm rather than a widening
 of Part B.
 
+### Part C's row protocol — a D-71 RECURRENCE, no new number
+`_check_models`' batched `node -e` reader emitted its five-column row (`id`, status, `fetchedAt`,
+`stale`, `lastError`) tab-delimited, and the bash side read it with `IFS=$'\t' read -r`. **This is D-71's
+class, cited here and not minted again**: D-71's general form (defined 2026-08-15, restated twice
+since) is *"any tab-delimited record with possibly-empty fields must not use `read` with `IFS` alone"* —
+bash treats a tab as IFS *whitespace* regardless of what `IFS` is set to, so a run of empty fields
+collapses and every later column shifts left. Measured directly, exactly as the finding reproduced it:
+
+    $ printf 'id\tOK\t\t0\t\n' | IFS=$'\t' read -r a b c d e; echo "c=[$c] d=[$d] e=[$e]"
+    c=[0] d=[] e=[]
+
+Fixed by moving the whole row protocol, on **both** the node emitter and the bash reader, from `\t` to
+`\x1f` (ASCII unit separator) — not classified as IFS whitespace, so a run of empty fields survives
+intact:
+
+    $ printf 'id\x1fOK\x1f\x1f0\x1f\n' | IFS=$'\x1f' read -r a b c d e; echo "c=[$c] d=[$d] e=[$e]"
+    c=[] d=[0] e=[]
+
+**One improvement claimed explicitly, against D-71 itself:** D-71's own stated remedy was *"split the
+fields by hand"* — parse the joined string in code rather than trust `read`. Moving the protocol to a
+non-whitespace delimiter is better than that remedy: it preserves empty fields **natively**, at the
+wire, so nothing downstream has to remember to re-split by hand at every call site that reads this shape
+in the future. That is a new remedy recorded against D-71, not a new deviation.
+
+**Disclosed in the same paragraph, per the coordinator's own audit: D-71's rule is stated six times in
+this repo's prose and violated thirteen times in code — 10 sites safe, THREE reachable.** Their anchors
+are not ours: they measured the population at `origin/main 03ecda65`, and this branch is behind that ref
+and has added lines of its own, so every site below was **re-measured in this tree by symbol**, not
+transcribed:
+- `_check_accounts` in `ccd/ccrc-doctor-checks` — **reachable**. Its producer is
+  `deploy/account-op.mjs`'s `opDoctor`, whose own docstring says in capitals that it does **not**
+  validate the roster; an id-less account therefore emits a row with an empty middle field, and the
+  collapse above is live for it. The comment claiming every field this reader gets is "non-empty by
+  construction (a code, an id, a sentence, or a number)" is false for exactly that reason — corrected as
+  its own clause, not this code, alongside this wave's source-side changes.
+- `_check_routing` in `ccd/ccrc-doctor-checks` — **reachable**. An empty `CCRC_ANTHROPIC_BACKEND`
+  element shifts the row so the `[ -n "$a" ] || continue` guard can never fire for the case it exists to
+  catch — D-71's **original signature**, *"the no-id guard was dead code that could never fire"*, showing
+  up a second time in the same file.
+- Two sites in `ccd/ccd` — **reachable, not fixed, not this wave's.**
+**The coordinator's own conclusion, recorded rather than re-argued:** a rule stated six times in prose
+and violated thirteen times in code is a **missing mechanism**, not a knowledge-transfer failure — D-71
+has never had a red suite of its own. Two cousins outside the idiom, named so they are not lost: one
+site splits on a SPACE over `tmux list-panes` output where a session name may itself contain one; one
+uses awk's default field separator over a TAB record, so `length($1)` measures only to the first space —
+and that length is a load-bearing sort key.
+
 ### D-2376 — D-2347 is one of twelve, and the sweep that found them also found a class that must not be swept
 Looking for D-2347's siblings with two independent censuses (a `-r` census and a "read by name" census,
 each run under `/bin/grep -F` because `/usr/bin/grep` here is ugrep) returned **twelve open sites** of
@@ -278,6 +337,28 @@ an unmeasured fallback at the same exit status. **Most are deliberate** — `_ho
 QUESTION: each candidate needs adjudicating against its governing document before anyone calls it a
 defect. **The coordinator got this wrong first** — see D-2381.
 
+**D8 — the four remaining sites this wave disclosed rather than fixed.** Navigate by symbol; every line
+anchor this plan carried for them has drifted. Two corrections to this entry's own framing, measured by
+the census that finished this wave: **the plan calls all four "the same class (a path opened BY NAME
+after a permissive guard)" — that is wrong.** Three of the four have **no guard on the path at all**
+(`cmd_ws_add`'s `mkdir -p` guards the *directory*, not the file it later reads); the fourth's only guard
+is `[ "$CCD_OS" = darwin ]`, a platform predicate, not a filesystem test. What the four actually share is
+the weaker and more alarming property of an **unguarded** open-by-name, not a permissive one.
+1. `_ws_archive_manifest`'s `prhistory` open — unguarded; not fixed this wave.
+2. `_attic_project`'s `sed` — unguarded; not fixed this wave.
+3. `cmd_ws_add`'s three `grep`s of `info/exclude` — the `mkdir -p` guards the directory only, never the
+   file itself; not fixed this wave.
+4. `cmd_supervise`'s darwin start-limit arm — guarded only by `[ "$CCD_OS" = darwin ]`, dead on this
+   Linux fleet; not fixed this wave.
+For `_ws_archive_manifest` specifically, the plan's own framing is also wrong the other way: its
+DIRECTORY arm is already correct and argued in the source (`IsADirectoryError` ⊂ `OSError` →
+`SystemExit(3)` → refusal), so that shape is not a gap. The live hazard at all three unguarded sites
+(1–3) is FIFO / character-device only, and it is a **HANG with no exit code** — which is exactly why the
+`2>/dev/null` and `|| fallback` arms already sitting near each of them give no protection whatsoever;
+those arms only ever run once the process returns, and a hang never returns. Reason all four stay open:
+D1–D5 were ordered by blast radius and D-2925 was the one new site the sweep also found; these four were
+not cheap to fold in alongside them and remain named here rather than dropped.
+
 ### D-2377 — the account roster is sourced by name after `-e` and `-r`, on the module top level
 `ccd/ccd:1081-1090`. `[[ -e ]]` then `[[ -r ]]` then `source "$CCRC_ACCOUNTS_SH"`. Neither test is false
 for a FIFO or for a character device, and `source` opens by name: `open(2)` blocks for ever on a FIFO
@@ -286,6 +367,14 @@ the box** reaches it: ~20 `ccd supervise` units at startup and at every systemd 
 agent shells out under the exec whitelist (hence every PWA tap), every terminal invocation. The two
 `die` sentences immediately above it are the proof that this ladder's author intended to refuse rather
 than hang; the ladder is simply missing the arm for a file that is present, readable, and not a file.
+
+**D7 mutation table (one site):**
+
+| site | command | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
+|---|---|---|---|
+| `source "$CCRC_ACCOUNTS_SH"`, module top level | `vitest run test/ccd-bounded-reads.test.ts -t D1` | **RED** — FIFO / symlink-to-FIFO / symlink-to-`/dev/zero` each `Error: runBounded("true") did not return within 5000ms — this is a hang regressing, not a flake`; the directory shape answered promptly but with the wrong diagnosis (`AssertionError: expected '… is a directory' to contain 'not a regular file'`) | **GREEN** — `Tests 6 passed \| 25 skipped (31)`, all three hang shapes now refuse promptly with the new arm's `die` sentence and the directory shape now names the right cause |
+
+Restored from a copy kept outside the repo (never `git checkout --`), per the finish brief.
 
 ### D-2378 — the hold family: five `-e` gates whose refusal STRING is read by name, and one of them is a trap
 `cmd_ws_rm` (4975), `cmd_ws_rename` (5360), `cmd_ws_release` (6000), `cmd_ws_reap` (10403), `cmd_forget`
@@ -299,6 +388,24 @@ reasoned about EACCES and EISDIR explicitly — and never reached the shape wher
 The `|| echo '<unreadable — treat as held>'` fallbacks at four of the five sites are DEAD for this input
 and become live with the fix.
 
+**D7 mutation table (five sites, all `-t D2`, each FIFO / symlink-to-FIFO / symlink-to-`/dev/zero`):**
+
+| site | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
+|---|---|---|
+| `cmd_ws_rm` | **RED** — 3/3 shapes: `Error: runBounded("cmd_ws_rm demo-quiet-basin") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — answers `held: <unreadable — treat as held>` promptly |
+| `cmd_ws_rename` | **RED** — 3/3 shapes, same hang shape | **GREEN** — answers `{"refused":"held",…}` with the marker, promptly |
+| `cmd_ws_reap` | **RED** — 3/3 shapes, same hang shape | **GREEN** — same marker, promptly |
+| `cmd_forget` | **RED** — 3/3 shapes, same hang shape | **GREEN** — same marker, promptly |
+| `cmd_ws_release` (reversed polarity — deletes the hold, so a distinct marker, no `|| echo`) | **RED** — 3/3 shapes, same hang shape | **GREEN** — new marker `<unreadable — hold present but could not be read at release>`. **Mutation-proven positive, not just green-by-default**: the fix round 1 re-run of `_hold_reason=''` against the fixed test now REDS on all 3 shapes (`AssertionError: expected undefined to be '<unreadable — hold present but could not be read at release>'`) — the pin the controller's ruling actually decided is now refused, closing the class-defining green-mutation finding of this wave (Ruling 15) |
+
+15/15 hang failures measured before the fixes (5 sites × 3 shapes); **31/31 green** in the combined
+D1–D4 run once all four D7-owning sites were fixed together (`Tests 31 passed (31)`, 7.15s), later
+re-confirmed at **33/33** once D-2380's fourth opener (below) was also added.
+`cmd_ws_release`'s directory shape is deliberately NOT one of these cases — it surfaced a real,
+pre-existing, out-of-scope defect (`rm -f` has no `-r`, so a directory there fails `Is a directory` and
+the verb dies "STILL held" regardless of this fix) that is not the bounded-read defect D2 owns; disclosed
+in `partD-report.md`, not fixed here.
+
 ### D-2379 — `_ws_status` is the one unguarded reader of four, and it gates the destructive verbs
 The census of `<cfg>/sessions/<pid>.json` readers in `ccd/ccd` is four. Three carry a type test:
 `_sync_uuid` (12216, `-f`), `_auto_swap_check` (13410, `-f` — added by **#69 review round 3**),
@@ -308,15 +415,37 @@ Its callers are `cmd_ws_archive` (`|| die "status-unknown"`), `_ws_reap_eval` an
 round hardened its sibling on the same path family and left this one; that is the instance-not-the-claim
 failure inside the fix for the same class.
 
+**D7 mutation table (one site):**
+
+| site | command | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
+|---|---|---|---|
+| `_ws_status` | `vitest run test/ccd-bounded-reads.test.ts -t D3` | **RED** — 3/3 shapes (FIFO / symlink-to-FIFO / symlink-to-`/dev/zero`): `FAIL … answers non-zero ("cannot be read"), PROMPTLY — never hangs, for a FIFO sessions JSON`, then `Error: runBounded("… _ws_status demo") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — D3 block 5/5 green (3 fixed shapes plus the idle/busy regression pins), no hangs |
+
 ### D-2380 — the same class in Python, where the `except` clause is dead
-`_pr_py`'s `state` mode opens two paths by name with no type test: `get()` at 3773
-(`open(os.path.join(reg, id_ + '.' + field))`, called three times per session) and the lock at 3936
-(`open(..., 'a')`, which blocks until a READER appears). **`except FileNotFoundError` (3773) and
-`except OSError` (3938) cannot fire for this input** — `open()` itself blocks, so the handler is never
-reached. Reached from `cmd_pr_state`'s per-id loop, so one poisoned `$REG/<id>.<field>` hangs the whole
-sweep rather than one row. The 20-line comment at 3888-3907 enumerates this open's outcomes for an
-existing lock file, a first-ever lock file and an unwritable `$REG` — every branch where `open` RETURNS,
-and none where it does not.
+**Cardinal corrected in place (the D-2475 shape) — the conclusion survives, only the count was wrong.**
+`_pr_py`'s `state` mode opens **FOUR** paths by name with no type test, not two: `get()`
+(`open(os.path.join(reg, id_ + '.' + field))`, called three times per session), the compare-and-set lock
+(`open(..., 'a')`, which blocks until a READER appears), the prhistory append (`open(hist_p, 'a')`, the
+third opener — undercounted by the same staleness, worker clause 6), and `put()`'s own tmp-file open
+(`open(tmp, 'w')`, the fourth, found during the fix round that followed — extending this same subject a
+second time, per the coordinator's ruling that a stale cardinal under an already-issued number is that
+number going stale). **`except FileNotFoundError` and `except OSError` cannot fire for this input** —
+`open()` itself blocks, so the handler is never reached, for all four. Reached from `cmd_pr_state`'s
+per-id loop, so one poisoned `$REG/<id>.<field>` hangs the whole sweep rather than one row. The comment
+block enumerating this open's outcomes for an existing lock file, a first-ever lock file and an unwritable
+`$REG` reasons about every branch where `open` RETURNS, and none where it does not.
+
+**D7 mutation table (four sites, `-t D4`):**
+
+| site | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
+|---|---|---|
+| `get()` (backs `prcheckedat`/`prnumber`/`prphase`) | **RED** — `FAIL … a FIFO at $REG/<id>.prcheckedat is treated as absent, PROMPTLY — never hangs the sweep`, then `Error: runBounded("…cmd_pr_state --session demo-quiet-basin") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — passes; the FIFO is provably gone afterward, replaced by `put`'s atomic tmp+`os.replace` |
+| the compare-and-set lock | **RED** — same hang shape | **GREEN** — passes; `$REG/<id>.prnumber` is written (`591`), proving the write went through unlocked |
+| the prhistory append | **RED** — same hang shape | **GREEN**, but as a **FAULT not a silent pass**: `Traceback … OSError: refusing to append to a non-regular-file prhistory: …` — non-zero exit, deliberate, because this open sits inside the outer `try` whose only handler is the `finally` that releases the lock |
+| `put()`'s own tmp-file open (the fourth, added when fix round 1 found it) | **RED** — `Error: runBounded(...) did not return within 5000ms — this is a hang regressing, not a flake`, reproduced with a `python3` shim that preserves the real interpreter's pid (`exec`, never forks) so the FIFO could be planted at the exact tmp path ahead of time | **GREEN** — `OSError: refusing to write a non-regular-file pr-state tmp: .../.demo-quiet-basin.prcheckedat.<realpid>.tmp`, the real pid proving the shim lined up with the guard |
+
+Full D4 run (first three sites): `Tests 4 passed | 27 skipped (31)` (three fixes plus one regression
+pin). Re-confirmed **33/33** once the fourth opener's guard and case were added (fix round 2).
 
 ### D-2381 — the spec calls three consumers durable; one of them is not
 **WITHDRAWN, the half this entry opened with.** It booked D-2347's false *"behaviour-identical for every
@@ -337,6 +466,23 @@ seeds this project's ledger floor whether or not the number was issued to that p
 | FIFO | **HANG** (rc 124) | 2 |
 | character device (`/dev/zero`) | **HANG** | 2 |
 | **directory** | **1** | **2** |
+
+**Wave verification, not a wave fix — D5's class has two byte-identical twins, both re-mutated this
+wave.** D5 itself (`_transcript_stalled_pair`) was already landed by PR #78 before this wave started, so
+the table above is history, kept because D5 is written against it. What this wave DID measure is whether
+the twin function carries the identical guard and whether either has drifted unpinned since:
+restoring each to `[[ -r "$f" ]]` alone (dropping `-f`) —
+- `_transcript_stalled_pair` (def, guarded call site) — **RED**, 2 cases via `ccd-limit-banner.test.ts`:
+  the directory case (`expected 'rc=1' to be 'rc=2'`) and the FIFO case (`expected 'rc=142' to be
+  'rc=2'`, the inner `alarm 5` firing).
+- `_transcript_limit_banner` (the twin) — **RED**, 1 case: the FIFO case only (`rc=142` again) — a
+  directory there is refused by `tail`'s own return code, not by this type test, which is a pre-existing
+  citation defect in the test's own title, not a gap in the guard.
+Neither twin came back green under mutation — both pins are live. Restored, `git status` clean,
+confirmed against the pre-mutation baseline (`ccd-limit-banner.test.ts` full run green, 69/69). **Both
+rows are VERIFICATIONS of an already-landed fix and do not count toward D7's per-site total** — if either
+had come back green, that would have been a live finding of exactly the class this Part exists to close;
+neither did.
 
 A directory ANSWERS today, and it answers 1 — "measured, and not a stall" — because `tail` on a directory
 writes to stderr and emits nothing, so the loop reads zero lines and the function reports a status quo it
@@ -374,3 +520,24 @@ text or unrelated code. The fix is the rule this repo already minted for census 
 derived guard must discover its population.** The headline no longer quotes a number and D7 now takes one
 row per site the worker's own census returns. **A plan may name the sites it found; the moment it also
 totals them, it has planted a fact that the next edit falsifies silently.**
+
+- **D-2925** (found during execution; named by no entry in this plan) — **`cmd_project_pool`
+  (`ccd/ccd:6775`) proves a project exists through an UNGUARDED glob.** `ccd/ccd:6906` is
+  `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null`, and `grep` opens every matched path BY
+  NAME: one FIFO or symlink-to-`/dev/zero` among the registry's `.project` rows blocks
+  `ccd project-pool --pool` for ever. This is D-2376's FIRST class (read-by-name), not the second
+  class Part D must not widen into. The comment above it (`6903-6904`) guards the glob against
+  leaving its own literal text on an EMPTY registry — a diagnostic, not a type — so the shape was
+  never reached. `/bin/grep -n '\*\.project'` returns this line and no other, and the same file has
+  measured FIFOs at `.project` three times in other readers (`13934`, `17529`, `17822`), all of which
+  go through `_reg_read` or `_project_pool_state`. **Fix:** the shape Part D transcribes
+  (`_project_pool_state`, `ccd/ccd:1470`) — loop the glob and skip any entry failing
+  `[[ -f "$f" && -r "$f" ]]`. Behaviour-identical for every input that answers today, because an
+  unreadable row already contributes nothing through `2>/dev/null`. **Costs if wrong:** one helper and
+  one call site, both reverted by deleting the commit.
+
+**D7 mutation table (one site, landed this wave as `_reg_project_glob_has`):**
+
+| site | command | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
+|---|---|---|---|
+| `cmd_project_pool`'s `--pool` arm, via `_reg_project_glob_has` | `vitest run test/ccd-bounded-reads.test.ts -t D5` | **RED** — measured independently in this session: reverted the guard to the original unguarded `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` (backup kept outside the repo, never `git checkout --`); `Tests 3 failed \| 1 passed \| 33 skipped (37)`, all three hang shapes (FIFO / symlink-to-FIFO / symlink-to-`/dev/zero`, sorted BEFORE the real row) timing out — `Error: runBounded("cmd_project_pool --project quiet-basin --pool pool-a") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — restored from the pre-mutation copy (md5 verified identical, `git diff --stat -- ccd/ccd` empty), re-ran: `Tests 4 passed \| 33 skipped (37)` |
