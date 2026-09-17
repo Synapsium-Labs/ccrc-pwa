@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
@@ -393,6 +393,66 @@ describe('the start limit is one policy, not two', () => {
     // supervisor takes every pane in its group with it.
     expect(unitFile).toMatch(/^KillMode=process$/m);
     expect(ccd).toContain('<key>AbandonProcessGroup</key><true/>');
+  });
+});
+
+// UNCONDITIONAL — runs on every box, including the Linux CI box that is the
+// only one that ever executes this suite. `CCD_OS` is computed ONCE, from
+// `$OSTYPE`, at the moment the platform block is sourced (ccd/ccd's own
+// comment above `_plat_mv_notdir`); an env var of that name handed to the
+// child process is overwritten before any function exists to read it, so it
+// does nothing. The only assignment that survives is one made AFTER the
+// source, in the SAME bash payload — exactly the rule
+// `ccd-account-auth.test.ts:794-796` states and `:806` uses
+// (`fn('CCD_OS=linux; _auth_script_argv …')`). That is how the Darwin arm of
+// `_plat_mv_notdir` (D-2187) gets driven here without a real Darwin
+// userland, rather than inside the `describe.skipIf(!IS_DARWIN)` block below,
+// which never executes on this box (D-2188).
+describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
+  function darwinBlock(expr: string): string {
+    const script = `${platformBlock(ccd)}\nCCD_OS=darwin\n${expr}\n`;
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
+  }
+
+  it('answers 0 only if src is now AT a dest that was a symlink to a directory', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-9d3f');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'the call must report an exit code').toBe('0');
+      // The postcondition, not just the exit status: <src> must now be AT
+      // <dest>. Before the fix, GNU `mv -f` (no `-T`) follows the symlink and
+      // moves `src` INSIDE the linked directory, leaving `dest` the same
+      // symlink it always was — rc 0 with the postcondition false.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must no longer be the symlink it was — the contract is 0 iff src is now AT dest').toBe(false);
+      expect(lstatSync(dst).isFile(), 'dest must now be a regular file').toBe(true);
+      expect(readFileSync(dst, 'utf8')).toBe('payload-9d3f');
+      expect(readdirSync(real), 'nothing may have been moved inside the linked directory').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a real directory destination and leaves it untouched', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-dir-'));
+    try {
+      const dst = path.join(d, 'dst');
+      mkdirSync(dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a real directory destination must be refused').toBe('1');
+      expect(lstatSync(dst).isDirectory()).toBe(true);
+      expect(readdirSync(dst), 'the destination directory must stay empty').toEqual([]);
+      expect(readdirSync(d)).toContain('src');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 });
 
