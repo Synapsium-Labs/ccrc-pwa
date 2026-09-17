@@ -471,21 +471,28 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(fs.readFileSync(path.join(REG(), `${id}.prnumber`), 'utf8')).toBe('591');
   }, 20000);
 
-  it('the compare-and-set lock: a DANGLING SYMLINK at $REG/.prstate-<id>.lock proceeds UNLOCKED, PROMPTLY', () => {
+  it('the compare-and-set lock: a DANGLING SYMLINK at $REG/.prstate-<id>.lock proceeds UNLOCKED, PROMPTLY — and never opens through the link', () => {
     // C2 (this round): the `lexists`-not-`exists` fix on this same guard exists
-    // BECAUSE `exists` follows a symlink — a target that is gone reads as
-    // absent, the guard is skipped, and `open(path, 'a')` creates a REGULAR
-    // file at this name instead of raising, silently losing the refusal the
-    // FIFO case above pins. `lexists` does not follow, so this shape raises
-    // the same `OSError` the FIFO does, caught by the same `try` that turns
-    // it into "proceed unlocked" — the write must still land, unlocked.
+    // BECAUSE `exists` follows a symlink — a target that is GONE reads as
+    // absent, the guard is skipped, and `open(path, 'a')` then opens THROUGH
+    // the link, creating a REGULAR file at the resolved TARGET (measured
+    // directly: `ln -s ./gone x; open('x','a')` creates `./gone`, not `x`,
+    // which stays the symlink) — landing bytes at whatever path the symlink
+    // names, exactly the `put()`-tmp escape this wave's own comment
+    // discloses, just via a bare `open` instead of `os.replace`. The prnumber
+    // write lands either way (guard-fires-then-unlocked, or guard-skipped-
+    // then-locked-through-the-link), so `r.code`/`prnumber` alone cannot
+    // distinguish the mutation — the escape target's own absence is the
+    // assertion that does: it is created only when the guard is skipped.
     const { id, tip } = workspace();
     const lockPath = path.join(REG(), `.prstate-${id}.lock`);
-    fs.symlinkSync(path.join(REG(), 'nonexistent-target'), lockPath);
+    const escapeTarget = path.join(hp.home, 'escaped-lock-target');
+    fs.symlinkSync(escapeTarget, lockPath);
     hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
     expect(r.code).toBe(0);
     expect(fs.readFileSync(path.join(REG(), `${id}.prnumber`), 'utf8')).toBe('591');
+    expect(fs.existsSync(escapeTarget), 'the guard must raise BEFORE the open, so nothing is ever created at the symlink\'s target').toBe(false);
   }, 20000);
 
   it('the prhistory append: a FIFO at $REG/<id>.prhistory faults PROMPTLY rather than hanging the whole sweep', () => {
