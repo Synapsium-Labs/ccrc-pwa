@@ -23,6 +23,16 @@
 // registry field, not a live-vulnerability fix. The one live wire-reachable
 // instance was `cmd_ensure`'s positional, closed in 73bc0fe.
 //
+// ROUTING SLICE 6 ADDS ONE OPERAND WITH A WRITER OUTSIDE THAT PICTURE, and it
+// is named here rather than left to the reader: `compact` — the per-session
+// compaction threshold `_auto_compact_check` compares `ctx` against — is
+// written by `ccd route` / `--route`, which the server reaches from a wave
+// dispatch. `_route_valid`'s `compact` arm admits only two or three digits in
+// 10–100, so what can still arrive at that `-ge` is a TORN or hand-edited
+// file, the same class as every field above; the guard is the same
+// `=~ ^[0-9]+$`, one line before the comparison instead of inside it, because
+// this site normalises the operand rather than refusing the tick.
+//
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
 // after, `=~ ^[0-9]+$` short-circuits and it does not. The structural test
@@ -68,6 +78,23 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
       + ' tmux(){ :; }; _pane_ctx_pct(){ :; };'
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compactswap'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_auto_compact_check does not evaluate a payload planted in the compact field', () => {
+    const h = makeCcdHarness('arith-compactfield');
+    // Routing slice 6, Task 5 — the per-session threshold reaches
+    // `[[ "$pct" -ge "$thr" ]]`, an arithmetic context, exactly as the two
+    // cooldowns above reach theirs. The pane and idle predicates are stubbed so
+    // the tick reaches the comparison and stops there; the payload fires (or
+    // not) on the way past.
+    h.sh(
+      '_reg_set myid wrapper claude;'
+      + ' _reg_set myid compact \'REG[$(touch "$HOME/PWNED-compactfield")]\';'
+      + ' _pane_for_keystroke(){ KS_PANE="▓ ctx ████ 88%"; return 0; };'
+      + ' _idle_for_keystroke(){ KS_WHY=not-idle; KS_DETAIL=x; return 1; };'
+      + ' _auto_compact_check myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-compactfield'))).toBe(false);
     h.cleanup();
   });
 

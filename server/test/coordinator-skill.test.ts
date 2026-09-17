@@ -491,8 +491,12 @@ describe('the coordinator skill: linkage', () => {
     // coordinator reading only one of these two files must still see all
     // three keys named together, or it writes a body missing one.
     const lifecycle = refs('wave-lifecycle.md');
+    // ALL FIVE writable fields, not four: the literal showed `class`, `effort`,
+    // `subagent` and `workflow` while the paragraph below it named five, so a
+    // coordinator copying the body omitted `compact` every time (slice 5's
+    // deferred minor, closed by slice 6 Task 5).
     expect(lifecycle).toContain(
-      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…"}}');
+      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}');
     expect(skill).toContain('{"brief": "<prose>", "items":\n   ["<title>", …], "route": {…}}');
     // The routing clause is 13 on the merged tree (R1) — the review-run clause
     // is 12, and this sentence must not renumber that one.

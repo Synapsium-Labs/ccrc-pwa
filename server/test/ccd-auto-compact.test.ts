@@ -110,6 +110,9 @@ const tick = (pane: string, n = 1, extra = ''): string =>
 
 const AT_PROMPT = '▓ ctx ████████░░ 88%\n❯ ';
 const MODEST = '▓ ctx ███░░░░░░░ 55%\n❯ ';
+/** Below COMPACT_THRESHOLD (50) and above the worker's own 40 — the one
+ *  reading that tells a per-session threshold from the default. */
+const BELOW_DEFAULT = '▓ ctx ██░░░░░░░░ 45%\n❯ ';
 const LEAN = '▓ ctx █░░░░░░░░░ 12%\n❯ ';
 const NO_CTX = '? for shortcuts\n❯ ';
 
@@ -495,5 +498,65 @@ describe('an armed auto-continue is never cancelled by /compact (D-2229)', () =>
     seed(); sessionJson('idle', 120);
     tick(ARMED.split('\n').filter((l) => !l.includes('Usage limit')).join('\n'));
     expect(sendKeys().some((k) => k.includes('/compact'))).toBe(true);
+  });
+});
+
+// ── The per-session `compact` field (routing spec §5.1; slice 6, Task 5) ──
+//
+// `COMPACT_THRESHOLD` was the ONLY threshold: one number for every session on
+// the box. The routing record's `compact` field makes it per session — the
+// coordinator's matrix gives a worker 40 (S6-R9) so a dependent chain comes
+// back under the wall between tasks, while a coordinator keeps the default.
+//
+// The field is a registry FILE, so "present but not digits" is reachable
+// (a torn write, a hand edit — `_route_valid` refuses a non-numeric value at
+// the write). It falls back to the default rather than dying, and it SAYS so:
+// silently compacting at a threshold the record does not name is exactly the
+// collapse D-2013 exists to prevent.
+describe('routing slice 6: `compact` is this session’s threshold, absent means COMPACT_THRESHOLD', () => {
+  it('a session at `compact=40` compacts at 45%, where the default would not', () => {
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 40`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    // The log line names the threshold that actually decided — `>= 50%` beside
+    // `ctx 45%` would be a record of a comparison nothing made.
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 45% >= 40%`);
+  });
+
+  it('with no `compact` field the default decides: 45% is left alone, 55% compacts', () => {
+    // The control for the case above, and the absent-field half of the §5.1
+    // row. Mutation that must put this back to red: none — this is what goes
+    // red if the field read replaces the default instead of defaulting to it.
+    seed(); sessionJson('idle', 600);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys()).toEqual([]);
+    expect(skipLines().join('\n'),
+      'an ABSENT field is not an invalid one').not.toContain('compact-field-invalid');
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
+  });
+
+  it('a `compact` field that is not digits falls back to the default AND says so', () => {
+    // Mutation that must put this back to red: drop the `=~ ^[0-9]+$` guard.
+    // Without it `[[ "$pct" -ge "$thr" ]]` evaluates `abc` as an unset name,
+    // i.e. 0, so EVERY session with a torn field compacts on every tick.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact abc`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys(), '45% is under the default the torn field falls back to').toEqual([]);
+    expect(skipLines().join('\n')).toContain(`compact-skip ${ID}: compact-field-invalid`);
+    expect(skipLines().join('\n')).toContain('3 bytes, not digits; using 50%');
+  });
+
+  it('a `compact` field of 100 is a session that never auto-compacts below the wall', () => {
+    // The other direction of the same read: the ceiling `_route_valid` admits
+    // (10–100) must actually hold the compactor off, or the field is decorative.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 100`);
+    tick('▓ ctx █████████░ 91%\n❯ ');
+    expect(sendKeys()).toEqual([]);
+    expect(h.reg(ID, 'lastcompact')).toBeNull();
   });
 });

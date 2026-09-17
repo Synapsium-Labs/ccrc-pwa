@@ -67,6 +67,28 @@ describe('routing-matrix.md — spec §3, pinned to the vocabularies the mechani
     expect([...matrix.matchAll(/ · /g)].length).toBeGreaterThanOrEqual(12);
   });
 
+  it('every row is spec §3\'s row byte for byte — one table, two homes', () => {
+    // This file's own header calls the matrix "spec §3's table" and nothing
+    // measured it. The two copies are hand-edited, in two trees, so a one-sided
+    // amendment is invisible until a coordinator reads the reference and finds
+    // it disagreeing with the spec it is supposed to be a copy of.
+    const spec = readFileSync(
+      path.join(root, 'docs/superpowers/specs/2026-09-14-effort-model-routing-design.md'), 'utf8');
+    for (const r of rows) {
+      expect(spec, `a matrix row the spec does not carry: ${r.slice(0, 70)}…`).toContain(r);
+    }
+  });
+
+  it('the worker row names the compaction threshold a wave\'s route carries (slice 6, Task 5)', () => {
+    // `compact` is the fifth writable field and the only one whose VALUE the
+    // matrix has to supply: ccd reads the number, the coordinator picks it, and
+    // the matrix is where it picks it from (clause 13). A row that names the
+    // model and the effort but not the threshold leaves that field to taste.
+    const worker = rows.find((r) => r.startsWith("| Worker executing a spec'd plan"));
+    expect(worker, 'the worker row is gone from the matrix').toBeDefined();
+    expect(worker).toContain('`compact 40`');
+  });
+
   it('states the floors the mechanism relies on, in the spec\'s words', () => {
     expect(matrix).toContain('Fable is never a fan-out worker');
     expect(matrix).toContain('`max` is never a default');
