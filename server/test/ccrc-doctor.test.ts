@@ -49,7 +49,7 @@ import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtu
 // One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
 // for the rule, and for why the /var/tmp control needs both spellings.
 import { SCRATCH_SLUGS, PERSISTENT_SLUGS } from './scratchSlugs.js';
-import { describeLinux, describeDarwin, itLinux } from './platformFixtures.js';
+import { describeLinux, describeDarwin, itLinux, itDarwin, IS_DARWIN } from './platformFixtures.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -6262,15 +6262,18 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
   // from `$OSTYPE`/`uname` at source time (ccd/ccrc:109 onward), so on a Mac
   // `_check_routing` takes its darwin arm — "unmeasured: this is a launchd
   // box" — before `_have_systemctl` or the fixture `systemctl` is asked
-  // anything, and the census wording these cases pin is never produced
-  // there. MEASURED on CI's `test-macos` leg 2026-09-17 (run 35210902959,
-  // PR #116): five of the six red on exactly that wording, the sixth (the
-  // exit-1 stub) green for the wrong reason, its `unmeasured` coming from
-  // the launchd arm rather than the systemctl answer it stubs. Skipped on
-  // darwin rather than rewritten: the darwin arm is pinned on EVERY platform
-  // by the "on a launchd box" case further down, which sources the checks
-  // file directly, and the Linux legs run these six unchanged.
-  const NO_SYSTEMD_CENSUS = process.platform === 'darwin';
+  // anything. MEASURED on CI's `test-macos` leg 2026-09-17 (run 35210902959,
+  // PR #116): four of the six red on a census-wording `toContain` that arm
+  // never produces, the fifth (fail-zero) red on the FAIL the launchd WARN
+  // displaces, and the sixth (the exit-1 stub) green for the wrong reason,
+  // its `unmeasured` coming from the launchd arm rather than the systemctl
+  // answer it stubs. Skipped on darwin rather than direct-sourced with
+  // CCD_OS=linux (which would run the loop on a Mac at the cost of the
+  // end-to-end `ccrc doctor` path the six exist to measure): the darwin arm
+  // is pinned on EVERY platform by the "on a launchd box" case further down,
+  // which sources the checks file directly, the end-to-end launchd line by
+  // the `itDarwin` case beside it, and the Linux legs run these six unchanged.
+  const NO_SYSTEMD_CENSUS = IS_DARWIN;
 
   it('routing: PASSES when no Anthropic lane\'s settings.json names a routing env key', () => {
     const home = routingBox('ccrc-doctor-routing-pass-');
@@ -6429,6 +6432,8 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
         const line = lineFor(out, 'routing');
         expect(line, out).toMatch(/^WARN routing: /);
         expect(line, 'the reason, in these words').toContain('unmeasured');
+        expect(line, 'the UNSEARCHABLE arm\'s own reason — on darwin the launchd arm also says `unmeasured`, so the substring alone would pass with this arm deleted')
+          .toContain('is not a searchable, readable directory');
         expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
       } finally {
         chmodSync(reg, 0o755);
@@ -6483,6 +6488,24 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const callsPath = join(home, 'systemctl-calls');
     const calls = existsSync(callsPath) ? readFileSync(callsPath, 'utf8').split('\n').filter(Boolean) : [];
     expect(calls, 'systemctl must never be invoked on a launchd box').toEqual([]);
+  });
+  itDarwin('routing: on a real launchd box, `ccrc doctor` itself says the census is unmeasured — the end-to-end line the six skipped cases used to show by failing', () => {
+    // The case above injects CCD_OS=darwin into a direct source of the checks
+    // file; this one lets `ccrc` compute it from the Mac it runs on and reads
+    // the doctor's own routing line, so the composition (ccd/ccrc:109 onward
+    // → `_check_routing`'s darwin arm) is pinned where it happens, not only
+    // in pieces (`macos-platform.test.ts` pins the block; the case above pins
+    // the arm). Before D-2988 this outcome was visible only as five red
+    // assertions on the macOS leg.
+    const home = routingBox('ccrc-doctor-routing-subagent-darwin-e2e-');
+    writeSettingsEnv(home, '.claude', { CLAUDE_CODE_SUBAGENT_MODEL: 'sonnet' });
+    plantSession(home, 'sess-a', { live: true, recorded: false });
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'routing');
+    expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
+    expect(line, 'the reason names the launchd box, in the doctor\'s own words').toContain('launchd box (CCD_OS=darwin)');
+    expect(line, 'never a census count this box cannot measure').not.toContain('live session(s) carry no routing record');
+    expect(out, 'never FAIL on a fabricated zero').not.toMatch(/^FAIL routing: /m);
   });
   it('routing: FAILS on CLAUDE_CODE_EFFORT_LEVEL — the arm that stays a FAIL, naming the lane', () => {
     const home = routingBox('ccrc-doctor-routing-effort-');
