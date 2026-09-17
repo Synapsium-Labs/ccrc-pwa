@@ -505,6 +505,14 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       // also collapse to null, unaffected by Task 5 either way.
       expect(rec.swapBlocked).toBeNull();
       expect(rec.spawn).toBeNull();
+      // Routing slice 6, Task 4 + the whole-branch review's finding #1: the
+      // seven routing files are not seeded above, so this listing does not
+      // name them — and an old-agent-shaped read, which cannot say `absent`
+      // at all, resolves each of them against that listing exactly as
+      // `branchEvidence` does. `route: null`, the answer for a session ccd
+      // has never routed, NOT seven names in `route.unreadable` (which the
+      // PWA reads as UNKNOWN and renders with no active picker row at all).
+      expect(rec.route).toBeNull();
     });
   });
 });

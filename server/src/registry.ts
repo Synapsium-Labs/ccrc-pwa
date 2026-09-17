@@ -293,7 +293,14 @@ export interface SessionRecord {
    *     when `.inert` measured readable; `[]` when it measured absent or
    *     unreadable (the latter is ALSO named in `unreadable`).
    *   - `unreadable` — every one of the seven fields (`RouteReadField`)
-   *     whose read measured UNREADABLE this pass; `[]` when none did.
+   *     whose read measured UNREADABLE this pass AND whose file the
+   *     directory listing this record was built from NAMES; `[]` when none
+   *     did. A read that failed on a file the listing does not carry is
+   *     measured ABSENT instead — the listing rung every other measured
+   *     field here already applies (`branchEvidence`, `held`, `stopped`,
+   *     `substrate`, `stranded`), and the reason an agent older than the
+   *     `absent` wire marker still answers `route: null` for a session ccd
+   *     has never routed.
    */
   route: {
     fields: RouteFields; degraded: string | null; inert: RouteField[]; unreadable: RouteReadField[];
@@ -817,24 +824,48 @@ async function buildRecord(
   // (present) or `unreadable` (failed, not absent) read on ANY of the seven
   // clears it — an `absent` read leaves it untouched, so it survives to
   // `true` exactly when every one of the seven agreed.
+  //
+  // THE LISTING RUNG (whole-branch review, finding #1) — `routeReallyUnreadable`
+  // below. `unreadable` is the READ's answer, not this ladder's: every other
+  // MEASURED field in this function resolves it against `names` first
+  // (`branchEvidence`'s `names.includes(`${id}.branch`) ? 'unreadable' :
+  // 'absent'` rung, and the same one for `held`, `stopped`, `substrate` and
+  // `stranded`), because the listing this function opened with proves
+  // PRESENCE independently of whether the bytes came back. A file the
+  // listing does not name AND the read could not open is measured ABSENT —
+  // "never written", evidenced by the listing — never unmeasured. That is
+  // also what makes the compatibility argument stated at `branchEvidence`
+  // above hold for these seven: an agent older than the `absent` marker
+  // (`server/src/remote/io.ts`'s `absent: true`, the ONLY proof of absence
+  // on that wire) answers `unreadable` for every missing file, and without
+  // this rung all seven names landed in `route.unreadable` and `route` went
+  // non-null for a session ccd has NEVER routed — where the PWA reads a
+  // named-unreadable field as UNKNOWN and lights no picker row and no badge
+  // at all (`pwa/src/lib/models.ts`'s `RoutingOverride.unreadable`). Fully
+  // compatible with ruling S6-R5: a LISTED file whose read failed is still
+  // named in `unreadable`, and still makes `route` non-null.
+  const routeReallyUnreadable = (f: RouteReadField, r: MeasuredRead): boolean =>
+    !r.ok && r.reason === 'unreadable' && names.includes(`${id}.${f}`);
   const routeFields: RouteFields = {};
   const unreadable: RouteReadField[] = [];
   let allAbsent = true;
   ROUTE_WRITABLE_FIELDS.forEach((f, i) => {
     const r = routeFieldReads[i]!;
     if (r.ok) { routeFields[f] = r.content; allAbsent = false; }
-    else if (r.reason === 'unreadable') { unreadable.push(f); allAbsent = false; }
-    // r.reason === 'absent': ordinary "never written", leaves both untouched.
+    else if (routeReallyUnreadable(f, r)) { unreadable.push(f); allAbsent = false; }
+    // Otherwise the field is measured absent — a proven ENOENT, or a read
+    // that failed on a file the listing does not carry: ordinary "never
+    // written", which leaves both untouched.
   });
   let degraded: string | null = null;
   if (degradedRead.ok) { degraded = degradedRead.content; allAbsent = false; }
-  else if (degradedRead.reason === 'unreadable') { unreadable.push('degraded'); allAbsent = false; }
+  else if (routeReallyUnreadable('degraded', degradedRead)) { unreadable.push('degraded'); allAbsent = false; }
   let inert: RouteField[] = [];
   if (inertRead.ok) {
     const inertList = inertRead.content.split(',').map((s) => s.trim()).filter(Boolean);
     inert = inertList.filter((f): f is RouteField => (ROUTE_WRITABLE_FIELDS as readonly string[]).includes(f));
     allAbsent = false;
-  } else if (inertRead.reason === 'unreadable') { unreadable.push('inert'); allAbsent = false; }
+  } else if (routeReallyUnreadable('inert', inertRead)) { unreadable.push('inert'); allAbsent = false; }
   const route: SessionRecord['route'] = allAbsent ? null : { fields: routeFields, degraded, inert, unreadable };
 
   return {

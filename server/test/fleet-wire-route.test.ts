@@ -20,7 +20,7 @@ import { loadConfig } from '../src/config.js';
 import { assembleFleet } from '../src/fleet.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
-import { reviveFleetSession, ROUTE_WRITABLE_FIELDS, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, ROUTE_READ_FIELDS, ROUTE_WRITABLE_FIELDS, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { degradedReadIO, unreadableField } from './ioDoubles.js';
@@ -159,11 +159,19 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
 
   // Controller ruling S6-R5 (fix round 2, finding 1): promote the seven
   // reads to the MEASURED ladder — `route: null` only when all seven measure
-  // ABSENT, never when one merely fails to read.
-  it('all seven files measured unreadable (a transient agent-link failure): route is non-null, all seven named in unreadable, never route: null', async () => {
+  // ABSENT, never when one merely fails to read. Whole-branch review,
+  // finding #1: "measured unreadable" is resolved against the registry
+  // LISTING first, exactly as `branchEvidence`/`held`/`substrate` already
+  // are (registry.test.ts's "THE GOVERNING RULE" suite) — so every fixture
+  // below SEEDS the file it degrades, which is what makes it listed and
+  // therefore genuinely unreadable rather than evidenced-absent.
+  it('all seven LISTED files measured unreadable (a transient agent-link failure): route is non-null, all seven named in unreadable, never route: null', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-quiet-basin', 'claude');
+    seedSession(home, 'claude-quiet-basin', 'claude', {
+      class: 'opus', effort: 'high', subagent: 'sonnet', workflow: 'sonnet',
+      compact: '80', degraded: 'ceiling', inert: 'effort',
+    });
     const now = 1784600000;
     const cfg = loadConfig({ CCRC_HOME: home });
     const io = degradedReadIO((p) => /\.(class|effort|subagent|workflow|compact|degraded|inert)$/.test(p));
@@ -178,10 +186,10 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     });
   });
 
-  it('.class readable, .effort measured unreadable: fields.class present, unreadable names only effort, no silent "never set"', async () => {
+  it('.class readable, a LISTED .effort measured unreadable: fields.class present, unreadable names only effort, no silent "never set"', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-quiet-basin', 'claude', { class: 'opus' });
+    seedSession(home, 'claude-quiet-basin', 'claude', { class: 'opus', effort: 'high' });
     const now = 1784600000;
     const io = unreadableField('claude-quiet-basin', 'effort');
     const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
@@ -189,15 +197,65 @@ describe('assembleFleet — route (routing slice 6, Task 4)', () => {
     expect(s?.route).toEqual({ fields: { class: 'opus' }, degraded: null, inert: [], unreadable: ['effort'] });
   });
 
-  it('.effort measured unreadable while every other one of the seven measures absent: still route non-null, not route: null', async () => {
+  it('a LISTED .effort measured unreadable while every other one of the seven measures absent: still route non-null, not route: null', async () => {
     const home = mkTmp('ccrc-');
     seedRoster(home);
-    seedSession(home, 'claude-quiet-basin', 'claude');
+    seedSession(home, 'claude-quiet-basin', 'claude', { effort: 'high' });
     const now = 1784600000;
     const io = unreadableField('claude-quiet-basin', 'effort');
     const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
     const s = fleet.find((r) => r.id === 'claude-quiet-basin');
     expect(s?.route).not.toBeNull();
     expect(s?.route).toEqual({ fields: {}, degraded: null, inert: [], unreadable: ['effort'] });
+  });
+
+  // Whole-branch review, finding #1 — THE LISTING RUNG, per field. The
+  // shape registry.test.ts states as the governing rule for every other
+  // migrated field ("a NOT-LISTED .branch, measured unreadable, keeps
+  // today's answer: absent"): the file was never written, so `names` never
+  // names it, while the double still forces `unreadable`. The listing
+  // settles it — measured ABSENT, not unmeasured — so a session ccd has
+  // never routed keeps answering `route: null` even on an agent whose read
+  // response carries no `absent` marker at all.
+  for (const f of ROUTE_READ_FIELDS) {
+    it(`a NOT-LISTED .${f}, measured unreadable, keeps today's answer: absent — route stays null`, async () => {
+      const home = mkTmp('ccrc-');
+      seedRoster(home);
+      seedSession(home, 'claude-quiet-basin', 'claude');
+      const now = 1784600000;
+      const io = unreadableField('claude-quiet-basin', f);
+      const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+      const s = fleet.find((r) => r.id === 'claude-quiet-basin');
+      expect(s?.route).toBeNull();
+    });
+  }
+
+  it('an OLD-AGENT-shaped io (every read unreadable, no `absent` marker) leaves a never-routed session at route: null', async () => {
+    // The compatibility case the rung exists for: `remote/io.ts`'s `absent`
+    // is the only proof of absence on that wire, so an agent predating it
+    // (or rolled back to one) answers `unreadable` for every missing file.
+    // Before the rung all seven names landed in `unreadable`, `route` went
+    // non-null, and the PWA — which reads a named-unreadable field as
+    // UNKNOWN — dropped the class/effort highlight on every never-routed
+    // session on the fleet, permanently.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-quiet-basin', 'claude');
+    const now = 1784600000;
+    const io = degradedReadIO(() => true);
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const s = fleet.find((r) => r.id === 'claude-quiet-basin');
+    expect(s?.route).toBeNull();
+  });
+
+  it('mixes the two rungs in ONE record: a LISTED .class unreadable is named, a NOT-LISTED .effort unreadable is not', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'claude-quiet-basin', 'claude', { class: 'opus' }); // .effort never written
+    const now = 1784600000;
+    const io = degradedReadIO((p) => /\.(class|effort)$/.test(p));
+    const fleet = await assembleFleet(io, loadConfig({ CCRC_HOME: home }), new Tmux(noopRun), now);
+    const s = fleet.find((r) => r.id === 'claude-quiet-basin');
+    expect(s?.route).toEqual({ fields: {}, degraded: null, inert: [], unreadable: ['class'] });
   });
 });

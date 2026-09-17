@@ -387,7 +387,11 @@ export interface FleetSession {
    *     measured absent or unreadable (an unreadable `.inert` is named in
    *     `unreadable` instead).
    *   - `unreadable` — every one of the seven files (`RouteReadField`) whose
-   *     read measured UNREADABLE this pass, `[]` when none did. A consumer
+   *     read measured UNREADABLE this pass AND which the registry listing
+   *     the record was built from NAMES (a read that failed on a file the
+   *     listing does not carry is measured ABSENT — `server/src/registry.ts`'s
+   *     listing rung, which every other measured registry field already
+   *     applies), `[]` when none did. A consumer
    *     treats a field named here as UNKNOWN — no active picker row, no
    *     queued badge — the same treatment an absent field already gets,
    *     never a positive "ccd cleared it" or "ccd never set it" claim.
