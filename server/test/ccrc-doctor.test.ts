@@ -1127,7 +1127,10 @@ const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  deliberately — a PASS there would be a verdict nobody measured, which is
  *  the forgery class this repo bans by name. The same shape as the standing
  *  `linger` WARN the summary test below already accounts for. */
-const HEALTHY_SKIPS = process.platform === 'darwin' ? 1 : 0;
+// `+ 1` universally: `healthy()` plants only the upstream (Anthropic) account,
+// which never has a model registry by design, so the new `models` check
+// SKIPs on every platform's healthy fixture — not just Darwin's `scopes`.
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 1;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
