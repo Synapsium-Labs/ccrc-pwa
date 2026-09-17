@@ -16,6 +16,7 @@ import path from 'node:path';
 import { readFileSync } from 'node:fs';
 import { spawn, spawnSync } from 'node:child_process';
 import { CCD, makeCcdHarness, ghContainedEnv, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
+import { itLinux } from './platformFixtures.js';
 import { eventsOf, measOf, lcDir, readJournal, compactLockPath, holdCompactLock,
   expectContentionClauses } from './lifecycleHelpers.js';
 
@@ -624,7 +625,12 @@ describe('the stable lock refuses a LATER canonical disappearance (spec §4, §5
     } finally { release(); }
   }, 30_000);
 
-  it('REFUSES rather than recreating canonical while a real holder owns the old inode', async () => {
+  // LINUX ONLY, AND THE RESIDUE IS THE REASON (round M4). Arm (b) of
+  // `_compact_lock_vanished` — the only arm that can see a holder past its own
+  // acquire — walks `/proc/<pid>/fd` and is gated `[ -d /proc ] || return 1`,
+  // so on Darwin this refusal does not happen: the acquire mints. That is
+  // recorded PLATFORM RESIDUE, not a defect this case may assert away.
+  itLinux('REFUSES rather than recreating canonical while a real holder owns the old inode', async () => {
     const release = await holdThroughAcquire();
     try {
       const ino = fs.statSync(lockOfId()).ino;
@@ -1688,7 +1694,11 @@ describe('the lock mechanism is absent (spec §4, §5)', () => {
     return () => { try { child.kill('SIGKILL'); } catch { /* gone */ } };
   };
 
-  it('(d1c) all four purge callers tell CANONICAL-VANISHED from CONTENTION, and neither prescribes the other remedy', async () => {
+  // LINUX ONLY, for the same recorded residue as the refusal leg above: with no
+  // `/proc` the acquire cannot measure `canonical-vanished` at all, so the
+  // fixture's own precondition (`RC=1 WHY=canonical-vanished`) is unbuildable
+  // there and there is no sentence for the four callers to tell apart.
+  itLinux('(d1c) all four purge callers tell CANONICAL-VANISHED from CONTENTION, and neither prescribes the other remedy', async () => {
     for (const leg of LEGS) {
       h = makeCcdHarness('ccrc-lc-purge-');
       leg.plant();
