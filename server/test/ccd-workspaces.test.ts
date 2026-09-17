@@ -191,12 +191,22 @@ describe('a partially purged registry never frees the slug', () => {
     // TAUTOLOGICAL — `LAST` is derived from this same measurement, so both
     // sides move together and a mutant adding one `rm` to `_reg_purge` stayed
     // GREEN (measured). The number that can actually change is the purge's own
-    // unlink count, so that is the one pinned: 25 today, which makes this `it`
-    // run 28 real `sh()` invocations, each taking the row's stable lock. When
-    // this reds, the protocol gained or lost an unlink: update the literal AND
-    // re-read this fixture's cost, because it is the thing that pushed the test
-    // past vitest's 20 s default and made it a load flake.
-    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(25);
+    // unlink count, so that is the one pinned: 27 today, which makes this `it`
+    // run 31 real `sh()` invocations, each taking the row's stable lock — one
+    // for `measureRmCalls` plus the loop's `RM_CALLS + 3`, measured by counting
+    // this file's own `sh` alias for one run of this `it`, not derived.
+    // IT WAS 25 UNTIL `_reg_purge` GAINED `_usage_purge "$id"` (ccd/ccd), whose
+    // two unconditional `rm -f` — the usage sidecar `$REG/usage/<id>.json` and
+    // its `.<id>.*.tmp` partials — take the count 25 → 27; they run mid-purge,
+    // between the `hookstate.json` unlink and the `reaping`/`archived` tail, so
+    // this is a claim about the TOTAL and not about which unlink goes last. The
+    // function's third `rm`, `-rf` of `$REG/usage/<id>.agents`, stands behind a
+    // `[[ -d ]]` no fixture here satisfies, so it does not count today and WILL
+    // when one seeds that directory. When this reds, the protocol gained or
+    // lost an unlink: update the literal AND re-read this fixture's cost,
+    // because it is the thing that pushed the test past vitest's 20 s default
+    // and made it a load flake.
+    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(27);
     const LAST = RM_CALLS + 2;
     const verdicts: string[] = [];
     for (let k = 0; k <= LAST; k++) {
