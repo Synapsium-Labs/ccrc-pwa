@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=192fce5d47a846e28c83be1d3c40782fd72e839b2e36327ed4676c046ac42788
+# ccrc:generated 1 sha256=5d10a844ed41ca59e922f0ebf7ce9ca7395aa79b6e9e1f2e633c388c205bc6c9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2351,14 +2351,14 @@ _reg_claim() {   # id — THE ONE WRITER of `started`, and now of its record
     meas.project "$(_reg_get "$1" project)"
   _reg_set "$1" started 1
 }
-_usage_purge() {   # id — the usage sidecar (routing spec 2026-09-14 §6) is keyed by
-  # the ccd id, so a REUSED id must never inherit a dead session's reading. Exact
-  # names, never a glob: `_reg_purge's own unanchored-glob hazard (an id that is
-  # a prefix of another) applies to this directory too. Always 0 — a purge that
-  # cannot remove a sidecar is not a reason to stop purging the row.
-  rm -f -- "$REG/usage/$1.json" 2>/dev/null
-  rm -f -- "$REG/usage/.$1."*.tmp 2>/dev/null
-  [[ -d "$REG/usage/$1.agents" ]] && rm -rf -- "$REG/usage/$1.agents" 2>/dev/null
+_usage_purge() {   # id — the usage sidecar (routing spec 2026-09-14 §6) is keyed by the ccd id, so a REUSED id must
+  # never inherit a dead session's reading. Exact names, never a glob: `_reg_purge`'s own unanchored-glob hazard (an
+  # id that is a prefix of another) applies to this directory too. EXACTLY ONE CALLER, `_reg_purge`, whose dynamic
+  # scope carries `_pg_urc` — so every removal below is RECORDED through `_reg_purge_unremoved` and raises THAT
+  # function's status to 3. This one still returns 0: a refused removal is not a reason to stop purging the row.
+  rm -f -- "$REG/usage/$1.json" 2>/dev/null || _reg_purge_unremoved "$REG/usage/$1.json"
+  rm -f -- "$REG/usage/.$1."*.tmp 2>/dev/null || _reg_purge_unremoved "$REG/usage/.$1.*.tmp"
+  [[ -d "$REG/usage/$1.agents" ]] && { rm -rf -- "$REG/usage/$1.agents" 2>/dev/null || _reg_purge_unremoved "$REG/usage/$1.agents"; }
   return 0
 }
 
@@ -2853,17 +2853,17 @@ _reg_generation_init() {   # <id> -> 0 the row carries a valid generation; 1 ref
 # caller never hears about, and describing a failure the caller cannot see is
 # the fabricated-cause defect this whole seam exists to remove.
 #
-# `_pg_urc` is `_reg_purge`'s own `local`, reached here through bash's dynamic
-# scope. That is why this function has exactly one caller and is defined
-# immediately beside it: a second caller would be assigning into whatever
-# `_pg_urc` happened to be in scope, which is not a mechanism.
+# `_pg_urc` is `_reg_purge`'s own `local`, reached here through bash's dynamic scope. TWO sites reach it —
+# `_reg_purge`'s own unlinks and `_usage_purge`, whose only call site is inside `_reg_purge` — so it is still
+# ONE dynamic extent, and why this is defined immediately beside it: a caller outside that extent would be
+# assigning into whatever `_pg_urc` happened to be in scope, which is not a mechanism.
 #
-# THE SEPARATOR IS PROSE, NOT A GRAMMAR. `$REG/<id>.<suffix>` and
-# `$REG/.<id>.<suffix>` are the only two shapes that reach here — ids are
-# `<project>-<slug>` and both loops filter on a dot-free or private-family
-# suffix — so no pathname carries a comma today, but nothing DEPENDS on that:
-# the value is a sentence for a human and for the journal's `detail`, and
-# nothing parses it back into a list.
+# THE SEPARATOR IS PROSE, NOT A GRAMMAR. `$REG/<id>.<suffix>`, `$REG/.<id>.<suffix>` and — since
+# the sidecar removals became tracked — `$REG/usage/<id>.json`, `$REG/usage/.<id>.*.tmp` (the GLOB
+# PATTERN, never an expansion) and `$REG/usage/<id>.agents` are the shapes that reach here. Ids are
+# `<project>-<slug>` and every suffix is dot-free or a private family, so no pathname carries a
+# comma today — but nothing DEPENDS on that: the value is a sentence for a human and for the
+# journal's `detail`, and nothing parses it back into a list.
 _reg_purge_unremoved() {   # path — record one refused unlink AND the status it implies
   _pg_urc=3
   REG_PURGE_UNREMOVED="${REG_PURGE_UNREMOVED:+$REG_PURGE_UNREMOVED, }$1"
@@ -3081,7 +3081,7 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # explicitly here rather than exempted from the loop's filter, so the
   # nested-id guard stays a single, simple rule.
   rm -f "$REG/$id.hookstate.json" || _reg_purge_unremoved "$REG/$id.hookstate.json"
-  _usage_purge "$id"
+  _usage_purge "$id"   # its three sidecar removals are tracked too — see its own header
   rm -f "$REG/$id.reaping" || _reg_purge_unremoved "$REG/$id.reaping"
   # CONDITIONAL, so the invariant is a mechanism rather than a hope: an `rm`
   # that did not take the breadcrumb must not be followed by one that takes the
@@ -6587,7 +6587,7 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # `cmd_ws_reap` already writes every one of its ~30 refusals this way.
   #
   # `_json_str`'s status, checked ONCE and up front — the same probe, for the
-  # same reason, as `cmd_ws_audit` (ccd:5113) and `cmd_ws_reap` (ccd:5952).
+  # same reason, as `cmd_ws_audit` (ccd:10967) and `cmd_ws_reap` (ccd:11919).
   # Every refusal below quotes its detail inside a printf ARGUMENT LIST, where a
   # failure is a swallowed status and an empty argument — `"detail":,` — i.e. a
   # document the server reports as a parse error rather than as the refusal it
