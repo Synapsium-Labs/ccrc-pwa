@@ -6687,9 +6687,15 @@ describe('ccrc doctor: models', () => {
     const lines = out.split('\n');
     const i = lines.findIndex((l) => l.startsWith('WARN models: '));
     expect(i, out).toBeGreaterThan(-1);
-    expect(out).toMatch(/aaa/);
-    expect(out).toMatch(/bbb/);
-    expect(out).toMatch(/ccc/);
+    // N1 fix: scope to the models verdict line itself, not the whole doctor
+    // stdout — the fixture's own roster makes the unrelated `wrappers` check
+    // print every id too (`FAIL wrappers: aaa has no executable at …`), so
+    // matching against `out` was tautological against the fixture and would
+    // still pass even if `_check_models` warned about no lane at all.
+    const verdict = lines[i];
+    expect(verdict).toMatch(/aaa/);
+    expect(verdict).toMatch(/bbb/);
+    expect(verdict).toMatch(/ccc/);
     expect(out).not.toMatch(/^PASS models: 0 lanes,/m);
   });
 
@@ -6715,7 +6721,12 @@ describe('ccrc doctor: models', () => {
     const out = runDoctor(home).stdout;
     const any = anyVerdictFor(out, 'models');
     expect(any, out).toBeDefined();
-    expect(any).not.toMatch(/^PASS models: 0 lanes,/);
+    // N2 fix: pin the VERDICT CLASS, not just that a non-"0 lanes" line
+    // exists — the default arm's whole point is that an unrecognized status
+    // must be treated as unmeasurable, i.e. it must WARN. A default arm that
+    // filed the row under `ok` instead (still reporting a nonzero lane
+    // count, just as a false PASS) used to slip past the old assertion.
+    expect(any).toMatch(/^WARN models: /);
   });
 });
 
