@@ -2793,8 +2793,8 @@ defect in either direction, and round 14 re-anchored or era-marked each one it m
   new flags is normative (round 9, B-I2/M-8), not left to the implementer:** `--parent-live` accepts exactly
   `true`, `false` or the empty string; `--live-agents` accepts exactly `^[0-9]+$` or the empty string; **empty
   means JSON `null` for both**, which is the hook's own measured encoding (`_hook_compact_scope` leaves
-  `CS_PARENT_LIVE=""`/`CS_LIVE_N=""` at `ccd/session-hook.sh:951` and returns on a manual trigger; `:765`,
-  `:771`) and the one its own initial-set `jq` already decodes at `:1281-1282`. The helper converts
+  `CS_PARENT_LIVE=""`/`CS_LIVE_N=""` at `ccd/session-hook.sh:951` and returns on a manual trigger; `:963`,
+  `:969`) and the one its own initial-set `jq` already decodes at `:1479-1480`. The helper converts
   exhaustively — empty ⇒ `null`; `true`/`false` ⇒ boolean; `^[0-9]+$` ⇒ integer; **anything else ⇒ a usage
   error (exit 2)**. **`Number(v)` on a possibly-empty value is FORBIDDEN here and must be named as the trap
   in the code's own comment**, because it is this file's established idiom (`:803`,
@@ -2941,8 +2941,8 @@ defect in either direction, and round 14 re-anchored or era-marked each one it m
      reddened by the audit that enforces the correction, or the next round deletes the record.
 
   **Two citations fail under every reading and are corrected in this round rather than left for the audit
-  to find:** `holdersOf` is declared at `server/test/single-definition.test.ts:1144` with its body spanning
-  `:1144-1145`, so a bare `:1145` names the `BASH.filter(…)` continuation and not the declaration; and
+  to find:** `holdersOf` is declared at `server/test/single-definition.test.ts:1303` with its body spanning
+  `:1303-1304`, so a bare `:1304` names the `BASH.filter(…)` continuation and not the declaration; and
   §3.4's five-site cell cited `server/test/ccd-ws-reap.test.ts:344` beside a quoted `_lc_refuse reap …
   flock-unavailable` string that belongs to `ccd/ccd:12033` and occurs nowhere in that test — that same
   `server/test/ccd-ws-reap.test.ts:344` being the `it(` line titled `refuses to run the destructive verb

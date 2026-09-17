@@ -789,7 +789,7 @@ than by bytes: base `:781` has no byte-identical tip line, because Task 9's nonc
 written value from `"$2"` to `"$3"`, so `:798` is the same arm re-measured rather than the same bytes
 relocated. **"Every
 PUBLISHING run", not "every run" (round 13, A-M9):** measured, `_hook_write_atomic`'s printf-failure arm
-(`ccd/session-hook.sh:996`) runs `rm -f "$tmp"; return 1` and NEVER reaches the `mv -f` at `:799`, so on the
+(`ccd/session-hook.sh:996`) runs `rm -f "$tmp"; return 1` and NEVER reaches the `mv -f` at `:997`, so on the
 write-failure branch this list's last member is absent — the mirror of the error the paragraph warns about
 two sentences on. Both required scenarios below are publishing runs, so the subset holds for each. The
 CONDITIONAL members are named with the branch that produces each, and are asserted only in a run that takes
@@ -824,7 +824,7 @@ above — always present, so the VALUE, never the flag's presence, encodes null.
 the empty string. **The empty string means JSON `null` for both.** This is not a new convention: it is the
 hook's own, measured — `_hook_compact_scope` initialises `CS_PARENT_LIVE=""`/`CS_LIVE_N=""`
 (`ccd/session-hook.sh:951`), returns on a manual trigger leaving both empty, sets `CS_LIVE_N="$n"` at `:963`
-and `CS_PARENT_LIVE="false"` at `:771`, and the hook's own initial-set `jq` already reads exactly that
+and `CS_PARENT_LIVE="false"` at `:969`, and the hook's own initial-set `jq` already reads exactly that
 encoding back out at `:1479-1480`
 (`parentLive:(if $pl=="true" then true elif $pl=="false" then false else null end)`,
 `liveAgents:(if $ln=="" then null else ($ln|tonumber) end)`). The helper must convert identically and
@@ -1213,7 +1213,7 @@ The round-8 text bounded the cost to "the ENTIRE compaction lifecycle — card, 
 journal, and lifecycle purge cleanup alike", which composed with §3.4's own "`_reg_purge` acquires/validates
 the stable lock BEFORE any registry mutation" into something far larger than it stated: a permanent,
 fleet-wide failure of `ws-rm`, `ws-reap`, `forget` and `ws-gc --prune`, each of which calls `_reg_purge`
-(`ccd/ccd:6478` in `cmd_ws_rm`, `:13020` in `_ws_reap_tail` under `_ws_reap_locked`, `:12608` in
+(`ccd/ccd:6478` in `cmd_ws_rm`, `:13020` in `_ws_reap_tail` under `_ws_reap_locked`, `:13602` in
 `_ws_gc_prune_row` under `ws-gc --prune`, `:19131` in `cmd_forget`) — three of them only AFTER irreversible
 action. That is ccd's universal registry-destruction path, not the compaction lifecycle. The design does not
 accept that cost, and does not need to.
