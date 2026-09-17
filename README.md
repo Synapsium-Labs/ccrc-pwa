@@ -538,8 +538,8 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the twenty-four machine lanes the
-fleet host reaches (twenty-three box-token-consulting coordination routes plus
+liveness gate reads the shipped sha out of it), the twenty-five machine lanes the
+fleet host reaches (twenty-four box-token-consulting coordination routes plus
 `/api/notify`, which still tolerates an absent token for one deploy generation —
 the caller is `curl` inside a Claude Code session, with no cookie jar, though the
 exempt-but-authenticated GETs among them (`/api/runs`, `/api/runs/:id/items`,
@@ -1544,7 +1544,7 @@ disaster-recovery drill, and the Build 4 dogfood runbook.
 
 **All three skills ship to every rostered account's config dir.** The
 coordinator's protocol is now a trio: its worker counterpart is the
-`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, thirteen clauses pinned by
+`ccrc-worker` skill (`ccd/worker-skill/SKILL.md`, fifteen clauses pinned by
 `server/test/worker-skill.test.ts`), and its reviewer counterpart is the
 `ccrc-reviewer` skill (`ccd/reviewer-skill/SKILL.md`, ten clauses pinned by
 `server/test/reviewer-skill.test.ts`), which reads a finished wave in its own
@@ -1860,10 +1860,10 @@ database is a server-side re-measurement of what they already say, never a
 replacement for them, and a lost `coord.db` reconstructs from them.
 
 **The skill's contract.** A coordinator is an ordinary fleet session running
-the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its twelve
+the `ccrc-coordinator` skill (`ccd/coordinator-skill/SKILL.md`), and its fourteen
 clauses are pinned verbatim by `server/test/coordinator-skill.test.ts` — a
 softened clause is a red suite, not a silent drift. **A worker is the same
-shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), thirteen clauses,
+shape:** the `ccrc-worker` skill (`ccd/worker-skill/SKILL.md`), fifteen clauses,
 pinned the same way by `server/test/worker-skill.test.ts`, and it is what a
 dispatched session is told to run by the kickoff sentence dispatch composes
 onto every brief mail. That is why a wave brief is short: the standing
@@ -1881,6 +1881,21 @@ release first, and reap consent stays the PWA's own ceremony either way.
 Nothing server-side makes reap mechanically impossible for a process with a
 shell — see "The honest boundary" below for what a contract does and does not
 buy.
+
+**Routing (routing slice 2).** Clause 13 makes every brief name the wave's shape and the routing
+`ccd/coordinator-skill/references/routing-matrix.md` (spec §3, verbatim) derives from it, and makes
+the coordinator revise routing only on a wave's evidence, recorded in the ledger. Clause 14 names the
+held-out panel in `references/review-panel.md` as the review brief's shape, RUN BY the review run's
+reviewer (clause 12) — three Opus lenses, a Sonnet refute pass per finding, model and effort literal
+in the script — so the quality gate does not move when a worker's class or effort does. Both
+references are in `install-coordinator-skill.sh`'s
+`REQUIRED_REFS` and pinned by `server/test/routing-references.test.ts`.
+
+The worker's half: clause 14 routes its own subagents by task shape from the same matrix, class
+named on every call and effort on every Workflow call, Fable never a fan-out worker; clause 15 opens
+every wave-done body with `suite: green|red|unrun` and, on a failed check, `failure:
+shallow|ceiling|unclear`, which `GET /api/runs/:id/signals` reads off the mail row as `signals` —
+three answers per line (a value, absent, unrecognised) and `null` when no wave-done has arrived.
 
 **Run lifecycle**, three HTTP routes driving six steps, one run row per wave
 (D-56, corrected — the version below was checked line-by-line against
@@ -2006,7 +2021,7 @@ the recipient POSTs
 `/api/mail/:id/ack`.
 
 `/api/mail` (and its ack route), the gated run routes (`POST /api/runs`,
-`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`) — but **not** the
+`/:id/dispatch`, `/:id/close`, `/:id/advance`, `/:id/items`, `/:id/route`) — but **not** the
 operator doors `/api/runs/:id/abandon` and `/api/runs/:id/reclaim`, which carry
 no box token by design (D-282), any more than `/api/coord/pause` or
 `/api/claims/:id/break` do — `GET /api/mail?to=<id>` and
@@ -2183,7 +2198,7 @@ is that the read side lives only where ccrc owns the file it is written in, and 
   those two per event, and empty on every other event**, because a stdout JSON on `PreToolUse` is
   read as this hook having something to say about the call, and it says nothing there unless it
   does. All three are pinned in both directions by `server/test/session-hook.test.ts`.
-- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries thirteen clauses, pinned verbatim: a
+- **Worker clause 12 (R2).** `ccd/worker-skill/SKILL.md` now carries fifteen clauses (thirteen at R2; routing slice 2 added 14 and 15), pinned verbatim: a
   workspace with a `graphify-out/graph.json` takes a codebase question to `graphify query` before
   `grep`, **weighted by the card's freshness word** — only `fresh` licenses taking an answer as read,
   and every other word makes a query answer a lead to verify by opening the file it names — and never
@@ -2482,8 +2497,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:6560-6562`), each with an operator sentence of its own at `:6600`,
-`:6608` and `:6621`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7224-7226`), each with an operator sentence of its own at `:7264`,
+`:7272` and `:7285`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2521,7 +2536,7 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:16330-16332`, the `genrc == 1` arm); the
+  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:18027-18029`, the `genrc == 1` arm); the
   generation-absent row and the off-`PATH` box are SILENT — the acquire succeeds or fails without ever
   reaching that warning — and the absence of the artifacts is the only signal there. Adding the missing
   warning is a `ccd/ccd` change, which this documentation pass does not make.

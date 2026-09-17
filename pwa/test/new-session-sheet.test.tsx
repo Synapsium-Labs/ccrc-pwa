@@ -2,7 +2,7 @@
 // so the split runs the other way round from SwapSheet's: which projects may
 // this account take. Same disclosure, same rule, same wire flag.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { ProjectRow, RosterWire } from '../../shared/api';
 import { NewSessionSheet } from '../src/fleet/NewSessionSheet';
 import { api } from '../src/lib/api';
@@ -228,5 +228,108 @@ describe('NewSessionSheet step 2 and the pool line', () => {
     ]);
     fireEvent.change(await screen.findByLabelText('Search projects'), { target: { value: 'zzz' } });
     expect(screen.getByText('No project matches "zzz"')).toBeInTheDocument();
+  });
+});
+
+describe('the optional routing row (routing slice 4, Task 6)', () => {
+  it('renders only at step 2', async () => {
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+    expect(screen.queryByLabelText('Class')).not.toBeInTheDocument();
+
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    expect(await screen.findByLabelText('Class')).toBeInTheDocument();
+    expect(screen.getByLabelText('Effort')).toBeInTheDocument();
+    expect(screen.getByLabelText('Workflows')).toBeInTheDocument();
+  });
+
+  it('leaves every select unset and posts no `route` key at all', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+    }));
+  });
+
+  it('Opus + High posts `route: { class: "opus", effort: "high" }`', async () => {
+    const create = vi.spyOn(api, 'createSession').mockResolvedValue(undefined);
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+
+    fireEvent.click(await screen.findByText('demo'));
+    fireEvent.change(screen.getByLabelText('Class'), { target: { value: 'opus' } });
+    fireEvent.change(screen.getByLabelText('Effort'), { target: { value: 'high' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Start demo/ }));
+
+    await waitFor(() => expect(create).toHaveBeenCalledWith({
+      wrapper: 'claude', project: 'demo', workdir: '/w/demo',
+      route: { class: 'opus', effort: 'high' },
+    }));
+  });
+
+  it('offers no Ultracode rung on the gpt account\'s Effort select', async () => {
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^gpt/ }));
+    const effortSelect = await screen.findByLabelText('Effort');
+    expect(within(effortSelect).queryByText('Ultracode')).not.toBeInTheDocument();
+  });
+
+  // Fix round 2, finding #4: the gpt negative above was a bare negative with
+  // no positive control — this is the mirror case on an Anthropic wrapper, so
+  // the pair actually binds the rule ("Ultracode shows for Anthropic, not for
+  // gpt") rather than "Ultracode never shows".
+  it('offers the Ultracode rung on an Anthropic account\'s Effort select', async () => {
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /team·max/ }));
+    const effortSelect = await screen.findByLabelText('Effort');
+    expect(within(effortSelect).getByText('Ultracode')).toBeInTheDocument();
+  });
+
+  // Fix round 2, finding #5: the Class select used to read in ladder order
+  // (Haiku first) with no class word on a gpt label, so a gpt operator saw
+  // "GPT-6 Astra" and had no way to know it posts `class=fable`. S4-R13 wants
+  // capability order (Fable, Opus, Sonnet, Haiku) after the two unset rows,
+  // and every label carrying its class word.
+  it('the Class select reads in capability order with the class word appended (S4-R13)', async () => {
+    await openAtStepTwo([proj('demo', { state: 'tagged', name: 'pool-a' })]);
+    fireEvent.click(await screen.findByText('demo'));
+    const classSelect = await screen.findByLabelText('Class') as HTMLSelectElement;
+    const labels = Array.from(classSelect.options).map((o) => o.textContent);
+    expect(labels).toEqual([
+      'Coordinator row', 'Default',
+      'Fable 5 — fable', 'Opus 5 — opus', 'Sonnet 5 — sonnet', 'Haiku 4.5 — haiku',
+    ]);
+  });
+
+  it('a gpt operator sees the class word on a label that otherwise carries none of its own', async () => {
+    const roster = pooled(POOLS);
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects: [] });
+    vi.spyOn(api, 'accounts').mockResolvedValue({ accounts: [], projected: null, roster });
+    render(<NewSessionSheet open onClose={vi.fn()} fleet={storeWith(roster)} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /^gpt/ }));
+    const classSelect = await screen.findByLabelText('Class');
+    expect(within(classSelect).getByText('GPT-6 Astra — fable')).toBeInTheDocument();
+  });
+
+  it('shows the coordinator-row note under the row', async () => {
+    await openAtStepTwo([]);
+    expect(await screen.findByText(
+      "Unset fields take the coordinator row (Fable · ultracode, Sonnet subagents, workflows on). "
+      + "If the account can't serve the class today, ccd starts one rung down and restores it when it can.",
+    )).toBeInTheDocument();
   });
 });

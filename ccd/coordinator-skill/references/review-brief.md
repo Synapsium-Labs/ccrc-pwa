@@ -12,7 +12,7 @@ Ledger: `<ledgerAbsPath>`.
 Plan: `<path>`   — or, for a plan in another repository:
   homeRepoRoot: <abs path>   planRepoPath: <repo-relative>   planSha: <40-hex>
 Tasks in this wave: <range or list>.
-Lenses: <e.g. correctness, seams-and-interfaces, tests-pin-effect-not-shape, docs-match-code>.
+Lenses: the held-out panel — `../ccrc-coordinator/references/review-panel.md` (three Opus·high lenses, a Sonnet·high refute pass per finding; coordinator clause 14) — plus any wave-specific lens.
 Whole-branch pass: <what to hold the branch to as a whole>.
 Suites: <exact commands, run in your worktree at the measured tip>.
 Carried constraints from earlier waves: <the ledger's list, verbatim>.

@@ -12,6 +12,7 @@ import {
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster } from './helpers.js';
 import { unreadableField, absentField } from './ioDoubles.js';
+import { ROUTE_WRITABLE_FIELDS } from '../../shared/api.js';
 
 const seed = (dir: string, id: string, fields: Record<string, string>) => {
   for (const [k, v] of Object.entries(fields)) writeFileSync(path.join(dir, `${id}.${k}`), v);
@@ -19,10 +20,24 @@ const seed = (dir: string, id: string, fields: Record<string, string>) => {
 
 const REGISTRY_CENSUS_TAG = 'registry-read-census';
 
+/**
+ * One bare `field(`/`fieldMeasured(` call site is one registry read — except
+ * the ONE call site that reads several files through
+ * `ROUTE_WRITABLE_FIELDS.map((f) => fieldMeasured(...))` (routing slice 6,
+ * Task 4 fix round 2, finding 3: one pass over the vocabulary instead of
+ * `ROUTE_WRITABLE_FIELDS.length` hand-typed calls), which the bare regex
+ * below sees as exactly ONE call but which fires `ROUTE_WRITABLE_FIELDS
+ * .length` reads at runtime. Derived from the real constant, not a
+ * hand-typed "5", so a change to the vocabulary's own size keeps this
+ * census honest without a second edit here.
+ */
 function buildRecordFieldReadCount(src: string): number {
   const body = src.match(/async function buildRecord\([\s\S]*?await Promise\.all\(\[([\s\S]*?)\n  \]\);/);
   expect(body, '`buildRecord` no longer has the one Promise.all this census measures').not.toBeNull();
-  return [...body![1]!.matchAll(/\bfield(?:Measured)?\(/g)].length;
+  const text = body![1]!;
+  const bareCalls = [...text.matchAll(/\bfield(?:Measured)?\(/g)].length;
+  const mapCalls = [...text.matchAll(/ROUTE_WRITABLE_FIELDS\.map\(/g)].length;
+  return bareCalls + mapCalls * (ROUTE_WRITABLE_FIELDS.length - 1);
 }
 
 function taggedRegistryCensusClaims(src: string): Map<string, number[]> {
@@ -61,7 +76,7 @@ describe('registry read census', () => {
       ['single', 1 + fieldReads],
       ['fleet', 1 + 24 * fieldReads],
     ]);
-    expect(expected).toEqual(new Map([['fields', 23], ['single', 24], ['fleet', 553]]));
+    expect(expected).toEqual(new Map([['fields', 30], ['single', 31], ['fleet', 721]]));
 
     const files = filesUnder(path.join(root, 'server'))
       .filter((file) => /\.(?:ts|js|mjs|cjs)$/.test(file));
@@ -490,6 +505,14 @@ describe('the measured read reaching the registry ladder (Task 5)', () => {
       // also collapse to null, unaffected by Task 5 either way.
       expect(rec.swapBlocked).toBeNull();
       expect(rec.spawn).toBeNull();
+      // Routing slice 6, Task 4 + the whole-branch review's finding #1: the
+      // seven routing files are not seeded above, so this listing does not
+      // name them — and an old-agent-shaped read, which cannot say `absent`
+      // at all, resolves each of them against that listing exactly as
+      // `branchEvidence` does. `route: null`, the answer for a session ccd
+      // has never routed, NOT seven names in `route.unreadable` (which the
+      // PWA reads as UNKNOWN and renders with no active picker row at all).
+      expect(rec.route).toBeNull();
     });
   });
 });
@@ -592,7 +615,7 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 23
+// narrowed to one id — one readdir plus that id's 30
 // [registry-read-census:fields] field reads instead of a whole-fleet sweep.
 // These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
@@ -641,7 +664,7 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 23-field Promise.all `buildRecord` would — the
+    // A miss must not fire the 30-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
@@ -661,7 +684,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 23 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 30 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-a-MekWarLive', {
       wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -682,7 +705,7 @@ describe('readSessionRecord', () => {
     await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    expect(fieldReads).toHaveLength(23);
+    expect(fieldReads).toHaveLength(30);
     expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });
 

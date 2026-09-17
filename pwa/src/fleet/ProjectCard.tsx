@@ -160,6 +160,13 @@ export function ProjectCard({
   group: FleetGroup;
   onOpen: (id: string) => void;
   selectedId?: string | null;
+  /** The card fires `onAddWorkspace(project)` — nothing about a route lives
+   *  here. Whether the resulting request carries one is FleetScreen's
+   *  decision, made in its class chooser's closure before this callback is
+   *  invoked (routing slice 5, Task 6): with the chooser left on
+   *  "Coordinator row" the request is byte-identical to before this task;
+   *  any other choice seeds `{ class }` on the wire. This card neither knows
+   *  nor needs to know which. */
   onAddWorkspace?: (project: string) => void;
   /** Where a new workspace would land, as the SERVER projects it (limits.ts
    *  `projectHome`, itself a mirror of ccd's `_ws_least_loaded`). Never
@@ -247,10 +254,21 @@ export function ProjectCard({
   const headroom = forecast ? 100 - forecast.score : null;
   const placeableNames = poolLabelList(roster, pool);
   const measuredNone = placement.kind === 'measured' && placement.placement.kind === 'none';
+  // The THIRD meaning of `none` (D-2854): the row was fetched with a class
+  // and every eligible lane measured unservable for it. Only a `?class=`
+  // fetch can ever carry this. The fleet screen's class chooser (routing
+  // slice 5, Task 6) now sends one whenever an operator picks a class there
+  // — with the chooser left on "Coordinator row" the fetch stays unrouted
+  // and a card never takes this branch, reading exactly as before.
+  const measuredNoneClass = placement.kind === 'measured' && placement.placement.kind === 'none'
+    ? placement.placement.class
+    : undefined;
   const legacyNone = placement.kind === 'legacy' && legacySafe && projected === null;
   const addLabel = forecast
     ? `New workspace on ${group.project} — ${accountLabel(roster, forecast.wrapper)}, ${headroom}% free`
-    : measuredNone || legacyNone
+    : measuredNoneClass !== undefined
+      ? `New workspace on ${group.project} — no lane can serve ${measuredNoneClass}`
+      : measuredNone || legacyNone
       ? poolName === null
         ? placeableNames === ''
           ? `New workspace on ${group.project} — all disabled`

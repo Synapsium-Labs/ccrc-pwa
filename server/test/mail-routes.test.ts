@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -700,6 +700,12 @@ describe('the rejection table is total, in both directions', () => {
                                   // exactly like its two siblings above — no
                                   // `refused`/`reject.code` ever carries it, nothing
                                   // switches on it over the wire.
+      'reverse-demotion',        // routing slice 5, Task 2 — one of `RouteMode`'s own
+                                  // words (`shared/routing-ladder.ts`'s `RungTarget.mode`),
+                                  // compared here only against a run_events.detail token
+                                  // parsed back off `coord.runEvents(id)` to derive
+                                  // `lastDemotion` — same forensic-history family as
+                                  // `session-rebound` above, never a `refused`/`error` code.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -746,8 +752,17 @@ describe('the rejection table is total, in both directions', () => {
         // from the whole-branch review) as literals in server/src/coord,
         // alongside `answerAsk`'s own ten — same refusal family, one union,
         // admitted through its own exported guard rather than NOT_CODES.
-        || isAskRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode or AskRefuseCode`).toBe(true);
+        || isAskRefuseCode(tok)
+        // ROUTING SLICE 5, TASK 2 — the EIGHTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` states above.
+        // `POST /api/runs/:id/route` (coord/routes.ts) spells its own
+        // refusals as literals — a run-scoped write like `RunRefuseCode`'s
+        // four routes, but that union's docstring scopes itself to those
+        // four by name, so this fifth route gets its own vocabulary and its
+        // own exported guard rather than silently widening one whose
+        // docstring would then under-state its own membership.
+        || isRunRouteRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode or RunRouteRefuseCode`).toBe(true);
     }
   });
 });

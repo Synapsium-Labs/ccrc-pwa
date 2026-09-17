@@ -916,6 +916,58 @@ describe('account pools', () => {
       .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
   });
 
+  // Fix round 2, finding #3 (routing slice 4, Task 6): `api.projects(cls)` and
+  // `createSession`'s `route` strip shipped with no test of their own — this
+  // pair mutates the same emptiness rule the `crossPool` case above pins.
+  it('projects(cls) appends ?class= only when given (routing slice 4, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { roots: [], projects: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.projects();
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects');
+
+    await api.projects('fable');
+    expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe('/api/projects?class=fable');
+  });
+
+  it('createSession omits route entirely unless at least one field is set (routing slice 4, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: {} });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: { class: 'opus' } });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: { class: 'opus' } });
+  });
+
+  // Fix round 1, finding #1 (routing slice 5, Task 6): `workspaceAdd`'s
+  // `route` wrapper shipped pinned only through the fleet-class-chooser
+  // screen test — this pair pins the api-layer decision directly, the same
+  // shape as the `crossPool`/`route` cases above it.
+  it('workspaceAdd(project) posts with no body and no content-type (routing slice 5, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p/workspaces');
+    expect('body' in init).toBe(false);
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+  });
+
+  it('workspaceAdd(project, route) posts { route } exactly (routing slice 5, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { class: 'fable' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p/workspaces');
+    expect(JSON.parse(init.body as string)).toEqual({ route: { class: 'fable' } });
+  });
+
   it('names both pools in a measured mismatch without promising a control', () => {
     const mismatch = apiErrorText(asError(409, {
       ok: false,
