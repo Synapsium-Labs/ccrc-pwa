@@ -124,6 +124,17 @@ Issued by the allocator on 2026-09-17 after the whole-slice review and defined i
 - **D-2976** (subagent-inert-departs-5.2) — spec §5.2 said `subagent` 'applies through the lane's materialiser, where settings.json wins' on a non-Anthropic lane; measured, ccd applies subagent ONLY through CLAUDE_CODE_SUBAGENT_MODEL on the Anthropic arm, so Task 3's inert stamp is the truth and the spec sentence is corrected at the mint (S6-R7).
 - **D-2977** (census-cost-accepted) — the 23→30 field-read raise multiplies across five whole-registry readers (~+168 agent-link reads per whole-fleet pass at 24 sessions); accepted with the cost stated and measured live at the gate; the listing-backed skip for absent files is carried (S6-R6).
 
+A second block, issued on 2026-09-17 after the compaction card (PR #134, dfa167d7) merged mid-slice and Task 5 ran on the merged tree, defined in the same act: D-2978 through D-2985 (8 departures; the block's unspent tail is never spelled). Commits: the third merge b6b0b442, 1c71be12, 4784dd18; Task 5 2ef6314c, 8f373055. Rulings S6-R8..S6-R12 are in the SDD ledger.
+
+- **D-2978** (card-merged-mid-slice) — the graphify compaction card (PR #134, dfa167d7) merged while slice 6 ran and was merged into the branch before Task 5 (b6b0b442); its three citation-debt censuses were RE-MEASURED on the merged tree (ccd/ccd 22→124, the Files: set 12→20, the |-row set 18→51) as their own comment mandates, no doc edits (S6-R10).
+- **D-2979** (readme-anchors-recited) — five of main's README operator anchors into shared/api.ts and ccd/ccd were re-anchored by content after the merge moved their targets.
+- **D-2980** (svc-gate-earlier-spelling) — the S3-R1 comment in ccd/ccd says 'under the earlier spelling `_svc_gate`' so the card's dangling-identifier guard reads it as quoted history.
+- **D-2981** (gate-ruled-not-measured) — Task 5's Step 0 (the card merged AND deployed) was satisfied by ruling: the card is merged in-tree and Task 6's deploy ships the card and the field together (S6-R8).
+- **D-2982** (worker-compact-40) — the worker's initial `compact` value is 40, chosen by ruling S6-R9 (the spec left the number open); the matrix and spec §3 rows carry it.
+- **D-2983** (matrix-spec-identity-pin) — routing-references.test.ts had never pinned the matrix verbatim against spec §3 (only the class/effort vocabularies); the two copies were identical by convention — a byte-for-byte row pin was added.
+- **D-2984** (reread-count-no-reader) — the plan's gate item (d), the post-compaction re-read count, has no shipped reader (slice 0's figure came from an ad hoc transcript pass); the gate states so and carries a reader.
+- **D-2985** (compactor-reads-through-route-get) — the compactor reads the field through the validated routing reader `_route_get` (out-of-range digits behave as absent with the routing note), not a bare `_reg_get` with a digit belt (S6-R12).
+
 ## Carried
 
 - Slice 0's seven-day measurement re-measure (~2026-09-21).
