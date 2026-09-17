@@ -71,7 +71,27 @@ describe('_reg_set writes atomically', () => {
     const mvBody = /_plat_mv_notdir\(\)\s*\{([\s\S]*?)\n\}/.exec(ccd)?.[1] ?? '';
     expect(mvBody, '_plat_mv_notdir must be a multi-line function').not.toBe('');
     expect(mvBody, 'the helper reaches the destination by rename only').toMatch(/mv\s+-[a-zA-Z]*T[a-zA-Z]*\s/);
-    expect(mvBody, 'the helper must never unlink its destination').not.toMatch(/rm\s+[^\n]*"\$2"/);
+    // D-2187 (A2) added one narrowly-guarded `rm -f -- "$2"` for the one
+    // destination shape a bare Darwin `mv -f` cannot replace correctly (a
+    // symlink to a directory) — so an unconditional "never unlinks" pin is
+    // no longer honest. A regex over a function body CANNOT decide whether
+    // an `rm` sits INSIDE a guarded arm: it can only see that an
+    // `rm "$2"`, a `[ -L "$2" ]` and a `[ -d "$2" ]` all appear somewhere in
+    // the same text — an unconditional `rm` with the guard three lines away
+    // would pass this too. So this is narrowed to its WEAKEST HONEST FORM:
+    // if the body contains an `rm` of "$2", both `-L "$2"` and `-d "$2"`
+    // must also appear in it. That detects the SHAPE CHANGING (an `rm`
+    // showing up with no guard tokens at all); it does NOT prove the `rm`
+    // is actually guarded, and it cannot — the real proof is the
+    // behavioural cases in `macos-platform.test.ts`'s "_plat_mv_notdir's
+    // Darwin arm, forced from Linux (D-2187)" describe (A1's symlink-to-dir
+    // and real-directory cases). Re-verify against ccd/ccd's Darwin arm
+    // directly, not against this scan.
+    if (/rm\s+[^\n]*"\$2"/.test(mvBody)) {
+      const limitMsg = 'an rm of "$2" appeared with no -L/-d guard token in the body — this scan cannot prove the rm is CONTAINED in a guarded arm, only that the shape changed; re-verify against ccd/ccd\'s Darwin arm and A1\'s cases in macos-platform.test.ts';
+      expect(mvBody, limitMsg).toMatch(/-L\s+"\$2"/);
+      expect(mvBody, limitMsg).toMatch(/-d\s+"\$2"/);
+    }
     expect(mvBody, 'the helper must never redirect into its destination').not.toMatch(/>\s*"\$2"/);
   });
 
