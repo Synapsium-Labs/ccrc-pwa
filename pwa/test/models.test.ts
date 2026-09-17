@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { ROUTE_WRITABLE_FIELDS } from '../../shared/api';
+import { EFFORT_LADDER } from '../../shared/routing-ladder';
 import { modelOptions, effortOptions, type PickOption } from '../src/lib/models';
 
 /**
@@ -120,5 +121,24 @@ describe('effortOptions', () => {
       .toEqual({ field: 'effort', value: 'auto' });
     expect(effortOptions('claude', null, false).find((o) => o.label === 'Ultracode')?.route)
       .toEqual({ field: 'effort', value: 'ultracode' });
+  });
+
+  // The picker's five slider stops come from EFFORT_LADDER (shared/routing-ladder.ts)
+  // rather than five hand-built rows — Auto and Ultracode are the picker's own
+  // labelled superset on top of the ladder, never part of it.
+  const levelRows = (opts: PickOption[]) =>
+    opts.filter((o) => o.label !== 'Auto' && o.label !== 'Ultracode');
+
+  it('the five level rows equal EFFORT_LADDER in order, capitalised', () => {
+    const rows = levelRows(effortOptions('claude', null, false));
+    expect(rows.map((o) => o.route.value)).toEqual([...EFFORT_LADDER]);
+    expect(rows.map((o) => o.label)).toEqual(
+      EFFORT_LADDER.map((v) => v[0]!.toUpperCase() + v.slice(1)),
+    );
+  });
+
+  it('control: the five stops match the spec\'s own hand-written list — not a value derived from EFFORT_LADDER itself, so a reordered or shortened ladder reds this', () => {
+    const rows = levelRows(effortOptions('claude', null, false));
+    expect(rows.map((o) => o.route.value)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
 });

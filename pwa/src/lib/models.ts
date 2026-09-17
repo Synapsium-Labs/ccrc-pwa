@@ -17,6 +17,7 @@
 // Object.assigns settings env over the process environment at runtime. Both are
 // box tooling outside this repo; this list only has to agree with them.
 import type { RouteField } from '../../../shared/api';
+import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 
 export interface PickOption {
   label: string;
@@ -67,9 +68,18 @@ export function modelOptions(wrapper: string, current: string | null): PickOptio
   ];
 }
 
-/** Effort chooser rows. Ultracode is xhigh + workflow orchestration (a super-
- *  mode, not a level) and is invalid on the gpt lane, so it's offered only for
- *  Anthropic wrappers. Ultracode is still the `effort` field's own value
+/** The five level rows' labels are the ladder rung capitalised, nothing more
+ *  (`xhigh` -> `Xhigh`) — exactly today's hand-typed labels, so no rendered
+ *  text changes. */
+const capitalise = (rung: EffortRung): string => rung[0]!.toUpperCase() + rung.slice(1);
+
+/** Effort chooser rows. The five level rows are `EFFORT_LADDER`'s own five
+ *  stops, in ladder order — the ladder is the single source for what a
+ *  routing decision walks (`shared/routing-ladder.ts`), and this picker adds
+ *  its own LABELLED SUPERSET on top: `Auto` (the absence of a typed value,
+ *  never a ladder rung) and, for Anthropic wrappers, `Ultracode` (xhigh +
+ *  workflow orchestration — a super-mode, not a level, and invalid on the
+ *  gpt lane). Ultracode is still the `effort` field's own value
  *  (`{effort: 'ultracode'}`) — there is no separate routing field for it. */
 export function effortOptions(
   wrapper: string,
@@ -79,12 +89,10 @@ export function effortOptions(
   const e = (effort ?? '').toLowerCase();
   const level = (label: string, value: string, active: boolean): PickOption =>
     ({ label, route: { field: 'effort', value }, readback: value, active });
+  const activeFor = (rung: EffortRung): boolean =>
+    rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung;
   const opts: PickOption[] = [
-    level('Low', 'low', e === 'low'),
-    level('Medium', 'medium', e === 'medium'),
-    level('High', 'high', e === 'high'),
-    level('Xhigh', 'xhigh', e === 'xhigh' && !ultracode),
-    level('Max', 'max', e === 'max'),
+    ...EFFORT_LADDER.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
     level('Auto', 'auto', e === 'auto'),
   ];
   if (wrapper !== 'gpt') {
