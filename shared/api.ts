@@ -5598,7 +5598,11 @@ export function armEventDetail(fields: RouteFields): string {
  *                             carries no session id on this run
  *   501 unsupported         — the fleet does not report `route-v1`
  *   409 no-record           — the target session's registry has no `.class`
- *                             or `.effort` file to walk the ladder from
+ *                             file at all (S5-R18: an absent `.effort`
+ *                             alongside a present `.class` is NOT this — it
+ *                             reads as `effort: 'auto'`, the record's own
+ *                             vocabulary for "no override, the model's
+ *                             default", never a refusal)
  *   409 unrouteable-record  — `.class`/`.effort`/`.degraded` IS present and
  *                             readable, but its content is not a legal
  *                             vocabulary member (`CLASSES`/`EFFORT_LADDER` ∪

@@ -308,7 +308,13 @@ describe('POST /api/runs/:id/route', () => {
     expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
   });
 
-  it('409s no-record naming effort when .class exists but .effort does not', async () => {
+  // Ruling S5-R18 (final review, finding #5): `.class` present with
+  // `.effort` ABSENT is `effort: 'auto'` — the record's own vocabulary for
+  // "no override, the model's default" — never `no-record`; `no-record` is
+  // reserved for an absent `.class` (the test above). A session with a
+  // class but no effort override is reachable without corruption — ccd
+  // route and the PWA class picker each write ONE field.
+  it('escalates from auto when .class exists but .effort does not (S5-R18) — auto counts as high, shallow -> xhigh, one run event', async () => {
     const home = mkTmp('ccrc-route-');
     const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w20'] });
     const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
@@ -316,10 +322,15 @@ describe('POST /api/runs/:id/route', () => {
     seed(home, sid, { class: 'opus' }); // no `effort` override — no `.effort` file at all
 
     const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
-    expect(res.statusCode).toBe(409);
-    expect(res.json()).toEqual({ ok: false, error: 'no-record', field: 'effort' });
-    expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
-    expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'auto', to: 'xhigh', kind: 'shallow', effortReset: null },
+    });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([
+      ['route', '--session', sid, '--set', 'effort=xhigh', '--actor', `run:${id} coordinator`,
+        '--reason', 'escalate shallow: checks failed'],
+    ]);
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:escalate:effort:auto->xhigh:shallow');
   });
 
   it('kind: shallow on a worker at opus·high escalates effort to xhigh, one run event', async () => {
@@ -446,15 +457,67 @@ describe('POST /api/runs/:id/route', () => {
     const demoted = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
     expect(demoted.statusCode).toBe(200);
 
-    // The stubbed ccd never rewrites the registry file, so `.effort` still
-    // reads 'high' — proving `lastDemotion` is read from the run's OWN event
-    // trail, never from a re-read of the record.
+    // The stub doesn't run real ccd, so this seed stands in for the write
+    // ccd's own `route` verb makes to the registry on every call regardless
+    // of `--apply` (spec: `--apply` gates only whether ccd also types the
+    // change into the live pane, never whether the record itself is
+    // written) — `.effort` now reads 'medium', matching `lastDemotion.to`,
+    // so this is THIS door's own write, not an out-of-band supersession
+    // (S5-R17), and the reversal below fires normally: `lastDemotion` is
+    // read from the run's OWN event trail, never from a re-read of the
+    // record — this case's `.effort` measurement below is the CONTROL for
+    // the out-of-band case (S5-R17's own test), agreeing with it rather than
+    // disagreeing.
+    seed(home, sid, { class: 'opus', effort: 'medium' });
     const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({
       ok: true, applied: { session: sid, mode: 'reverse-demotion', field: 'effort', from: 'medium', to: 'high', kind: 'shallow', effortReset: null },
     });
     expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:reverse-demotion:effort:medium->high:shallow');
+  });
+
+  // Final review, finding #3, controller ruling S5-R17: a `reverse-demotion`
+  // whose `from` (`lastDemotion.to`) differs from the field's MEASURED live
+  // value is a demotion superseded OUT OF BAND — by the PWA picker's `POST
+  // /api/sessions/:id/route`, or by ccd directly — neither of which writes a
+  // run event this door's trail could see. The door must not name a rung the
+  // session was never actually on: it clears `lastDemotion` and applies the
+  // plain ladder from what is really on the record. This case writes
+  // `.effort` directly (bypassing this door entirely, the way that
+  // out-of-band write would) between the demotion and the failure; the test
+  // above (no out-of-band write) is this case's own control and still
+  // reverses.
+  it('an out-of-band write after a demotion supersedes the reversal — a plain escalate from the measured value, never a stale reverse-demotion (S5-R17)', async () => {
+    const home = mkTmp('ccrc-route-');
+    const { run, calls } = makeRunner(home, { wsAddCreates: ['demo-w24'] });
+    const w = await openApp(home, run, { fleetState: ROUTE_READY_FLEET }); app = w.app;
+    const { id, sid } = await dispatchedRun(w.app, 'demo-w24');
+    seed(home, sid, { class: 'opus', effort: 'high' });
+
+    const demoted = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
+    expect(demoted.statusCode).toBe(200);
+    expect(w.coord.runEvents(id).map((e) => e.detail)).toContain('route:demote:effort:high->medium:manual');
+
+    // Out of band: something other than this door (the PWA class picker,
+    // ccd itself) wrote `.effort` directly — no run event records it, so
+    // `lastDemotion` still reads the demotion above.
+    seed(home, sid, { class: 'opus', effort: 'low' });
+
+    const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      ok: true, applied: { session: sid, mode: 'escalate', field: 'effort', from: 'low', to: 'medium', kind: 'shallow', effortReset: null },
+    });
+    expect(calls.filter((c) => c[0] === 'route')).toEqual([
+      ['route', '--session', sid, '--set', 'effort=medium', '--actor', `run:${id} coordinator`,
+        '--reason', 'demote: slow down'],
+      ['route', '--session', sid, '--set', 'effort=medium', '--actor', `run:${id} coordinator`,
+        '--reason', 'escalate shallow: failed again'],
+    ]);
+    const details = w.coord.runEvents(id).map((e) => e.detail);
+    expect(details).toContain('route:escalate:effort:low->medium:shallow');
+    expect(details.some((d) => d?.startsWith('route:reverse-demotion:'))).toBe(false);
   });
 
   // Review finding #8, controller ruling S5-R5: a `route:manual:<field>:`
@@ -499,9 +562,17 @@ describe('POST /api/runs/:id/route', () => {
 
     const demoted = await postRoute(w.app, id, { target: 'worker', why: 'slow down', demote: 'effort' });
     expect(demoted.statusCode).toBe(200);
+    // Stands in for ccd's own write on the demote call (S5-R17's control:
+    // agreeing with `lastDemotion.to` is what makes this THIS door's own
+    // write, not a superseding out-of-band one).
+    seed(home, sid, { class: 'opus', effort: 'medium' });
 
     const manual = await postRoute(w.app, id, { target: 'worker', why: 'operator judgement', field: 'class', value: 'sonnet' });
     expect(manual.statusCode).toBe(200);
+    // The manual write names `class`, so it stands in for ccd's own write to
+    // THAT field only — `.effort` is untouched by it and keeps reading
+    // 'medium'.
+    seed(home, sid, { class: 'sonnet', effort: 'medium' });
 
     const res = await postRoute(w.app, id, { target: 'worker', why: 'failed again', kind: 'shallow' });
     expect(res.statusCode).toBe(200);
@@ -619,7 +690,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'ceiling' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
-      ok: false, error: 'unrouteable-record', field: 'class', detail: 'not a routable class: "default"',
+      ok: false, error: 'unrouteable-record', field: 'class', detail: '"default" is not a rung of the ladder (a record, not a rung)',
     });
     // Critically: no --set class=haiku (the bug this finding named — an
     // out-of-vocabulary class resolving to the bottom rung).
@@ -637,7 +708,7 @@ describe('POST /api/runs/:id/route', () => {
     const res = await postRoute(w.app, id, { target: 'worker', why: 'checks failed', kind: 'shallow' });
     expect(res.statusCode).toBe(409);
     expect(res.json()).toEqual({
-      ok: false, error: 'unrouteable-record', field: 'effort', detail: 'not a routable effort: ""',
+      ok: false, error: 'unrouteable-record', field: 'effort', detail: '"" is not a rung of the ladder (a record, not a rung)',
     });
     expect(calls.filter((c) => c[0] === 'route')).toEqual([]);
     expect(w.coord.runEvents(id).some((e) => e.detail?.startsWith('route:'))).toBe(false);

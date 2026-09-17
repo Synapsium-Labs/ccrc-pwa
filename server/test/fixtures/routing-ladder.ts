@@ -1,9 +1,14 @@
 // One truth table for the routing ladders (routing spec 2026-09-14 §3
 // "Escalation"/"Demotion"), driven against `shared/routing-ladder.ts`'s
 // `escalate()` and `demote()`. Every row asserts the WHOLE `RungTarget` (or
-// `{ kind: 'floor' }`) object, not just its `kind` — the `why` text is part
-// of the contract because Task 2's door composes it verbatim into the
-// argv `--reason` and the run event.
+// `{ kind: 'floor' }`) object, not just its `kind` — final review, finding
+// #4: `why` does NOT reach the argv or the run event verbatim. The door's
+// `--reason` is built from the CALLER's `why` (the request body's text, not
+// `target.why`), and the run event (`routeEventDetail`) carries no `why` at
+// all. `target.why` reaches the wire on exactly one arm: the 409 refusal
+// (`detail: target.why`) — so these rows are asserted whole because the
+// 409 `detail` strings ARE a contract, not because a successful move's
+// `why` is echoed anywhere downstream.
 //
 // `escalate()` and `demote()` have different signatures (escalate takes
 // `kind`/`scope`/`priorSameKind`/`lastDemotion`; demote takes only `field`),

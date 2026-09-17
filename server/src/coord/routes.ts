@@ -1865,12 +1865,16 @@ export function registerCoordRoutes(
             ? reply.code(409).send({ ok: false, error: 'no-record', field: 'class' })
             : reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'class' });
         }
+        // S5-R18: `.class` present with `.effort` ABSENT is `effort: 'auto'`
+        // — the record's own vocabulary for "no override, the model's
+        // default" (ccd composes no `--effort` for it) — never `no-record`;
+        // that refusal is reserved for an absent `.class` (checked above).
+        // `.effort` present-but-UNREADABLE is still transient, not absence.
         const effortRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'effort');
-        if (!effortRead.ok) {
-          return effortRead.reason === 'absent'
-            ? reply.code(409).send({ ok: false, error: 'no-record', field: 'effort' })
-            : reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'effort' });
+        if (!effortRead.ok && effortRead.reason === 'unreadable') {
+          return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'effort' });
         }
+        const effortContent = effortRead.ok ? effortRead.content : 'auto';
         const degradedRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'degraded');
         if (!degradedRead.ok && degradedRead.reason === 'unreadable') {
           return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'degraded' });
@@ -1888,13 +1892,17 @@ export function registerCoordRoutes(
         // whitespace-collapse). Both are refused here as `unrouteable-record`
         // — a condition distinct from `no-record` (the record EXISTS, it is
         // only unroutable) — before either value is cast into the ladder's
-        // domain types.
+        // domain types. Ruling S5-R19: this is a DIFFERENT question than the
+        // doctor's live-session census asks ("has a record" — a `.class`
+        // field, `default` included) — this door asks "is on a rung of the
+        // ladder", so the detail below says the value is a record, not a
+        // rung, rather than repeating the census's own words.
         if (!(CLASSES as readonly string[]).includes(classRead.content)) {
-          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'class', detail: `not a routable class: ${JSON.stringify(classRead.content)}` });
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'class', detail: `${JSON.stringify(classRead.content)} is not a rung of the ladder (a record, not a rung)` });
         }
         const EFFORT_VALUES: readonly string[] = [...EFFORT_LADDER, 'auto', 'ultracode'];
-        if (!EFFORT_VALUES.includes(effortRead.content)) {
-          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'effort', detail: `not a routable effort: ${JSON.stringify(effortRead.content)}` });
+        if (!EFFORT_VALUES.includes(effortContent)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'effort', detail: `${JSON.stringify(effortContent)} is not a rung of the ladder (a record, not a rung)` });
         }
         // An ABSENT `.degraded` means no degrade (brief's own contract,
         // handled above by `!degradedRead.ok`). A PRESENT but blank one — the
@@ -1906,14 +1914,14 @@ export function registerCoordRoutes(
         // it as. Anything else present must be a real class or the record is
         // unrouteable.
         if (degradedRead.ok && degradedRead.content !== '' && !(CLASSES as readonly string[]).includes(degradedRead.content)) {
-          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'degraded', detail: `not a routable class: ${JSON.stringify(degradedRead.content)}` });
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'degraded', detail: `${JSON.stringify(degradedRead.content)} is not a rung of the ladder (a record, not a rung)` });
         }
         const rawClass = classRead.content as ModelClass;
         const degraded = degradedRead.ok && degradedRead.content !== '' ? (degradedRead.content as ModelClass) : null;
         const servedClass = degraded ?? rawClass;
         const current: RungCurrent = {
           class: servedClass,
-          effort: effortRead.content as RungCurrent['effort'],
+          effort: effortContent as RungCurrent['effort'],
         };
 
         // S5-R2: `lastDemotion` is bookkeeping this door owns, derived from
@@ -1975,9 +1983,28 @@ export function registerCoordRoutes(
           }
         }
 
-        const target: RungTarget | { kind: 'floor'; why: string } = hasKind
+        let target: RungTarget | { kind: 'floor'; why: string } = hasKind
           ? escalate(kind!, current, 'main', priorSameKind, lastDemotion)
           : demote(current, demoteField!);
+
+        // Ruling S5-R17 (final review, finding #3): `lastDemotion.to` is
+        // BOOKKEEPING — the rung the door last recorded the session landing
+        // on — while `current` above is what was just MEASURED off the live
+        // registry. A reversal's own `from` is `lastDemotion.to` (the
+        // ladder's own doc comment), so if the two disagree, something wrote
+        // the field out of band since (the PWA picker's `POST
+        // /api/sessions/:id/route`, or ccd itself — neither writes a run
+        // event this door's trail could see) and the demotion this reversal
+        // would walk back is no longer the session's actual history: treat
+        // `lastDemotion` as cleared and let the plain ladder apply to what is
+        // really on the record. The reversal's `from` is therefore always
+        // the measured value, never the stale bookkeeping.
+        if (hasKind && target.kind === 'move' && target.mode === 'reverse-demotion') {
+          const liveValue = target.field === 'class' ? current.class : current.effort;
+          if (target.from !== liveValue) {
+            target = escalate(kind!, current, 'main', priorSameKind, null);
+          }
+        }
 
         if (target.kind !== 'move') {
           return reply.code(409).send({ ok: false, error: target.kind, detail: target.why });

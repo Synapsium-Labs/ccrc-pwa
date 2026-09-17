@@ -791,9 +791,11 @@ no control characters>", ...one of...}`:
 Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind","effortReset"}}`,
 `mode` one of `escalate`/`demote`/`reverse-demotion`/`manual`; `effortReset` is the companion
 effort a CLASS rung wrote in the same argv (§4 above), `null` on a single-field write. Refusals: `no-session` (the target has no
-session id on this run), `no-record` (the registry has no `.class`/`.effort` file to walk from),
-`unrouteable-record` (`.class`/`.effort`/`.degraded` IS present and readable but its content is
-not a legal rung — a stray ccd value like `class=default`, or a torn/never-written field — refused
+session id on this run), `no-record` (the registry has no `.class` file at all — an ABSENT `.effort`
+alongside a present `.class` is not this: it reads as `effort: 'auto'`, the record's own vocabulary
+for "no override, the model's default"), `unrouteable-record` (`.class`/`.effort`/`.degraded` IS
+present and readable but its content is not a rung of the ladder — a record, not a rung: a stray ccd
+value like `class=default`, or a torn/never-written field — refused
 here rather than silently resolved to the ladder's bottom rung), `registry-unreadable` (transient
 — one of the three registry files is listed but unreadable), `run-closed` (the run is in a
 TERMINAL state — `done` or `failed`; every other state, including `unknown` and `planned`, is

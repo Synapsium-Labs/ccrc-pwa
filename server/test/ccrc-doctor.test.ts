@@ -6294,7 +6294,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(line, 'the consequence, not just the key')
       .toContain("the routing record's subagent field is overridden there until the key is removed");
     expect(line, 'the census count that keeps this a WARN — stopped sessions must not inflate it')
-      .toContain('1 live session(s) carry no routing record yet');
+      .toContain('1 live session(s) carry no routing record (a `.class` field, `default` included) yet');
     expect(line).toContain('sess-unrecorded');
     expect(line, 'a stopped session is not a live one, and must not be named here')
       .not.toContain('sess-stopped');
@@ -6314,7 +6314,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const line = lineFor(out, 'routing');
     expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
     expect(line, 'the .class filter — only the unrecorded LIVE id counts')
-      .toContain('1 live session(s) carry no routing record yet');
+      .toContain('1 live session(s) carry no routing record (a `.class` field, `default` included) yet');
     expect(line).toContain('sess-unrecorded');
     expect(line, 'the recorded live id must not be named as missing')
       .not.toContain('sess-recorded');
@@ -6360,7 +6360,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     const line = lineFor(out, 'routing');
     expect(line, out).toMatch(/^WARN routing: 1 Anthropic lane\(s\) pin CLAUDE_CODE_SUBAGENT_MODEL in settings\.json: /);
     expect(line, 'six missing counted, only five ids named, the sixth marked as truncated')
-      .toContain('6 live session(s) carry no routing record yet: sess-1 sess-2 sess-3 sess-4 sess-5 and 1 more');
+      .toContain('6 live session(s) carry no routing record (a `.class` field, `default` included) yet: sess-1 sess-2 sess-3 sess-4 sess-5 and 1 more');
     for (let i = 1; i <= 5; i++) expect(line).toContain(`sess-${i}`);
     expect(line, 'the truncated tail is never silently dropped').toContain('and 1 more');
   });
@@ -6375,7 +6375,7 @@ describe('ccrc doctor: routing (routing spec 2026-09-14 §5.2, §8)', () => {
     expect(line).toContain('CLAUDE_CODE_SUBAGENT_MODEL');
     expect(line).toContain('claude');
     expect(line, 'the measured-zero cause, not the missing-record one')
-      .toContain('every live session carries a routing record');
+      .toContain('every live session carries a routing record (a `.class` field, `default` included)');
     expect(out).toContain('remedy: remove');
     expect(out, 'a measured zero is a FAIL, not also a WARN about the same lane')
       .not.toMatch(/^WARN routing: /m);

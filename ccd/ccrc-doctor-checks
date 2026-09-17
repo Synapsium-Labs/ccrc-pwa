@@ -4436,7 +4436,12 @@ _check_routing() {
     local reg="$HOME/.cc-sessions" sf id scrc missing=0 shown=0 missing_ids="" \
       live=0 census=measured why=""
     local _sub_lead="$sn Anthropic lane(s) pin CLAUDE_CODE_SUBAGENT_MODEL in settings.json: $sub — the routing record's subagent field is overridden there until the key is removed"
-    local _sub_remedy="remove the key from those lanes' settings.json once every session carries a routing record, or keep it and treat the record's subagent field as inert on them"
+    # RULING S5-R19: "carries a routing record" here means "has a `.class`
+    # field" — `default` included, because the operator's own choice of "no
+    # override" is still a record. This census asks a DIFFERENT question
+    # than `POST /api/runs/:id/route` does ("is on a rung of the ladder") —
+    # both are right, they just answer different things about the same file.
+    local _sub_remedy="remove the key from those lanes' settings.json once every session carries a routing record (a \`.class\` field, \`default\` included), or keep it and treat the record's subagent field as inert on them"
     # `$reg` UNSEARCHABLE IS NOT `$reg` ABSENT, and the absence branch below
     # cannot tell them apart — the same D-1848 shape `_check_pools` above
     # already guards against on its own registry read, checked FIRST here for
@@ -4495,8 +4500,8 @@ _check_routing() {
       # population. This is the ONLY FAIL left in this arm; dropping either
       # half of the guard turns a zero-live or a not-yet-measured box into a
       # fabricated FAIL.
-      _dr_fail routing "an Anthropic lane's settings.json pins CLAUDE_CODE_SUBAGENT_MODEL ($sub) while every live session carries a routing record — the key overrides the record's subagent field; remove it" \
-        "remove CLAUDE_CODE_SUBAGENT_MODEL from $sub' settings.json — ccrc update stops at this verdict until it is gone"
+      _dr_fail routing "an Anthropic lane's settings.json pins CLAUDE_CODE_SUBAGENT_MODEL ($sub) while every live session carries a routing record (a \`.class\` field, \`default\` included) — the key overrides the record's subagent field; remove it" \
+        "remove CLAUDE_CODE_SUBAGENT_MODEL from $sub' settings.json — every live session already carries a routing record (a \`.class\` field, \`default\` included); ccrc update stops at this verdict until the key is gone"
       return 1
     elif [ "$live" -eq 0 ]; then
       # RULING S5-R12(2): live == 0, measured — its own WARN, worded so it
@@ -4506,7 +4511,7 @@ _check_routing() {
     else
       local _sub_trunc=""
       [ "$missing" -gt "$shown" ] && _sub_trunc=" and $((missing - shown)) more"
-      _dr_warn routing "$_sub_lead — $missing live session(s) carry no routing record yet: $missing_ids$_sub_trunc" "$_sub_remedy"
+      _dr_warn routing "$_sub_lead — $missing live session(s) carry no routing record (a \`.class\` field, \`default\` included) yet: $missing_ids$_sub_trunc" "$_sub_remedy"
       rc=2
     fi
   fi
