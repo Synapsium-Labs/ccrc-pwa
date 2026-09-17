@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=ea6184921df939c7118dff360cd27413c7f39839f8a00b254e219d38146043e3
+# ccrc:generated 1 sha256=c8fc9b6542812c5c4506b7edcc18bd5a9a4c50973fb50187a250e841bbe1f7b0
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6939,7 +6939,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # the log and the journal, never its bytes — the file is writable by any
   # session on the box and a multi-line value would forge log lines.
   local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--apply] [--actor <text>] [--reason <text>]"
-  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc
+  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert
   local -a sets=()
   while (( $# )); do
     case "$1" in
@@ -7039,9 +7039,34 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # the three would leave this session pending for ever against a keystroke that
   # does not exist. Gated on `--apply` because a plain `cmd_route` promises to
   # touch nothing but the record.
+  #
+  # AND A FIELD THE `inert` STAMP NAMES IS NOT CLAIMED HERE EITHER (controller
+  # ruling S6-R3). This is the THIRD `routeapplied` writer — the spawn's
+  # composition and `_route_apply_seed` are the other two, and both already read
+  # the stamp before they claim a field. Unguarded, a `--apply` naming
+  # `subagent` or `workflow` on a session the last settle stamped
+  # `inert=subagent`/`inert=workflow` wrote `routeapplied … subagent=haiku`
+  # beside that stamp: two records of one session contradicting each other —
+  # `inert` saying this lane composed no `CLAUDE_CODE_SUBAGENT_MODEL`,
+  # `routeapplied` saying it did — until the next settle rewrote both. The
+  # sentence above stays true either way ("the applier has nothing left to do"),
+  # but silence and "applied" are two different reasons for it and the record may
+  # not collapse them.
+  #
+  # `compact` IS NEVER INERT — `ROUTE_INERTABLE` has no word for it, because it
+  # is a threshold ccd's own compactor reads rather than anything a lane composes
+  # — so its arm asks nothing and stays as it was.
+  #
+  # THE STAMP IS READ ONCE, through `_route_peek` (this loop writes no journal
+  # line of its own for the read, and the field is being read only to DECIDE) and
+  # through `_route_inert_has`, the one reader of the `inert` vocabulary.
+  inert=$(_route_peek "$id" inert)
   for kv in "${sets[@]}"; do
     f="${kv%%=*}"; v="${kv#*=}"
-    case "$f" in workflow|subagent|compact) _route_applied_set "$id" "$f" "$v" ;; esac
+    case "$f" in
+      workflow|subagent) _route_inert_has "$inert" "$f" || _route_applied_set "$id" "$f" "$v" ;;
+      compact)           _route_applied_set "$id" "$f" "$v" ;;
+    esac
   done
   # THE SAME PREDICATE THE COMPACTOR USES, and it is asked BEFORE any keystroke
   # for the same three reasons that function gives: a mid-turn pane would take
@@ -16872,8 +16897,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # comment above already says another backend's settings.json materialiser owns
       # the subagent there — so until now a record carrying `subagent=sonnet` had that
       # field dropped in SILENCE on this lane, the one overloaded silence left beside
-      # the two the stamp had already removed. The order is `effort,workflow,subagent`,
-      # the order the three are composed above, so every standing stamp keeps its bytes.
+      # the two the stamp had already removed. The order is `effort,workflow,subagent`
+      # — the order the existing stamp already spelled its two words, with the new one
+      # APPENDED — so every standing stamp keeps its bytes. It is not a composition
+      # order and must not be read as one: the Anthropic arm above composes `routeenv`
+      # (the subagent) FIRST, `--settings` (the workflow) second and `--effort` last.
       [[ -n "$rsub" ]] && inert="${inert:+$inert,}subagent"
     fi
     if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi

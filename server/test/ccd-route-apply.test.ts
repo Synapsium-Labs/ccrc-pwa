@@ -464,3 +464,54 @@ describe('the final review\'s three writer/typer defects, each pinned where it h
     expect(h.reg(ID, 'routeapplied')).toContain('effort=high');
   });
 });
+
+describe("`--apply`'s post-write stamp omits every field the `inert` stamp names (controller ruling S6-R3)", () => {
+  // THE THIRD `routeapplied` WRITER. The spawn's composition and
+  // `_route_apply_seed` both read the `inert` stamp before they claim a field;
+  // this loop did not, so an operator writing `subagent=haiku` with `--apply`
+  // to a session the last settle had already stamped `inert=subagent` got two
+  // records of one session contradicting each other — `inert` saying the lane
+  // composed no `CLAUDE_CODE_SUBAGENT_MODEL`, `routeapplied` saying it did —
+  // until the next settle rewrote both. `workflow` had carried the same hole
+  // since slice 4, when the stamp learnt the word and this arm did not.
+  //
+  // `compact` is NEVER inert (`ROUTE_INERTABLE` has no word for it — it is a
+  // threshold ccd's own compactor reads, not something a lane composes), so its
+  // arm is unguarded and the third case below is what says so.
+  const GPT = 'demo-codex-lane';
+  beforeEach(() => {
+    install('gpt'); seed(GPT, 'gpt'); plantIdle('gpt'); pane(IDLE_PANE);
+    h.sh(`_reg_set ${GPT} class opus
+          _reg_set ${GPT} routeapplied "class=opus"
+          _reg_set ${GPT} inert "effort,workflow,subagent"`);
+  });
+
+  it('a codex lane stamped inert=…,subagent: the record takes subagent=haiku, routeapplied does NOT', () => {
+    h.sh(`${TMUX_STUB} cmd_route --session ${GPT} --set subagent=haiku --apply`);
+    expect(h.reg(GPT, 'subagent')).toBe('haiku');
+    expect(h.reg(GPT, 'routeapplied')).not.toContain('subagent=');
+    expect(h.reg(GPT, 'routeapplied')).toBe('class=opus');
+    expect(keys()).toEqual([]);
+  });
+
+  it('a codex lane stamped inert=…,workflow: the record takes workflow=off, routeapplied does NOT', () => {
+    h.sh(`${TMUX_STUB} cmd_route --session ${GPT} --set workflow=off --apply`);
+    expect(h.reg(GPT, 'workflow')).toBe('off');
+    expect(h.reg(GPT, 'routeapplied')).not.toContain('workflow=');
+    expect(h.reg(GPT, 'routeapplied')).toBe('class=opus');
+  });
+
+  it('`compact` is not in the inert vocabulary, so the same call still claims it applied', () => {
+    h.sh(`${TMUX_STUB} cmd_route --session ${GPT} --set compact=80 --apply`);
+    expect(h.reg(GPT, 'routeapplied')).toContain('compact=80');
+  });
+
+  it('CONTROL — an Anthropic lane carries no inert stamp and claims both fields exactly as before', () => {
+    seed(ID); plantIdle(); pane(IDLE_PANE);
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} routeapplied "class=opus"`);
+    h.sh(`${TMUX_STUB} cmd_route --session ${ID} --set subagent=haiku --set workflow=off --apply`);
+    expect(h.reg(ID, 'inert')).toBeNull();
+    expect(h.reg(ID, 'routeapplied')).toContain('subagent=haiku');
+    expect(h.reg(ID, 'routeapplied')).toContain('workflow=off');
+  });
+});
