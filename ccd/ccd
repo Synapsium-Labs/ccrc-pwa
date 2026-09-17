@@ -4186,10 +4186,10 @@ if mode == 'state':
         # `endsWith('.uuid')` id minting, which DOES see dotfiles).
         dst = os.path.join(reg, id_ + '.' + field)
         tmp = os.path.join(reg, '.' + id_ + '.' + field + '.' + str(os.getpid()) + '.tmp')
-        # D-2380: this tmp open is the FOURTH by-name open in this mode, not
-        # counted alongside its three siblings (`get()` below, the
-        # compare-and-set lock, the prhistory append) until this pass —
-        # undercounted by the same D-2475 staleness their own count had
+        # D-2380: this tmp open is one of FOUR by-name opens in this mode,
+        # alongside its three siblings (`get()` below, the compare-and-set
+        # lock, the prhistory append) — not counted alongside them until this
+        # pass, undercounted by the same D-2475 staleness their own count had
         # already gone through once this wave. `open(tmp,'w')` blocks on a
         # FIFO exactly as the siblings' `'a'` opens do (measured standalone:
         # `mkfifo f.tmp; timeout 3 python3 -c "open('f.tmp','w')"` -> rc 124),
@@ -4207,8 +4207,14 @@ if mode == 'state':
         # raise before the open, the same shape the lock guard below uses —
         # and the raise is caught by the `except OSError` immediately below,
         # so it becomes the same FAULT that block already turns any other
-        # write failure into (and the cleanup arm's `os.remove` clears the
-        # non-regular tmp too, the same self-heal `get()`'s FIFO case gets).
+        # write failure into. The cleanup arm's `os.remove` DOES clear a FIFO,
+        # socket or device at the tmp path — the same self-heal `get()`'s
+        # FIFO case gets — but NOT a directory: `os.remove` is `unlink(2)`,
+        # which raises `IsADirectoryError` (an `OSError`, swallowed by the
+        # inner `except OSError: pass` below), so a directory refuses
+        # correctly but is never self-healed. The guard's population is
+        # `not isfile`, which includes directories, so this is a real gap in
+        # the claim, not in the refusal.
         try:
             if os.path.exists(tmp) and not os.path.isfile(tmp):
                 raise OSError('refusing to write a non-regular-file pr-state tmp: ' + tmp)
@@ -4450,11 +4456,12 @@ if mode == 'state':
                 if old_num is not None and old_num != number:
                     rec = {'pr': old_num, 'branch': branch, 'phase': old_phase,
                            'recordedAt': int(time.time())}
-                    # D-2380: THE FOURTH OPEN in this mode, not the third —
-                    # the plan's own cardinal named two (`get()` and the lock
-                    # above); a first correction this same wave counted
-                    # three and still missed `put()`'s own tmp-file open
-                    # (above `get()` in this file), which is by-name and
+                    # D-2380: one of FOUR OPENS in this mode, alongside
+                    # `get()`, the lock above and `put()`'s own tmp-file open
+                    # (above `get()` in this file) — the plan's own cardinal
+                    # named two (`get()` and the lock above), and a first
+                    # correction this same wave counted three and still
+                    # missed `put()`'s tmp-file open, which is by-name and
                     # blocks on the identical shapes. Corrected in place
                     # again here, still taking no new deviation number: the
                     # coordinator's ruling is that a stale COUNT under this

@@ -4,7 +4,7 @@
 // or an unbounded character device through an `-e`/`-r` test and then open
 // the path BY NAME — `source`, `cat`, a bash `grep FILE`, and FOUR Python
 // `open()`s in `_pr_py`'s `state` mode (`put`'s tmp file, `get`, the
-// compare-and-set lock, and the prhistory append) — six openers across the
+// compare-and-set lock, and the prhistory append) — seven openers across the
 // four `describe` blocks below. Each one hangs the reader FOREVER on the
 // shapes this file plants. `_project_pool_state` (NAMED BY FUNCTION, NOT
 // LINE — a line number here goes stale the moment anything above it grows)
@@ -19,7 +19,7 @@
 // (`bash`) and throws `.code === 'ETIMEDOUT'` — it does NOT reach a
 // grandchild blocked on a FIFO open inside a command-substitution subshell,
 // which is exactly what most cases below plant, so that option alone leaks
-// an immortal process per case (measured on this box: dozens of blocked
+// an immortal process per HANGING case (measured on this box: dozens of blocked
 // `cat`/`grep`/`python3` children surviving hours past the run that spawned
 // them, some inherited from a SIBLING suite and aged 7.5 days). `runBounded`
 // below instead spawns through GNU `timeout -k 1 <secs> bash -c …`, which
@@ -42,17 +42,18 @@
 //  - The four echo-fallback D2 sites' directory shape is excluded because it
 //    genuinely does NOT hang pre-fix (`cat`'s own EISDIR trips the existing
 //    `|| echo` fallback promptly) — but it is NOT "already covered
-//    elsewhere" either: `ccd-forget.test.ts` plants a REGULAR hold only, and
-//    no suite in this tree plants a directory at any of the five hold paths.
-//    A true gap, left as one, because behaviour there is unchanged by this
-//    fix either way (directory already satisfied `-e` before it, same as
-//    after).
+//    elsewhere" either, uniformly: `cmd_forget`'s site is the uncovered one;
+//    `ccd-hold.test.ts` and `ccd-ws-rename.test.ts` plant a directory at
+//    `$REG/<id>.hold` for `cmd_ws_rm`, `cmd_ws_reap` and `cmd_ws_rename`. A
+//    true gap for `cmd_forget` alone, left as one, because behaviour there is
+//    unchanged by this fix either way (directory already satisfied `-e`
+//    before it, same as after).
 //  - D3's directory shape at `<cfg>/sessions/<pid>.json` is excluded for the
 //    same non-hang reason, and it is likewise NOT covered elsewhere: neither
 //    `ccd-hold.test.ts` nor `ccd-ws-rename.test.ts` — nor any other file in
 //    this tree — touches that path with a directory.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
@@ -61,9 +62,31 @@ import { readJournal, measOf } from './lifecycleHelpers.js';
 
 type Bounded = { code: number; stdout: string; stderr: string };
 
+// THE DEADLINE BINARY ITSELF, RESOLVED ONCE, BY ABSOLUTE PATH — same remedy
+// `server/test/ccd-plat-timeout.test.ts` ships for the identical class (D-2764,
+// "test-macos is red on a hard-coded /usr/bin/timeout"). A bare `execFileSync('timeout', …)`
+// resolves against the CHILD's PATH, and this repo's own `ci.yml` guarantees a bare
+// `timeout` is ABSENT on `test-macos` (BSD userland, no gnubin on PATH) — an ENOENT there
+// sets no `e.status`, so a naive `catch` used to fall through to the generic
+// `{code: e.status ?? 1, …}` return, a SILENT, sometimes-GREEN non-measurement for every
+// case in this file. `gtimeout` (installed by that job's own `brew install … coreutils`
+// step) is resolved as the fallback, exactly as `_plat_timeout` itself tries `timeout`
+// then `gtimeout`. Resolved HERE, at module scope, while PATH is still the runner's own.
+const DEADLINE_BIN: string | null = (() => {
+  for (const candidate of ['timeout', 'gtimeout']) {
+    const r = spawnSync('sh', ['-c', `command -v ${candidate}`], { encoding: 'utf8' });
+    if (r.status === 0 && r.stdout.trim() !== '') return r.stdout.trim();
+  }
+  return null;
+})();
+// NO DEADLINE BINARY -> every `describe` below is WRAPPED in `.skipIf(NO_DEADLINE_BIN)`,
+// never silently downgraded. A skip is visible in the report as a skip; the thing this
+// finding forbids is a case that reads GREEN while it measured nothing.
+const NO_DEADLINE_BIN = DEADLINE_BIN === null;
+
 /** The one driver every case below goes through — `source "$CCD"` plus a
  *  snippet, under the CHILD PROCESS's own bound (never vitest's), the exact
- *  reason `boundedState` (ccd-project-pool.test.ts:41-66) builds its own
+ *  reason `boundedState` (`ccd-project-pool.test.ts`) builds its own
  *  `execFileSync` too. Takes `home` explicitly rather than closing over a
  *  module-level harness variable, because D4's describe block below runs its
  *  own `PrHarness` alongside the outer `CcdHarness`.
@@ -79,12 +102,23 @@ type Bounded = { code: number; stdout: string; stderr: string };
  *  bash -c 'x=$(cat fifo)'` — `timeout`, `bash` and the grandchild `cat` all
  *  share one pgid, and all three are gone after the 124), so every
  *  descendant blocked on the same FIFO dies with it. The hang case is
- *  `rc === 124`, not an `ETIMEDOUT` exception. */
+ *  `rc === 124`, not an `ETIMEDOUT` exception.
+ *
+ *  `rc 124` IS OVERLOADED AT THIS SEAM: it is also GNU `timeout`'s own expiry code, so
+ *  a case whose SNIPPET itself shells through `ccd`'s `_plat_timeout` (none currently
+ *  do — every case here is a direct guard read) could not be told apart from this
+ *  driver's own bound firing. Distinguishing them would need a different code or a
+ *  sentinel on this driver's own invocation; undone here, disclosed instead. */
 function runBounded(home: string, snippet: string, ms = 5000): Bounded {
+  // Defense in depth: every call site is reached only from a `describe.skipIf(NO_DEADLINE_BIN)`
+  // block, but a hard THROW here — never a silent `{code: 1}` — is what this guard is FOR.
+  if (DEADLINE_BIN === null) {
+    throw new Error('runBounded: no `timeout` or `gtimeout` on PATH — cannot bound this call safely');
+  }
   const secs = String(ms / 1000);
   try {
     const out = execFileSync(
-      'timeout', ['-k', '1', secs, 'bash', '-c', `source "${CCD}"; ${snippet}`],
+      DEADLINE_BIN, ['-k', '1', secs, 'bash', '-c', `source "${CCD}"; ${snippet}`],
       { encoding: 'utf8', cwd: home,
         env: ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true }) },
     );
@@ -131,7 +165,7 @@ const HANG_SHAPES: Array<[string, BadShape]> = [
   ['a symlink to an infinite character device (/dev/zero)', 'symlink-devzero'],
 ];
 
-describe('D1 — the account roster `source`, module top level (D-2377)', () => {
+describe.skipIf(NO_DEADLINE_BIN)('D1 — the account roster `source`, module top level (D-2377)', () => {
   let h: CcdHarness;
   beforeEach(() => { h = makeCcdHarness('ccrc-ccd-bounded-d1-'); });
   afterEach(() => { h.cleanup(); });
@@ -189,7 +223,7 @@ describe('D1 — the account roster `source`, module top level (D-2377)', () => 
     }, 10000);
 });
 
-describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
+describe.skipIf(NO_DEADLINE_BIN)('D2 — the hold family, five sites, one shape (D-2378)', () => {
   let h: CcdHarness;
   beforeEach(() => { h = makeCcdHarness('ccrc-ccd-bounded-d2-'); });
   afterEach(() => { h.cleanup(); });
@@ -303,7 +337,7 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
   }, 10000);
 });
 
-describe('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () => {
+describe.skipIf(NO_DEADLINE_BIN)('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () => {
   let h: CcdHarness;
   beforeEach(() => { h = makeCcdHarness('ccrc-ccd-bounded-d3-'); });
   afterEach(() => { h.cleanup(); });
@@ -358,7 +392,7 @@ describe('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () =>
   }, 10000);
 });
 
-describe('D4 — `_pr_py`\'s Python opens in `state` mode — FOUR, not two (D-2380)', () => {
+describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mode — FOUR, not two (D-2380)', () => {
   let hp: PrHarness;
   beforeEach(() => { hp = makePrHarness('ccrc-ccd-bounded-d4-'); });
   afterEach(() => { hp.cleanup(); });
