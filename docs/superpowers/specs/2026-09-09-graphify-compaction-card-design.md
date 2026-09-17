@@ -1118,7 +1118,7 @@ slug residue because it intentionally outlives the row. The Bash 4.4+/GNU-or-BSD
 
    **THE REFUSAL IS A `WHY`, NOT A THIRD STATUS.** `canonical-vanished` is carried in `HOOK_LOCK_WHY` /
    `COMPACT_LOCK_WHY` beside the ordinary rc 1, because all five hook acquire sites read the acquire as a
-   boolean and two functions across three of its five sites (`cmd_start`, and `_spawn_start`, which holds
+   boolean and two functions across three of its six sites (`cmd_start`, and `_spawn_start`, which holds
    two) fall through an unrecognised code into a
    silent continue — a new numeric status would be a distinct refusal nobody distinguishes, and two spawn
    paths would quietly treat it as mechanism absence. `cmd_ws_add` and `cmd_start` append a conditional
