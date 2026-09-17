@@ -6996,6 +6996,32 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   done
 }
 
+# D-2925: `cmd_project_pool`'s `--pool` arm proved a registry-only project
+# exists with `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` — a
+# GLOB, not a single named path, so `grep` opens EVERY matched `.project` row
+# BY NAME, in glob order, before it can report a match or a miss. A FIFO or a
+# symlink-to-an-infinite-character-device among those rows — sorting before
+# the row that would have answered — blocks `grep`'s own `open`/`read`
+# forever, and `ccd project-pool --pool` never returns. `_project_pool_state`
+# above already closes this exact class for the SINGLE-file read; this glob
+# is the second, unguarded reader of the same directory.
+#
+# `_project_pool_state`'s pattern, copied here rather than re-derived: a type
+# test (`-f`+`-r`) checked BEFORE any attempt to open, so the shape alone
+# decides which rows are even offered to `grep` — never a read of one this
+# function has not first typed. Behaviour-identical for every input that
+# answers today: an entry `grep` already could not usefully read contributed
+# nothing through the original's `2>/dev/null` either, so skipping it here
+# changes no verdict, only whether the skip can hang.
+_reg_project_glob_has() {   # project -> 0 iff some readable $REG/*.project row's content equals it
+  local project="$1" f
+  for f in "$REG"/*.project; do
+    [[ -f "$f" && -r "$f" ]] || continue
+    grep -qxF -- "$project" "$f" 2>/dev/null && return 0
+  done
+  return 1
+}
+
 cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --project <p> --clear
   # THE PROJECT SIDE of the pool rule gains a writer here. The tag is
   # `$POOLS_DIR/<project>` — one file, one token — and until this verb
@@ -7127,7 +7153,7 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # taggable. The glob is guarded because an empty registry leaves it its own
     # literal text and grep would complain about a file that is not there.
     [[ -d "$PROJECTS_ROOT/$project" ]] \
-      || grep -qxF -- "$project" "$REG"/*.project 2>/dev/null \
+      || _reg_project_glob_has "$project" \
       || die "no such project '$project' — neither $PROJECTS_ROOT/$project nor any registry row names it"
     # A WARNING, NOT A REFUSAL. This pool may be about to gain an account, and
     # the FLEET's roster copy is the authority — the server's can lag it
