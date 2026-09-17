@@ -1095,3 +1095,69 @@ rots.**
 **Its citation correction of my citation correction is accepted.** `_pr_py` opens at 4675 at
 `76897187`; it had cited the import line inside the heredoc. At this tip it is 4684. Both parties have
 now mis-cited a `ccd` line in the course of insisting on `ccd` line discipline.
+
+---
+
+## Run 70: a critical fourth site, and two of my rulings measured wrong
+
+Run 70 reported at `96d5ec10` — the tip the worker superseded while it read — so its close would refuse
+`stale-review`. **Closed `failed`, and RUN 71 opened as a CARRY-FORWARD** rather than a fresh review:
+run 70's 26 findings (1 critical, 13 important, 12 minor; panel 16 confirmed / 4 refuted / 0
+unexamined) and run 69's 18 ids are its starting evidence, not discarded. The worker is told to HOLD —
+no work, no push — so it does not fix stale findings or move the tip under a second reviewer.
+
+### The critical, and it is my defect rather than the worker's
+
+`get()` at `ccd/ccd:5002` still reads `if not os.path.isfile(p)` — **the exact call the fix removed
+fifty lines above it** — so a symlink at `$REG/<id>.<field>` makes `get()` return a foreign file's
+bytes as the field. Run 70 measured it end to end; I confirmed the line is present and unmoved at
+`37a175eb`, while `put()` (`:4952`) and the lock (`:5188`) now correctly use
+`stat.S_ISREG(os.lstat(...))`. The file even carries a comment at `:4977` explaining that
+`os.path.isfile` follows symlinks — twenty-five lines above a call that does.
+
+**I wrote "F1 CRITICAL, three sites" and the worker closed three.** A brief that names INSTANCES of a
+class gets instances fixed. The rule is already in this ledger's own corpus —
+*a ruling naming N guards names INSTANCES of a class; grep the shape before acting* — and I had it and
+did not apply it. The round to come names the class by SHAPE: every `os.path.isfile`, every
+`os.path.exists`, every bash `-f`/`-e` used as a TYPE TEST on a path that can be a symlink, censused
+with its instrument, **and four is not to be taken as the count either.** Run 71 censuses it
+independently; a difference between the two censuses is itself the finding.
+
+### My ordering ruling was wrong, and it failed the way I have been correcting everyone else all day
+
+I accepted the re-point landing before `#135`'s merge on line-neutrality, and wrote that I had measured
+*"every source file the re-point points into"*. **I had not.** I measured three files I ASSUMED were
+the set — `ccd/ccd`, `ccd/ccrc`, `ccd/session-hook.sh` — instead of deriving the set from the corpus.
+Run 70 says three cited TEST files moved. Measured since:
+
+| file | `dfa167d7` → `2f9deae2` | in the census's own `byFile` map? |
+|---|---|---|
+| `server/test/ccd-ws-reap.test.ts` | **2855 → 2860** | **yes** |
+| the other seven map entries | line-neutral | — |
+
+**The ordering deviation is therefore NOT accepted.** Whether it costs anything depends on how many
+anchors point into a moved file — run 71 measures it, and every such anchor is re-derived by content.
+
+**This is the fifth enumeration defect of mine this run and the first that produced a wrong RULING
+rather than a wrong count.** The aggravating fact: the correct source was one command away, and I had
+written *"derive the id list from the report and assert coverage"* to the worker three messages
+earlier. A rule applied to other people's lists and not to my own file sets is not a rule I hold.
+
+> **Generalised, and it is the rule I keep re-learning in a new costume: the set you measure over must
+> be DERIVED from the artifact that defines it — a findings list from the report's headers, a file set
+> from the corpus's references, a call-site census from the shape. Never from what you remember the
+> set to be.**
+
+### Two more from run 70, held for the carry-forward
+
+**F9 and F11 not addressed, and commit `d59f93d7`'s message CLAIMS F11 was** — the same defect as F9
+itself, which was a commit message contradicting its own diff. The last commit's subject names F9, so
+that one may have landed after run 70 read; F11 waits for run 71 to re-seat it.
+
+**Four more anchors green by coincidence**, beyond the one the worker found and named. Its instinct to
+name rather than delete the one it found is precisely what makes the other four findable.
+
+**The fix round itself was sound:** suites at `96d5ec10` were server 331 files / 10,066 passed / 0
+failed, agent 295/295, pwa 2602/2602, three builds green. What run 70 found is not bad work — it is a
+class closed by list, an ordering accepted on an assumed file set, and an audit believed where it was
+green. **Two of those three are mine.**
