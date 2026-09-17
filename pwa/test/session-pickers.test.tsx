@@ -306,4 +306,61 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(high.className).toContain('opt--selected');
     expect(high.textContent).toContain('inert on this lane');
   });
+
+  // Fix round 1, finding 1: `effort: 'auto'` and `class: 'default'` are
+  // ccd's absent-equivalents — `_route_apply_now` types nothing for either,
+  // so the pane can never read either back. Both must AGREE unconditionally,
+  // never light a permanent badge.
+  it('effort:"auto" never lights the badge — ccd types nothing back for it', () => {
+    renderScreen({
+      effort: 'medium', // the live pane can never read "auto" back, ever
+      route: { fields: { effort: 'auto' }, degraded: null, inert: [] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openEffortSheet();
+    expect(screen.getByRole('button', { name: 'Auto' }).className).toContain('opt--selected');
+  });
+
+  it('class:"default" never lights the badge — no model string distinguishes it', () => {
+    renderScreen({
+      model: 'Sonnet 5', // no model string this row could ever match
+      route: { fields: { class: 'default' }, degraded: null, inert: [] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openModelSheet();
+    expect(screen.getByRole('button', { name: 'Default' }).className).toContain('opt--selected');
+  });
+
+  // Fix round 1, finding 1: a routing value naming no row on this wrapper's
+  // own option list (a rejected/stale/foreign-build registry value — the
+  // registry read behind `route` is deliberately unvalidated) is
+  // UNMEASURABLE, not permanently queued: nothing on this pane can ever
+  // confirm it, and no picker row highlights it either.
+  it('an out-of-vocabulary effort value is unmeasurable, not permanently queued', () => {
+    renderScreen({
+      effort: 'medium',
+      route: { fields: { effort: 'ludicrous' }, degraded: null, inert: [] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openEffortSheet();
+    for (const name of ['Low', 'Medium', 'High', 'Xhigh', 'Max', 'Ultracode', 'Auto']) {
+      expect(screen.getByRole('button', { name: new RegExp(`^${name}`) }).className).not.toContain('opt--selected');
+    }
+  });
+
+  it('an out-of-vocabulary class value is unmeasurable, not permanently queued', () => {
+    renderScreen({
+      model: 'Sonnet 5',
+      route: { fields: { class: 'ludicrous' }, degraded: null, inert: [] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openModelSheet();
+    for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+      expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
+    }
+  });
 });

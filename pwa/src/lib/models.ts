@@ -149,3 +149,17 @@ export function effortOptions(
   }
   return opts;
 }
+
+/** Whether an `effort` routing value names a row on this wrapper's own
+ *  option list (fix round 1, finding 1) — `false` for a word ccd itself
+ *  would never write for this lane (a rejected or stale registry value; the
+ *  registry read behind `FleetSession.route` is deliberately unvalidated,
+ *  `registry.ts`'s field reads, so an out-of-vocabulary word can ride the
+ *  wire) and for `ultracode` on the `gpt` lane, which `effortOptions` never
+ *  lists there. `SessionScreen`'s wire-derived queued check uses this to
+ *  tell "ccd will never confirm this — treat it as unmeasurable, not
+ *  perpetually queued" apart from "confirmed and just disagrees right now",
+ *  the same split `modelReadbackFor` makes for `class`. */
+export function effortIsKnown(wrapper: string, value: string): boolean {
+  return effortOptions(wrapper, null, false).some((o) => o.route.value === value);
+}

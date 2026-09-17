@@ -28,7 +28,7 @@ import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
 import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, modelReadbackFor, type PickOption } from '../lib/models';
+import { modelOptions, effortOptions, modelReadbackFor, effortIsKnown, type PickOption } from '../lib/models';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -188,15 +188,33 @@ export function SessionScreen({
   // comparison through `modelReadbackFor`. An INERT field is never
   // "queued" — ccd will not apply it on this lane, so there is nothing for a
   // badge to wait on (`PickSheet` marks its row `inertOnThisLane` instead).
+  //
+  // Fix round 1, finding 1: two more conditions never light this badge,
+  // mirroring the pre-existing LOCAL-write carve-out below (`pick`'s own
+  // "neither value leaves a mark the pane can read back" comment) instead of
+  // leaving the wire path with none of it:
+  //   - `effort: 'auto'` / `class: 'default'` are ccd's absent-equivalents
+  //     (`ccd/ccd:16189-16192`'s `_route_apply_now` types NOTHING for
+  //     `auto` — "the live level stands" — so `live.effort` can never read
+  //     back `auto`, and a wrapper's own default has no distinguishing
+  //     model string `default` could ever match). Both AGREE unconditionally.
+  //   - an intended value that names no row on THIS wrapper's own option
+  //     list (`effortIsKnown` false, or `modelReadbackFor` null) is a word
+  //     ccd itself will never confirm here — a rejected/stale/foreign-build
+  //     registry value (the registry read behind `route` is deliberately
+  //     unvalidated). Nothing on this pane can ever read it back, so it is
+  //     UNMEASURABLE, not queued forever: no picker row highlights it either
+  //     (`activeFor`/`modelOptions`'s exact-match `active` finds no row),
+  //     so a permanent badge next to no active row is doubly wrong.
   const wireQueuedField: RouteField | null = routeInfo === null ? null : (() => {
-    if (effortIntended !== null && !effortInert) {
+    if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, effortIntended)) {
       const agrees = effortIntended === 'ultracode' ? live?.ultracode === true : live?.effort === effortIntended;
       if (!agrees) return 'effort';
     }
-    if (classIntended !== null && !classInert) {
+    if (classIntended !== null && !classInert && classIntended !== 'default') {
       const readback = modelReadbackFor(wrapper, classIntended);
       const agrees = readback !== null && (live?.model ?? '').toLowerCase().includes(readback);
-      if (!agrees) return 'class';
+      if (readback !== null && !agrees) return 'class';
     }
     return null;
   })();
