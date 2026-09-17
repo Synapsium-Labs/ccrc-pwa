@@ -2,10 +2,11 @@
 // (docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md,
 // D-2376 through D-2380): FOUR families of `ccd/ccd` guard that admit a FIFO
 // or an unbounded character device through an `-e`/`-r` test and then open
-// the path BY NAME — `source`, `cat`, a bash `grep FILE`, and FOUR Python
+// the path BY NAME — D1's `source`, D2's `cat` family (the hold family, five
+// call sites, one shape), D3's bash `grep FILE`, and D4's FOUR Python
 // `open()`s in `_pr_py`'s `state` mode (`put`'s tmp file, `get`, the
-// compare-and-set lock, and the prhistory append) — seven openers across the
-// four `describe` blocks below. Each one hangs the reader FOREVER on the
+// compare-and-set lock, and the prhistory append), one `describe` block
+// below per family. Each one hangs the reader FOREVER on the
 // shapes this file plants. `_project_pool_state` (NAMED BY FUNCTION, NOT
 // LINE — a line number here goes stale the moment anything above it grows)
 // is the pattern every fix here copies: a type test (`-f`+`-r`, or
@@ -62,20 +63,34 @@ import { readJournal, measOf } from './lifecycleHelpers.js';
 
 type Bounded = { code: number; stdout: string; stderr: string };
 
-// THE DEADLINE BINARY ITSELF, RESOLVED ONCE, BY ABSOLUTE PATH — same remedy
-// `server/test/ccd-plat-timeout.test.ts` ships for the identical class (D-2764,
-// "test-macos is red on a hard-coded /usr/bin/timeout"). A bare `execFileSync('timeout', …)`
-// resolves against the CHILD's PATH, and this repo's own `ci.yml` guarantees a bare
-// `timeout` is ABSENT on `test-macos` (BSD userland, no gnubin on PATH) — an ENOENT there
-// sets no `e.status`, so a naive `catch` used to fall through to the generic
-// `{code: e.status ?? 1, …}` return, a SILENT, sometimes-GREEN non-measurement for every
-// case in this file. `gtimeout` (installed by that job's own `brew install … coreutils`
-// step) is resolved as the fallback, exactly as `_plat_timeout` itself tries `timeout`
-// then `gtimeout`. Resolved HERE, at module scope, while PATH is still the runner's own.
+// THE DEADLINE BINARY ITSELF, RESOLVED ONCE, BY ABSOLUTE PATH — same remedy commit
+// f27c8a86 (PR #130, "test-macos is red on a hard-coded /usr/bin/timeout") ships for the
+// identical class. A bare `execFileSync('timeout', …)` resolves against the CHILD's PATH,
+// and this repo's own `ci.yml` guarantees a bare `timeout` is ABSENT on `test-macos` (BSD
+// userland, no gnubin on PATH) — an ENOENT there sets no `e.status`, so a naive `catch`
+// used to fall through to the generic `{code: e.status ?? 1, …}` return, a SILENT,
+// sometimes-GREEN non-measurement for every case in this file. `gtimeout` (installed by
+// that job's own `brew install … coreutils` step) is resolved as the fallback, exactly as
+// `_plat_timeout` itself tries `timeout` then `gtimeout`. Resolved HERE, at module scope,
+// while PATH is still the runner's own.
+//
+// PRESENCE ON PATH IS NOT ENOUGH: a busybox-shaped `timeout` that refuses `-k` (`case "$1"
+// in -k) exit 125;; esac`) resolves via `command -v`, then answers every hang case's own
+// probe with `{code: 125, stdout: ''}` before the guard under test ever runs — which
+// satisfies `expect(r.code).not.toBe(0)` and `expect(r.stdout.trim()).toBe('')` in every
+// D3 hang/absent-path case, four cases GREEN while measuring nothing (this repo books
+// exactly that busybox `timeout` shape as live: D-2840). So the candidate is PROBED, not
+// merely resolved: `<bin> -k 1 0.1 sleep 5` is a known-124 command (a 5s sleep bounded to
+// 0.1s must expire), and a candidate that does not answer 124 is treated as absent and the
+// loop tries the next one — a probe failure folds into `NO_DEADLINE_BIN` exactly like an
+// absent binary, never into a silently-degraded pass.
 const DEADLINE_BIN: string | null = (() => {
   for (const candidate of ['timeout', 'gtimeout']) {
     const r = spawnSync('sh', ['-c', `command -v ${candidate}`], { encoding: 'utf8' });
-    if (r.status === 0 && r.stdout.trim() !== '') return r.stdout.trim();
+    if (r.status !== 0 || r.stdout.trim() === '') continue;
+    const bin = r.stdout.trim();
+    const probe = spawnSync(bin, ['-k', '1', '0.1', 'sleep', '5'], { encoding: 'utf8' });
+    if (probe.status === 124) return bin;
   }
   return null;
 })();
@@ -105,10 +120,15 @@ const NO_DEADLINE_BIN = DEADLINE_BIN === null;
  *  `rc === 124`, not an `ETIMEDOUT` exception.
  *
  *  `rc 124` IS OVERLOADED AT THIS SEAM: it is also GNU `timeout`'s own expiry code, so
- *  a case whose SNIPPET itself shells through `ccd`'s `_plat_timeout` (none currently
- *  do — every case here is a direct guard read) could not be told apart from this
- *  driver's own bound firing. Distinguishing them would need a different code or a
- *  sentinel on this driver's own invocation; undone here, disclosed instead. */
+ *  a case whose SNIPPET itself shells through `ccd`'s `_plat_timeout` could not be told
+ *  apart from this driver's own bound firing — and all six D4 cases DO shell through
+ *  `_plat_timeout` (`cmd_pr_state` → `_gh_pr_list`), not zero: `GH_STUB` (`ccdPrHelpers.ts`)
+ *  shadows `timeout` with a shell function that returns 125 on a flag and otherwise
+ *  `exec`s the wrapped command unbounded, so no INNER 124 can be produced by those cases
+ *  TODAY — but that is `GH_STUB`'s doing, not an absence of the call, and a D4 case that
+ *  drops `GH_STUB` reopens the ambiguity this paragraph describes. Distinguishing the two
+ *  124s in general would need a different code or a sentinel on this driver's own
+ *  invocation; undone here, disclosed instead. */
 function runBounded(home: string, snippet: string, ms = 5000): Bounded {
   // Defense in depth: every call site is reached only from a `describe.skipIf(NO_DEADLINE_BIN)`
   // block, but a hard THROW here — never a silent `{code: 1}` — is what this guard is FOR.

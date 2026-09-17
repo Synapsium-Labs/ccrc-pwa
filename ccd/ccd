@@ -4210,8 +4210,11 @@ if mode == 'state':
         # write failure into. The cleanup arm's `os.remove` DOES clear a FIFO,
         # socket or device at the tmp path — the same self-heal `get()`'s
         # FIFO case gets — but NOT a directory: `os.remove` is `unlink(2)`,
-        # which raises `IsADirectoryError` (an `OSError`, swallowed by the
-        # inner `except OSError: pass` below), so a directory refuses
+        # which raises an `OSError` — `IsADirectoryError` on Linux (errno 21,
+        # measured here), `PermissionError` on BSD/macOS (`unlink(2)` there
+        # answers EPERM, and this repo's own server suite runs on
+        # `macos-latest` too, unmeasured here) — swallowed either way by the
+        # inner `except OSError: pass` below, so a directory refuses
         # correctly but is never self-healed. The guard's population is
         # `not isfile`, which includes directories, so this is a real gap in
         # the claim, not in the refusal.
