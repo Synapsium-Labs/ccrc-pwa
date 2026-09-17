@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=863b36acc2e1d1d749331ed0b3d379fb43c24d0cc5d73e6c309a4c6f48af38a2
+# ccrc:generated 1 sha256=c9d4c388061bd1e263569306a1f598bd17628f0092ca767e852ba0b1faa1cea9
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -14586,11 +14586,11 @@ _class_gate() {   # wrapper class -> rc 0 the lane may keep or take the class (s
   # The shape every decision site needs: `skipped` folds into 0 because a session with no class has nothing to gate on.
   #
   # NAMED FOR THE CLASS, NOT FOR `_svc_` (controller ruling S3-R1). It shipped
-  # as `_svc_gate` and cost `macos-platform.test.ts` a name-only exemption in
-  # the guard that holds every `_plat_`/`_svc_` definition inside the platform
-  # sentinels — `_svc_` is that guard's pinned launchd/systemd vocabulary, and a
-  # routing helper borrowing the prefix made a real platform helper's escape one
-  # `Set` entry away from unnoticed. The exemption is gone with the name.
+  # under the earlier spelling `_svc_gate`, and that cost `macos-platform.test.ts`
+  # a name-only exemption in the guard that holds every `_plat_`/`_svc_` definition
+  # inside the platform sentinels — `_svc_` is that guard's pinned launchd/systemd
+  # vocabulary, and a routing helper borrowing the prefix made a real platform
+  # helper's escape one `Set` entry away from unnoticed. The exemption is gone with the name.
   [[ -z "${2:-}" || "$2" == default ]] && return 0
   _serviceable "$1" "$2" >/dev/null
   case $? in 0) return 0 ;; 1) return 1 ;; *) return 2 ;; esac

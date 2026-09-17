@@ -2497,8 +2497,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:6560-6562`), each with an operator sentence of its own at `:6600`,
-`:6608` and `:6621`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7224-7226`), each with an operator sentence of its own at `:7264`,
+`:7272` and `:7285`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2536,7 +2536,7 @@ plan's job.
   has no generation at all, a `_spawn_start` that loses the lock fails OPEN and spawns without exporting one
   rather than wedging a swap, and a box where `flock`, `mktemp` or `link` is off `PATH` cannot take the lock
   to read one. Any of the three leaves that pane's compaction lifecycle simply INERT until its next respawn.
-  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:16330-16332`, the `genrc == 1` arm); the
+  `ccd` says so on stderr for the CONTENDED acquire alone (`ccd/ccd:17992-17994`, the `genrc == 1` arm); the
   generation-absent row and the off-`PATH` box are SILENT — the acquire succeeds or fails without ever
   reaching that warning — and the absence of the artifacts is the only signal there. Adding the missing
   warning is a `ccd/ccd` change, which this documentation pass does not make.
