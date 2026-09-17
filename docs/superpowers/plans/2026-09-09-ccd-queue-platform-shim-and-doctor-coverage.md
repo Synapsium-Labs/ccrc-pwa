@@ -459,61 +459,71 @@ header correction moved every line past `:1528` by 26.
 
 *Destructive or context-reaching entries are marked. Votes are the original census's.*
 
-- **`ccd/ccd:1761`** (4/5) — `_project_pool_state` (`:1679`). **WRONG-POOL PLACEMENT — the worst
+- **`ccd/ccd:1735`** (4/5) — `_project_pool_state` (`:1653`). **WRONG-POOL PLACEMENT — the worst
   non-destructive consequence in this census.** CLAUDE.md: this is ccd's ONLY reader of the project
   pool tag, and it answers one of four words that every placement, tick and manual verb keys on. A
   symlink at `$REG/pools/<project>` resolving to any readable ≤64-byte file matching the pool grammar
   makes it answer `named <that>`, placing work on a pool nobody tagged.
-- **`ccd/ccd:6872`** (3/3) — `cmd_ws_rm`'s held-refusal. **PERSISTED** (corrected this round): the
+- **`ccd/ccd:6846`** (3/3) — `cmd_ws_rm`'s held-refusal. **PERSISTED** (corrected this round): the
   fabricated bytes go into `_lc_refuse destroy "$id" held "held: $_hold_reason — release first: …"`
-  (`:6877`), which emits through `_lc_emit` — the journal — and then dies. The HELD verdict itself is
+  (`:6851`), which emits through `_lc_emit` — the journal — and then dies. The HELD verdict itself is
   the separate `-e` gate above and is not forgeable; the reason TEXT is.
-- **`ccd/ccd:7333`** (3/3) — `cmd_ws_rename`'s held-refusal. **COSMETIC.** Already decided by the `-e`
-  gate above it; the value lands only in the wire JSON at `:7338`
+- **`ccd/ccd:7307`** (3/3) — `cmd_ws_rename`'s held-refusal. **COSMETIC.** Already decided by the `-e`
+  gate above it; the value lands only in the wire JSON at `:7312`
   (`printf '{"refused":"held","detail":%s,"paths":[]}\n'`), which nothing persists.
-- **`ccd/ccd:8038`** (3/3) — `cmd_ws_release`'s measured hold. **PERSISTED, AND IT OUTLIVES ITS
+- **`ccd/ccd:8012`** (3/3) — `cmd_ws_release`'s measured hold. **PERSISTED, AND IT OUTLIVES ITS
   SUBJECT** — the highest-ranked of the three persisted hold rungs, because it records a hold being
   REMOVED and the `rm -f -- "$REG/$id.hold"` two lines later destroys the only other copy. The value
-  goes into `_lc_done release "$id" "" meas.held "$_hold_reason"` (`:8043`).
-- **`ccd/ccd:8360`** (2/2) — `_reg_project_glob_has` (`:8357`). **SMALLEST OF THE REAL ONES.** Single
-  caller, `:8497`, inside `cmd_project_pool`'s `--pool` arm, as the second disjunct of a
+  goes into `_lc_done release "$id" "" meas.held "$_hold_reason"` (`:8017`).
+- **`ccd/ccd:8334`** (2/2) — `_reg_project_glob_has` (`:8331`). **SMALLEST OF THE REAL ONES.** Single
+  caller, `:8471`, inside `cmd_project_pool`'s `--pool` arm, as the second disjunct of a
   project-exists check. A symlink to any file containing the project name as a whole line makes an
   unknown project look known, so a tag is accepted for a project that is not there.
-- **`ccd/ccd:12558`** (4/5) — `_ws_tombstone_reclip` (`:12507`). **READ *AND* WRITE THROUGH THE LINK —
+- **`ccd/ccd:12532`** (4/5) — `_ws_tombstone_reclip` (`:12481`). **READ *AND* WRITE THROUGH THE LINK —
   the only candidate in this census that CLOBBERS a foreign file rather than merely misreading one.**
   `[[ -s "$f" ]]` follows, the python that rewrites the tombstone opens the same path, and the write
-  lands on the link's TARGET. Single caller, `:13392`, on `cmd_ws_reap`'s path. **DESTRUCTIVE.**
-- **`ccd/ccd:12608`** (4/5) — `_ws_tomb_str` (`:12571`). **A DESTRUCTIVE ARM, AND THE
+  lands on the link's TARGET. Single caller, `:13366`, on `cmd_ws_reap`'s path. **DESTRUCTIVE.**
+- **`ccd/ccd:12582`** (4/5) — `_ws_tomb_str` (`:12545`). **A DESTRUCTIVE ARM, AND THE
   SELF-CONSISTENCY IS WHAT MAKES IT BITE — the widest radius in this census.** On `cmd_ws_reap`'s
-  RESUME path, `:12886` takes `tombtip=$(_ws_tomb_str "$REG/.reaped/$id.json" tip)`, and a tip read
+  RESUME path, `:12860` takes `tombtip=$(_ws_tomb_str "$REG/.reaped/$id.json" tip)`, and a tip read
   from a substituted tombstone is then what the resume acts on, including `update-ref -d`.
   **DESTRUCTIVE.**
-- **`ccd/ccd:12659`** (4/5) — `_ws_tomb_children` (`:12618`). **THE CONSENTED-CHILD SET ON A REAP
-  RESUME.** Callers `:13063` (`rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json")`) and `:13416`
+- **`ccd/ccd:12633`** (4/5) — `_ws_tomb_children` (`:12592`). **THE CONSENTED-CHILD SET ON A REAP
+  RESUME.** Callers `:13037` (`rcconsented=$(_ws_tomb_children "$REG/.reaped/$id.json")`) and `:13390`
   (`childlines=$(_ws_tomb_children "$tomb")`). A substituted child list is a substituted answer to
   "which children did the operator consent to destroy". **DESTRUCTIVE.**
-- **`ccd/ccd:12729`** (3/3) — `cmd_ws_reap`'s held-refusal. **COSMETIC**, same shape as `:7333`: the
+- **`ccd/ccd:12703`** (3/3) — `cmd_ws_reap`'s held-refusal. **COSMETIC**, same shape as `:7307`: the
   refusal is already decided by the `-e` gate above, and the fabricated bytes reach only the wire JSON
-  at `:12734`.
-- **`ccd/ccd:14973`** (3/3) — `_share_pct` (`:14967`). **FABRICATED PLACEMENT HEADROOM FOR THE FABLE
-  CLASS.** Single caller `:15003` (`fig=$(_share_pct "$w"); rc=$?`) inside `_serviceable`. A symlink
+  at `:12708`.
+- **`ccd/ccd:14947`** (3/3) — `_share_pct` (`:14941`). **FABRICATED PLACEMENT HEADROOM FOR THE FABLE
+  CLASS.** Single caller `:14977` (`fig=$(_share_pct "$w"); rc=$?`) inside `_serviceable`. A symlink
   to any JSON carrying a fresh-looking timestamp and a low share makes an account look serviceable for
   Fable work when its real share says otherwise.
-- **`ccd/ccd:21392`** (3/3) — `cmd_ws_forget`'s held-refusal. **PERSISTED** (corrected this round):
-  `_lc_refuse forget "$id" held …` at `:21397` reaches the journal through `_lc_emit`, exactly as
-  `:6872` does.
+- **`ccd/ccd:21366`** (3/3) — `cmd_ws_forget`'s held-refusal. **PERSISTED** (corrected this round):
+  `_lc_refuse forget "$id" held …` at `:21371` reaches the journal through `_lc_emit`, exactly as
+  `:6846` does.
 - **`ccd/ccd-graph-sweep:88`** (3/3) — `_gs_session_on`. **GRAPH FRESHNESS ONLY** — nothing
   destructive, nothing the PWA renders. Called at `:201` on a `.claude/worktrees` candidate.
-- **`ccd/ccd-graph-sweep:297`** (3/3) — `_gs_busy`, gating `_gs_row "$tree" "$BUSY_OUTCOME"` at
-  `:1069` — the sweep's decision not to touch a tree. A symlink to any fresh JSON carrying a live
-  marker makes the sweep skip a tree that is idle, or work one that is not.
+- **`ccd/ccd-graph-sweep:297`** (3/3) — `_gs_busy` (`[ -f "$hs" ] || return 1`), gating
+  `if _gs_busy "$tree"; then _gs_row "$tree" "$BUSY_OUTCOME" …` at `:1069` — the sweep's decision not
+  to touch a tree. A substituted hook-state file substitutes that decision. The original row's
+  description of WHICH marker was lost to the truncation and is not reconstructed here.
 - **`ccd/ccd-telemetry-keepalive:521`** (3/3) — `_ka_session_on`. **AN ACCOUNT'S KEEPALIVE TURN.**
   Caller `:680` (`sess_why="$(_ka_session_on "$acct")"; sess_rc=$?`). The function's own header at
   `:510-519` argues the gate this bypasses.
 - **`ccd/ccd-usage-sweep.py:272`** (2/3) — **THE TOOL'S ONLY DESTRUCTIVE PATH, BY ITS OWN DOCSTRING**
-  (`:238-243`: an id whose `ts` is absent, unreadable or malformed must not be reaped). The type test
-  is `os.path.isfile`, which follows; the fix shape is `os.path.lexists` ∧ `stat.S_ISREG(os.lstat(...))`.
-  **DESTRUCTIVE**, and the file is not in this branch's diff at all — the follow-up wave's FIRST item.
+  (`:238-243`: an id whose `ts` is absent, unreadable or malformed is NOT reapable). The type test is
+  `if os.path.isdir(agents):` over `usage/<sid>.agents`, and what it guards is an `os.walk(...,
+  topdown=False)` that `os.remove`s every file and `os.rmdir`s every directory under it. `isdir`
+  follows, and `os.walk` follows the TOP path it is handed, so a symlink there empties the directory
+  it points at. The fix shape is the DIRECTORY one — `S_ISDIR(os.lstat(...))`, not the `S_ISREG`
+  spelling the other python site takes. **DESTRUCTIVE, and the widest single blast radius declared
+  here**; the file is not in this branch's diff at all, which is why it is the follow-up's FIRST item.
+
+  *Recorded as a correction: this entry's first re-emission said `os.path.isfile` and an `S_ISREG`
+  fix. That was INFERRED while completing a sentence the old table had cut, and it was wrong — caught
+  by checking the line rather than the memory of it. The truncation's real cost is exactly this: a
+  reader who trusts a cut sentence completes it, and the completion is fiction.*
 - **`ccd/ccrc-api:275`** (3/3) — **MUTED, AND THE REASON IS WORTH STATING.** `DERIVED_ID` comes from
   the tmux pane (`:271-274`), not from the file, so `who` at `:404` is unaffected; only a path that
   does not decide identity reads through the link.
@@ -582,14 +592,14 @@ What the widened pass found:
 
   | rung (the `[[ -f && -r ]]` test) | consumer | reaches |
   |---|---|---|
-  | `ccd/ccd:6872` | `_lc_refuse destroy` | the lifecycle journal — **PERSISTED** |
-  | `ccd/ccd:7333` | `printf '{"refused":"held",…}'` | stdout — cosmetic |
-  | `ccd/ccd:8038` | `_lc_done release … meas.held` | the lifecycle journal — **PERSISTED** |
-  | `ccd/ccd:12729` | `printf '{"refused":"held",…}'` | stdout — cosmetic |
-  | `ccd/ccd:21392` | `_lc_refuse forget` | the lifecycle journal — **PERSISTED** |
+  | `ccd/ccd:6846` | `_lc_refuse destroy` | the lifecycle journal — **PERSISTED** |
+  | `ccd/ccd:7307` | `printf '{"refused":"held",…}'` | stdout — cosmetic |
+  | `ccd/ccd:8012` | `_lc_done release … meas.held` | the lifecycle journal — **PERSISTED** |
+  | `ccd/ccd:12703` | `printf '{"refused":"held",…}'` | stdout — cosmetic |
+  | `ccd/ccd:21366` | `_lc_refuse forget` | the lifecycle journal — **PERSISTED** |
 
   Measured, not inherited, and stated no wider than it was measured: **`_lc_emit` is the only writer of
-  RECORDS**, one `printf … >> "$live"` at `ccd/ccd:4232`, and `_lc_refuse` and `_lc_done` both reach the
+  RECORDS**, one `printf … >> "$live"` at `ccd/ccd:4206`, and `_lc_refuse` and `_lc_done` both reach the
   journal only through it — `_lc_refuse` emits then dies, `_lc_done` delegates in one line. The
   function's own header says "NOTHING BUT THIS FUNCTION WRITES INTO `.lifecycle/`" and then qualifies
   itself, correctly: `_lc_err` bumps `$_LC_DIR/errors` and the rotation arm mints and moves generation
@@ -598,7 +608,7 @@ What the widened pass found:
   unqualified grep would have said so. Containment is pinned by
   `server/test/ccd-lifecycle-contain.test.ts`. So the property the entry used to single `:8012` out for — "persists into the
   lifecycle journal, where it outlives its subject and reaches the wire" — is true of three rungs, not
-  one. **`:8038` keeps its RANKING and loses its count**: alone among the three it records a hold being
+  one. **`:8012` keeps its RANKING and loses its count**: alone among the three it records a hold being
   REMOVED, so its record survives the thing it describes. The other two refuse and die, leaving the
   hold in place for anyone to read directly.
 - **`ccd/session-hook.sh:198` is NOT in the class**, and that is a measurement, not an exemption: it is

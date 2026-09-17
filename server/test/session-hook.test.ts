@@ -8112,10 +8112,31 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
     // 59 -> 161 (S6-R10) -> 162 (Task 6) -> 161 (#137 repaired the one
-    // `shared/api.ts` anchor), the sum of the re-measured map
-    // above: the headline is a MECHANISM, not a separate number, so it moves
+    // `shared/api.ts` anchor) -> 182 on the merge of that with this branch's
+    // own 183: the map is unchanged and the `shared/api.ts` entry is gone, so
+    // 183 - 1. The headline is a MECHANISM, not a separate number, so it moves
     // with `ccd/ccd`.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(183);
+    //
+    // DERIVED ON THIS TREE, LAST, and that matters twice over. Review 78 derived
+    // the same 182 on a scratch merge tree and the ruling that carried it said
+    // DO NOT TYPE IT — a number measured on a tree that is not the one shipping
+    // is a forecast wearing a measurement's clothes. It agrees here because this
+    // tree and that one turned out to hold the same corpus, which is a result,
+    // not a licence for the next round to copy it.
+    //
+    // AND THIS ROUND MEASURED WHAT AN EDIT ABOVE THE CORPUS COSTS. The round's
+    // `_authdead` header correction first landed as 26 NET NEW LINES of comment,
+    // and those 26 lines of pure prose moved four other assertions in this file:
+    // `ccd/ccd` 143 -> 144, a README anchor off its quote, one `**Files:**`
+    // anchor and SEVEN `|`-row anchors onto accidental matches (green, and
+    // wrong), and main's own corpus claim that no reference is anchored by a
+    // short token alone from `[]` to two. Rewritten to say the same thing in the
+    // SAME NUMBER OF LINES, all four go away and only this sum remains. That is
+    // not a number being protected: every one of those documents is byte-identical
+    // to main and this wave is forbidden to re-point any of them, so a line
+    // inserted above their anchors is damage with no repair available. When a
+    // corpus cannot be re-pointed, the length of an edit above it IS a decision.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(182);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a

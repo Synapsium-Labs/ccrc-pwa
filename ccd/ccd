@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=a1bf6398ae31643be0c2d883c93174d2f96d10f158f26fa22c3fa54735897d92
+# ccrc:generated 1 sha256=c283bdd65576a269ee621ea1712289ba1e59c5c575340dbd512a9a895af07f94
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1525,38 +1525,12 @@ _lane_enabled() { [[ ! -f "$REG/$1-disabled" ]]; }   # operator kill-switch: tou
 # `/dev/zero` each returned rc 124 under `timeout 5`; with the guard, every
 # input below answers in under 0.05 s.
 #
-# THE CENSUS BELOW IS THE `-f` RUNG'S, AND ONLY ITS. Saying which guard a census
-# is about is not pedantry here: this paragraph stood unchanged while the rung
-# below it gained a second conjunct, and it then asserted the opposite of the
-# function five lines under it — a symlink to a marker answering rc 0 — for as
-# long as nobody read the two together. Nothing pins prose against the code it
-# describes, so the only protection is naming the subject and re-measuring on
-# the shipping tree.
-#
-# THE `-f` RUNG NARROWS NOTHING, measured across those 14 inputs: absent, empty,
-# garbage, a leading space, `chmod 000`, a directory, a dangling symlink, a
-# symlink loop and `/dev/null` all answer rc 1 before and after; a regular
-# marker, a symlink to one and a hardlink answer rc 0 before and after. Only the
-# two that answer NOTHING today change, and no writer in this tree can make one —
-# `ccd-account-health`'s `_ah_mark` is mktemp -> printf -> `mv -f`.
-#
-# THE `! -L` RUNG NARROWS EXACTLY ONE OF THEM, deliberately, and that is the
-# whole of D-2989 on this path. Re-measured on the shipping tree by extracting
-# this body verbatim and running it against a body differing in that one
-# conjunct — the two columns differ in ONE thing, so nothing else can explain a
-# difference:
-#
-#   absent empty garbage lead-space chmod-000 directory dangling loop /dev/null
-#   fifo /dev/zero   -> rc 1 under BOTH
-#   regular marker, hardlink to one -> rc 0 under BOTH
-#   SYMLINK TO A WELL-FORMED MARKER -> rc 0 before, rc 1 AFTER
-#
-# 1 of 14 moves. A hardlink still answers rc 0 and that is correct, not an
-# oversight: a hardlink IS the file, there is no second path to follow and
-# nothing outside `$REG` can be reached through one. `server/test/ccd-authdead.test.ts`
-# pins the moved input and its controls; `server/src/limits.ts` is the third
-# body of this contract and carries the same refusal, because a class closed in
-# one body of a three-body contract is closed nowhere.
+# THE `-f` RUNG NARROWS NOTHING — AND SAYING WHICH RUNG IS THE POINT, because this
+# stopped: absent, empty, garbage, a leading space, `chmod 000`, a directory, a
+# dangling symlink, a loop and `/dev/null` answer rc 1 before and after; a regular
+# marker and a hardlink answer rc 0; only the two answering NOTHING change, and no
+# writer here makes one (`_ah_mark` is mktemp -> printf -> `mv -f`). THE `! -L`
+# RUNG NARROWS EXACTLY ONE MORE, re-measured: a SYMLINK to a marker, rc 0 -> rc 1.
 #
 # THE FOLD IS ALREADY HERE AND ITS DIRECTION IS THE FILE'S OWN RULING. An
 # unreadable marker answering "not condemned" folds "no marker" with "cannot
