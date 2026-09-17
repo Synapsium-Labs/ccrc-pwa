@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=fc9de536d65126c057720fb93064d17a30085c6688c9aef1491684f2a69d701e
+# ccrc:generated 1 sha256=9ad737e123b1788b513cf2d38f57b3cb33cd70fcad6adf0a1589d801ce8c0efc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -82,16 +82,18 @@ esac
 # destination. Measured repo-wide (D-2189): this function has EIGHT
 # executable call sites across ccd and ccrc — the paragraph this replaces
 # claimed it was the destination's ONLY WRITER, which undercounted the call
-# sites themselves, not a cardinal it ever stated. The eight:
-# `_svc_write_session_plist` (in each file, to a launchd plist under
-# `$HOME/Library/LaunchAgents` — outside `$REG` entirely), `_reg_set` (to
-# `$REG/<id>.<field>`, canonical), `_lc_err` (to `$REG/.lifecycle/errors`, a
-# subdirectory), `cmd_project_pool` (to `$REG/pools/<project>`, a
-# subdirectory), `cmd_supervise` (to `$REG/.<id>.starts`, dot-leading),
-# `_acct_mark_off` (to `$REG/<id>-disabled`, a marker) and `_acct_rehome` (to
-# `$REG/<id>.<field>`, canonical). Only `_reg_set` and `_acct_rehome` write
-# the canonical shape; the other six write elsewhere under `$REG` or outside
-# it entirely. The race stays unreachable TODAY: every directory that sits
+# sites themselves, not a cardinal it ever stated. The eight, each named WITH
+# ITS FILE since this comment is one shared text mirrored into both: (in
+# EACH file) `_svc_write_session_plist`, to a launchd plist under
+# `$HOME/Library/LaunchAgents` — outside `$REG` entirely; (`ccd/ccd` only)
+# `_reg_set` (to `$REG/<id>.<field>`, canonical), `_lc_err` (to
+# `$REG/.lifecycle/errors`, a subdirectory), `cmd_project_pool` (to
+# `$REG/pools/<project>`, a subdirectory) and `cmd_supervise` (to
+# `$REG/.<id>.starts`, dot-leading); (`ccd/ccrc` only) `_acct_mark_off` (to
+# `$REG/<id>-disabled`, a marker) and `_acct_rehome` (to `$REG/<id>.<field>`,
+# canonical). Only `_reg_set` and `_acct_rehome` write the canonical shape;
+# the other six write elsewhere under `$REG` or outside it entirely. The
+# race stays unreachable TODAY: every directory that sits
 # at one of the eight destinations exists BEFORE this function is ever
 # called (test fixtures included), so the refusal guard's `[ -d ]` arm sees
 # it and returns 1 — the race this paragraph is about is a directory
@@ -99,21 +101,34 @@ esac
 # of the eight call sites creates. A measured fact about today's call sites,
 # not a guarantee about future ones.
 #
-# ONE MORE PRICE, undisclosed until now: the `rm` above runs BEFORE the `mv`,
+# ONE MORE PRICE, undisclosed until now: the `rm` below runs BEFORE the `mv`,
 # so a call with `dest` a symlink-to-directory and `src` absent leaves the
 # destination GONE, where the pre-fix behavior left the symlink intact
-# (measured against both revisions). Reachability from `_reg_set` is nil
-# today — no symlink is created at `$REG/<id>.<field>` BY CCD OR CCRC (the
-# `ln -s` census was scoped to the shipped files, not to test fixtures — one
-# plants a symlink AT that exact path, `ccd-crosspool.test.ts`'s
-# `devzero-symlink` case), and no symlink-to-DIRECTORY exists at any of the
-# eight anywhere in the tree — but the price is real for the one destination
-# shape this `rm` covers, so it is disclosed here rather than only in a
-# mutation table.
+# (measured against both revisions). That price is conditional on the unlink
+# SUCCEEDING — `rm -f -- "$2" || return 1` below refuses rather than falling
+# into the `mv` on a failed unlink (D-2187's own recurrence, closed this
+# round: the unguarded fall-through moved `src` INSIDE the linked directory
+# and returned 0), so a failing `rm` leaves the symlink in place and answers
+# 1, never this price. Reachability from `_reg_set` is nil today through the
+# `ln -s` census (scoped to a literal `ln -s` call in the shipped files, not
+# to test fixtures) — but that census cannot see a `rename(2)`/`os.replace`
+# of an EXISTING symlink onto this path, only an `ln -s` invocation, which is
+# a narrower method than the sentence it was backing (this file's own
+# `_pr_py`, in ccd only, has such a path — see its `put()`). Narrowed to what
+# the census actually measured, not a proof that no symlink is ever created
+# here by any code path in either file. THE CONDITION, not a verdict with an
+# expiry date nothing re-measures: this price is real for any caller whose
+# destination's identity matters and whose `src` may be absent — check a
+# new call site against THAT, not against "reachability is nil today", which
+# was true of the eight above only until one of them changed shape. And no
+# symlink-to-DIRECTORY exists at
+# any of the eight anywhere in the tree — but the price is real for the one
+# destination shape this `rm` covers, so it is disclosed here rather than
+# only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
     if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi
-    if [ -L "$2" ] && [ -d "$2" ]; then rm -f -- "$2"; fi
+    if [ -L "$2" ] && [ -d "$2" ]; then rm -f -- "$2" || return 1; fi
     mv -f -- "$1" "$2"
   else
     mv -fT -- "$1" "$2"
@@ -1317,6 +1332,15 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # inherit this same exposure with no `-f` rung of their own — noted here
 # rather than given a second ladder, because this one hangs first on a
 # pre-existing FIFO.
+#
+# THAT ARGUMENT DOES NOT CLOSE THE CLASS, and is not written to (final-round
+# item 8): "hangs first" only holds for a caller reached FROM this same
+# process, after this module top level has already run. `ccd/ccrc` and
+# `ccd/ccrc-doctor-checks` each carry their OWN unguarded `source`/`.` of the
+# identical path, in their OWN process, with no ladder of theirs run first —
+# each HANGS on a FIFO independently (measured, rc 124), and that includes
+# `_check_routing`, which this wave edited. Pre-existing in both, and NOT
+# fixed here — disclosed so this paragraph is not read as having closed it.
 [[ -f "$CCRC_ACCOUNTS_SH" ]] \
   || die "account roster $CCRC_ACCOUNTS_SH exists but is not a regular file — something else (a FIFO, a device node, a UNIX socket, or a directory) is sitting at that path; remove it, then regenerate: ccrc install. Regenerating it will not help until the path is clear."
 [[ -r "$CCRC_ACCOUNTS_SH" ]] \
@@ -4873,25 +4897,34 @@ if mode == 'state':
         # the ordinary path never sees this tmp exist at all (fresh per-pid
         # name), a STALE REGULAR tmp left by a prior crash must still be
         # truncated and reused, and only a PRESENT NON-REGULAR tmp must
-        # refuse rather than block inside the open. `os.path.exists(...) and
+        # refuse rather than block inside the open. `os.path.lexists(...) and
         # not os.path.isfile(...)` draws exactly that line — absent:
         # proceed and create; regular: proceed and truncate; anything else:
         # raise before the open, the same shape the lock guard below uses —
         # and the raise is caught by the `except OSError` immediately below,
         # so it becomes the same FAULT that block already turns any other
-        # write failure into. The cleanup arm's `os.remove` DOES clear a FIFO,
-        # socket or device at the tmp path — the same self-heal `get()`'s
-        # FIFO case gets — but NOT a directory: `os.remove` is `unlink(2)`,
-        # which raises an `OSError` — `IsADirectoryError` on Linux (errno 21,
-        # measured here), `PermissionError` on BSD/macOS (`unlink(2)` there
-        # answers EPERM, and this repo's own server suite runs on
-        # `macos-latest` too, unmeasured here) — swallowed either way by the
-        # inner `except OSError: pass` below, so a directory refuses
+        # write failure into. `lexists`, NOT `exists` (final-round fix,
+        # measured end to end): `exists` FOLLOWS a symlink, so a DANGLING
+        # symlink at `tmp` answered False — guard skipped, `open(tmp,'w')`
+        # created the link's TARGET, and `os.replace(tmp, dst)` renamed the
+        # SYMLINK onto `dst`, so `$REG/<id>.<field>` ended up a symlink and
+        # the field's bytes landed outside `$REG` entirely. `lexists` does
+        # not follow, so a dangling symlink now raises here same as any
+        # other non-regular shape. The cleanup arm's `os.remove` DOES clear a
+        # FIFO, socket or device at the tmp path — the same self-heal
+        # `get()`'s FIFO case gets — but NOT a directory: `os.remove` is
+        # `unlink(2)`, which raises an `OSError` — `IsADirectoryError` on
+        # Linux (errno 21, measured here), `PermissionError` on BSD/macOS
+        # (`unlink(2)` there answers EPERM, and this repo's own server suite
+        # runs on `macos-latest` too, unmeasured here) — swallowed either way
+        # by the inner `except OSError: pass` below, so a directory refuses
         # correctly but is never self-healed. The guard's population is
-        # `not isfile`, which includes directories, so this is a real gap in
-        # the claim, not in the refusal.
+        # `lexists ∧ ¬isfile` (not the `¬isfile` alone this comment used to
+        # say, which omitted the first conjunct and so did not disclose the
+        # `exists`-follows-symlinks gap above); a directory is the one
+        # remaining gap in self-heal, not in the refusal.
         try:
-            if os.path.exists(tmp) and not os.path.isfile(tmp):
+            if os.path.lexists(tmp) and not os.path.isfile(tmp):
                 raise OSError('refusing to write a non-regular-file pr-state tmp: ' + tmp)
             with open(tmp, 'w') as f:
                 f.write(str(value))
@@ -4922,6 +4955,17 @@ if mode == 'state':
         # already gives, never a fabricated value. `FileNotFoundError` stays
         # caught for the ordinary TOCTOU race (removed between this check and
         # the open).
+        #
+        # DISCLOSED, NOT CHANGED (final-round item 8): "present but not a
+        # regular file" and "absent" collapse to the identical `None` here —
+        # an overloaded null at a seam, the shape this repo's own
+        # conventions ban, and `_check_models` (`ccd/ccrc-doctor-checks`)
+        # takes the OPPOSITE position on the same class (a distinct verdict
+        # for a read it cannot trust). Not reopened this late: the collapse
+        # is CONTAINED, because `put()`'s and `clear()`'s own guards on this
+        # same path still raise on a non-regular shape — the fault moves
+        # downstream to the next write rather than disappearing, it is never
+        # silently accepted as though the field had simply never existed.
         p = os.path.join(reg, id_ + '.' + field)
         if not os.path.isfile(p):
             return None
@@ -5093,16 +5137,18 @@ if mode == 'state':
         # NAME and blocks forever on a FIFO with no writer; the `except
         # OSError` below cannot fire for a block, only for an error, so it
         # does NOT cover this. Guarded only when something is already there
-        # (`os.path.exists`): the FIRST-EVER lock file for a session must
-        # still be free to be CREATED by this open (the very case the
-        # comment above this block argues about), so an ABSENT path is not
-        # refused here, only a PRESENT non-regular one — which raises the
-        # same `OSError` this `try` already turns into "proceed unlocked",
-        # so the guarantee that block states ("this guard may only remove
-        # races, never add a refusal that stops a phase from ever updating")
-        # holds unchanged.
+        # (`os.path.lexists`, not `exists` — same final-round fix as
+        # `put()`'s tmp guard above: `exists` follows a symlink, so a
+        # DANGLING one at this path would read as absent and skip the
+        # guard): the FIRST-EVER lock file for a session must still be free
+        # to be CREATED by this open (the very case the comment above this
+        # block argues about), so an ABSENT path is not refused here, only a
+        # PRESENT non-regular one — which raises the same `OSError` this
+        # `try` already turns into "proceed unlocked", so the guarantee that
+        # block states ("this guard may only remove races, never add a
+        # refusal that stops a phase from ever updating") holds unchanged.
         lock_p = os.path.join(reg, '.prstate-' + id_ + '.lock')
-        if os.path.exists(lock_p) and not os.path.isfile(lock_p):
+        if os.path.lexists(lock_p) and not os.path.isfile(lock_p):
             raise OSError('refusing to open a non-regular-file pr-state lock: ' + lock_p)
         lock_f = open(lock_p, 'a')
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
@@ -5153,10 +5199,12 @@ if mode == 'state':
                     # bounded and visible on stderr, even though it costs this
                     # one row's update rather than merely the append. Guarded
                     # only when present-and-not-regular, exactly like the
-                    # lock above: the first-ever prhistory file must still be
-                    # free to be CREATED.
+                    # lock above (`lexists`, not `exists` — same final-round
+                    # fix: a dangling symlink here must not read as absent):
+                    # the first-ever prhistory file must still be free to be
+                    # CREATED.
                     hist_p = os.path.join(reg, id_ + '.prhistory')
-                    if os.path.exists(hist_p) and not os.path.isfile(hist_p):
+                    if os.path.lexists(hist_p) and not os.path.isfile(hist_p):
                         raise OSError('refusing to append to a non-regular-file prhistory: ' + hist_p)
                     with open(hist_p, 'a') as f:
                         f.write(json.dumps(rec) + '\n')
