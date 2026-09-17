@@ -8087,7 +8087,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 143,
+      'ccd/ccd': 145,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8136,7 +8136,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // to main and this wave is forbidden to re-point any of them, so a line
     // inserted above their anchors is damage with no repair available. When a
     // corpus cannot be re-pointed, the length of an edit above it IS a decision.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(182);
+    //
+    // RE-DERIVED AGAIN on the merge with `f06abdce` (round 7), and the number is
+    // the point of the round rather than an afterthought of it: this assertion is
+    // a FUNCTION OF THE MERGE. It walks the corpus and resolves anchors into
+    // `ccd/ccd`, main touches `ccd/ccd` often, and main moved ten times in the day
+    // this was derived — so every such move invalidates it on the PR's merge ref.
+    // 182 (this branch alone) and 163 (main alone) are both measurements of trees
+    // that no longer exist; neither was carried forward. 184 is what the instrument
+    // printed on the tree that ships.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(184);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8614,13 +8623,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
-        // RE-MEASURED at the tree this ships in (fix round 4). The citation
-        // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
-        // `origin/main`, so no anchor of this branch's ships. What moved these
-        // numbers instead is this branch's own `ccd/ccd` growth (+418 lines by
-        // the D-2989 guards and their arguments), which shifts every anchor
-        // below it — main's anchors going stale on this branch, not the other
-        // way round. Whatever the instrument printed is what ships.
+        // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
+        // merge carried a set measured on a tree that no longer exists — this
+        // branch's, and main's own CCR-10/D-2994 re-measure — so NEITHER was taken
+        // and the conflict was resolved structurally, leaving every value here to
+        // the instrument. The citation RE-POINT LEFT THIS WAVE: both corpus
+        // documents are byte-identical to `origin/main`, so no anchor of this
+        // branch's ships. What moves these entries is `ccd/ccd` growth on BOTH
+        // sides — this branch contributes `458 31` to it (net +427, derived here,
+        // not the `+418` three sibling comments still carry; that figure is review
+        // 78's F6 and stays DECLARED, corrected only where a comment was being
+        // rewritten anyway) and main's own insertions move it again. Whatever the
+        // instrument printed is what ships.
         'ccd/ccd:203',
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd:13573-13575',
@@ -8636,7 +8650,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
-        'ccd/ccd:19120',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
@@ -8645,7 +8658,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
         'ccd/ccd:11665-11670',
-        'ccd/ccd:12594-12659',
         'ccd/ccd:13809',
         'ccd/ccd:13812',
         'ccd/ccd:6425',
@@ -8667,15 +8679,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:2874',
         'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
+        'ccd/ccd:3070',
         'ccd/ccd:3050',
         'ccd/ccd:3050',
+        'ccd/ccd:3070',
         'ccd/ccd:2455',
-        'ccd/ccd:2793',
+        'ccd/ccd:3070',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
-        'ccd/ccd:5353-5362',
+        'ccd/ccd:5385-5388',
         'ccd/ccd:5828-5830',
-        'ccd/ccd:5819-5823',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -8714,13 +8727,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // spec lines. No ruling id and no rule change.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-        // RE-MEASURED at the tree this ships in (fix round 4). The citation
-        // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
-        // `origin/main`, so no anchor of this branch's ships. What moved these
-        // numbers instead is this branch's own `ccd/ccd` growth (+418 lines by
-        // the D-2989 guards and their arguments), which shifts every anchor
-        // below it — main's anchors going stale on this branch, not the other
-        // way round. Whatever the instrument printed is what ships.
+      // RE-MEASURED at the tree this ships in (fix round 4). The citation
+      // RE-POINT LEFT THIS WAVE — both corpus documents are byte-identical to
+      // `origin/main`, so no anchor of this branch's ships. What moved these
+      // numbers instead is this branch's own `ccd/ccd` growth (+418 lines by
+      // the D-2989 guards and their arguments), which shifts every anchor
+      // below it — main's anchors going stale on this branch, not the other
+      // way round. Whatever the instrument printed is what ships.
+      // RE-DERIVED on the merge with `f06abdce` (round 7), from the same run as
+      // the set above — the two are one measurement and must not be taken from
+      // different trees.
         'spec:2123 ccd/ccd:13573-13575',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
@@ -8731,7 +8747,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
-        'spec:2125 ccd/ccd:19120',
         'spec:2125 ccd/ccd:19131',
         'spec:2204 ccd/ccd:12032-12034',
         'spec:2204 ccd/ccd:12032-12034',
@@ -8753,9 +8768,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
+        'spec:2220 ccd/ccd:3070',
         'spec:2220 ccd/ccd:3050',
         'spec:2220 ccd/ccd:3050',
+        'spec:2220 ccd/ccd:3070',
+        'spec:2220 ccd/ccd:3070',
         'spec:2222 ccd/ccd:5725',
+        'spec:2222 ccd/ccd:5385-5388',
       ]);
   });
 
