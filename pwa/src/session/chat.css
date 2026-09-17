@@ -2120,6 +2120,16 @@ button.metachip:active {
   color: var(--accent);
   flex: none;
 }
+/* Routing slice 6, Task 4: the active row on a field ccd's `.inert` names for
+   this lane — the intended value still renders, but there is nothing a
+   queued badge could confirm, so this replaces `.opt-enter`'s dot rather than
+   joining it. Muted tertiary ink, not the accent: this is a fact about the
+   lane, not a pending action. */
+.opt-inert {
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  flex: none;
+}
 .opt-wait {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   color: var(--status-busy-text);

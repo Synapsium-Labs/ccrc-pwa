@@ -33,7 +33,14 @@ export function PickSheet({ open, onClose, eyebrow, title, options, onPick }: Pi
               <span className="opt-label">{o.label}</span>
               {o.sublabel && <span className="opt-desc">{o.sublabel}</span>}
             </span>
-            {o.active && (
+            {o.active && o.inertOnThisLane && (
+              // S6 Task 4: ccd's `.inert` names this field on the session's
+              // CURRENT lane — the intended value still renders (the active
+              // row), but there is nothing a queued badge could confirm, so
+              // this replaces the enter dot rather than joining it.
+              <span className="opt-inert">inert on this lane</span>
+            )}
+            {o.active && !o.inertOnThisLane && (
               <span className="opt-enter" aria-hidden="true">●</span>
             )}
           </button>

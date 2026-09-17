@@ -82,21 +82,24 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, ...patch,
+  started: true, spawnState: null, ask: null, usage: null, route: null, ...patch,
 });
 
 const makeStore = (): SessionStore =>
   createSessionStore(ID, { makeSocket: fakeSocket, api: { prompt } });
 
-const makeFleet = (): FleetStore => {
+const makeFleet = (patch: Partial<FleetSession> = {}): FleetStore => {
   const store = createFleetStore();
-  act(() => { store.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [fleetSession()] }); });
+  act(() => { store.setState({ roster: TEST_ROSTER, conn: 'open', sessions: [fleetSession(patch)] }); });
   return store;
 };
 
-const renderScreen = (): { store: SessionStore; fleet: FleetStore } => {
+/** `patch` (routing slice 6, Task 4) seeds the ONE fleet session this screen
+ *  renders against — every existing call site passes none, so this stays
+ *  `route: null` and every test below it is unaffected. */
+const renderScreen = (patch: Partial<FleetSession> = {}): { store: SessionStore; fleet: FleetStore } => {
   const store = makeStore();
-  const fleet = makeFleet();
+  const fleet = makeFleet(patch);
   render(
     <>
       <SessionScreen id={ID} store={store} fleet={fleet} />
@@ -246,5 +249,61 @@ describe('session pickers write the routing record', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// Routing slice 6, Task 4: once `FleetSession.route` rides the wire, the
+// pickers' active row and the header's `queued` badge are DERIVED from it —
+// no tap, no local timer, no `api.route` call anywhere in this describe
+// block. Every test above this one leaves `route: null` (the fixture's own
+// default) and is the "route: null, nothing changes" control for these.
+describe('the routing record on the wire drives the pickers directly (routing slice 6, Task 4)', () => {
+  it('the active row follows the intended record, not the live read-back', () => {
+    renderScreen({
+      effort: 'medium', // the live pane has not caught up yet
+      route: { fields: { effort: 'high' }, degraded: null, inert: [] },
+    });
+    openEffortSheet();
+
+    expect(screen.getByRole('button', { name: /^High/ }).className).toContain('opt--selected');
+    expect(screen.getByRole('button', { name: /^Medium/ }).className).not.toContain('opt--selected');
+    expect(route).not.toHaveBeenCalled();
+  });
+
+  it('the queued badge derives from the wire alone — no tap required to show or clear it', () => {
+    const { fleet } = renderScreen({
+      effort: 'medium',
+      route: { fields: { effort: 'high' }, degraded: null, inert: [] },
+    });
+    // Mismatch between the intended record and the live read-back: queued,
+    // with nobody ever having tapped a row.
+    expect(screen.getByText('queued')).toBeInTheDocument();
+
+    // The pane catches up; the SAME route record rides the next frame.
+    act(() => {
+      fleet.setState({
+        sessions: [fleetSession({
+          effort: 'high',
+          route: { fields: { effort: 'high' }, degraded: null, inert: [] },
+        })],
+      });
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+  });
+
+  it('an inert field renders its intended value with a marker, never a badge', () => {
+    renderScreen({
+      effort: 'medium', // still mismatched — would be "queued" if it weren't inert
+      route: { fields: { effort: 'high' }, degraded: null, inert: ['effort'] },
+    });
+
+    // No badge: ccd will never apply this field on the current lane, so
+    // there is nothing for a queued badge to wait on.
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+
+    openEffortSheet();
+    const high = screen.getByRole('button', { name: /^High/ });
+    expect(high.className).toContain('opt--selected');
+    expect(high.textContent).toContain('inert on this lane');
   });
 });

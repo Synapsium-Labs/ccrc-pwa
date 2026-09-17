@@ -61,7 +61,7 @@ describe('registry read census', () => {
       ['single', 1 + fieldReads],
       ['fleet', 1 + 24 * fieldReads],
     ]);
-    expect(expected).toEqual(new Map([['fields', 23], ['single', 24], ['fleet', 553]]));
+    expect(expected).toEqual(new Map([['fields', 30], ['single', 31], ['fleet', 721]]));
 
     const files = filesUnder(path.join(root, 'server'))
       .filter((file) => /\.(?:ts|js|mjs|cjs)$/.test(file));
@@ -592,7 +592,7 @@ describe('PR and archive fields', () => {
 });
 
 // C0.3: readSessionRecord is the SAME parser (buildRecord) as readRegistry,
-// narrowed to one id — one readdir plus that id's 23
+// narrowed to one id — one readdir plus that id's 30
 // [registry-read-census:fields] field reads instead of a whole-fleet sweep.
 // These pin that it agrees with readRegistry's own
 // per-record answer, id-by-id, rather than re-testing every field this file
@@ -641,7 +641,7 @@ describe('readSessionRecord', () => {
 
     const rec = await readSessionRecord(countingIO, cfg, 'nope');
     expect(rec).toEqual({ found: false, reason: 'absent' });
-    // A miss must not fire the 23-field Promise.all `buildRecord` would — the
+    // A miss must not fire the 30-field Promise.all `buildRecord` would — the
     // whole point of checking the listing FIRST.
     expect(fieldReads).toBe(0);
   });
@@ -661,7 +661,7 @@ describe('readSessionRecord', () => {
     expect(await readSessionRecord(localIO, cfg, 'claude-demo')).toEqual({ found: false, reason: 'absent' });
   });
 
-  it('costs exactly one readdir plus the one id\'s 23 field reads — never a per-session Promise.all for a sibling', async () => {
+  it('costs exactly one readdir plus the one id\'s 30 field reads — never a per-session Promise.all for a sibling', async () => {
     const reg = path.join(home, '.cc-sessions');
     seed(reg, 'claude-a-MekWarLive', {
       wrapper: 'claude-a', project: 'MekWarLive', workdir: '/data/projects/MekWarLive', uuid: 'a'.repeat(36),
@@ -682,7 +682,7 @@ describe('readSessionRecord', () => {
     await readSessionRecord(countingIO, cfg, 'claude-a-MekWarLive');
 
     expect(readdirCalls).toBe(1);
-    expect(fieldReads).toHaveLength(23);
+    expect(fieldReads).toHaveLength(30);
     expect(fieldReads.every((p) => p.includes('claude-a-MekWarLive'))).toBe(true);
   });
 

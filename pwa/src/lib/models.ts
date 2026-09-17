@@ -19,6 +19,23 @@
 import type { RouteField } from '../../../shared/api';
 import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 
+/**
+ * Routing slice 6, Task 4: the intended-value override an option list is
+ * built with once a session carries `FleetSession.route`. `intended`, when
+ * non-null, replaces the loose live-pane comparison for `active` with an
+ * EXACT match against the row's own routing value — the recorded intent,
+ * not what the pane happens to display yet. `inert`, true only when ccd's
+ * own `.inert` names this field on the CURRENT lane, marks whichever row
+ * `active` lands on as `inertOnThisLane` — a row can be active-and-inert
+ * (ccd wrote the field, but this lane will never apply it) as easily as
+ * active-and-pending. Omitted entirely (not just `{intended: null}`), a
+ * caller gets EXACTLY today's live-comparison behaviour — the
+ * "route: null, nothing changes" contract (S6-R4). */
+export interface RoutingOverride {
+  intended: string | null;
+  inert: boolean;
+}
+
 export interface PickOption {
   label: string;
   sublabel?: string;
@@ -33,24 +50,37 @@ export interface PickOption {
    *  directly), but always populated so no caller has to special-case an
    *  absent field on a type that promises one. */
   readback: string;
-  active: boolean; // matches the session's current model/effort
+  active: boolean; // matches the session's current model/effort, or (S6 Task 4) the intended record when one rides the wire
+  /** S6 Task 4: set on the ACTIVE row only, and only when the caller passed
+   *  `inert: true` — this field is on ccd's `.inert` list for the session's
+   *  current lane. The sheet renders a marker instead of a queued badge;
+   *  `SessionScreen` never treats an inert field as queued (there is nothing
+   *  to wait for a confirmation that will never come). */
+  inertOnThisLane?: boolean;
 }
 
 /** Model chooser rows. `current` is the pane statusline display name
  *  ("Opus 5 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
- *  doesn't defeat the highlight.
+ *  doesn't defeat the highlight. `routing` (S6 Task 4) overrides `active` with
+ *  the recorded intent when the session's `route` rides the wire — see
+ *  `RoutingOverride`'s own docstring.
  *
  *  Labels are the family's CURRENT latest (the routing record's `class` value
  *  is the bare family alias, which the harness auto-resolves to the newest in
  *  that family — `opus` → Opus 5 on Anthropic API as of CC v2.1.219+). Bump a
  *  label when a family's newest name changes; the alias itself never needs
  *  touching. */
-export function modelOptions(wrapper: string, current: string | null): PickOption[] {
+export function modelOptions(wrapper: string, current: string | null, routing?: RoutingOverride): PickOption[] {
   const c = (current ?? '').toLowerCase();
-  const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => ({
-    label, sublabel, route: { field: 'class', value: alias }, readback: key,
-    active: key !== '' && c.includes(key),
-  });
+  const intended = routing?.intended ?? null;
+  const inert = routing?.inert ?? false;
+  const row = (label: string, alias: string, key: string, sublabel?: string): PickOption => {
+    const active = intended !== null ? alias === intended : (key !== '' && c.includes(key));
+    return {
+      label, sublabel, route: { field: 'class', value: alias }, readback: key, active,
+      ...(active && inert ? { inertOnThisLane: true } : {}),
+    };
+  };
   if (wrapper === 'gpt') {
     return [
       row('GPT-6 Astra', 'fable', 'astra', 'Fable class'),
@@ -68,6 +98,15 @@ export function modelOptions(wrapper: string, current: string | null): PickOptio
   ];
 }
 
+/** The model row's own `readback` for a routing `class` alias, on the given
+ *  wrapper's option list — `null` for an alias no row on this wrapper's list
+ *  carries (an out-of-vocabulary value ccd wrote from a build ahead of this
+ *  one). `SessionScreen`'s wire-derived queued check reuses this rather than
+ *  re-deriving the alias→key table a second time. */
+export function modelReadbackFor(wrapper: string, alias: string): string | null {
+  return modelOptions(wrapper, null).find((o) => o.route.value === alias)?.readback ?? null;
+}
+
 /** The five level rows' labels are the ladder rung capitalised, nothing more
  *  (`xhigh` -> `Xhigh`) — exactly today's hand-typed labels, so no rendered
  *  text changes. */
@@ -80,29 +119,33 @@ const capitalise = (rung: EffortRung): string => rung[0]!.toUpperCase() + rung.s
  *  never a ladder rung) and, for Anthropic wrappers, `Ultracode` (xhigh +
  *  workflow orchestration — a super-mode, not a level, and invalid on the
  *  gpt lane). Ultracode is still the `effort` field's own value
- *  (`{effort: 'ultracode'}`) — there is no separate routing field for it. */
+ *  (`{effort: 'ultracode'}`) — there is no separate routing field for it.
+ *  `routing` (S6 Task 4) overrides every row's `active` with an exact match
+ *  against the recorded intent — see `RoutingOverride`'s own docstring. */
 export function effortOptions(
   wrapper: string,
   effort: string | null,
   ultracode: boolean,
+  routing?: RoutingOverride,
 ): PickOption[] {
   const e = (effort ?? '').toLowerCase();
-  const level = (label: string, value: string, active: boolean): PickOption =>
-    ({ label, route: { field: 'effort', value }, readback: value, active });
+  const intended = routing?.intended ?? null;
+  const inert = routing?.inert ?? false;
+  const level = (label: string, value: string, active: boolean, sublabel?: string): PickOption => ({
+    label, sublabel, route: { field: 'effort', value }, readback: value, active,
+    ...(active && inert ? { inertOnThisLane: true } : {}),
+  });
   const activeFor = (rung: EffortRung): boolean =>
-    rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung;
+    intended !== null ? rung === intended : (rung === 'xhigh' ? e === 'xhigh' && !ultracode : e === rung);
   const opts: PickOption[] = [
     ...EFFORT_LADDER.map((rung) => level(capitalise(rung), rung, activeFor(rung))),
-    level('Auto', 'auto', e === 'auto'),
+    level('Auto', 'auto', intended !== null ? intended === 'auto' : e === 'auto'),
   ];
   if (wrapper !== 'gpt') {
-    opts.splice(4, 0, {
-      label: 'Ultracode',
-      sublabel: 'xhigh + workflow orchestration',
-      route: { field: 'effort', value: 'ultracode' },
-      readback: 'ultracode',
-      active: ultracode,
-    });
+    opts.splice(4, 0, level(
+      'Ultracode', 'ultracode', intended !== null ? intended === 'ultracode' : ultracode,
+      'xhigh + workflow orchestration',
+    ));
   }
   return opts;
 }

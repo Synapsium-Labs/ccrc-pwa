@@ -28,7 +28,7 @@ import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
 import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, type PickOption } from '../lib/models';
+import { modelOptions, effortOptions, modelReadbackFor, type PickOption } from '../lib/models';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -169,6 +169,41 @@ export function SessionScreen({
   const wrapperFromId = id.split(':', 1)[0] ?? id;
   const project = live?.project ?? (id.slice(wrapperFromId.length + 1) || id);
   const wrapper = live?.wrapper ?? wrapperFromId;
+
+  // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
+  // active row and the header's queued badge are DERIVED from it instead of
+  // this screen's own optimistic `queued` state below. `route: null` (an
+  // older ccd, or a session it has never routed) leaves every line here
+  // inert and `queuedField` below falls through to exactly today's
+  // behaviour — S6-R4's "nothing changes" contract.
+  const routeInfo = live?.route ?? null;
+  const classIntended = routeInfo?.fields.class ?? null;
+  const effortIntended = routeInfo?.fields.effort ?? null;
+  const classInert = routeInfo?.inert.includes('class') ?? false;
+  const effortInert = routeInfo?.inert.includes('effort') ?? false;
+  // The intended value's readback vs. the live read-back: `live.effort`
+  // directly for effort (`ultracode` is its own boolean, not an effort
+  // string — the same split `pick`'s own read-back effect already makes),
+  // the model display name for class, reusing `modelOptions`' own loose
+  // comparison through `modelReadbackFor`. An INERT field is never
+  // "queued" — ccd will not apply it on this lane, so there is nothing for a
+  // badge to wait on (`PickSheet` marks its row `inertOnThisLane` instead).
+  const wireQueuedField: RouteField | null = routeInfo === null ? null : (() => {
+    if (effortIntended !== null && !effortInert) {
+      const agrees = effortIntended === 'ultracode' ? live?.ultracode === true : live?.effort === effortIntended;
+      if (!agrees) return 'effort';
+    }
+    if (classIntended !== null && !classInert) {
+      const readback = modelReadbackFor(wrapper, classIntended);
+      const agrees = readback !== null && (live?.model ?? '').toLowerCase().includes(readback);
+      if (!agrees) return 'class';
+    }
+    return null;
+  })();
+  // Exclusively one source or the other, never both: with `route` present the
+  // wire is the sole answer (a stale local write must not re-light a badge
+  // the wire already cleared); with `route: null`, today's local state.
+  const queuedField: RouteField | null = routeInfo !== null ? wireQueuedField : (queued?.field ?? null);
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
@@ -327,7 +362,7 @@ export function SessionScreen({
         onBack={() => navigate('/')}
         onChangeModel={changeModel}
         onChangeEffort={changeEffort}
-        queuedField={queued?.field ?? null}
+        queuedField={queuedField}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
@@ -464,7 +499,7 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
-        options={modelOptions(live?.wrapper ?? wrapperFromId, live?.model ?? null)}
+        options={modelOptions(wrapper, live?.model ?? null, routeInfo ? { intended: classIntended, inert: classInert } : undefined)}
         onPick={(o) => void pick(o)}
       />
       <PickSheet
@@ -472,7 +507,10 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="effort"
         title="Reasoning effort"
-        options={effortOptions(live?.wrapper ?? wrapperFromId, live?.effort ?? null, live?.ultracode ?? false)}
+        options={effortOptions(
+          wrapper, live?.effort ?? null, live?.ultracode ?? false,
+          routeInfo ? { intended: effortIntended, inert: effortInert } : undefined,
+        )}
         onPick={(o) => void pick(o)}
       />
       <SwapSheet

@@ -3,8 +3,20 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO, MeasuredRead, ReadFailure } from './io.js';
 import { readHookState } from './hookstate.js';
 import {
-  isPrPhase, isStopSurface, type IdentityField, type LifecycleField, type PrPhase, type StopSurface,
+  isPrPhase, isStopSurface, ROUTE_WRITABLE_FIELDS, type IdentityField, type LifecycleField, type PrPhase,
+  type RouteField, type RouteFields, type StopSurface,
 } from '../../shared/api.js';
+
+// Destructured, never re-typed as quoted string literals, at `buildRecord`'s
+// own Promise.all below: `single-definition.test.ts`'s ROUTE_WRITABLE_FIELDS
+// census (routing spec §5.3, slice 4) scans every `[...]` literal under the
+// four roots for two or more of these five words QUOTED together, and a
+// hand-typed `field(io, dir, id, 'class')`/`'effort'`/… run alongside each
+// other in that Promise.all would BE exactly the second copy the census
+// exists to catch — this repo's own "enumerated once, derived" rule
+// (CLAUDE.md), applied to a reader instead of a writer for once.
+const [ROUTE_FIELD_CLASS, ROUTE_FIELD_EFFORT, ROUTE_FIELD_SUBAGENT, ROUTE_FIELD_WORKFLOW, ROUTE_FIELD_COMPACT] =
+  ROUTE_WRITABLE_FIELDS;
 
 // `IdentityField` moved to shared/api.ts (Task 2): `FleetSession.unmeasured`
 // carries the SAME evidence onto the wire, and a second, server-only
@@ -44,7 +56,7 @@ export interface SessionRecord {
    *    `'unreadable'` — the file is LISTED in the registry directory this read
    *                     opened with, and its bytes did not come back.
    *                     TRANSIENT — one dropped agent-WS round trip among the
-   *                     23 [registry-read-census:fields] field reads a session's
+   *                     30 [registry-read-census:fields] field reads a session's
    *                     read fires — so it asks to be retried.
    *                     `field()` cannot see this on its own (`io.readFile`
    *                     maps a failed read and a missing file to the same
@@ -244,6 +256,24 @@ export interface SessionRecord {
    *  file is proven not to exist. Only a measured `unreadable` still falls
    *  back to the listed-vs-not rung above. */
   lifecycleUnmeasured: readonly LifecycleField[];
+  /**
+   * The routing record ccd owns for this session — the SEVEN files
+   * `$REG/<id>.{class,effort,subagent,workflow,compact,degraded,inert}`
+   * (routing slice 6, Task 4), read alongside every other field on the same
+   * `Promise.all` so a routing read never costs a second round trip. `null`
+   * when NONE of the seven files exist at all — the ordinary state of a
+   * session ccd has never routed. Otherwise:
+   *   - `fields` — the WRITABLE fields present (`ROUTE_WRITABLE_FIELDS`),
+   *     absent fields simply absent, values trimmed and otherwise UNCHECKED —
+   *     this is a raw registry read, not `parseRouteFields`'s ingress guard,
+   *     so an unparseable-by-ccd value still rides the wire rather than
+   *     being silently dropped.
+   *   - `degraded` — `.degraded`'s word, or `null` when absent.
+   *   - `inert` — `.inert`'s comma-separated list, split and restricted to
+   *     `ROUTE_WRITABLE_FIELDS` members (a stray word ccd never writes is
+   *     dropped rather than laundered onto the wire as a routable field).
+   */
+  route: { fields: RouteFields; degraded: string | null; inert: RouteField[] } | null;
 }
 
 /**
@@ -289,7 +319,7 @@ export function measuredIdentity(rec: SessionRecord): { uuid: string; wrapper: s
 /**
  * The reason a held workspace carries when its `.hold` file is listed in the
  * registry directory but its contents could not be read — one failed op over
- * the agent WS is enough (`readRegistry` fires 23
+ * the agent WS is enough (`readRegistry` fires 30
  * [registry-read-census:fields] field reads per session under one request
  * timeout). Held with an unreadable reason, never unheld: the consumer
  * that makes the polarity load-bearing is `coord/dispatch.ts`'s adoption gate,
@@ -452,8 +482,8 @@ function manifestBytes(raw: string | null): number | null {
 // ── Observability (spec's OBSERVABILITY section) ───────────────────────────
 //
 // A degraded field must be LOUD without being a flood: a read-storm sweep
-// (23 [registry-read-census:fields] field reads per session — a 24-session
-// fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+// (30 [registry-read-census:fields] field reads per session — a 24-session
+// fleet's baseline is 721 agent-WS operations [registry-read-census:fleet]
 // PER `readRegistry` call, before the conditional reconfirmation listing)
 // would otherwise log the same stuck field dozens of times a minute.
 // `warnOnce` is keyed `id#field`,
@@ -540,7 +570,7 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
 }
 
 /**
- * One session's 23-field read [registry-read-census:fields] plus the
+ * One session's 30-field read [registry-read-census:fields] plus the
  * `SessionRecord` it builds — the ONE
  * parser, shared by `readRegistry`'s whole-fleet sweep and
  * `readSessionRecord`'s single-id read below (C0.3), so there is no second
@@ -548,6 +578,16 @@ function noteWholeFleetListing(listable: boolean, now: number): void {
  * caller's directory listing, passed in rather than re-read here, for the
  * same "PRESENCE independently of whether the read succeeded" reason the
  * `held` field below already relies on.
+ *
+ * 23 -> 30 (routing slice 6, Task 4): seven routing fields — `.class`,
+ * `.effort`, `.subagent`, `.workflow`, `.compact` (`ROUTE_WRITABLE_FIELDS`)
+ * plus ccd's own `.degraded`/`.inert` — ride the wire as `SessionRecord.route`
+ * beside the live read-back the pane statusline already carries, so the
+ * routing UI can show the INTENDED value even before it has painted. Cost
+ * (measure-the-loop-not-the-function, not just this function): +7 reads ×
+ * the session count per sweep — a 24-session fleet's whole-registry sweep
+ * rises from 553 to 721 agent-WS operations per `readRegistry` call, before
+ * the conditional reconfirmation listing.
  *
  * Returns null for a DROPPED registry entry — narrowed (architecture doc,
  * increment 1's second half) from the old "missing wrapper/workdir/uuid"
@@ -564,7 +604,8 @@ async function buildRecord(
 ): Promise<SessionRecord | null> {
   const [wrapperRead, project, workdirRead, uuidRead, startedRead, home, pool, lastswap, workspace, branchRead,
     base, prPhaseRaw, prNumberRaw, prCheckedAtRaw, archivedRaw, manifestRaw, holdRead,
-    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead] = await Promise.all([
+    stoppedRead, supervisedRead, swapBlockedRaw, spawnRaw, substrateRead, strandedRead,
+    classRaw, effortRaw, subagentRaw, workflowRaw, compactRaw, degradedRaw, inertRaw] = await Promise.all([
     fieldMeasured(io, cfg.registryDir, id, 'wrapper'), field(io, cfg.registryDir, id, 'project'),
     fieldMeasured(io, cfg.registryDir, id, 'workdir'), fieldMeasured(io, cfg.registryDir, id, 'uuid'),
     fieldMeasured(io, cfg.registryDir, id, 'started'), field(io, cfg.registryDir, id, 'home'),
@@ -578,6 +619,15 @@ async function buildRecord(
     field(io, cfg.registryDir, id, 'swapblocked'), field(io, cfg.registryDir, id, 'spawn'),
     fieldMeasured(io, cfg.registryDir, id, 'substrate'),
     fieldMeasured(io, cfg.registryDir, id, 'stranded'),
+    // Routing slice 6, Task 4: the seven routing files, plain trimmed reads
+    // (no measured ladder — a raw, unvalidated string carried onto
+    // `SessionRecord.route`, exactly the shape asked for below). The first
+    // five read through the `ROUTE_FIELD_*` constants above, not quoted
+    // literals — see that block's own comment.
+    field(io, cfg.registryDir, id, ROUTE_FIELD_CLASS), field(io, cfg.registryDir, id, ROUTE_FIELD_EFFORT),
+    field(io, cfg.registryDir, id, ROUTE_FIELD_SUBAGENT), field(io, cfg.registryDir, id, ROUTE_FIELD_WORKFLOW),
+    field(io, cfg.registryDir, id, ROUTE_FIELD_COMPACT), field(io, cfg.registryDir, id, 'degraded'),
+    field(io, cfg.registryDir, id, 'inert'),
   ]);
 
   // The identity-triple ladder. `uuid` first: `names.includes(id + '.uuid')`
@@ -728,6 +778,24 @@ async function buildRecord(
   // string exactly when the evidence is `'named'`.
   const branchName = branchEvidence === 'named' && branchRead.ok ? branchRead.content : null;
 
+  // Routing slice 6, Task 4: `route` is `null` only when NONE of the seven
+  // routing files exist — a session ccd has never routed. `field()` already
+  // returns `null` for an absent file, so `raw` below IS the presence check.
+  const routeRawByField: Record<RouteField, string | null> = {
+    class: classRaw, effort: effortRaw, subagent: subagentRaw, workflow: workflowRaw, compact: compactRaw,
+  };
+  const routeFields: RouteFields = {};
+  for (const f of ROUTE_WRITABLE_FIELDS) {
+    const raw = routeRawByField[f];
+    if (raw !== null) routeFields[f] = raw;
+  }
+  const inertList = (inertRaw ?? '').split(',').map((s) => s.trim()).filter(Boolean);
+  const inert = inertList.filter((f): f is RouteField => (ROUTE_WRITABLE_FIELDS as readonly string[]).includes(f));
+  const route: SessionRecord['route'] =
+    Object.keys(routeFields).length === 0 && degradedRaw === null && inertRaw === null
+      ? null
+      : { fields: routeFields, degraded: degradedRaw, inert };
+
   return {
     id, wrapper: measured.wrapper, project: project ?? id, workdir: measured.workdir, uuid: measured.uuid,
     started: startedRead.ok && startedRead.content === '1',
@@ -837,6 +905,7 @@ async function buildRecord(
     spawn: spawnStamp === null || spawnRc === null ? null : { at: spawnStamp.at, rc: spawnRc },
     lifecycleUnmeasured,
     unmeasured,
+    route,
   };
 }
 
@@ -885,7 +954,7 @@ export async function readRegistryMeasured(io: FleetIO, cfg: CcrcConfig): Promis
     out.push(rec);
   }
   // ONE SECOND LISTING, and only when something needs it. Before Task 5, a
-  // `ccd ws-release` landing anywhere inside the 23-field-read window left
+  // `ccd ws-release` landing anywhere inside the 30-field-read window left
   // the name in the listing and no bytes behind it, indistinguishable at
   // `field()` alone from a read that failed — a perfectly ordinary release
   // was reported as `HOLD_UNREADABLE`, the registry-is-broken sentence, and
@@ -943,9 +1012,9 @@ export type SingleRead =
 
 /**
  * `readRegistry`, narrowed to ONE session (C0.3). Its baseline is one
- * `readdir` plus that id's 23 [registry-read-census:fields] field reads — 24
+ * `readdir` plus that id's 30 [registry-read-census:fields] field reads — 31
  * agent-WS operations [registry-read-census:single] in remote mode, instead of
- * `readRegistry`'s 553-operation baseline [registry-read-census:fleet] on a
+ * `readRegistry`'s 721-operation baseline [registry-read-census:fleet] on a
  * 24-session fleet. The conditional reconfirmation listing described below is
  * excluded from both baselines. This serves every caller that only asked "what does
  * the registry say about THIS session" and never needed uniqueness or a

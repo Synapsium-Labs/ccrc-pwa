@@ -355,6 +355,30 @@ export interface FleetSession {
    *  it — and the first tick's `sweepUsage` re-derives it against the current
    *  one. */
   readonly usage: SessionUsage | null;
+  /**
+   * The routing record ccd owns for this session (routing slice 6, Task 4) —
+   * `server/src/registry.ts`'s `SessionRecord.route`, carried straight onto
+   * the wire. `null` when NONE of the seven routing files exist at all — the
+   * ordinary state of a session ccd has never routed; NOT the same word
+   * `degraded` already carries elsewhere on this interface, which means a
+   * degraded ROW (a failed identity lookup) — the two never collide because
+   * the routing values ride this ONE nested object instead of flat fields
+   * (S6-R4).
+   *
+   *   - `fields` — the writable fields present (`ROUTE_WRITABLE_FIELDS`),
+   *     absent fields simply absent, values the raw trimmed strings the
+   *     registry holds. UNVALIDATED beyond that shape — this is a reading,
+   *     not `parseRouteFields`'s ingress guard, so the PWA validates nothing
+   *     and shows what ccd actually wrote, even a value a newer/older ccd
+   *     vocabulary does not recognise.
+   *   - `degraded` — `$REG/<id>.degraded`'s word, or `null`.
+   *   - `inert` — `$REG/<id>.inert`'s comma list, split and restricted to
+   *     `ROUTE_WRITABLE_FIELDS` members.
+   *
+   * ADDITIVE, absence-permits: an older persisted `FleetSession[]` (a
+   * `state-cache.json` from before this task) revives with `route: null`
+   * through `reviveFleetSession` below — no `FLEET_PROTO` bump. */
+  readonly route: { readonly fields: RouteFields; readonly degraded: string | null; readonly inert: readonly RouteField[] } | null;
 }
 
 /**
@@ -2372,6 +2396,38 @@ const reviveStranded = (o: RawObj, k: string): { at: number; reason: string } | 
   return { at: reqNum(s, 'at'), reason: reqStr(s, 'reason') };
 };
 
+/** `FleetSession.route`'s persistence contract (routing slice 6, Task 4).
+ *  Absent → null: an older snapshot predates this task entirely, same
+ *  "additive, absence-permits" degrade every other slice-6 addition takes.
+ *  Present-but-malformed rejects the WHOLE session — `reviveSwapBlocked`'s
+ *  stance, not `reviveAsk`'s: a route reading a caller cannot parse is not
+ *  the same fact as "no routing file at all", so it must not launder into
+ *  that answer. `fields` keeps only `ROUTE_WRITABLE_FIELDS` members with
+ *  string values (an unknown key or non-string value rejects); `degraded`
+ *  is free text with no vocabulary to check; `inert` keeps only
+ *  `ROUTE_WRITABLE_FIELDS` members, same restriction the live read applies. */
+const reviveRoute = (
+  o: RawObj, k: string,
+): { fields: RouteFields; degraded: string | null; inert: RouteField[] } | null => {
+  const v = o[k];
+  if (v === undefined || v === null) return null;
+  const s = asObj(v, k);
+  const fieldsRaw = asObj(s['fields'], `${k}.fields`);
+  const fields: RouteFields = {};
+  for (const [field, value] of Object.entries(fieldsRaw)) {
+    if (!(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(field)) throw new MalformedSnapshot(`${k}.fields`);
+    if (typeof value !== 'string') throw new MalformedSnapshot(`${k}.fields.${field}`);
+    fields[field as RouteField] = value;
+  }
+  const inertRaw = s['inert'];
+  if (!Array.isArray(inertRaw) || (inertRaw as unknown[]).some(
+    (x) => typeof x !== 'string' || !(ROUTE_WRITABLE_FIELDS as readonly string[]).includes(x),
+  )) {
+    throw new MalformedSnapshot(`${k}.inert`);
+  }
+  return { fields, degraded: optStr(s, 'degraded'), inert: inertRaw as RouteField[] };
+};
+
 /** `FleetSession.ask`'s own persistence contract (Task 19, CORRECTED by fix
  *  round 1 / D-2311). Absent → null: an older snapshot predates the ask
  *  pre-emption lane entirely. Present but malformed — not an object, or
@@ -2670,6 +2726,7 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
       started: optBool(o, 'started', true),
       spawnState: spawnRaw,
       usage: reviveUsage(o, 'usage'),
+      route: reviveRoute(o, 'route'),
     };
 
     // A recorded bucket is taken as recorded, timestamp and all — the server
