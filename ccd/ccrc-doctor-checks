@@ -2745,11 +2745,17 @@ _check_accounts() {
   fi
 
   # ONE LINE PER FINDING, plus one COUNTS line, TAB-separated and read into FOUR
-  # variables. Every field the helper writes is non-empty by construction (a
-  # code, an id, a sentence, or a number), so CLAUDE.md's measured TSV hazard —
-  # TAB is an IFS whitespace character, so a run of them collapses and shifts
-  # every field after an empty one — cannot bite here; a finding's absent fourth
-  # field is TRAILING, which `read` leaves empty without shifting anything.
+  # variables. Three of the four fields the helper writes are non-empty by
+  # construction (a code, a sentence, a number) — the id is NOT: its producer,
+  # `opDoctor` (`deploy/account-op.mjs`), documents in capitals that IT DOES
+  # NOT VALIDATE THE ROSTER, with several lines arguing why it must not, so an
+  # id-less account's row carries an EMPTY id field (`Array.prototype.join`
+  # renders `undefined` as `''`). CLAUDE.md's measured TSV hazard (D-71) — TAB
+  # is an IFS whitespace character, so a run of them collapses and shifts
+  # every field after an empty one — IS LIVE for that field: `read` collapses
+  # the empty id into the message that follows it, and the message prints
+  # where the id should be. A finding's absent fourth field is still TRAILING,
+  # which `read` leaves empty without shifting anything.
   # `_dr_line` squashes embedded newlines out of both halves, so the findings
   # join onto ONE verdict line and the remedy stays the line after it.
   local -a findings=()
