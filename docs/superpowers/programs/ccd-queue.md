@@ -900,3 +900,64 @@ central spec question, and the answer is in the wave's favour.
 lenses, three Sonnet refuters per finding, 0 unexamined — plus my own independent reproduction of the
 critical finding. A second panel over a closed panel would re-review a review, which clause 12 assigns
 to nobody and which the routing policy names as the archetypal over-fan.
+
+---
+
+## F14 had no ruling — the fourth enumeration defect of mine this run, and the first one with a mechanism
+
+The worker read the fix-round artifact against the report and found it ruled on **fifteen of sixteen
+findings**. It did not fold the gap in silently, and its reason is the right one: *"a finding that
+nobody ruled on is exactly the thing that disappears."*
+
+**Checked mechanically rather than by eye, which is the change.** Deriving the id list from the
+report's own `###` headers gives 18 ids — F1–F16 plus R1 and R2 — and matching each against the
+artifact leaves **exactly one missing: F14.** The worker's count was exact.
+
+**And the first checker lied, in the safe direction.** It reported four MORE as missing (F12, F15,
+F16, R2) because its pattern demanded `**Fn` followed by space/comma/paren while the artifact spells
+three of them `**F12.` and one as plain "F11 and F15". The checker under-matched the document's own
+spellings. **The direction of a checker's error is itself a property worth naming:** one that
+over-reports costs a re-read; one that under-reports hides the gap. Neither answer was believed until
+the pattern was fixed.
+
+> **Standing for the rest of this run: no ruling over a set of findings is published without deriving
+> the id list from the report and asserting coverage.**
+
+That is the mechanism version of a rule I have stated at other people all day and failed four times
+myself — "all six" when it was five; the safe/reachable split whose headline disagreed with its own
+list; two figures published without naming the tree they came from; and now fifteen of sixteen. **A
+rule that is only ever stated is the thing this entire wave exists to stop.**
+
+### F14 ruled: NARROW the sentence, and not for cost
+
+The new `_plat_mv_notdir` header closes *"And no symlink-to-DIRECTORY exists at any of the eight
+anywhere in the tree"* while its own census is scoped to a literal `ln -s` in the shipped files and
+excludes fixtures by construction. The reviewer offered two directions; I take the narrowing, because
+the reviewer **already measured the fixtures** — `POOLS()/demo` targets a FIFO, `/dev/zero`,
+`/dev/null` and a regular file, none a directory. So the wide claim is *true today*. Its warrant would
+then rest on a fixture census nobody maintains, and it goes silently false the first time anyone adds
+a directory fixture: an absence claim with no writer that maintains it. **Scope it to what the census
+measures — and any surviving sentence about fixtures must name the census that would catch a new one,
+or it is the same defect one sentence shorter.** Costs if wrong: a narrower true sentence.
+
+**The worker's substitution is ratified** — it proceeded on the reviewer's fix direction rather than
+stalling the round on a round trip, under the standing conflict rule written one exchange earlier:
+nothing irreversible, cheapest route that discharges it, report rather than silently fold in. First
+occasion after the rule was written, used exactly as intended.
+
+### F9 lands in two homes, and the worker was right that it cannot land one of them
+
+A worker never merges, so the hand-written squash body is mine. Ruling: **the corrected row 6 goes in
+the plan's A5 table** — tracked, durable, consistent with F5 — **and** the squash body states it. The
+body alone would not do: under a squash merge `79aa38b4`'s message never reaches `main`, so the squash
+body is the only surviving message, and a reader looking for a mutation result looks at the table, not
+at `git log`. The worker writes the artifact with the trailers DERIVED; **verifying it lands is mine.**
+
+### Its F1 scope note, verified — with one citation fourteen lines off
+
+Platform block is `ccd/ccd:11-948`; all three F1 sites (4927, 5158, 5214) sit far outside it; the next
+top-level definition after `_pr_py` is at 5366, so it encloses all three; and all three read exactly
+`if os.path.lexists(X) and not os.path.isfile(X):` — one defect, three times. **`_pr_py` opens at
+4675, not the 4689 it cited.** Substance right, citation off; recorded only because this run has been
+two parties holding each other to citing a `ccd` line with the copy it came from. The byte-identity
+conclusion stands and `ccd/ccrc` needs no mirror edit.
