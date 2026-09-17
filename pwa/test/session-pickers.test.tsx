@@ -82,7 +82,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, usage: null, route: null, ...patch,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...patch,
 });
 
 const makeStore = (): SessionStore =>

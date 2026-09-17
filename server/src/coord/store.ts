@@ -3,6 +3,10 @@ import { tx } from './db.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, type ClaimRow } from './claims.js';
 import { decideAllocation } from './ledger.js';
+// D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
+// policy — the house port pattern. This read exists to feed that policy and
+// nothing else, so the shape it returns is the policy's to define.
+import type { CoordPlacementStamp } from './placement.js';
 import type { LedgerLog } from './ledgerlog.js';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
@@ -57,8 +61,14 @@ export interface PrLineageEntry { pr: number; branch: string; phase: string; rec
  * cannot live in `shared/` without `RunSummary` importing server-only
  * knowledge of `.prhistory`'s shape, so this stays a server-side supertype
  * rather than growing the wire type.
+ *
+ * `coordProject` (migration 12) is the same idea for a second field: the
+ * coordinator's project, stamped at open time from a registry read the caller
+ * made, kept here for the board-placement policy to read server-side. It is
+ * NOT one of the design's two wire additions, so it stays off `RunSummary`
+ * and gets stripped by `toRunSummary` alongside `prLineage`.
  */
-export interface RunRow extends RunSummary { prLineage: PrLineageEntry[] }
+export interface RunRow extends RunSummary { prLineage: PrLineageEntry[]; coordProject: string | null }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
  *  the three consumers (`closeRun`, `FleetWatcher.sweepMerged`, the by-hand
@@ -69,14 +79,31 @@ export interface OpenSibling {
   id: number; program: string; wave: number; waveOf: number | null;
 }
 
+/** The columns `boardPlacement`'s port supply needs from a run, and nothing
+ *  else — `OpenSibling`'s own reasoning above, restated for this consumer:
+ *  hydrating a whole run (`itemTally`, `unreadMailCount`, batch health, a
+ *  `prLineage` JSON parse) to answer "who coordinates this session, and where
+ *  do they live" would drag all of that through a decision that turns on three
+ *  strings and an id.
+ *
+ *  DECLARED BY THE CONSUMER (`coord/placement.ts`), re-exported here so the
+ *  store's own result type reads in one place. D-2921 also dropped `project`
+ *  from it: that column is the WORKER's project, the policy no longer keys
+ *  anything on it, and a field nobody reads is an invitation to key on it
+ *  again — which is the defect that number was spent on. */
+export type { CoordPlacementStamp };
+
 /** `RunRow` -> `RunSummary`: strips `prLineage`, server-internal review
  *  material `RunSummary`'s own docstring says is "deliberately absent" from
  *  the wire shape — "neither small nor something that changes on every
- *  frame." Shared by `GET /api/runs` (`coord/routes.ts`) and the `runs` WS
- *  frame's own emitter (`watch.ts`'s `emitRuns`, Task 10) rather than each
- *  holding its own copy of the strip. */
+ *  frame." Also strips `coordProject` (migration 12, Task 1): the
+ *  coordinator's project, stamped for the board-placement policy to read
+ *  server-side, and NOT one of that design's two wire additions — see
+ *  `RunRow`'s own docstring. Shared by `GET /api/runs` (`coord/routes.ts`)
+ *  and the `runs` WS frame's own emitter (`watch.ts`'s `emitRuns`, Task 10)
+ *  rather than each holding its own copy of the strip. */
 export const toRunSummary = (row: RunRow): RunSummary => {
-  const { prLineage: _prLineage, ...summary } = row;
+  const { prLineage: _prLineage, coordProject: _coordProject, ...summary } = row;
   return summary;
 };
 
@@ -259,6 +286,10 @@ export type OpenSiblingsResult =
   | { ok: true; siblings: OpenSibling[] }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
+export type CoordPlacementStampsResult =
+  | { ok: true; stamps: CoordPlacementStamp[] }
+  | { ok: false; kind: 'run-unreadable'; detail: string };
+
 export type AskReadResult =
   | { ok: true; ask: AskRow | null }
   | { ok: false; kind: 'ask-unreadable'; detail: string };
@@ -304,6 +335,7 @@ interface RunRowDb {
   prLineage: string | null;
   briefQueued: number | null;
   clearError: string | null;
+  coordProject: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -323,7 +355,7 @@ const RUN_ROW_COLUMNS =
   'r.workspace, r.branch, r.state, r.kind, CAST(r.reviews AS TEXT) AS reviewsText, r.claimedBy, ' +
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
-  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError';
+  'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -778,6 +810,11 @@ export class CoordStore {
      *  constraint error rather than answer in words, which is why no other
      *  caller may pass one. */
     reviews?: number | null;
+    /** The project of the session in `claimedBy`, measured by the CALLER from
+     *  the registry and stamped here for the run's whole life. Optional, and
+     *  its absence is a real answer: an older row, or an open where the
+     *  coordinator's registry record could not be read. */
+    coordProject?: string;
   }): OpenRunResult {
     try {
       return tx(this.db, () => {
@@ -855,15 +892,15 @@ export class CoordStore {
           'ON CONFLICT(slug) DO UPDATE SET title = excluded.title',
         ).run(input.program, input.title, now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
-          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews) ' +
-          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+          'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject) ' +
+          'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
         );
         // Keep SQLite's exact INTEGER result until the safe-integer check below;
         // converting first can round an out-of-domain id into another number.
         insertRun.setReadBigInts(true);
         const res = insertRun.run(
           input.program, input.wave, input.waveOf, input.project, 'planned', input.claimedBy, now,
-          input.kind ?? 'work', input.reviews ?? null,
+          input.kind ?? 'work', input.reviews ?? null, input.coordProject ?? null,
         );
         const exactId = res.lastInsertRowid;
         const id = Number(exactId);
@@ -1066,7 +1103,7 @@ export class CoordStore {
    * fetches. Re-rendering it here would trade a true historical line for a
    * violation of the one rule the mail body has.
    */
-  reclaimProgram(runId: number, to: string, at: number): ReclaimProgramResult {
+  reclaimProgram(runId: number, to: string, at: number, coordProject: string | null): ReclaimProgramResult {
     return tx(this.db, () => {
       const run = this.db.prepare('SELECT program, claimedBy FROM runs WHERE id = ?')
         .get(runId) as { program: string; claimedBy: string | null } | undefined;
@@ -1084,8 +1121,29 @@ export class CoordStore {
         'SELECT id, claimedBy FROM runs WHERE program = ? AND claimedBy IS NOT NULL ' +
         'AND claimedBy != ? ORDER BY id',
       ).all(run.program, to) as { id: number; claimedBy: string }[];
-      this.db.prepare('UPDATE runs SET claimedBy = ? WHERE program = ? AND claimedBy IS NOT NULL')
-        .run(to, run.program);
+      // D-2922: `claimedBy` and `coordProject` move TOGETHER, under one WHERE.
+      // They are two facts about the same coordinator — who holds the chair,
+      // and which card that chair's workers render on — and rewriting only the
+      // first left every row of the program boarding on the coordinator this
+      // statement had just displaced, until wave N+1 opened (days, on a real
+      // programme). Spec section 7 rules this move CORRECT: "Reclaim moves
+      // every worker of a programme at once, because the programme genuinely
+      // has a new coordinator."
+      //
+      // NOT a contradiction of section 4's "stamped at open time, never
+      // re-derived from a live read of the coordinator's registry record":
+      // that rule forbids re-deriving a placement on every READ, so a worker
+      // keeps its card when its coordinator dies. This writes at the other
+      // moment the coordinator is DECIDED. The stamp still never chases a
+      // live record.
+      //
+      // `coordProject` is the caller's MEASUREMENT or null — the store does not
+      // read the registry and does not guess. Null over the displaced
+      // coordinator's project is deliberate: a null stamp places the row at
+      // home (`boardPlacement`'s own contract), while the stale value would
+      // have the board assert a coordinator this very statement retired.
+      this.db.prepare('UPDATE runs SET claimedBy = ?, coordProject = ? WHERE program = ? AND claimedBy IS NOT NULL')
+        .run(to, coordProject, run.program);
       for (const m of moved) {
         // One `at` for N rows (D-1134): the operator acted once, and a trail that
         // reads five clock samples describes five acts.
@@ -2049,6 +2107,65 @@ export class CoordStore {
   }
 
   /**
+   * `runs({includeClosed:true})`'s narrow sibling, for `fleet.ts`'s
+   * `readCoordPlacements` alone. `runs()` prices a full read at "~3,000 [SQL
+   * statements] for one [on-demand] board load" (this docstring's own
+   * estimate, `:2521-2524` below) — `itemTally` (two statements),
+   * `unreadMailCount` (one), batch health and a `prLineage` JSON parse, PER
+   * ROW, over every open run and up to 500 closed. That is an on-demand-load
+   * price. `readCoordPlacements` runs on `FleetWatcher`'s 2s tick and every
+   * `/ws/fleet` connect, so paying it there would be roughly 200-1,500
+   * statements every couple of seconds to obtain three columns — `OpenSibling`
+   * and `openCoordinatorIds` above make the identical trade for the identical
+   * reason.
+   *
+   * `claimedBy` rides in the SAME row as `coordProject` (D-2921), never as a
+   * second read: they are two facts about one coordinator, and the walk that
+   * consumes them is a chain of "who coordinates THIS session" — whose answer
+   * is a project (where the row renders) and a session id (the next question).
+   * Splitting them would let a stamp and a claimant disagree about which
+   * coordinator a run has. `runs.project` is deliberately NOT selected: it is
+   * the WORKER's project — the column `POST /api/runs`' `project-mismatch`
+   * rung compares `sessionProject(sessionId)` against — and keying a hop on it
+   * is the defect D-2921 repairs.
+   *
+   * `WHERE coordProject IS NOT NULL` is pushed into SQL, not left to the
+   * caller: an unstamped run can never change a placement (`boardPlacement`'s
+   * own contract — a session whose lookup answers null degrades to
+   * `ownProject`), so filtering it out here is strictly narrower than filtering
+   * it out in `fleet.ts`, at no cost to correctness.
+   *
+   * Closed runs stay visible (same `includeClosed:true` shape as `runs()`,
+   * same `closedLimit` clamp) — DELIBERATE, not a narrowing this method may
+   * drop: a placement keyed on open runs alone would bounce a worker between
+   * cards at the close-then-open wave boundary (Task 3's own brief).
+   *
+   * `id` rides CAST to TEXT and proven by `persistedInt`, D-2545's reason:
+   * `foldCoordPlacements` (`coord/placement.ts`) uses it to pick the NEWEST
+   * stamp per session regardless of which order these rows arrive in — this
+   * method still orders by `id` for determinism, but that ordering is not a
+   * contract the caller may rely on (that fold's own ruling). ALL-OR-FAILURE on an unrepresentable id, the
+   * same rule `openRunsForSession` follows: a partial stamp set is how a
+   * session's card could silently jump to the wrong coordinator.
+   */
+  coordPlacementStamps(closedLimit?: number): CoordPlacementStampsResult {
+    const n = clampMailLimit(closedLimit ?? 500);
+    const rows = this.db.prepare(
+      'SELECT CAST(id AS TEXT) AS idText, sessionId, claimedBy, coordProject FROM runs ' +
+      `WHERE coordProject IS NOT NULL AND (state NOT IN ${TERMINAL_RUN_STATES_SQL} OR id IN ` +
+      `(SELECT id FROM runs WHERE state IN ${TERMINAL_RUN_STATES_SQL} ORDER BY id DESC LIMIT ?)) ` +
+      'ORDER BY id',
+    ).all(n) as unknown as { idText: string; sessionId: string | null; claimedBy: string | null; coordProject: string }[];
+    const stamps: CoordPlacementStamp[] = [];
+    for (const r of rows) {
+      const id = persistedInt(r.idText, 'run id');
+      if (!id.ok) return { ok: false, kind: 'run-unreadable', detail: id.detail };
+      stamps.push({ id: id.value, sessionId: r.sessionId, claimedBy: r.claimedBy, coordProject: r.coordProject });
+    }
+    return { ok: true, stamps };
+  }
+
+  /**
    * "Which OPEN runs name this session?" — the question the hold file
    * structurally cannot answer, asked at three destructive decision points.
    *
@@ -2488,6 +2605,13 @@ export class CoordStore {
       // cannot forget it and quietly ship a zeroed health object.
       health,
       prLineage: row.prLineage ? (JSON.parse(row.prLineage) as PrLineageEntry[]) : [],
+      // Read straight through, on `homeProject`'s idiom: a free-form project
+      // name stamped once at open time (migration 12), never re-derived here.
+      // NULL means "not stamped" — an older row, or an open whose registry
+      // read came back absent/unlistable — and `RunRow`'s own docstring says
+      // this stays off the wire (`toRunSummary` strips it alongside
+      // `prLineage`).
+      coordProject: row.coordProject,
     };
   }
 
@@ -3951,6 +4075,10 @@ export class CoordStore {
         // it gets `dispatchedAt` bound — the reconstruction time stands in
         // for the real dispatch time nothing in the ledger preserves.
         const dispatchedAt = state === 'working' ? now : null;
+        // `coordProject` is deliberately NOT reconstructed: it is a measurement
+        // taken at open time from a registry record that may no longer exist,
+        // and inventing one here would be a placement nobody measured. A
+        // reconstructed run reads as unstamped, which the policy already handles.
         const res = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, sessionId, workspace, branch, state, ' +
           'dispatchedAt, claimedBy, openedAt, handoffCommit, prLineage) ' +

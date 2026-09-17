@@ -2,7 +2,7 @@ import type { CcrcConfig } from '../config.js';
 import type { SessionVerdict } from '../exec.js';
 import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
-import { readSessionRecord } from '../registry.js';
+import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
 import { lifecycleIsDead, sessionLifecycle } from '../../../shared/api.js';
 
@@ -310,10 +310,22 @@ export async function reclaimRun(
       return { ok: false, kind: 'claimant-alive', detail: claimant.why, by: from };
     }
   }
-  const committed = deps.coord.reclaimProgram(runId, to, now);
+  // D-2922. The heir's project, MEASURED — never `incoming.record.project`,
+  // whose `project ?? id` collapsing default (`registry.ts`'s `buildRecord`)
+  // would reach the stamp as if it were a measurement, and never
+  // `sessionProject(to)`, which reads the runs table and so answers only for a
+  // session that has been a WORKER. Exactly the read `POST /api/runs` makes for
+  // the open-time stamp, at the other moment a coordinator is decided.
+  //
+  // An unreadable field, an absent field and a present but EMPTY field all
+  // leave the stamp NULL: absence permits, a guess never heals, and a null
+  // stamp places the row at home rather than on a card nobody proved.
+  const heirProject = await fieldMeasured(deps.io, deps.cfg.registryDir, to, 'project');
+  const coordProject = heirProject.ok && heirProject.content !== '' ? heirProject.content : null;
+  const committed = deps.coord.reclaimProgram(runId, to, now, coordProject);
   // Re-measured INSIDE the transaction, so these are not the answers rungs 1-2
-  // already gave — they are what is still true at commit time, after two awaited
-  // registry reads have given the event loop somewhere to run.
+  // already gave — they are what is still true at commit time, after the awaited
+  // registry reads above have given the event loop somewhere to run.
   if (!committed.ok) return committed;
   return { ok: true, program: committed.program, runIds: committed.runIds,
     from: committed.from, to };

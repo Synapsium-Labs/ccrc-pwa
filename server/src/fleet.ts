@@ -15,6 +15,12 @@ import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
 import type { AskRow, CoordStore } from './coord/store.js';
+// Task 3: the pure board-placement decision (Task 2) — this file supplies its
+// ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
+// nothing from here. D-2921 moved the fold that BUILDS that port into
+// placement.ts too: it is the same pure decision, and holding half of it here
+// in L3 is what let the two halves disagree about what the hop is keyed on.
+import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
@@ -178,6 +184,54 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
   } catch (err) {
     console.warn(`ccrc-server: currentAsksFor failed for ${childIds.length} session(s) (${childIds.join(', ')}) — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
     return new Map();
+  }
+}
+
+/** `boardPlacement`'s empty port: nothing stamped, so every row goes home.
+ *  Handed back by `readCoordPlacements`'s guards below — a dark box, an empty
+ *  registry, a refused or throwing read. */
+const emptyCoordPlacements = (): StampLookup => () => null;
+
+/**
+ * Task 3's own batched, guarded read — the `boardPlacement` port supply,
+ * built ONCE per assembly (never per row, which would be O(rows x hops)
+ * `coord.db` queries), by handing `coordPlacementStamps`' rows to the pure
+ * `foldCoordPlacements` (`coord/placement.ts`, L1 — D-2921 moved it there, to
+ * sit beside the walk it feeds). Same guard shape as `readCurrentAsks` right
+ * above: `coord` is absent on a dark box and in every pre-Task-3 test, and
+ * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
+ * race — either way this degrades to "nothing stamped", never throws out of
+ * `assembleFleet`, so a broken coord.db costs every row its placement
+ * (falls back to `ownProject`, per `boardPlacement`'s own total contract)
+ * rather than the whole tick. `sessionCount === 0` (an empty registry) also
+ * skips the read entirely — `readCurrentAsks`'s own `childIds.length === 0`
+ * short-circuit, restated here: no row exists to spend the answer on.
+ *
+ * Fix round 1: this used to call `coord.runs({includeClosed:true})`, which
+ * hydrates every row (`itemTally`, `unreadMailCount`, batch health, a
+ * `prLineage` JSON parse) to obtain three columns — priced at "~3,000 [SQL
+ * statements] for one [on-demand] board load" (`store.ts`), paid here every
+ * 2s tick and every `/ws/fleet` connect instead. `coord.coordPlacementStamps`
+ * is the narrow sibling built for this one caller (`store.ts`'s own
+ * docstring), no hydration, `coordProject IS NOT NULL` pushed into SQL.
+ *
+ * `includeClosed: true` is deliberate (`coordPlacementStamps` always
+ * includes closed runs, up to its own clamp): a placement keyed on open runs
+ * alone would bounce every worker between cards at the close-then-open wave
+ * boundary, one of the four defects this design exists to end.
+ */
+function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): StampLookup {
+  if (!coord || sessionCount === 0) return emptyCoordPlacements();
+  try {
+    const read = coord.coordPlacementStamps();
+    if (!read.ok) {
+      console.warn(`ccrc-server: coordPlacementStamps refused while computing board placement — ${read.detail} — placements degrade to ownProject`);
+      return emptyCoordPlacements();
+    }
+    return foldCoordPlacements(read.stamps);
+  } catch (err) {
+    console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — placements degrade to ownProject`);
+    return emptyCoordPlacements();
   }
 }
 
@@ -407,6 +461,10 @@ export async function assembleFleet(
   // rows carry millisecond timestamps (`settleAsk`'s callers all pass
   // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
   const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  // Task 3: ONE pass over the stamped runs, reused by every row below — see
+  // `readCoordPlacements`'s own docstring for why this is batched rather than
+  // a per-row query.
+  const stampOf = readCoordPlacements(coord, recs.length);
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
@@ -553,6 +611,13 @@ export async function assembleFleet(
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      // Task 3: which CARD this row renders on. ONE port, SESSION-keyed
+      // (D-2921) — the walk starts at this row's own id and every later hop
+      // asks the same question of the coordinator it just reached. Built ONCE
+      // above, outside this per-row map.
+      boardProject: boardPlacement({
+        sessionId: r.id, ownProject: r.project, held: r.held !== null, stampOf,
+      }),
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
       // AskUserQuestion/permission menu the hook never gets a write for

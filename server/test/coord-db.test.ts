@@ -657,10 +657,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 11 — never hand-edited beside a growing array', () => {
-    // Bumped to 11 by migration 11, runs.kind/runs.reviews (design 2026-09-14 §5.1).
-    expect(COORD_SCHEMA_VERSION).toBe(11);
-    expect(MIGRATIONS.length).toBe(11);
+  it('COORD_SCHEMA_VERSION derives to 12 — never hand-edited beside a growing array', () => {
+    // Bumped to 12 by two migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+    // design 2026-09-14 §5.1) and MIGRATIONS[11] (runs.coordProject, board
+    // placement wave 1 Task 1).
+    expect(COORD_SCHEMA_VERSION).toBe(12);
+    expect(MIGRATIONS.length).toBe(12);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -715,7 +717,7 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    expect(COORD_SCHEMA_VERSION).toBe(11);
+    expect(COORD_SCHEMA_VERSION).toBe(12);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -887,5 +889,56 @@ describe('coord.db: migration 10 — the programme knows its home, the feed row 
       .toBe(COORD_SCHEMA_VERSION + 3);
     warnSpy.mockRestore();
     b.close();
+  });
+});
+
+describe('coord.db: migration 12 — runs.coordProject', () => {
+  interface ColumnInfo { name: string; type: string; notnull: number; dflt_value: unknown }
+  const columnOf = (db: DatabaseSync, table: string, name: string): ColumnInfo | undefined =>
+    (db.prepare(`PRAGMA table_info(${table})`).all() as unknown as ColumnInfo[])
+      .find((c) => c.name === name);
+
+  it('reaches a database ALREADY at user_version 11 — the version just before this one', () => {
+    const dir = mkTmp('ccrc-mig12-');
+    const p = path.join(dir, '.ccrc', 'coord.db');
+    mkdirSync(path.dirname(p), { recursive: true });
+    // Build a db at exactly user_version 11 by applying the first eleven entries
+    // only, so this isolates THIS migration rather than a chain. It planted at
+    // 10 until #108 (review runs) took `user_version 10 -> 11` and moved this
+    // one down a slot; the assertion is unchanged in meaning — a database one
+    // version behind the current build gains `coordProject` on open.
+    const old = new DatabaseSync(p);
+    for (let v = 0; v < 11; v++) old.exec(MIGRATIONS[v]!);
+    old.exec('PRAGMA user_version = 11');
+    old.close();
+
+    const db = openCoordDb(p);                    // must migrate 11 -> 12
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 12 });
+    expect(columnOf(db, 'runs', 'coordProject')).toBeDefined();
+    db.close();
+  });
+
+  it('is NULLABLE — an existing run predates the stamp and must survive', () => {
+    const dir = mkTmp('ccrc-mig12-null-');
+    const db = openCoordDb(path.join(dir, '.ccrc', 'coord.db'));
+    expect(columnOf(db, 'runs', 'coordProject')!.notnull).toBe(0);
+    db.close();
+  });
+
+  it('is ADDITIVE: every runs column migration 1 wrote is still there', () => {
+    const dir = mkTmp('ccrc-mig12-add-');
+    const db = openCoordDb(path.join(dir, '.ccrc', 'coord.db'));
+    const names = (db.prepare("SELECT name FROM pragma_table_info('runs')").all() as { name: string }[])
+      .map((r) => r.name);
+    expect(names).toEqual(expect.arrayContaining(
+      ['id', 'program', 'project', 'wave', 'state', 'claimedBy', 'sessionId', 'dispatchStartedAt']));
+    db.close();
+  });
+
+  it('a database from a NEWER build still READS — rollback is real', () => {
+    const dir = mkTmp('ccrc-mig12-fwd-');
+    const p = path.join(dir, '.ccrc', 'coord.db');
+    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    expect(() => openCoordDb(p).close()).not.toThrow();
   });
 });

@@ -12,11 +12,16 @@ import { RUN_HOLD_NUMBER_MAX } from '../../shared/api.js';
 const dbPathIn = (home: string): string => path.join(home, '.ccrc', 'coord.db');
 
 describe('the asks table', () => {
-  it('is still present after schema version 10 adds the cross-repo columns', () => {
+  it('the cross-repo columns added at schema version 10 are still present at the current version', () => {
     const home = mkTmp('ccrc-coord-');
     const db = openCoordDb(dbPathIn(home));
-    // Bumped to 11 by migration 11, runs.kind/runs.reviews (design 2026-09-14 §5.1).
-    expect(COORD_SCHEMA_VERSION).toBe(11);
+    // TWO migrations have landed since this test's own version: MIGRATIONS[10]
+    // (`runs.kind`/`runs.reviews`, review runs, design 2026-09-14 §5.1) and
+    // MIGRATIONS[11] (`runs.coordProject`, board placement wave 1 Task 1).
+    // Neither touches the asks table. This pin only needs the CURRENT total —
+    // it asserts "no migration after the one this test knows about has changed
+    // the asks table's columns", not anything about either migration.
+    expect(COORD_SCHEMA_VERSION).toBe(12);
     const cols = (db.prepare("SELECT name FROM pragma_table_info('asks')").all() as
       { name: string }[]).map((r) => r.name).sort();
     expect(cols).toEqual([
@@ -49,9 +54,9 @@ describe('ask store methods', () => {
       wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
     s.setSession(run.id, 'child-1');
     // `reclaimProgram` takes the RUN id, not the program slug — the store's
-    // real signature (`reclaimProgram(runId, to, at)`), not the brief's
+    // real signature (`reclaimProgram(runId, to, at, null)`), not the brief's
     // illustrative `('prog', 'coord-2', ...)`.
-    s.reclaimProgram(run.id, 'coord-2', Date.now());
+    s.reclaimProgram(run.id, 'coord-2', Date.now(), null);
     expect(s.parentOfSession('child-1')).toBe('coord-2');
   });
 

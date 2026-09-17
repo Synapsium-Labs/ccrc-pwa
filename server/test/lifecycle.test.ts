@@ -67,7 +67,12 @@ async function makeApp(
   if (opts.projectsRoot) env.CCRC_PROJECTS_ROOT = opts.projectsRoot;
   const cfg = loadConfig(env);
   const watcher = (opts.readiness !== undefined || opts.unswept)
-    ? ({ currentReadiness: () => opts.readiness, stop: () => {} } as never)
+    // Task 4 (board placement wave 1): `currentProjectRepos()` rides beside
+    // `currentReadiness()` on the same double — the route calls both
+    // unconditionally, so a watcher stub missing either throws inside the
+    // route rather than answering `unmeasured`. Empty map: no test in this
+    // file measures a repo, only that the key is present and defaulted.
+    ? ({ currentReadiness: () => opts.readiness, currentProjectRepos: () => new Map(), stop: () => {} } as never)
     : undefined;
   const app = await buildServer({
     cfg, runCcd: ccdRunner(run, cfg), tmux: new Tmux(run), io: localIO, queue: new KeyedQueue(),
@@ -577,6 +582,11 @@ describe('listProjects', () => {
         readiness: null,
         pool: { state: 'untagged' },
         placement: { kind: 'projected', wrapper: 'claude', score: 0 },
+        // Task 4 (board placement wave 1): this app has no watcher at all, so
+        // `currentProjectRepos()` is never called — every row reads the
+        // sweep-never-reached default, same reasoning as `readiness: null`
+        // just above.
+        repo: { state: 'unmeasured' },
       })));
     await app.close();
   });

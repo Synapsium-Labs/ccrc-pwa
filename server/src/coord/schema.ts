@@ -896,6 +896,34 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE runs ADD COLUMN reviews INTEGER REFERENCES runs(id);
   CREATE INDEX runs_by_reviews ON runs(reviews);
   `,
+
+  // ── 12: user_version 11 -> 12 ───────────────────────────────────────────
+  // The coordinator's project, stamped on the run AT OPEN TIME.
+  //
+  // Why stamped and not derived: the board places a coordinated workspace on
+  // its coordinator's card, and deriving that placement from a LIVE read of
+  // the coordinator's registry record means the workers scatter the moment
+  // that record is archived, removed or unreadable. Stamping makes the
+  // placement a fact the run carries for its whole life.
+  //
+  // NULLABLE, and null is a real answer with two producers: a run opened
+  // before this column existed, and an open where the coordinator's registry
+  // record could not be read. Both mean "not stamped", and the placement
+  // policy treats both the same way — the session's own project.
+  //
+  // MIGRATIONS[0..10] are frozen: `db.ts:182` iterates `for (let v = current;
+  // v < COORD_SCHEMA_VERSION; v++)`, so an edit to an applied entry never
+  // runs against the live `~/.ccrc/coord.db`.
+  //
+  // THIS ENTRY WAS SLOT 11 WHEN IT WAS WRITTEN. #108 (review runs) merged
+  // first and took `user_version 10 -> 11`, so this one moved down a slot at
+  // merge time rather than sharing an index: two entries at one `user_version`
+  // is a migration that never runs on a db that has already passed that
+  // version. Nothing else about it changed. Re-verified against origin/main at
+  // 2f9deae2 that `runs` carries no `coordProject` today.
+  `
+  ALTER TABLE runs ADD COLUMN coordProject TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
