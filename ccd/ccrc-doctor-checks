@@ -803,19 +803,24 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
   fi
 }
 
-# THIS FILE RUNS TWO DIFFERENT COVERAGE DESIGNS FOR "is a recurring job actually
-# keeping its promise", and this check is only one of them (D-2193). `known`
-# below (`ccrc.service`, `ccrc-agent.service`, `ccd-cap-scopes.timer`,
-# `ccd-account-health.timer`, `ccd-telemetry-keepalive.timer`,
-# `ccrc-models.timer`) is measured DIRECTLY, by asking systemd/launchd whether
-# the unit is active. Two more units are covered on purpose by a DIFFERENT
-# design that measures the job's EFFECT instead of its activation state, and
-# are deliberately absent from `known`: `_check_graphify`'s census sub-check
-# covers `ccd-graph-sweep.timer` by reading the census artifact the timer
-# PRODUCES (`~/.ccrc/graph-sweep.json`), and `_check_name` covers
-# `ccrc-ddns.timer` by re-measuring the DNS record the timer maintains rather
-# than the timer's own state. `ccd-usage-sweep.timer` is, measured, in
-# NEITHER design — this file asks about it nowhere.
+# THIS FILE RUNS TWO DIFFERENT COVERAGE DESIGNS FOR TIMERS — "is a recurring
+# job actually keeping its promise" — and this check is only one of them
+# (D-2193). The units in the `known` array below are measured DIRECTLY, by
+# asking systemd/launchd whether the unit is active; that array mixes actual
+# TIMERS with this box's long-lived daemons, which are not recurring jobs at
+# all and are simply polled for up/down like everything else in `known`. Two
+# more timers are covered on purpose by a DIFFERENT design that measures the
+# job's EFFECT instead of its activation state, and are deliberately absent
+# from `known`: `_check_graphify`'s census sub-check covers
+# `ccd-graph-sweep.timer` by reading the census artifact the timer PRODUCES
+# (`~/.ccrc/graph-sweep.json`), and `_check_name` covers `ccrc-ddns.timer` by
+# re-measuring the DNS record the timer maintains rather than the timer's own
+# state. `ccd-usage-sweep.timer` is, measured, in NEITHER design — this file
+# asks about it nowhere, and nor is it alone: the 7 timer-fired oneshot
+# `.service` siblings of every timer this file names (one per timer,
+# `ccd-usage-sweep.service` among them) are out of BOTH designs BY
+# CONSTRUCTION, not omission — a timer-fired oneshot is never `active`
+# between runs, so polling one here would be a false positive.
 _check_services() {
   local dir="$CCRC_UNIT_DIR" u st why rc=0
   local -a ok=() installed=()
@@ -870,11 +875,12 @@ _check_services() {
     fi
     case "$u" in
       *.timer)
-        # ONE CLASS, TWO CONSEQUENCES. Both timers DEGRADE rather than down the
-        # box, so both warn — but the sentence an operator reads has to name
-        # what THIS one stopping costs, or they get the right remedy attached to
-        # somebody else's reason. `_dr_warn`'s detail is the only place that
-        # fact exists, so it is a case rather than one shared string.
+        # ONE CLASS, EACH WITH ITS OWN CONSEQUENCE. Every timer here DEGRADES
+        # rather than downs the box, so every one warns — but the sentence an
+        # operator reads has to name what THIS one stopping costs, or they get
+        # the right remedy attached to somebody else's reason. `_dr_warn`'s
+        # detail is the only place that fact exists, so it is a case rather
+        # than one shared string.
         #
         # The `*` arm is not decoration: `known` above is the list this file
         # maintains, and the day a seventh unit joins it, a timer with no sentence
@@ -890,9 +896,9 @@ _check_services() {
           ccrc-models.timer) why="a dead timer means every lane's catalogue goes stale and nothing says so" ;;
           *) why="the job it fires is not running" ;;
         esac
-        # Unreachable on macOS today (`_inst_units` installs neither timer's
-        # plist there) — routed through the hint anyway, so the day that
-        # changes the remedy is already right.
+        # Unreachable on macOS today (`_inst_units` installs none of these
+        # timers' plists there) — routed through the hint anyway, so the day
+        # that changes the remedy is already right.
         _dr_warn services "$u is installed but ${st:-not active} — $why" \
           "$(_dr_enable_now_hint "$u")"
         [ "$rc" -eq 1 ] || rc=2 ;;

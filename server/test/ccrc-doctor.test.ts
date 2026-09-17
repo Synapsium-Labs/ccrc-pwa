@@ -1912,10 +1912,10 @@ describe('ccrc doctor: services knows about the account-health timer', () => {
 
 describe('ccrc doctor: services knows about the telemetry keepalive timer', () => {
   // F4 (fix-wave 2026-09-07): `ccd-account-health.timer` joined `known` with
-  // its own consequence sentence and a `*)` arm that already reasons about
-  // "the day a fifth unit joins it" — `ccd-telemetry-keepalive.timer` is that
-  // fifth unit, and a stopped keepalive is silent (no error, just telemetry
-  // going stale) unless doctor names it.
+  // its own consequence sentence, and at the time the `*)` arm's comment
+  // reasoned about a fifth unit joining next — `ccd-telemetry-keepalive.timer`
+  // was that fifth unit, and a stopped keepalive is silent (no error, just
+  // telemetry going stale) unless doctor names it.
   itLinux('warns — with its OWN consequence — when the keepalive timer is installed and stopped', () => {
     const home = healthy('ccrc-doctor-services-keepalive-timer-');
     writeUnitFile(home, 'ccd-telemetry-keepalive.timer');
@@ -1951,10 +1951,13 @@ describe('ccrc doctor: services knows about the telemetry keepalive timer', () =
 
 describe('ccrc doctor: services knows about the models catalogue timer', () => {
   // D-2190/D-2191: `ccrc-models.timer` already ships (deploy/systemd/ccrc-models.timer)
-  // but `known` (ccd/ccrc-doctor-checks:812) never named it, so a dead models-refresh
-  // timer read as a silent PASS. Membership in `installed` is gated on the unit FILE
-  // existing, so this fixture case is what proves the fix is not a no-op — measured
-  // RED without the `known` entry (350 passed | 3 skipped either way, D-2191).
+  // but `_check_services`'s `known` array never named it, so a dead
+  // models-refresh timer read as a silent PASS. Membership in `installed` is
+  // gated on the unit FILE existing, so this fixture case is what proves the
+  // fix is not a no-op — measured RED without the `known` entry on
+  // 2026-09-09, on a scratch worktree of main (350 passed | 3 skipped,
+  // D-2191); this suite has grown since, so do not expect that count to
+  // still match a live run.
   itLinux('warns — with its OWN consequence — when the models timer is installed and stopped', () => {
     const home = healthy('ccrc-doctor-services-models-timer-');
     writeUnitFile(home, 'ccrc-models.timer');
