@@ -4624,6 +4624,47 @@ _check_models() {
     for (const id of ids) {
       const p = path.join(dir, id + ".json");
       let raw;
+      // F2 (review run 69) -- D-2380s own class, reintroduced in this checks
+      // new code. readFileSync opens BY NAME with no regard for TYPE: a FIFO
+      // with no writer, a symlink to one, or an unbounded character device at
+      // <id>.json blocks INSIDE the read, so the catch below never runs and
+      // ONE poisoned catalogue hangs the whole operator-facing ccrc doctor --
+      // cmd_doctors driver wraps no deadline. Measured: mkfifo gpt.json then
+      // this read gave rc 124 under a bounded 5s deadline, with the catch
+      // never entered.
+      // The C3 reasoning under that catch cannot reach it: a FIFO is not an
+      // errno, it is a block. And the population gate 57 lines above does not
+      // cover it -- that -f test is on the per-lane REGISTRY file, while this
+      // read is of the CATALOGUE, a different path. So apply that gates
+      // own TYPE TEST here, spelled the way node spells the bash -f operator:
+      // statSync FOLLOWS symlinks and isFile() is true only for a regular
+      // file, so a symlink to a real catalogue still reads exactly as before.
+      // lstatSync runs FIRST so an ABSENT path is told apart from a DANGLING
+      // symlink, and only the genuinely absent one reads as "never probed" --
+      // C3s own distinction, applied to the shapes C3 could not see.
+      //
+      // NOTE FOR EDITORS: this program is a single-quoted bash string. An
+      // apostrophe anywhere in it closes that string; that is why the prose
+      // above has none.
+      try { fs.lstatSync(p); }
+      catch (e) {
+        if (e && e.code === "ENOENT") { process.stdout.write(id + US + "NOCATALOGUE" + US + US + US + "\n"); }
+        else { process.stdout.write(id + US + "UNREADABLE" + US + US + US + ((e && e.code) || "unknown") + "\n"); }
+        continue;
+      }
+      let st;
+      try { st = fs.statSync(p); }
+      catch (e) {
+        // PRESENT to lstat but not to stat: a DANGLING symlink, which answers
+        // ENOENT here and must never read as "never probed", or a symlink
+        // loop, which answers ELOOP.
+        process.stdout.write(id + US + "UNREADABLE" + US + US + US + ((e && e.code) || "unknown") + "\n");
+        continue;
+      }
+      if (!st.isFile()) {
+        process.stdout.write(id + US + "UNREADABLE" + US + US + US + "not-a-regular-file" + "\n");
+        continue;
+      }
       try { raw = fs.readFileSync(p, "utf8"); }
       catch (e) {
         // C3: ENOENT alone means "never probed" — every other errno (a
@@ -4666,6 +4707,27 @@ _check_models() {
     # Say what actually happens: any partial output is discarded, not trusted.
     _dr_warn models "${#population[@]} lane(s) have a model registry, but the catalogue reader exited non-zero (rc=$rc2) — any rows it already printed are discarded rather than trusted, so this box's model freshness could not be measured this run" \
       "re-run ccrc doctor; this check runs node with stderr sent to /dev/null, so if it keeps failing, read the node process's own error by running its command directly against \$HOME/.ccrc/models without that redirect"
+    return 2
+  fi
+  if [ -z "$out" ]; then
+    # R1 (review run 69) — the coordinator RULED this closed against its own
+    # panel, which refuted the finding 3/3 and was right about the shipped
+    # reader. The ground for closing it is this function's own text, not the
+    # reachability argument: the ROSTER read above is guarded on BOTH its exit
+    # status (`[ "$rc" -ne 0 ]`) and its emptiness (`[ -z "$ids" ]`); the
+    # CATALOGUE read had only the first. The `rc2` comment says that check
+    # exists because an empty `$out` gave "an empty loop, and the same false
+    # PASS" — and a ZERO-exit empty batch produces exactly that, so the guard
+    # did not cover the case its own comment names. A guard whose comment
+    # names a case it does not reach is a false guard, which is the class this
+    # whole wave is about.
+    #
+    # Reachability, measured and stated honestly: through the SHIPPED reader
+    # this is unreachable — a non-empty population always emits one row per
+    # id. It is reachable through any other `node` on PATH, which is how the
+    # suite reaches it (`stubNodeModelsExit <home> 0`).
+    _dr_warn models "${#population[@]} lane(s) have a model registry, but the catalogue reader exited zero and printed no rows at all — this box's model freshness could not be measured this run, and a PASS naming no lane would be a confident answer over a population nothing measured" \
+      "re-run ccrc doctor; if it persists, check which node is on PATH — this check runs node with stderr sent to /dev/null, so run its command directly against \$HOME/.ccrc/models without that redirect to see what the interpreter actually prints"
     return 2
   fi
 

@@ -944,6 +944,50 @@ function performCaddyCeremony(home: string): void {
   utimesSync(sysCaddyfile(home), t, t);
 }
 
+/** THE DEADLINE BINARY, resolved and PROBED once — the per-file house pattern
+ *  here (`ccd-plat-timeout.test.ts` and `ccd-lifecycle-sites.test.ts` each
+ *  resolve their own), not a second copy of a single-sourced mechanism.
+ *  Needed because `runDoctor` below has NO bound, and F2's case plants a FIFO:
+ *  pre-fix the catalogue read blocks INSIDE `readFileSync`, so an unbounded
+ *  run would hang the whole suite instead of failing it. `spawnSync`'s own
+ *  `timeout` cannot do this job — it signals only the DIRECT child (`bash`),
+ *  never the `node` grandchild blocked on the FIFO, which then survives the
+ *  run. GNU `timeout` puts the child in its own process group and signals the
+ *  GROUP, so the blocked grandchild dies with it.
+ *
+ *  PRESENCE IS NOT ENOUGH (D-2840): a busybox-shaped `timeout` that refuses
+ *  `-k` resolves via `command -v` and then answers every case with rc 125
+ *  before the guard under test ever runs. So each candidate is PROBED with a
+ *  known-124 command, and one that does not answer 124 is treated as absent. */
+const DOCTOR_DEADLINE_BIN: string | null = (() => {
+  for (const candidate of ['timeout', 'gtimeout']) {
+    const found = spawnSync('sh', ['-c', `command -v ${candidate}`], { encoding: 'utf8' });
+    if (found.status !== 0) continue;
+    const bin = (found.stdout ?? '').trim();
+    if (!bin) continue;
+    const probe = spawnSync(bin, ['-k', '1', '0.1', 'sleep', '5'], { encoding: 'utf8' });
+    if (probe.status === 124) return bin;
+  }
+  return null;
+})();
+
+/** `ccrc doctor`, bounded by the process GROUP. A hang becomes a readable
+ *  failure — never a hung suite. */
+function runDoctorBounded(home: string, ms = 10000): Result {
+  if (DOCTOR_DEADLINE_BIN === null) {
+    throw new Error('runDoctorBounded: no usable `timeout`/`gtimeout` — cannot bound this call safely');
+  }
+  const r = spawnSync(DOCTOR_DEADLINE_BIN,
+    ['-k', '1', String(ms / 1000), BASH, ccrcIn(home), 'doctor'],
+    { env: doctorEnv(home), encoding: 'utf8' });
+  if (r.status === 124) {
+    throw new Error(
+      `runDoctorBounded did not return within ${ms}ms — either a catalogue guard regressed `
+      + 'or this box is loaded; re-run in isolation before concluding');
+  }
+  return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+
 function runDoctor(home: string, args: string[] = ['doctor'], extraEnv: NodeJS.ProcessEnv = {}): Result {
   const r = spawnSync(BASH, [ccrcIn(home), ...args],
     { env: { ...doctorEnv(home), ...extraEnv }, encoding: 'utf8' });
@@ -6627,6 +6671,147 @@ describe('ccrc doctor: models', () => {
     expect(any).not.toMatch(/^PASS models: 0 lanes,/);
     expect(out).toMatch(/grok/);
     expect(out).toMatch(/HTTP 401/);
+  });
+
+  // F2 (review run 69) — D-2380's class in this check's own new code. The
+  // catalogue read opened BY NAME with no type test, so a FIFO blocked inside
+  // `readFileSync`, the `catch` never ran, and `cmd_doctor` — which wraps no
+  // deadline — hung whole. Bounded here so a regression is a readable failure.
+  it.skipIf(DOCTOR_DEADLINE_BIN === null)(
+    'F2: a FIFO at <id>.json is a BROKEN PATH, answered PROMPTLY — never a hang', () => {
+      const home = healthy('ccrc-doctor-models-fifo-');
+      writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+      writeModelRegistry(home, 'gpt');
+      execFileSync('mkfifo', [join(home, '.ccrc', 'models', 'gpt.json')]);
+      const out = runDoctorBounded(home).stdout;
+      const lines = out.split('\n');
+      const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+      expect(i, out).toBeGreaterThan(-1);
+      // Same distinction R1-3 draws for EISDIR: a shape the probe cannot read
+      // is a broken path, never "never probed".
+      expect(lines[i]).not.toMatch(/never probed/);
+      expect(lines[i]).toMatch(/broken path/);
+    }, 20000);
+
+  it.skipIf(DOCTOR_DEADLINE_BIN === null)(
+    'F2: a symlink to a FIFO at <id>.json is a BROKEN PATH too — the type test follows the link, as bash `-f` does', () => {
+      const home = healthy('ccrc-doctor-models-symfifo-');
+      writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+      writeModelRegistry(home, 'gpt');
+      const real = join(home, '.ccrc', 'models', 'gpt.real-fifo');
+      execFileSync('mkfifo', [real]);
+      symlinkSync(real, join(home, '.ccrc', 'models', 'gpt.json'));
+      const out = runDoctorBounded(home).stdout;
+      const lines = out.split('\n');
+      const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+      expect(i, out).toBeGreaterThan(-1);
+      expect(lines[i]).toMatch(/broken path/);
+    }, 20000);
+
+  it('F2: a DANGLING symlink at <id>.json is a broken path, NOT "never probed"', () => {
+    // The distinction `lstat`-before-`stat` exists to keep: `statSync` alone
+    // answers ENOENT for a dangling link exactly as it does for an absent
+    // file, which would report a broken probe as a lane nobody has probed —
+    // the very collapse C3's own comment refuses.
+    const home = healthy('ccrc-doctor-models-dangling-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    symlinkSync(join(home, '.ccrc', 'models', 'gone.json'), join(home, '.ccrc', 'models', 'gpt.json'));
+    const out = runDoctor(home).stdout;
+    const lines = out.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN models: '));
+    expect(i, out).toBeGreaterThan(-1);
+    expect(lines[i]).not.toMatch(/never probed/);
+    expect(lines[i]).toMatch(/broken path/);
+  });
+
+  // F3 (review run 69) — the `lastError` sanitiser guards a PROVIDER-CONTROLLED
+  // string against carrying the row/field terminators of the very protocol it
+  // travels on, and every other fixture in this file plants clean text, which
+  // is why the hole was invisible. Mutated (drop the `.replace`), the doctor
+  // INVENTS A LANE that has no roster row and prints an operator-facing remedy
+  // naming it.
+  it('F3: a provider-controlled lastError carrying row/field terminators cannot invent a lane', () => {
+    const home = healthy('ccrc-doctor-models-lasterror-inject-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', {
+      stale: true, fetchedAt: nowS() - 60,
+      lastError: 'HTTP 401\nphantom-lane\x1fOK\x1f\x1f0\x1f',
+    });
+    const out = runDoctor(home).stdout;
+    // NOT a substring pin on `phantom-lane`: the token appears in BOTH the
+    // shipped and the mutated output, because the sanitiser FLATTENS the
+    // terminators rather than dropping the text, and the operator is still
+    // shown the provider's message verbatim-but-flattened. Measured shipped:
+    // `WARN models: gpt's catalogue is stale (1 min old): HTTP 401
+    // phantom-lane OK  0  — …` — one lane, one row. What the mutation adds is
+    // a SECOND ROW parsed out of the injected newline, i.e. a LANE, with its
+    // own verdict and its own remedy. So bind the lane, not the substring.
+    const modelWarns = out.split('\n').filter((l) => l.startsWith('WARN models: '));
+    expect(modelWarns.length, out).toBe(1);
+    expect(modelWarns[0]).toContain('gpt');
+    expect(modelWarns[0]).toContain('HTTP 401');
+    expect(out, 'no verdict may be attributed to a lane with no roster row')
+      .not.toMatch(/phantom-lane's catalogue/);
+    expect(out, 'no remedy may name a lane this box does not have')
+      .not.toMatch(/ccrc models refresh phantom-lane/);
+  });
+
+  // F3 — the 0x1F DELIMITER, which was shipped as this wave's own remedy
+  // against D-71 and which the reviewer measured GREEN when reverted to a TAB
+  // in BOTH halves. This is the fixture its own comment describes and no test
+  // planted: an OK row whose `fetchedAt` is ABSENT, so the reader emits an
+  // EMPTY field between two delimiters.
+  it('F3: an OK row with an ABSENT fetchedAt keeps its columns — the 0x1F delimiter, pinned', () => {
+    const home = healthy('ccrc-doctor-models-emptyfield-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    // `writeModelCatalogue` DEFAULTS `fetchedAt` to now, so the key is written
+    // out by hand here — absent, not zero.
+    writeFileSync(join(home, '.ccrc', 'models', 'gpt.json'),
+      JSON.stringify({ probe: 'codex', stale: true, lastError: 'boom', models: [] }));
+    const out = runDoctor(home).stdout;
+    const warns = out.split('\n').filter((l) => l.startsWith('WARN models: '));
+    expect(warns.length, out).toBe(1);
+    // Under a TAB protocol `read` collapses the run of separators (a tab is
+    // IFS whitespace whatever IFS is set to), so this row comes back as
+    // fa="1" stale="boom" — every later column shifted LEFT, and the verdict
+    // becomes a confident age computed out of the STALE FLAG.
+    expect(warns[0]).toMatch(/not a usable whole-second timestamp/);
+    expect(warns[0], 'a shifted column would compute an age from the stale flag').not.toMatch(/min old/);
+  });
+
+  // F3 — `Number.isInteger`. Recorded as an EQUIVALENT mutant rather than
+  // pinned, with the control that proves it: the refusal below survives
+  // dropping the node-side check, because the BASH side re-validates the
+  // string it receives (`[[ "$fa" =~ ^-?[0-9]+$ ]]`) and that is what actually
+  // refuses a float. `String(1789000000.5)` is `"1789000000.5"`, which that
+  // regex rejects; the node check is belt to the bash braces, exactly as its
+  // own comment claims. This case pins the mechanism that DOES decide.
+  it('F3: a FLOAT fetchedAt is refused — by the bash re-validation, which is the real gate', () => {
+    const home = healthy('ccrc-doctor-models-float-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() - 60.5 });
+    const out = runDoctor(home).stdout;
+    const warns = out.split('\n').filter((l) => l.startsWith('WARN models: '));
+    expect(warns.length, out).toBe(1);
+    expect(warns[0]).toMatch(/not a usable whole-second timestamp/);
+  });
+
+  // R1 (review run 69), RULED closed by the coordinator against its own panel.
+  it('R1: the catalogue reader exiting ZERO with no rows is not a PASS either', () => {
+    const home = healthy('ccrc-doctor-models-readersilent-');
+    writeRoster(home, [{ id: 'gpt', exec: { kind: 'external' } }]);
+    writeModelRegistry(home, 'gpt');
+    writeModelCatalogue(home, 'gpt', { fetchedAt: nowS() - 60 });
+    stubNodeModelsExit(home, 0);
+    const out = runDoctor(home).stdout;
+    const any = anyVerdictFor(out, 'models');
+    expect(any, out).toBeDefined();
+    expect(any).not.toMatch(/^PASS models: /);
+    expect(any, 'the forbidden string this rung exists to prevent').not.toMatch(/^PASS models: 0 lanes,/);
   });
 
   it('R1-2: the batched catalogue reader exiting non-zero is not a PASS', () => {

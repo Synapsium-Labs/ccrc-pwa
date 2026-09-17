@@ -180,9 +180,18 @@ esac
 # destination's identity matters and whose `src` may be absent — check a
 # new call site against THAT, not against "reachability is nil today", which
 # was true of the eight above only until one of them changed shape. And no
-# symlink-to-DIRECTORY exists at
-# any of the eight anywhere in the tree — but the price is real for the one
-# destination shape this `rm` covers, so it is disclosed here rather than
+# symlink-to-DIRECTORY is created at any of the eight BY ANY `ln -s` IN THE
+# SHIPPED FILES — which is the whole of what the census measured, and is
+# strictly narrower than the "anywhere in the tree" this sentence claimed
+# until F14 (review run 69): the census excludes test fixtures BY
+# CONSTRUCTION, and fixtures create links with `symlinkSync`, which no
+# `ln -s` scan can see. The wider claim was not falsified either — run 69
+# measured the fixtures at `POOLS()/demo` and found a FIFO, `/dev/zero`,
+# `/dev/null` and a regular file, none of them a directory — so what was
+# wrong was the WARRANT, not the conclusion: an argument narrower than the
+# sentence it backed, which is the D-2189 shape appearing inside the very
+# paragraph that fixes D-2189. Stated as measured, the price is real for the
+# one destination shape this `rm` covers, so it is disclosed here rather than
 # only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then

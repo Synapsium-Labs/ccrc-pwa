@@ -53,8 +53,35 @@
 //    same non-hang reason, and it is likewise NOT covered elsewhere: neither
 //    `ccd-hold.test.ts` nor `ccd-ws-rename.test.ts` — nor any other file in
 //    this tree — touches that path with a directory.
+//
+// F7 (review run 69) — D6 asks for a DIRECTORY case per site and this file
+// carries exactly one, at D1. The reasons above were prose; the reviewer was
+// right that one of them lived only in a gitignored artifact. So the
+// exclusion is now MUTATION-MEASURED, here, in tracked text, site by site.
+// Method: plant a directory case at every remaining site, then revert that
+// site's own type test to its pre-fix spelling and re-run.
+//  - D2's four refusing verbs (`-f`+`-r` reverted to the pre-fix `-e`):
+//    12 cases red — exactly the three HANG shapes x four verbs — and all four
+//    DIRECTORY cases stayed GREEN. Pre-fix, `-e` matches a directory, `cat`
+//    fails EISDIR, and the `|| echo` fallback supplies the identical refusal
+//    text the post-fix shape test supplies; the two spellings are
+//    indistinguishable at this shape.
+//  - D3 (`[[ -f "$sf" ]]` rung deleted): the three hang shapes red, the
+//    DIRECTORY case GREEN.
+//  - D5 (`[[ -f "$f" && -r "$f" ]]` reverted to `[[ -e "$f" ]]`): the three
+//    hang shapes red, the DIRECTORY case GREEN.
+//  - D4's four Python opens: `get()`'s `os.path.isfile` already answers False
+//    for a directory, so it is treated as absent with or without the fix. The
+//    one thing a directory DOES change there is downstream of this guard and
+//    is already named in `_pr_py`'s own comment: `os.replace(tmp, dst)` and
+//    `clear`'s `os.remove` refuse a directory at `dst` with
+//    `IsADirectoryError`. Measured here, and it confirms that comment rather
+//    than this guard: the sweep faults at the REPLACE, not at the read.
+// So the fourth shape is absent at those sites because it is an EQUIVALENT
+// mutant there, not because it was forgotten — and D1 keeps its case because
+// there, uniquely, the message changes.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { execFileSync, spawnSync } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
@@ -345,6 +372,44 @@ describe.skipIf(NO_DEADLINE_BIN)('D2 — the hold family, five sites, one shape 
     },
   );
 
+  // F4 (review run 69): the three shapes above all fail `-f`, so `[[ -f ]]`
+  // ALONE answers identically for every one of them and the `-r` conjunct at
+  // this site was held by nothing — the reviewer measured the whole suite
+  // GREEN with `-r` dropped. The only shape that separates the two spellings
+  // is a PRESENT REGULAR file this process cannot read, so that is the case.
+  //
+  // Mutated (`-r` dropped), a mode-000 hold takes the `cat` branch instead:
+  // `cat` fails EACCES, stderr is suppressed, `$()` yields the empty string,
+  // and `_lc_json` DROPS an empty-valued key — so `meas.held` is not wrong,
+  // it is ABSENT, and the release record silently loses the one field that
+  // says the hold could not be read. The assertion below is the exact marker,
+  // so `undefined` reds it.
+  //
+  // WHY THE SKIP IS HONEST HERE, unlike the one F10 replaced: root can read a
+  // mode-000 file, so under root `-r` is TRUE for it and `[[ -f && -r ]]` and
+  // `[[ -f ]]` agree at every shape — the mutant is provably EQUIVALENT on a
+  // root runner, not merely unobserved. There is no condition this skip
+  // hides; there is nothing left to pin.
+  it.skipIf(process.getuid?.() === 0)(
+    'cmd_ws_release: a PRESENT but UNREADABLE (mode-000) hold gets the release-time marker — the `-r` conjunct, pinned', () => {
+      const id = 'demo-quiet-mesa';
+      regSet(id, 'uuid', 'u');
+      fs.mkdirSync(REG(), { recursive: true });
+      fs.writeFileSync(HOLD(id), 'program:x wave:2/4');
+      fs.chmodSync(HOLD(id), 0o000);
+      try {
+        const r = boundedRun(`cmd_ws_release --session ${id}`);
+        expect(r.code).toBe(0);
+        expect(r.stdout).toContain(`released ${id}`);
+        const releaseEvents = readJournal(h.home).filter((e) => e['act'] === 'release');
+        expect(releaseEvents.length).toBeGreaterThan(0);
+        expect(measOf(releaseEvents[releaseEvents.length - 1]!)['held'])
+          .toBe('<unreadable — hold present but could not be read at release>');
+      } finally {
+        if (fs.existsSync(HOLD(id))) fs.chmodSync(HOLD(id), 0o644);
+      }
+    }, 10000);
+
   it('cmd_ws_release still records the reason VERBATIM for a genuinely readable hold (unchanged)', () => {
     const id = 'demo-quiet-plain';
     regSet(id, 'uuid', 'u');
@@ -358,6 +423,7 @@ describe.skipIf(NO_DEADLINE_BIN)('D2 — the hold family, five sites, one shape 
 });
 
 describe.skipIf(NO_DEADLINE_BIN)('D3 — `_ws_status`, the one unguarded reader of four (D-2379)', () => {
+  // (F7/D6's directory case for this family is the last `it` in this block.)
   let h: CcdHarness;
   beforeEach(() => { h = makeCcdHarness('ccrc-ccd-bounded-d3-'); });
   afterEach(() => { h.cleanup(); });
@@ -495,6 +561,53 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(fs.existsSync(escapeTarget), 'the guard must raise BEFORE the open, so nothing is ever created at the symlink\'s target').toBe(false);
   }, 20000);
 
+  it('the compare-and-set lock: a LIVE SYMLINK to an existing regular file proceeds UNLOCKED, PROMPTLY — the flock is never taken on a foreign inode', async () => {
+    // F1 (review run 69). The dangling case above pins only HALF of this
+    // guard: `exists` followed the link, and so did the second conjunct,
+    // `os.path.isfile` — which answers True for a symlink to an EXISTING
+    // REGULAR file. So the guard did not fire, `open(lock_p, 'a')` returned
+    // an fd on the TARGET, and `fcntl.flock` took an exclusive lock on a
+    // foreign inode: ccd serialising against a file that is not its lock.
+    //
+    // Nothing observable is WRITTEN in that case — an append-mode open that
+    // writes no bytes leaves the target untouched — so the target's content
+    // cannot pin it and the dangling case's existsSync cannot either. What
+    // makes it observable is the lock itself: an UNRELATED holder of that
+    // inode wedges the sweep. This case plants one, so the pre-fix code
+    // BLOCKS on flock and `runBounded` reports it as the hang it is, while
+    // the fixed code refuses before the open and proceeds unlocked — which
+    // is the arm the function's own comment promises must always remain.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    const escapeTarget = path.join(hp.home, 'escaped-lock-live-target');
+    fs.writeFileSync(escapeTarget, 'UNTOUCHED');
+    fs.symlinkSync(escapeTarget, path.join(REG(), `.prstate-${id}.lock`));
+    // Held from OUTSIDE the bounded process group, so `timeout`'s kill cannot
+    // reach it and the block is genuine for as long as the case needs it.
+    const holder = spawn('python3', ['-c',
+      'import fcntl, sys, time\n'
+      + 'f = open(sys.argv[1], "a")\n'
+      + 'fcntl.flock(f, fcntl.LOCK_EX)\n'
+      + 'sys.stdout.write("held\\n"); sys.stdout.flush()\n'
+      + 'time.sleep(120)\n', escapeTarget], { stdio: ['ignore', 'pipe', 'ignore'] });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('the external flock holder never reported held')), 10000);
+        holder.stdout!.on('data', (b: Buffer) => {
+          if (String(b).includes('held')) { clearTimeout(t); resolve(); }
+        });
+        holder.on('exit', () => { clearTimeout(t); reject(new Error('the external flock holder exited early')); });
+      });
+      hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+      const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+      expect(r.code).toBe(0);
+      expect(fs.readFileSync(path.join(REG(), `${id}.prnumber`), 'utf8')).toBe('591');
+      expect(fs.readFileSync(escapeTarget, 'utf8'), 'nothing may be written through the link').toBe('UNTOUCHED');
+    } finally {
+      holder.kill('SIGKILL');
+    }
+  }, 20000);
+
   it('the prhistory append: a FIFO at $REG/<id>.prhistory faults PROMPTLY rather than hanging the whole sweep', () => {
     // THE FOURTH OPEN, not the third — `get()`, `put()`'s own tmp file, the
     // lock and this append are four sites in the same mode, not two (the
@@ -537,6 +650,25 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('refusing to append to a non-regular-file prhistory');
+  }, 20000);
+
+  it('the prhistory append: a LIVE SYMLINK to an existing regular file faults — rows never append THROUGH the link', () => {
+    // F1 (review run 69), the same half-closed guard on the fourth site.
+    // `os.path.isfile` follows the link, so a symlink to an existing REGULAR
+    // file passed and `open(hist_p, 'a')` appended the row to a file outside
+    // `$REG`. Unlike the lock, this one WRITES, so the target's own bytes are
+    // the assertion — and a dangling case cannot make it.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    fs.writeFileSync(path.join(REG(), `${id}.prnumber`), '591');
+    const escapeTarget = path.join(hp.home, 'escaped-prhistory-target');
+    fs.writeFileSync(escapeTarget, 'UNTOUCHED');
+    fs.symlinkSync(escapeTarget, path.join(REG(), `${id}.prhistory`));
+    hp.ghRows([mergedRow({ number: 601, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('refusing to append to a non-regular-file prhistory');
+    expect(fs.readFileSync(escapeTarget, 'utf8'), 'no row may be appended through the link').toBe('UNTOUCHED');
   }, 20000);
 
   it("put(): a FIFO already at the pid-named tmp path (pid reuse) faults PROMPTLY rather than hanging the whole sweep", () => {
@@ -603,6 +735,39 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
     expect(fs.readFileSync(path.join(REG(), `${id}.prcheckedat`), 'utf8')).not.toBe('stale');
   }, 20000);
 
+  it("put(): a LIVE SYMLINK to an existing regular file at the pid-named tmp path is refused — the bytes never land outside $REG", () => {
+    // F1 (review run 69), THE CRITICAL ONE. The `lexists`-not-`exists` fix
+    // closed the DANGLING half of this escape and left the LIVE half wide
+    // open, because the guard's SECOND conjunct followed the link too:
+    // `os.path.isfile` answers True for a symlink whose target is an existing
+    // REGULAR file. The guard did not fire, `open(tmp,'w')` wrote THROUGH the
+    // link, `os.replace(tmp, dst)` renamed the SYMLINK onto `dst` — the
+    // field's bytes outside `$REG` and `$REG/<id>.<field>` left a symlink,
+    // which is verbatim the consequence the shipped comment said the fix had
+    // closed. Reproduced end to end before the fix. A DANGLING case is green
+    // without the fix and so pins none of this, which is exactly why one
+    // round of review passed over it.
+    const { id, tip } = workspace();
+    fs.mkdirSync(REG(), { recursive: true });
+    const escapeTarget = path.join(hp.home, 'escaped-put-target');
+    fs.writeFileSync(escapeTarget, 'UNTOUCHED');
+    const shim = path.join(harnessBin(hp.home), 'python3');
+    fs.writeFileSync(shim,
+      '#!/bin/bash\n'
+      + `ln -s "${escapeTarget}" "${path.join(REG(), `.${id}.prcheckedat.$$.tmp`)}" 2>/dev/null || true\n`
+      + 'exec /usr/bin/python3 "$@"\n', { mode: 0o755 });
+    hp.ghRows([mergedRow({ number: 591, headRefOid: tip })]);
+    const r = boundedPrRun(`${GH_STUB} cmd_pr_state --session ${id}`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('refusing to write a non-regular-file pr-state tmp');
+    // The assertion a dangling case cannot make: the target's own bytes.
+    expect(fs.readFileSync(escapeTarget, 'utf8'), "the field's bytes must never be written through the link").toBe('UNTOUCHED');
+    const dst = path.join(REG(), `${id}.prcheckedat`);
+    if (fs.existsSync(dst)) {
+      expect(fs.lstatSync(dst).isSymbolicLink(), '$REG/<id>.prcheckedat must never become a symlink').toBe(false);
+    }
+  }, 20000);
+
   it('still appends prhistory normally when the path is a regular file (unchanged)', () => {
     const { id, tip } = workspace();
     fs.mkdirSync(REG(), { recursive: true });
@@ -617,7 +782,11 @@ describe.skipIf(NO_DEADLINE_BIN)('D4 — `_pr_py`\'s Python opens in `state` mod
   }, 20000);
 });
 
-describe.skipIf(NO_DEADLINE_BIN)('D5 — `cmd_project_pool`\'s registry-row existence glob, unguarded (D-2925)', () => {
+// RENAMED from 'D5 — …' (F15, review run 69): the plan's own task D5 is
+// `_transcript_stalled_pair`, a different site, so `vitest -t D5` selected THIS
+// block and a reader believed the transcript guard had been measured this wave.
+// The deviation number is unambiguous where the task letter was not.
+describe.skipIf(NO_DEADLINE_BIN)('D-2925 — `cmd_project_pool`\'s registry-row existence glob, unguarded', () => {
   // `cmd_project_pool`'s `--pool` arm proves a registry-only project exists
   // with `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` — a GLOB, not
   // a single named path, so `grep` opens EVERY matched `.project` row BY

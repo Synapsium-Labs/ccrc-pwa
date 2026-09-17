@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=638658893e86646e69a369fad3216ffc3f6db2cff26113d1c20da8bb6a6a2f95
+# ccrc:generated 1 sha256=79e36f129a8f80a7fa8ecf4faeb9edfed0d886cd6ce181356844d7f67c11d579
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -121,9 +121,18 @@ esac
 # destination's identity matters and whose `src` may be absent — check a
 # new call site against THAT, not against "reachability is nil today", which
 # was true of the eight above only until one of them changed shape. And no
-# symlink-to-DIRECTORY exists at
-# any of the eight anywhere in the tree — but the price is real for the one
-# destination shape this `rm` covers, so it is disclosed here rather than
+# symlink-to-DIRECTORY is created at any of the eight BY ANY `ln -s` IN THE
+# SHIPPED FILES — which is the whole of what the census measured, and is
+# strictly narrower than the "anywhere in the tree" this sentence claimed
+# until F14 (review run 69): the census excludes test fixtures BY
+# CONSTRUCTION, and fixtures create links with `symlinkSync`, which no
+# `ln -s` scan can see. The wider claim was not falsified either — run 69
+# measured the fixtures at `POOLS()/demo` and found a FIFO, `/dev/zero`,
+# `/dev/null` and a regular file, none of them a directory — so what was
+# wrong was the WARRANT, not the conclusion: an argument narrower than the
+# sentence it backed, which is the D-2189 shape appearing inside the very
+# paragraph that fixes D-2189. Stated as measured, the price is real for the
+# one destination shape this `rm` covers, so it is disclosed here rather than
 # only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
@@ -4686,7 +4695,7 @@ _pr_py() {   # mode [args…]; stdin = the gh rows JSON. The ONE embedded helper
   # the rows, with sys.argv identical. The rows cannot move to argv instead —
   # spec §7 is that no GitHub-sourced string is ever placed in an argv.
   python3 /dev/fd/3 "$@" 3<<'PY'
-import fcntl, json, os, re, subprocess, sys, time
+import fcntl, json, os, re, stat, subprocess, sys, time
 
 mode = sys.argv[1]
 # `headRefOid` and `mergeCommit.oid` are GitHub-SOURCED, and `is_ours` puts the
@@ -4897,8 +4906,9 @@ if mode == 'state':
         # the ordinary path never sees this tmp exist at all (fresh per-pid
         # name), a STALE REGULAR tmp left by a prior crash must still be
         # truncated and reused, and only a PRESENT NON-REGULAR tmp must
-        # refuse rather than block inside the open. `os.path.lexists(...) and
-        # not os.path.isfile(...)` draws exactly that line — absent:
+        # refuse rather than block inside the open.
+        # `os.path.lexists(...) and not stat.S_ISREG(os.lstat(...).st_mode)`
+        # draws exactly that line — absent:
         # proceed and create; regular: proceed and truncate; anything else:
         # raise before the open, the same shape the lock guard below uses —
         # and the raise is caught by the `except OSError` immediately below,
@@ -4918,13 +4928,28 @@ if mode == 'state':
         # (`unlink(2)` there answers EPERM, and this repo's own server suite
         # runs on `macos-latest` too, unmeasured here) — swallowed either way
         # by the inner `except OSError: pass` below, so a directory refuses
-        # correctly but is never self-healed. The guard's population is
-        # `lexists ∧ ¬isfile` (not the `¬isfile` alone this comment used to
-        # say, which omitted the first conjunct and so did not disclose the
-        # `exists`-follows-symlinks gap above); a directory is the one
-        # remaining gap in self-heal, not in the refusal.
+        # correctly but is never self-healed.
+        #
+        # AND `os.path.isfile` WAS ALSO WRONG HERE, for the same reason
+        # `exists` was (F1, review run 69; reproduced end to end before the
+        # fix): `isfile` FOLLOWS symlinks, so a LIVE symlink pointing at an
+        # EXISTING REGULAR file answered True, the guard did not fire, and
+        # the `exists`-era escape reproduced IDENTICALLY — `open(tmp,'w')`
+        # wrote THROUGH the link, `os.replace(tmp, dst)` renamed the SYMLINK
+        # onto `dst`, and the field's bytes landed outside `$REG`. The
+        # `lexists` fix closed the DANGLING half only; BOTH conjuncts had to
+        # stop following the link, so the type test is now
+        # `stat.S_ISREG(os.lstat(...).st_mode)`, which answers about the link
+        # itself rather than its target. `lexists` still guards it, so an
+        # absent path short-circuits before `lstat` can raise — and a race
+        # that removes the path between the two raises `FileNotFoundError`,
+        # an `OSError`, which this block already turns into the same FAULT.
+        # The guard's population is therefore `lexists ∧ ¬S_ISREG(lstat)`:
+        # every PRESENT shape that is not itself a regular file, symlinks to
+        # regular files INCLUDED. A directory is the one remaining gap in
+        # self-heal, not in the refusal.
         try:
-            if os.path.lexists(tmp) and not os.path.isfile(tmp):
+            if os.path.lexists(tmp) and not stat.S_ISREG(os.lstat(tmp).st_mode):
                 raise OSError('refusing to write a non-regular-file pr-state tmp: ' + tmp)
             with open(tmp, 'w') as f:
                 f.write(str(value))
@@ -5154,8 +5179,13 @@ if mode == 'state':
         # `try` already turns into "proceed unlocked", so the guarantee that
         # block states ("this guard may only remove races, never add a
         # refusal that stops a phase from ever updating") holds unchanged.
+        # The type test is `stat.S_ISREG(os.lstat(...).st_mode)`, NOT
+        # `os.path.isfile`, for the reason `put()`'s guard above records at
+        # length (F1): `isfile` follows the link, so a symlink to an existing
+        # regular file passed this guard too and the `'a'` open appended
+        # THROUGH it, to a file outside `$REG`.
         lock_p = os.path.join(reg, '.prstate-' + id_ + '.lock')
-        if os.path.lexists(lock_p) and not os.path.isfile(lock_p):
+        if os.path.lexists(lock_p) and not stat.S_ISREG(os.lstat(lock_p).st_mode):
             raise OSError('refusing to open a non-regular-file pr-state lock: ' + lock_p)
         lock_f = open(lock_p, 'a')
         fcntl.flock(lock_f.fileno(), fcntl.LOCK_EX)
@@ -5207,11 +5237,15 @@ if mode == 'state':
                     # one row's update rather than merely the append. Guarded
                     # only when present-and-not-regular, exactly like the
                     # lock above (`lexists`, not `exists` — same final-round
-                    # fix: a dangling symlink here must not read as absent):
+                    # fix: a dangling symlink here must not read as absent;
+                    # and `stat.S_ISREG(os.lstat(...))`, not
+                    # `os.path.isfile`, the F1 fix: `isfile` follows the
+                    # link, so a LIVE symlink to a regular file passed and
+                    # the rows were appended THROUGH it, outside `$REG`):
                     # the first-ever prhistory file must still be free to be
                     # CREATED.
                     hist_p = os.path.join(reg, id_ + '.prhistory')
-                    if os.path.lexists(hist_p) and not os.path.isfile(hist_p):
+                    if os.path.lexists(hist_p) and not stat.S_ISREG(os.lstat(hist_p).st_mode):
                         raise OSError('refusing to append to a non-regular-file prhistory: ' + hist_p)
                     with open(hist_p, 'a') as f:
                         f.write(json.dumps(rec) + '\n')

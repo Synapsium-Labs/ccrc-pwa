@@ -15,6 +15,17 @@ Part A touches the PLATFORM BLOCK, which is byte-identical in `ccd/ccd` and `ccd
 by `macos-platform.test.ts` — **both files must change together or that pin reds.** Part B touches
 `ccd/ccrc-doctor-checks` only. **Part D touches `ccd/ccd` only.** Its site count is DERIVED at execution time, not quoted here: D1-D5 name ten mandatory sites and D8 names four further groups, two of them conditional and one dead on a Linux fleet, so no reading of the list below yields the twelve this sentence used to assert (D-2475). Re-measure the class before fixing it, and navigate by SYMBOL — every line anchor in Part D predates #69/#78/#79 and has drifted.
 No server, agent, shared or PWA source is touched.
+**TWO TRACKED FILES OUTSIDE `ccd/` ARE EDITED, and both are declared here rather than left to a
+reader of the diff (F13, review run 69).** (1) `README.md` — one line-anchor repair, AUTHORISED by the
+coordinator during this wave ("README's `ccd/ccd:16330-16332`, repaired rather than bumped"); it cites
+`  elif (( genrc == 1 )); then`, and the repair was re-measured at the shipping tree because an
+earlier commit moved the referent after the first measurement. (2) `CLAUDE.md` — the `ccd-bounded-reads`
+D4 flake note, corrected from the family default to the bound this wave actually shipped. That edit was
+UNILATERAL AND UNDECLARED when it was made; the coordinator has since ruled ACCEPT-AND-DECLARE, and was
+explicit that they would have said yes if asked and that **the defect was the silence, not the edit**.
+It is kept because the content is measured accurate and `CLAUDE.md` is loaded by every session and
+subagent on this fleet, so leaving it stale ships a known-false claim into the most-read file in the
+repository.
 **`test-macos` IS NOT A REQUIRED CHECK** (measured 2026-09-10: the four required contexts are
 `test (server)`, `test (agent)`, `test (pwa)`, `build-pwa`, and `.github/workflows/ci.yml:129` says
 `test-macos` "is additive and non-required — a red here blocks nothing"). Part A's guard therefore has
@@ -63,6 +74,24 @@ so the suites run against one tree.
       which this repo does not own.
 - [x] **B6.** Mutation table: remove `ccrc-models.timer` from `known`, measure B2 RED, restore.
 
+**B6 mutation table (F5, review run 69 — this table existed only in a commit message; `.superpowers/`
+is gitignored, so the plan is the durable home, exactly as Part A's own paragraph argues).
+RE-MEASURED at this tree rather than transcribed from that message.** Mutant: delete
+`ccrc-models.timer` from the `known` array in `ccd/ccrc-doctor-checks` (restored from a copy kept
+outside the repo, never `git checkout --`; byte-identity confirmed after restore). Suite:
+`vitest run test/ccrc-doctor.test.ts -t 'services knows about the models catalogue timer'`.
+
+| case | mutated | restored |
+|---|---|---|
+| `names it in the PASS line when it is installed and running` | **RED** — `expected 'PASS services: ccrc.service is active…' to contain 'ccrc-models.timer is active'` | GREEN |
+| `warns — with its OWN consequence — when the models timer is installed and stopped` | **RED** | GREEN |
+| `a box without the unit is never asked about it — no count moves` | GREEN | GREEN |
+
+`Tests 2 failed | 1 passed | 418 skipped (421)` mutated; `3 passed | 418 skipped` restored. The third
+case stays green BY DESIGN and is not a hole: it asserts that an ABSENT unit moves no count, which does
+not depend on the unit's membership in `known` — it is the negative control for the other two, not a
+pin of the addition.
+
 ## Part C — the catalogue freshness check (contract supplied by the reporting session)
 
 `known` (Part B) answers "is the timer running". It cannot see a timer that fires and produces nothing,
@@ -97,6 +126,42 @@ built against a stated contract rather than an inference.
       nothing. The POPULATION is what that PASS is really asserting.
 - [x] **C6.** Mutation table: stop the clock (age the fixture past 3 h with `stale:false`) and measure
       C4's first arm RED; set `stale:true` on a fresh catalogue and measure the second arm RED.
+
+**FIVE DEGENERATE-ENVIRONMENT ARMS OF `_check_models` HAVE NO TEST TEXT — disclosed, not expanded
+(F16, review run 69; the coordinator ruled DISCLOSE ONLY).** Each is a distinct operator-facing verdict
+with no case, measured by census: each arm's own sentence returns ZERO hits in `ccrc-doctor.test.ts`.
+They are the roster-unreadable SKIP, the node-missing FAIL, the roster-unparseable SKIP, the
+no-declared-id SKIP, and the WARN for a box whose `date` cannot answer `+%s`. All five are
+degenerate-ENVIRONMENT arms — they fire only when something the check depends on is itself broken —
+which is why they are recorded here rather than covered: writing five fixtures for them is a scope
+widening this wave declined, and a reader is owed the list either way. Nothing about them is
+conditional on this round's work; they were absent when C6 was first ticked and they are absent now.
+
+**C6 mutation table — ONE ROW PER BEHAVIOUR CHANGE (F3 + F5, review run 69, enforcing the coordinator's
+binding ruling that Part C must not close without one).** The two C4 arms above were measured when C6 was
+ticked, but only in a comment pointing at a gitignored artifact; and THREE further behaviour changes
+shipped with no row at all, two of which the reviewer measured GREEN under mutation — i.e. unpinned, in
+code this wave wrote. All rows below are measured at THIS tree against
+`vitest run test/ccrc-doctor.test.ts -t 'ccrc doctor: models'` (baseline **24 passed | 397 skipped**),
+each mutant restored from a copy kept outside the repo and byte-compared after restore.
+
+| # | mutant | result | verdict |
+|---|---|---|---|
+| C-M1 | revert the `0x1F` field delimiter to a TAB in **BOTH** halves (`local -r US=$'\x1f'` and the node twin `const US`) | **2 RED** — `an OK row with an ABSENT fetchedAt keeps its columns` and `a FLOAT fetchedAt is refused` | **PINNED** this round |
+| C-M2 | drop `Number.isInteger` from the `fetchedAt` screen | 24 passed — **GREEN** | **EQUIVALENT**, with a control — see below |
+| C-M2c | *control for C-M2*: drop the BASH re-validation `[[ "$fa" =~ ^-?[0-9]+$ ]]` instead | **1 RED** — `R1-5: a non-integer fetchedAt … never a bash arithmetic crash` | the bash regex is the gate that decides |
+| C-M3 | drop the `lastError` sanitiser `.replace(/[\t\n\x1f]/g, " ")` | **1 RED** — `a provider-controlled lastError … cannot invent a lane` | **PINNED** this round |
+| C-M4 | remove F2's catalogue type test entirely (the pre-fix bare `readFileSync`) | **3 RED** — two of them as bounded HANGS (`runDoctorBounded did not return within 10000ms`), one as the wrong verdict for a dangling link | **PINNED** this round |
+| C-M5 | remove R1's `[ -z "$out" ]` rung | **1 RED** — `the catalogue reader exiting ZERO with no rows is not a PASS either` | **PINNED** this round |
+
+**C-M2 is an EQUIVALENT mutant, not an unpinned one, and C-M2c is why.** `Number.isInteger` can only
+reject a NON-INTEGRAL float; every such value crosses the process boundary as a string the bash side
+then refuses on its own (`String(1789000000.5)` is `"1789000000.5"`, which that regex rejects; `1e21`
+IS an integer to `Number.isInteger` and passes both). The node check is belt to the bash braces — which
+is exactly what its own shipped comment claims — so removing it changes no reachable verdict. The
+control proves the claim rather than asserting it: mutating the mechanism that DOES decide reds a case
+immediately. **This is the honest form of a green mutation row:** the row is not evidence of coverage
+on its own, and it is not left ambiguous either.
 
 ---
 
@@ -159,6 +224,13 @@ read corrects — it is a process that never returns, holding whatever it holds.
       **VERIFIED this wave, not implemented this wave** — this fix already landed in PR #78, before
       this wave started; this wave re-measured it (and its byte-identical twin `_transcript_limit_banner`)
       by mutation and confirmed both pins are still live (see D-2381).
+      **NAME COLLISION, resolved (F15, review run 69).** "D5" named two different sites: THIS task
+      (`_transcript_stalled_pair`) and, until this round, the shipped suite's own
+      `describe('D5 — cmd_project_pool's registry-row existence glob …')`, which is D-2925's site and
+      not this one. So `vitest … -t D5` selected the project-pool block, and a reader who trusted this
+      task's number would watch the wrong guard go green while believing the transcript pins had been
+      measured this wave. The suite's block is renamed to `D-2925 — …`, the D7 table's command below is
+      updated with it, and this task's own measurement lives in D-2381.
 - [x] **D6. The red-first cases, before any of D1–D5.** Follow `ccd-project-pool.test.ts`: a bounded
       helper plus FIFO, symlink-to-FIFO, symlink-to-`/dev/zero` and directory cases per site, each
       double-bounded (helper bound AND a vitest per-test timeout). **A red that hangs is not a red** — it
@@ -173,6 +245,16 @@ read corrects — it is a process that never returns, holding whatever it holds.
       three `grep`s of `info/exclude` (4654) and `cmd_supervise`'s darwin start-limit arm (14970, dead on
       a Linux fleet). Fix them here if D1–D5 land cheaply; if not, they stay named in D-2376 with a
       reason, never dropped.
+      **TWO MORE LIVE INSTANCES, MEASURED AND DISCLOSED HERE (F8, review run 69) — no new deviation
+      number, because D-71 already covers the class and the coordinator refused a second number for it
+      once this run.** Both are the wave's own class, in files this wave touched, and until now they were
+      named only in a source comment: `ccd/ccrc` sources the account roster with NO `-f`/`-r` rung at all
+      at `_inst_dirs` (`:10294`) and `_inst_graph_always_on_off` (`:10625`), while `ccd/ccrc`'s six other
+      roster readers do guard it; and `ccd/ccrc-doctor-checks` guards it with `-r` ONLY at `:3047` and
+      `:3376`, the second inside `_check_routing`, which THIS WAVE edited. `-r` alone admits a FIFO, so
+      each hangs on one independently (measured, rc 124). Not fixed here: `ccd/ccrc`'s copy of the
+      platform block is byte-pinned to `ccd/ccd`'s, and these sites sit outside D1-D5's enumerated scope,
+      so repairing them is a scope widening this wave declined rather than an omission it overlooked.
 
 **What Part D must NOT do:** widen into the SECOND class the sweep turned up — functions whose measured
 arms all guard but whose final fallback returns an unmeasured value at the same exit status. That class
@@ -180,6 +262,48 @@ has ~18 candidates in this file and **most of them are deliberate and argued** (
 and `_home_measured` is already its measured sibling; `_transcript_path`'s rung 4 is specified verbatim
 by `2026-08-12-swap-transcript-defect-family-design.md` §2.5). Each needs adjudicating against its own
 governing document before it can be called a defect. Booked as a QUESTION in D-2376, not as work.
+
+---
+
+## The citation census this wave broke — disclosed here because nothing else in the repo does
+
+**Ruled by the coordinator, before merge (F6, review run 69).** `server/test/session-hook.test.ts`
+carries a census — added by PR #134, D-2849 — that checks every line citation in the compaction-card
+documents against the file each one names. Three of its assertions are RED at this branch's tip, and
+they are **100% this wave's own doing**: review run 69 measured it one file at a time and found all
+three GREEN at the base `dfa167d7`, RED at the tip, and GREEN again once this branch's `ccd/` scripts,
+`README.md` and `CLAUDE.md` are reverted. This is not rot the branch inherited. It is debt the branch
+created, in documents the branch does not own — the citing documents are a spec and a plan belonging to
+another programme, and every anchor in them shifted because this wave inserted lines into `ccd/ccd`.
+
+**Why it is disclosed HERE.** This plan is the only tracked document this wave owns. The programme
+ledger that carries the sizing lives on `ws/amber-summit`, which no PR carries, and the wave-done mail
+is not in the repository at all. Without this section a reader of `main` after the merge meets three red
+assertions and finds nothing in the tree explaining where they came from.
+
+**The decision, and it is not "absorb".** The three options were prove, repair, or absorb. The
+coordinator ruled REPAIR, over every failure instance whose old anchor's bytes are byte-equal to exactly
+one block in the file at the tip — the referent provably moved, to one known place, against a FIXED base
+that is a direct ancestor and with both citing documents byte-identical between base and tip. Finding
+that block is a lookup here, not a judgement. A minority of instances match more than one block
+byte-identically; no candidate is offered for those and they are named with their match counts instead.
+A further minority will have their anchor repaired and still fail, because their QUOTATION was already
+wrong before this wave touched anything — those get the anchor and no prose change, which is the same
+line the citing programme's own Task 11 drew.
+
+**Method, and the rule that governs it.** The repair lands as ONE commit, the LAST on this branch,
+re-measured against that exact tree — *a citation repair is only valid against the tree it will ship
+in*. That rule was learned here the expensive way: this wave's authorised `README.md` repair was
+measured at one line, a later commit moved the referent, and the originally-chosen line now holds a
+comment. The census's own expected numbers, its `total`, and the comment naming this branch as the cause
+land in that same commit.
+
+**This section deliberately carries no cardinal.** Every count involved — the census's per-file
+expectations, the number of failure instances, the split between repaired, still-red and unprovable — is
+derived from a tree that this fix round is still changing, and a number written here now would be false
+by the time it merged. They are written once, in the last commit, measured against the tree they
+describe. Where this wave's own measurement and review run 69's disagree on such a count, the
+disagreement is reported rather than resolved by picking one.
 
 ---
 
@@ -216,12 +340,58 @@ group by design; a row can be green across all four and still be caught elsewher
 
 | # | mutant | case (a) | case (b) | narrowed scan | A1 case 2 |
 |---|---|---|---|---|---|
-| M1 | delete the `rm -f -- "$2"` line entirely | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four; caught by THREE cases: A1's case 1 (`answers 0 only if src is now AT a dest that was a symlink to a directory`), the rm-fails price (`when the guarded rm FAILS…`) and the destination-gone price (`when src is absent, a symlink-to-directory dest is left GONE…`) |
+| M1 | delete the `rm -f -- "$2"` line entirely | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four; caught by **FOUR** cases (was three until F10 added the fourth this round, re-measured): A1's case 1 (`answers 0 only if src is now AT a dest that was a symlink to a directory`), the rm-fails price (`when the guarded rm FAILS…`), the SAME price pinned at every uid (`when the guarded rm fails for a reason chmod cannot cause…`) and the destination-gone price (`when src is absent, a symlink-to-directory dest is left GONE…`) |
 | M2 | guard the `rm` by `-L "$2"` only (drop `-d`) | GREEN | **RED** | GREEN | GREEN |
 | M2b | guard the `rm` by `-d "$2"` only (drop `-L`) | GREEN | GREEN | GREEN | GREEN — **UNPINNED** by these four, but **PROVABLY EQUIVALENT** (below), not an uncaught defect |
 | M3 | make the `rm` unconditional (drop its own `-L`/`-d`, keep `\|\| return 1`) | **RED** | **RED** | GREEN | GREEN |
 | M4 | M3 plus delete the pre-existing refusal guard (`if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi`) too | **RED** | **RED** | **RED** | GREEN |
 | 6 | delete ONLY the refusal guard — the `rm` line left EXACTLY as HEAD has it | GREEN | GREEN | GREEN | **RED** |
+
+**THE WAVE'S UNPINNED COUNT, CORRECTED — and it is a taxonomy, not a number (F4, review run 69).**
+This wave disclosed "two UNPINNED mutants", meaning M1 and M2b in the table above. That was wrong on
+both sides of the word. Review run 69 measured FOUR further behaviour changes with no pin at all — three
+in Part C (the `0x1F` delimiter, `Number.isInteger`, the `lastError` sanitiser) and one in Part D
+(`cmd_ws_release`'s `-r` conjunct, which the reviewer measured by dropping it and finding the entire
+`ccd-bounded-reads` suite still GREEN at 40 passed). A single integer cannot carry that, because the
+four resolve three different ways. Measured at this tree, the wave's mutants now fall into exactly
+three classes:
+
+- **PINNED this round (4):** the `0x1F` delimiter, the `lastError` sanitiser, F2's catalogue type test
+  and R1's empty-output rung — each with its own case and its own RED above (C6's table); plus
+  `cmd_ws_release`'s `-r` conjunct, pinned by a mode-000 hold case that reds when the conjunct is
+  dropped at that one site.
+- **EQUIVALENT, with a control (2):** M2b in the table above (measured across all six destination
+  shapes; the one shape where the two spellings differ is unreachable, refused by the guard above it)
+  and C-M2 (`Number.isInteger`, whose control C-M2c reds immediately). An equivalent mutant is not an
+  unpinned one, and this plan says which of the two each row is rather than leaving a green cell to be
+  read either way.
+- **UNPINNED BY ITS OWN GROUP, CAUGHT ELSEWHERE (1):** M1, whose four catching cases are enumerated in
+  the row itself and re-measured below.
+
+`cmd_ws_release`'s `-r` carries one further honest qualification, stated where the case lives: its pin
+is `skipIf(uid === 0)`, and under root the mutant is **provably equivalent** rather than merely
+unobserved, because root can read a mode-000 file, so `[[ -f && -r ]]` and `[[ -f ]]` agree at every
+shape there. That is a different thing from the skip F10 replaced, where a real behavioural difference
+survived under root with nothing holding it.
+
+**A5's OWN named deliverable, on its own line (F12, review run 69).** A5 is *"delete the `rm -f` line,
+measure A1 RED"* — that is M1 against **A1 case 1**, which sits OUTSIDE the four-column group above by
+design, so M1's result for it survived only as prose inside the one cell the table scores GREEN. Stated
+on its own and **re-measured at this tree**, `vitest run test/macos-platform.test.ts` with the whole
+`rm -f -- "$2" || return 1` line deleted:
+
+| M1 — delete the guarded `rm` line entirely | result |
+|---|---|
+| A1 case 1 — `answers 0 only if src is now AT a dest that was a symlink to a directory` | **RED** |
+| the rm-fails price — `when the guarded rm FAILS, the function does not answer 0` | **RED** |
+| the rm-fails price at every uid — the F10 case added this round | **RED** |
+| the destination-gone price — `when src is absent, a symlink-to-directory dest is left GONE` | **RED** |
+| the four columns of the table above | all GREEN — which is what "UNPINNED **by these four**" means, and no more |
+
+`Tests 5 failed | 49 passed | 10 skipped (64)`; the fifth failure is `is byte-identical in ccd and ccrc`,
+an artefact of mutating `ccd/ccd` alone and not a behavioural case. **So A5's measurement is RED at FOUR
+independent cases, not three** — the count the earlier rounds recorded, before F10 added a pin that holds
+regardless of uid.
 
 **The narrowed scan's column is historical for M1–M4/M2b and MEASURED for row 6** (the rest were not
 re-run against it, since it no longer exists — deleting it is what row 6 decided; see below). **M4's `A1
@@ -509,6 +679,20 @@ per-id loop, so one poisoned `$REG/<id>.<field>` hangs the whole sweep rather th
 block enumerating this open's outcomes for an existing lock file, a first-ever lock file and an unwritable
 `$REG` reasons about every branch where `open` RETURNS, and none where it does not.
 
+**THE OVERLOADED NULL AT `get()`'s SEAM, named here and not only in the source (R2, review run 69).**
+`get()` answers the identical `None` for "absent" and for "present but not a regular file" — two
+conditions a caller handles differently, collapsed to one value. `CLAUDE.md` bans that shape outright
+("No overloaded null at a seam … that's a defect, not style"), and the shipped comment already calls it
+by name. It gets NO deviation number of its own: the review panel refuted that 2/3 and the coordinator
+agreed, because this entry is already the subject's home. It is written here because the deviations
+section is where the next reader looks, and a ban this repo states in its own conventions file should not
+be discoverable only by opening the function. **What contains it, measured:** for a FIFO, socket, device
+or symlink at `dst` the next `put`/`clear` silently replaces or unlinks it, exactly as though the field
+had never existed, so the collapse is invisible AND harmless; a DIRECTORY at `dst` is the one shape that
+still faults, at `os.replace`/`os.remove`, not at this read. Note the file's own asymmetry, deliberately
+unreconciled: `_check_models` in `ccd/ccrc-doctor-checks` takes the OPPOSITE position on the same class,
+giving a read it cannot trust its own distinct verdict.
+
 **D7 mutation table (four sites, `-t D4`):**
 
 | site | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
@@ -624,4 +808,4 @@ least one, e.g." rather than naming a single instance.]
 
 | site | command | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
 |---|---|---|---|
-| `cmd_project_pool`'s `--pool` arm, via `_reg_project_glob_has` | `vitest run test/ccd-bounded-reads.test.ts -t D5` | **RED** — measured independently in this session: reverted the guard to the original unguarded `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` (backup kept outside the repo, never `git checkout --`); `Tests 3 failed \| 1 passed \| 33 skipped (37)`, all three hang shapes (FIFO / symlink-to-FIFO / symlink-to-`/dev/zero`, sorted BEFORE the real row) timing out — `Error: runBounded("cmd_project_pool --project quiet-basin --pool pool-a") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — restored from the pre-mutation copy (md5 verified identical, `git diff --stat -- ccd/ccd` empty), re-ran: `Tests 4 passed \| 33 skipped (37)` |
+| `cmd_project_pool`'s `--pool` arm, via `_reg_project_glob_has` | `vitest run test/ccd-bounded-reads.test.ts -t D-2925` (was `-t D5`, which collided with this plan's own task D5 — F15) | **RED** — measured independently in this session: reverted the guard to the original unguarded `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` (backup kept outside the repo, never `git checkout --`); `Tests 3 failed \| 1 passed \| 33 skipped (37)`, all three hang shapes (FIFO / symlink-to-FIFO / symlink-to-`/dev/zero`, sorted BEFORE the real row) timing out — `Error: runBounded("cmd_project_pool --project quiet-basin --pool pool-a") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — restored from the pre-mutation copy (md5 verified identical, `git diff --stat -- ccd/ccd` empty), re-ran: `Tests 4 passed \| 33 skipped (37)` |

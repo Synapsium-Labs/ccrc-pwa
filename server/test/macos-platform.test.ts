@@ -534,6 +534,39 @@ describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
     }
   });
 
+  // F10 (review run 69): the case ABOVE is the only pin on MUST-FIX 1's
+  // `|| return 1`, and it is `skipIf(uid === 0)` — so on a root runner the
+  // thing this fix's own header calls "a mechanism rather than a comment" is
+  // held by nothing. A skipped case is not a pin. The conjunct is about a
+  // FAILING `rm`; chmod is merely one way to cause that, and it is the way
+  // root defeats. Shadowing the binary causes the same condition for every
+  // uid, so this case runs everywhere and the guarantee is never unheld.
+  it('when the guarded rm fails for a reason chmod cannot cause, the function still does not answer 0 — the rm-fails price, pinned at every uid', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmstub-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmstub-1f9e');
+      const stubDir = path.join(d, 'bin');
+      mkdirSync(stubDir);
+      writeFileSync(path.join(stubDir, 'rm'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const rc = darwinBlock(
+        `export PATH='${stubDir}':"$PATH"\n_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success, whoever is running').not.toBe('0');
+      // Without `|| return 1` the failing `rm` falls through to the unchanged
+      // `mv`, which moves `src` INSIDE the linked directory and answers 0 —
+      // D-2187's recurrence exactly. Both assertions below red on that mutant.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink').toBe(true);
+      expect(readdirSync(real), 'nothing may be moved INTO the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmstub-1f9e');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
   it('when src is absent, a symlink-to-directory dest is left GONE — the destination-gone price, disclosed', () => {
     const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-gone-'));
     try {
