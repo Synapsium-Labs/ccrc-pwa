@@ -505,6 +505,15 @@ if [ "$TARGET" = "agent" ]; then
   node deploy/gen-accounts.mjs "$BOX_ROSTER" > "$ACCOUNTS_SH" \
     || { echo "deploy: FAILED — the roster at $BOX:~/.ccrc/accounts.json is not one ccrc can use (see above); refusing to ship a ccd that cannot read it" >&2; exit 1; }
   echo "roster fingerprint on $BOX: $(roster_fp "$ACCOUNTS_SH")"
+  # The banner this lane is about to raise, said out loud so it is not reported
+  # as a fault. `rosterAgreement` compares the fleet host's INSTALLED accounts.sh
+  # against the projection the running server generates from its OWN roster at
+  # boot, so an emitter change and a one-box roster edit both land here. The
+  # server lane clears it by restarting the server on this build against this
+  # box's own accounts.json — it never OVERWRITES a roster, so a pool added on
+  # one box only must be added on the other by hand (`ship_roster` runs in both
+  # lanes and scps accounts.json only when the box has none).
+  echo "  until the server lane restarts the server on this build, /api/fleet/health reports roster: divergent and the PWA shows the amber banner — expected between the two lanes; 'bash deploy/deploy.sh' clears an emitter skew, but a roster edit must be made on BOTH boxes"
   # ── THE SECOND SEED-ONCE FACT, AND WHY IT HAS TO BE HERE ─────────────────
   # `~/.ccrc/remote-control` is what the ccd installed further down asks, on
   # EVERY spawn, to decide whether a session comes up with `--remote-control`

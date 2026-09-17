@@ -1669,8 +1669,16 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
       'Reuse `sessionId` ONLY when the next wave stays in the same project.'],
     ['what a crossing wave does instead',
       'A wave that CHANGES project opens WITHOUT `sessionId` and spawns a fresh workspace in the target repo'],
-    ['the running-worker cap counts dispatched non-terminal runs',
-      'concurrency counts dispatched non-terminal runs, not held workspaces'],
+    // NARROWED BY D-2803, and the pin narrows with it. Review-runs replaced the
+    // cap's positive `state NOT IN ('done','failed')` with a DERIVED
+    // `NOT IN (idle âˆª terminal)`, so four dispatched non-terminal states â€”
+    // `planned`, `awaiting-review`, `merging`, `closing` â€” stopped consuming a
+    // slot. The old sentence stayed here, agreeing with the skill text it pins,
+    // for a day after the code moved: prose pinned against prose is green while
+    // both are false, which is why the crossrepo pin that reads `store.ts`
+    // caught it and this one did not.
+    ['the running-worker cap counts dispatched ACTIVE runs, not merely non-terminal ones',
+      'concurrency counts dispatched runs in an ACTIVE state'],
     ['the daily cap counts each actual dispatch',
       'each actual dispatch still consumes daily budget'],
     ['homeProject on every open',
@@ -1896,7 +1904,9 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec Â
 
   it('tells a refused coordinator the fields its OWN cap frame carries', () => {
     const caps = refs('wave-lifecycle.md');
-    const start = caps.indexOf('**Caps count runs, not holds.**');
+    // Anchor follows the heading D-2803 corrected: the paragraph is no longer
+    // "runs, not holds" but "ACTIVE runs, not holds and not merely non-terminal".
+    const start = caps.indexOf('**Caps count ACTIVE runs,');
     expect(start, 'wave-lifecycle.md no longer carries the caps paragraph')
       .toBeGreaterThanOrEqual(0);
     const para = flat(caps.slice(start, caps.indexOf('\n\n**', start + 1)));
