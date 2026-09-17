@@ -8081,11 +8081,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      // 125 -> 124 (D-2994): `cmd_ws_restore`'s mint grows `ccd/ccd` by 35
-      // lines at `:8974`, and ONE anchor below that point stopped failing
-      // by landing on content that happens to quote its token. Lowered
-      // because the rule must never widen — not because anything was fixed.
-      'ccd/ccd': 124,
+      // CCR-10 re-measure on top of D-2994: `_ws_unarchive` (+20), the
+      // `_spawn_start` archive check (+19) and the `_reg_get` census sentence
+      // (+2) moved anchors again. RE-MEASURED against the tree.
+      'ccd/ccd': 127,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8113,7 +8112,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `shared/api.ts` anchor), the sum of the re-measured map
     // above: the headline is a MECHANISM, not a separate number, so it moves
     // with `ccd/ccd`.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(160);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(163);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8246,7 +8245,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:6478',
         'ccd/ccd:13020',
         'ccd/ccd:19131',
-        'ccd/ccd:4006-4035',
         'ccd/ccd:4045',
         'ccd/ccd:4029',
         'ccd/ccd:4047',
@@ -8556,72 +8554,62 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
-        // D-2994 MOVES IT 48 -> 47, AND NOT ONE OF THE THREE IS A REPAIR.
-        // The mint this round adds to `cmd_ws_restore` grows `ccd/ccd` by 35
-        // lines at `:8974`, so every anchor into that file BELOW that point
-        // now names content written 35 lines earlier. The three that moved,
-        // each MEASURED against `origin/main` rather than inferred:
-        //   `ccd/ccd:19098` LEAVES — it named `_lc_done ensure … meas.inUnit`
-        //     and now lands inside D-2993's own minting comment, which happens
-        //     to carry a quotable token.
-        //   ONE of the three `ccd/ccd:11665-11670` copies LEAVES on the same
-        //     accident: the range held `_ws_gc`'s `[[ -d "$workdir" ]]`
-        //     argument and now holds `_ws_reap_eval`'s sixteenth-forgery
-        //     paragraph.
-        //   `ccd/ccd:13573-13575` ENTERS, the mirror image — it named the
-        //     `_ws_gc_prune_row` orphan-arm sentence and now names
-        //     `_ws_gc_dirty`'s round-3 header.
-        // A COINCIDENTAL PASS IS NOT A GREEN ANCHOR: the set shrank by one
-        // while the corpus got MORE stale, which is why this is a measurement
-        // and not a score. Same shape as S6-R10, when routing grew the file by
-        // ~1751 lines. Task 11 still owns the debt.
-        'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:13573-13575',
-        'ccd/ccd:3038',
-        'ccd/ccd:5797',
-        'ccd/ccd:7568',
-        'ccd/ccd:11025',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:11669',
-        'ccd/ccd:11670',
-        'ccd/ccd:13567',
-        'ccd/ccd:13673',
-        'ccd/ccd:19109',
-        'ccd/ccd:19120',
-        'ccd/ccd:19131',
-        'ccd/ccd:11669',
-        'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
-        'ccd/ccd:12032-12034',
-        'ccd/ccd:5810-5811',
-        'ccd/ccd:12032-12034',
-        'ccd/ccd:11665-11670',
-        'ccd/ccd:12594-12659',
-        'ccd/ccd:13809',
-        'ccd/ccd:13812',
-        'ccd/ccd:6425',
-        'ccd/ccd:1223',
-        'ccd/ccd:6547',
-        'ccd/ccd:3401',
-        'ccd/ccd:4029',
-        'ccd/ccd:4046',
-        'ccd/ccd:3038',
-        'ccd/ccd:2972-2973',
-        'ccd/ccd:8609',
-        'ccd/ccd:8654',
-        'ccd/ccd:8673',
-        'ccd/ccd:13573-13575',
-        'ccd/session-hook.sh:795',
-        'ccd/session-hook.sh:796',
-        'ccd/ccd:2874',
-        'ccd/ccd:2874',
-        'ccd/session-hook.sh:993',
-        'ccd/ccd:2433-2439',
-        'ccd/ccd:2793',
-        'ccd/session-hook.sh:802',
-        'ccd/ccd:5725',
-        'ccd/ccd:4642-4653',
-        'ccd/ccd:5819-5823',
+        // CCR-10 re-measure (on top of D-2994's own): the ccd insertions moved
+        // this set again. RE-MEASURED against the tree, never adjusted.
+        "server/test/ccd-ws-reap.test.ts:344",
+        "ccd/ccd:13573-13575",
+        "ccd/ccd:3038",
+        "ccd/ccd:3037-3089",
+        "ccd/ccd:5797",
+        "ccd/ccd:7568",
+        "ccd/ccd:11025",
+        "ccd/ccd:11665-11670",
+        "ccd/ccd:11669",
+        "ccd/ccd:11670",
+        "ccd/ccd:13561",
+        "ccd/ccd:13673",
+        "ccd/ccd:13560-13562",
+        "ccd/ccd:19109",
+        "ccd/ccd:19098",
+        "ccd/ccd:19120",
+        "ccd/ccd:19131",
+        "ccd/ccd:11669",
+        "ccd/ccd:11670",
+        "ccd/ccd:13650-13652",
+        "ccd/ccd:12032-12034",
+        "ccd/ccd:5810-5811",
+        "ccd/ccd:12032-12034",
+        "ccd/ccd:11665-11670",
+        "ccd/ccd:12594-12659",
+        "ccd/ccd:13809",
+        "ccd/ccd:13812",
+        "ccd/ccd:6425",
+        "ccd/ccd:1223",
+        "ccd/ccd:6547",
+        "ccd/ccd:3390-3402",
+        "ccd/ccd:3401",
+        "ccd/ccd:4029",
+        "ccd/ccd:4046",
+        "ccd/ccd:3038",
+        "ccd/ccd:2972-2973",
+        "ccd/ccd:8609",
+        "ccd/ccd:8654",
+        "ccd/ccd:8673",
+        "ccd/ccd:11665-11670",
+        "ccd/session-hook.sh:795",
+        "ccd/session-hook.sh:796",
+        "ccd/ccd:2874",
+        "ccd/ccd:2874",
+        "ccd/session-hook.sh:993",
+        "ccd/ccd:3070",
+        "ccd/ccd:3070",
+        "ccd/ccd:2455",
+        "ccd/ccd:2793",
+        "ccd/ccd:3070",
+        "ccd/session-hook.sh:802",
+        "ccd/ccd:5725",
+        "ccd/ccd:5385-5388",
+        "ccd/ccd:5828-5830",
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -8660,34 +8648,44 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // spec lines. No ruling id and no rule change.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-        'spec:2123 ccd/ccd:13573-13575',
-        'spec:2124 ccd/ccd:3038',
-        'spec:2125 ccd/ccd:5797',
-        'spec:2125 ccd/ccd:7568',
-        'spec:2125 ccd/ccd:11025',
-        'spec:2125 ccd/ccd:13673',
-        'spec:2125 ccd/ccd:19109',
-        'spec:2125 ccd/ccd:19120',
-        'spec:2125 ccd/ccd:19131',
-        'spec:2204 ccd/ccd:12032-12034',
-        'spec:2204 ccd/ccd:12032-12034',
-        'spec:2209 ccd/ccd:13809',
-        'spec:2209 ccd/ccd:13812',
-        'spec:2209 ccd/ccd:6425',
-        'spec:2209 ccd/ccd:1223',
-        'spec:2209 ccd/ccd:3401',
-        'spec:2209 ccd/ccd:4029',
-        'spec:2209 ccd/ccd:4046',
-        'spec:2209 ccd/ccd:3038',
-        'spec:2209 ccd/ccd:2972-2973',
-        'spec:2209 ccd/ccd:8609',
-        'spec:2209 ccd/ccd:8654',
-        'spec:2209 ccd/ccd:8673',
-        'spec:2210 ccd/ccd:13573-13575',
-        'spec:2220 ccd/ccd:2874',
-        'spec:2220 ccd/ccd:2874',
-        'spec:2220 ccd/session-hook.sh:993',
-        'spec:2222 ccd/ccd:5725',
+      // CCR-10 re-measure: the ccd insertions moved this intersection the same
+      // mechanical way the comment above describes. RE-MEASURED against the tree.
+      "spec:2123 ccd/ccd:13573-13575",
+      "spec:2124 ccd/ccd:3038",
+      "spec:2124 ccd/ccd:3037-3089",
+      "spec:2125 ccd/ccd:5797",
+      "spec:2125 ccd/ccd:7568",
+      "spec:2125 ccd/ccd:11025",
+      "spec:2125 ccd/ccd:13561",
+      "spec:2125 ccd/ccd:13673",
+      "spec:2125 ccd/ccd:13560-13562",
+      "spec:2125 ccd/ccd:19109",
+      "spec:2125 ccd/ccd:19098",
+      "spec:2125 ccd/ccd:19120",
+      "spec:2125 ccd/ccd:19131",
+      "spec:2204 ccd/ccd:12032-12034",
+      "spec:2204 ccd/ccd:12032-12034",
+      "spec:2209 ccd/ccd:13809",
+      "spec:2209 ccd/ccd:13812",
+      "spec:2209 ccd/ccd:6425",
+      "spec:2209 ccd/ccd:1223",
+      "spec:2209 ccd/ccd:3390-3402",
+      "spec:2209 ccd/ccd:3401",
+      "spec:2209 ccd/ccd:4029",
+      "spec:2209 ccd/ccd:4046",
+      "spec:2209 ccd/ccd:3038",
+      "spec:2209 ccd/ccd:2972-2973",
+      "spec:2209 ccd/ccd:8609",
+      "spec:2209 ccd/ccd:8654",
+      "spec:2209 ccd/ccd:8673",
+      "spec:2220 ccd/ccd:2874",
+      "spec:2220 ccd/ccd:2874",
+      "spec:2220 ccd/session-hook.sh:993",
+      "spec:2220 ccd/ccd:3070",
+      "spec:2220 ccd/ccd:3070",
+      "spec:2220 ccd/ccd:3070",
+      "spec:2222 ccd/ccd:5725",
+      "spec:2222 ccd/ccd:5385-5388",
       ]);
   });
 

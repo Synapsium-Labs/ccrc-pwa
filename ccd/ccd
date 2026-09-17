@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1262d40a3839de93cc9fdc966724a46d9023fb475093148bc6da856ff88081af
+# ccrc:generated 1 sha256=0b79fcb07a7a2f0205157a3efeb1be2ce2e53a3e342ef63ff3e024a2122e7a14
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2253,10 +2253,12 @@ _reg_get() { [[ -f "$REG/$1.$2" ]] || return 1; cat "$REG/$1.$2" 2>/dev/null; } 
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 151
-# invocations across 127 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 153
+# invocations across 129 non-comment lines.
 #
-# THE LAST MOVE WAS ROUTING SLICE 4's, and naming it is what stops the next
+# THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
+# archive fields, so the next reader is not hunting a refactor for the +2.
+# BEFORE THAT IT WAS ROUTING SLICE 4's, and naming it is what stops the next
 # reader hunting for a merge that did not happen: the applier and its registry
 # bookkeeping (`_route_apply_now`, `_route_note`, `_route_applied_set`,
 # `_route_applied_get`, `_route_try_bump`, `_route_retry_ok`, and the keystroke
@@ -3224,6 +3226,26 @@ _ws_supervise()   { rm -f "$REG/$1.stopped"                                   # 
                     _svc_enable_now "claude-session@$1" 2>/dev/null \
                       || echo "warn: could not enable unit claude-session@$1" >&2; }
 
+_ws_unarchive() {   # id — leave the archived state, and leave ALL of it.
+  # THE SINGLE CHOKE POINT for leaving an archive, for the same reason
+  # `_ws_unsupervise` is one for entering a stop: two call sites must not be
+  # able to disagree about WHAT an archive consists of. They did disagree —
+  # `cmd_ws_restore` unlinked all three files while every spawn path unlinked
+  # none — and the gap is not cosmetic: a workspace that is RUNNING while
+  # `$REG/<id>.archived` still stands is a workspace every cleanup selector
+  # calls dormant. Measured 2026-09-16: two live sessions carried the stamp for
+  # weeks, one of them mid-deploy on an irreversible step, and a sweep that
+  # filtered on the stamp selected both.
+  #
+  # `.archived` LAST, and that order is the crash argument: it is the field
+  # every other reader tests, so a SIGKILL between the unlinks leaves the
+  # workspace archived-with-less-detail — a state `ws-restore` still finishes
+  # and `ws-reap` still refuses — rather than running-with-archive-residue,
+  # which nothing collects and `_ws_slug_free` would still call taken.
+  rm -f "$REG/$1.archivedreason" "$REG/$1.archivemanifest"
+  rm -f "$REG/$1.archived"
+}
+
 _ws_unsupervise() {   # id [surface] — disable the unit AND RECORD THAT SOMEBODY MEANT TO.
   # THE SINGLE CHOKE POINT, which is why the stamp lives here and not in
   # cmd_stop: ws-rm, ws-archive, ws-reap and forget all reach systemd through
@@ -3438,7 +3460,7 @@ _LC_OBS=""
 # than by everyone remembering.
 _LC_ACTS=(archive attic-drop claim create destroy enable ensure forget gc
           hold purge reap rehome release rename restore route spawn start stop
-          supervise swap unsupervise)
+          supervise swap unarchive unsupervise)
 # The vocabulary is the set of ACCEPTABLE INPUTS; the degrade word is the
 # OUTPUT `_lc_emit` produces when an input is not in that set — the same rule
 # the acts array above follows. `unknown` stays OUT of this array for the same
@@ -8934,7 +8956,7 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
     meas.branch         "$(_reg_get "$id" branch)" \
     dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
   # ─────────────────────────────────────────────────────────────────────────
-  rm -f "$REG/$id.archived" "$REG/$id.archivedreason" "$REG/$id.archivemanifest"
+  _ws_unarchive "$id"
   # THE SAME F8 SHAPE, converted the same way — and this verb's agent budget is
   # CCD_VERB_TIMEOUT_MS['ws-restore'] = 60s, FIVE TIMES TIGHTER than the ws-add
   # budget whose expiry caused F8. The kill is likelier here, not less.
@@ -17764,6 +17786,25 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   SPAWN_FROMSWAP=0
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   [[ -n "$wrapper" && -n "$workdir" && -n "$uuid" ]] || die "incomplete registry for '$id'"
+  # A PANE IS BEING CREATED, SO THIS WORKSPACE IS NOT DORMANT. Clearing here
+  # rather than REFUSING here is the measured choice: `cmd_swap` kills the pane
+  # before it re-spawns, so a refusal on this path would leave a live session
+  # dead with nothing left to bring it back — strictly worse than the stale
+  # stamp it would be protecting against. `ws-archive` already killed the pane
+  # and unsupervised the unit, so nothing reaches here by drifting; something
+  # asked for this session back.
+  #
+  # `cmd_ws_restore` clears the stamp BEFORE it calls this function, so the
+  # deliberate way back never trips this arm. It fires only on the paths that
+  # had no opinion at all — start, ensure, swap, and the two unsupervised
+  # fallbacks in `_supervised_start`.
+  if [[ -f "$REG/$id.archived" ]]; then
+    local archreason; archreason=$(_reg_get "$id" archivedreason)
+    echo "ccd: warn: $id was archived${archreason:+ ($archreason)} — clearing the archive stamp, because a pane is being created for it; ws-restore is the deliberate way back" >&2
+    _lc_done unarchive "$id" "" verb spawn meas.mode "$mode" \
+      meas.archivedAt "$(_reg_get "$id" archived)" meas.archivedReason "$archreason"
+    _ws_unarchive "$id"
+  fi
   tname=$(_tmux "$id")
   # A spawn within 5 min of a swap is the swap LANDING on the new account — resume from
   # summary there (cheap) instead of full-as-is (700k re-read on the fresh limit pool).
