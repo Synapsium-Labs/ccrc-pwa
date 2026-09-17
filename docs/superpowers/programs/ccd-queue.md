@@ -618,3 +618,87 @@ Three census cases stay red, cross-plan, and the step-one sizing measurement is 
 prove-repair-absorb ruling — it arrives as its own mail. The README anchor it was authorised to repair
 is repaired by byte-equality and that assertion now passes. Every change is under `ccd/`, so this is
 **AGENT-FIRST at deploy time**; nothing is deployed and the worker has stopped pushing.
+
+---
+
+## The census repair, sized and ruled: re-point all 142 — the guard blocking 87 of them is a heuristic, not a proof
+
+Mail 1570. The step-one sizing came back with the branch untouched (`git status --porcelain` empty,
+tip still `76897187`, verified here) and a three-way split that answers a question neither option on
+the table was asking.
+
+**The tiers nest, and the nesting is the whole ruling:**
+
+```
+152 new failure instances
+ ├─ 142  byte-equal AND UNIQUE at the tip     ← the referent provably moved, to one known place
+ │   ├─ 125  …and the clause's rule is satisfied there   (a re-point turns them GREEN)
+ │   │   ├─  38  …and it carries the clause's LONGEST token   (the worker's class (i))
+ │   │   └─  87  …and it does not                              (its "population to rule on")
+ │   └─  17  …and the clause's rule is NOT satisfied there
+ └─  10  NON-UNIQUE — unprovable, parked, no candidate offered
+```
+
+38 + 87 + 17 + 10 = 152; 38 + 87 = 125; 38 + 87 + 17 = 142. Seven distinct offsets across all 142
+(+54, +83, +221, +241, +305, +314, +323), four across class (i) — every value a cumulative hunk band,
+so no anchor moved by an amount the 26 hunks cannot account for.
+
+**Ruling: re-point all 142. Costs if wrong:** a re-pointed anchor lands on the unique new home of
+bytes whose clause was never about them — which is the state the 17 are already in, is visible to the
+census, and is strictly better than the same clause pointing at an unrelated line.
+
+**Why Task 11's longest-token guard does not bind here, read from its own record.** Its method (1)
+searched HISTORY for *"the newest commit at which it stood in a neighbourhood carrying its own
+clause's longest quoted token AND was TRUE there"*, and its seven withdrawn repairs failed because
+*"the AUTOMATICALLY CHOSEN BASE carried a comment at those lines and the clause's token happened to
+occur in it."* **The defect was in base SELECTION.** Run 42 performs no search: one base, `dfa167d7`,
+a direct ancestor, and — the worker's own §0 measurement — the two corpus documents are
+**byte-identical between base and tip**. "The block the old anchor named" is a lookup, not a
+judgement. The guard compensates for a hazard that is absent.
+
+**And the guard demonstrably mis-fires on this corpus.** The 87 fail because one long sentence
+dominates a paragraph citing several different files, so the "longest token" belongs to a different
+reference: `spec:2209`'s *"UNCONDITIONAL, and with NO `tx`: this is not half of a pair"* is the
+longest token for **eight** separate citations, most about other lines; `spec:2222`'s operator-path
+sentence does it for four; `spec:308`'s longest token is a sentence about `ccd/session-hook.sh`
+attached to a citation of `ccd/ccd:203`. **They fail a heuristic, not a proof** — and the proof they
+do carry, byte-equality plus uniqueness against a fixed base, is the stronger of the two.
+
+**Per class:** 125 repaired and green; **17 repaired and STILL RED**, correctly — anchor becomes
+right, quotation was already wrong, which is Task 11's own `QUOTATIONLESS` class that it *"left rather
+than made"* because a quotation change is not an anchor change. Run 42 re-points the anchor, touches
+no prose, and records those 17 with that reason. The 10 non-unique stay untouched with their match
+counts named; `ccd/ccd:5797` at **186** identical matches is the method reporting its own limit, which
+is precisely why the other 142 are trustworthy. **The absorb falls from +152 to +27, each of the 27
+classified rather than counted.**
+
+### The sequencing rule is the worker's, adopted verbatim, and its evidence is the best thing in the exchange
+
+> *"A citation repair is only valid against the tree it will ship in."*
+
+Its README repair first chose `ccd/ccd:16637`; a later commit in the same round moved the referent to
+`:16644`. **Measured here: `:16637` at HEAD reads `  # the missed acquisition could have raced.` — a
+COMMENT.** That is Task 11's seven-false-repairs failure mode reproduced on this branch, caught only
+because the worker re-measured at the final tree rather than trusting its own earlier measurement.
+
+So: **the repair is ONE commit and it is the LAST commit on the branch**, re-measured against that
+exact tree, with the census's number, its `total` and its cause comment in the same commit — the hold
+on that comment released on that condition. **And it waits for review run 69 to report**, because a
+push now makes the review's report evidence about a tip that is gone and the close answers
+`stale-review`, costing a whole fresh review run. Order: review reports → any fix round → the repair
+commit, last.
+
+### Recorded against me
+
+**My `+268` was right at `9b53f221` and stale at HEAD.** `ccd/ccd` measures **341 in / 18 out = +323
+over 26 hunks** at `76897187`; the closing rounds added 55 lines after the tree I measured. Both
+figures were correct about their own tree, which is exactly the rule above — a measurement is only
+valid against the tree it describes — and I stated mine without naming the tree. The other two
+corrections stand too: the `|`-row set is **53**, and `byFile['ccd/ccrc']` 2 → 4 is a fourth KEY
+inside one `toEqual`, not a fourth failing case.
+
+**Class (ii)'s zero is the right kind of correction to have made.** The worker proved it non-vacuous —
+63 paragraphs, 12 references, 13 failures already firing inside the freeze **at the base as well** —
+so my "the freeze is pinned by nothing" finding turns out not to move this decision at all. It removed
+a false mechanism from the record without changing an outcome, and locating the region by sliding a
+sha-256 window rather than trusting a heading is what made that zero evidence instead of an assumption.
