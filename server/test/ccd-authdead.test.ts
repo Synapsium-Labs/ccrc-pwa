@@ -56,7 +56,7 @@ describe('_authdead', () => {
     // a read of it). `-f` FOLLOWS the chain, so a link at
     // `$REG/<wrapper>-authdead` pointing anywhere readable whose first word is
     // digits passed the test and the `cat` below returned THAT file's bytes — a
-    // fabricated AUTH-DEAD verdict sourced from outside `$REG`. `ccd/ccd:6005`
+    // fabricated AUTH-DEAD verdict sourced from outside `$REG`. `ccd/ccd:6017`
     // skips placement on it and the rescue arm scores `sc=101` from it, so the
     // fabricated value decides where a session lands.
     // The first census could not reach this site: it named the class by the

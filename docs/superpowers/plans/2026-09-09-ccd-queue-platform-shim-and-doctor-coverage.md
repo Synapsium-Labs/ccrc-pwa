@@ -14,16 +14,17 @@ D-2347, inherited from #73, plus the eleven other open instances of its class th
 Part A touches the PLATFORM BLOCK, which is byte-identical in `ccd/ccd` and `ccd/ccrc` and pinned equal
 by `macos-platform.test.ts` — **both files must change together or that pin reds.** Part B touches
 `ccd/ccrc-doctor-checks` only. **Part D touches `ccd/ccd` only.** Its site count is DERIVED at execution time, not quoted here: D1-D5 name ten mandatory sites and D8 names four further groups, two of them conditional and one dead on a Linux fleet, so no reading of the list below yields the twelve this sentence used to assert (D-2475). Re-measure the class before fixing it, and navigate by SYMBOL — every line anchor in Part D predates #69/#78/#79 and has drifted.
-No server, agent, shared or PWA source is touched.
-**TWELVE TRACKED FILES OUTSIDE `ccd/` ARE EDITED on this branch, not two** (measured at the FINAL tree
-with `git diff --name-only origin/main HEAD | grep -v '^ccd/'` — a two-dot diff is exact here, and only
-here, because the merge made `origin/main` an ancestor of `HEAD`, checked with `git merge-base
---is-ancestor` rather than assumed): `CLAUDE.md`; `README.md`; this plan itself
-(`docs/superpowers/plans/2026-09-09-ccd-queue-platform-shim-and-doctor-coverage.md`);
-`docs/superpowers/plans/2026-09-10-graphify-compaction-card-plan-a.md`;
-`docs/superpowers/specs/2026-09-09-graphify-compaction-card-design.md`; and seven `server/test/`
-suites — `ccd-bounded-reads.test.ts`, `ccd-crosspool.test.ts`, `ccd-reg-set-atomic.test.ts`,
-`ccrc-doctor.test.ts`, `macos-platform.test.ts`, `session-hook.test.ts`, `single-definition.test.ts`.
+Server, agent and shared sources ARE touched — six of them — and the sentence that used to stand here
+saying otherwise was written before round 5 added the `lstat` wire op.
+**TWENTY-TWO TRACKED FILES OUTSIDE `ccd/` ARE EDITED on this branch, not two.** Derive it; do not
+trust this sentence: `git diff --name-only origin/main...HEAD | grep -v '^ccd/'` — THREE dots. A
+two-dot diff is WRONG here and the paragraph this replaces claimed it was exact: `git merge-base
+--is-ancestor origin/main HEAD` exits **1**, because `origin/main` moved past the last merge, so
+two-dot blames main's own commits on this branch (26 paths when last run). At `eb047e13` the
+three-dot answer is **22**: `CLAUDE.md`; `README.md`; this plan itself; three `agent/` files
+(`src/fileops.ts`, `src/server.ts`, `test/fileops.test.ts`); three `server/src` files (`io.ts`,
+`limits.ts`, `remote/io.ts`); `shared/agent-protocol.ts`; and **twelve** `server/test/` suites.
+**NEITHER graphify document is in it** — both were reverted and ship byte-identical to `origin/main`.
 **THIS NUMBER WAS ELEVEN FOR MOST OF THIS ROUND, AND THE REASON IS WORTH KEEPING.** Measured mid-round,
 `README.md` was byte-identical to `origin/main` and so was genuinely NOT in the diff — the merge had
 resolved its one conflicting line to main's side, deliberately, pending re-derivation. The mid-round
@@ -331,6 +332,15 @@ ledger that carries the sizing lives on `ws/amber-summit`, which no PR carries, 
 is not in the repository at all. Without this section a reader of `main` after the merge meets three red
 assertions and finds nothing in the tree explaining where they came from.
 
+> **RETRACTED — THE REPAIR LEFT THIS WAVE.** This section and "The rule that removes the conflicts"
+> below are preserved as the record of what was ruled while it was ruled; they are NOT this wave's
+> conclusion, and nothing here should be re-attempted on their authority. What shipped: both graphify
+> documents are byte-identical to `origin/main`, the census is DERIVED on the shipping tree rather
+> than targeted, and the provenance rule is REFUTED — main's unrepaired copy carries every original
+> spelling by construction, so it qualifies as every anchor's base, and the implementation broke the
+> resulting ties on array position rather than on evidence. 16 of 115 repaired anchors matched neither
+> base's answer. D-2992's entry records the withdrawal.
+
 **The decision, and it is not "absorb".** The three options were prove, repair, or absorb. The
 coordinator ruled REPAIR, over every failure instance whose old anchor's bytes are byte-equal to exactly
 one block in the file at the tip — the referent provably moved, to one known place, against a FIXED base
@@ -340,6 +350,8 @@ byte-identically; no candidate is offered for those and they are named with thei
 A further minority will have their anchor repaired and still fail, because their QUOTATION was already
 wrong before this wave touched anything — those get the anchor and no prose change, which is the same
 line the citing programme's own Task 11 drew.
+
+> **RETRACTED — see the retraction banner at the head of the repair section.**
 
 **Method, and the rule that governs it.** The repair lands as ONE commit, the LAST on this branch,
 re-measured against that exact tree — *a citation repair is only valid against the tree it will ship
@@ -428,16 +440,14 @@ consistently wrong; closing the two bash ones alone made the server condemn acco
 gate calls healthy — the widening `limits.ts`'s own docstring forbids, reached from the other side. A
 class closed in one body of a three-body contract is closed nowhere.
 
-**A PENDING DEPARTURE, NAMED IN PROSE BECAUSE IT CANNOT BE NUMBERED HERE.** The sixth body needed a
-question no port on this fleet could ask — the server reads the registry over the agent WS in the
-live configuration — so `FleetIO` gained `lstatMeasured` and the agent protocol gained an `lstat`
-op. **Adding an op to the wire is a MECHANISM, not another instance of D-2989's class, so it wants a
-number of its own.** This wave's block (D-2989..D-2992) is spent and defined; the standing instruction
-for this run is never to call the allocator mid-wave; and a concrete `D-TBD-<slug>` reds
-`server/test/dtbd.test.ts` by design. It is therefore reported in the wave-done mail for the
-coordinator to mint against this project, and named here so a later reader finds it before the number
-exists. Additive on the wire, `FLEET_PROTO` untouched; an agent too old for the op refuses the request
-and the server reads UNMEASURED, never a kind.
+**THE SIXTH BODY NEEDED A NEW WIRE OP, AND IT IS D-2995.** The server reads the registry over the
+agent WS in the live configuration, so the question "is this path a symlink" could not be asked at
+all until `FleetIO` gained `lstatMeasured` and the protocol gained an `lstat` op. That is a
+MECHANISM, not another instance of D-2989's class, which is why it has a number of its own rather
+than being folded in. Round 5 named it here in prose and reported it, because this wave's block
+(D-2989..D-2992) was spent, the standing instruction for this run is never to call the allocator
+mid-wave, and a concrete `D-TBD-<slug>` reds `server/test/dtbd.test.ts` by design; the coordinator
+issued D-2995 in round 6. Its entry is below.
 
 ROWS 4 AND 5 ARE ONE CONTRACT IN TWO BASH BODIES, and row 6 is its third. `ccd/ccd`'s header claimed
 the keepalive sibling "already opens with `[ -f "$f" ] || return 1`" and that this copy "was the one
@@ -709,6 +719,8 @@ hand-written squash body played for F9. Recorded rather than quietly dropped bec
 is the first thing the next reader trusts and the last thing anyone re-measures.
 
 ### D-2990 — the citation repair's deliverable is a DERIVATION, not a number
+> **RETRACTED — see the retraction banner at the head of the repair section.**
+
 **Review 71 CRITICAL 2.** `main` moved TWICE inside a single review (`2f9deae2` -> `d02c2549` ->
 `ecbb8b22`), and each move falsified the census this branch had just re-measured. Three repairs on this
 wave have now expired that way. The reviewer offered two options — re-point once more, or take the
@@ -740,6 +752,8 @@ Measured at the merged tree:
 
 A conflict is two bases each yielding a DIFFERENT unique hit for the same anchor. Byte-equality cannot
 break that tie, and taking either side is a guess of exactly the kind this wave exists to refuse.
+
+> **RETRACTED — see the retraction banner at the head of the repair section.**
 
 **The rule that removes the conflicts rather than guessing them is DERIVABLE: an anchor's base is the
 tree whose copy of THAT SAME DOCUMENT contains that exact citation spelling.** Under it the 176 failing
@@ -1353,3 +1367,56 @@ about it that no longer does.]
 | site | command | before (guard reverted / pre-fix) | after restore (guard present / post-fix) |
 |---|---|---|---|
 | `cmd_project_pool`'s `--pool` arm, via `_reg_project_glob_has` | `vitest run test/ccd-bounded-reads.test.ts -t D-2925` (was `-t D5`, which collided with this plan's own task D5 — F15) | **RED** — measured independently in this session: reverted the guard to the original unguarded `grep -qxF -- "$project" "$REG"/*.project 2>/dev/null` (backup kept outside the repo, never `git checkout --`); `Tests 3 failed \| 1 passed \| 33 skipped (37)`, all three hang shapes (FIFO / symlink-to-FIFO / symlink-to-`/dev/zero`, sorted BEFORE the real row) timing out — `Error: runBounded("cmd_project_pool --project quiet-basin --pool pool-a") did not return within 5000ms — this is a hang regressing, not a flake` | **GREEN** — restored from the pre-mutation copy (md5 verified identical, `git diff --stat -- ccd/ccd` empty), re-ran: `Tests 4 passed \| 33 skipped (37)` |
+
+### D-2995 — the server could not ASK the question, so the wire grew an op
+**A MECHANISM, NOT AN INSTANCE.** D-2989 is a class of sites: a type test on a `$REG` path paired
+with a read of that path. This is not another member of it. `server/src/limits.ts` is the THIRD body
+of the `_authdead` contract, and closing it needed something no site-level edit could supply — the
+path's own type, which every read on `FleetIO` answers about the RESOLVED file. In `local` mode an
+`lstat` would have done; the live fleet runs `CCRC_FLEET=remote` and the registry is on the other
+box, so the answer had to cross the agent WS. Folding a new wire op into a class entry would have
+hidden a protocol change inside a list of guard fixes.
+
+**WHAT LANDED.** `FleetIO.lstatMeasured` (`server/src/io.ts`), declared by its consumer and with no
+collapsing `| null` sibling, because the distinction a `| null` destroys is the entire point of it.
+Three positive kinds — `regular`, `symlink`, `other` — so `other` never borrows one that decides
+something; and a fourth failure reason, `unmeasured`, which exists on the server side only and means
+this box cannot ask. `regular` is the ONLY kind that may condemn, so absent, unreadable and
+unmeasured all fall through to healthy — the direction `limits.ts`'s own rescue argument requires.
+Additive on the wire: `FLEET_PROTO` untouched, and an agent too old for the op REFUSES the request
+(`not-implemented`) rather than omitting a field, so the server reads UNMEASURED and never mistakes
+an older peer's silence for `regular`.
+
+**THE FIRST IMPLEMENTATION SHIPPED INERT, AND THIS IS THE ENTRY'S MOST USEFUL SENTENCE.**
+`agent/src/whitelist.ts`'s `checkPath` CANONICALISES every path before any file op sees it —
+deliberately, so that "every downstream fs call in fileops.ts/tail.ts already has symlink-escapes
+resolved". An `lstat` of that canonical result can therefore only ever answer `regular` for a
+symlink, because canonicalisation has already followed it. The first version did exactly that. It
+was not caught by reading and could not have been: **the local adapter's own unit tests were GREEN
+while the wire answered `regular` on the same fixture.** An END-TO-END case — one live symlink,
+created on a real agent, asked over a real socket — is what disagreed with the unit that had just
+passed.
+
+**A UNIT-GREEN, WIRE-WRONG SEAM IS THE REUSABLE PART.** Whenever a port gains a member whose whole
+purpose is a distinction some layer below deliberately erases, the unit test and the integration
+test are asking different questions, and only the second one is the question the caller has. The
+op now makes its whitelist decision on the FULLY RESOLVED path exactly as before — the escape
+`checkPath` exists to stop is still refused, pinned in both suites — and then lstats the path whose
+PARENT is canonical and whose last component is literal: one component appended to a
+whitelist-checked directory, naming an entry `readdir` already lists. Strictly less disclosure than
+`readdir`, and no content is read.
+
+**Mutation rows, per rung** (`server/test/limits.test.ts`, `agent/test/fileops.test.ts`,
+`server/test/remote-io.test.ts`):
+
+| mutant | symlink case | unmeasured case | controls |
+|---|---|---|---|
+| the whole type gate deleted | RED | RED | green |
+| `kind === 'symlink'` only (the `!kind.ok` rung dropped) | green | RED | green |
+| `!kind.ok` only (the kind check dropped) | RED | green | green |
+| the agent lstats `checkPath`'s CANONICAL path (the inert shape) | RED x3, across both suites | green | green |
+
+Two rows are declared NOT pins and say so in the file: a DANGLING link and a DIRECTORY stay green
+under every mutant, because `readFile` folds ENOENT and EISDIR to null and the CONTENT gate refuses
+them anyway. They are controls on the type gate's reach, recorded rather than left to read as
+coverage they do not provide.
