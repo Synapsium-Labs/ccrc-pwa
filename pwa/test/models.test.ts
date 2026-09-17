@@ -141,4 +141,13 @@ describe('effortOptions', () => {
     const rows = levelRows(effortOptions('claude', null, false));
     expect(rows.map((o) => o.route.value)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
   });
+
+  it('pins the full row order — Auto last, Ultracode spliced before Max on a non-gpt wrapper only — against a hand-written literal, not the ladder itself', () => {
+    expect(effortOptions('claude', null, false).map((o) => o.label)).toEqual([
+      'Low', 'Medium', 'High', 'Xhigh', 'Ultracode', 'Max', 'Auto',
+    ]);
+    expect(effortOptions('gpt', null, false).map((o) => o.label)).toEqual([
+      'Low', 'Medium', 'High', 'Xhigh', 'Max', 'Auto',
+    ]);
+  });
 });
