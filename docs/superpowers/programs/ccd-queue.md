@@ -961,3 +961,77 @@ top-level definition after `_pr_py` is at 5366, so it encloses all three; and al
 4675, not the 4689 it cited.** Substance right, citation off; recorded only because this run has been
 two parties holding each other to citing a `ccd` line with the copy it came from. The byte-identity
 conclusion stands and `ccd/ccrc` needs no mirror edit.
+
+---
+
+## Fix round 1 handed back; the ordering deviation accepted on the half the worker under-claimed
+
+Mail 1589, `wave-done`, fingerprint `96d5ec10…` / PR 136 / open, `suite: red`, `failure: shallow`.
+**Re-measured, not taken:** `git rev-parse HEAD` reads `96d5ec108dd647549d5c66a101590918a537655a`,
+identical to both claimed fields; working tree clean; `git log -3` confirms the merge is last and the
+re-point second-to-last, exactly as disclosed. Run 42 → `awaiting-review`; **review run 70 opened and
+dispatched, SCOPED to the fix round** rather than a fresh whole-branch pass. All sixteen findings
+closed, both cheap ones, both disclose-only ones; the citation census reports **12/12 green — the
+first time on this branch**.
+
+### The ordering deviation: accepted, and on the evidence the worker did NOT lead with
+
+A merge of `origin/main` (`2f9deae2`, #135) landed mid-round, touching the same files as the repair,
+so the repair is second-to-last and the merge is last — against the rule, adopted this run, that a
+citation repair lands last because it is only valid against the tree it ships in.
+
+The worker offered two arguments. **(a) "the census is green at the merged tree" cannot carry it, and
+its own finding 3 is the proof:** `ccd/ccrc:7129-7130` is green *and still stale*, because inserted
+lines happen to carry a token its clause quotes. **Green is compatible with wrong.**
+
+**(b) is the proof, and it is larger than claimed.** The worker cited `ccd/ccd` alone; measured here
+across every source file the re-point points into:
+
+| file | base → main | verdict |
+|---|---|---|
+| `ccd/ccd` | 19,334 → 19,334, numstat 4/4 | line-neutral |
+| `ccd/session-hook.sh` | numstat 5/5 | line-neutral |
+| `ccd/ccrc` | 11,911 → 11,911 | **not touched by #135 at all** |
+
+No line below #135's changes moved in any file the re-point addresses, so no re-pointed anchor can
+have shifted. **Accepted on (b).** Costs if wrong: every anchor into a moved file re-derived — which
+is what review run 70 is asked to check independently.
+
+### The README hazard is new, and it generalises past this wave
+
+The anchor went stale a **third** time, and the offset method nearly shipped a false repair: **the
+method assumes the CITING document is byte-identical to the base**, and README is the one corpus file
+this wave edited, so at the already-repaired anchor the base block is unrelated text — following the
+method moved README's anchor onto Python source while its clause is about the `genrc == 1` arm. Caught
+only by re-measuring after applying. Re-derived by CONTENT; verified here byte-equal
+(`HEAD:16678-16680` ≡ `76897187:16644-16646`, both opening `elif (( genrc == 1 )); then`), and
+README's census entry is now empty for the first time this wave.
+
+> **The offset method is valid only where the cited file moved AND the citing file did not.**
+
+### Finding 3 — a stale anchor that LEFT the failing set by coincidence
+
+`ccd/ccrc:7129-7130` is D-2849's parked reference inside the 24,688-byte freeze. This branch added
+nine lines above it, so the stale anchor now lands on `_uninst_cc_sessions`' own `rm -f` lines, which
+carry a token its clause quotes. **It went green without being repaired and was never reachable to
+repair.** The worker kept the five named, made the exception its own constant with the reason beside
+it, and the pin that caught it is the one whose comment says a set keeping its length while losing an
+entry must still red.
+
+**Routing is mine, not the worker's** — it does not write to another programme. This goes to the
+operator as the **second instance** of "#134's census is a ratchet with no owner", and it is the
+harder failure of the two: **nothing ever looks at a green row again.**
+
+### Two smaller things, both right
+
+**The `|`-row count was retired, not resolved.** Three sources had said 54 / 53 / 52 at a tree that no
+longer exists. The worker measured fresh at the shipping tree — **23**, instrument named — and did not
+pick one or average. A disagreement about a dead tree is a question to retire, not settle.
+
+**`suite: red` / `failure: shallow` stands**, for the third time, though the suites are now green:
+clause 15 asks what the FIRST full run after implementation said. Reporting the better number would
+make that field a summary of the worker's fixes instead of a measurement of its branch.
+
+**F9 remains mine to land.** The corrected squash body is written as an artifact with the trailer
+command to re-derive; I derive at merge rather than trusting the two names measured, and read
+`git log -1 origin/main` back afterwards to confirm the body landed as written.
