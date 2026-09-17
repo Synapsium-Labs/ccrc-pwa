@@ -5525,8 +5525,23 @@ cmd_ws_rm() {   # id — tear a workspace down. Refuses anything it might destro
   # it dies too; `cmd_ws_reap`'s copy of this rung answers in JSON on stdout
   # instead, for the reason recorded there (the PWA reads tokens, not stderr).
   if [[ -e "$REG/$id.hold" ]]; then
+    # D-2378: the `-e` gate above is correct and deliberate — doubt reads as
+    # HELD, and this rung is untouched — but the `cat` that used to follow
+    # opened BY NAME: a FIFO with no writer, or a symlink to an unbounded
+    # character device, blocks in open(2)/read(2) forever, and this verb's
+    # caller is a terminal. `_project_pool_state`'s pattern (ccd:1470-ish):
+    # `-f`+`-r` checked BEFORE any attempt to open, so a non-regular shape is
+    # answered the SAME fallback text `cat`'s own `|| echo` already gave a
+    # directory — no behaviour change for anything that answered before,
+    # only for what used to hang.
+    local _hold_reason
+    if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
+      _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')
+    else
+      _hold_reason='<unreadable — treat as held>'
+    fi
     _lc_refuse destroy "$id" held \
-      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id" verb ws-rm dec.reason "$reason"
+      "held: $_hold_reason — release first: ccd ws-release --session $id" verb ws-rm dec.reason "$reason"
   fi
   local main="$PROJECTS_ROOT/$project"
 
@@ -5910,8 +5925,17 @@ cmd_ws_rename() {   # ccd ws-rename --session <id> --branch <name> — rename a
   # The verb's deliberate absence of a BUSY guard is UNCHANGED and stays
   # deliberate: the naming moment is by definition a busy moment.
   if [[ -e "$REG/$id.hold" ]]; then
+    # D-2378: bounded exactly as `cmd_ws_rm`'s copy of this rung above —
+    # `-f`+`-r` checked before the open, so a FIFO/chardev at the hold path
+    # cannot block this read, never touching the `-e` gate itself.
+    local _hold_reason
+    if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
+      _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')
+    else
+      _hold_reason='<unreadable — treat as held>'
+    fi
     printf '{"refused":"held","detail":%s,"paths":[]}\n' \
-      "$(_json_str "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id")"
+      "$(_json_str "$_hold_reason — release first: ccd ws-release --session $id")"
     return 0
   fi
 
@@ -6573,7 +6597,28 @@ cmd_ws_release() {   # ccd ws-release --session <id> — end the program's claim
     # idempotent no-op is not an act, and recording one would make the record
     # disagree with what happened. Read BEFORE the unlink, which is the only
     # instant the text exists.
-    _lc_done release "$id" "" meas.held "$(cat "$REG/$id.hold" 2>/dev/null)" \
+    #
+    # D-2378: bounded, but NOT like this rung's four siblings — this is the
+    # one read with no `|| echo` fallback, because its polarity is REVERSED
+    # (this verb DELETES the hold; the four siblings REFUSE on one). A FIFO or
+    # a symlink to an unbounded character device here used to block `cat`
+    # forever; `-f`+`-r` checked before the open (`_project_pool_state`'s
+    # pattern) now decides without opening. The marker text is deliberately
+    # its OWN, never `<unreadable — treat as held>`: that sentence is a
+    # refusal instruction, and this is a RELEASE record, the verb succeeding
+    # at clearing the very hold in question — and never empty either, per
+    # this function's own argument two paragraphs up that a record must not
+    # disagree with what happened. (Measured: nothing in this repo parses
+    # `meas.held` by VALUE — `journalparse.ts`'s `reviveMeas` reads it as an
+    # opaque string, and `store.ts` only JSON-stringifies the whole `meas`
+    # object — so a new token here breaks no reader.)
+    local _hold_reason
+    if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
+      _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null)
+    else
+      _hold_reason='<unreadable — hold present but could not be read at release>'
+    fi
+    _lc_done release "$id" "" meas.held "$_hold_reason" \
       dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     rm -f -- "$REG/$id.hold" \
       || die "could not remove the hold for $id — it is STILL held"
@@ -11149,8 +11194,17 @@ cmd_ws_reap() {   # ccd ws-reap --expect <token> --session <id>
   # fetch, or a lock left behind. `-e` not `-f`: an unreadable-but-present hold
   # still refuses — the fail-shut polarity is that doubt reads as HELD.
   if [[ -e "$REG/$id.hold" ]]; then
+    # D-2378: bounded exactly as `cmd_ws_rm`'s copy of this rung — `-f`+`-r`
+    # checked before the open, so a FIFO/chardev at the hold path cannot
+    # block this read, never touching the `-e` gate itself.
+    local _hold_reason
+    if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
+      _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')
+    else
+      _hold_reason='<unreadable — treat as held>'
+    fi
     printf '{"refused":"held","detail":%s,"paths":[]}\n' \
-      "$(_json_str "$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id")"
+      "$(_json_str "$_hold_reason — release first: ccd ws-release --session $id")"
     return 0
   fi
 
@@ -18023,8 +18077,17 @@ cmd_forget() {   # <id> — remove a DEAD non-workspace session's registry entry
   # A hold is a program's declaration that it is mid-flight here. Same rung,
   # same polarity as ws-rm: `-e` not `-f`, present-but-unreadable refuses.
   if [[ -e "$REG/$id.hold" ]]; then
+    # D-2378: bounded exactly as `cmd_ws_rm`'s copy of this rung — `-f`+`-r`
+    # checked before the open, so a FIFO/chardev at the hold path cannot
+    # block this read, never touching the `-e` gate itself.
+    local _hold_reason
+    if [[ -f "$REG/$id.hold" && -r "$REG/$id.hold" ]]; then
+      _hold_reason=$(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>')
+    else
+      _hold_reason='<unreadable — treat as held>'
+    fi
     _lc_refuse forget "$id" held \
-      "held: $(cat "$REG/$id.hold" 2>/dev/null || echo '<unreadable — treat as held>') — release first: ccd ws-release --session $id" dec.reason "$reason"
+      "held: $_hold_reason — release first: ccd ws-release --session $id" dec.reason "$reason"
   fi
   # Deadness is a precondition, not an effect: forget is for a row whose
   # session is already gone. Stopping a live one is `ccd stop`'s job, and

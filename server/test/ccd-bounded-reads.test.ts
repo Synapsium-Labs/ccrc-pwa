@@ -179,8 +179,12 @@ describe('D2 — the hold family, five sites, one shape (D-2378)', () => {
       plantBad(HOLD(id), shape);
       const r = boundedRun(`cmd_ws_rename --session ${id} --branch feat/real-name`);
       expect(r.code).toBe(0);
-      expect(r.stdout).toContain('"refused":"held"');
-      expect(r.stdout).toContain('<unreadable — treat as held>');
+      // Parsed, not a raw-substring check: `_json_str` (ccd:2666) deliberately
+      // emits `ensure_ascii` JSON, so the em-dash is `—` on the wire —
+      // JSON.parse is what un-escapes it back to the real character.
+      const o = JSON.parse(r.stdout) as { refused: string; detail: string };
+      expect(o.refused).toBe('held');
+      expect(o.detail).toContain('<unreadable — treat as held>');
     }, 10000);
 
     it('cmd_ws_reap answers {"refused":"held",…} with the unreadable marker, PROMPTLY', () => {
