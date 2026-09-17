@@ -399,7 +399,15 @@ export interface FleetSession {
    *     the one reader tolerating its absence on an OLDER PERSISTED frame
    *     (a `state-cache.json` a pre-fix-round-2 server wrote), defaulting
    *     absent to `[]` — optional on the wire, not optional in what a live
-   *     read produces.
+   *     read produces. The LIVE `fleet` WS frame carries the same
+   *     optionality and is NOT tolerant on its own: `pwa/src/stores/
+   *     fleet.ts`'s `asFleetMsg` casts the raw frame straight to `FleetMsg`
+   *     rather than routing it through `reviveFleetSession`, so a frame
+   *     from a pre-fix-round-2 server arrives with `route` non-null and
+   *     `unreadable` genuinely absent. `SessionScreen.tsx`'s
+   *     `routeUnreadable` (`routeInfo?.unreadable ?? []`) is the one reader
+   *     on that path and tolerates it the same way `reviveRoute` does
+   *     (whole-branch review fix wave, item #5).
    *
    * ADDITIVE, absence-permits: an older persisted `FleetSession[]` (a
    * `state-cache.json` from before this task) revives with `route: null`

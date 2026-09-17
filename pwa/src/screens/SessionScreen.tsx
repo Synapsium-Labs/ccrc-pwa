@@ -191,8 +191,34 @@ export function SessionScreen({
   // `RoutingOverride.unreadable` below forces no active row for exactly this
   // field, on top of the queued badge already skipping it for having no
   // `intended` to compare.
-  const classUnreadable = routeInfo?.unreadable.includes('class') ?? false;
-  const effortUnreadable = routeInfo?.unreadable.includes('effort') ?? false;
+  //
+  // Whole-branch review, fix wave #5: `routeInfo.unreadable` is REQUIRED on
+  // a freshly-assembled `FleetSession.route` and on anything that has been
+  // through `reviveRoute` (the persisted-snapshot path), but the live
+  // `fleet` WS frame is never revived — `stores/fleet.ts`'s `asFleetMsg`
+  // casts the raw frame straight to `FleetMsg` — so a frame from an older
+  // server that predates this key arrives with `route` non-null and
+  // `route.unreadable` genuinely `undefined`. `routeInfo?.unreadable`
+  // alone still throws on `.includes` in that case; read it tolerantly
+  // ONCE here, the one place either field below is derived from it.
+  const routeUnreadable = routeInfo?.unreadable ?? [];
+  const classUnreadable = routeUnreadable.includes('class');
+  const effortUnreadable = routeUnreadable.includes('effort');
+  // Fix wave #4: `pick()` decides the local-timer carve-out from `routeInfo`
+  // at TAP TIME — a tap on a session that had never been routed yet
+  // (`route: null`) arms the 60s "not confirmed" toast below, same as
+  // always. Once the FIRST routing record for this session lands on any
+  // later fleet frame, `queuedField` below hands the badge to the wire for
+  // good, but nothing disarmed that already-running local timer — left
+  // alone it still fires 60s after the tap and pops a false "not confirmed"
+  // toast for a write the wire has since taken over entirely. This clears
+  // both the moment `routeInfo` stops being null.
+  useEffect(() => {
+    if (routeInfo === null) return;
+    clearQueuedTimer();
+    setQueued(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeInfo !== null]);
   // The intended value's readback vs. the live read-back: `live.effort`
   // directly for effort (`ultracode` is its own boolean, not an effort
   // string — the same split `pick`'s own read-back effect already makes),
@@ -220,12 +246,38 @@ export function SessionScreen({
   //     so a permanent badge next to no active row is doubly wrong.
   const wireQueuedField: RouteField | null = routeInfo === null ? null : (() => {
     if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, effortIntended)) {
-      const agrees = effortIntended === 'ultracode' ? live?.ultracode === true : live?.effort === effortIntended;
+      // Fix wave #2: `xhigh` and `ultracode` share the SAME wire value —
+      // `live.effort: 'xhigh'` — with `ultracode` distinguished only by the
+      // separate `live.ultracode` boolean (`effortOptions`'s own
+      // `activeFor`, models.ts:151-153, already carries this guard for the
+      // picker rows). Without it, an intended `xhigh` reads a live
+      // ultracode pane's `effort: 'xhigh'` as agreement and never queues —
+      // an unapplied `xhigh` write silently reporting itself confirmed.
+      const agrees = effortIntended === 'ultracode'
+        ? live?.ultracode === true
+        : effortIntended === 'xhigh'
+          ? live?.effort === 'xhigh' && live?.ultracode !== true
+          : live?.effort === effortIntended;
       if (!agrees) return 'effort';
     }
     if (classIntended !== null && !classInert && classIntended !== 'default') {
       const readback = modelReadbackFor(wrapper, classIntended);
-      const agrees = readback !== null && (live?.model ?? '').toLowerCase().includes(readback);
+      const liveModel = (live?.model ?? '').toLowerCase();
+      // Fix wave #3: a degraded session (`routeInfo.degraded` names the
+      // class ccd is actually SERVING because no candidate lane could
+      // serve the intended one, spec §5.4) can never read the intended
+      // class back on `live.model` while the degrade stands — ccd's own
+      // `_route_wanted` types the SERVED class, not the intended one, into
+      // the pane. Without also agreeing on the served class, the badge
+      // never clears for as long as the degrade lasts, even though ccd is
+      // doing exactly what it can and the intended row already carries its
+      // own `degradedTo` note (`PickSheet`, whole-branch review M1).
+      const degradedClass = routeInfo?.degraded ?? null;
+      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, degradedClass) : null;
+      const agrees = readback !== null && (
+        liveModel.includes(readback)
+        || (degradedReadback !== null && liveModel.includes(degradedReadback))
+      );
       if (readback !== null && !agrees) return 'class';
     }
     return null;

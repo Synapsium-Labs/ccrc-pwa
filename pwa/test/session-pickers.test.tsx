@@ -529,3 +529,95 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     }
   });
 });
+
+// Whole-branch review #1 fix wave (2026-09-17) — four minors against the
+// wire-derived queued badge and the local-timer carve-out.
+describe('routing slice 6 whole-branch review fix wave', () => {
+  // Item #3: ccd's own `_route_wanted` types the SERVED class into the pane
+  // while a degrade stands, never the intended one — so the class arm has
+  // to agree on EITHER the intended class's readback or the degraded (served)
+  // class's, or the badge can never clear for as long as the degrade lasts.
+  it('#3: a degraded session\'s badge clears once the live model matches the SERVED class', () => {
+    renderScreen({
+      model: 'Opus 5', // serving the degraded class, not the intended fable
+      route: { fields: { class: 'fable' }, degraded: 'opus', inert: [], unreadable: [] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+  });
+
+  it('#3 control: the same live Opus model queues once `degraded` is dropped', () => {
+    renderScreen({
+      model: 'Opus 5',
+      route: { fields: { class: 'fable' }, degraded: null, inert: [], unreadable: [] },
+    });
+    expect(screen.getByText('queued')).toBeInTheDocument();
+  });
+
+  // Item #2: `xhigh` and `ultracode` share the same `live.effort: 'xhigh'`
+  // wire value — `ultracode` is a separate boolean. An intended `xhigh`
+  // must never read a live ultracode pane's `effort: 'xhigh'` as agreement,
+  // mirroring `effortOptions`'s own `!ultracode` guard (models.ts:151-153).
+  it('#2: intended xhigh never agrees with a live ultracode pane', () => {
+    renderScreen({
+      effort: 'xhigh', ultracode: true,
+      route: { fields: { effort: 'xhigh' }, degraded: null, inert: [], unreadable: [] },
+    });
+    expect(screen.getByText('queued')).toBeInTheDocument();
+  });
+
+  it('#2 control: intended ultracode agrees with the same live ultracode pane', () => {
+    renderScreen({
+      effort: 'xhigh', ultracode: true,
+      route: { fields: { effort: 'ultracode' }, degraded: null, inert: [], unreadable: [] },
+    });
+    expect(screen.queryByText('queued')).not.toBeInTheDocument();
+  });
+
+  // Item #4: `pick()` decides the local-timer carve-out from `routeInfo` at
+  // TAP TIME. A tap on a never-routed session (`route: null`) arms the 60s
+  // local toast same as always — but nothing used to disarm it once the
+  // session's FIRST routing record showed up on a later fleet frame, even
+  // though the wire owns the badge from that point on.
+  it('#4: the local 60s toast is disarmed once the wire\'s first routing record arrives, before it would fire', async () => {
+    vi.useFakeTimers();
+    try {
+      const { fleet } = renderScreen(); // route: null at tap time
+      openEffortSheet();
+      fireEvent.click(screen.getByRole('button', { name: /^High/ }));
+      await act(async () => { await vi.advanceTimersByTimeAsync(0); });
+      expect(screen.getByText('queued')).toBeInTheDocument();
+
+      // The fleet sweep's first-ever routing record for this session lands
+      // before 60s — still disagreeing with the live pane, so it is this
+      // effect (not the pre-existing local read-back effect) disarming the
+      // timer.
+      act(() => {
+        fleet.setState({
+          sessions: [fleetSession({
+            effort: 'medium',
+            route: { fields: { effort: 'low' }, degraded: null, inert: [], unreadable: [] },
+          })],
+        });
+      });
+
+      await act(async () => { await vi.advanceTimersByTimeAsync(60_000); });
+      expect(screen.queryByText('Routing queued; the pane has not confirmed it yet')).not.toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Item #5: the live `fleet` WS frame is never revived (`stores/fleet.ts`'s
+  // `asFleetMsg` casts the raw frame), so an older server's frame can carry
+  // `route` non-null with `unreadable` genuinely absent — unlike every test
+  // above, which goes through this file's own typed `fleetSession()`
+  // fixture and always supplies the array. `routeInfo?.unreadable
+  // .includes(...)` alone throws in that case; the fix reads it through one
+  // tolerant `routeUnreadable = routeInfo?.unreadable ?? []`.
+  it('#5: a live route object missing `unreadable` renders without throwing', () => {
+    const rawRoute = { fields: { class: 'opus' }, degraded: null, inert: [] } as unknown as FleetSession['route'];
+    expect(() => renderScreen({ model: 'Opus 5', route: rawRoute })).not.toThrow();
+    openModelSheet();
+    expect(screen.getByRole('button', { name: /Opus 5/ }).className).toContain('opt--selected');
+  });
+});
