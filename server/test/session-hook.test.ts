@@ -7785,21 +7785,69 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // would have joined them; they were repaired and era-marked instead, so
     // they appear under (A) -> (B) and not here.
     // RE-MEASURED against the tree, never adjusted to keep a number green.
+    //
+    // THE MERGE WITH `origin/main` MOVES IT AGAIN, 55 -> 58 OVER THE SAME
+    // THREE-DOCUMENT CORPUS (merge fix round M2), and the movement is measured
+    // as separate causes rather than reported as one number. The merge
+    // (`6e84524a`, 41 commits of main) grew every file this corpus cites —
+    // `ccd/ccd` 16,832 -> 19,334 lines, `ccd/session-hook.sh` 2,954 -> 3,174,
+    // `shared/api.ts` 6,092 -> 7,188, `ccd/ccrc` 7,344 -> 11,911,
+    // `deploy/deploy.sh` 1,151 -> 1,200 and
+    // `server/test/ccd-workspaces.test.ts` 1,525 -> 1,540 — so BOTH sides'
+    // anchors moved: the branch's spec/plan anchors by main's insertions and
+    // main's own README anchors by the branch's.
+    //   (A) branch base (`fcf2c660`) + this rule    55   the pre-merge census
+    //   (B) merged tip  (`c7cc7348`) + this rule   251   the merge's shifts alone
+    //   (C) this tip                 + this rule    58   what this map asserts
+    // (B) -> (C) IS -193, AND EVERY REPAIR IS A SHIFT PROVEN BY BYTE-EQUALITY
+    // rather than by arithmetic: for each reference, the block it named at the
+    // branch base was located byte-identically in the merged file, with
+    // symmetric context expanded until the match was UNIQUE, and the anchor
+    // moved to where those bytes now stand. No number was obtained by adding a
+    // file's delta, and no reference was moved whose base bytes were not its
+    // referent — an anchor already stale at `fcf2c660` is pre-merge debt and
+    // stays where the pre-merge census left it.
+    // TWO references could not move that way and were measured BY NAME instead,
+    // because main edited inside the block rather than above it:
+    // `ccd/ccd:2399-2450` -> `:3037-3089` (`_reg_purge`'s purge sequence; main
+    // inserted `_usage_purge "$id"` inside it, so the range is one line longer)
+    // and `ccd/ccd:3345-3374` -> `:4006-4035` (`_lc_done` through `_lc_refuse`;
+    // 29 of the 30 lines are byte-identical and the 30th is a comment carrying a
+    // `ccd:<n>` citation of its own that main re-anchored).
+    //
+    // WHAT THE 58 ARE, relative to the pre-merge 55. Every entry is one of the
+    // two classes this map already carried, at the number the referent now
+    // stands at — no class is new and no rule changed:
+    //   `ccd/ccd` 23 -> 22, `ccd/session-hook.sh` 19 -> 21,
+    //   `server/test/ccd-workspaces.test.ts` 5, `ccd/compact-card.mjs` 4,
+    //   `server/test/ccd-ws-reap.test.ts` 2 and `deploy/deploy.sh` 1 unmoved.
+    //   `ccd/ccrc` 1 -> 2: the merge's edits to `ccd/ccrc` moved `_inst_files`'
+    //     body out from under `ccd/ccrc:5217`, so the sub-rule-A exemption that
+    //     covered it at the base is gone and the reference is now VISIBLE to
+    //     this map as well as to the `**Files:**` pass. It sits inside Task
+    //     10's 24,688-byte FROZEN section, so the repair is out of reach here
+    //     for exactly D-2849's reason.
+    //   `shared/api.ts` 1, NEW, and frozen for the same reason: plan `:3379`'s
+    //     `shared/api.ts:5644` was byte-exact at the base and main's +1,096
+    //     lines moved `lcRefusalWord`'s return out from under it. It is inside
+    //     the same 24,688-byte freeze.
+    // RE-MEASURED against the tree, never adjusted to keep a number green.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 23,
-      'ccd/session-hook.sh': 19,
+      'ccd/ccd': 22,
+      'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
       'server/test/ccd-workspaces.test.ts': 5,
       'deploy/deploy.sh': 1,
-      'ccd/ccrc': 1,
+      'ccd/ccrc': 2,
+      'shared/api.ts': 1,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(55);
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(58);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -7814,7 +7862,15 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // tasks REWROTE, so the census stays a statement about this work rather
       // than about the documents' own quality — and these two are named
       // because Task 10 rewrote them, not to admit a stale reference.
-      'ccd/ccrc', 'deploy/deploy.sh'];
+      'ccd/ccrc', 'deploy/deploy.sh',
+      // `shared/api.ts`, on the same ground and MEASURED rather than assumed:
+      // this branch rewrote it, 43 changed lines over
+      // `ee1d6228`..`fcf2c660` (the three new `LcRefusalToken` members and
+      // their word map, which plan Task 10's Interfaces paragraph cites). The
+      // claim this list makes is unchanged — every failing citation points
+      // into a file this work REWROTE — and the entry is named because the
+      // work rewrote the file, not to admit a stale reference.
+      'shared/api.ts'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
   });
@@ -7832,6 +7888,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // stale-by-construction debt here to park — every one of them resolved at
     // `f18c1be5` and every one resolves now — so the honest assertion is that
     // none is stale, not that no more than N are.
+    //
+    // AND THE MERGE WITH `origin/main` PROVED THAT WORTH ASSERTING (merge fix
+    // M2): SIX of the eight stopped resolving at the merge commit `6e84524a`,
+    // because README's anchors point into files BOTH sides grew —
+    // `ccd/session-hook.sh:2680`, `shared/api.ts:5560-5562`/`:5600`/`:5608`/
+    // `:5621` and `ccd/ccd:14431-14433`. Each was re-anchored BY CONTENT, not
+    // by arithmetic: the block it named at the branch base `fcf2c660` was
+    // located byte-identically in the merged file and the anchor moved there —
+    // `:2680` -> `:2900` (`_hook_emit_context "$CARD" "$CARD_COMPACT"`),
+    // `:5560-5562` -> `:6560-6562` and its three sentences -> `:6600`/`:6608`/
+    // `:6621` (the `'purge-refused'`/`'purge-incomplete'`/
+    // `'purge-mechanism-absent'` arms), `:14431-14433` -> `:16330-16332` (the
+    // `genrc == 1` arm). The other two, `:97` and `:103-105`, never moved:
+    // every insertion in that file lands below them.
     expect(CORPUS.map(([label]) => label),
       'README is in the corpus, and dropping it would make the line below vacuous')
       .toEqual(['spec', 'plan', 'readme']);
@@ -7899,9 +7969,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // Task 9's own list: the debt D-2758 parks in Task 11, RE-MEASURED
         // there. FIVE of its TEN entries inside the census were re-anchored and
         // now pass — ten, not eleven: `ccd/session-hook.sh:1098` is one of the
-        // three keys the last assertion in this test names as reachable by THIS
-        // PASS ALONE, so it is outside the census by construction and the two
-        // numbers in this file cannot both be right
+        // keys the last assertion in this test names as reachable by THIS
+        // PASS ALONE (three of them when this sentence was written; TWO since
+        // merge fix M2, which is recorded at that assertion), so it is outside
+        // the census by construction and the two numbers in this file cannot
+        // both be right
         // (`ccd/session-hook.sh:744` -> `:753`, `ccd/ccd:2756-2785` ->
         // `:3345-3374`, `:2766` -> `:3355`, `:2784` -> `:3373`, `:4355-4357` ->
         // `:5077-5079`). A SIXTH was re-anchored correctly and still reports:
@@ -7922,7 +7994,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // cuts the clause at the `;` inside that very quotation — a wrong
         // ANCHOR became a right anchor with an unreachable quotation, which is
         // a different defect and a smaller one.
-        'ccd/ccd:3384',
+        // AND THE MERGE MOVED IT AGAIN, `:3384` -> `:4045` (merge fix M2): the
+        // same quoted line stands byte-identically at `:4045` in the merged
+        // `ccd/ccd`, so the entry keeps its class and changes its number.
+        'ccd/ccd:4045',
         // ADDED BY THE RE-SPELLED FLOOR (wb2 B-I1), and it is a reference made
         // VISIBLE rather than one newly broken. This `**Files:**` clause cites
         // `ccd/ccd:3386` for `_lc_refuse`'s EMITS-THEN-DIES pair and its only
@@ -7930,16 +8005,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // bash it is pointed at. The ANCHOR is correct — `:3386` really is
         // `die "$msg"` — so what is available is a QUOTATION change to the
         // plan's own sentence, which is the class this pass records rather
-        // than makes.
-        'ccd/ccd:3386',
-        // ADDED BY THE ROUND-14 PASS, and deliberately: this reference was a
-        // bare `:3940-3951` whose clause names `ccd-wsaudit-nonpoison.test.ts`
-        // (83 lines), so it resolved to a file that cannot hold it and the
-        // pass never reached it. Spelling `ccd/ccd` in full is the fix for the
-        // inheritance; the number itself is Task 9's own pre-Task-9
-        // prescription and stays, so the reference becomes VISIBLE debt
-        // rather than invisible debt.
-        'ccd/ccd:3940-3951',
+        // than makes. MERGE FIX M2 moves it `:3386` -> `:4047` by the same
+        // byte-equality: `die "$msg"` is that line in the merged file, and the
+        // QUOTATIONLESS class is unchanged.
+        'ccd/ccd:4047',
+        // `ccd/ccd:3940-3951` LEFT THIS SET AT THE MERGE, and it left by
+        // COINCIDENCE rather than by repair (merge fix M2), which is why it is
+        // recorded here rather than silently dropped. The reference is Task 9's
+        // own pre-Task-9 prescription for `_ws_slug_free` and NO round has
+        // re-anchored it; main's insertions moved OTHER bytes under those
+        // numbers, and MEASURED to the token, `:3940-3951` is now `_lc_emit`'s
+        // header, whose comment names `ccd-lifecycle-contain.test.ts` — so the
+        // clause's `.test.ts` token occurs there and the reference passes for a
+        // reason having nothing to do with `_ws_slug_free`. It is the same
+        // class as the `:6838` repair round 3 recorded and round 4 lost again —
+        // a coincidence of bytes, not a referent.
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
         // Task 10's list: FOUR of the five its two `- Modify:` bullets carry,
@@ -7948,7 +8028,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // the two in its `- NOT modified` sub-list pass on merit, so three of
         // the seven survive and `deploy/deploy.sh:560` is the only survivor
         // among the five the `- Modify:` bullets carry. All four are inside the
-        // 24,688-byte freeze, so Task 11 could not repair them either.
+        // 24,688-byte freeze, so Task 11 could not repair them either — and
+        // nor could merge fix M2, which measured all four as MOVED by the merge
+        // (`deploy/deploy.sh` +49 lines, `ccd/ccrc` +4,567) and left every one
+        // of them where the freeze requires.
         'deploy/deploy.sh:629',
         'ccd/ccrc:5217',
         'ccd/ccrc:6531',
@@ -7961,11 +8044,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'the four references Task 10\'s own **Files:** paragraph falsifies (D-2849)').toEqual(D2849);
     // AND THE REACH THIS PASS ADDS, which is the whole reason it exists: the
     // references the census NEVER reports, at any line, because an exemption
-    // swallows them. Two are D-2849's; the third answers the open question
+    // swallows them. One is D-2849's; the other answers the open question
     // about whether the retraction marker hides anything ELSE — it does.
+    // THE MERGE TOOK ONE OF THE THREE OFF THIS LIST (merge fix M2), and by
+    // LOSING an exemption rather than by any repair: `ccd/ccrc:5217` was
+    // invisible to the census because sub-rule A anchored it on `_inst_files`'
+    // body, and main's +4,567 lines to `ccd/ccrc` moved that body out from
+    // under the number, so the census now reports it too. It is still in THIS
+    // set, and still unrepairable — it lives in the 24,688-byte freeze.
     const census = new Set(audit(realCorpus()).failures.map(refKey));
     expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
-      .toEqual(['ccd/session-hook.sh:1098', 'ccd/ccrc:5217', 'ccd/ccrc:7129-7130']);
+      .toEqual(['ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130']);
   });
 
   /** THE THIRD PASS, and the third reason the census under-reports (D-2849,
@@ -8181,47 +8270,77 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     green is that `rm` satisfied it.
     // RECORDED, NOT REPAIRED: this is a RATCHET, and re-anchoring references no
     // finding examined is how a census stops being a measurement.
+    //
+    // THE MERGE WITH `origin/main` TAKES IT 20 -> 18 (merge fix M2), and the
+    // movement is FIVE RENUMBERINGS and TWO DEPARTURES, none of them a rule
+    // change. The renumberings are the same references at the line their
+    // referent now stands on, each a shift PROVEN by byte-equality against the
+    // branch base `fcf2c660`:
+    //   `ccd/ccd:5059` -> `:5797`, `:1022` -> `:1223` (`die() { echo "ccd:
+    //     $*" >&2; exit 1; }`), `:3385` -> `:4046` (`_lc_refuse`'s
+    //     `_lc_emit … refused` line), `:7661` -> `:8654` (still the COMMENT
+    //     line this comment named above — the anchor stays as stale as it was
+    //     and now says so at the number those bytes reached), and the LIVE
+    //     `ccd/session-hook.sh:795` -> `:993` (`_hook_write_atomic() {`). The
+    //     OTHER `:795` is the `8e457995:` literal list's copy and is quoted
+    //     history: it keeps its number, which is the whole point of an era
+    //     marker.
+    // THE TWO DEPARTURES ARE COINCIDENCES, NOT REPAIRS, and neither reference
+    // was edited by this round — MEASURED with an instrumented `rowAudit`:
+    //   `ccd/ccd:2455` now names `command -v link   >/dev/null 2>&1 || return 2`
+    //     and `ccd/session-hook.sh:1094` now names a comment reading "every
+    //     acquisition afterwards opens a private hard-link ALIAS"; the §5 row's
+    //     own cell offers the token `link`, which occurs on both, so each
+    //     passes for a reason having nothing to do with the unlink or the
+    //     comment its clause is about. They are the same class as the `:6838`
+    //     repair round 3 recorded and round 4 lost again.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:5059', 'ccd/ccd:7568', 'ccd/ccd:11025',
+        'ccd/ccd:5797', 'ccd/ccd:7568', 'ccd/ccd:11025',
         'ccd/ccd:11665-11670', 'ccd/ccd:11669', 'ccd/ccd:11670',
         'ccd/ccd:11669', 'ccd/ccd:11670',
         'ccd/ccd:11665-11670',
-        'ccd/ccd:1022',
-        'ccd/ccd:3385',
-        'ccd/ccd:7661',
+        'ccd/ccd:1223',
+        'ccd/ccd:4046',
+        'ccd/ccd:8654',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
-        'ccd/session-hook.sh:1094',
-        'ccd/session-hook.sh:795',
-        'ccd/ccd:2455',
+        'ccd/session-hook.sh:993',
         'ccd/session-hook.sh:802',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
     // a key-only comparison would credit this pass with a failure another pass
-    // found somewhere else. FOURTEEN of the twenty are reachable by no other
+    // found somewhere else. THIRTEEN of the eighteen are reachable by no other
     // pass: a cell-scoped clause quotes nothing, so both passes above count
-    // them `unanchored` rather than checking them. The six below are the honest
-    // bound on that claim, and they are measured rather than asserted: three
-    // sit in §4's mechanism-absent row and one in §5's `die` row, both long
-    // enough to carry a `. ` sentence break the audit can read, and the two
-    // `:795` are the recognizer row's pair — the audit reaches the filter
-    // clause's copy and exempts the `8e457995:` one as history, while this pass
-    // reads both and this comparison is by SITE, so the era copy matches the
-    // other's site string. `spec:2210 ccd/session-hook.sh:802` left this list
-    // when that clause was era-marked (wb2 B-I1): the audit now classes it as
-    // history, so it is no longer a site another pass reaches.
+    // them `unanchored` rather than checking them. The five below are the
+    // honest bound on that claim, and they are measured rather than asserted:
+    // three sit in §4's mechanism-absent row and one in §5's `die` row, both
+    // long enough to carry a `. ` sentence break the audit can read, and the
+    // fifth is the recognizer row's LIVE `_hook_write_atomic` reference.
+    // `spec:2210 ccd/session-hook.sh:802` left this list when that clause was
+    // era-marked (wb2 B-I1): the audit now classes it as history, so it is no
+    // longer a site another pass reaches.
+    // THE MERGE (merge fix M2) MOVES FOUR OF THESE NUMBERS AND DROPS ONE, and
+    // every document line below moved too — `spec:2115` -> `:2125`, `:2199` ->
+    // `:2209`, `:2210` -> `:2220` — because M1's own prose edits lengthened the
+    // spec, not because any citation changed. The DROP is the sixth entry: the
+    // two `:795` were the recognizer row's PAIR and matched each other's site
+    // string only because they carried the same number. The live copy is now
+    // `:993` (re-anchored by content onto `_hook_write_atomic() {`, which main's
+    // +220 lines moved) while the `8e457995:` copy keeps `:795` as quoted
+    // history, so the pair no longer collides and this list names one of them.
+    // Both are still in the set above; only their coincidence is gone.
     const site = (f: { doc: string; line: number; file: string; from: number; to: number }): string =>
       `${f.doc}:${f.line} ${refKey(f)}`;
     const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-        'spec:2115 ccd/ccd:5059', 'spec:2115 ccd/ccd:7568', 'spec:2115 ccd/ccd:11025',
-        'spec:2199 ccd/ccd:1022',
-        'spec:2210 ccd/session-hook.sh:795', 'spec:2210 ccd/session-hook.sh:795',
+        'spec:2125 ccd/ccd:5797', 'spec:2125 ccd/ccd:7568', 'spec:2125 ccd/ccd:11025',
+        'spec:2209 ccd/ccd:1223',
+        'spec:2220 ccd/session-hook.sh:993',
       ]);
   });
 
