@@ -124,6 +124,11 @@ export const TREE_FILES = [
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.
   'ccd/ccd-account-auth',
+  // The compaction card's helper (compaction-card spec §2). `_inst_files`
+  // places it beside the hook and BEFORE it, so the tree has to carry it or
+  // `_inst_atomic` dies naming the missing source and every describe here goes
+  // red for a fixture reason.
+  'ccd/compact-card.mjs',
   'ccd/session-hook.sh',
   'ccd/install-session-hooks.sh',
   'ccd/tmux.conf',

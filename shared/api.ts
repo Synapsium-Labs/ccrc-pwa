@@ -6359,6 +6359,14 @@ export interface LifecycleMeas {
    *  classification, never free text (see `LifecycleDec.reason` for that).
    *  Both `rehome` writers set this. */
   readonly reason: string | null;
+  /** The registry entries a purge could NOT unlink, on a `_lc_fail` carrying
+   *  `purge-incomplete` (D-2782). Present ONLY on that condition: the purge
+   *  ran, the row is destroyed, the `purge` done-fact is already journaled,
+   *  and this names what is still on disk for a human to remove. `null` on
+   *  every other act, including the `purge-refused` refusal, where nothing was
+   *  removed and there is nothing to name — the two must not be told apart by
+   *  reading a sentence. It is prose for a person and never a parsed list. */
+  readonly unremoved: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -6380,6 +6388,7 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   workdir: true, base: true, old: true, rc: true, mode: true, inUnit: true,
   from: true, dropped: true, registered: true, state: true, bytes: true,
   resumed: true, tombstone: true, home: true, pool: true, reason: true,
+  unremoved: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -6547,7 +6556,10 @@ export type LcRefusalToken =
   | 'is-a-workspace'           // forget, aimed at a workspace: use the audited path
   | 'session-live'             // forget, on a running session
   | 'session-verdict-unknown'  // tmux did not answer: fail-shut, nothing removed
-  | 'spawn-failed';            // _lc_fail: the undo landed, the session did not come back
+  | 'spawn-failed'             // _lc_fail: the undo landed, the session did not come back
+  | 'purge-refused'            // D-2605: the row's compaction mutex was unavailable, so the registry row stands
+  | 'purge-incomplete'         // D-2605: the purge RAN — the row is gone, the fact is journaled — and something beside it would not unlink
+  | 'purge-mechanism-absent';  // D-2605 r3: the box cannot take the lock AT ALL (flock/mktemp/link off PATH) while a generation is live
 
 /**
  * The word for each. DECLARED ONCE AND EXPORTED — there is no module-private
@@ -6579,6 +6591,35 @@ export const LC_REFUSAL_WORD: Record<LcRefusalToken, string> = {
     'tmux did not answer, so ccrc cannot tell whether this session is still running. Nothing was removed.',
   'spawn-failed':
     'The undo landed, but the session did not come back up. The workspace and its branch are intact.',
+  // D-2605. The act itself COMPLETED — this token only ever rides a `_lc_fail`
+  // from a post-action caller, or the non-fatal `_lc_refuse_return` from the
+  // one caller that reaches the purge before anything irreversible — so the
+  // sentence must not say "nothing happened". What it says is what is still
+  // TRUE: the registry row and its generation are still on disk, and re-running
+  // the verb is the whole remedy.
+  'purge-refused':
+    'The registry row could not be removed: this session\'s compaction lock was unavailable. Whatever the verb had already done is done; the row and its generation are still there. Re-run once the compaction settles.',
+  // D-2605, and the WHOLE POINT is that it is not the sentence above. A single
+  // token for both conditions told an operator to wait for a compaction that
+  // was not running and promised a row that no longer existed. Here the purge
+  // ran to its end: re-running the verb finds nothing to do and will not clear
+  // what is left, so the remedy is a hand and not a retry. The journal row's
+  // `detail` names the pathname; this sentence must not pretend to know it.
+  'purge-incomplete':
+    'The registry row was removed, but something beside it would not delete and is still on disk. The verb itself finished — re-running it will not clear the leftover; the journal entry names what is still there.',
+  // D-2605 fix round 3, and it is the THIRD sentence for a reason the first two
+  // make: `_reg_purge` answers 1 for a contended lock and 2 for a box that
+  // cannot take that lock at all, and until now both wore this map's
+  // `purge-refused` word — which told an operator on a flock-less box to wait
+  // for a compaction that is not running, on a row nothing will ever clear.
+  // MEASURED: `_compact_lock_acquire` returns 2 from `command -v` on ANY of
+  // `flock`, `mktemp` or `link` before it touches the lock file, so the
+  // pathname that sentence blames does not even exist there. This sentence
+  // names the cause instead, and its remedy is the PATH — never a wait. The
+  // journal row's `detail` carries the per-verb remedy; this one must not,
+  // because one map entry serves four callers.
+  'purge-mechanism-absent':
+    'The registry row could not be removed: this box cannot take the session\'s compaction lock at all — flock, mktemp or link is missing from the PATH ccd ran with — and the session still has a live generation, so ccrc refused rather than race a compaction it has no way to serialise against. Whatever the verb had already done is done; the row and its generation are still there. Waiting will not help: re-run from a PATH that resolves those tools.',
 };
 
 /** Derived from the map — the `PR_REASON_MAP` idiom, so a member added to the

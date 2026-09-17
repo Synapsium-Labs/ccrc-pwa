@@ -1699,6 +1699,9 @@ describe('ccrc install: the executables and files it installs', () => {
     // and a box that silently writes no `~/.cc-limits` telemetry.
     const { home } = installed;
     const cases: Array<[string, string, number]> = [
+      // The compaction card's helper (compaction-card spec §2): 0644, a script
+      // `node` runs under the hook's `timeout`, never executed directly.
+      [join(home, '.cc-sessions', 'compact-card.mjs'), placed(home, 'ccd', 'compact-card.mjs'), 0o644],
       [join(home, '.cc-sessions', 'session-hook.sh'), placed(home, 'ccd', 'session-hook.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-session-hooks.sh'),
         placed(home, 'ccd', 'install-session-hooks.sh'), 0o755],
@@ -1755,6 +1758,7 @@ describe('ccrc install: the executables and files it installs', () => {
       // NOT in the spread above: this one is on both arms.
       join(home, '.local', 'bin', 'ccd-account-auth'),
       join(home, '.local', 'bin', 'ccrc'),
+      join(home, '.cc-sessions', 'compact-card.mjs'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),

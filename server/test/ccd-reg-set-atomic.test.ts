@@ -152,8 +152,14 @@ describe('_reg_set writes atomically', () => {
     // naming scheme exists to prevent.
     expect(all.filter((n) => n.endsWith('.uuid'))).toEqual(['demo-quiet-basin.uuid']);
     // And ccd's own globs: `_ws_slug_residue` lists exactly the real fields.
+    // RETARGETED, NOT LOOSENED (D-2605): it now emits complete `$REG`-relative
+    // BASENAMES rather than bare suffixes, because its caller prints them as a
+    // list rooted once and a dot-LEADING private family has no bare suffix to
+    // print. A substring match here would destroy exactly the pin the comment
+    // above describes — a tmp ending in a field name minting a phantom session
+    // id — so the equality stays an equality.
     expect(h.sh('_ws_slug_residue demo quiet-basin').split(', ').sort())
-      .toEqual(['uuid', 'workspace', 'wrapper']);
+      .toEqual(['demo-quiet-basin.uuid', 'demo-quiet-basin.workspace', 'demo-quiet-basin.wrapper']);
   });
 
   // ROOT-TOLERANT, deliberately: `chmod 500` does not stop uid 0, so under a

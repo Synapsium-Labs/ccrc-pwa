@@ -119,16 +119,59 @@ describe('a partially purged registry never frees the slug', () => {
   // comment keeps this list; it is repeated here so the fixture is a full
   // registry entry rather than a plausible subset.
   const FIELDS = ['archived', 'archivedreason', 'archivemanifest', 'base', 'branch',
-    'compactnote', 'compactskip', 'home', 'hookstate.json', 'lastcompact', 'lastswap', 'pool', 'prnumber',
-    'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+    'compactnote', 'compactskip', 'generation', 'home', 'hookstate.json', 'lastcompact', 'lastswap',
+    'pool', 'prnumber', 'project', 'reaping', 'setup', 'started', 'uuid', 'workdir', 'workspace', 'wrapper'];
+  /** One DOT-LEADING private compaction family, so the fixture is a full
+   *  POST-D-2605 row rather than the dot-free half of one. `_ws_slug_free` now
+   *  refuses on these too, and `_reg_purge` takes them in a second loop the
+   *  dot-free one cannot see — so leaving them out would make the terminal
+   *  FREE prove less than it claims. */
+  const PRIVATE = '.demo-quiet-mesa.compactset.999.compact-1-999-1-2.stage';
 
   const seedFullEntry = (): string => {
     const regdir = path.join(home, '.cc-sessions');
     for (const f of fs.readdirSync(regdir)) {
       fs.rmSync(path.join(regdir, f), { recursive: true, force: true });
     }
-    for (const f of FIELDS) fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`), 'x\n');
+    for (const f of FIELDS) {
+      // `generation` has a BYTE GRAMMAR the rest do not; a row seeded with `x`
+      // there is a present-INVALID generation, which is a different subject.
+      fs.writeFileSync(path.join(regdir, `demo-quiet-mesa.${f}`),
+        f === 'generation' ? '0189abcd-1234-5678-9abc-0123456789ab' : 'x\n');
+    }
+    fs.writeFileSync(path.join(regdir, PRIVATE), '');
     return regdir;
+  };
+
+  /** THE BUDGET BOUND, MEASURED RATHER THAN COUNTED BY HAND (D-2605).
+   *
+   *  The shipped bound was the literal `FIELDS.length + 2`, which held exactly
+   *  two budget steps of headroom past the purge's last unlink. Task 9 adds
+   *  three more `rm` calls inside the function's own body — the stable lock's
+   *  init source and its open alias, and the explicit generation unlink after
+   *  the archived/reaping tail — plus the dot-leading private-family loop, so
+   *  a hand-kept literal is now a number that drifts every time the protocol
+   *  gains a step. Measured on the shipped tree at the time of writing: 21 rm
+   *  calls before this task, 24 after, against a bound of 23 — i.e. the
+   *  literal had already gone BELOW the real count, and the only reason the
+   *  terminal FREE stayed reachable was that the old fixture seeded no
+   *  `generation` for the 24th `rm` to take.
+   *
+   *  So the bound is re-derived HERE, by replaying one unbudgeted purge under
+   *  a COUNTING shadow of the same shape. A guessed bound makes the assertion
+   *  pass while proving nothing, which is the failure `:164-166`'s own comment
+   *  exists to prevent. */
+  const measureRmCalls = (): number => {
+    seedFullEntry();
+    const out = sh(
+      `RMCALLS=0
+       rm() { RMCALLS=$(( RMCALLS + 1 )); command rm "$@"; }
+       _reg_purge demo-quiet-mesa
+       unset -f rm
+       echo "$RMCALLS"`);
+    const n = Number(out.trim().split('\n').pop());
+    expect(Number.isInteger(n) && n > 0, `the rm count did not measure: ${out}`).toBe(true);
+    return n;
   };
 
   it('holds at EVERY interruption point of _reg_purge, not just the disclosed one', () => {
@@ -139,8 +182,34 @@ describe('a partially purged registry never frees the slug', () => {
     // terminal state (nothing left, slug genuinely free) is covered too, and
     // the assertion is keyed off the MEASURED residue rather than off a
     // hardcoded expectation of which field goes when.
+    // TWO STEPS OF HEADROOM PAST THE MEASURED LAST UNLINK, which is what the
+    // shipped `FIELDS.length + 2` bought and what makes the terminal FREE
+    // reachable at all.
+    const RM_CALLS = measureRmCalls();
+    // THE COST RATCHET (r3 B-M5), and it has to be a LITERAL. The first form of
+    // this control asserted `verdicts.length === LAST + 1`, which is
+    // TAUTOLOGICAL — `LAST` is derived from this same measurement, so both
+    // sides move together and a mutant adding one `rm` to `_reg_purge` stayed
+    // GREEN (measured). The number that can actually change is the purge's own
+    // unlink count, so that is the one pinned: 27 today, which makes this `it`
+    // run 31 real `sh()` invocations, each taking the row's stable lock — one
+    // for `measureRmCalls` plus the loop's `RM_CALLS + 3`, measured by counting
+    // this file's own `sh` alias for one run of this `it`, not derived.
+    // IT WAS 25 UNTIL `_reg_purge` GAINED `_usage_purge "$id"` (ccd/ccd), whose
+    // two unconditional `rm -f` — the usage sidecar `$REG/usage/<id>.json` and
+    // its `.<id>.*.tmp` partials — take the count 25 → 27; they run mid-purge,
+    // between the `hookstate.json` unlink and the `reaping`/`archived` tail, so
+    // this is a claim about the TOTAL and not about which unlink goes last. The
+    // function's third `rm`, `-rf` of `$REG/usage/<id>.agents`, stands behind a
+    // `[[ -d ]]` no fixture here satisfies, so it does not count today and WILL
+    // when one seeds that directory. When this reds, the protocol gained or
+    // lost an unlink: update the literal AND re-read this fixture's cost,
+    // because it is the thing that pushed the test past vitest's 20 s default
+    // and made it a load flake.
+    expect(RM_CALLS, 'the purge`s unlink count moved — this `it`s cost moved with it').toBe(27);
+    const LAST = RM_CALLS + 2;
     const verdicts: string[] = [];
-    for (let k = 0; k <= FIELDS.length + 2; k++) {
+    for (let k = 0; k <= LAST; k++) {
       seedFullEntry();
       const out = sh(
         `rm() { if (( RMBUDGET-- > 0 )); then command rm "$@"; fi; }
@@ -161,10 +230,15 @@ describe('a partially purged registry never frees the slug', () => {
     // one interruption that left residue, and the completed purge.
     expect(verdicts.filter((v) => v.endsWith('TAKEN')).length,
       'the budget never actually interrupted anything').toBeGreaterThan(0);
+    // SPELLED AS THE SAME EXPRESSION as the loop bound, so the two cannot drift.
     expect(verdicts[verdicts.length - 1],
       'the purge never ran to completion, so FREE was never proved reachable')
-      .toBe(`${FIELDS.length + 2}:FREE`);
-  });
+      .toBe(`${LAST}:FREE`);
+    // AND THE LOOP REALLY RAN ITS WHOLE BOUND. This one IS relative to `LAST`
+    // on purpose and covers the other failure: a `break` or an early `return`
+    // inside the loop, which the ratchet above cannot see.
+    expect(verdicts.length, 'the loop ran its whole derived bound').toBe(LAST + 1);
+  }, 60_000);
 
   it('refuses ws-add on the residue the purge is documented to leave', () => {
     // The one-field residue fix3-ccd.md disclosed and called harmless: an empty
@@ -179,7 +253,13 @@ describe('a partially purged registry never frees the slug', () => {
     expect(out, 'the refusal happened').toContain('REFUSED');
     expect(out, 'and it names the files holding the slug, which is the reclaim step')
       .toContain('slug in use: quiet-mesa');
-    expect(out).toContain('demo-quiet-mesa.{archived}');
+    // RETARGETED (D-2605). The `$REG/<id>.{…}` brace template is gone: it
+    // could not express the dot-LEADING private compaction families
+    // `_ws_slug_free` now also refuses on, so every path it printed for one
+    // would not exist. Both halves of what the line bought are kept — the root
+    // is named once, and the basename is named in full.
+    expect(out, 'the root is named once').toContain(path.join(home, '.cc-sessions'));
+    expect(out, 'and the basename in full').toContain('demo-quiet-mesa.archived');
     // Nothing was created: no worktree, no branch, no registry entry.
     expect(fs.existsSync(path.join(home, 'worktrees', 'demo', 'quiet-mesa'))).toBe(false);
     expect(reg('demo-quiet-mesa', 'uuid'), 'no new session inherited the marker').toBeNull();
@@ -202,6 +282,120 @@ describe('a partially purged registry never frees the slug', () => {
     fs.writeFileSync(path.join(home, '.cc-sessions', 'demo-quiet-mesa.x-y.archived'), '');
     expect(sh(`_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN`)).toBe('FREE');
     expect(sh(`_ws_slug_residue demo quiet-mesa`)).toBe('');
+  });
+
+  // ── D-2605: the dot-LEADING private compaction families ────────────────
+  // `_ws_slug_free` globbed `"$REG/$id".*` — id, then a dot — and was
+  // therefore structurally blind to every `.<id>.…` name the compaction
+  // lifecycle creates. A slug handed back while one of those is present is a
+  // slug re-handed with a stranger's claim on it.
+  it('refuses a slug still holding a dot-leading private compaction family — for THAT id only', () => {
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock-open.1.2.3'), '');
+    // A SECOND LIVE ID sharing the prefix. THE COMMENT THAT STOOD HERE claimed
+    // this pair measured the nested-id hazard, and MEASURED it does not: with
+    // `demo-quiet-mesa-b.uuid` present, `quiet-mesa-b` is TAKEN by the DOT-FREE
+    // loop's own `.uuid` test, which returns before the dot-leading loop is
+    // entered at all — the verdict is byte-identical with the `.<id>.` anchor
+    // and without it. (Control, measured: delete that `.uuid` and the ORIGINAL
+    // answers FREE.) It is kept because it is a real property of the pair —
+    // a live neighbour holds its own slug — and the anchoring is measured
+    // below, where only the dot-leading loop can answer.
+    fs.writeFileSync(path.join(REG, 'demo-quiet-mesa-b.uuid'), 'x');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
+      'the dot-leading family holds the slug').toBe('TAKEN');
+    expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
+      'a live neighbour holds its own slug — by its .uuid, not by this family').toBe('TAKEN');
+    expect(sh('_ws_slug_free demo quiet-lake && echo FREE || echo TAKEN'),
+      'and an unrelated slug is free').toBe('FREE');
+    // EVERY REASON `_ws_slug_free` CAN REFUSE IS A REASON `_ws_slug_residue`
+    // CAN NAME. The two are pinned as a PAIR, so reverting either alone reds.
+    expect(sh('_ws_slug_residue demo quiet-mesa'))
+      .toBe('.demo-quiet-mesa.compactions.lock-open.1.2.3');
+  });
+
+  it('…and the anchoring is measured in the direction only the dot-leading loop can answer', () => {
+    // THE LEG THE ANCHOR ACTUALLY NEEDS, and it is the mirror of the one above:
+    // the residue is planted under the LONGER id and NEITHER id gets a dot-free
+    // field, so the dot-free loop cannot answer for either and only the
+    // `.<id>.` strip decides. On the shipped exact anchor `quiet-mesa` is FREE
+    // with empty residue; with the anchor widened to an unanchored
+    // `"$REG/.$id"*` glob it reads TAKEN and reports a PHANTOM residue that
+    // belongs to another id — `_ws_slug_new` would then skip that slug for
+    // ever and `cmd_ws_add` refuse it.
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa-b.compactions.lock-open.1.2.3'), '');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN'),
+      'a NEIGHBOUR id\'s private family is not this slug\'s residue').toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa'),
+      'and nothing is named for it').toBe('');
+    // NON-VACUITY: the file really is there, and it really does hold its OWN
+    // slug — so the FREE above is the anchor and not a missing fixture.
+    expect(fs.existsSync(path.join(REG, '.demo-quiet-mesa-b.compactions.lock-open.1.2.3'))).toBe(true);
+    expect(sh('_ws_slug_free demo quiet-mesa-b && echo FREE || echo TAKEN'),
+      'the id it does belong to is held').toBe('TAKEN');
+    expect(sh('_ws_slug_residue demo quiet-mesa-b'))
+      .toBe('.demo-quiet-mesa-b.compactions.lock-open.1.2.3');
+  });
+
+  it('a DOTTED nested id\'s private family does not hold this slug either', () => {
+    // The other nested shape, and the one `_reg_purge`'s own header measures:
+    // project DIRECTORY names may hold dots, so `demo-quiet-mesa.x-y` is a
+    // legal id whose dot-leading families share this id's `.<id>.` prefix
+    // exactly. Only the SUFFIX rule — a private family name has no further dot
+    // before its own grammar — keeps it out.
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.x-y.compactions.lock-open.1.2.3'), '');
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN')).toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa')).toBe('');
+  });
+
+  it('the PERMANENT lock is the sole exclusion: it never holds a slug, and never appears as residue', () => {
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-mesa.compactions.lock'), '');
+    // It spans row generations and safe reuse by design, so its presence
+    // proves HISTORY, not a live regime. Gating on it would wedge every
+    // ever-purged id for ever — `_reg_purge` mints one even for an id that
+    // never existed.
+    expect(sh('_ws_slug_free demo quiet-mesa && echo FREE || echo TAKEN')).toBe('FREE');
+    expect(sh('_ws_slug_residue demo quiet-mesa')).toBe('');
+  });
+
+  it('the ws-add refusal names what it found, and EVERY path it names EXISTS', () => {
+    makeRepo('demo');
+    const REG = path.join(home, '.cc-sessions');
+    fs.writeFileSync(path.join(REG, '.demo-quiet-basin.compactions.lock-open.1.2.3'), '');
+    fs.writeFileSync(path.join(REG, 'demo-quiet-basin.archived'), '');
+    // A second LIVE id sharing the prefix, so the message cannot be right by
+    // naming everything in $REG.
+    fs.writeFileSync(path.join(REG, 'demo-quiet-basin-mesa.uuid'), 'x');
+    // POSITIONAL, because `--slug` is not a flag `cmd_ws_add` has: its arg
+    // loop's catch-all would bind `project` to the literal `--slug`, which
+    // `_ws_project_valid` accepts, so the verb would die at the not-a-git-repo
+    // check long before the slug gate and this test would pass for the wrong
+    // reason.
+    const out = sh(`${WS_ADD} ( cmd_ws_add demo quiet-basin ) 2>&1 || echo REFUSED`);
+    expect(out, '(a) it refuses').toContain('REFUSED');
+    expect(out).toContain('slug in use: quiet-basin');
+    // (b) the exact basename — not an empty brace pair naming no file.
+    expect(out).toContain('.demo-quiet-basin.compactions.lock-open.1.2.3');
+    expect(out).toContain('demo-quiet-basin.archived');
+    expect(out, 'the neighbour id is not named').not.toContain('demo-quiet-basin-mesa.uuid');
+    // (c) THE MUTATION-EFFECTIVE PART: parse the message and stat every path
+    // it names. This is what the `$REG/<id>.{…}` template could never satisfy
+    // for a dot-leading family, and it is why the die had to change alongside
+    // the function rather than after it.
+    // ANCHORED ON THE EM DASH the message actually uses: a bare `/in (\S+): /`
+    // matches "slug in use: " first and captures `use` as the root, which read
+    // as a real failure of the assertion rather than of the parse.
+    const m = /— in (\S+): (.*)$/m.exec(out);
+    expect(m, 'the message roots the list once and then lists basenames').not.toBeNull();
+    const root = m![1]!;
+    const named = m![2]!.trim().split(', ').filter((x) => x !== '');
+    expect(named.length, 'it named something').toBeGreaterThan(0);
+    for (const base of named) {
+      expect(fs.existsSync(path.join(root, base)), `the message names a path that exists: ${base}`).toBe(true);
+    }
   });
 });
 
@@ -1232,5 +1426,115 @@ describe('gh containment is the harness\'s, not the caller\'s', () => {
     // what makes this structural rather than advisory.
     expect(h.sh('command -v gh')).toBe(path.join(h.home, '.local', 'bin', 'gh'));
     expect(h.sh('command -v gh', { PATH: '/usr/bin:/bin' })).toBe(path.join(h.home, '.local', 'bin', 'gh'));
+  });
+});
+
+// ── D-2605: THE WIDENED SELF-CHECKING SCAN (plan Task 9) ─────────────────
+// The plan widens this enumeration from `_ws_slug_residue` invocations and
+// assertions ALONE to their UNION with every assertion on `cmd_ws_add`'s die
+// message — any `server/test/**` line naming the `.{` brace template, or
+// asserting on the `slug in use:` string. Every member of the union must be
+// named in a disposition list, and an UNLISTED one reds.
+//
+// Each member WAS disposed correctly by Task 9, so the property holds today.
+// What was missing is the mechanism: a NEW `_ws_slug_residue` assertion, or a
+// new `slug in use:` one, added later and not thought about, reds nothing.
+describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposition list (plan Task 9)', () => {
+  const TESTS = path.resolve(__dirname);
+  /** THE UNION, three grammars. `\.{` is the brace template Task 9 deleted from
+   *  the die: it could not express the dot-LEADING private compaction families
+   *  `_ws_slug_free` now also refuses on, so every path it printed for one
+   *  would not exist. A surviving assertion on it is a test pinning a message
+   *  the code no longer produces. */
+  const GRAMMARS: Array<[string, RegExp]> = [
+    ['residue', /_ws_slug_residue/],
+    ['slug-in-use', /slug in use:/],
+    ['brace-template', /\$REG\/<id>\.\{|\$\{?REG\}?\/\$\{?id\}?\.\{/],
+  ];
+
+  /** THE DISPOSITION LIST, as DATA. Each entry names a file, the grammar it
+   *  belongs to, how many lines carry it, and what Task 9 did with them —
+   *  which is what makes an unlisted member visible as a count mismatch rather
+   *  than as prose nobody re-reads. */
+  const DISPOSITION: Array<{ file: string; grammar: string; count: number; what: string }> = [
+    { file: 'ccd-workspaces.test.ts', grammar: 'residue', count: 8,
+      what: 'three assertions on the ROOTED list form (the `_ws_slug_free`/`_ws_slug_residue` pair-pin, the permanent-lock exclusion, the empty case), the fixture that plants residue, the comment that states the pair rule, and — fix round 2, B-I3 — THREE more on the two NESTED-ID legs that measure the `.<id>.` anchoring in the direction only the dot-leading loop can answer: a hyphen-neighbour id holding its own family (this slug FREE, its residue empty; the neighbour TAKEN and named), and a DOTTED nested id (`demo-quiet-mesa.x-y`) whose family shares this id\'s exact `.<id>.` prefix' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'slug-in-use', count: 3,
+      what: 'the two die assertions, retargeted to root-plus-basename, and the em-dash parse comment' },
+    { file: 'ccd-reg-set-atomic.test.ts', grammar: 'residue', count: 3,
+      what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
+    { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
+      what: 'a comment naming the three globs that share the dot-leading second pass' },
+    { file: 'session-hook.test.ts', grammar: 'residue', count: 2,
+      what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair' },
+    { file: 'ccd-workspaces.test.ts', grammar: 'brace-template', count: 2,
+      what: 'RETRACTED HISTORY ONLY — two comments naming the template Task 9 deleted, beside the assertions that replaced it; pinned to comments by the clause below' },
+  ];
+
+  const scan = (): Array<{ file: string; grammar: string; line: number }> => {
+    const out: Array<{ file: string; grammar: string; line: number }> = [];
+    for (const f of fs.readdirSync(TESTS).filter((n) => n.endsWith('.ts')).sort()) {
+      const lines = fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n');
+      for (let i = 0; i < lines.length; i++) {
+        for (const [grammar, re] of GRAMMARS) {
+          if (re.test(lines[i]!)) out.push({ file: f, grammar, line: i + 1 });
+        }
+      }
+    }
+    // THIS FILE'S OWN describe carries all three grammars as literals — a
+    // self-reading scan must exclude its own, or it can never be green.
+    return out.filter((h) => !(h.file === 'ccd-workspaces.test.ts' && h.line >= SELF[0] && h.line <= SELF[1]));
+  };
+
+  /** This describe's own line range, bounded BY NAME so the exclusion cannot
+   *  silently widen. */
+  const SELF: [number, number] = (() => {
+    const lines = fs.readFileSync(path.join(TESTS, 'ccd-workspaces.test.ts'), 'utf8').split('\n');
+    const a = lines.findIndex((l) => l.startsWith('// ── D-2605: THE WIDENED SELF-CHECKING SCAN (plan Task 9)'));
+    let b = a;
+    while (b < lines.length && lines[b] !== '});') b++;
+    return [a + 1, b + 1];
+  })();
+
+  it('the found union EQUALS the disposition list, file by file and grammar by grammar', () => {
+    const hits = scan();
+    expect(hits.length, 'the scan found members at all').toBeGreaterThan(0);
+    const counted = new Map<string, number>();
+    for (const h of hits) counted.set(`${h.file}|${h.grammar}`, (counted.get(`${h.file}|${h.grammar}`) ?? 0) + 1);
+    const listed = new Set(DISPOSITION.map((d) => `${d.file}|${d.grammar}`));
+    // AN UNLISTED MEMBER, which is the whole point: a new assertion in a file
+    // nobody thought about.
+    expect([...counted.keys()].filter((k) => !listed.has(k)).sort(),
+      'an assertion on no disposition entry').toEqual([]);
+    // AND EVERY ENTRY ITS EXACT COUNT, so adding a second copy inside a listed
+    // file reds too.
+    expect(DISPOSITION.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
+      .toEqual(DISPOSITION.map((d) => `${d.file}|${d.grammar}=${d.count}`));
+    // THE BRACE TEMPLATE SURVIVES ONLY AS PROSE. Its entry above has a count,
+    // because the two lines that carry it are RETRACTING comments beside the
+    // assertions that replaced them — quoted history, which this project keeps
+    // rather than deletes. What must not exist is a CODE line pinning it: the
+    // die no longer prints that message, so an assertion on it would be a test
+    // pinning a shape the tree cannot produce.
+    const code = (f: string, line: number): string => fs.readFileSync(path.join(TESTS, f), 'utf8').split('\n')[line - 1] ?? '';
+    expect(hits.filter((h) => h.grammar === 'brace-template' && !/^\s*(\/\/|\*|\/\*)/.test(code(h.file, h.line)))
+      .map((h) => `${h.file}:${h.line}`),
+      'no CODE line still pins the `$REG/<id>.{…}` message the die no longer prints').toEqual([]);
+  });
+
+  it('CONTROL: an unlisted assertion in another file reds, and a second copy in a listed file reds', () => {
+    // Measured against the real found set rather than by writing a file: the
+    // property is of the LIST, so the mutation is to the list.
+    const hits = scan();
+    const counted = new Map<string, number>();
+    for (const h of hits) counted.set(`${h.file}|${h.grammar}`, (counted.get(`${h.file}|${h.grammar}`) ?? 0) + 1);
+    // (a) drop an entry ⇒ its members become unlisted.
+    const without = new Set(DISPOSITION.filter((d) => d.file !== 'ccd-authdead.test.ts').map((d) => `${d.file}|${d.grammar}`));
+    expect([...counted.keys()].filter((k) => !without.has(k)),
+      'dropping an entry orphans its members').toEqual(['ccd-authdead.test.ts|residue']);
+    // (b) a count that no longer matches ⇒ red, with the file named.
+    const bumped = DISPOSITION.map((d) => (d.file === 'ccd-reg-set-atomic.test.ts' ? { ...d, count: d.count + 1 } : d));
+    expect(bumped.map((d) => `${d.file}|${d.grammar}=${counted.get(`${d.file}|${d.grammar}`) ?? 0}`))
+      .not.toEqual(bumped.map((d) => `${d.file}|${d.grammar}=${d.count}`));
   });
 });
