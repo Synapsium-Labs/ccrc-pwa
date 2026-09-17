@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=6a44cfffe7dd1d026a47339e04bcb6a7a3057e6997a58ea3642fe4f872f033ef
+# ccrc:generated 1 sha256=8ed3ce4899d5dc4193b356bbcc186197dc8b8b6848b8528528f7dec1ed3b3629
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2414,7 +2414,7 @@ _compact_lock_vanished() {   # <id> -> 0 iff an ABSENT canonical is a LATER disa
   # box). `<id>.generation` absent proves no hook on this row ever held this
   # lock, which is the same argument `_reg_purge`'s own fail-open rests on.
   [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
-  [ -d /proc ] || return 1
+  [ -d /proc ] || return 1   # AND WHERE THERE IS NO `/proc`, §4'S RULE IS NOT ENFORCED HERE EITHER — the hook-side twin's own gate carries the full argument and the residue's reasoning. In short: this is the only probe that can see a holder past its acquire, so on a box without `/proc` (Darwin) a later canonical disappearance under a live holder reads as a first-ever mint, the acquire mints a second inode at the one pathname, and `_reg_purge`, `cmd_ws_add`, `cmd_start` and `_spawn_start` all proceed where §4 says they must refuse. Recorded platform residue, not a defect to be papered over: the refusal-side cases are Linux-only and say so.
   command -v find >/dev/null 2>&1 || return 1
   [[ -n "$(find /proc -mindepth 3 -maxdepth 3 -path '/proc/[0-9]*/fd/*' \
              -lname "$REG/.$id.compactions.lock-open.*" -print -quit 2>/dev/null)" ]] || return 1

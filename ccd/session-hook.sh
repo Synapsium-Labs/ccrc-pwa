@@ -1182,7 +1182,7 @@ _hook_lock_vanished() {   # -> 0 iff an ABSENT canonical is a LATER disappearanc
   # it absent this function is one glob and no fork, which is what every real
   # `ws-add` and `start` pays.
   [ -e "$REG/$id.generation" ] || [ -L "$REG/$id.generation" ] || return 1
-  [ -d /proc ] || return 1
+  [ -d /proc ] || return 1   # AND WHERE THERE IS NO `/proc`, §4'S RULE IS NOT ENFORCED — stated here rather than left to be inferred from the gate. Arm (b) is the ONLY arm that can see a holder past its own acquire, so on such a box (Darwin ships no `/proc` at all) a later canonical disappearance under a live holder is indistinguishable from a first-ever mint: this function answers "first-ever mint", the acquire MINTS a second inode at the one pathname, and two processes can each be told by `flock` that they hold "the" lock — the hazard this file's header says the link-based design removes, standing on that platform. It is RECORDED platform residue rather than repaired here: `lsof` is the only candidate detector and its deleted-path reporting there is unmeasured, while failing CLOSED on the ambiguity would refuse every first-ever mint, because canonical is minted lazily while the generation is minted at row creation. The cases that assert the rule are Linux-only for this reason and each says so.
   command -v find >/dev/null 2>&1 || return 1
   # ONE FORK, NOT ONE PER DESCRIPTOR. MEASURED on this box (517 processes, 2662
   # `/proc/<pid>/fd` entries): a bash loop calling `readlink` per entry takes

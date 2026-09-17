@@ -10,6 +10,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { CCD } from './ccdWsHelpers.js';
 import { tl, GRAPH, type GraphContent } from './compactCardFixtures.js';
 import { isScratchSlug } from './scratchSlugs.js';
+import { itLinux } from './platformFixtures.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const realTool = (name: string): string => execFileSync('sh', ['-c', `command -v ${name}`], { encoding: 'utf8' }).trim();
@@ -3548,7 +3549,13 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
   // arm publish a SECOND inode at the same pathname while a live holder still
   // owned the first: two processes each told by `flock` that it holds "the"
   // lock, the exact hazard this file's own header says the design removes.
-  it('a holder past its acquire leaves NO name in $REG, only a descriptor — measured', async () => {
+  // LINUX ONLY (round M4). Its second half asks `/proc` to NAME the live
+  // holder's descriptor, which is exactly the capability a box without `/proc`
+  // does not have — the residue `_hook_lock_vanished`'s own `[ -d /proc ]` gate
+  // records. Its first half (a holder leaves no exact-family NAME) is
+  // platform-neutral and keeps being asserted on both platforms by
+  // `an uncontended acquisition leaves no init source and no open alias behind`.
+  itLinux('a holder past its acquire leaves NO name in $REG, only a descriptor — measured', async () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
@@ -3569,7 +3576,13 @@ describe('the compaction card — the permanent stable lock (spec §3.4)', () =>
     } finally { release(); }
   }, 60_000);
 
-  it('PreCompact REFUSES and recreates no canonical when it vanished under a live holder', async () => {
+  // LINUX ONLY, and this is the case that NAMES the residue (round M4). With no
+  // `/proc` the two states §4 separates — "nobody ever held this lock" and
+  // "somebody holds it and its name was taken away" — are indistinguishable, so
+  // the arm mints a second inode at the same pathname and both holders are told
+  // by `flock` that they hold "the" lock. That hazard STANDS on Darwin; the
+  // gate's own comment in `ccd/session-hook.sh` says so in place.
+  itLinux('PreCompact REFUSES and recreates no canonical when it vanished under a live holder', async () => {
     const tree = cardTree(); plantHelper();
     const { transcript } = plantSession({ lines: workLines(tree) });
     run(preCompact(tree, transcript));
