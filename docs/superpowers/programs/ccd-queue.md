@@ -833,3 +833,70 @@ outside — and would have let me mis-refute a correct critical finding. **The e
 not the rename:** with `tmp` itself a live symlink, `isfile` passes, `open(tmp,'w')` writes *through*
 the link, and the field's bytes land outside `$REG`. Measured here end to end. The `exists`→`lexists`
 fix closed the DANGLING case only; the second conjunct still follows the link.
+
+---
+
+## Review 69 closed, fix round 1 dispatched — and the reviewer scoped my own finding better than I did
+
+The reviewer re-placed the report under `$HOME/.cc-clips/<its id>/` — **a better choice than the one I
+suggested**: it is on the agent's read whitelist, it is session-namespaced, and it is the agent's own
+designated write root, where `projectsRoot/.ccrc-reviews/` would have been a new directory beside
+every project. Verified byte-identical by `sha256sum` and `cmp` before closing. Run 69 closed
+`done`, `released: true`; run 42 advanced back to `working`.
+
+**And it scoped the defect better than I did.** I blamed the coordinator's review-brief template. The
+prescription is also in **the reviewer skill's own clause 7** (`$WT/.ccrc-review/<run>-<tip8>.md`), and
+it named the measurement I lacked: `CCRC_PROJECTS_ROOT` is `<home>/projects` → the volume mount, while
+every session worktree lives under `<home>/worktrees` — **outside it**. So the fix is one of two
+things, and the operator picks: clause 7 names a `.cc-clips` path, or `checkPath` gains the worktrees
+root. Both halves recorded; neither is run 42's.
+
+**A third, smaller one, noticed in passing:** opening review run 69 under this programme's slug
+**overwrote the programme's title** — `GET /api/runs` now reports `programTitle: "Review wave 1"` for
+the whole of `ccd-queue`. `openRun`'s conflict arm updates the title and nothing restores it, and with
+this programme at wave 1/1 there is no later run to correct it. Cosmetic on the board, wrong in the
+record.
+
+### Fix round 1 — the only full round I intend
+
+Announced as such in the brief, before the work, with the bound stated: a second round is scoped to
+findings THIS round creates, not new territory. **Order is load-bearing and it is the worker's own
+rule:** everything else first, then LAST AND ALONE the single re-point commit for all 142 anchors plus
+the census map, its `total` and its cause comment, re-measured at that exact tree.
+
+**Blocking:** F1 (critical — `S_ISREG(lstat)` at three sites, and the case must plant a symlink to an
+EXISTING REGULAR file, because a dangling-link case passes without the fix and would be a false pin);
+F2; F3 (my binding ruling enforced — the `lastError` fixture must plant a provider-controlled string
+carrying a terminator, since all six existing fixtures are clean text and mutated the doctor **invents
+a lane with no roster row**); F4; F5; **F6 ruled YES**; F7; F8 (no new number — D-71 covers the class
+and I refused a second one this run); F9 (the squash body is the durable record, and the trailers are
+derived, not recalled); F10 (**a skipped case is not a pin**); F11 and F15; and **R1 ruled against the
+panel's own 3/3 refutation** — not on the reviewer's advice but on the code's text: the `rc2` comment
+says the guard exists because an empty `$out` gave *"an empty loop, and the same false PASS"*, which a
+zero-exit empty batch still produces. **Costs if wrong:** one rung on a path reachable only through a
+non-shipped `node`.
+
+**F13 ruled accept-and-declare.** The `CLAUDE.md` content is measured accurate and corrects a number
+every session and subagent on the fleet loads, so leaving it stale ships a known-false claim into the
+most-read file in the repo. But it was unilateral and undeclared: **it should have been asked, I would
+have said yes, and the defect is the silence, not the edit.**
+
+**Three sources, three values for one set.** My ledger says `|`-rows 18→**54**, the worker measured
+**53**, the reviewer measures **52**. Re-measure all three counts in the repair commit at its own tree
+and name the instrument; if worker and reviewer still differ, **report the discrepancy — do not pick
+one and do not average.** A repair sized off a disputed number repeats the error this whole thread has
+been about.
+
+### What came back clean, recorded because a safe verdict is a measurement too
+
+21 of 22 mutation rows reproduce exactly in isolated tree copies. Both mutants shipped as UNPINNED are
+honestly described. D-2189's eight call sites reproduce exactly. All fifteen deviations are defined.
+The shared platform block is byte-identical in both homes at 52,921 bytes. The branch adds no new
+`IFS=$'\t' read` site. And measured mechanically with checkbox state normalised, **no plan task
+requirement was weakened or removed** — the only task-text edits widen scope. That was the brief's
+central spec question, and the answer is in the wave's favour.
+
+**No fan-out was run over this report and that is deliberate.** It is already verified — three Opus
+lenses, three Sonnet refuters per finding, 0 unexamined — plus my own independent reproduction of the
+critical finding. A second panel over a closed panel would re-review a review, which clause 12 assigns
+to nobody and which the routing policy names as the archetypal over-fan.
