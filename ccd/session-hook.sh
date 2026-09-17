@@ -1115,12 +1115,12 @@ _hook_lock_same() {   # <fd> <canonical> -> 0 iff the FD's target and canonical 
   if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
   elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
   else return 1; fi
-  # `-f` and `-ef` both FOLLOW the /proc symlink, so these read the FD's own
-  # target: a FIFO, a directory and a symlink at canonical each fail here
-  # (measured), and a canonical REPLACED since the open fails `-ef`.
+  # `-f` and `-ef` both FOLLOW the /proc symlink, so these read the FD's own target; through /dev/fd (Darwin, MEASURED
+  # on macOS 25.6: stat(/dev/fd/N) carries the fdesc DEVICE with the file's inode, so `-ef` is false while the inode
+  # matches) the inode alone decides, via POSIX `ls -i`. A FIFO, directory or symlink at canonical still fails `-f`;
   [[ -f "$p" ]] || return 1
   [[ -f "$lock" && ! -L "$lock" ]] || return 1
-  [[ "$p" -ef "$lock" ]] || return 1
+  [[ "$p" -ef "$lock" ]] || { [[ "$p" != /proc/* ]] && a=$(ls -i -- "$p" 2>/dev/null) && b=$(ls -i -- "$lock" 2>/dev/null) && [[ -n "${a%% *}" && "${a%% *}" == "${b%% *}" ]]; } || return 1
   return 0
 }
 

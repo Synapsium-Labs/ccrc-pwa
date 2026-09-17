@@ -6766,7 +6766,7 @@ describe('the compaction card — mechanism absence, the serve and settle arms (
   });
 });
 
-// ── D-2605: the FIRST held section's fork multiset (spec §3.1 leg (b)) ────
+// LINUX-ONLY BY ITS INSTRUMENT: `strace` does not exist on Darwin, so the describe skips there (the macOS leg reds otherwise).
 // The companion to this file's two source-order pins, and the one of the three
 // that no reading of the source can supply: `find` counted by grep cannot see a
 // child of any OTHER shape appearing or vanishing, and §3.1's enumeration of
@@ -6779,7 +6779,7 @@ describe('the compaction card — mechanism absence, the serve and settle arms (
 // branch-conditional and no single run produces all of them: a single expected
 // list naming every conditional member is RED on a correct tree, which is the
 // weakening this pin exists to prevent.
-describe('the compaction card — the first held section forks exactly this (spec §3.1)', () => {
+describe.skipIf(process.platform === 'darwin')('the compaction card — the first held section forks exactly this (spec §3.1)', () => {
   /** One fork the arm's own shell took, named by the first command its subtree
    *  execs — or `(subshell)` when it execs nothing at all, which is what a
    *  `$( )` around a builtin-only function is. Naming by the SUBTREE rather

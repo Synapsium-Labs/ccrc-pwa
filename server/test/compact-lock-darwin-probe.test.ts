@@ -1,4 +1,4 @@
-// A PROBE, not a pin: prints what each step of `_compact_lock_acquire` answers on
+// A PROBE THAT IS ALSO A PIN: prints what each step of `_compact_lock_acquire` answers on
 // THIS platform, so the macOS leg can say why the compaction lock cannot be taken
 // there (main dfa167d7: 540 `could not take … within 5s` with an EMPTY
 // COMPACT_LOCK_WHY, answered in ~200 ms — so not the `flock -w` wait). Runs on
@@ -39,5 +39,11 @@ describe('compact-lock platform probe', () => {
     const r = spawnSync('bash', ['-c', `source "${CCD}"; ${SNIPPET}`], { encoding: 'utf8', cwd: h.home, env });
     console.log(`\n=== compact-lock probe (${process.platform}) ===\n${r.stdout}${r.stderr ? `--- stderr ---\n${r.stderr}` : ''}=== end probe ===\n`);
     expect(r.status, `the probe shell itself exited ${r.status}: ${r.stderr}`).toBe(0);
+    // AND THE PIN: the acquire itself answers 0 on this platform. Before the
+    // /dev/fd inode fallback in `_compact_lock_same`, macOS answered 1 with an
+    // empty COMPACT_LOCK_WHY (measured on the draft PR's probe run: `-ef=no`,
+    // stat(p) 1245178674:2962058 vs stat(lock) 16777230:2962058 — same inode,
+    // fdesc's device), and every lifecycle verb died `could not take … within 5s`.
+    expect(r.stdout, 'the acquire answers 0 here').toMatch(/^acquire rc=0 why=\[\] fd=\[\d+\]$/m);
   });
 });
