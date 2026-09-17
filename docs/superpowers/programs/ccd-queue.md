@@ -1604,3 +1604,82 @@ model in the floor. Re-dispatched with `subagent: sonnet`; nothing was touched b
 Review run **76** (not 72 — the allocator's own id) dispatched to `ccrc-pwa-warm-delta`, opened with
 the programme's own title so the open could not overwrite it. Six items; item 2 is the 117-anchor
 provenance re-point, **which no review has ever seen.**
+
+## 2026-09-17 18:0x UTC — review 76 closed; **the citation re-point leaves the wave**
+
+Run 76 (`ccrc-pwa-warm-delta`) at `2080f293`: 19 findings — 1 CRITICAL, 10 important, 8 minor — panel
+verbatim, 66 agents, 0 errors, **0 unexamined, no unverified lenses.** Advanced and closed on the
+reviewer's own `{reviewedTip, report}`; `done`, `released:true`. I verified its three load-bearing
+findings independently before ruling.
+
+### F4 — the class I called CLOSED was not, and the naming error is mine
+
+`_authdead` (`ccd/ccd:1546`) is `[[ -f "$f" ]] || return 1` then `cat "$f"` — no `! -L`. Reproduced
+with controls:
+
+    _authdead seven -> TRUE   (wrapper judged AUTH-DEAD from a foreign file's bytes)
+    dangling -> false   |   a real marker -> TRUE     (both controls correct)
+
+`ccd/ccd:6005` and `:15608` key **placement and rescue** on that answer — a heavier consequence than
+the three sites the round fixed. **D-2989 names its class by the FIELD-path grammar
+(`$REG/<id>.<field>`), which excludes `<wrapper>-authdead` by construction while the defect is
+identical.** I asked for the class *by shape* and then accepted a grammar that could not contain it.
+Worse: I wrote **"D-2989 is CLOSED"** as a ledger heading on a verification of the FIX, not of the
+CLASS — my own run-76 brief said plainly that the class was unchecked, but **the heading is what a
+later reader carries**, and it claimed more than I had measured. The class is the PAIRING: a type
+test on ANY `$REG` path followed by a read of that path.
+
+### F1 — the provenance rule cannot determine a base, and I measured it myself
+
+The spec's `ccd/ccd:6478` spelling is carried by `dfa167d7`'s, `61e0d45b`'s AND `2ff33333`'s copies
+of that same document — 3 occurrences each. **Two bases qualify and the tie is broken silently.** The
+reviewer's formulation is the durable one: *the document-copy test proves the spelling was PRESENT at
+that base, never that it was CORRECT there, and main's unrepaired copy carries every original
+spelling by construction — so main qualifies for every anchor, always.*
+
+Verified end to end on one: the repair wrote `:6791` for a clause about `_rm_prc`; at the tip `:6791`
+is `# path, instead of zero args killing the process…` and the referent is uniquely at **`:7038`**.
+16 of 115 anchors equal neither base's answer (panel); 33 of 138 under the reviewer's seven-tree
+instrument. Different denominators, same conclusion.
+
+### F3 — the instrument silently scored every RANGE anchor safe
+
+Run verbatim: `sed -n '3050-3070p'` is invalid (`unknown command: '-'`), exits 1 with **empty output
+on both sides**, so `diff` succeeds and the anchor is reported UNMOVED. The entry claiming to be
+"re-runnable at any future tip" fails on 2 of its 12. `sed -n "${a//-/,}p"` is the fix. And D-2992's
+two/ten split is wrong in both directions — **nine** of the twelve were re-pointed this round.
+
+### THE RULING
+
+**The citation re-point leaves this wave.** Five measured reasons: the method cannot determine a base
+(structural, not fixable by care); it has shipped provably wrong anchors; its measuring instrument is
+broken for ranges; **no mechanism requires it** (census green, weak-anchor assertion green); and
+`origin/main` has moved **SIX times** during this wave — `2f9deae2 → d02c2549 → ecbb8b22 → 2ff33333 →
+bd2bf57a → 53e6a438` — so it re-conflicts faster than it converges.
+
+**The asymmetry that decides it: the branch is introducing 16+ newly-wrong anchors in order to repair
+anchors it did not break.** A wave that ships more wrong citations than it inherited, while calling
+itself a citation repair, is worse than one that ships none. If I am wrong, the cost is that the
+inherited debt stays inherited — which is where it already was.
+
+**I ruled in round 2 that taking the repair out was NOT available. It is now, and I measured why.**
+Strip every `:N`/`:N-M` token from both sides of the two graphify documents and the branch's entire
+diff there is **exactly two non-anchor lines per file — and both are main being newer**: plan-a's
+`D-2993` (#142's), and the spec's "three of its **SIX** sites", where the branch still says FIVE.
+Five came from `dfa167d7`; #142 added the sixth. **The branch's copy is stale and a conflict resolved
+the wrong way would regress it**, so `git checkout origin/main --` on those two files is not a loss —
+it is a second fix.
+
+The round: revert those two docs to main; fix `_authdead` and re-census by the PAIRING shape; merge
+current main; re-derive the census LAST and declare the inherited debt with **the two instruments
+that actually work** — main's weak-anchor assertion and the range-corrected comparison. No hand
+re-pointing: if the assertion names an anchor after the merge, that one anchor is the whole work list.
+
+**F19 ruled:** the `D-2990(a)` suffix stays. Line-count-neutrality-is-a-promise is the WARRANT for
+D-2990, not an independent finding. Rule, reusable: *a suffix carries a qualification of its parent's
+subject; an independent finding gets an issued number.* Precedent `D-1454(b)`, `D-2574(b)`,
+`D-2747(a)`. No number minted.
+
+The worker's pwa flake (`contrast.test.ts`, 242/242 isolated, byte-identical tree, zero `pwa/` files
+on the branch) is green under the rule it reached on the server suite — **which is what makes it a
+rule rather than an excuse.**
