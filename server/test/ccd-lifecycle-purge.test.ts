@@ -537,8 +537,17 @@ describe('the row generation, and the purge that runs under the row mutex (spec 
     // mint the row's generation and its permanent lock the way creation does
     expect(init(id)).toBe('OK');
     const before = fs.readdirSync(REG()).sort();
+    // CONTAINED LIKE EVERY OTHER BASH SPAWN IN THIS SUITE, and named by
+    // `ccd-workspaces.test.ts`'s source census as one that was not. This holder
+    // runs `flock` and `sleep` and never sources ccd, so the three poisons
+    // change NOTHING it does — which is exactly why it goes through them: the
+    // census's claim is "every bash call site", and a per-call-site judgement
+    // about which spawns are harmless is the rule-to-remember the harness
+    // boundary exists to replace. The sibling holder in
+    // `holdThroughAcquire` below already spawns this way.
     const holder = spawn('bash', ['-c',
-      `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 8`, '_', lock(id)]);
+      `exec 9<>"$1" || exit 1; flock 9 || exit 1; echo held; exec sleep 8`, '_', lock(id)],
+      { cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home }, { systemd: true, tmux: true }) });
     await new Promise<void>((res, rej) => {
       const t = setTimeout(() => rej(new Error('holder never took the lock')), 10_000);
       holder.stdout.on('data', (d: Buffer) => { if (d.toString().includes('held')) { clearTimeout(t); res(); } });
