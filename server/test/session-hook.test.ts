@@ -3295,14 +3295,21 @@ describe('the compaction card — SessionStart(compact) (spec §3.3)', () => {
     // R=4 is a FLEET-BOX ratio and the whole argument above is a fleet-box
     // sample; the macOS runner is a different machine and the row measured 4.64
     // there, on `test-macos` at ab08bd92 — a red that says nothing about the
-    // hook. TWO Darwin observations, both on `macos-latest` and both real:
-    //   4.6368  `test-macos`, the 303-file run, at ab08bd92
+    // hook. THREE Darwin observations, all on `macos-latest` and all real:
+    //   4.6368  `test-macos`, the whole-suite run, at ab08bd92
+    //   3.3083  `test-macos`, the whole-suite run, at b856a939 — cheap-median
+    //           68.5 ms, compact-median 226.7 ms
     //   3.5427  `probe-macos`, this one case almost alone on the runner, at
     //           b856a939 — cheap-median 73.5 ms, compact-median 260.3 ms
-    // So this runner's spread across load is itself ~1.3x, against the fleet
-    // box's 14.7% within one sample. 8 is ~1.7x the worse of the two, which is
-    // the headroom a machine that variable needs before a slow-but-healthy leg
-    // reads as a regression — and it is a BOUND, not a skip: the row still
+    // AND THE SPREAD IS NOT A LOAD EFFECT, which is what the third observation
+    // corrects: the two extremes, 3.31 and 4.64, are BOTH whole-suite runs, and
+    // the near-idle leg lands BETWEEN them. So this is run-to-run variance of
+    // the runner itself — 3.31-4.64 across three runs, ~35% of the mean,
+    // against the fleet box's 14.7% within one sample — and no amount of
+    // quieting the leg would narrow it. 8 is ~1.7x the worst of the three,
+    // which is the headroom a machine that variable needs before a
+    // slow-but-healthy leg reads as a regression — and it is a BOUND, not a
+    // skip: the row still
     // fails there on anything an order of magnitude bigger, which is the size
     // of regression its own power measurement (the ten-extra-fork mutation,
     // 4.13-4.51 on the fleet box) says it can see.
