@@ -1822,3 +1822,94 @@ number, per D-2990.
 
 Round 5 sent as mail 1660: the third body, the widened instrument (report only — fix nothing new), the
 two corrections, the merge, and the derivation last.
+
+## 2026-09-17 21:4x UTC — the third body landed; D-2995 issued; round 6 is a TRANSCRIPTION round
+
+Round 5 came back `suite: green` at `eb047e13` — server 6/6 shards 10,595 passed, agent 300/300, pwa
+2668/2668, typecheck clean, **first full run after implementation was green**.
+
+**The third body is fixed and I verified it:** `FleetIO` gains `lstatMeasured`, and only a proven
+`regular` may condemn — every other answer folds to healthy, which is the direction `limits.ts`'s own
+ruling requires. So the divergence this wave created is closed.
+
+**And the worker caught a defect I could not have:** the remote arm **shipped INERT**. `checkPath`
+canonicalises deliberately, so lstat'ing its result can only ever answer `regular` for a symlink —
+**the local adapter's units were green while the wire answered `regular` on the same fixture**, and an
+END-TO-END case is what found it. A unit-green, wire-wrong seam is the most reusable thing in this
+wave.
+
+### D-2995 issued, and the clause worked exactly as written
+
+Adding a wire op is a **mechanism**, not another instance of D-2989's class. The worker refused to
+call the allocator mid-wave (clause 10) AND refused to write a concrete `D-TBD-<slug>` that would red
+`dtbd.test.ts` by design — so it named the need in prose and asked. **D-2995** minted and defined in
+the same act.
+
+### Round 6 is transcription, and that is the ruling
+
+Six rounds have each minted a new false sentence in the act of correcting one — **mine as much as the
+worker's**: my "make it GREEN" instruction, my keying explanation, my field-path grammar, my "D-2989 is
+CLOSED" heading. Asking for prose judgement a seventh time asks for a seventh. So I supplied the
+BYTES, measured at `eb047e13`, and verification is byte-equality — the one check that cannot mint
+anything.
+
+Four edits, all in files OUTSIDE the citation corpus (the plan is cited by nothing; `ccd-authdead.
+test.ts` is new), so line counts there are free:
+
+- **F7** — one token: `ccd/ccd:6005` → `:6017`. `:6005` is the tier comment; `if _authdead "$w"` is
+  uniquely at `:6017`. Wrong at `a4fe09bb` — **the commit that reverted a citation repair for shipping
+  wrong anchors.**
+- **F5** — the header census, replaced wholesale. `git merge-base --is-ancestor origin/main HEAD`
+  exits **1**, so the paragraph's own claim that two-dot "is exact here" is false; two-dot prints 26.
+  The honest three-dot answer at `eb047e13` is **22** non-`ccd/` files, twelve of them `server/test/`,
+  and **neither graphify document**. *The reviewer's "twelve files / nine suites" was measured at
+  `73e67950` and is already stale — I re-derived rather than transcribing it, which is the exact trap
+  this wave keeps springing.*
+- **F4** — the retraction. The plan still argued for the reverted repair in four places, **carrying
+  both claims at once**: the failure `ccd/ccd`'s own prose names — *"A correction that leaves the
+  falsehood in place is not a correction; it is two claims and no way to pick."* One banner plus three
+  markers, located BY CONTENT, never by the artifact's line numbers, which move when edit 2 lands.
+- **D-2995** — defined.
+
+### The wave's best finding, and it is the worker's — with a cost that is mine
+
+> **When a corpus cannot be re-pointed, the LENGTH of an edit above it is a decision, not a style
+> question.**
+
+Measured: its item-4 correction first landed as **26 net new lines of comment** in `ccd/ccd`. Isolated
+by swapping only that file between the merge blob and the edited one, the file goes from **one** red
+assertion to **FIVE** — `ccd/ccd` 143→144, a README anchor off its quote, seven `|`-row anchors turned
+GREEN on accidental matches, and **main's own #137 claim that no reference is anchored by a short
+token alone going `[]` → two.** The same content in the SAME SIX LINES: all four vanish. **My revert
+ruling is what made comment length load-bearing**, so that cost is mine, and it is now written where
+the next wave will hit it.
+
+### Two corrections of my own, and one of the worker's I am adopting
+
+**F9 was already fixed** — the heading reads "SIX bodies" with a `mutation table` column. I read the
+worker's item-8 list, saw F9 absent, and was about to treat it as unaccounted for. Its accounting was
+right; my reading was hasty.
+
+**My ledger quoted `_lc_emit`'s "NOTHING BUT THIS FUNCTION WRITES INTO `.lifecycle/`" as the whole
+truth.** The worker's narrowing is correct: `_lc_err` and the rotation arm write there too, just not
+records. The narrower claim is the one I carry.
+
+**And its item 6 is the other keeper.** A 19-row table re-emitted as a list lost the blast-radius
+column in ALL NINETEEN — the declaration's entire deliverable — because a list has no width; and one
+row it completed BY INFERENCE was fiction (`usage-sweep:272` is `os.path.isdir` guarding an
+`os.walk(topdown=False)` that **empties the directory a symlink points at** — worse than written).
+It corrected that in place, left the correction VISIBLE, and said plainly which lost detail it could
+not recover **instead of reconstructing it**. Reconstructing a measurement from memory is the failure;
+"this one is gone" is the fix.
+
+### Declared, not fixed — carried to the follow-up
+
+New from the widened repo-wide instrument (`readdir(` added, because **in TypeScript the type test is
+often a FILENAME — which is exactly what hid `limits.ts`**): `server/src/registry.ts:1010`/`:1119`, a
+`.uuid` filename as the existence test through which every field reads, so **a symlink there fabricates
+a whole session ROW**; and `deploy/deploy.sh:568-570` (lowest — `cp -a` does not follow). Already
+declared: `server/src/pools.ts` (D-2516). F6, F10, F11, F12, F13, F14 stay open; **F13 is unfixable by
+construction — it is a commit message.**
+
+Round 6 sent as mail 1673 with the exact-text artifact. A review will check byte-equality and that
+nothing else moved; that is the only thing it is asked to check.
