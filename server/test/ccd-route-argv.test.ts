@@ -373,9 +373,11 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     expect(rows).toHaveLength(5);
     expect(decOf(rows[4]!)).toMatchObject({ actor: 'ccd' });
     expect(rows[4]!['detail']).toBe('degraded: ∅ -> opus');
-    // Slice 1's non-Anthropic arm: the two fields this backend cannot apply are
-    // stamped by NAME rather than silently dropped.
-    expect(h.reg('gpt-demo', 'inert')).toBe('effort,workflow');
+    // Slice 1's non-Anthropic arm, widened by slice 6 Task 3: the THREE fields this
+    // backend cannot apply are stamped by NAME rather than silently dropped. The
+    // coordinator row seeds all three (`ultracode`, `sonnet`, `on`), and the argv
+    // assertion below is the other half — none of them reaches the command line.
+    expect(h.reg('gpt-demo', 'inert')).toBe('effort,workflow,subagent');
     const line = composed(newSessions()[0]!);
     expect(line).toContain('--model opus');
     for (const tok of ['--settings', '--effort', 'CLAUDE_CODE_SUBAGENT_MODEL']) {

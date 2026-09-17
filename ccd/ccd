@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d7c261824fcae24681834557dc2e7bf0580953d6fdfd1d3646f9c967bb983e04
+# ccrc:generated 1 sha256=ea6184921df939c7118dff360cd27413c7f39839f8a00b254e219d38146043e3
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1202,7 +1202,11 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # `CCRC_SUBAGENT_CLASSES`, the roster projection of `shared/models.mjs`'s
 # `SUBAGENT_CLASSES`, so this file never holds a third spelling of that list.
 # `inert` is a comma list of FIELD NAMES a lane could not apply (`effort`,
-# `workflow`), never a value.
+# `workflow`, `subagent` — `ROUTE_INERTABLE` below), never a value. So the word
+# `subagent` means two different things in this block and both are right: as a
+# ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
+# inside an `inert` list it is the FIELD's name, stamped by a lane that composed
+# no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
 ROUTE_FIELDS=(class effort subagent workflow compact degraded inert)
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
@@ -1217,7 +1221,7 @@ ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # refusal word, never a guessed key.
 ROUTE_EFFORT_STOPS="low medium high xhigh max"
 ROUTE_WORKFLOWS="on off"
-ROUTE_INERTABLE="effort workflow"
+ROUTE_INERTABLE="effort workflow subagent"
 ROUTE_NOTE_FLOOR=1800           # seconds between route-reject / route-refuse / route-skip notes for one
                                 # id+field. EQUAL TO `COMPACT_NOTE_FLOOR` BY CHOICE, NOT BY DERIVATION:
                                 # both bound the same load — the 5s supervisor tick across ~20 sessions
@@ -15656,7 +15660,12 @@ _route_wanted() {   # id -> stdout "<class> <effort>": the two values the applie
   # settle's own statement that this lane could not apply the field; a tick that
   # then typed it would contradict the record on disk, and the `routeapplied`
   # stamp beside it would claim a state nobody set. `class` is never inert —
-  # `ROUTE_INERTABLE` has no word for it — so only the effort arm asks.
+  # `ROUTE_INERTABLE` has no word for it — so only the effort arm asks. `subagent`
+  # IS inertable (slice 6 Task 3) and still does not ask here, for a different
+  # reason: this function answers the two values THE APPLIER TYPES, and the
+  # subagent is an env key on the spawn's argv with no picker behind it. Its
+  # inert stamp is read where it is claimed instead — `_route_apply_seed` and
+  # `_spawn_start`'s `routeapplied` line.
   #
   # IT WRITES NOTHING. Five registry READS and no write: `_route_peek` for
   # `class` and `degraded` and `inert`, and `_route_effort_for … quiet`, which is
@@ -15740,15 +15749,17 @@ _route_apply_seed() {   # id [why] -> 0 iff it SEEDED `routeapplied` (the tick's
   # never reach that state (`_route_apply_pending` returned first), and a writer
   # reaching it is a session being routed for the very first time.
   [[ -e "$REG/$1.routeapplied" ]] && return 1
-  local id="$1" why="${2:-record predates the applier}" want cls eff sub wf cmp words=""
+  local id="$1" why="${2:-record predates the applier}" want cls eff sub wf cmp inert words=""
   want=$(_route_wanted "$id"); cls="${want%% *}"; eff="${want#* }"
   [[ -n "$cls" ]] && words="class=$cls"
   [[ -n "$eff" ]] && words="${words:+$words }effort=$eff"
   # `_route_peek`, not `_route_get`: the seed runs on a supervise tick and a tick
   # writes no journal line (the rule `_route_apply_pending` states above).
-  sub=$(_route_peek "$id" subagent); [[ -n "$sub" ]] && words="${words:+$words }subagent=$sub"
+  inert=$(_route_peek "$id" inert)
+  sub=$(_route_peek "$id" subagent)
+  _route_inert_has "$inert" subagent || { [[ -n "$sub" ]] && words="${words:+$words }subagent=$sub"; }
   wf=$(_route_peek "$id" workflow)
-  _route_inert_has "$(_route_peek "$id" inert)" workflow || { [[ -n "$wf" ]] && words="${words:+$words }workflow=$wf"; }
+  _route_inert_has "$inert" workflow || { [[ -n "$wf" ]] && words="${words:+$words }workflow=$wf"; }
   cmp=$(_route_peek "$id" compact); [[ -n "$cmp" ]] && words="${words:+$words }compact=$cmp"
   _reg_set "$id" routeapplied "$words"
   [[ -n "$words" ]] && echo "$(date '+%F %T') routeapplied-seeded $id: $words ($why)" >> "$REG/swap.log"
@@ -16789,10 +16800,11 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     [[ "$reff" == ultracode ]] && rwf=on
     # `--model` IS COMPOSED ON EVERY BACKEND, and the reason it is not gated to
     # Anthropic lanes is that the record has no way to say otherwise: `inert` is
-    # a list of FIELD NAMES drawn from `ROUTE_INERTABLE` (`effort workflow`) and
-    # its vocabulary has no word for `class`, so gating the flag here would make
-    # a non-Anthropic session's model silently unset with no channel saying so —
-    # the overloaded silence the inert stamp below exists to remove.
+    # a list of FIELD NAMES drawn from `ROUTE_INERTABLE` (`effort workflow
+    # subagent`) and its vocabulary has no word for `class`, so gating the flag
+    # here would make a non-Anthropic session's model silently unset with no
+    # channel saying so — the overloaded silence the inert stamp below exists to
+    # remove.
     #
     # WHAT THE ALIAS MEANS THERE IS NOW MEASURED (controller ruling S1-R10,
     # settled by the slice-4 probe: research doc §6, row `S1-R10, slice 4`,
@@ -16854,6 +16866,15 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
       # excluded here exactly as `--effort` above excludes it.
       [[ -n "$reff" && "$reff" != auto ]] && inert="effort"
       [[ "$rwf" == on ]] && inert="${inert:+$inert,}workflow"
+      # AND `subagent`, WHICH THIS ARM COMPOSES NOTHING FOR EITHER (slice 6 Task 3,
+      # closing slice 4's deferred minor). `routeenv` is built on the Anthropic arm
+      # ALONE — `CLAUDE_CODE_SUBAGENT_MODEL` is Claude Code's own env key and the
+      # comment above already says another backend's settings.json materialiser owns
+      # the subagent there — so until now a record carrying `subagent=sonnet` had that
+      # field dropped in SILENCE on this lane, the one overloaded silence left beside
+      # the two the stamp had already removed. The order is `effort,workflow,subagent`,
+      # the order the three are composed above, so every standing stamp keeps its bytes.
+      [[ -n "$rsub" ]] && inert="${inert:+$inert,}subagent"
     fi
     if [[ -n "$inert" ]]; then _reg_set "$id" inert "$inert"; else rm -f -- "$REG/$id.inert"; fi
     # THE SETTLE IS AN APPLICATION, and this is it saying so (slice 4, Task 4).
@@ -16882,11 +16903,14 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
     # on the Anthropic arm above while the stamp claimed them on both. The
     # sentence this comment opens with is true again: what is written is what was
     # composed. `_route_wanted` skips the same fields, so an inert field is
-    # neither claimed applied nor typed.
+    # neither claimed applied nor typed — and `subagent`, which joined the
+    # vocabulary in slice 6 Task 3, is never typed by anything: its guard here
+    # keeps this stamp from claiming an env key the else-branch above did not
+    # compose.
     rapplied="${rclass:+class=$rclass}"
     _route_inert_has "$inert" effort   || rapplied="${rapplied:+$rapplied }${reff:+effort=$reff}"
     rapplied="${rapplied% }"
-    [[ -n "$rsub" ]] && rapplied="${rapplied:+$rapplied }subagent=$rsub"
+    _route_inert_has "$inert" subagent || { [[ -n "$rsub" ]] && rapplied="${rapplied:+$rapplied }subagent=$rsub"; }
     _route_inert_has "$inert" workflow || { [[ -n "$rwf" ]] && rapplied="${rapplied:+$rapplied }workflow=$rwf"; }
     _reg_set "$id" routeapplied "$rapplied"
     # THE RETRY COUNTER DIES WITH THE SPAWN IT COUNTED (ruling S4-R7): whatever

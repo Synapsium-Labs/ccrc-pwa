@@ -223,6 +223,20 @@ describe('a record that PREDATES the applier is SEEDED, never typed on sight (co
       new RegExp(`routeapplied-seeded ${ID}: class=opus effort=xhigh subagent=sonnet workflow=on \\(record predates the applier\\)`));
   });
 
+  it('(b2) the seed omits every field the inert stamp names — subagent included (slice 6 Task 3)', () => {
+    // The seed's own header promises "nothing at all for a field that is absent or
+    // named in `inert`". `subagent` became an inertable field in slice 6 Task 3, and
+    // the seed composed it unguarded — so a codex-lane session would have been seeded
+    // `subagent=sonnet` beside `inert=subagent`, the contradiction the stamp exists to
+    // prevent, on the one path that writes it without composing an argv.
+    h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} effort high; _reg_set ${ID} subagent sonnet;`
+      + ` _reg_set ${ID} workflow on; _reg_set ${ID} inert effort,workflow,subagent`);
+    h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
+    expect(h.reg(ID, 'routeapplied')).toBe('class=opus');
+    expect(fs.existsSync(path.join(h.home, 'tmux-calls')),
+      'the seeding tick reached tmux — an inert field is neither claimed applied nor typed').toBe(false);
+  });
+
   it('(c) the seed is not a suppression: a DIVERGENT write after it is pending, and lands at the next idle tick', () => {
     h.sh(`_reg_set ${ID} class opus; _reg_set ${ID} effort xhigh`);
     h.sh(`${TMUX_STUB} _route_apply_check ${ID}`);
