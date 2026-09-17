@@ -203,7 +203,7 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     expect(labels).toEqual(['', 'default', 'fable', 'opus', 'sonnet', 'haiku']);
   });
 
-  it('renders outside the fleet head, on a row of its own', () => {
+  it('renders outside the fleet head, on the runs line', () => {
     // Where this control LIVES is a layout fact with a measured cause, not a
     // cosmetic one: `.fleet-head-right`'s four other items need 244px of
     // min-content and the group has 294px at 390px, while this select is
@@ -212,7 +212,10 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     // and 219px at 700px — measured in Chromium against this component's own
     // rendered markup. Nothing about its BEHAVIOUR is different out here,
     // which is why the rest of this suite is untouched; the assertions below
-    // exist so a future tidy-up cannot quietly put it back.
+    // exist so a future tidy-up cannot quietly put it back. It shares the
+    // runs line rather than holding a band of its own, which read as an
+    // orphan; the runs door is the partner because it always renders, while
+    // HotFilesStrip renders nothing with no live claim.
     vi.stubGlobal('fetch', vi.fn(async (url: string) => {
       if (String(url).includes('/api/accounts')) return accountsRoute();
       if (String(url).includes('/api/projects')) {
@@ -229,8 +232,12 @@ describe('the fleet screen class chooser (routing slice 5, Task 6)', () => {
     const select = screen.getByLabelText('Class');
     expect(select.closest('.fleet-head'), 'the class chooser is back inside the fleet head')
       .toBeNull();
-    expect(select.closest('.fleet-class-row'), 'the class chooser lost its own row')
-      .not.toBeNull();
+    const line = select.closest('.fleet-runs-line');
+    expect(line, 'the class chooser left the runs line').not.toBeNull();
+    // The partner is there too — a line holding only the chooser is the
+    // orphan row this replaced.
+    expect(line!.querySelector('.fleet-runs-row'),
+      'the runs door left the line, so the chooser is orphaned again').not.toBeNull();
     // The head itself is still there and still carries the items that DO fit,
     // so this is not passing merely because the header stopped rendering.
     expect(document.querySelector('.fleet-head .fleet-head-right')).not.toBeNull();

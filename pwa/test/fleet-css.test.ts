@@ -1044,19 +1044,18 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
       .not.toMatch(/(^|[\s,}])\.fleet-class-select\s*\{/);
   });
 
-  it('gives the chooser a row of its own rather than a seat in the head', () => {
+  it('seats the chooser on the runs line, beside the one door that always renders', () => {
     // FAULT 2, and the one no width could have fixed. `.fleet-head-right`'s
     // four other items — count, accounts door, mail badge, bell — need 244px
     // of min-content, and the group has 294px at 390px; the chooser's widest
     // option, "Coordinator row", measures 167px against the ~38px left once
     // its gap is paid. A 129px deficit is not closable by a floor, a cap or a
-    // shrink factor, so the control leaves the row. Those figures are browser
+    // shrink factor, so the control leaves the head. Those figures are browser
     // measurements and deliberately are NOT recomputed here — an arithmetic
     // gate over constants this file cannot measure would agree with itself
     // forever. What IS checkable is the structure that keeps them true.
-    const row = ruleFor('.fleet-class-row');
-    expect(declValue(row, 'display')).toBe('flex');
-    expect(declValue(row, 'justify-content')).toBe('flex-end');
+    const line = ruleFor('.fleet-runs-line');
+    expect(declValue(line, 'display')).toBe('flex');
 
     const screen = readFileSync(
       path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
@@ -1064,7 +1063,68 @@ describe('the fleet head holds one row, and the class chooser is not on it', () 
                               screen.indexOf('</header>'));
     expect(head, 'the chooser is back inside <header>, where it never fit')
       .not.toContain('fleet-class-select');
-    expect(screen).toContain('<div className="fleet-class-row">');
+    expect(screen).toContain('<div className="fleet-runs-line">');
+  });
+
+  it("makes the runs door yield the row, by specificity — it declares width: 100% too", () => {
+    // The same cascade trap as the chooser's own override, one row over, and
+    // worth its own assertion because it is the trap this codebase has now
+    // walked into twice. `.fleet-runs-row` is a full-width button; inside the
+    // flex line it must become a flex item that yields. A single-class
+    // restatement could not do it — `.fleet-runs-row` is declared LATER in
+    // this file than the line rule — so the override is the descendant form,
+    // (0,2,0) against (0,1,0), which wins from any position.
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const scrubbed = stripComments(css);
+    const baseAt = scrubbed.search(/\.fleet-runs-row\s*\{/);
+    const overrideAt = scrubbed.search(/\.fleet-runs-line\s+\.fleet-runs-row\s*\{/);
+
+    expect(overrideAt, 'the descendant override is gone — the runs door claims the whole row again')
+      .toBeGreaterThan(-1);
+    // Non-vacuity, both directions: there must be a `width` to beat, and it
+    // must be declared later, or source order alone would already settle it.
+    expect(declValue(ruleFor('.fleet-runs-row'), 'width'),
+      '.fleet-runs-row no longer claims the full width, so there is nothing to override')
+      .toBe('100%');
+    expect(baseAt,
+      '.fleet-runs-row now PRECEDES the override, so this test no longer proves anything')
+      .toBeGreaterThan(overrideAt);
+
+    expect(spec('.fleet-runs-line .fleet-runs-row'))
+      .toBeGreaterThan(spec('.fleet-runs-row'));
+    const override = ruleFor('.fleet-runs-line .fleet-runs-row');
+    expect(declValue(override, 'flex')).toBe('1 1 0');
+    expect(declValue(override, 'min-width')).toBe('0');
+    expect(declValue(override, 'width')).toBe('auto');
+  });
+
+  it('pairs the chooser with the runs door and NOT with the hot-files strip', () => {
+    // This pins the REASON, not just the arrangement. `HotFilesStrip` was the
+    // other candidate partner and is the wrong one because it renders itself
+    // or nothing: paired with it, the chooser would sit side by side only
+    // while somebody held a hot file and be orphaned again the moment the last
+    // claim expired. If that guard ever goes away the argument in
+    // `.fleet-runs-line`'s comment stops being true, and this is what says so.
+    const strip = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'fleet', 'HotFilesStrip.tsx'), 'utf8');
+    expect(stripComments(strip),
+      'HotFilesStrip no longer renders nothing when idle — re-argue the chooser\'s partner')
+      .toMatch(/liveClaims\.length === 0\)\s*return null/);
+
+    // …and the chooser really is beside the runs door rather than the strip.
+    const screen = readFileSync(
+      path.join(import.meta.dirname, '..', 'src', 'screens', 'FleetScreen.tsx'), 'utf8');
+    const lineStart = screen.indexOf('<div className="fleet-runs-line">');
+    const lineEnd = screen.indexOf('<HotFilesStrip />');
+    expect(lineStart).toBeGreaterThan(-1);
+    expect(lineEnd).toBeGreaterThan(lineStart);
+    const row = screen.slice(lineStart, lineEnd);
+    expect(row, 'the runs door left the line the chooser was seated on')
+      .toContain('className="fleet-runs-row"');
+    expect(row, 'the chooser left the runs line').toContain('fleet-class-select');
+    expect(row, 'HotFilesStrip was pulled inside the runs line — it renders nothing when idle')
+      .not.toContain('<HotFilesStrip');
   });
 
   it("lets the sheet's routing row shrink below its three selects", () => {

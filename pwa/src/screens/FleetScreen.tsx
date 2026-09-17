@@ -471,46 +471,6 @@ export function FleetScreen({
           <NotificationBell />
         </div>
       </header>
-      {/* ITS OWN ROW, not a member of `.fleet-head-right` — a layout
-          measurement, argued in full beside `.fleet-class-row` in
-          fleet.css. In one line: the head's right group has 294px at
-          390px and its other four items need 244px of that, while this
-          control's widest option, "Coordinator row", measures 167px. It
-          never fit, and the head overflowed the viewport by 225px at
-          390px and 219px at 700px for as long as it sat there. Nothing
-          about what the control DOES changes by moving it. */}
-      <div className="fleet-class-row">
-        {/* The class chooser (routing spec, slice 5, Task 6): forecasts
-            EVERY card's placement for one class at a time, the same
-            `GET /api/projects?class=` this build has carried since slice 4
-            but with no caller until now. "Coordinator row" (unset) is the
-            class-blind fetch every build before this task has always sent;
-            "Default" asks explicitly for the record's own "no override"
-            word — the projects handler (`server.ts`) treats it identically
-            to the unset fetch (no per-class shares read, byte-identical
-            answer), so choosing it changes nothing about what renders, only
-            what the `+` posts. The four classes are `CLASSES` reversed —
-            the same capability order `NewSessionSheet`'s own routing row
-            uses — never a hand-typed list, so a class this build adds or
-            drops shows up here for free. */}
-        <select
-          className="route-select fleet-class-select"
-          aria-label="Class"
-          value={classFilter}
-          onChange={(e) => {
-            const next = e.target.value as '' | 'default' | ModelClass;
-            setClassFilter(next);
-            classFilterRef.current = next;
-            void refreshProjects();
-          }}
-        >
-          <option value="">Coordinator row</option>
-          <option value="default">Default</option>
-          {[...CLASSES].reverse().map((c) => (
-            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
-          ))}
-        </select>
-      </div>
 
       <FleetHostBanner />
 
@@ -576,14 +536,57 @@ export function FleetScreen({
           `readRegistry` failure still ships an honest `sessions: []` — had
           no door to the one surface that would show the operator their runs
           going stale. D-2's rule: the only door must never render nothing. */}
-      <button
-        type="button"
-        className="fleet-runs-row"
-        aria-label={`Runs · ${runsLabel}`}
-        onClick={() => navigate('/runs')}
-      >
-        Runs · {runsLabel}
-      </button>
+      {/* THE RUNS LINE — the runs door and the class chooser share one row.
+          The chooser had a row to itself and looked orphaned on it; this row
+          was already full-width, 44px tall and nearly empty, so pairing them
+          costs no height at all. The partner is the RUNS door and not
+          `HotFilesStrip` (the other candidate) for one measured reason: that
+          strip returns null when no claim is live and says so in its own
+          comment, so a chooser paired with it would be side-by-side only
+          while somebody held a hot file and alone again the moment the last
+          claim expired. The runs door is the opposite — its comment cites
+          D-2's rule that the only door must never render nothing, so it is
+          the one sibling on this screen guaranteed to be there. */}
+      <div className="fleet-runs-line">
+        <button
+          type="button"
+          className="fleet-runs-row"
+          aria-label={`Runs · ${runsLabel}`}
+          onClick={() => navigate('/runs')}
+        >
+          Runs · {runsLabel}
+        </button>
+        {/* The class chooser (routing spec, slice 5, Task 6): forecasts
+            EVERY card's placement for one class at a time, the same
+            `GET /api/projects?class=` this build has carried since slice 4
+            but with no caller until now. "Coordinator row" (unset) is the
+            class-blind fetch every build before this task has always sent;
+            "Default" asks explicitly for the record's own "no override"
+            word — the projects handler (`server.ts`) treats it identically
+            to the unset fetch (no per-class shares read, byte-identical
+            answer), so choosing it changes nothing about what renders, only
+            what the `+` posts. The four classes are `CLASSES` reversed —
+            the same capability order `NewSessionSheet`'s own routing row
+            uses — never a hand-typed list, so a class this build adds or
+            drops shows up here for free. */}
+        <select
+          className="route-select fleet-class-select"
+          aria-label="Class"
+          value={classFilter}
+          onChange={(e) => {
+            const next = e.target.value as '' | 'default' | ModelClass;
+            setClassFilter(next);
+            classFilterRef.current = next;
+            void refreshProjects();
+          }}
+        >
+          <option value="">Coordinator row</option>
+          <option value="default">Default</option>
+          {[...CLASSES].reverse().map((c) => (
+            <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+          ))}
+        </select>
+      </div>
 
       {/* Build 9's contested-files signal (D12 ruling 3) — renders itself or
           nothing, so it mounts unconditionally, the AccountsStrip rule. */}
