@@ -1472,3 +1472,75 @@ gap goes to the operator. Deviations **D-2989**, **D-2990**, **D-2991**, **D-299
 arm while the mechanism-absence probe names three) and `ccd/ccd-usage-sweep.py`'s delete-side
 `os.path.isdir` gate. Both are main's, both real, both mine to carry up rather than this wave's to
 take.
+
+## 2026-09-17 16:0x UTC — wave-done at `724dab2e`; the CRITICAL is closed; my own instruction was impossible
+
+Worker reported `suite: red`, `failure: ceiling`, six commits in the mandated order, tip `724dab2e`.
+**`ceiling` was the correct signal and the cause was my brief.**
+
+### D-2989 is CLOSED, verified with controls rather than taken
+
+I re-ran my own fixture probe against the worker's code:
+
+    _reg_get  demo rc=1 | _reg_read demo rc=2 | get('demo') -> None
+    controls: a real regular file -> its own bytes (all three); a dangling symlink -> rc 1 / rc 2 / None
+
+The read-through is gone at all three sites. `_reg_read` answers **rc 2, not rc 1** — present-and-
+not-a-field, never absent — which is the right arm and the worker chose it unprompted. Its per-site
+mutation table (all three reverted 3F/164P; each alone exactly 1F) is what makes this a class rather
+than three coincidences, and it named the shape that let this survive twice: **the dangling case is
+green with NO guard**, so only symlink-to-an-existing-regular-file discriminates.
+
+### My instruction could not be executed, and the reason is my own rule unapplied
+
+I wrote "re-derive `ccd/ccd:6478` and `:13020` so main's new assertion goes GREEN". Two anchors
+cannot close a gap of 70. **Review 71 measured that test at `d02c2549`, where the failing half was
+the weak-anchor list; by the time I wrote the brief main was `ecbb8b22` and the failing half had
+become the NON-VACUITY FLOOR — a different assertion in the same test.** I carried a DIAGNOSIS
+across a moved tree, which is the exact thing my own brief forbids for numbers. **A diagnosis goes
+stale the same way a number does, and I did not apply the rule to my own reasoning.** Third time
+this wave a claim has been carried over a moved tree; the first two were also mine.
+
+Corroborated by a hand that is not ours: **PR #140 is MERGED** — "the corpus walk's non-vacuity
+floor … 200 → 100 against a measured 130 (main red at `ecbb8b22`)". The worker's 130 is that PR's
+own number, arrived at independently. `origin/main` is now `2ff33333` — **the fourth move of main
+inside this wave.**
+
+### What I measured, with controls, before ruling
+
+    main 2ff33333 alone ............ GREEN (1 passed)
+    branch 724dab2e alone .......... RED (the old 200 floor)
+    merge-tree 2ff33333 + 724dab2e . CLEAN, no conflicts, tree 2c7d63c5
+    that test on the MERGE ......... RED — the floor now PASSES and the OTHER
+                                     assertion fires: weak = ["ccd/ccd:2964"], exactly one anchor
+
+**The floor failure was masking the weak assertion**, so the worker could not have seen it. One
+anchor, attributed: the graphify spec `:99` cites `ccd/ccd:2964` for "the three-status `_reg_purge`";
+`dfa167d7` and main both cite `:2872`; **this branch re-pointed it to `:2964`** while the merged
+referent sits at `:3072`. Moved by +92 where the tree moved ~+200 — one anchor whose base was picked
+wrong, which is the worker's own provenance defect in a single instance.
+
+### The provenance finding is the best thing this wave produced, and it is accepted whole
+
+**"The repair's base was never one tree."** Three populations — anchors `61e0d45b` re-pointed,
+anchors that arrived with the merge, anchors nobody touched — so a single-base byte-equality method
+produced **138 "provable" repairs of which 103 CONFLICT**, each base giving a different unique answer
+for the same anchor. The fix is derivable rather than chosen: *an anchor's base is the tree whose
+copy of that same DOCUMENT carries that exact spelling*. 176 failing → 117 repairable / 16 non-unique
+/ 15 referent-gone / 28 already right, **no conflicts left**. Refusing the 16, the 15 and 5
+unlocatable rather than guessing is correct and I overrode none of it.
+
+**The mechanism did what the census cannot.** My ruling said declare the residue with its instrument
+rather than repair it blind; main's assertion is now such an instrument, and it found exactly one
+anchor the census scores green. That is the vindication of the ruling and also its bound.
+
+I accept the worker's correction over the reviewer's on `ccd/session-hook.sh:1115-1119`: if the
+anchor never matched its clause at any tree, it is not #135 residue, the defect predates the wave and
+the clause's substance is stale too — the quotationless class, refused and declared, not re-pointed.
+And its two stale-when-written corrections are my own rule biting inside a single round, caught by
+the worker at the line-final tree. Its carried obligation closed against the FINAL set: 59 repaired
+lines, 59 distinct segments, **zero collisions**, no edit discarded — and it took the same bound on
+that exonerating result as it would have on an incriminating one.
+
+Round 3 sent as mail 1616: merge `2ff33333`, re-locate that one anchor **by content**, re-derive every
+cardinal last. Nothing else. I merge on green with `--admin`.
