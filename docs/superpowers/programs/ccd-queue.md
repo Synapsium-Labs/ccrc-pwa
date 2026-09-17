@@ -1358,3 +1358,117 @@ works if neither party was told.
 **Thread closed:** 66 reproduces under two independent instruments, 67 under none, the cause is an
 artifact that no longer exists, and both durable findings — the bare-`:N` corpus property and the
 paragraph-range discard — are recorded.
+
+## 2026-09-17 13:5x UTC — run 71 closed; two CRITICALs I re-measured myself; the fix round, and the order that is the ruling
+
+Review run 71 (`ccrc-pwa-soft-river`) reported at `37a175eb`: **22 findings, 2 CRITICAL, 415 agents,
+0 dead, `unexamined: 0`, `unverifiedLenses: []`.** Advanced to `working`, closed with the reviewer's
+own `{reviewedTip, report}` — `done`, `released:true`. The report sat under `~/.cc-clips/`, which is
+on the agent read whitelist, so the close route could stat it: run 69's structural refusal did not
+recur, because the brief now names the whitelisted home rather than the worktree clause 7 asks for.
+
+**I re-measured both CRITICALs before ruling, and a third finding that falsifies a sentence this
+wave minted. All three reproduce exactly.**
+
+### CRITICAL 1 — the class is three read sites, and two of them are bash
+
+I reproduced the read-through in a fixture HOME, with controls, at the reviewed tip:
+
+    _reg_get  demo  rc=0 value=[SECRET-OUTSIDE-REG]     # ccd/ccd:2282
+    _reg_read demo  rc=0 value=[SECRET-OUTSIDE-REG]     # ccd/ccd:2391
+    get('demo')  -> 'SECRET-OUTSIDE-REG\n'              # ccd/ccd:5002
+    controls: a real regular file -> its own bytes; a DANGLING symlink -> rc 1 / rc 2 / None
+
+A live symlink at `$REG/<id>.<field>` returns a foreign file's bytes **at rc 0** — indistinguishable
+from a real read, and `cmd_pr_state` persists it into `.prhistory`. My brief for run 70 said "F1
+critical, all three sites", naming instances of a class; the reviewer's brief said not to take four
+as the count either. **The answer is three read-side sites, one python and two bash — and the bash
+pair is the most-called reader in the tool, 142 invocations.** Neither of my two counts was right,
+and the reason is the same both times: I counted the instances someone had already found.
+
+The scan that makes the twins safe to convert is measured (`git grep -nE "ln -s(fn)? .*(REG|
+cc-sessions)" 37a175eb -- ccd/` → three hits, all comments), and **it answers only "does converting
+break a shipped caller".** It cannot bound the population — anything with a shell can write that
+directory. Ruled explicitly into the brief so the scan is never quoted as containment; that vacuity
+is this wave's own subject.
+
+### CRITICAL 2 — the branch no longer merges, and the deliverable had to change shape
+
+`git merge-tree --write-tree ecbb8b22 37a175eb` — no working tree touched — gives three conflicts,
+each one a thing this wave was about: the `# ccrc:generated` marker, the one README line the wave was
+authorised to repair, and **the citation-debt map itself**, where main asserts `'ccd/ccd': 125` /
+total **162** and this branch asserts **29 / 66**. Two branches have each re-measured one census off
+one base to different values, each true of its own tree and neither of the merge.
+
+The reviewer offered two options — re-point once more, or take the repair out. **Neither is
+available: "take it out" is not a revert.** Reverting restores a *different* wrongness, since the
+reverted anchors point at pre-#135 lines that are also wrong on the merged tree.
+
+**RULING (D-2990): the repair's deliverable stops being a number and becomes a derivation that was
+run last.** The census map and total are whatever the instrument prints on the final tree; neither
+66 nor 162 may be typed; if it prints 200, 200 ships and the commit names the command. Same for the
+README anchor and the stamp. This is the only shape that converges, because the old deliverable was
+a number true of a tree that stops existing the moment `main` moves — and **`main` moved twice
+inside a single review.** Making the deliverable a derivation makes re-running it cheap, which is how
+the race is won: by shortening the window, not by measuring more carefully.
+
+### The order is the ruling
+
+Three items each change `ccd/ccd`'s line count and two are *derived from* it. Merge first, then the
+guard class, then every tree-derived cardinal last, stamp last of all. **Nothing in step 3 may be
+typed from an earlier measurement, including one taken earlier in the same round.** Done in the
+intuitive order each step invalidates the last — which is how this wave has expired three repairs in
+a row.
+
+### F4 is the indictment of the method, and it is why the scope contracts (D-2992)
+
+Twelve distinct anchors are coincidence-green: spelling unchanged, audit GREEN, cited bytes moved.
+**The repair takes its work list from the census's FAILING set, so it can never reach them** — not
+through more care, not through another round. Two are caught by main's new assertion and are fixed;
+**the other ten are declared with the instrument, not repaired.** A declaration carrying its
+instrument is inheritable; a repaired ten with no instrument is another number that goes stale.
+
+Run 70's four were real but its framing — that they "left the failing set" — does not hold; all four
+were already green at `d59f93d7`. I accepted that framing. The correction is mine to carry.
+
+### Two inferences of mine that the round retires
+
+**"Line-count neutral" was never anchor safety.** #135 rewrote `ccd/session-hook.sh:1118-1120` and
+`:1123` **in place**; the cited span `1115-1119` covers them. A file can keep its length and change
+every byte under a citation. I made that inference twice and closed a deviation on it once.
+
+**A verified wave-done freezes the tip (D-2991).** `37a175eb` landed after its own wave-done and
+that is what discarded review run 70 — 26 findings, a full panel, six sharded suites, closed
+`stale-review`. The worker did the obedient thing; my F14 ruling arrived into a branch already under
+review, and a requirement delivered then has nowhere to land except a push. **The constraint binds
+the coordinator, not the worker:** I do not issue requirements against a branch whose fingerprint is
+under review — they wait for the brief that review will trigger.
+
+### F3 — the third occurrence of one shape, inside the paragraph that exists to fix it
+
+`ccd/ccd:128` / `ccd/ccrc:187` / plan `:330-331` ship "fixtures create links with `symlinkSync`,
+which no `ln -s` scan can see". Measured: **28 `ln -s` in `server/test/*.ts`, two of them in the file
+this wave created.** The conclusion survives on its other reason; the second reason is false. Ruled:
+delete the false one, keep the true one, **and do not supply a third** — one true reason is the whole
+remedy. And my own F14 ruling said "if ANY sentence about fixtures survives": **"any" means any**, so
+it reaches `ccd/ccd:98`, and that condition is unmet. Widening my own ruling against the branch's
+interest is the direction that costs something.
+
+### Dispatch, and two mechanism facts found by trying
+
+Run 42 advanced `awaiting-review` → `working`. **`POST /api/runs/:id/dispatch` answers
+`bad-transition` from `working`** — a run may be dispatched once, so a fix round is MAIL, not a
+dispatch, and its `route` object has no ride. Sent as mail 1611 with both artifacts attached.
+
+**`POST /api/runs/42/route` then answered `no-record` on `class`.** This worker's session predates
+the routing slices (#116 landed on main during run 71), so it has no `.class` file and **the
+coordinator's escalation door is closed for the whole life of that session.** The wave's own
+`failure: shallow` signal — the matrix's direct call to raise effort — has no mechanism to act on.
+The routing therefore lands by the brief's prose, where the worker skill's clause applies it, and the
+gap goes to the operator. Deviations **D-2989**, **D-2990**, **D-2991**, **D-2992** issued (floor
+2993) and defined in the brief, each spelled on its own.
+
+**Reported, not fixed:** F14's compaction-lock fourth binary (`ls` reachable through the `/dev/fd`
+arm while the mechanism-absence probe names three) and `ccd/ccd-usage-sweep.py`'s delete-side
+`os.path.isdir` gate. Both are main's, both real, both mine to carry up rather than this wave's to
+take.
