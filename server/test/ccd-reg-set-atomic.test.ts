@@ -65,42 +65,35 @@ describe('_reg_set writes atomically', () => {
     // `_plat_mv_notdir`, whose Linux arm IS that call and whose Darwin arm
     // reproduces its refusal. The invariant on THIS end — that `_reg_set`
     // reaches the destination through the rename helper and nothing else —
-    // is unchanged. The OTHER end is not: D-2187 (A2) loosened
-    // `_plat_mv_notdir`'s own body alone, on purpose, to add its one
-    // narrowly-guarded `rm`, and the scan below states that limit rather
-    // than hiding it — it can no longer prove BOTH ends stay pinned
-    // together. The real proof that the loosened end stays honest lives in
-    // macos-platform.test.ts's "_plat_mv_notdir's Darwin arm, forced from
-    // Linux (D-2187)" describe: the symlink-to-directory and real-directory
-    // cases (A1), plus the plain-file and symlink-to-file cases added
-    // alongside this scan's narrowing (R1) to replace the mechanism this
-    // narrowing removed.
+    // is unchanged.
     expect(body, 'the destination is reached by the rename helper only')
       .toMatch(/_plat_mv_notdir\s+"\$tmp"\s+"\$REG\/\$1\.\$2"/);
     const mvBody = /_plat_mv_notdir\(\)\s*\{([\s\S]*?)\n\}/.exec(ccd)?.[1] ?? '';
     expect(mvBody, '_plat_mv_notdir must be a multi-line function').not.toBe('');
     expect(mvBody, 'the helper reaches the destination by rename only').toMatch(/mv\s+-[a-zA-Z]*T[a-zA-Z]*\s/);
-    // D-2187 (A2) added one narrowly-guarded `rm -f -- "$2"` for the one
-    // destination shape a bare Darwin `mv -f` cannot replace correctly (a
-    // symlink to a directory) — so an unconditional "never unlinks" pin is
-    // no longer honest. A regex over a function body CANNOT decide whether
-    // an `rm` sits INSIDE a guarded arm: it can only see that an
-    // `rm "$2"`, a `[ -L "$2" ]` and a `[ -d "$2" ]` all appear somewhere in
-    // the same text — an unconditional `rm` with the guard three lines away
-    // would pass this too. So this is narrowed to its WEAKEST HONEST FORM:
-    // if the body contains an `rm` of "$2", both `-L "$2"` and `-d "$2"`
-    // must also appear in it. That detects the SHAPE CHANGING (an `rm`
-    // showing up with no guard tokens at all); it does NOT prove the `rm`
-    // is actually guarded, and it cannot — the real proof is the
-    // behavioural cases in `macos-platform.test.ts`'s "_plat_mv_notdir's
-    // Darwin arm, forced from Linux (D-2187)" describe (A1's symlink-to-dir
-    // and real-directory cases). Re-verify against ccd/ccd's Darwin arm
-    // directly, not against this scan.
-    if (/rm\s+[^\n]*"\$2"/.test(mvBody)) {
-      const limitMsg = 'an rm of "$2" appeared with no -L/-d guard token in the body — this scan cannot prove the rm is CONTAINED in a guarded arm, only that the shape changed; re-verify against ccd/ccd\'s Darwin arm and A1\'s cases in macos-platform.test.ts';
-      expect(mvBody, limitMsg).toMatch(/-L\s+"\$2"/);
-      expect(mvBody, limitMsg).toMatch(/-d\s+"\$2"/);
-    }
+    // THE OTHER END IS NOT PINNED HERE, and a scan that once tried to was
+    // REMOVED (final-round item 6), not just narrowed: D-2187 (A2) added
+    // one narrowly-guarded `rm -f -- "$2"` to `_plat_mv_notdir`'s own body,
+    // for the one destination shape a bare Darwin `mv -f` cannot replace
+    // correctly (a symlink to a directory) — so an unconditional "never
+    // unlinks" pin on THIS function stopped being honest for THAT one. A
+    // regex over a function body cannot decide whether an `rm` sits INSIDE
+    // a guarded arm — it can only see that an `rm "$2"`, a `[ -L "$2" ]` and
+    // a `[ -d "$2" ]` all appear somewhere in the same text — so a version
+    // narrowed to "if the body contains an rm of \"$2\", both -L \"$2\" and
+    // -d \"$2\" must also appear in it" was tried here. MEASURED to hold
+    // NOTHING: the pre-existing refusal guard three lines above the `rm`
+    // (`if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi`) supplies both
+    // tokens UNCONDITIONALLY, so deleting that guard ALONE — leaving the
+    // `rm`'s own guard and the `|| return 1` exactly as shipped — left this
+    // scan GREEN (mutation table row 6, `partA-report.md`/the plan's A5);
+    // only `macos-platform.test.ts`'s "refuses a real directory destination"
+    // case caught it. A pin whose name promises containment while its body
+    // cannot fail is worse than none: the next reader sees a named
+    // assertion and stops looking. The real proof that `_plat_mv_notdir`'s
+    // Darwin arm stays honest lives entirely in `macos-platform.test.ts`'s
+    // "_plat_mv_notdir's Darwin arm, forced from Linux (D-2187)" describe —
+    // re-verify there, not here.
     expect(mvBody, 'the helper must never redirect into its destination').not.toMatch(/>\s*"\$2"/);
   });
 
