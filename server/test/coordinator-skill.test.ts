@@ -1,6 +1,6 @@
 // The coordinator skill is prose a model follows unsupervised against a fleet
 // it can destroy. These are the properties a review cannot hold in place:
-// twelve contract clauses, the routes it names, the refusal codes it promises,
+// fourteen contract clauses, the routes it names, the refusal codes it promises,
 // the envelope it quotes and the template it ships. `wsaudit.test.ts` already
 // established the idiom — harvest tokens out of a source and require the
 // copy to match it in both directions.
@@ -25,7 +25,7 @@ import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import type { DoneClaim } from '../src/coord/fingerprint.js';
 import {
   ASK_REFUSE_CODES, MAIL_BODY_MAX_BYTES, MAIL_REJECT_CODES, RUN_REFUSE_CODES,
-  isPrPhase, isRunRefuseCode,
+  isPrPhase, isRunRefuseCode, SUITE_WORDS, FAILURE_KINDS,
 } from '../../shared/api.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -91,7 +91,7 @@ const serverSources = (): string => {
   return out.join('\n');
 };
 
-// The twelve clauses, verbatim. Kept as a literal array rather than a regex per
+// The fourteen clauses, verbatim. Kept as a literal array rather than a regex per
 // clause: the point is that the SENTENCE is the contract, so a paraphrase must
 // fail exactly as a deletion does.
 //
@@ -116,10 +116,12 @@ const CONTRACT = [
   'This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.',
   'When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.',
   'A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:\'review\'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.',
+  'Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.',
+  "The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.",
 ];
 
 describe('the coordinator skill: its contract', () => {
-  it('carries all twelve clauses verbatim', () => {
+  it('carries all fourteen clauses verbatim', () => {
     for (const clause of CONTRACT) {
       expect(skill, `missing contract clause: ${clause.slice(0, 48)}…`).toContain(clause);
     }
@@ -141,7 +143,7 @@ describe('the coordinator skill: its contract', () => {
   // "pinned verbatim" exists to prevent. `worker-skill.test.ts` already
   // carries this guard; this ports it, with two adaptations the worker's
   // version does not need. First, the coordinator states its count in prose as
-  // "These twelve sentences" (SKILL.md:67), not "clauses"/"lines" as the
+  // "These fourteen sentences" (SKILL.md:67), not "clauses"/"lines" as the
   // worker skill says, so the in-file harvest is widened to accept all three.
   // Second, README.md's own mention line-wraps the count word onto the line
   // after "clauses" (measured — CLAUDE.md's does not), so the cross-file
@@ -176,7 +178,7 @@ describe('the coordinator skill: its contract', () => {
   it('spells that same count, as one derived word, everywhere prose states it', () => {
     expect(COUNT_WORD, `${CONTRACT.length} clauses is past the end of WORDS — extend the array`)
       .toBeTruthy();
-    // SKILL.md states it once in its own words ("These twelve sentences").
+    // SKILL.md states it once in its own words ("These fourteen sentences").
     // HARVESTED, never matched literally, so a revert to "ten" fails with the
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
@@ -482,6 +484,32 @@ describe('the coordinator skill: linkage', () => {
     // The two halves must be said to agree — a brief that names five units of
     // work and an `items` array with three is a ledger that lies on the board.
     expect(`${skill}\n${lifecycle}`).toMatch(/brief[\s\S]{0,400}?the server never reads/i);
+  });
+
+  it('documents route beside brief and items on the dispatch body (routing slice 4, Task 7)', () => {
+    // `route` rides the SAME dispatch call as `brief` and `items` — a
+    // coordinator reading only one of these two files must still see all
+    // three keys named together, or it writes a body missing one.
+    const lifecycle = refs('wave-lifecycle.md');
+    // ALL FIVE writable fields, not four: the literal showed `class`, `effort`,
+    // `subagent` and `workflow` while the paragraph below it named five, so a
+    // coordinator copying the body omitted `compact` every time (slice 5's
+    // deferred minor, closed by slice 6 Task 5).
+    expect(lifecycle).toContain(
+      '{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}');
+    expect(skill).toContain('{"brief": "<prose>", "items":\n   ["<title>", …], "route": {…}}');
+    // The routing clause is 13 on the merged tree (R1) — the review-run clause
+    // is 12, and this sentence must not renumber that one.
+    expect(skill).toContain("`route` is the object clause 13's placement derives");
+    // The §2 `route` paragraph itself: the five writable fields, the
+    // wave-1-argv/wave-N-verb split, and the two omission events — this is
+    // the sentence the mutation check (Step 5) deletes to prove this pin
+    // reds without it.
+    expect(lifecycle).toContain(
+      "**`route` — the wave's placement, not a request.**");
+    expect(lifecycle).toContain('`class`, `effort`, `subagent`,\n`workflow`, `compact`');
+    expect(lifecycle).toContain('route-omitted:no-route-argv-cap');
+    expect(lifecycle).toContain('route-omitted:no-route-v1-cap');
   });
 
   it('names POST /api/runs/:id/items after the re-measurement, never before', () => {
@@ -1463,7 +1491,7 @@ describe('the coordinator-resume runbook (program-leverage wave 1, spec S3 item 
     // The fourth ungated door (D-1123), and the same accounting D16 gave the third:
     // the EXEMPT entry above only PERMITS the omission; this is what FORBIDS the
     // mention. Wider than the `resume.md` harvest below, which reads one reference
-    // file — a door named in `SKILL.md`, or in any of the other four references,
+    // file — a door named in `SKILL.md`, or in any of the other six references,
     // passes that and fails here.
     expect(allSkillText).not.toContain('/api/runs/:id/reclaim');
   });
@@ -2179,5 +2207,124 @@ describe('the coordinator learns the project boundary (cross-repo wave 2, spec �
     const env = flat(refs('mail-envelope.md'));
     expect(env).toContain('**`to:` is always the resolved recipient.**');
     expect(env).toContain('resolveWorker');
+  });
+});
+
+describe('the routing clauses (routing slice 2)', () => {
+  it('clause 13 names the matrix reference, which ships, and step 2 sends the brief writer to it', () => {
+    const c13 = CONTRACT[12]!;
+    expect(c13).toContain('`references/routing-matrix.md`');
+    expect(REFERENCE_NAMES).toContain('routing-matrix.md');
+    // step 2's list of what a brief carries, in SKILL.md and in the reference
+    // (anchored on step 2's own opening phrase, not clause 13's — clause 13
+    // also contains "the shape of the wave and the routing" ~170 chars before
+    // its own routing-matrix.md mention, which made that anchor self-satisfied)
+    expect(flat(skill)).toMatch(/what only this wave knows[\s\S]{0,320}routing-matrix\.md/);
+    expect(flat(refs('wave-lifecycle.md'))).toMatch(/A brief carries what only THIS wave knows:[\s\S]{0,900}routing-matrix\.md/);
+  });
+
+  it('clause 14 names the panel reference, which ships, and step 5 sends the REVIEWER to it', () => {
+    // The merge of 2026-09-16: the panel is the review run's SHAPE, run by the
+    // reviewer (clause 14), not something this session runs on the diff —
+    // clause 12 (review runs, design 2026-09-14) forbids that reading, so the
+    // SKILL.md anchor is step 5's `Lenses:` sentence rather than the deleted
+    // "Review the handoff commit".
+    const c14 = CONTRACT[13]!;
+    expect(c14).toContain('`references/review-panel.md`');
+    expect(c14).toContain('unverified, never as approval');
+    expect(c14).toContain('the reviewer runs it as written');
+    expect(REFERENCE_NAMES).toContain('review-panel.md');
+    expect(flat(skill)).toMatch(/`Lenses:` line names the held-out panel[\s\S]{0,160}review-panel\.md/);
+    expect(flat(refs('review-brief.md'))).toMatch(/Lenses:[\s\S]{0,120}review-panel\.md/);
+    expect(flat(refs('wave-lifecycle.md'))).toMatch(/## 5 — The boundary[\s\S]{0,600}review-panel\.md/);
+  });
+
+  it('wave-lifecycle.md §4 documents the two signal lines with every word the vocabulary admits, and the signals section names the two new fields', () => {
+    const wl = refs('wave-lifecycle.md');
+    for (const w of SUITE_WORDS) expect(wl).toMatch(new RegExp(`suite: [^\\n]*\\b${w}\\b`));
+    for (const k of FAILURE_KINDS) expect(wl).toMatch(new RegExp(`failure: [^\\n]*\\b${k}\\b`));
+    expect(wl).toContain('waveDoneMails');
+    expect(wl).toMatch(/`signals`/);
+    // absent vs unrecognised — the reader is told the third answer exists
+    expect(wl).toContain('unrecognised');
+  });
+});
+
+describe('the routing door in the references (routing slice 5, Task 4)', () => {
+  it('the "Reading ccd is fine" paragraph names the door, never the verb, as how this session changes a run\'s routing', () => {
+    // Subject-bound (memory: a-substring-pin-binds-no-subject) — isolate the
+    // paragraph itself rather than grepping the whole file for a bare
+    // /never/ or /route/, so a sentence added anywhere else in SKILL.md
+    // cannot satisfy this pin by accident.
+    const readingCcd = skill.split('\n\n').find((p) => p.startsWith('**Reading ccd is fine.**'));
+    expect(readingCcd, 'the "Reading ccd is fine" paragraph is gone from SKILL.md').toBeDefined();
+    expect(readingCcd).toContain('POST /api/runs/:id/route');
+    expect(readingCcd).toContain('ccrc-api runs route');
+    expect(readingCcd).toMatch(/`ccd route` is never this session's call/);
+  });
+
+  it('does not add the door sentence inside a byte-pinned clause', () => {
+    for (const clause of CONTRACT) expect(clause).not.toContain('ccrc-api runs route');
+  });
+
+  it('wave-lifecycle.md §4 carries the escalation example, the demotion guidance, and never `ccd route`', () => {
+    // Bound to §4 itself (fix round 1, finding #1) — the paragraph lives in
+    // §4 but below the advance bullets, so slice from the §4 heading to the
+    // next `## ` heading the way the signals-section test below slices
+    // between two headings, rather than asserting against the whole file
+    // (which would stay green even if the paragraph moved into another
+    // section entirely).
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf('## 4 — Advance the run as the wave progresses');
+    const end = wl.indexOf('## 5 — The boundary');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const section4 = wl.slice(start, end);
+    expect(section4).toContain('"$API" runs route "$run_id" --json -');
+    expect(section4).toMatch(/kind":"<shallow\|ceiling\|unclear>"/);
+    expect(section4).toContain('**Demotion** is your judgement');
+    expect(section4).toMatch(/Never `ccd route` \(clause 1\) and never `--apply`/);
+    // Controller ruling S5-R10 (fix round 1, finding #3): a refusal records
+    // neither a run event nor a journal row, so the mandated sentence is
+    // qualified to calls that change a record. Subject-bound (memory:
+    // a-substring-pin-binds-no-subject) — anchored on "Every call" so an
+    // unrelated "records neither" elsewhere in the section cannot satisfy it.
+    expect(flat(section4)).toMatch(
+      /Every call that CHANGES a record is one run event and one journal row; a refusal — the ladder's answers included — records neither\./,
+    );
+    // Routing slice 6, Task 1: the run-scoped sentence final review left
+    // here (D-2957) is CLOSED — `lastDemotion` and the same-kind count are
+    // now derived from the target SESSION's event trail, across every run
+    // it touches, not ONE run's events. §4 now says so where the
+    // coordinator acts. Each claim is bound to its own subject rather than
+    // one wide regex over the section (memory: a-substring-pin-binds-no-subject).
+    const scope = flat(section4);
+    expect(scope).toContain('The reversal follows the SESSION, across every wave.');
+    expect(scope).toMatch(/demotion taken on wave N's run IS reversed by a failed check you report against wave N\+1's run, on the same session/);
+    expect(scope).toMatch(/same-kind count carries forward with it rather than restarting at zero/);
+    expect(scope).toMatch(/D-2957[\s\S]{0,80}CLOSED by routing slice 6/);
+    // Finding #1: a class rung writes TWO fields, and the answer says which.
+    expect(scope).toContain('A class rung is two fields in one write.');
+    expect(scope).toMatch(/resets\s+effort in the SAME call[\s\S]{0,140}`auto` onto haiku/);
+    expect(scope).toMatch(/`applied\.effortReset`[\s\S]{0,200}`null` when the call wrote a single field/);
+  });
+
+  it('wave-lifecycle.md\'s signals section names arm, routing, armUnparsed and routingUnparsed', () => {
+    const wl = refs('wave-lifecycle.md');
+    const start = wl.indexOf("## The run's own signals");
+    const end = wl.indexOf('## The routing door');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const signalsSection = wl.slice(start, end);
+    for (const field of ['`arm`', '`routing`', '`armUnparsed`', '`routingUnparsed`']) {
+      expect(signalsSection, `the signals section does not name ${field}`).toContain(field);
+    }
+    // §6's reader rule, in one sentence
+    expect(signalsSection).toMatch(/`routing` is non-empty[\s\S]{0,120}mid-flight/);
+    // S5-R9 (fix round 1, finding #2): armUnparsed is what tells arm's two
+    // `null` causes apart — no arm ever seeded vs. an unparseable arm event
+    // excluded from its arm's mean. Named beside the `armUnparsed` field
+    // itself so this cannot be satisfied by the field name alone.
+    expect(signalsSection).toMatch(/armUnparsed === 0[\s\S]{0,200}armUnparsed > 0/);
   });
 });

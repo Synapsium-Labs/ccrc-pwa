@@ -12,7 +12,7 @@ import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import {
   substrateFault,
-  type FleetSession, type RosterWire, type SessionBucket, type SessionStatus,
+  type FleetSession, type RosterWire, type RouteField, type SessionBucket, type SessionStatus,
 } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { StatusDot } from '../components/StatusDot';
@@ -36,6 +36,16 @@ export interface SessionHeaderProps {
   onChangeModel: () => void;
   /** "Change effort" — opens the one-tap effort chooser. */
   onChangeEffort: () => void;
+  /** A routing write in flight on this field, until the pane reads it back
+   *  or the 60s timeout clears it (routing spec §5.3, slice 4, Task 5) — the
+   *  chip for THAT field wears a `queued` badge while this is non-null.
+   *  Typed as the full `RouteField` union (only `class`/`effort` are ever
+   *  passed — the two fields the model/effort pickers write — but the value
+   *  arrives through `SessionScreen`'s general-purpose queue state, so this
+   *  prop takes the same type rather than a narrower one no caller could
+   *  satisfy without a cast). Defaults to `null` so a caller that never wires
+   *  the picker's queue state renders exactly as it always did. */
+  queuedField?: RouteField | null;
   /** Overflow menu: "Move to another account" — opens the SwapSheet. */
   onMoveAccount: () => void;
   /** Overflow menu: "Stop session" — opens the stop QuickConfirm. */
@@ -91,6 +101,7 @@ export function SessionHeader({
   onReapWorkspace,
   fallback,
   roster = [],
+  queuedField = null,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -272,11 +283,20 @@ export function SessionHeader({
               what fits comfortably on one. */}
           {hasMeta && (
             <>
-              {model !== null && (
+              {model !== null ? (
               <button type="button" className="metachip metachip--model" onClick={onChangeModel}>
                 <span className="metachip-glyph" aria-hidden="true">🤖</span>
                 <span className="metachip-text">{model}</span>
+                {queuedField === 'class' && <span className="route-queued">queued</span>}
               </button>
+            ) : (
+              // The model chip itself is gated on `model !== null`, so a
+              // queued `class` write on a freshly spawned session (no model
+              // string on the pane yet) would otherwise show no feedback
+              // until read-back clears it. A bare chip, same `route-queued`
+              // class, stands in for the missing model chip in that one
+              // window.
+              queuedField === 'class' && <span className="route-queued">queued</span>
             )}
             <button
               type="button"
@@ -284,6 +304,7 @@ export function SessionHeader({
               onClick={onChangeEffort}
             >
               <span className="metachip-text">{ultracode ? 'ultracode' : (effort ?? 'set effort')}</span>
+              {queuedField === 'effort' && <span className="route-queued">queued</span>}
             </button>
             {branch !== null && !branchDuplicatesCrumb && (
               <span className="metachip metachip--branch" title={branch}>

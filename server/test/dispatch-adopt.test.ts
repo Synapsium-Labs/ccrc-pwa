@@ -27,7 +27,7 @@ import { CoordStore, toRunSummary } from '../src/coord/store.js';
 import { dispatchRun, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
-import type { CcdArgv } from '../src/ccdargv.js';
+import { ROUTE_ARGV_CAP, type CcdArgv } from '../src/ccdargv.js';
 import { configDirFor, type CcrcConfig } from '../src/config.js';
 import { readRegistry } from '../src/registry.js';
 import { localIO } from '../src/io.js';
@@ -83,6 +83,14 @@ interface HarnessCfg {
    *  flight and no session id exists yet. A timestamp asserted only after the
    *  spawn returns would pass while being invisible for exactly that window. */
   onWsAdd?: () => void;
+  /** Routing spec §6 "Arms" (fix round 1, finding #1): the route body this
+   *  dispatch is asked to seed onto the argv. `undefined` (the default) keeps
+   *  every existing case in this file byte-identical — no fifth argument. */
+  route?: unknown;
+  /** Overrides the harness's default `fleetState` (`undefined`, under which
+   *  `capSupported` always answers false — "no evidence"). Set to include
+   *  `ROUTE_ARGV_CAP` for a case that seeds routing onto the `ws-add` argv. */
+  ccdVerbs?: string[];
 }
 
 const harness = async (cfg: HarnessCfg) => {
@@ -127,6 +135,8 @@ const harness = async (cfg: HarnessCfg) => {
     : localIO;
   const deps: DispatchRunDeps = {
     ...base, io, coord, runCcd,
+    fleetState: cfg.ccdVerbs === undefined ? undefined
+      : { connected: true, downSince: null, ccdVerbs: cfg.ccdVerbs, rosterFp: null, build: null },
     // The one join `configDirFor` owns, supplied through dispatch's
     // consumer-declared port (wave 2, F2). NOTE: the `as` assertion below does
     // NOT make this optional — a missing property would pass the compiler here
@@ -146,7 +156,7 @@ const harness = async (cfg: HarnessCfg) => {
     // (`typeof brief !== 'string'` -> `bad-request`, before the pause check and
     // long before any registry read) — an object here refuses every case in this
     // file for a reason none of them are about.
-    dispatch: () => dispatchRun(deps, opened.id, 'go', undefined),
+    dispatch: () => dispatchRun(deps, opened.id, 'go', undefined, cfg.route),
     cleanup: () => { rmSync(home, { recursive: true, force: true }); },
   };
 };
@@ -517,5 +527,68 @@ describe('T1 — `dispatchStartedAt`: the run says a dispatch is in flight', () 
     const wire: RunSummary = toRunSummary(okRun(h.coord.run(h.runId))!);
     expect(wire.dispatchStartedAt).toBe(NOW);
     expect(okRuns(h.coord.runs()).map((r) => toRunSummary(r).dispatchStartedAt)).toEqual([NOW]);
+  });
+});
+
+// Routing spec §6 "Arms" (fix round 1, finding #1). §1.5's adoption path is the
+// exact case that falsifies "the arm gate can read `res.ok`": `cmd_ws_add`
+// writes the worktree and every registry row FIRST and blocked LAST, so the
+// `--route` pairs a killed `ws-add` carried were applied to the workspace this
+// call then adopts, binds and holds — `res.ok === false` throughout. The old
+// gate (`routeFields !== null && capSupported(...) && res.ok`) skipped the
+// record for exactly that run, and a route-seeded dispatch that refused AFTER
+// `ws-add` genuinely succeeded (`registry-unmeasurable`/`ambiguous-dispatch`)
+// left the arm recorded for an attempt the run never bound to — read back as
+// the run's `arm` forever, since `runRoutingEvents` takes the FIRST `arm:`
+// event. Both are fixed by moving the record to right after `coord.setSession`
+// — the point a session is genuinely, irreversibly bound — and gating only on
+// whether routing was actually seeded onto the argv, never on `res.ok`.
+describe('routing spec §6 "Arms" — the arm gate reads BOUND, never `res.ok` (fix round 1, finding #1)', () => {
+  it('an ADOPTED spawn (res.ok:false, a genuinely killed ws-add) still records its seeded arm', async () => {
+    const h = await harness({
+      ccd: { ok: false, killed: true, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null, spawnRc: 4 }],
+      ccdVerbs: ['ws-add', 'ws-hold', ROUTE_ARGV_CAP],
+      route: { class: 'opus', effort: 'high' },
+    });
+    const out = await h.dispatch();
+    expect(out).toMatchObject({ ok: true, adopted: true, sessionId: 'demo-quiet-basin' });
+    // The seeded pairs really did reach the `ws-add` argv this call sent.
+    expect(h.ccdCalls()).toContainEqual(expect.arrayContaining(['--route', 'class=opus']));
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('arm:class=opus effort=high');
+  });
+
+  it('a route-seeded dispatch that refuses AFTER ws-add succeeded (ambiguous-dispatch) records NO arm', async () => {
+    // `ws-add` itself is CLEAN (`ok:true`) — this is the false positive named
+    // by finding #1(b), not the adoption path: two same-project candidates
+    // appear in the AFTER read (an operator race, or a second live worker),
+    // so the dispatch refuses `ambiguous-dispatch` before `coord.setSession`
+    // is ever reached — nothing was bound, so nothing should be armed.
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      after: [{ id: 'demo-quiet-basin', held: null }, { id: 'demo-still-cove', held: null }],
+      ccdVerbs: ['ws-add', 'ws-hold', ROUTE_ARGV_CAP],
+      route: { class: 'opus', effort: 'high' },
+    });
+    const out = await h.dispatch();
+    expect(out).toEqual({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 });
+    expect(okRun(h.coord.run(h.runId))?.sessionId).toBeNull();
+    expect(h.coord.runEvents(h.runId).some((e) => (e.detail ?? '').startsWith('arm:'))).toBe(false);
+  });
+
+  it('a route-seeded dispatch that refuses AFTER ws-add succeeded (registry-unmeasurable) records NO arm', async () => {
+    // The other refusal-after-success shape finding #1(b) names: ccd itself
+    // reported nothing wrong, but the AFTER listing could not be measured —
+    // refused before `coord.setSession`, same as above.
+    const h = await harness({
+      ccd: { ok: true, killed: false, stderr: '' },
+      afterListed: false,
+      ccdVerbs: ['ws-add', 'ws-hold', ROUTE_ARGV_CAP],
+      route: { class: 'opus', effort: 'high' },
+    });
+    const out = await h.dispatch();
+    expect(out).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+    expect(okRun(h.coord.run(h.runId))?.sessionId).toBeNull();
+    expect(h.coord.runEvents(h.runId).some((e) => (e.detail ?? '').startsWith('arm:'))).toBe(false);
   });
 });

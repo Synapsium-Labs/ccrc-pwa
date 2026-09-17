@@ -587,6 +587,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  'fleet.css .route-field-label': {
+    under: ['var(--bg-sheet)'],
+    why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
@@ -594,6 +598,34 @@ export const INHERITED_GROUNDS = {
   'chat.css .term-histbar-word': {
     under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
     why: "the history bar's legend — `reading history…`, and the sentence a failed read says — sits inside .term-histbar (TerminalDrawer.tsx), whose own background is the well lifted 12% toward the ink. It sets no background of its own and its selector names no ancestor, so no route could ground it; the same shape as .code-block-lang on .code-block-bar. Naming --bg-well instead would flatter the ratio by measuring pixels that are not behind it",
+  },
+  'chat.css .compaction-raw': {
+    under: ['var(--bg-surface)'],
+    why: "the raw body of a `system` compaction card is rendered as `<pre class=\"compaction-body compaction-raw\">` INSIDE the card (MessageBubble.tsx:285), and .compaction-body paints nothing — the ground is .compaction's own `background: var(--bg-surface)` (chat.css:1223), the same ground .compaction-head is registered against in GROUNDS. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  'chat.css .task-card-glyph': {
+    under: ['var(--bg-surface)'],
+    why: "the clock glyph sits in .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:39-40), which paints `background: var(--bg-surface)` (chat.css:1286) — the same ground .task-card-toggle is registered against. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  'chat.css .task-card-status': {
+    under: ['var(--bg-surface)'],
+    why: "the status chip is the last cell of .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:46); its own `border` is the whole fill it has, so the pixels behind its ink are the card's `background: var(--bg-surface)` (chat.css:1286)",
+  },
+  'chat.css .task-card-status--ok': {
+    under: ['var(--bg-surface)'],
+    why: "the done tone of that same chip (TaskCard.tsx:29, applied beside .task-card-status), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
+  },
+  'chat.css .task-card-status--bad': {
+    under: ['var(--bg-surface)'],
+    why: "the failed tone of that same chip (TaskCard.tsx:30), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
+  },
+  'chat.css .task-card-field dt': {
+    under: ['var(--bg-surface)'],
+    why: "the field NAME of a task card's definition list: <dt> inside .task-card-field inside .task-card-fields inside <article class=\"task-card\"> (TaskCard.tsx:63-67). Neither list level paints anything, so the ground is the card's `background: var(--bg-surface)` (chat.css:1286)",
+  },
+  'chat.css .task-card-field dd': {
+    under: ['var(--bg-surface)'],
+    why: "the field VALUE beside that name (TaskCard.tsx:68), on the same task-card ground (chat.css:1286). It scrolls inside its own box but paints no background of its own, so the card is still what is behind the ink",
   },
   'fleet.css .proj-archived-body .sess-line:not(.sess-line--active) .sess-label': {
     under: ['var(--bg-surface)'],
@@ -666,6 +698,14 @@ export const INHERITED_GROUNDS = {
   'fleet.css .mail-group-head': {
     under: ['var(--bg-page)'],
     why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",
+  },
+  'chat.css .opt-inert': {
+    under: ['var(--bg-sheet)'],
+    why: "routing slice 6, Task 4: the model/effort picker's 'inert on this lane' marker, rendered inside <Sheet>'s .sheet-panel (Sheet.tsx:59), which paints background: var(--bg-sheet) (primitives.css:141) with no colour of its own. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same shape as fleet.css's .pool-note/.route-field-label on the same .sheet-panel ground. Registered rather than left in the uncovered census: the ground is recoverable by reading the component, so calling it unmeasurable would be false.",
+  },
+  'chat.css .opt-degraded': {
+    under: ['var(--bg-sheet)'],
+    why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
   },
 };
 

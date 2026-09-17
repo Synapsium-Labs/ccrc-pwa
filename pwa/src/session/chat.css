@@ -148,6 +148,19 @@ button.metachip:active {
 .metachip--branch .metachip-text {
   max-width: 22ch;
 }
+/* Routing spec §5.3, slice 4, Task 5: a small badge beside the model/effort
+   text while a write is queued, waiting for the pane to read it back. Same
+   tokens `.metachip--ultra` already uses for an inline accent state — no new
+   component, no new palette entry. */
+.route-queued {
+  flex: none;
+  color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 45%, var(--edge-subtle));
+  background: var(--accent-tint);
+  border-radius: var(--r-full);
+  padding: 1px 6px;
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+}
 
 /* Account chip — mono name first, hue second, against the screen-scoped
    account accent (the [data-acct] rebinding in tokens.css). */
@@ -2106,6 +2119,27 @@ button.metachip:active {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
   color: var(--accent);
   flex: none;
+}
+/* Routing slice 6, Task 4: the active row on a field ccd's `.inert` names for
+   this lane — the intended value still renders, but there is nothing a
+   queued badge could confirm, so this replaces `.opt-enter`'s dot rather than
+   joining it. Muted tertiary ink, not the accent: this is a fact about the
+   lane, not a pending action. */
+.opt-inert {
+  font: var(--weight-regular) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+  flex: none;
+}
+/* Whole-branch review M1: the `.degraded` note under the intended class —
+   one rung of ink quieter than the label, wrapping with the body rather
+   than competing with the right-hand marker slot. `--ink-tertiary`, the
+   token `.opt-inert` (the other routing marker on this row) already uses:
+   it grounds against the sheet's own surface, so contrast.test.ts MEASURES
+   this rule instead of adding it to the uncovered census the way an
+   unmeasurable `--status-*` token would. */
+.opt-degraded {
+  font: var(--weight-regular) var(--text-2xs) / 1.3 var(--font-mono);
+  color: var(--ink-tertiary);
 }
 .opt-wait {
   font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);

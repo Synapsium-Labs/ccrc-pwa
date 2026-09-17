@@ -11,6 +11,17 @@
 //
 // Expressed as a function of `now` because the two cannot share a clock:
 // readLimits takes an injectable now, ccd's _limit_field calls `date +%s`.
+//
+// THE ONE IMPORT IS A TYPE (Task 2 minor, deferred). This file deliberately
+// imports no HELPERS — the runner builds the roster, the clock and the seeds,
+// so the fixture stays a statement of the contract rather than of one test's
+// plumbing. The four class names are a different matter: hand-spelling them
+// here made this a further copy of a sequence `shared/models.ts` already owns
+// (`single-definition.test.ts`'s walk rule is about exactly that), and a
+// type-only import erases at compile time, so it adds no runtime coupling at
+// all while making a class added to `CLASSES` a compile error here.
+import type { ModelClass } from '../../../shared/models.js';
+
 export interface LeastLoadedCase {
   name: string;
   /** Per-wrapper file bytes under ~/.cc-limits. An ABSENT key means no file at
@@ -57,6 +68,18 @@ export interface LeastLoadedCase {
    *  can carry its own malformed content; omitted/empty means no lane gets a
    *  malformed marker. */
   authDeadMalformed?: Record<string, string>;
+  /** Routing slice 3. The class the placement is for, DERIVED from `ModelClass`
+   *  rather than respelled. Absent means `default` — and so does an explicit
+   *  `'default'`, which one case below passes on purpose: the two spellings must
+   *  reach the identical answer, and only a case that says the word out loud
+   *  proves the runner's `c.cls ?? 'default'` and ccd's `${2:-}` fold them the
+   *  same way. Either way the clause is skipped and every pre-slice-3 case stays
+   *  byte-identical. */
+  cls?: ModelClass | 'default';
+  /** The sweep's latest pass, seeded at `<HOME>/.cc-sessions/usage/sweep/latest.json`
+   *  by the runner: per-account Fable share ESTIMATES (fractions) and the pass
+   *  age in seconds. Absent means no file — `unmeasured` for fable on both sides. */
+  sweep?: { ageS: number; estimates: Record<string, number | null> };
   /** `null` iff every home-able lane is disabled — nothing is placeable, and
    *  both sides must say so in their own idiom (see the runner). */
   expect: { wrapper: string; score: number } | null;
@@ -321,6 +344,111 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       expect: null,
       why: 'the pool has exactly one member and it is declared off: nothing is placeable '
         + 'and both sides must admit it rather than cross (ruling 6)',
+    },
+    {
+      name: 'fable-under-ceiling-everywhere-ranks-as-untagged',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.1, 'claude-a': 0.2, 'claude-b': 0.3 } },
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'every lane reads well under the Fable ceiling, so the clause filters '
+        + 'nothing out and the cheapest lane wins exactly as it would untagged',
+    },
+    {
+      name: 'fable-at-ceiling-is-skipped-even-when-emptiest',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.1, 'claude-a': 0.40, 'claude-b': 0.3 } },
+      expect: { wrapper: 'claude-b', score: 30 },
+      why: 'claude-a is cheapest but AT the Fable share ceiling: placement refuses it '
+        + 'before scoring and hands the workspace to the next cheapest lane',
+    },
+    {
+      name: 'fable-unmeasured-stays-eligible-and-ranks-by-its-own-score',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.1, 'claude-b': 0.3 } },   // claude-a has no row
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'a lane the sweep never saw is UNMEASURED, not unservable — unmeasured never '
+        + 'degrades eligibility, so claude-a stays in and wins on its own limits score',
+    },
+    {
+      name: 'fable-stale-pass-is-unmeasured-not-a-refusal',
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30) },
+      cls: 'fable', sweep: { ageS: 28_801, estimates: { claude: 0.9, 'claude-a': 0.9, 'claude-b': 0.9 } },
+      expect: { wrapper: 'claude-a', score: 20 },
+      why: 'a pass older than SHARE_FRESH_S measures nothing for placement: every lane '
+        + 'reads unmeasured despite the stale 0.9 estimates, and eligibility is untouched',
+    },
+    {
+      name: 'fable-at-ceiling-on-every-lane-places-nothing',
+      // Every HOME-ABLE lane in DEFAULT_TEST_ROSTER, including claude-d: an
+      // earlier version of this case named only three accounts, which left
+      // claude-d unmeasured and therefore eligible — winning the very fallback
+      // this case exists to rule out. All four must read at or over the
+      // ceiling for `null` to be the honest answer (task-2 deviation).
+      files: { claude: fresh(50, 60), 'claude-a': fresh(10, 20), 'claude-b': fresh(30, 30), 'claude-d': fresh(85, 45) },
+      cls: 'fable', sweep: { ageS: 60, estimates: { claude: 0.5, 'claude-a': 0.6, 'claude-b': 0.7, 'claude-d': 0.8 } },
+      expect: null,
+      why: 'every lane is measured AT or over the Fable ceiling: the clause empties '
+        + 'eligibility entirely and both sides must admit nothing is placeable',
+    },
+    {
+      // NOT A FABLE CASE, AND THAT IS THE POINT (final review finding 2, and
+      // Task 4's deferred minor). Every class case above drives `fable`, whose
+      // ceiling is the sweep's share estimate — a fact about the CLASS. For
+      // `opus`/`sonnet`/`haiku` the ceiling is `SWAP_CEILING` on the lane's own
+      // seven-day figure, the identical test `_avail` makes, so with one of
+      // those classes the filter DOES skip a lane on a health measurement.
+      // Until this row nothing drove that through either placement walk.
+      name: 'sonnet-over-SWAP_CEILING-loses-to-lanes-nobody-measured',
+      // THE ONLY SHAPE THAT DISCRIMINATES, and deriving it is worth a note.
+      // `_limit_score` is max(five, seven), so a lane at the seven-day ceiling
+      // scores >= 98 and already loses to every MEASURED lane under it — the
+      // filter would change nothing there. It can only change the answer when
+      // the lane it skips would otherwise have WON, which for a ceiling-bound
+      // score means every other lane is unmeasured. So: `claude` is the one
+      // lane with telemetry, and its week reads 98. Untagged (and with class
+      // `default`) it is the sole scored candidate and wins at 98; for
+      // `sonnet` it is unservable, leaves eligibility, the scored set empties
+      // and the fallback takes the first lane nobody condemned.
+      files: { claude: fresh(1, 98) },
+      cls: 'sonnet',
+      expect: { wrapper: 'claude-a', score: 0 },
+      why: 'claude sits AT the seven-day ceiling, so sonnet cannot be served there — and '
+        + 'unlike the fable rows this is the lane\'s own HEALTH figure against SWAP_CEILING, '
+        + 'the same test _avail makes. It is filtered out before scoring on both sides, so '
+        + 'the only measured lane on the box loses to three nobody has measured at all',
+    },
+    {
+      // THE HEALTH-DERIVED EMPTY ANSWER, said out loud in a fixture because the
+      // bash header now says it in prose: with a non-fable class this walk CAN
+      // answer "" for a reason the three health tiers below it were written to
+      // prevent, and `_class_below` cannot relieve it — opus, sonnet and haiku
+      // all read the same figure against the same ceiling. Nothing drove it
+      // before this row, in either language.
+      name: 'every-lane-over-SWAP_CEILING-places-nothing-for-sonnet',
+      files: { claude: fresh(10, 98), 'claude-a': fresh(10, 99), 'claude-b': fresh(10, 100), 'claude-d': fresh(10, 98) },
+      cls: 'sonnet',
+      expect: null,
+      why: 'every home-able lane\'s WEEK is at or over SWAP_CEILING, so no lane can serve '
+        + 'sonnet — and a degrade cannot help, since haiku reads the identical figure. Both '
+        + 'sides answer "nothing is placeable" on a health measurement, which is the narrow '
+        + 'exception the placement rule admits only for a call that passes a class',
+    },
+    {
+      // AN EXPLICIT `default` (Task 4's deferred minor). Every other
+      // pre-slice-3 case omits `cls` entirely, so the WORD itself was never
+      // driven: the runner folds an absent class to `'default'` for the TS side
+      // and to `''` for bash, and only this row proves the spelled-out word
+      // takes the same path both folds do. The files are `all-pinned`'s, so a
+      // clause that failed to skip would be loudly visible — every lane is over
+      // SWAP_CEILING and the answer would flip from claude-b to null.
+      name: 'explicit-default-skips-the-clause-entirely',
+      files: { claude: fresh(100, 100), 'claude-a': fresh(99, 100), 'claude-b': fresh(98, 99), 'claude-d': fresh(100, 100) },
+      cls: 'default',
+      sweep: { ageS: 60, estimates: { claude: 0.9, 'claude-a': 0.9, 'claude-b': 0.9, 'claude-d': 0.9 } },
+      expect: { wrapper: 'claude-b', score: 99 },
+      why: 'class `default` is the no-class walk byte for byte: neither the seven-day '
+        + 'ceiling nor the Fable share ceiling is consulted, and the minimum wins exactly '
+        + 'as it does with no class at all',
     },
   ];
 }

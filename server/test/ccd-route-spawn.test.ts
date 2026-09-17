@@ -42,6 +42,18 @@ const spawnBoth = (id: string): string[] => {
  *  the `ccd-spawn-split.test.ts` rule). */
 const today = (sidflag: string): string =>
   `cd '${h.home}' && exec env COLORTERM=truecolor ${h.sh('_resume_env')} '${h.home}/.local/bin/claude'  ${sidflag} --dangerously-skip-permissions`;
+/** The NON-Anthropic lane every inert case needs: a roster whose `gpt` account is
+ *  `exec.kind: 'external'`, plus the wrapper on PATH. `_is_anthropic_backend` reads
+ *  the roster, so the account row IS the fixture. */
+const gptLane = (): void => {
+  seedAccountsSh(h.home, {
+    version: 1, accounts: [
+      { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+      { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
+    ],
+  });
+  fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+};
 
 describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2, §5.4)', () => {
   it('NO record: both lines are byte-identical to today\'s', () => {
@@ -108,16 +120,18 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(p2).toContain(`--model opus --settings '{"enableWorkflows":true}' --`);
   });
 
-  it('workflow=off on an Anthropic lane composes NOTHING and stamps inert=workflow (controller ruling S1-R12)', () => {
-    // `off` and absence compose the same argv, so without this stamp the record
-    // claims a state it never set: `{"enableWorkflows":false}` is unmeasured,
-    // and the lane's own settings.json still decides. Slice 4 measures the
-    // false key and clears the stamp.
+  it('workflow=off on an Anthropic lane composes {"enableWorkflows":false} and stamps NO inert (slice 4 measured the false key)', () => {
+    // Slice 1 composed nothing for `off` and stamped `inert=workflow`, because
+    // only the TRUE key had been measured and an unmeasured flag is not composed
+    // on a guess. Slice 4 measured it (2026-09-15, Claude Code 2.1.273): the
+    // false key is HONOURED and is a real lever — `/effort ultracode` is then
+    // refused verbatim and `/config` matches no `workflow` row at all. So the
+    // field IS applied now and the inert stamp would be a false claim.
     seed('myid');
     h.sh(`_reg_set myid class opus; _reg_set myid effort high; _reg_set myid workflow off`);
     const [primary, retry] = spawnBoth('myid');
-    for (const l of [primary, retry]) expect(l).not.toContain('--settings');
-    expect(h.reg('myid', 'inert')).toBe('workflow');
+    for (const l of [primary, retry]) expect(l).toContain(`--model opus --settings '{"enableWorkflows":false}' --effort high`);
+    expect(h.reg('myid', 'inert')).toBeNull();
   });
 
   it('workflow=on on an Anthropic lane stamps no inert — it really was applied', () => {
@@ -159,44 +173,59 @@ describe('_spawn_start carries the routing record (routing spec 2026-09-14 §5.2
     expect(h.sh(`${RESUME_DIES} rm -f "$HOME/pane-up"; _spawn_start myid resume 2>/dev/null; echo "[$SPAWN_FROMSWAP]"`)).toBe('[1]');
   });
 
-  it('a non-Anthropic lane: --model passes, no env, effort and workflow stamped inert, nothing else reaches the argv', () => {
-    seedAccountsSh(h.home, {
-      version: 1, accounts: [
-        { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-        { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
-      ],
-    });
-    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+  it('a non-Anthropic lane: --model passes, no env, effort AND workflow AND subagent stamped inert, nothing else reaches the argv', () => {
+    // `subagent` joined the stamp in slice 6 Task 3 (it closes slice 4's deferred
+    // minor). The env key is Claude Code's own and this arm composes no `routeenv`
+    // at all, so a record carrying `subagent=sonnet` had its third field dropped in
+    // silence — the same overloaded silence the effort and workflow words removed.
+    gptLane();
     seed('myid', 'gpt');
     h.sh(`_reg_set myid class opus; _reg_set myid effort ultracode; _reg_set myid subagent sonnet`);
     const [primary] = spawnBoth('myid');
     expect(primary).toContain(`'${h.home}/.local/bin/gpt' --model opus --resume`);
     expect(primary).not.toContain('--settings');
     expect(primary).not.toContain('CLAUDE_CODE_SUBAGENT_MODEL');
-    expect(h.reg('myid', 'inert')).toBe('effort,workflow');
+    expect(h.reg('myid', 'inert')).toBe('effort,workflow,subagent');
+  });
+
+  it('a non-Anthropic lane with ONLY a subagent stamps inert=subagent alone — no effort, no workflow to report', () => {
+    gptLane();
+    seed('myid', 'gpt');
+    h.sh(`_reg_set myid subagent sonnet`);
+    const [primary] = spawnBoth('myid');
+    expect(primary).not.toContain('CLAUDE_CODE_SUBAGENT_MODEL');
+    expect(h.reg('myid', 'inert')).toBe('subagent');
+  });
+
+  it("a non-Anthropic lane's routeapplied claims no subagent: the stamp says what was COMPOSED", () => {
+    // The `routeapplied` half of the same contradiction: written unguarded, this line
+    // put `subagent=sonnet` beside `inert=subagent` — two records of one spawn
+    // disagreeing, and the applier comparing against a state nobody set.
+    gptLane();
+    seed('myid', 'gpt');
+    h.sh(`_reg_set myid class opus; _reg_set myid subagent sonnet`);
+    spawnBoth('myid');
+    expect(h.reg('myid', 'routeapplied')).toBe('class=opus');
+  });
+
+  it('an Anthropic lane with a subagent stamps NO inert — the env carries the key, so it really was applied (the control)', () => {
+    seed('myid');
+    h.sh(`_reg_set myid subagent sonnet`);
+    const [primary] = spawnBoth('myid');
+    expect(primary).toContain('CLAUDE_CODE_SUBAGENT_MODEL=sonnet ');
+    expect(h.reg('myid', 'inert')).toBeNull();
+    expect(h.reg('myid', 'routeapplied')).toBe('subagent=sonnet');
   });
 
   it('a non-Anthropic lane with a plain effort and no workflow stamps inert=effort only', () => {
-    seedAccountsSh(h.home, {
-      version: 1, accounts: [
-        { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-        { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
-      ],
-    });
-    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    gptLane();
     seed('myid', 'gpt'); h.sh(`_reg_set myid effort high`);
     spawnBoth('myid');
     expect(h.reg('myid', 'inert')).toBe('effort');
   });
 
   it('a non-Anthropic lane with effort auto stamps no inert (S1-R6): there is nothing not applied', () => {
-    seedAccountsSh(h.home, {
-      version: 1, accounts: [
-        { id: 'claude', label: 'a', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
-        { id: 'gpt', label: 'g', configDirSuffix: '.gpt-cfg', exec: { kind: 'external' }, homeAble: true, hue: 'magenta', telemetry: 'none' },
-      ],
-    });
-    fs.writeFileSync(path.join(h.home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
+    gptLane();
     seed('myid', 'gpt'); h.sh(`_reg_set myid effort auto`);
     spawnBoth('myid');
     expect(h.reg('myid', 'inert')).toBeNull();

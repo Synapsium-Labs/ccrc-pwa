@@ -102,7 +102,7 @@ vocabulary §5.1 validates against.
 |---|---|---|---|---|
 | Coordinator: opens the program, dispatches waves, re-measures wave-done, reviews handoffs, rules on deviations; every operator-started session | Fable · ultracode while orchestrating; drops itself to Fable · high with workflows off while idle on mail | Opus · high review lenses (3–5, scaled to the diff); Sonnet · high refute pass per finding; Haiku scouts | On while orchestrating | Operator ruling 2026-09-14: operator-started sessions get the best model at the start and decide routing for everything below them. This runs above Anthropic's Fable 5.1 default of `high` (higher effort over-deliberates on routine work), which is why the idle drop is part of the row. |
 | Brainstorm, spec, architecture with cross-cutting blast radius; multi-day plan | Fable · high; ultracode at the decision itself | Opus · high refuters and design lenses; Sonnet fact checks | On as a judge panel only when the solution space is wide | Fable's launch guidance names design and long horizons; not independently measured. A panel pays only when there is a real space of designs (design choice). |
-| Worker executing a spec'd plan: a dependent chain that fits one context | Opus · high | Sonnet · high implementers; Opus · high per-task reviewer; Haiku scouts | Off | Measured by Anthropic, not on this fleet: a single model on a dependent chain that fits one context beat orchestration in every case, at lower effort; Opus 5 matched Fable 5 on coding at 60% of its cost. Measured here: this fleet's Opus turns average 155k of context, so a wave that outgrows one context falls under the bulk row; the coordinator names the row in the brief. |
+| Worker executing a spec'd plan: a dependent chain that fits one context | Opus · high | Sonnet · high implementers; Opus · high per-task reviewer; Haiku scouts | Off | Measured by Anthropic, not on this fleet: a single model on a dependent chain that fits one context beat orchestration in every case, at lower effort; Opus 5 matched Fable 5 on coding at 60% of its cost. Measured here: this fleet's Opus turns average 155k of context, so a wave that outgrows one context falls under the bulk row; the coordinator names the row in the brief. The wave's `route` carries `compact 40` (the worker's lower threshold, S6-R9): a dependent chain that fills one context compacts earlier than the box default, so the wave's later tasks start lean. |
 | Bulk independent work: mechanical sweeps, transforms, many files with checkable output; a wave larger than one context | Opus · ultracode orchestrating | Sonnet · medium or high workers; Haiku for transcription-grade | On | Measured by Anthropic, not on this fleet: orchestrator with cheaper workers cost 55% less at 3–7 points below the frontier model solo, only when bulk exceeds one context. The 3–7 points is the largest measured quality cost in this matrix; the held-out panel runs on this row's output from the first wave. |
 | Whole-branch review pass, large program | Fable · ultracode | Opus · high lenses | On | One second-hand data point (a 2026-07-22 Anthropic webinar): Fable orchestrating Sonnet workers reached 96% of Fable-solo's score at 46% of cost on bulk reading, and on an easier subset the same mix added 60% cost for no gain. This row is a design choice betting that a whole-branch pass is the hard subset. |
 | Debugging | Opus · xhigh | Sonnet · high refuters | Off | Operator's standing rule: Fable · high after two failed Opus attempts. `max` is reachable only by the mechanical rule below. |
@@ -196,8 +196,10 @@ the operator from the pickers.
 
 The held-out panel has its own home: a second coordinator reference,
 `ccd/coordinator-skill/references/review-panel.md` (the three lenses, the refute pass, the
-literal model and effort), also in `REQUIRED_REFS` and the parity tests, invoked by a new twelfth
-coordinator clause. Neither the routing fields nor escalation or demotion reach it.
+literal model and effort), also in `REQUIRED_REFS` and the parity tests, named by coordinator
+clause 14 as the review brief's shape and RUN by the review run's reviewer (the review-runs design
+of 2026-09-14 holds clause 12 — the coordinator dispatches a review run and never reads the diff
+itself; merged 2026-09-16, deviation recorded by the controller). Neither the routing fields nor escalation or demotion reach it.
 
 ## 5. Mechanics
 
@@ -252,9 +254,10 @@ Never `CLAUDE_CODE_EFFORT_LEVEL`: it overrides everything and cannot be changed 
 <alias>` maps onto the lane's tiers through its materialiser); `effort` levels other than
 `ultracode` apply through the same `/effort` keystroke the picker sends there today; `effort:
 ultracode` and `workflow` are inert (the spawn injector's backend gate exists for ultracode, and
-the effort picker already hides ultracode on that lane), and ccd stamps `inert=ultracode,workflow`
-rather than pretending; `subagent` applies through the lane's materialiser, where `settings.json`
-wins.
+the effort picker already hides ultracode on that lane), and ccd stamps `inert=effort,workflow,subagent` (field names, never values)
+rather than pretending; `subagent` is inert there too — ccd composes `CLAUDE_CODE_SUBAGENT_MODEL`
+only on an Anthropic lane (amended by routing slice 6, D-2976: the "materialiser where
+`settings.json` wins" mechanism this paragraph described was never built).
 
 ### 5.3 Writers
 
@@ -284,13 +287,14 @@ wins.
   the next tick that it does. The picker shows "queued" until the pane read-back confirms. Picker
   values outside the vocabularies do not exist: `Auto` writes `effort: auto`, `Default` writes
   `class: default`.
-- **Coordinator decisions.** The coordinator runs
-  `ccd route --session <id> --set <field>=<value>` locally on the fleet box, for a worker or for
-  itself, and never passes `--apply`: both skills carry the verbatim clause that a session "never
-  types into another session's pane by any other means", and the record is the arbiter, so ccd
-  applies the change on its own supervise tick or at the next settle without any session having
-  caused a keystroke. `--apply` is reachable only from the server's picker path, where the actor
-  is the server.
+- **Coordinator decisions.** The coordinator calls `POST /api/runs/:id/route` through `ccrc-api
+  runs route`, for the run's worker or for itself; the server computes the rung and runs `ccd
+  route --session <id> --set <field>=<value>` as the SERVER's call, and never passes `--apply`:
+  both skills carry the verbatim clause that a session "never types into another session's pane by
+  any other means", and the record is the arbiter, so ccd applies the change on its own supervise
+  tick or at the next settle without any session having caused a keystroke. `--apply` is reachable
+  only from the server's picker path, where the actor is the server. (amended by routing slice 5, D-2947: clause 1 forbids a coordinator running ccd to change fleet state,
+  so the decision goes through the server's door and the verb is the server's call)
 - **The verb.** `ccd route --session <id> --set <field>=<value> [--apply]` is enrolled in
   `agent/src/whitelist.ts`'s `REQUIRED_VERB_FLAG` as `'route': '--session'` and granted as the
   two-token prefix `['route','--session']`, for the reason `coord-pause` and `project-pool` are: a
@@ -458,7 +462,7 @@ Fable session placeable.
 |---|---|---|---|
 | 0 | sidecar write keyed by ccd id with `ts`, the agents subdirectory and the reaper; the `model.id` confirmation; the per-account Fable share estimate from the sweep (the `get_usage` channel was probed at plan time and carries no buckets, §5.4); server reader and wire fields; the sweep as a scheduled job; speed and quality signals from run events | none | seven days of sidecar data on every Anthropic lane |
 | 1 | the seven routing fields with shape validation; settle reads them; `--model` on both relaunch argvs; subagent env; the routing verb and `route` lifecycle act; the `route-v1` caps token and verb list entry; the measurements: does a plain `/effort <level>` or `/model` persist to the lane and does `/effort auto` delete the saved level, can the session-only form be driven by keystroke, does `--settings` set ultracode and workflows and is `enableWorkflows` readable back, does a keystroke survive a settle on a pinned lane, is an effort change cache-safe on Opus 5 | none without fields; swap continuity with them | a swap measured carrying every field |
-| 2 | coordinator clauses 12 and 13; `routing-matrix.md` and `review-panel.md` in `REQUIRED_REFS` and the parity tests; worker clauses; the routing sentence in the brief; the `suite:` and `failure:` body lines and the server's body parser; the workflow model/effort policy | in-session subagent routing by convention; the held-out panel runs on every handoff review | skill tests pin the clauses; sidecar shows subagent class shifting |
+| 2 | coordinator clauses 13 and 14 (12 and 13 before the 2026-09-16 merge with the review-runs design); `routing-matrix.md` and `review-panel.md` in `REQUIRED_REFS` and the parity tests; worker clauses; the routing sentence in the brief; the `suite:` and `failure:` body lines and the server's body parser; the workflow model/effort policy | in-session subagent routing by convention; the held-out panel runs on every handoff review | skill tests pin the clauses; sidecar shows subagent class shifting |
 | 3 | serviceability clause in swap and placement with rc 5, shared definition, bash mirror, parity test; the Fable ceiling; `degraded` | Fable-class sessions are placed and swapped by their share, or by the estimate | a Fable session measured surviving a swap without touching credits |
 | 4 | dispatch writes the fields on the argv (wave 1) and through the verb (wave N ≥ 2); operator spawn on the argv; pickers write the fields with `--apply`; `_route_apply_check` with the idle predicate and `routeskip`; coordinator row as the operator-spawn default | workers spawn on their row; operator sessions spawn on Fable · ultracode; picker taps land on the next idle tick | continuous attribution begins |
 | 5 | failure-kind escalation and demotion by the coordinator through the verb; journal and run-event trail | automatic escalation and demotion | rungs measured against fix-round cost |
@@ -480,7 +484,7 @@ Fable session placeable.
 | Anthropic lanes carry no `CLAUDE_CODE_SUBAGENT_MODEL` in settings | plant one in a fixture HOME | the doctor check |
 | serviceability parity | change the bash mirror alone | the parity test |
 | serviceability's third answer | collapse unmeasured into unservable | the fixture with an absent bucket degrades |
-| the held-out panel's literal model and effort | route the panel through the fields | the parity test on `review-panel.md` and the clause-13 pin |
+| the held-out panel's literal model and effort | route the panel through the fields | the parity test on `review-panel.md` and the clause-14 pin |
 | `--model` on both relaunch argvs | drop it from the retry line | `ccd-spawn-split`'s retry pin |
 | sidecar keyed by ccd id with `ts`; agent renders go to the subdirectory | key by uuid, drop `ts`, or let an agent render write the main file | the hook fixture with an `agent` render and a stale reading |
 | body-line signals never touch the envelope | add a header line | `mail-envelope-parse`'s round-trip pin |

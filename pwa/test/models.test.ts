@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { modelOptions, effortOptions } from '../src/lib/models';
+import { ROUTE_WRITABLE_FIELDS } from '../../shared/api';
+import { EFFORT_LADDER } from '../../shared/routing-ladder';
+import { modelOptions, effortOptions, type PickOption } from '../src/lib/models';
 
 /**
  * The session pickers' one pin. `modelOptions` is wrapper-aware — the gpt
@@ -8,6 +10,11 @@ import { modelOptions, effortOptions } from '../src/lib/models';
  * (and settings WINS: Claude Code Object.assigns settings env over the process
  * environment at runtime).
  *
+ * Routing spec 2026-09-14 §5.3, slice 4, Task 5: a row no longer carries a
+ * slash `command` — it carries the routing record write a tap performs
+ * (`route: {field, value}`), which `SessionScreen`'s `pick` sends through
+ * `POST /api/sessions/:id/route`.
+ *
  * D-2015: the `fable` alias on that lane used to name a loud sentinel
  * (`ccrc-unavailable-fable`) because the lane had only three tiers. The Codex
  * catalogue now offers `gpt-6-astra`, the alias names it, and the picker has to
@@ -15,14 +22,15 @@ import { modelOptions, effortOptions } from '../src/lib/models';
  * which is exactly the knowledge a phone-first console exists to remove.
  */
 describe('modelOptions', () => {
-  const commands = (w: string, cur: string | null = null) => modelOptions(w, cur).map((o) => o.command);
+  const routes = (w: string, cur: string | null = null) =>
+    modelOptions(w, cur).map((o: PickOption) => `${o.route.field}=${o.route.value}`);
 
   it('offers the gpt lane four tiers, astra on the fable alias', () => {
-    expect(commands('gpt')).toEqual([
-      '/model fable',
-      '/model opus',
-      '/model sonnet',
-      '/model haiku',
+    expect(routes('gpt')).toEqual([
+      'class=fable',
+      'class=opus',
+      'class=sonnet',
+      'class=haiku',
     ]);
     expect(modelOptions('gpt', null).map((o) => o.label)).toEqual([
       'GPT-6 Astra',
@@ -33,20 +41,52 @@ describe('modelOptions', () => {
   });
 
   it('never offers a bare "Default" on the gpt lane', () => {
-    // `/model default` resolves through ANTHROPIC_MODEL, which the wrapper owns;
-    // offering it would present a row whose meaning the console cannot state.
-    expect(commands('gpt')).not.toContain('/model default');
+    // Routing to `class=default` resolves through ANTHROPIC_MODEL, which the
+    // wrapper owns; offering it would present a row whose meaning the
+    // console cannot state.
+    expect(routes('gpt')).not.toContain('class=default');
   });
 
-  it('leaves the Anthropic lanes untouched', () => {
-    expect(commands('claude')).toEqual([
-      '/model opus',
-      '/model sonnet',
-      '/model fable',
-      '/model haiku',
-      '/model default',
+  it('leaves the Anthropic lanes untouched, ending in class=default', () => {
+    expect(routes('claude')).toEqual([
+      'class=opus',
+      'class=sonnet',
+      'class=fable',
+      'class=haiku',
+      'class=default',
     ]);
     expect(modelOptions('claude', null).map((o) => o.label)).not.toContain('GPT-6 Astra');
+  });
+
+  it('carries the readback key the read-back effect matches the live model string against', () => {
+    // Same keys the "highlights the live tier" test above matches `active`
+    // against — `readback` IS that key, reused (models.ts's own comment on
+    // `PickOption.readback`) so `SessionScreen`'s read-back effect can tell
+    // when a fleet frame agrees with a queued `class` write without
+    // re-deriving the option list.
+    expect(modelOptions('gpt', null).map((o) => o.readback)).toEqual([
+      'astra', 'sol', 'terra', 'luna',
+    ]);
+    expect(modelOptions('claude', null).map((o) => o.readback)).toEqual([
+      'opus', 'sonnet', 'fable', 'haiku',
+      // Default's readback is the empty string. `SessionScreen`'s `pick`
+      // never consults it for `class=default` — that value clears `queued`
+      // immediately on the 2xx response (absence is not readable, there is
+      // no distinguishing model string to read back), so this key is
+      // populated but structurally unused for that one row. It still has to
+      // be a real string, not undefined, so no caller has to special-case an
+      // absent field on a type that promises one.
+      '',
+    ]);
+  });
+
+  it('every row writes a field ROUTE_WRITABLE_FIELDS knows, and never carries a command key', () => {
+    for (const wrapper of ['gpt', 'claude']) {
+      for (const o of modelOptions(wrapper, null)) {
+        expect(ROUTE_WRITABLE_FIELDS as readonly string[], o.label).toContain(o.route.field);
+        expect('command' in o, o.label).toBe(false);
+      }
+    }
   });
 
   it('highlights the live tier from the statusline display name, and only that one', () => {
@@ -62,11 +102,85 @@ describe('modelOptions', () => {
   it('matches a tier name case-insensitively, as the pane may title-case it', () => {
     expect(modelOptions('gpt', 'GPT-6 Astra').filter((o) => o.active).map((o) => o.label)).toEqual(['GPT-6 Astra']);
   });
+
+  // Whole-branch review M1: `route.degraded` — the class ccd IS serving when
+  // no lane could serve the intended one (spec §5.4). `degradedTo` carries a
+  // LABEL off THIS wrapper's own list, never the bare alias, so the gpt lane
+  // names the tier a reader of that pane would recognise.
+  describe('the degraded-class note (whole-branch review M1)', () => {
+    const noted = (w: string, intended: string, degraded: string | null): (string | undefined)[] =>
+      modelOptions(w, null, { intended, inert: false, degraded })
+        .filter((o) => o.active).map((o) => o.degradedTo);
+
+    it('names the served class by its label on this wrapper, on the intended row alone', () => {
+      expect(noted('claude', 'opus', 'haiku')).toEqual(['Haiku 4.5']);
+      expect(noted('gpt', 'opus', 'haiku')).toEqual(['GPT-5.6 Luna']);
+    });
+
+    it('sets nothing when the stamp names the intended class itself, or is absent', () => {
+      expect(noted('claude', 'opus', 'opus')).toEqual([undefined]);
+      expect(noted('claude', 'opus', null)).toEqual([undefined]);
+      // Omitted entirely — the S6-R4 "nothing changes" shape — is the same
+      // answer as an explicit null, never a crash or a stray note.
+      expect(modelOptions('claude', null, { intended: 'opus', inert: false })
+        .filter((o) => o.active).map((o) => o.degradedTo)).toEqual([undefined]);
+    });
+
+    it('falls back to the raw stamped word for a class no row here carries — a degradation it cannot name is still one', () => {
+      expect(noted('claude', 'opus', 'ludicrous')).toEqual(['ludicrous']);
+    });
+
+    it('attaches to no row at all when the class read was unreadable — no active row to sit beside', () => {
+      expect(modelOptions('claude', 'Haiku 4.5', { intended: null, inert: false, unreadable: true, degraded: 'haiku' })
+        .filter((o) => o.degradedTo !== undefined)).toEqual([]);
+    });
+  });
 });
 
 describe('effortOptions', () => {
   it('withholds ultracode from the gpt lane and offers it everywhere else', () => {
-    expect(effortOptions('gpt', 'high', false).map((o) => o.command)).not.toContain('/effort ultracode');
-    expect(effortOptions('claude', 'high', false).map((o) => o.command)).toContain('/effort ultracode');
+    expect(effortOptions('gpt', 'high', false).map((o) => o.label)).not.toContain('Ultracode');
+    expect(effortOptions('claude', 'high', false).map((o) => o.label)).toContain('Ultracode');
+  });
+
+  it('every row writes the effort field, ultracode included, and Auto writes effort=auto', () => {
+    for (const wrapper of ['gpt', 'claude']) {
+      for (const o of effortOptions(wrapper, null, false)) {
+        expect(o.route.field, o.label).toBe('effort');
+        expect('command' in o, o.label).toBe(false);
+      }
+    }
+    expect(effortOptions('claude', null, false).find((o) => o.label === 'Auto')?.route)
+      .toEqual({ field: 'effort', value: 'auto' });
+    expect(effortOptions('claude', null, false).find((o) => o.label === 'Ultracode')?.route)
+      .toEqual({ field: 'effort', value: 'ultracode' });
+  });
+
+  // The picker's five slider stops come from EFFORT_LADDER (shared/routing-ladder.ts)
+  // rather than five hand-built rows — Auto and Ultracode are the picker's own
+  // labelled superset on top of the ladder, never part of it.
+  const levelRows = (opts: PickOption[]) =>
+    opts.filter((o) => o.label !== 'Auto' && o.label !== 'Ultracode');
+
+  it('the five level rows equal EFFORT_LADDER in order, capitalised', () => {
+    const rows = levelRows(effortOptions('claude', null, false));
+    expect(rows.map((o) => o.route.value)).toEqual([...EFFORT_LADDER]);
+    expect(rows.map((o) => o.label)).toEqual(
+      EFFORT_LADDER.map((v) => v[0]!.toUpperCase() + v.slice(1)),
+    );
+  });
+
+  it('control: the five stops match the spec\'s own hand-written list — not a value derived from EFFORT_LADDER itself, so a reordered or shortened ladder reds this', () => {
+    const rows = levelRows(effortOptions('claude', null, false));
+    expect(rows.map((o) => o.route.value)).toEqual(['low', 'medium', 'high', 'xhigh', 'max']);
+  });
+
+  it('pins the full row order — Auto last, Ultracode spliced before Max on a non-gpt wrapper only — against a hand-written literal, not the ladder itself', () => {
+    expect(effortOptions('claude', null, false).map((o) => o.label)).toEqual([
+      'Low', 'Medium', 'High', 'Xhigh', 'Ultracode', 'Max', 'Auto',
+    ]);
+    expect(effortOptions('gpt', null, false).map((o) => o.label)).toEqual([
+      'Low', 'Medium', 'High', 'Xhigh', 'Max', 'Auto',
+    ]);
   });
 });

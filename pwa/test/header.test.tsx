@@ -63,7 +63,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   limits: null,
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
   version: null,
   ...patch,
 });
@@ -243,6 +243,19 @@ describe('SessionHeader', () => {
     expect(props.onOpenTerminal).toHaveBeenCalledOnce();
     fireEvent.click(screen.getByRole('button', { name: 'Back to fleet' }));
     expect(props.onBack).toHaveBeenCalledOnce();
+  });
+
+  it('a queued class write still shows the badge when the session has no model yet (fix round 2, finding 4)', () => {
+    // The model chip itself only renders when `model !== null` — a freshly
+    // spawned session's pane has not printed a model string yet. `effort`
+    // set makes `hasMeta` true so the meta row renders at all; `model` stays
+    // null so the model chip is absent and the badge has no chip to ride.
+    renderHeader({
+      session: fleetSession({ model: null, effort: 'medium' }),
+      queuedField: 'class',
+    });
+    expect(screen.getByText('queued')).toBeInTheDocument();
+    expect(document.querySelector('.route-queued')).toBeInTheDocument();
   });
 });
 

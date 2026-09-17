@@ -27,9 +27,13 @@ import {
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
   isPositiveDecimalSafeInteger,
+  parseArmEventDetail,
+  parseRouteEventDetail,
+  parseWaveDoneSignals,
   PROGRAM_KICKOFF_SUBJECT,
   RUN_HOLD_NUMBER_MAX,
   IDLE_RUN_STATES, transitionsFor, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
+  WAVE_DONE_SUBJECT,
   type AskState,
   type ClaimConflict, type ClaimState, type ClaimSummary,
   type CoordCaps, type DeviationAllocation, type DeviationAllocState,
@@ -37,6 +41,7 @@ import {
   type MailDeliveryState, type MailGate,
   type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
   type NotifyEvent, type PeerDeliverable, type ProgramState,
+  type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
   type WorkItemState,
@@ -952,6 +957,24 @@ export class CoordStore {
       'SELECT project FROM runs WHERE sessionId = ? ORDER BY id LIMIT 1',
     ).get(sessionId) as { project: string } | undefined;
     return row?.project ?? null;
+  }
+
+  /**
+   * Every run this session touches — as WORKER (`sessionId`) or as
+   * COORDINATOR (`claimedBy`) — ANY state, ordered by id (routing spec
+   * 2026-09-14 §3, routing slice 6, Task 1). This is the routing door's
+   * (`routes.ts`) own read: the ladder's history ("the last unreversed
+   * demotion", the same-kind count that gates `max`) is a property of the
+   * SESSION, not of one run row, so the door walks the union of
+   * `runEvents(r.id)` over what this method answers rather than one run's
+   * trail alone. A session can be the worker of one run and the
+   * coordinator of another at once — both belong in the walk, which is why
+   * this is an OR, not an either/or pick.
+   */
+  runsTouching(sessionId: string): { id: number; sessionId: string | null; claimedBy: string | null }[] {
+    return this.db.prepare(
+      'SELECT id, sessionId, claimedBy FROM runs WHERE sessionId = ? OR claimedBy = ? ORDER BY id',
+    ).all(sessionId, sessionId) as { id: number; sessionId: string | null; claimedBy: string | null }[];
   }
 
   /**
@@ -2238,6 +2261,72 @@ export class CoordStore {
     ).all(runId) as { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[];
   }
 
+  /** Routing spec 2026-09-14 §6 "Arms" — this run's OWN event trail, parsed
+   *  into the writer's `arm:`/`route:` vocabulary (`parseArmEventDetail`/
+   *  `parseRouteEventDetail`, `shared/api.ts`). Read-only, callable on its
+   *  own so a caller that only wants the routing trail can get it without
+   *  reaching for `runSignals`' whole shape. Delegates to the private
+   *  `routingFromEvents` (fix round 2, finding #3) so `runSignals`, which
+   *  already holds this run's `runEvents(runId)` result, can compute the
+   *  same trail from that ARRAY rather than this method re-issuing the
+   *  identical SELECT a second time per `runSignals` call. */
+  runRoutingEvents(runId: number): { arm: RouteFields | null; armUnparsed: number; routing: RoutingEvent[]; routingUnparsed: number } {
+    return this.routingFromEvents(this.runEvents(runId));
+  }
+
+  /** The actual walk `runRoutingEvents` and `runSignals` share (fix round 2,
+   *  finding #3) — takes an already-fetched `runEvents(runId)` array so
+   *  neither caller issues the SELECT twice.
+   *
+   *  `arm` is the FIRST WELL-FORMED `arm:` event's fields, by position in
+   *  the trail (fix round 2, finding #2, controller ruling S5-R9): a
+   *  malformed `arm:` row no longer collapses to the same `null` a run with
+   *  NO arm at all reports — two conditions a reader handles differently
+   *  ("no routing was seeded" vs "the arm event could not be parsed") must
+   *  not share a value. Every malformed `arm:` row encountered before the
+   *  first well-formed one is counted in `armUnparsed`; once a well-formed
+   *  `arm:` is found, later `arm:` rows are ignored entirely (a
+   *  dispatcher-written `arm:` is never rewritten by design — §6's
+   *  first-wins rule — so nothing after the first well-formed one is worth
+   *  reading). A trail with no well-formed `arm:` row at all answers
+   *  `arm: null, armUnparsed: <every malformed arm: row seen>`.
+   *
+   *  `routing` is every `route:` event in order; a detail that starts
+   *  `route:` but does not parse is skipped and counted in
+   *  `routingUnparsed`, never thrown — the same never-crash-the-signals
+   *  contract `runSignals` keeps everywhere else. */
+  private routingFromEvents(
+    events: { at: number; fromState: string; toState: string; causedBy: string; detail: string | null }[],
+  ): { arm: RouteFields | null; armUnparsed: number; routing: RoutingEvent[]; routingUnparsed: number } {
+    let arm: RouteFields | null = null;
+    let armFound = false;
+    let armUnparsed = 0;
+    const routing: RoutingEvent[] = [];
+    let routingUnparsed = 0;
+    for (const e of events) {
+      if (e.detail === null) continue;
+      if (!armFound && e.detail.startsWith('arm:')) {
+        const parsed = parseArmEventDetail(e.detail);
+        if (parsed === null) { armUnparsed++; continue; }
+        arm = parsed;
+        armFound = true;
+        continue;
+      }
+      if (e.detail.startsWith('route:')) {
+        const parsed = parseRouteEventDetail(e.detail);
+        if (parsed === null) { routingUnparsed++; continue; }
+        // `parsed.session` (routing slice 6, Task 1) rides the spread below
+        // unchanged — this walk needs no session-aware branch of its own,
+        // because it is `runSignals`'s per-RUN trail, not the routing
+        // door's per-SESSION one (`routes.ts`'s own walk over
+        // `runsTouching`); `RoutingEvent.session` is simply carried through
+        // for whoever reads a run's `routing` array off the wire.
+        routing.push({ at: e.at, causedBy: e.causedBy, ...parsed });
+      }
+    }
+    return { arm, armUnparsed, routing, routingUnparsed };
+  }
+
   /** Routing spec 2026-09-14 §6 — speed and quality per run, read-only. The
    *  worker is `runs.sessionId` (never `claimedBy`, the coordinator). Holds
    *  pair `hold done` with the next `release done`; a swap is ONE `done` row
@@ -2332,11 +2421,23 @@ export class CoordStore {
       if (unstamped > 0) excludedUnmeasured = true;
     }
     if (swaps > 0) excludedUnmeasured = true;
+    // The worker's own done-claims, in order. `fromId = runs.sessionId` is the
+    // filter, not `toId`: the coordinator role resolves per run, and any
+    // session on the box can name a runId (attribution, not authentication).
+    const waveDone = run.sessionId === null ? [] : this.db.prepare(
+      "SELECT body FROM mail WHERE runId = ? AND fromId = ? AND kind = 'status' AND subject = ? ORDER BY id",
+    ).all(runId, run.sessionId, WAVE_DONE_SUBJECT) as { body: string }[];
+    const last = waveDone[waveDone.length - 1];
+    const routingInfo = this.routingFromEvents(events);
     return {
       runId, dispatchedAt, closedAt, finalState, wallMs, holdMs, swaps, excludedUnmeasured,
       activeMs: wallMs === null ? null : Math.max(0, wallMs - holdMs),
       closeRefusals,
       firstSubmission: finalState === 'done' ? closeRefusals === 0 : null,
+      waveDoneMails: waveDone.length,
+      signals: last === undefined ? null : parseWaveDoneSignals(last.body),
+      arm: routingInfo.arm, armUnparsed: routingInfo.armUnparsed,
+      routing: routingInfo.routing, routingUnparsed: routingInfo.routingUnparsed,
     };
   }
 

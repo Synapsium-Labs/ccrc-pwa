@@ -43,6 +43,16 @@
   align-items: center;
   gap: var(--sp-3);
 }
+/* The class chooser (routing spec, slice 5, Task 6) reuses `.route-select`'s
+ * chrome verbatim — same edge, ground and tap-min height as the new-session
+ * sheet's routing row — but that rule's `width: 100%` is right for a grid
+ * cell and wrong for a flex sibling of the wordmark and the mail/bell icons:
+ * unmodified it would claim the header's whole remaining width. This is the
+ * one override, not a second control style. */
+.fleet-class-select {
+  width: auto;
+  flex-shrink: 0;
+}
 /* Notification toggle — a quiet bell; lit when push is on. */
 .bell {
   border: none;
@@ -676,6 +686,37 @@
 }
 .proj-skel {
   padding: var(--sp-3) 0;
+}
+/* The new-session sheet's optional routing row (routing spec, slice 4, Task
+ * 6) — three plain selects under the project list. Reuses `.proj-search`'s
+ * chrome tokens (edge, raised ground, tap-min height) rather than inventing a
+ * second control style for the app's first `<select>`. */
+.route-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.route-field {
+  display: grid;
+  gap: 2px;
+}
+.route-field-label {
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.route-select {
+  width: 100%;
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 0 var(--sp-2);
+}
+.route-select:focus {
+  border-color: var(--accent);
 }
 .sheet-confirm {
   margin-top: var(--sp-2);

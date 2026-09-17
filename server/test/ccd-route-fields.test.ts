@@ -41,6 +41,11 @@ describe('the routing record (routing spec 2026-09-14 §5.1)', () => {
     ['compact', '10', true], ['compact', '50', true], ['compact', '100', true], ['compact', '9', false], ['compact', '101', false], ['compact', '50%', false],
     ['degraded', 'opus', true], ['degraded', 'default', false],
     ['inert', 'effort,workflow', true], ['inert', 'effort', true], ['inert', 'ultracode', false], ['inert', 'effort workflow', false],
+    // `subagent` joined `ROUTE_INERTABLE` in slice 6 Task 3: a lane that composes no
+    // `CLAUDE_CODE_SUBAGENT_MODEL` now says so by field name. `noeffort` is shape-legal
+    // (`^[a-z]+(,[a-z]+)*$`) and vocabulary-illegal, so it pins the PER-WORD lookup and
+    // not the regex — measured: deleting that loop reds this row and the `ultracode` one.
+    ['inert', 'subagent', true], ['inert', 'effort,workflow,subagent', true], ['inert', 'noeffort', false],
     ['colour', 'blue', false],
   ])('_route_valid %s=%s → %s', (field, value, ok) => {
     expect(h.sh(`_route_valid ${field} '${value}' && echo yes || echo no`)).toBe(ok ? 'yes' : 'no');

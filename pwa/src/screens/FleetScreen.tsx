@@ -30,6 +30,7 @@ import { ackAll, acksSnapshot, FEED_ACK_KEY, isUnseen, isUnseenAt, prune, subscr
 import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
+import { CLASSES, type ModelClass } from '../../../shared/models';
 import type { FleetSession, ProjectPoolsWire, ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
@@ -199,6 +200,16 @@ export function FleetScreen({
   // overwriting a newer measurement. The visibility token coalesces only an
   // equal reconnect frame while that visibility read remains unresolved; a
   // changed frame still starts its own request immediately (D-2702).
+  // The class chooser (routing spec, slice 5, Task 6): `''` is the unset
+  // "Coordinator row" — the class-blind fetch and route-less `+` every build
+  // before this task has always sent. A ref beside the state, not a
+  // `refreshProjects` dependency: that callback's identity is kept stable
+  // for the pools/visibility effects below, so the class it reads has to
+  // arrive through the same synchronously-updated-ref idiom `poolsFingerprintRef`
+  // already uses two lines down, rather than by giving it a changing identity.
+  const [classFilter, setClassFilter] = useState<'' | 'default' | ModelClass>('');
+  const classFilterRef = useRef<'' | 'default' | ModelClass>('');
+  classFilterRef.current = classFilter;
   const projectRequest = useRef(0);
   const visibilityRequest = useRef<{ token: number; pools: string } | null>(null);
   const writeRefresh = useRef<{ token: number; write: { project: string; pool: NonNullable<ProjectRow['pool']> } } | null>(null);
@@ -219,7 +230,8 @@ export function FleetScreen({
     if (write !== undefined) writeRefresh.current = { token: request, write };
     setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'pending' });
     try {
-      const response = await api.projects();
+      const cls = classFilterRef.current;
+      const response = await api.projects(cls === '' ? undefined : cls);
       if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
     } catch {
       if (request === projectRequest.current) {
@@ -305,7 +317,12 @@ export function FleetScreen({
     if (adding.has(project)) return;
     setAdding((s) => new Set(s).add(project));
     try {
-      await api.workspaceAdd(project);
+      // Seeds the SAME class the chooser fetched with — the `+` starts a
+      // workspace on the lane the row above it just forecast, rather than
+      // asking the coordinator to re-decide from an unset row.
+      await (classFilter === ''
+        ? api.workspaceAdd(project)
+        : api.workspaceAdd(project, { class: classFilter }));
       void refreshProjects();
     } catch (err) {
       toast(`Couldn't create workspace — ${apiErrorText(err)}`, 'error');
@@ -424,6 +441,36 @@ export function FleetScreen({
       <header className="fleet-head">
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
+          {/* The class chooser (routing spec, slice 5, Task 6): forecasts
+              EVERY card's placement for one class at a time, the same
+              `GET /api/projects?class=` this build has carried since slice 4
+              but with no caller until now. "Coordinator row" (unset) is the
+              class-blind fetch every build before this task has always sent;
+              "Default" asks explicitly for the record's own "no override"
+              word — the projects handler (`server.ts`) treats it identically
+              to the unset fetch (no per-class shares read, byte-identical
+              answer), so choosing it changes nothing about what renders, only
+              what the `+` posts. The four classes are `CLASSES` reversed —
+              the same capability order `NewSessionSheet`'s own routing row
+              uses — never a hand-typed list, so a class this build adds or
+              drops shows up here for free. */}
+          <select
+            className="route-select fleet-class-select"
+            aria-label="Class"
+            value={classFilter}
+            onChange={(e) => {
+              const next = e.target.value as '' | 'default' | ModelClass;
+              setClassFilter(next);
+              classFilterRef.current = next;
+              void refreshProjects();
+            }}
+          >
+            <option value="">Coordinator row</option>
+            <option value="default">Default</option>
+            {[...CLASSES].reverse().map((c) => (
+              <option key={c} value={c}>{c.charAt(0).toUpperCase() + c.slice(1)}</option>
+            ))}
+          </select>
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its

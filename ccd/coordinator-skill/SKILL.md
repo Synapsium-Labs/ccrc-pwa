@@ -64,7 +64,7 @@ run record and the server's own re-measurement are what settle facts.
 
 ## The contract
 
-These twelve sentences are the boundary between "a coordinator" and "an agent
+These fourteen sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -79,12 +79,16 @@ with a shell on the fleet host". They are not advice.
 10. This session allocates the program’s deviation block once, at run-open — `POST /api/ledger/deviations` — and names the block in every brief; a worker never calls the allocator mid-wave. Before splitting a wave across workers it reads `GET /api/claims?project=<project>`, and a wave that dispatches two workers onto overlapping claims is a defect in this session’s ledger, not in the workers.
 11. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session’s pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child’s reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator’s; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
 12. A verified `wave-done` is READ by a review run, never by this session. Once `POST /api/runs/:id/advance` has moved the work run to `awaiting-review`, this session opens a run of `kind:'review'` naming it, dispatches the reviewer with `references/review-brief.md`, and ends its turn; when `review-done` arrives it closes the review run with the reviewer’s own `{reviewedTip, report}` and rules on the report the server accepted. This session does not read the diff itself, and a `stale-review` refusal means a fresh review run against the live tip, never a ruling on the old report.
+13. Every brief names the shape of the wave and the routing the matrix derives from it — class, effort, subagent class and workflow mode, and the subagent effort the worker is expected to name on its calls — read from `references/routing-matrix.md`; this session revises routing only on the evidence a wave returns, and records each change and why in the ledger before the next dispatch.
+14. The review brief names the held-out panel in `references/review-panel.md` as the review's shape, and the reviewer runs it as written: three Opus lenses and a Sonnet refute pass per finding, model and effort literal in the script, exempt from every routing field and from escalation and demotion. A lens that dies or returns nothing counts as unverified, never as approval, and no wave is accepted on a reading this session made alone.
 
 **Reading ccd is fine.** `ccd ls`, `ccd caps`, `ccd pr-state --session <id>` and
 `ccd ws-audit --session <id>` are read-only and answer faster than a round trip.
 Clause 1 is about *changing* fleet state, and the reason is not that ccd is
 unsafe — it is that an act the server did not record did not happen as far as
-the run board, the caps and the operator are concerned.
+the run board, the caps and the operator are concerned. This session changes a
+run's routing only through `POST /api/runs/:id/route` (`ccrc-api runs route`)
+— `ccd route` is never this session's call.
 
 **`/clear` is dispatch's job, never yours (clause 9).** For wave ≥ 2, `POST
 /api/runs/:id/dispatch` itself resumes the workspace and injects `/clear`
@@ -244,7 +248,10 @@ not after.
    THAT places the hold immediately.)
 2. **Dispatch.** `POST /api/runs/:id/dispatch` with the wave brief AND the
    wave's declared ledger: the body is `{"brief": "<prose>", "items":
-   ["<title>", …]}`, at most 32 titles of at most 200 UTF-8 bytes each. The
+   ["<title>", …], "route": {…}}`, at most 32 titles of at most 200 UTF-8
+   bytes each. `route` is the object clause 13's placement derives, carried
+   on this same call (`references/wave-lifecycle.md` §2 has its shape and
+   its two omission events). The
    brief is prose the server never reads; the items are the machine-readable
    half of the same wave plan, and **they must agree** — the board's tally is
    built from the items, so a brief naming five units of work beside three
@@ -257,7 +264,9 @@ not after.
    `ccrc-worker` skill, and that skill IS the protocol** — so your brief carries
    what only this wave knows (the plan file's path, the task range, **the
    execution skill the worker should invoke**, the interfaces earlier waves
-   settled, the deviations already ledgered), not the
+   settled, the deviations already ledgered), **the shape of the wave and the
+   routing** the matrix derives from it (`references/routing-matrix.md`;
+   clause 13), not the
    identity, ack, question and fingerprint rules the worker already has. The
    execution skill is not optional: the worker's clause 6 invokes "the
    execution skill the brief names", so an unnamed one is a clause pointing at
@@ -312,7 +321,10 @@ not after.
    second WORK run for the wave. Then `"$API" runs dispatch <review run id> --json -` with a
    brief cut from `references/review-brief.md` — the work run id, its branch
    `ws/<worker-slug>`, the plan coordinates, the task range, the lenses, the
-   suites. `cap-concurrency` here is ordinary: the reviewer needs a slot and
+   suites. The brief's `Lenses:` line names the held-out panel
+   (`../ccrc-coordinator/references/review-panel.md`, clause 14) — the
+   reviewer runs it; this session never runs it on the diff itself.
+   `cap-concurrency` here is ordinary: the reviewer needs a slot and
    the idle worker no longer holds one, so retry on the next wake. **End your
    turn.** The reviewer's `review-done` mail wakes you.
 6. **Rule on the report**. The `review-done` mail's body opens with one JSON

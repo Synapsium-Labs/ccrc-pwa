@@ -6934,7 +6934,13 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     const { transcript } = plantSession({ lines: workLines(tree) });
     const { forks } = straceRun(preCompact(tree, transcript));
     // EVERY MEMBER IS §3.1's, and the count beside each is what makes adding or
-    // deleting ANY child red — not only a third `find`:
+    // deleting any child THIS SCENARIO DRIVES red — not only a third `find`.
+    // The qualifier is load-bearing (closing gate M6): "any child" is false of
+    // a multiset, however exact, because a member the path never reaches
+    // contributes nothing to it. That is not hypothetical — it is what hid the
+    // sweep loop's per-iteration `rm` from both of this describe's original
+    // scenarios; the residue scenario at the end of this describe is the one
+    // that drives it, and only together do the three cover §3.1's list:
     //   link + rm  — step 5's generation-read hard-link alias and its unlink,
     //                the two children Task 9 ADDS to this section;
     //   find × 2   — the overlap check and the exact-family sweep. The scope
@@ -6963,6 +6969,59 @@ describe.skipIf(process.platform === 'darwin')('the compaction card — the firs
     // the ordinary run, which is why the multiset is stated per scenario.
     expect(tally(forks)).toEqual({ '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 2 });
   }, 60_000);
+
+  // THE RESIDUE SCENARIO (closing gate I1). The sweep loop's per-iteration
+  // `rm -f "$cand"` (`ccd/session-hook.sh:1458`) is the one member of this
+  // section neither scenario above can see: both leave the registry free of
+  // AGED family residue, so `$aged` is empty, the loop body never runs, and a
+  // child that costs one `execve` per swept candidate contributes nothing to
+  // either multiset. That is also why the comment above says what it now says:
+  // a multiset pins the children the scenario DRIVES, not every child the arm
+  // can take.
+  //
+  // ONE PLANTED AND TWO, because presence and UNBOUNDEDNESS are two claims.
+  // A single-N pin stays green if the loop ever learns to batch — `rm -f a b`
+  // is one fork for two candidates, and it is the obvious optimisation here —
+  // so the property worth pinning is that the count RISES WITH THE WORK.
+  // The residue is `.stage` temp family, deliberately not `compactpost.*.claim`:
+  // the overlap `find` at `:1433` reads that second name, and although it
+  // reads it YOUNG-only and aged residue could not flip the verdict, a fixture
+  // whose planted file is also an input to the scope decision would couple two
+  // measurements that have no business being coupled.
+  for (const planted of [1, 2]) {
+    it(`the SWEEP run forks one further \`rm\` per swept candidate — ${planted} planted, ${planted} swept`, () => {
+      const tree = cardTree(); plantHelper();
+      const { transcript } = plantSession({ lines: workLines(tree) });
+      const at = (f: string): string => path.join(home, '.cc-sessions', f);
+      // Older than `COMPACT_CARD_MAX_AGE` (1200 s), by the same margin the
+      // sweep's own fixture uses, so `find -mmin +20` matches every one.
+      const old = Math.floor(Date.now() / 1000) - 1200 - 60;
+      const residue = Array.from({ length: planted }, (_, k) =>
+        at(`.demo-quiet-basin.compactset.99${k}.compact-1-99${k}-1-2.stage`));
+      for (const f of residue) { fs.writeFileSync(f, 'x'); fs.utimesSync(f, old, old); }
+      const { forks, raw } = straceRun(preCompact(tree, transcript));
+      // THE DIAGNOSTIC BELONGS IN THE FAILURE, not in a later bisect. A busy
+      // box makes `strace -f` interleave, and an `execve` split across
+      // `<unfinished ...>` / `<... execve resumed>` matches NEITHER half of
+      // this parser's pair of regexes, so the child loses its name and reads
+      // as `(subshell)` — a mis-ATTRIBUTION that looks exactly like a changed
+      // arm. Measured on this box 2026-09-17 under four concurrent agents:
+      // `find` 2 -> 1 with `(subshell)` 1 -> 2, the same six forks throughout.
+      // So the message says which of the two a reader is looking at.
+      const split = raw.split('\n').filter((l) => l.includes('<unfinished ...>')
+        || l.includes('resumed>')).length;
+      // The ORDINARY multiset, plus exactly one `rm` per planted candidate.
+      expect(tally(forks), split === 0
+        ? 'the first held section\'s forks, with the sweep loop\'s removals'
+        : `${split} interleaved strace lines in this trace: a child may have lost `
+          + `its exec and be counted as "(subshell)". Re-run in isolation before `
+          + `reading this as a changed arm.`).toEqual(
+        { '(subshell)': 1, find: 2, jq: 1, link: 1, mv: 1, rm: 1 + planted });
+      // AND THE SWEEP REALLY SWEPT: a green multiset over residue that was
+      // never removed would be measuring a fork this arm did not take.
+      for (const f of residue) expect(fs.existsSync(f), `swept: ${f}`).toBe(false);
+    }, 60_000);
+  }
 });
 
 // ── D-2605: the CITATION AUDIT over both documents (spec §3.4, round 14) ──
@@ -7423,14 +7482,73 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       'the same quotation on a line that does not carry it reds').toEqual(['ccd/fx.sh:4']);
     // (4) THE STOPLIST BY NAME, in the arm that would otherwise admit each one,
     // and the four short tokens the rule DOES accept — named so a later reader
-    // sees the whole of what this floor lets through at that length rather than
-    // having to re-derive it.
+    // sees the whole of what this floor lets through AT THREE NON-SPACE
+    // CHARACTERS OR FEWER rather than having to re-derive it. "That length"
+    // used to be left to the reader (closing gate M2); it is now both stated
+    // and MEASURED, by the corpus test directly below — these four loops are
+    // about the PREDICATE, that one is about the CORPUS, and only the pair
+    // makes the sentence above a claim anything could falsify.
     for (const tok of ['rm', 'die', 'in', 'do', 'case', 'echo', 'local', 'return', 'while', '$1']) {
       expect(specific(tok), `\`${tok}\` never satisfies`).toBe(false);
     }
     for (const tok of ['jq', 'ccd', 'it(', 'out']) {
       expect(specific(tok), `\`${tok}\` is a name, not a keyword, and still satisfies`).toBe(true);
     }
+  });
+
+  it('THE TWO CORPUS FACTS the docstring above states, asserted rather than asserted-about', () => {
+    // A DOCSTRING IS NOT A PIN. The comment above states two facts about the
+    // REAL corpus — not about `FX`, the seven-line fixture the loops use — and
+    // until now nothing measured either: the loops prove the PREDICATE's
+    // verdict on four hand-written strings, which is a different claim from
+    // "these four are the whole of what the corpus gets through the floor".
+    // Both facts were TRUE when measured (2026-09-17, origin/main 2f9deae2);
+    // that is exactly why they were worth pinning, since a fact nobody checks
+    // is one edit away from being prose that used to be true.
+    const short = (x: string): boolean => x.replace(/\s+/g, '').length <= 3;
+    const accepted = new Set<string>();
+    const weak: string[] = [];
+    let resolved = 0; let anchored = 0;
+    for (const [, text] of realCorpus()) {
+      for (const { text: p } of paragraphs(text)) {
+        for (const { file, n1, n2, toks } of refsOf(p)) {
+          const lines = fromRepo(file);
+          if (lines === null) continue;
+          resolved++;
+          for (const t of toks) for (const part of partsOf(t)) if (short(part)) accepted.add(part);
+          const cited = lines.slice(n1 - 1, n2).join('\n');
+          const hits = toks.filter((t) => occurs(t, cited));
+          if (!hits.length) continue;
+          anchored++;
+          // ANCHORED BY SHORTNESS ALONE: every token that actually occurs in
+          // the cited lines is at or below the floor's short bound. Such a
+          // reference passes on evidence the loops above call too weak to be
+          // evidence, so the audit's verdict on it would rest on nothing.
+          if (hits.every((t) => partsOf(t).every(short))) weak.push(refKey({ file, from: n1, to: n2 }));
+        }
+      }
+    }
+    // NON-VACUITY FIRST, because both facts below are shapes an empty walk
+    // would satisfy for free: an unread corpus offers no short token and
+    // anchors nothing, and would print exactly the two answers wanted here.
+    expect(resolved, 'references into tracked source that the walk resolved')
+      .toBeGreaterThanOrEqual(400);
+    expect(anchored, 'and references some quotation of theirs actually anchors')
+      .toBeGreaterThanOrEqual(200);
+    // FACT ONE — the docstring's "the whole of what this floor lets through".
+    // `toks` is already `usable`-filtered, so this set cannot contain a token
+    // the floor refuses; what it CAN contain, and what this asserts it does
+    // not, is a FIFTH short token the comment above never named. The partition
+    // is not tautological: the stoplist loop directly above names ten short
+    // tokens the floor refuses, and `rm`, `do` and `in` are all offered by
+    // this same corpus.
+    expect([...accepted].sort(), 'every short token the real corpus gets through the floor')
+      .toEqual(['ccd', 'it(', 'jq', 'out']);
+    // FACT TWO — nothing in the corpus is anchored by shortness alone, so none
+    // of those four decides a reference's fate on its own. This is the fact
+    // that makes the floor SAFE to have tightened: had the set been non-empty,
+    // tightening it would have turned correct references stale.
+    expect(weak, 'references anchored only by tokens at or below the short bound').toEqual([]);
   });
 
   it('the audit reads the whole corpus — the numbers it is entitled to claim anything from', () => {
@@ -7907,8 +8025,28 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     lines moved `lcRefusalWord`'s return out from under it. It is inside
     //     the same 24,688-byte freeze.
     // RE-MEASURED against the tree, never adjusted to keep a number green.
+    // RULING S6-R10 (fix round 2, controller, overruling this task's own
+    // hand-off above): routing slices 2-6 grew `ccd/ccd` by ~1751 lines below
+    // this corpus's anchors — measured on the merged tree at `1c71be12` — so
+    // `ccd/ccd` re-measures 22 -> 124 here. Task 11 still owns re-anchoring the
+    // citations themselves; this is a RE-MEASUREMENT of the census only, per
+    // the assertion's own mandate, never a rule change. No D-number (S6-R11).
+    // RE-MEASURED AGAIN at Task 6, on the same standing rule and with no
+    // ruling id of its own: Task 5's two hunks into `ccd/ccd` (`+3` at
+    // `:1143`, `+32` at `:16543`) landed after S6-R10's measurement, taking
+    // `ccd/ccd` 124 -> 125. The composition was MEASURED by running this same
+    // audit against the pre-Task-5 tree (`ccd/ccd` and `README.md` at
+    // `4784dd18`, this file unchanged) and diffing the two failure lists:
+    // EXACTLY ONE reference entered, `spec:2125 ccd/ccd:19131`, which sits
+    // below BOTH hunks (a cumulative `+35`), and NOTHING left. README contributes nothing to this
+    // number because its `genrc == 1` anchor was RE-ANCHORED BY CONTENT
+    // rather than parked (`ccd/ccd:17992-17994` -> `:18027-18029`, the three
+    // bytes byte-identical at both trees) — README's own entry is an equality
+    // with empty, not a debt, so a rotted anchor there is repaired, never
+    // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
+    // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 22,
+      'ccd/ccd': 125,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -7920,14 +8058,23 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
       'deploy/deploy.sh': 2,
       'ccd/ccrc': 2,
-      'shared/api.ts': 1,
+      // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
+      // (#137): its own additions moved this file's lines, and repairing the
+      // README anchors it broke re-pointed BY CONTENT the one anchor that was
+      // carrying this debt. Re-measured, not adjusted to keep a number green —
+      // the entry is gone because the debt is, which is the direction this
+      // census is allowed to move without a finding.
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
     // sentence names the sum and the sum is asserted, so the two cannot drift:
     // ±1 on any entry reds the map AND this line.
     const total = Object.values(byFile).reduce((a, b) => a + b, 0);
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(59);
+    // 59 -> 161 (S6-R10) -> 162 (Task 6) -> 161 (#137 repaired the one
+    // `shared/api.ts` anchor), the sum of the re-measured map
+    // above: the headline is a MECHANISM, not a separate number, so it moves
+    // with `ccd/ccd`.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(161);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8046,75 +8193,28 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const set = r.failures.map(refKey);
     expect(set, 'a **Files:** reference stopped naming what its clause quotes — re-measure (D-2849)')
       .toEqual([
-        // Task 9's own list: the debt D-2758 parks in Task 11, RE-MEASURED
-        // there. FIVE of its TEN entries inside the census were re-anchored and
-        // now pass — ten, not eleven: `ccd/session-hook.sh:1098` is one of the
-        // keys the last assertion in this test names as reachable by THIS
-        // PASS ALONE (three of them when this sentence was written; TWO since
-        // merge fix M2, which is recorded at that assertion), so it is outside
-        // the census by construction and the two numbers in this file cannot
-        // both be right
-        // (`ccd/session-hook.sh:744` -> `:753`, `ccd/ccd:2756-2785` ->
-        // `:3345-3374`, `:2766` -> `:3355`, `:2784` -> `:3373`, `:4355-4357` ->
-        // `:5077-5079`). A SIXTH was re-anchored correctly and still reports:
-        // `ccd/ccd:2782` -> `:3371` really is the `shift 4` line, but the
-        // sentence boundary falls between that quotation's opening backtick and
-        // the reference, so the clause this pass sees carries none of its
-        // tokens — a clause-splitting artifact, not a wrong anchor. The rest
-        // are HISTORICAL: the helper's deleted slot block, its corrected
-        // `measureCommand` docstring, and the two hook comments the task's own
-        // prose quotes back at itself.
+        // RULING S6-R10 (fix round 2, controller, overruling this task's own
+        // hand-off above): routing slices 2-6 grew `ccd/ccd` by ~1751 lines
+        // below this corpus's anchors — measured on the merged tree at
+        // `1c71be12` — so the stale set moves 12 -> 20, all eight new entries
+        // `ccd/ccd`. RE-MEASURED against the tree, never adjusted to keep a
+        // number green; Task 11 still owns re-anchoring the citations
+        // themselves. No D-number (S6-R11).
         'ccd/compact-card.mjs:433-560',
         'ccd/compact-card.mjs:726-728',
         'ccd/compact-card.mjs:726',
-        // RE-ANCHORED BY CONTENT this round (wb): the clause quotes
-        // `local a="${1-}" i="${2-}" tok="${3-}" msg="${4-}"; shift 4`, which
-        // stood at `ccd/ccd:3371` at the round's base and stands
-        // byte-identically at `:3384` here. It still reports because `SENT`
-        // cuts the clause at the `;` inside that very quotation — a wrong
-        // ANCHOR became a right anchor with an unreachable quotation, which is
-        // a different defect and a smaller one.
-        // AND THE MERGE MOVED IT AGAIN, `:3384` -> `:4045` (merge fix M2): the
-        // same quoted line stands byte-identically at `:4045` in the merged
-        // `ccd/ccd`, so the entry keeps its class and changes its number.
+        'ccd/ccd:6478',
+        'ccd/ccd:13020',
+        'ccd/ccd:19131',
+        'ccd/ccd:4006-4035',
         'ccd/ccd:4045',
-        // ADDED BY THE RE-SPELLED FLOOR (wb2 B-I1), and it is a reference made
-        // VISIBLE rather than one newly broken. This `**Files:**` clause cites
-        // `ccd/ccd:3386` for `_lc_refuse`'s EMITS-THEN-DIES pair and its only
-        // satisfying token was `die`, a word that occurs on whatever line of
-        // bash it is pointed at. The ANCHOR is correct — `:3386` really is
-        // `die "$msg"` — so what is available is a QUOTATION change to the
-        // plan's own sentence, which is the class this pass records rather
-        // than makes. MERGE FIX M2 moves it `:3386` -> `:4047` by the same
-        // byte-equality: `die "$msg"` is that line in the merged file, and the
-        // QUOTATIONLESS class is unchanged.
+        'ccd/ccd:4029',
         'ccd/ccd:4047',
-        // `ccd/ccd:3940-3951` LEFT THIS SET AT THE MERGE, and it left by
-        // COINCIDENCE rather than by repair (merge fix M2), which is why it is
-        // recorded here rather than silently dropped. The reference is Task 9's
-        // own pre-Task-9 prescription for `_ws_slug_free` and NO round has
-        // re-anchored it; main's insertions moved OTHER bytes under those
-        // numbers, and MEASURED to the token, `:3940-3951` is now `_lc_emit`'s
-        // header, whose comment names `ccd-lifecycle-contain.test.ts` — so the
-        // clause's `.test.ts` token occurs there and the reference passes for a
-        // reason having nothing to do with `_ws_slug_free`. It is the same
-        // class as the `:6838` repair round 3 recorded and round 4 lost again —
-        // a coincidence of bytes, not a referent.
+        'ccd/ccd:3940-3951',
+        'ccd/ccd:5828-5830',
+        'ccd/ccd:1330-1333',
         'ccd/session-hook.sh:1098',
         'ccd/session-hook.sh:1175-1177',
-        // Task 10's list: FOUR of the five its two `- Modify:` bullets carry,
-        // not the two D-2849 first recorded. The PARAGRAPH is longer than those
-        // two bullets and resolves SEVEN references in all (measured, Task 11):
-        // the two in its `- NOT modified` sub-list pass on merit, so three of
-        // the seven survive and `deploy/deploy.sh:560` is the only survivor
-        // among the five the `- Modify:` bullets carry. All four are inside the
-        // 24,688-byte freeze, so Task 11 could not repair them either — and
-        // nor could merge fix M2, which measured all four as MOVED by the merge
-        // (`deploy/deploy.sh` +49 lines, `ccd/ccrc` +4,567) and left every one
-        // of them where the freeze requires. The SECOND merge (03ecda65) then
-        // took the last survivor: `deploy/deploy.sh:560` is nine lines below
-        // its backup clause now, so all FIVE of the two bullets' references
-        // are stale, and named here.
         'deploy/deploy.sh:560',
         'deploy/deploy.sh:629',
         'ccd/ccrc:5217',
@@ -8137,8 +8237,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // under the number, so the census now reports it too. It is still in THIS
     // set, and still unrepairable — it lives in the 24,688-byte freeze.
     const census = new Set(audit(realCorpus()).failures.map(refKey));
+    // RULING S6-R10 (fix round 2): re-measured with the census above — the
+    // two new `ccd/ccd` entries this pass alone reaches are the same growth
+    // (routing slices 2-6), not a new exemption.
     expect(set.filter((k) => !census.has(k)), 'the stale references only this pass can see')
-      .toEqual(['ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130']);
+      .toEqual(['ccd/ccd:5828-5830', 'ccd/ccd:1330-1333', 'ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130']);
   });
 
   /** THE THIRD PASS, and the third reason the census under-reports (D-2849,
@@ -8352,8 +8455,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     `_reg_purge`'s dot-leading-family header and the unlink stands at
     //     `ccd/ccd:2468`. A genuinely stale anchor, and the only reason it was
     //     green is that `rm` satisfied it.
-    // RECORDED, NOT REPAIRED: this is a RATCHET, and re-anchoring references no
-    // finding examined is how a census stops being a measurement.
+    // RECORDED, NOT REPAIRED — and the two classes are not the same class.
+    // The two STALE anchors above were each EXAMINED and their referents named
+    // at the measurement this comment reports: `ccd/ccd:2455`'s allow-list
+    // entry (13) cites a comment inside `_reg_purge`'s dot-leading-family
+    // header while the `rm -f "$REG/$id.generation"` it names stood at
+    // `ccd/ccd:2468`, and `ccd/ccd:7661` is a comment line about `die`. So for
+    // those two the deferral is a CHOICE with the evidence already in hand,
+    // not an absence of it — this is a RATCHET, and re-anchoring references a
+    // pass examined is how a census stops being a measurement of the debt it
+    // inherited. (Both numbers are the BRANCH-TIP measurement; the merge below
+    // renumbers them, and `:2455` in particular now names something else.)
     //
     // THE MERGE WITH `origin/main` TAKES IT 20 -> 18 (merge fix M2), and the
     // movement is FIVE RENUMBERINGS and TWO DEPARTURES, none of them a rule
@@ -8378,21 +8490,80 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     //     passes for a reason having nothing to do with the unlink or the
     //     comment its clause is about. They are the same class as the `:6838`
     //     repair round 3 recorded and round 4 lost again.
+    // RULING S6-R10 (fix round 2, controller, overruling this task's own
+    // hand-off above): routing slices 2-6 grew `ccd/ccd` by ~1751 lines below
+    // this corpus's anchors — measured on the merged tree at `1c71be12` — so
+    // the joined-row stale set moves 18 -> 51, all 33 new entries `ccd/ccd`.
+    // RE-MEASURED against the tree, never adjusted to keep a number green;
+    // Task 11 still owns re-anchoring the citations themselves. No D-number
+    // (S6-R11).
+    // RE-MEASURED AGAIN at Task 6 (the whole-slice ship), applying S6-R11's
+    // standing rule to an instance its list could not name — no ruling id of
+    // its own, because nothing about the rule changed. Task 5's two hunks into
+    // `ccd/ccd` — `+3` lines at `:1143` (the compact tunables) and `+32` at
+    // `:16543` (`_auto_compact_check`'s threshold read) — landed AFTER S6-R10
+    // re-measured this set, so the joined-row stale set moves 51 -> 48. Every
+    // one of the seven movers is a COINCIDENCE of those two shifts, in the
+    // class this comment already records, and each was MEASURED at both trees
+    // rather than inferred: `:2455` -> `:2433-2439` (`:2455` now holds a `rc 2
+    // is MECHANISM ABSENCE` comment; `:2433-2439` now holds `_reg_purge`'s
+    // usage-family `rm -f` block, which offers the `rm` its row quotes), and
+    // `:13561`, `:13560-13562`, `:13573-13575` (one of its two sites) and
+    // `:5385-5388` each stopped failing because the `+3` shift slid a
+    // different comment line under the anchor — not because anything was
+    // re-anchored. `:19131` starts failing for the mirror reason, below BOTH
+    // hunks (a cumulative `+35`). Nothing here is a repair and no rule changed; Task 11 still owns
+    // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         'server/test/ccd-ws-reap.test.ts:344',
-        'ccd/ccd:5797', 'ccd/ccd:7568', 'ccd/ccd:11025',
-        'ccd/ccd:11665-11670', 'ccd/ccd:11669', 'ccd/ccd:11670',
-        'ccd/ccd:11669', 'ccd/ccd:11670',
+        'ccd/ccd:13573-13575',
+        'ccd/ccd:3038',
+        'ccd/ccd:5797',
+        'ccd/ccd:7568',
+        'ccd/ccd:11025',
         'ccd/ccd:11665-11670',
+        'ccd/ccd:11669',
+        'ccd/ccd:11670',
+        'ccd/ccd:13567',
+        'ccd/ccd:13673',
+        'ccd/ccd:19109',
+        'ccd/ccd:19098',
+        'ccd/ccd:19120',
+        'ccd/ccd:19131',
+        'ccd/ccd:11669',
+        'ccd/ccd:11670',
+        'ccd/ccd:13650-13652',
+        'ccd/ccd:12032-12034',
+        'ccd/ccd:5810-5811',
+        'ccd/ccd:12032-12034',
+        'ccd/ccd:11665-11670',
+        'ccd/ccd:12594-12659',
+        'ccd/ccd:13809',
+        'ccd/ccd:13812',
+        'ccd/ccd:6425',
         'ccd/ccd:1223',
+        'ccd/ccd:6547',
+        'ccd/ccd:3401',
+        'ccd/ccd:4029',
         'ccd/ccd:4046',
+        'ccd/ccd:3038',
+        'ccd/ccd:2972-2973',
+        'ccd/ccd:8609',
         'ccd/ccd:8654',
+        'ccd/ccd:8673',
         'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
+        'ccd/ccd:2874',
+        'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
+        'ccd/ccd:2433-2439',
+        'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
+        'ccd/ccd:5725',
+        'ccd/ccd:4642-4653',
+        'ccd/ccd:5819-5823',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -8420,11 +8591,45 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     const site = (f: { doc: string; line: number; file: string; from: number; to: number }): string =>
       `${f.doc}:${f.line} ${refKey(f)}`;
     const seen = new Set([...audit(realCorpus()).failures, ...filesAudit(realCorpus()).failures].map(site));
+    // RULING S6-R10 (fix round 2): re-measured against both re-measured
+    // passes above — routing slices 2-6's growth of `ccd/ccd` put 24 more
+    // sites within reach of another pass; no rule changed.
+    // RE-MEASURED AGAIN at Task 6, 29 -> 28, and it is DERIVED: this list is
+    // the intersection of the set above with the two passes above it, so
+    // Task 5's `+3`/`+32` hunks move it mechanically — `spec:2125
+    // ccd/ccd:19131` enters and `spec:2210 ccd/ccd:13573-13575` and
+    // `spec:2222 ccd/ccd:5385-5388` leave, the same three movers, at the same
+    // spec lines. No ruling id and no rule change.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
-        'spec:2125 ccd/ccd:5797', 'spec:2125 ccd/ccd:7568', 'spec:2125 ccd/ccd:11025',
+        'spec:2123 ccd/ccd:13573-13575',
+        'spec:2124 ccd/ccd:3038',
+        'spec:2125 ccd/ccd:5797',
+        'spec:2125 ccd/ccd:7568',
+        'spec:2125 ccd/ccd:11025',
+        'spec:2125 ccd/ccd:13673',
+        'spec:2125 ccd/ccd:19109',
+        'spec:2125 ccd/ccd:19098',
+        'spec:2125 ccd/ccd:19120',
+        'spec:2125 ccd/ccd:19131',
+        'spec:2204 ccd/ccd:12032-12034',
+        'spec:2204 ccd/ccd:12032-12034',
+        'spec:2209 ccd/ccd:13809',
+        'spec:2209 ccd/ccd:13812',
+        'spec:2209 ccd/ccd:6425',
         'spec:2209 ccd/ccd:1223',
+        'spec:2209 ccd/ccd:3401',
+        'spec:2209 ccd/ccd:4029',
+        'spec:2209 ccd/ccd:4046',
+        'spec:2209 ccd/ccd:3038',
+        'spec:2209 ccd/ccd:2972-2973',
+        'spec:2209 ccd/ccd:8609',
+        'spec:2209 ccd/ccd:8654',
+        'spec:2209 ccd/ccd:8673',
+        'spec:2220 ccd/ccd:2874',
+        'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
+        'spec:2222 ccd/ccd:5725',
       ]);
   });
 

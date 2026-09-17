@@ -167,17 +167,26 @@ beside it when the programme closes.
 seven-day window. `opens_7d = 11` — runs opened in the same window, independently confirmed by
 the coordinator from the runs route.
 
-The read is an **operator act**: `run_events` is exposed by no HTTP route. Measured line by
-line in `server/src/coord/routes.ts`: three mentions, all comments — `:261` inside the JSDoc
-block documenting the `HOME_PROJECT_LEGACY_ACCEPTED` constant (`:269`); `:1240` inside the
-runs-open handler body; `:1788` inside the `app.post('/api/coord/caps')` handler body, whose
-registration opens at `:1744` and closes at `:1832`, the next registration being `/api/runs`
-at `:1883`. `runEvents` appears nowhere in the file, and `CoordStore.runEvents`
+**As measured 2026-09-14:** the read is an **operator act**: `run_events` is exposed by no HTTP
+route. Measured line by line in `server/src/coord/routes.ts`: three mentions, all comments —
+`:261` inside the JSDoc block documenting the `HOME_PROJECT_LEGACY_ACCEPTED` constant (`:269`);
+`:1240` inside the runs-open handler body; `:1788` inside the `app.post('/api/coord/caps')`
+handler body, whose registration opens at `:1744` and closes at `:1832`, the next registration
+being `/api/runs` at `:1883`. `runEvents` appears nowhere in the file, and `CoordStore.runEvents`
 (`server/src/coord/store.ts:2066`) has no caller outside `server/test`. Eleven
 `app.get('/api…')` registrations exist, the eleventh being `/api/asks`, none reading the
 trail. `sqlite3` is not installed on the server box, so the legacy count was taken through
 `node:sqlite`'s `DatabaseSync(..., { readOnly: true })` — the same engine the server itself
 uses — against `~/.ccrc/coord.db`, and from nowhere else. It prints two integers and no rows.
+
+**Correction, 2026-09-16** (routing spec 2026-09-14 §5.3, slice 5, Task 2): the 2026-09-14
+claim above no longer holds. `POST /api/runs/:id/route`, the coordinator's escalation/demotion
+door, is the FIRST route to read `run_events` — it calls `coord.runEvents(id)`
+(`server/src/coord/routes.ts`) to derive its own `priorSameKind`/`lastDemotion` bookkeeping from
+the run's event trail, for a narrow, run-scoped purpose (routing ladder state), not as a general
+trail-reader. The 2026-09-14 measurement above is unaffected by this correction — it predates
+that route and was genuinely taken by operator act against `~/.ccrc/coord.db` directly, from
+nowhere else.
 
 The single counted event **at the time of this read** is run 43 (programme `account-pools`, wave 5/6),
 `causedBy=coordinator`, at `2026-09-11T12:02:33.805Z` — the only `legacy-home-project` event this read
