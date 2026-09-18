@@ -2158,10 +2158,10 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 | 1 | push moved below the build (gh and push statements swapped, both after the build) | pushes the tag BEFORE publishing | RED (1/14 failed) |
 | 1 | `trap cleanup EXIT` removed | failed publish deletes the tag | RED (1/14 failed) |
 | 1 | ls-remote origin-tag probe removed (R5) | refuses when origin already holds the derived tag | RED (1/14 failed) |
-| 2 | `tags: ['v*']` added | triggers on main pushes only | |
-| 2 | `npm ci` step added | owns no second build path | |
-| 2 | `concurrency:` removed | serialises | |
-| 2 | `timeout-minutes: 360` | oss-metadata deadline | |
+| 2 | `tags: ['v*']` added | triggers on main pushes only | RED (1/1 failed) |
+| 2 | `npm ci` step added | owns no second build path | RED (1/1 failed) |
+| 2 | `concurrency:` removed | serialises | RED (1/1 failed) |
+| 2 | `timeout-minutes: 360` | oss-metadata deadline | RED (1/1 failed) |
 | 3 | `_inst_installed` above `_inst_skills` | fault half of the install case | |
 | 3 | uninstall `rm` removed | preserve-set case | |
 | 3 | `cmd_version` compares `$rec == $rec` | `def456` sub-case | |

@@ -149,7 +149,7 @@ describe('workflow and package posture', () => {
   });
 
   it('no workflow reads a repository secret', () => {
-    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/release-main.yml']) {
       expect(read(f), `${f} references secrets — fork PRs must never reach one`)
         .not.toMatch(/secrets\./);
     }
@@ -170,7 +170,7 @@ describe('workflow and package posture', () => {
     // The ceiling carries as much of this as the key does: `timeout-minutes:
     // 360` would satisfy a presence-only check while restating the default it
     // is supposed to replace.
-    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml']) {
+    for (const f of ['.github/workflows/ci.yml', '.github/workflows/release.yml', '.github/workflows/release-main.yml']) {
       const jobs = jobBlocks(read(f));
       expect(jobs.size, `${f}: parsed no jobs at all`).toBeGreaterThan(0);
       for (const [name, block] of jobs) {
