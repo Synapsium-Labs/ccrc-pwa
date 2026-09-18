@@ -1617,7 +1617,7 @@ held cell's `/runs` door all stay on the card the row is on. A row whose repo
 differs from its card's carries the repo slug inside its name; the session
 view shows the slug whenever it is known. The project's own card stays on the
 board with nothing on it and says `N workspaces under <project>` — text, never
-a link. When a coordinator is NOT on the card (archived, dead, or on another
+a link. When a coordinator is NOT on the card (archived, or on another
 card the placement could not reach), the row stays flat with the marker
 `<program> wave n/N`, `· home <project>` appended only when the measured home
 differs, and the marker says when the coordinator is measured gone. The home
@@ -1635,10 +1635,16 @@ After the `home-mismatch` bullet's paragraph (before `**What a crossing costs.**
 `{"ok":false,"refused":"claimant-is-a-worker","by":"<that worker's coordinator>"}`
 — fires at `POST /api/runs` when `claimedBy` is itself the worker of an open
 run, and `heir-is-a-worker` fires the same way at `POST /api/runs/:id/reclaim`
-for a successor. A dispatched worker may not open or inherit a programme: the
+for a successor. The worker of any open run may not open or inherit a programme: the
 board brackets ONE level, and a real chain would render its middle session
-detached from the coordinator above it. A finished worker is not a worker; a
-self-claimed run is admitted (spec 2026-09-16 §12).
+detached from the coordinator above it. Three admissions, not two. A finished
+worker is not a worker; a self-claimed run is admitted (the plan's ruling D-3012;
+spec 2026-09-16 §12 for the door itself); and at the RECLAIM door only, an heir
+whose one coordinator is the claimant being replaced may inherit — the
+programme's own live worker is the likeliest successor to a dead coordinator, and
+the run it takes over is self-claimed, which the board never brackets, so the one
+level stays honest. A worker of somebody ELSE's open run is still refused, and a
+claimant that measures alive is still refused ahead of any of this.
 ```
 
 - [ ] **Step 3: Commit**
@@ -1683,6 +1689,7 @@ Numbers here are ISSUED at the moment of the departure (`ccrc-api ledger allocat
 
 - **D-3024 — Task 10: `resume-reclaim-l0.test.ts` exact-equality pins updated for `heir-is-a-worker`.** `RECLAIM_REFUSE_CODES` and `resume-reclaim-l0.test.ts`'s `total` literal were both built to red the moment `ReclaimRefuseCode` gains a member — Task 10 is exactly that growth. Both pins (`:50`, `:58`) updated to include `'heir-is-a-worker'` in the same commit as the union/map edit that reddened them; the edit is the plan's own reds-by-design mechanism firing, not an improvisation on top of it.
 - **D-3026 — Task 10 fix round 1: `ResumeSheet` learns `heir-is-a-worker`.** What departed: Tasks 9–10 scoped the door slice server-only, so the only operator surface for the reclaim door (`pwa/src/fleet/ResumeSheet.tsx`) kept a hand-written `RECLAIM_COPY` union and a `reclaimErrorText` 409 branch that only knew `no-claimant`/`claimant-alive` — `heir-is-a-worker` fell through to `RECLAIM_COPY.unknown` and `by` never reached the operator, an L4 adapter narrowing a distinction it received. Why: shipping a refusal the console renders as "does not recognise" violates the ring rule even though the plan never scoped the console. What shipped instead: a `'heir-is-a-worker'` entry in `RECLAIM_COPY` and a 409 branch mirroring `claimant-alive`'s shape (a condition sentence, `by` appended the same way `detail` is), plus a `resume-sheet.test.tsx` case pinning that both the sentence and `by` render and the fallback never fires.
+- **D-3028 — the reclaim door ADMITS the dead claimant's own worker as heir.** What departed: Task 10's heir rung mirrored the open door's predicate exactly (`heirWorkerOf !== null && heirWorkerOf !== to`, D-3011/D-3012), and `parentOfSession(to)` answers the CLAIMANT of the heir's newest open run — which on a dead-coordinator programme is `from`, the very claimant being replaced. So the rung refused the programme's OWN live worker: the likeliest successor in the one scenario the reclaim door exists for. Why: a door whose whole purpose is rescuing a programme from a corpse must not refuse the session sitting beside it; the two doors ask the same read but not the same question — the open door has no `from`. What shipped: the predicate gains `&& heirWorkerOf !== from`, so an heir whose only coordinator IS the outgoing claimant is admitted. The run that results is SELF-CLAIMED, which the open door already admits (D-3012) and which `nestFleet` never brackets (`r.claimedBy !== r.sessionId`), so §12's one-level rationale is untouched and no chain can form out of it; a worker of somebody ELSE's open run is still refused, and rung 4 still refuses a `from` that measures alive. Pinned by a new `coord-reclaim.test.ts` case (RED when `&& heirWorkerOf !== from` is dropped, measured) beside the existing refusal case (RED when the rung is deleted, measured). The same exception is written into `shared/api.ts`'s `heir-is-a-worker` bullet, spec §12's reclaim sentence, README's door paragraph and `ResumeSheet`'s copy.
 
 ## Follow-ons, recorded and not built
 

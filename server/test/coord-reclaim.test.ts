@@ -330,6 +330,30 @@ describe('reclaimRun — the order is the guard', () => {
     expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
+  it('the DEAD claimant\'s OWN worker IS admitted as heir — the programme inherits itself', async () => {
+    // The scenario the whole door exists for, and the one the first spelling of
+    // the rung refused: a coordinator dies, its live worker is the session in
+    // the pane beside the corpse, and `parentOfSession(LIVE)` answers `DEAD` —
+    // the very id being replaced. `heirWorkerOf !== from` is what admits it.
+    // What lands is a SELF-CLAIMED run (LIVE claims a run it is also the
+    // sessionId of), which the open door already admits (D-3012) and which
+    // `nestFleet` never brackets (`r.claimedBy !== r.sessionId`), so no chain
+    // can form out of this and §12's one-level rationale is untouched.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);              // wave 1, the row being reclaimed
+    const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the SAME programme
+    s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    expect(s.parentOfSession(LIVE)).toBe(DEAD);   // the fixture reaches the arm
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toMatchObject({ ok: true, program: PROGRAM, from: DEAD, to: LIVE });
+    // EVERY row of the programme moved, not just the one named — `reclaimProgram`
+    // selects on `claimedBy != ?`, so the wave the heir works is rewritten too.
+    expect(okRun(s.run(id))!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(wave2))!.claimedBy).toBe(LIVE);
+  });
+
   it('a re-typed sitting claimant stays a no-op even when that claimant is somebody\'s worker — the rung is INSIDE `to !== from` (D-1136, D-3011)', async () => {
     const home = mkTmp('ccrc-reclaim-');
     const s = store(home);

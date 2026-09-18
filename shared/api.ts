@@ -5363,11 +5363,14 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
  *    no-claimant    — the run names nobody. Distinct from `unknown-run` (there is no
  *                     such run) and from `unknown-session` (the NEW claimant has no
  *                     registry row): three different things to fix, never one code
- *    heir-is-a-worker — the NEW claimant is the worker of somebody else's open
+ *    heir-is-a-worker — the NEW claimant is the worker of somebody ELSE's open
  *                     run (spec §12): a worker may not inherit a programme
  *                     any more than open one. 409, `by` names its coordinator.
  *                     A finished worker is not a worker; a self-claimed one is
- *                     admitted (D-3012) */
+ *                     admitted (D-3012); and at the RECLAIM door only, so is
+ *                     an heir whose one coordinator is the claimant being
+ *                     replaced — a programme's own worker may inherit it
+ *                     (D-3028) */
 export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant' | 'heir-is-a-worker';
 const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> =
   { 'claimant-alive': true, 'no-claimant': true, 'heir-is-a-worker': true };

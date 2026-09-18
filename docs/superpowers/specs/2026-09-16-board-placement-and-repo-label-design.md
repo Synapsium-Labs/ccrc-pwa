@@ -375,7 +375,13 @@ workspaces of its own so that only the parent coordinator has that right.
    uses to find a worker's parent — with `409 {ok:false, refused:'claimant-is-a-worker', by:<that
    worker's own coordinator>}`, placed with the other pre-open rungs so a refusal leaves no `planned`
    orphan and places no hold. `POST /api/runs/:id/reclaim` refuses the same heir (`ReclaimOutcome`
-   kind `heir-is-a-worker`, `409`, `by:` its coordinator), because a reclaim decides a coordinator too.
+   kind `heir-is-a-worker`, `409`, `by:` its coordinator), because a reclaim decides a coordinator too
+   — **unless that heir's only coordinator is the claimant being replaced**, in which case the
+   programme's own worker may inherit it. That heir is the likeliest successor in the one scenario the
+   reclaim door exists for, and the run it takes over is self-claimed, which `nestFleet` never brackets
+   (`r.claimedBy !== r.sessionId`), so admitting it leaves the one-level rule exactly as it was. A
+   worker of somebody ELSE's open run is still refused, and a claimant that measures alive is refused
+   ahead of any of it. (Wave 2's fix round, beside D-3012's admission at the open door.)
 
 **What the guard deliberately does NOT refuse.** A session that was a worker of a programme whose runs
 are all terminal — `parentOfSession` answers `null` for it — may coordinate later; the operator reuses

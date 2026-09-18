@@ -8125,11 +8125,21 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // FOLLOWED, not inferred: the line that anchor named at the base is a
       // `RoutingArm` docstring line reading "into `arm === null`. Rows after
       // the first well-formed `arm:` are never", and those bytes now stand at
-      // `:5688` — +44 exactly, measured at both trees. The anchor is NOT
+      // `:5691` — +47 exactly, measured at both trees. The anchor is NOT
       // re-pointed, because `plans/2026-09-10-…-plan-a.md` is byte-identical to
       // `origin/main` at this tree (measured, `git diff --quiet origin/main --`
       // on the file), so re-pointing it is editing a closed programme's
       // document. Measured, left where it is, and counted.
+      // RE-MEASURED at the final fix round, +44 -> +47 and NOT adjusted to keep
+      // a number green: D-3028 added three lines to the `heir-is-a-worker`
+      // bullet — `git diff -U0 -- shared/api.ts` is one replacement at `:5366`
+      // and ONE pure-insertion hunk `@@ -5370 +5370,4 @@`, so every line below
+      // shifts by exactly +3 and the `RoutingArm` referent went `:5688` ->
+      // `:5691`. Still not `:5644`, so this entry stays 1. README's own four
+      // `shared/api.ts` anchors sit below that insertion and were RE-POINTED by
+      // content (+3) rather than counted, on the same ground the round before
+      // this one used: README is the one corpus document this branch may repair,
+      // so a rotted anchor there is a repair and never a debt.
       'shared/api.ts': 1,
       // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
       // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
@@ -8139,9 +8149,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // hunk header, `@@ -377,0 +378,23 @@`, so the shift is +23 with nothing
       // deleted anywhere above. EACH REFERENT WAS FOLLOWED BY CONTENT, measured
       // at both trees rather than derived by adding 23 to a number:
-      //   `:1274` -> `:1297`, the `bashRoots` declaration — FIVE of the eight
-      //     (spec `:308` and `:1347`, plan `:28` and `:3236`, one of them
-      //     naming it twice in one clause);
+      //   `:1274` -> `:1297`, the `bashRoots` declaration — FOUR of the eight,
+      //     MEASURED rather than counted by eye. `grep -no ':1274'` over the two
+      //     corpus documents (`specs/2026-09-09-graphify-compaction-card-design.md`
+      //     and `plans/2026-09-10-graphify-compaction-card-plan-a.md`) prints
+      //     exactly four sites: spec `:308`, spec `:1353`, plan `:32`, plan
+      //     `:3236`. The audit keys a reference by its PARAGRAPH-START line,
+      //     which is why two of those read `:1347` and `:28` elsewhere in this
+      //     breakdown; the grep reports the line the token itself is on. The
+      //     sentence this replaces said FIVE and blamed the fifth on a clause
+      //     "naming it twice in one clause" — no such clause exists, and the
+      //     four measured sites are what make this breakdown sum to the 8 it
+      //     annotates;
       //   `:1319-1320` -> `:1342-1343`, the two opening lines of the `for`
       //     over the bash file list — TWO (spec `:308`, plan `:28`);
       //   `:1303-1304` -> `:1326-1327` and the bare `:1304` -> `:1327`, both

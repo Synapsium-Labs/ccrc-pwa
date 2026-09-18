@@ -254,12 +254,19 @@ export type ReclaimOutcome =
  *      ladder on purpose: handing a program to an id that does not exist strands
  *      it exactly as thoroughly as leaving it on a corpse, and one listing rules
  *      it out;
+ *    • the HEIR RUNG, deliberately UNNUMBERED so rungs 4 and 5 keep the
+ *      numbers this file's comments and its suite already cite: `to` is not
+ *      the worker of somebody ELSE's open run — else `heir-is-a-worker`
+ *      carrying `by`. It sits HERE and only inside `to !== from` (D-3011):
+ *      after the existence read it would otherwise repeat, before the tmux
+ *      measurement because it is synchronous and cheaper. Its three
+ *      admissions are argued at the guard itself;
  *   4. the CURRENT claimant is dead      — else `claimant-alive` carrying the
  *      evidence sentence, or `registry-unmeasurable`;
  *   5. the commit, as ONE transaction the store owns.
  *
- * D-1136 — `to === from` SHORT-CIRCUITS PAST 4 BUT NOT PAST 3, and where it sits
- * is the decision rather than the arm itself. It must not be a refusal: an
+ * D-1136 — `to === from` SHORT-CIRCUITS PAST THE HEIR RUNG AND 4, BUT NOT PAST
+ * 3, and where it sits is the decision rather than the arm itself. It must not be a refusal: an
  * operator re-typing the id the board already shows is asking for nothing, and a
  * refusal there teaches them the door is broken. Run at the ALIVENESS rung, as
  * here, it still pays for the destination's own registry read — so a typo that
@@ -304,13 +311,27 @@ export async function reclaimRun(
     return { ok: false, kind: 'unknown-session' };
   }
   if (to !== from) {
-    // §12 / D-3011: a worker may not inherit a programme. INSIDE this branch,
-    // so an operator re-typing the id the board already shows stays the
-    // no-op D-1136 made it; AFTER rung 3 (the heir's row exists) and BEFORE
-    // rung 4 (the tmux measurement it would otherwise pay for). Same read and
-    // same two admissions as `POST /api/runs`' rung (Task 9).
+    // §12 / D-3011: a worker of SOMEBODY ELSE's open run may not inherit a
+    // programme. INSIDE this branch, so an operator re-typing the id the board
+    // already shows stays the no-op D-1136 made it; AFTER rung 3 (the heir's
+    // row exists) and BEFORE rung 4 (the tmux measurement it would otherwise
+    // pay for). Same read as `POST /api/runs`' rung (Task 9).
+    //
+    // THREE admissions, not two, and the third is this door's own (D-3028).
+    // `parentOfSession` answers the CLAIMANT of the heir's newest open run,
+    // which on a dead-coordinator programme is exactly `from` — the claimant
+    // being replaced. Refusing that heir refuses the most likely successor in
+    // the one scenario this door exists for: the programme's own live worker,
+    // sitting in the pane beside the corpse. So `heirWorkerOf === from` is
+    // ADMITTED. What it produces is a SELF-CLAIMED run, which the open door
+    // already admits for the same read (D-3012) and which `nestFleet` never
+    // brackets (`r.claimedBy !== r.sessionId`, nestFleet.ts:132) — so §12's
+    // one-level rationale is untouched: no chain can form out of it. A worker
+    // of somebody ELSE's open run is still refused, and rung 4 below still
+    // refuses a `from` that measures alive, so this admission cannot be used
+    // to take a programme off a living coordinator.
     const heirWorkerOf = deps.coord.parentOfSession(to);
-    if (heirWorkerOf !== null && heirWorkerOf !== to) {
+    if (heirWorkerOf !== null && heirWorkerOf !== to && heirWorkerOf !== from) {
       return { ok: false, kind: 'heir-is-a-worker', by: heirWorkerOf };
     }
     const claimant = await measureClaimant(deps, from, now);
