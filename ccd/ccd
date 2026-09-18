@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8aa0c8b641553762c1381a839fbe2c65185e59ec56d73f891b75aecfecdf938e
+# ccrc:generated 1 sha256=796f806581382512960fc9c2f456d2975363317887edc930e135a094a2b51e5a
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2059,6 +2059,85 @@ _codex_lanes() {
 # untagged — today's behaviour, with no `command not found` on stderr and no
 # rc 127 leaking into a `$(…)` capture.
 _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# THE ACCOUNT SIDE'S STATE, and the reason it is not `_acct_pool`'s shape.
+#
+# `_acct_pool` answers a NAME or empty, and empty means untagged — which was
+# honest while the only carrier was the roster, a file that is either present
+# or the box has no accounts at all. The projection is different: it can be
+# ABSENT (this node has never synced), STALE (the control plane has been
+# unreachable longer than the lease) or MALFORMED, and all three mean NOBODY
+# DECIDES. Folding any of them into "untagged" would silently lift every
+# account constraint on the box, which is the fail-OPEN direction and the one
+# outcome the whole design exists to prevent (spec §5.4).
+#
+# FIVE WORDS, NOT FOUR. `stale` does not fold into `unreadable`: both mean
+# nobody decides, but one's remedy is file permissions and the other's is the
+# control-plane link, and the die message a human reads has to say which.
+# An adapter may not narrow a distinction it received.
+#
+# READ ONCE, ANSWERED MANY TIMES. `_pool_ok` runs per CANDIDATE account, so a
+# per-call read would turn one placement into N reads of the same file — the
+# cost `_pool_ok`'s own comment already refuses for the project side. The
+# memoisation is a load flag plus one associative array, both process-local.
+_APS_LOADED=0
+_APS_STATE=''
+_APS_EPOCH=''
+declare -A _APS_POOL=()
+_acct_pool_load() {   # -> sets _APS_STATE to '' (usable) or a verdict word
+  [[ "$_APS_LOADED" == 1 ]] && return 0
+  _APS_LOADED=1
+  # The same LOCALE shadow `_project_pool_state` argues for (D-2520): the
+  # grammar, the trailing strip and `_pool_name_valid` are ASCII rules about a
+  # file whose only legal content is ASCII, and without this they follow
+  # whatever locale the caller ran under.
+  local LC_ALL=C
+  local f="$REG/pool-epoch" line k v p now lease=''
+  # ABSENCE PROVEN AT EVERY LEVEL IT IS CLAIMED, exactly as
+  # `_project_pool_state` does it one directory down.
+  [[ -d "$REG" && -x "$REG" ]] || { _APS_STATE=unreadable; return 0; }
+  [[ -e "$f" || -L "$f" ]]     || { _APS_STATE=unreadable; return 0; }
+  [[ -f "$f" && -r "$f" ]]     || { _APS_STATE=unreadable; return 0; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    k=${line%% *}; v=${line#* }
+    case "$k" in
+      epoch)  _APS_EPOCH=$v ;;
+      # R3's wire format carries an `issued` line (the projection's own
+      # issuedAt) between `epoch` and `lease`; this reader has no use for it
+      # today and no `_APS_ISSUED` global to put it in (see Task 1's
+      # Interfaces list), so it is read and discarded exactly as a blank line
+      # is — recognised, not merely tolerated by falling through.
+      issued) ;;
+      lease)  lease=$v ;;
+      acct)   p=${v#* }; v=${v%% *}
+              # A name off the grammar poisons the WHOLE document: a reader
+              # that skipped the bad row would serve the rest under a tag it
+              # could not validate.
+              _pool_name_valid "$p" || { _APS_STATE=malformed; return 0; }
+              _APS_POOL["$v"]=$p ;;
+      '')     ;;
+      *)      _APS_STATE=malformed; return 0 ;;
+    esac
+  done < "$f" 2>/dev/null || { _APS_STATE=unreadable; return 0; }
+  # No epoch line is not an empty document — it is a document this reader does
+  # not recognise, and recognising it partially is how a stale format gets
+  # served as fact.
+  [[ "$_APS_EPOCH" =~ ^[0-9]+$ ]] || { _APS_STATE=malformed; return 0; }
+  [[ "$lease" =~ ^[0-9]+$ ]]      || { _APS_STATE=malformed; return 0; }
+  now=$(date +%s)
+  (( now > lease )) && { _APS_STATE=stale; return 0; }
+  return 0
+}
+_acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | malformed | stale ; always rc 0
+  _acct_pool_load
+  [[ -n "$_APS_STATE" ]] && { echo "$_APS_STATE"; return 0; }
+  local p="${_APS_POOL[${1-}]-}"
+  # An account the document does not name is UNTAGGED, not unknown: the
+  # document is complete by construction (the control plane always emits every
+  # edge it holds), so silence about an account is a positive statement that
+  # it carries no pool. This is the one fold that is honest here.
+  [[ -z "$p" ]] && { echo untagged; return 0; }
+  echo "named $p"
+}
 # THE RULE, spelled once in this language: an account may serve a project iff
 # the account is untagged, or the project is untagged, or the names are equal.
 #
