@@ -1384,6 +1384,8 @@ UPD_STAGE=""
 UPD_TREE=""
 UPD_VERSION=""
 UPD_BACKUP_DIR=""
+UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
+UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 # `set -u` out-parameter discipline, same as the UPD_* four above: the _inst_*
 # steps read it, cmd_install overwrites it — a direct _inst_* call must meet a
 # stated default, never an unbound-variable death.
@@ -1506,8 +1508,11 @@ already running).
             verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
             print the from -> to report. [--to vX.Y.Z] pins a version — the
             rollback path too: a downgrade prints the coord.db restore
-            commands and never auto-restores. Never automatic; per box;
-            fleet box first, then the server box
+            commands and never auto-restores. A box already running the
+            target, whose install completed, is left alone (--force
+            reinstalls). --check only compares this box with what is
+            published (exit 0 current, 1 otherwise) and writes nothing.
+            Per box; across a fleet, 'ccrc rollout' runs it in order
   uninstall move this box off ccrc, leaving reinstall safe: stop, disable
             and remove the units (incl. both drop-ins and the slice
             escape), remove ccrc's managed settings.json hook entries
@@ -10936,7 +10941,7 @@ _inst_installed() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to=""
+  local to="" check=0 force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -10944,6 +10949,8 @@ cmd_update() {
         [ $# -ge 2 ] || { echo "$PROG: --to needs a value: a release tag shaped vX.Y.Z" >&2; usage >&2; exit 2; }
         to="$2"; shift ;;
       --to=*) to="${1#--to=}" ;;
+      --check) check=1 ;;
+      --force) force=1 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
@@ -10952,6 +10959,34 @@ cmd_update() {
     echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
     usage >&2
     exit 2
+  fi
+
+  if [ "$check" -eq 1 ]; then
+    command -v curl >/dev/null 2>&1 || _ccrc_die "curl is required by 'ccrc update --check' but is not on PATH"
+    local sha="none" box="unversioned" state="unversioned" label="latest" rec="" rc=0
+    [ -n "$to" ] && label="target"
+    _box_build_fields || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      sha="${BOX_BUILD[0]}"
+      if [ -n "${BOX_BUILD[4]}" ]; then
+        box="${BOX_BUILD[4]}"; state="behind"
+      fi
+    fi
+    _upd_resolve "$to" >/dev/null
+    if [ "$state" = behind ] && [ "$box" = "$UPD_VERSION" ]; then
+      state="incomplete"
+      if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then
+        state="current"
+      fi
+    fi
+    # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
+    echo "check: box=$box sha=$sha target=$UPD_VERSION state=$state"
+    case "$state" in
+      current)    echo "this box: $box ($sha) · $label: $UPD_VERSION — current"; return 0 ;;
+      incomplete) echo "this box: $box ($sha) · $label: $UPD_VERSION — same version, but the install never completed (ccrc version explains); update will reinstall"; return 1 ;;
+      behind)     echo "this box: $box ($sha) · $label: $UPD_VERSION — behind"; return 1 ;;
+      *)          echo "this box: unversioned ($sha) · $label: $UPD_VERSION — a release install would be the first on this box"; return 1 ;;
+    esac
   fi
 
   # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
@@ -10984,7 +11019,15 @@ cmd_update() {
   esac
 
   _upd_fleet_warn
-  _upd_fetch "$to"
+  _upd_resolve "$to"
+  _upd_fetch
+  # THE GATE (design §5): the no-op path costs one verified download and no
+  # write — no backup, no restart, no sweep. Two operators told to ship the
+  # same release no longer restart the fleet twice.
+  if [ "$force" -eq 0 ] && _upd_converged; then
+    echo "update: this box already runs $UPD_VERSION (${BOX_BUILD[0]}) and that install completed — nothing to do (pass --force to reinstall)"
+    return 0
+  fi
   _upd_backup
 
   # THE RECORDED ROLE (spec §5): `ccrc.env`'s CCRC_ROLE, written by
@@ -11032,47 +11075,78 @@ _upd_fleet_warn() {
   return 0
 }
 
-# Fetch + verify, into a throwaway staging dir this process removes on ANY
+# ── _upd_resolve / _upd_fetch — SHA256SUMS first, then the tarball ────────
+# Split (release/rollout design §5-6) so `--check` and `rollout` can learn
+# WHICH version is published from the sums file alone — one small download,
+# nothing staged beyond it — while the full verb goes on to fetch, verify
+# twice and extract exactly as before.
+#
+# `_upd_resolve` — into a throwaway staging dir this process removes on ANY
 # exit. The URL space is GitHub's release layout (`latest/download/<asset>`,
 # `download/<tag>/<asset>`) under the one owner/repo pair at the top;
 # `install.sh --release` walks the same space with the same order — SUMS
 # first, because under `latest/` only the sums file knows the tarball's name.
-_upd_fetch() {   # $1 = pinned tag, or "" for the newest release
-  local to="$1" base url_dir _sum tarname
+_upd_resolve() {   # $1 = pinned tag, or "" for the newest release
+  local to="$1" base _sum
   base="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
-  if [ -n "$to" ]; then url_dir="$base/download/$to"; else url_dir="$base/latest/download"; fi
+  if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
   trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
-  echo "update: fetching $url_dir/SHA256SUMS …"
-  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$url_dir/SHA256SUMS" \
-    || _ccrc_die "download failed: $url_dir/SHA256SUMS (is there a release?) — nothing on this box was changed"
-  read -r _sum tarname < "$UPD_STAGE/SHA256SUMS" \
+  echo "update: fetching $UPD_URL_DIR/SHA256SUMS …"
+  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$UPD_URL_DIR/SHA256SUMS" \
+    || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release?) — nothing on this box was changed"
+  read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
-  tarname="${tarname#\*}"
-  case "$tarname" in
+  UPD_TARNAME="${UPD_TARNAME#\*}"
+  case "$UPD_TARNAME" in
     ccrc-*.tar.gz) ;;
-    *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $tarname) — refusing; nothing on this box was changed" ;;
+    *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $UPD_TARNAME) — refusing; nothing on this box was changed" ;;
   esac
-  UPD_VERSION="${tarname#ccrc-}"
+  UPD_VERSION="${UPD_TARNAME#ccrc-}"
   UPD_VERSION="${UPD_VERSION%.tar.gz}"
-  echo "update: fetching $url_dir/$tarname …"
-  curl -fsSL -o "$UPD_STAGE/$tarname" "$url_dir/$tarname" \
-    || _ccrc_die "download failed: $url_dir/$tarname — nothing on this box was changed"
+}
+
+# `_upd_fetch` — the tarball itself, verified twice and extracted. Reads
+# `UPD_URL_DIR`/`UPD_TARNAME`, both set by `_upd_resolve` above.
+_upd_fetch() {
+  echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME …"
+  curl -fsSL -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
+    || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME — nothing on this box was changed"
   # Verify BEFORE extracting: a tarball that fails its checksum never puts a
   # file on disk, let alone runs one (install.sh's rule, same words).
   ( cd "$UPD_STAGE" && _plat_sha256_check SHA256SUMS >/dev/null 2>&1 ) \
-    || _ccrc_die "checksum verification FAILED for $tarname — refusing to extract or install; nothing on this box was changed"
+    || _ccrc_die "checksum verification FAILED for $UPD_TARNAME — refusing to extract or install; nothing on this box was changed"
   UPD_TREE="$UPD_STAGE/tree"
   mkdir "$UPD_TREE" || _ccrc_die "cannot create $UPD_TREE"
-  tar -xzf "$UPD_STAGE/$tarname" -C "$UPD_TREE" \
-    || _ccrc_die "extracting $tarname failed — nothing outside the staging dir was touched"
+  tar -xzf "$UPD_STAGE/$UPD_TARNAME" -C "$UPD_TREE" \
+    || _ccrc_die "extracting $UPD_TARNAME failed — nothing outside the staging dir was touched"
   [ -f "$UPD_TREE/MANIFEST" ] \
     || _ccrc_die "the release ships no MANIFEST — refusing to install a set nothing can verify"
   ( cd "$UPD_TREE" && _plat_sha256_check MANIFEST >/dev/null 2>&1 ) \
     || _ccrc_die "MANIFEST verification FAILED after extraction — a file in the release set does not match its recorded digest; refusing to install"
-  echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"
+  echo "update: verified $UPD_TARNAME (transport checksum, then the per-file MANIFEST)"
+}
+
+# ── _upd_converged — 0 iff stamp sha == staged sha == the completed record ─
+# Three comparisons, none dropped: version equality alone is a moved tag
+# away from wrong; stamp==staged alone is a half-installed box away from
+# wrong (the record is the spine's LAST write, Task 3). An unreadable stamp
+# or record is no evidence, so it answers 1 and the update proceeds.
+_upd_converged() {
+  local rec="" staged=""
+  local -a box=()
+  _box_build_fields || return 1
+  [ -n "${BOX_BUILD[4]}" ] && [ "${BOX_BUILD[4]}" = "$UPD_VERSION" ] || return 1
+  box=("${BOX_BUILD[@]}")
+  _box_build_fields "$UPD_TREE/build.json" || { BOX_BUILD=("${box[@]}"); return 1; }
+  staged="${BOX_BUILD[0]}"
+  BOX_BUILD=("${box[@]}")
+  [ "$staged" = "${box[0]}" ] || return 1
+  [ -f "$BOX_INSTALLED_FILE" ] || return 1
+  IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1
+  [ "$rec" = "${box[0]}" ]
 }
 
 # Deploy's backup set (deploy.sh:363-369 agent lane, :788-792 server lane),

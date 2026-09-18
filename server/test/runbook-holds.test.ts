@@ -407,7 +407,7 @@ describe('step 12 (the release round-trip) quotes what the release verbs actuall
   });
 
   it("`ccrc update`'s verified line is derived from _upd_fetch's template", () => {
-    const template = 'echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"';
+    const template = 'echo "update: verified $UPD_TARNAME (transport checksum, then the per-file MANIFEST)"';
     expect(ccrcSrc).toContain(template);
     // The update in the worked example crosses to v0.0.2.
     expect(step12Section()).toContain(

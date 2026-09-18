@@ -38,7 +38,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
-  statSync, chmodSync, readdirSync, appendFileSync, renameSync,
+  statSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -931,5 +931,148 @@ describe('ccrc update: source pins', () => {
     // Both refusal messages must keep NAMING the floor they enforce.
     expect(inst).toContain(`ccd needs ${instFloor} or newer`);
     expect(ccrc).toContain(`ccd needs ${instFloor} or newer`);
+  });
+});
+
+describe('ccrc update --check: what runs here vs what is published (spec §6)', () => {
+  const firstLine = (s: string): string => s.split('\n')[0] ?? '';
+  const parse = (s: string): Record<string, string> =>
+    Object.fromEntries(firstLine(s).replace(/^check: /, '').split(' ').map((kv) => kv.split('=') as [string, string]));
+
+  it('behind: an older version on the box, exit 1, SHA256SUMS fetched and nothing else, nothing written', () => {
+    const home = freshUpdateBox('ccrc-update-check-behind-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', state: 'behind' });
+    expect(r.stdout).toMatch(/^this box: v1\.0\.0 \(oldsha[0-9a-f]*\) · latest: v2\.0\.0 — behind$/m);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('current: same version AND the completed-install record names the stamped sha, exit 0', () => {
+    const home = freshUpdateBox('ccrc-update-check-current-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(parse(r.stdout).state).toBe('current');
+    expect(r.stdout).toMatch(/— current$/m);
+  });
+
+  it('incomplete: same version but no (or a stale) completed-install record, exit 1 — rollout must not skip it', () => {
+    const home = freshUpdateBox('ccrc-update-check-incomplete-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    let r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout).state).toBe('incomplete');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'stalesha00000000000000000000000000000000\n');
+    r = runUpdate(home, ['--check']);
+    expect(parse(r.stdout).state).toBe('incomplete');
+  });
+
+  it('unversioned: a deploy.sh stamp (no version), exit 1, and --to labels the target', () => {
+    const home = freshUpdateBox('ccrc-update-check-unversioned-');
+    plantOldBox(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"deploysha0000000000000000000000000000000","ref":"HEAD","builtAt":"2026-09-17T17:16:09Z","dirty":false}\n');
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    const r = runUpdate(home, ['--check', '--to', 'v1.0.0']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', state: 'unversioned' });
+    expect(r.stdout).toMatch(/^this box: unversioned \(deploysha[0-9a-f]*\) · target: v1\.0\.0 — a release install would be the first on this box$/m);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
+  });
+
+  it('unstamped: no build.json at all reads as unversioned with sha=none', () => {
+    const home = freshUpdateBox('ccrc-update-check-unstamped-');
+    plantOldBox(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toMatchObject({ box: 'unversioned', sha: 'none', state: 'unversioned' });
+  });
+});
+
+describe('ccrc update: the "already there" gate (spec §5)', () => {
+  const converged = (prefix: string): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v2.0.0' });
+    plantCoordDb(home);
+    // The stub release's stamp sha is what stubTree writes: newsha…; the box
+    // must carry the SAME sha for the gate's second comparison to hold.
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"newsha0000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v2.0.0"}\n');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'newsha0000000000000000000000000000000000\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    return home;
+  };
+
+  it('three matching shas → nothing to do: exit 0, tarball verified, NO backup, NO install, NO sweep', () => {
+    const home = converged('ccrc-update-gate-skip-');
+    writeFileSync(join(home, 'fixture-sweep-units'), 'claude-session@x.service loaded active running\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^update: this box already runs v2\.0\.0 \(newsha[0-9a-f]*\) and that install completed — nothing to do \(pass --force to reinstall\)$/m);
+    // Both fetches happened (the gate's exact stage reads the staged stamp)…
+    expect(localUrls(home)).toEqual([
+      `local://${home}/releases/latest/download/SHA256SUMS`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz`,
+    ]);
+    // …and nothing after them.
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
+    expect(calls).not.toMatch(/try-restart|restart/);
+  });
+
+  it('--force skips the gate: the same box installs and sweeps', () => {
+    const home = converged('ccrc-update-gate-force-');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toMatch(/nothing to do/);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('same version, record absent → proceeds', () => {
+    const home = converged('ccrc-update-gate-norecord-');
+    rmSync(join(home, '.ccrc', 'installed'));
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('same version, record names an older sha → proceeds', () => {
+    const home = converged('ccrc-update-gate-stale-');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('same version, the RELEASE carries a different sha (a moved tag) → proceeds', () => {
+    const home = converged('ccrc-update-gate-moved-');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"boxsha00000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v2.0.0"}\n');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'boxsha00000000000000000000000000000000000\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('a different version never consults the record', () => {
+    const home = converged('ccrc-update-gate-differs-');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"newsha0000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v1.0.0"}\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
   });
 });
