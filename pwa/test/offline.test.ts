@@ -281,6 +281,18 @@ describe('fleet store hydration + persistence', () => {
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
     store.getState().disconnect();
   });
+
+  // Task 7 (board-placement wave 2): `projects` is the LAST successful
+  // `/api/projects` read, lifted into the store so the session view can
+  // label a repo without a second agent round trip. It is deliberately NOT
+  // part of the persisted snapshot — same reason as `pools`.
+  it('projects start null and are NOT part of the persisted snapshot (Task 7)', () => {
+    const store = createFleetStore({ makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket });
+    expect(store.getState().projects).toBeNull();
+    store.getState().setProjects([{ name: 'demo', workdir: '/w/demo', repo: { state: 'named', slug: 'o/demo' } }]);
+    expect(store.getState().projects?.[0]?.name).toBe('demo');
+    expect(JSON.stringify(loadFleetSnapshot() ?? {})).not.toContain('"projects"');
+  });
 });
 
 /**

@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault, type RouteField } from '../../../shared/api';
+import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -75,6 +75,7 @@ export function SessionScreen({
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
+  const projects = useFleet((s) => s.projects);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -169,6 +170,11 @@ export function SessionScreen({
   const wrapperFromId = id.split(':', 1)[0] ?? id;
   const project = live?.project ?? (id.slice(wrapperFromId.length + 1) || id);
   const wrapper = live?.wrapper ?? wrapperFromId;
+  // R3: the session view's repo label is unconditional — not conditioned on
+  // a card's context. `projects` is the fleet store's last successful
+  // `/api/projects` read (Task 7); `null` before the fleet screen has ever
+  // fetched (D-3013) or when this project has no row renders nothing.
+  const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
   // active row and the header's queued badge are DERIVED from it instead of
@@ -454,6 +460,7 @@ export function SessionScreen({
         status={status}
         statusUpdatedAt={statusUpdatedAt}
         roster={roster}
+        repo={repo}
         onInterrupt={() => void interrupt()}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}

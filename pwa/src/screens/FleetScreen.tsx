@@ -232,7 +232,10 @@ export function FleetScreen({
     try {
       const cls = classFilterRef.current;
       const response = await api.projects(cls === '' ? undefined : cls);
-      if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
+      if (request === projectRequest.current) {
+        setProjectRows({ kind: 'ready', rows: response.projects });
+        useStore.getState().setProjects(response.projects);
+      }
     } catch {
       if (request === projectRequest.current) {
         setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'failed' });

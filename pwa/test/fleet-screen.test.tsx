@@ -409,6 +409,27 @@ describe('FleetScreen', () => {
         .toBeInTheDocument();
     });
 
+    // Task 7 (board-placement wave 2): `refreshProjects` also lifts the last
+    // successful read onto the fleet store itself (`setProjects`), not just
+    // this screen's own component-local `projectRows` — the session view
+    // reads it from THERE, with no round trip of its own, so a ready read
+    // that never reaches the store would leave that view permanently blind.
+    it('writes the last successful read onto the fleet store too, not just this screen\'s own rows', async () => {
+      vi.spyOn(api, 'projects').mockResolvedValue({
+        roots: [],
+        projects: [{ name: 'alpha', workdir: '/alpha', repo: { state: 'named', slug: 'o/alpha' } }],
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      await waitFor(() => expect(store.getState().projects?.[0]?.name).toBe('alpha'));
+    });
+
     it('skips the null-state cold-load sweep, then refreshes for each pools frame only', async () => {
       const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
       const store = makeStore();
