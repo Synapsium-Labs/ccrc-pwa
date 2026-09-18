@@ -283,6 +283,35 @@ describe('GET /api/accounts', () => {
     }
   });
 
+  // Minor 1 (review round 2): ONE hoisted `accountPoolEdges()` read for the
+  // whole request, not one per account — this proves the degrade-on-throw
+  // side of that hoist: the WHOLE response falls back to the declared-only
+  // shape rather than 500ing, and it does so consistently across every
+  // account (not just the ones a per-account try/catch happened to guard).
+  it('a throwing accountPoolEdges() degrades the WHOLE response to declared-only, never a 500', async () => {
+    const home = seedLimits({ claude: { five: 2, seven: 3 } });
+    seedRoster(home, POOLED_TEST_ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    coord.accountPoolEdges = () => { throw new Error('simulated DatabaseSync failure'); };
+    const base = testDeps(home);
+    const app = await buildServer({ ...base, cfg, coord });
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/accounts' });
+      expect(res.statusCode).toBe(200);
+      const { roster } = res.json() as AccountsResponse;
+      // Every entry falls back to its DECLARED pool, adapted — none 500s and
+      // none silently drops the field.
+      expect(roster.find((a) => a.id === 'claude')?.resolvedPool)
+        .toEqual({ state: 'tagged', pools: ['pool-a'], origin: 'declared' });
+      expect(roster.find((a) => a.id === 'gpt')?.resolvedPool)
+        .toEqual({ state: 'untagged', origin: 'declared' });
+    } finally {
+      await app.close();
+      coord.db.close();
+    }
+  });
+
   // The handler rebuilds each AccountUsage field by field, so a field it forgets
   // to copy is a silent wire loss, not a type error — which is this whole file's
   // reason to exist. `disabled` is exactly that shape of field.

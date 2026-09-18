@@ -29,6 +29,7 @@ import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { execFileSync } from 'node:child_process';
 import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { POOLS_DIR_NAME } from '../src/pools.js';
 
 const TOKEN = 'f'.repeat(64);
 
@@ -487,5 +488,67 @@ describe('refusePool guards a throwing coord.db (review round 1, Minor 9)', () =
     });
     expect(r.statusCode).toBe(503);
     expect(r.json()).toMatchObject({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
+  });
+});
+
+/**
+ * Ruling T7-R3 (review round 2) — CLOSES THE FORECAST/REFUSAL DIVERGENCE.
+ * The reviewer's exact repro: `acct-a` untagged in the ROSTER, centrally
+ * tagged `pool-b`, project tagged `pool-a`. Before this ruling,
+ * `GET /api/projects`'s forecast read only the DECLARED roster (via
+ * `poolEligible(roster, pool)` with no `edges`) and would have offered
+ * `acct-a` as placeable, while `POST /api/sessions`'s `refusePool` already
+ * read the central edge and refused it — a project card offering a lane the
+ * server then refuses, live the first time an operator uses both halves of
+ * the feature. This is the assertion whose absence let that sit open.
+ */
+describe('T7-R3 — GET /api/projects\' forecast and POST /api/sessions\' refusal now AGREE', () => {
+  let app3: FastifyInstance | undefined;
+  let coord3: CoordStore | undefined;
+  afterEach(async () => {
+    if (app3) await app3.close();
+    app3 = undefined;
+    if (coord3) coord3.db.close();
+    coord3 = undefined;
+  });
+
+  it('an account untagged in the roster but centrally tagged elsewhere is excluded from the forecast AND refused at placement', async () => {
+    const home = mkTmp('ccrc-pool-t7r3-');
+    seedRoster(home, ROSTER); // acct-a: homeAble, no `pool` key — declared UNTAGGED
+    mkdirSync(path.join(home, 'projects', 'demo'), { recursive: true });
+    mkdirSync(path.join(home, '.cc-sessions', POOLS_DIR_NAME), { recursive: true });
+    writeFileSync(path.join(home, '.cc-sessions', POOLS_DIR_NAME, 'demo'), 'pool-a');
+    const cfg = loadConfig({ CCRC_HOME: home });
+    coord3 = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const poolEdgeLog = new PoolEdgeLog(path.join(home, '.ccrc', 'pool-edges.log'));
+    // The CENTRAL edge the declared roster does not carry.
+    coord3.setAccountPools({ accountId: 'acct-a', pools: ['pool-b'], addedBy: null }, poolEdgeLog);
+    app3 = await buildServer({
+      cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner),
+      io: localIO, queue: new KeyedQueue(), coord: coord3, poolEdgeLog,
+    } as Deps);
+    await app3.ready();
+
+    // 1. THE FORECAST: `demo` (pool-a) must NOT offer `acct-a` (centrally
+    // pool-b) — before T7-R3 this answered `{ kind: 'projected', wrapper:
+    // 'acct-a', ... }`, because the declared roster alone says untagged =
+    // unconstrained. With `acct-a` the ONLY account, excluding it empties
+    // the pool entirely.
+    const projects = await app3.inject({ method: 'GET', url: '/api/projects' });
+    expect(projects.statusCode).toBe(200);
+    const demo = (projects.json().projects as { name: string; placement: { kind: string; pool?: string | null } }[])
+      .find((p) => p.name === 'demo');
+    expect(demo, 'the demo project was not listed — fixture setup is wrong, not the assertion').toBeDefined();
+    expect(demo!.placement).toEqual({ kind: 'none', pool: 'pool-a' });
+
+    // 2. THE REFUSAL: `POST /api/sessions` must still 409 the very placement
+    // the forecast now (correctly) declines to offer.
+    const session = await app3.inject({
+      method: 'POST', url: '/api/sessions', payload: { wrapper: 'acct-a', project: 'demo' },
+    });
+    expect(session.statusCode).toBe(409);
+    expect(session.json()).toMatchObject({
+      ok: false, error: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a',
+    });
   });
 });

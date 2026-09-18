@@ -1225,6 +1225,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // respawns, and swaps. Ordered by the roster's declaration order.
   app.get('/api/accounts', async (): Promise<AccountsResponse> => {
     const limits = await readLimits(deps.io, deps.cfg);
+    // ONE central-edges read for the WHOLE request (review round 1, Minor 1),
+    // exactly the way `shares`/`limits` are each one read for every row below
+    // rather than one per account: `deps.coord?.accountPoolEdges()` inside
+    // the per-account `.map` used to run N synchronous sqlite reads on a
+    // route the PWA polls every 20s, AND risked a TORN VIEW — a
+    // `setAccountPools` landing mid-iteration could mix pre- and post-write
+    // membership across the same response. Caught here, not per-account: an
+    // unreadable coord.db degrades the WHOLE response to the declared-only
+    // answer (the pre-account-pools shape), never a 500 — this is a READ for
+    // display, not `refusePool`'s placement decision (Minor 9's guard, which
+    // DOES refuse, because that call IS one).
+    let accountEdges: ReadonlyMap<string, readonly string[]>;
+    try {
+      accountEdges = deps.coord?.accountPoolEdges() ?? new Map();
+    } catch {
+      accountEdges = new Map();
+    }
     // Rebuilt per request from `deps.cfg.roster`, not hoisted to module scope:
     // the roster is runtime data read at boot (`~/.ccrc/accounts.json`), so a
     // module-level rank table would be built before any roster exists.
@@ -1275,29 +1292,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // pool tag", which is what it has always meant and is now the only thing
       // it can mean. Per-project placement rides `ProjectRow.placement` on
       // `GET /api/projects`.
-      projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }),
+      // `edges` threaded through (ruling T7-R3): the ranking forecast now
+      // agrees with `refusePool`'s refusal pre-check about which accounts a
+      // central tag has moved.
+      projected: projectHome(deps.cfg.roster, limits, { state: 'untagged' }, accountEdges),
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,
-        // T7-R2 (D-TBD-resolved-pool-wire): the RESOLVED membership (central beats declared beats
-        // untagged, design §5.6), folded in server-side — `pool` above is the
-        // declared carrier alone, and a client that computed its own crossing
-        // warning from it would contradict what `POST /api/sessions`/`POST
-        // /api/sessions/:id/swap`'s `refusePool` actually decides the moment
-        // a central `pool_edges` row exists (`NewSessionSheet.tsx:186-188`,
-        // measured live before this field existed). Caught, not propagated:
-        // this is a READ for display, not a placement refusal, so an
-        // unreadable coord.db degrades to the declared-only answer (the
-        // pre-account-pools shape) rather than 500ing the whole accounts
-        // screen — `refusePool`'s OWN 503 (Minor 9) is the placement-time
-        // equivalent that does refuse, because that call IS a decision.
-        ...(() => {
-          try {
-            return { resolvedPool: resolvedAccountPool(a, deps.coord?.accountPoolEdges() ?? new Map()) };
-          } catch {
-            return {};
-          }
-        })(),
+        // T7-R2 (D-TBD-resolved-pool-wire): the RESOLVED membership (central
+        // beats declared beats untagged, design §5.6) — `pool` above is the
+        // declared carrier alone, and a client that computed its own
+        // crossing warning from it would contradict what `POST
+        // /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool`
+        // actually decides the moment a central `pool_edges` row exists
+        // (`NewSessionSheet.tsx:186-188`, measured live before this field
+        // existed). Reads the ONE `accountEdges` snapshot above, not a
+        // fresh per-account read.
+        resolvedPool: resolvedAccountPool(a, accountEdges),
       })),
     };
   });
@@ -2148,6 +2159,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * uncaught 500. Reads as `pool-undecidable`/`unreadable`, the same
    * vocabulary `refusePool`'s other undecidable arms already use, rather than
    * inventing a fifth word for a read that failed.
+   *
+   * NOT SILENT (review round 2, Minor): the 500 this replaces at least
+   * printed. A `console.warn` here is the operator's only trace that coord.db
+   * is unreadable — the 503 body alone cannot distinguish "the tag genuinely
+   * cannot be read" from "this box's own database is broken".
    */
   const refusePool = (
     reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
@@ -2155,7 +2171,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     let edges: ReadonlyMap<string, readonly string[]>;
     try {
       edges = deps.coord?.accountPoolEdges() ?? new Map();
-    } catch {
+    } catch (err) {
+      console.warn('ccrc-server: accountPoolEdges() failed ' +
+        `(${err instanceof Error ? err.message : String(err)}) — refusing ${wrapper} as pool-unreadable`);
       return reply.code(503).send({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
     }
     const v = poolVerdict(deps.cfg.roster, wrapper, pool, edges);
@@ -2271,9 +2289,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // a read whose answer it could not use.
     const shares = cls === 'default' ? { kind: 'absent' as const } : await readSharesMeasured(deps.io, deps.cfg.registryDir);
     const nowS = Math.floor(Date.now() / 1000);
+    // ONE central-edges read for the whole request (ruling T7-R3, on
+    // `shares`'s exact precedent one line up): every project's forecast
+    // reads the SAME snapshot, so a `setAccountPools` landing mid-response
+    // cannot mix pre- and post-write membership across rows, and this
+    // now agrees with `refusePool`'s own per-request read about which
+    // accounts a central tag has moved. Degrades to declared-only on a
+    // throwing coord.db (a READ for display, not `refusePool`'s placement
+    // decision — Minor 9's guard is the one that refuses).
+    let projectEdges: ReadonlyMap<string, readonly string[]>;
+    try {
+      projectEdges = deps.coord?.accountPoolEdges() ?? new Map();
+    } catch {
+      projectEdges = new Map();
+    }
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
-      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, cls, shares, nowS) };
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, projectEdges, cls, shares, nowS) };
     };
     // A project the sweep has not reached reads `unmeasured`, NOT `absent`.
     // That includes every project with no workspaces — the sweep enumerates

@@ -154,10 +154,24 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly one import line, and it is a type', () => {
+  it('shared/api.ts has exactly two import lines, and both are types', () => {
+    // Review round 1 (F1): `RosterWire.resolvedPool` (T7-R2, account-pool
+    // membership wave 1) needs `AccountPoolWire`'s shape, so a second line
+    // joined this array — `import type { AccountPoolWire } from
+    // './poolrule.js'`. The RULE this pin defends is still satisfied: a
+    // TYPE-ONLY import from an L0 SIBLING does not break L0 purity —
+    // `shared/poolrule.ts` is itself L0 (no `node:*`, no value imports of
+    // its own beyond L0), so this file still imports nothing at runtime that
+    // the PWA bundle would not already need. The fix is to widen the pin to
+    // both lines, not to re-declare `AccountPoolWire` locally here — a local
+    // copy would be a second definition of an enumerated type,
+    // `single-definition.test.ts`'s own job to refuse.
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
-    expect(imports).toEqual(["import type { Hue } from './roster.js';"]);
+    expect(imports).toEqual([
+      "import type { Hue } from './roster.js';",
+      "import type { AccountPoolWire } from './poolrule.js';",
+    ]);
   });
 });
 

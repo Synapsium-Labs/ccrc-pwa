@@ -116,20 +116,24 @@ export function poolVerdict(
  * is disabled": callers must ask {@link poolUndecidable} first if they need to
  * tell the two apart (`projectPlacement` in `limits.ts` does).
  *
- * `edges` is REQUIRED (T7-R1, account-pool-membership wave 1, D-TBD-poolEligible-required-edges), on `poolVerdict`'s
- * exact reasoning: an optional parameter lets a caller that HAS central edges
- * silently fall back to declared-only by forgetting to pass them, which is the
- * fail-open T5-R4 was written to close at every call site, not only
- * `refusePool`'s. This function's ONE call site is `projectHome` (`limits.ts`),
- * which has no `Deps`/`coord` access and passes `new Map()` — RECORDED, not
- * silent: `limits.ts`'s own comment at that call states the reason and the
- * cost of wiring the real edges through `projectHome`/`projectPlacement` and
- * their ~30 positional call sites in `test/projected-home.test.ts`, which
- * this task declined to spend (a decision, not an oversight — `GET
- * /api/projects`' `placement` field and `GET /api/accounts`'s `projected`
- * can therefore still rank an account by its DECLARED pool after a central
- * tag has moved it elsewhere; `resolvedAccountPool` above is what closes that
- * gap for a per-account READ, `GET /api/accounts`'s `roster[].resolvedPool`).
+ * `edges` is REQUIRED (T7-R1, account-pool-membership wave 1,
+ * D-TBD-poolEligible-required-edges), on `poolVerdict`'s exact reasoning: an
+ * optional parameter lets a caller that HAS central edges silently fall back
+ * to declared-only by forgetting to pass them, which is the fail-open T5-R4
+ * was written to close at every call site, not only `refusePool`'s.
+ *
+ * WIRED THROUGH FOR REAL (ruling T7-R3, reversing T7-R1's deferral): this
+ * function's ONE call site, `projectHome` (`limits.ts`), now passes a live
+ * `edges` from its own caller — `server.ts`'s `GET /api/projects` and `GET
+ * /api/accounts` both read `deps.coord?.accountPoolEdges() ?? new Map()` —
+ * so the RANKING forecast (`ProjectRow.placement`, `AccountsResponse.projected`)
+ * and the REFUSAL pre-check (`refusePool`) now agree: an account centrally
+ * tagged into a different pool than its declared default can no longer be
+ * forecast eligible for a project `POST /api/sessions` would then refuse.
+ * `test/projected-home.test.ts`'s fixture-driven parity harness against
+ * `_ws_least_loaded` is the one caller that still passes `NO_EDGES`
+ * deliberately — it tests the declared-only rule against bash's own
+ * declared-only positional, not this precedence.
  */
 export function poolEligible(
   roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,

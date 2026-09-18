@@ -272,27 +272,31 @@ export const sevenOf = (l: AccountLimits | undefined): number | null =>
  * answer this function can give. `GET /api/accounts`'s global `projected` says
  * `{state:'untagged'}` out loud, and that is what that field now MEANS.
  *
+ * `edges` IS ALSO REQUIRED, and also positioned before the optional trailing
+ * trio for the same reason `pool` is (ruling T7-R3, account-pool-membership
+ * wave 1 — reversing the T7-R1 deferral once the reviewer showed the
+ * divergence is LIVE, not merely theoretical: an account untagged in the
+ * roster but centrally tagged elsewhere would have `GET /api/projects`
+ * forecast it eligible while `POST /api/sessions`'s `refusePool` refused the
+ * very placement, the moment an operator uses the feature this wave ships).
+ * `poolEligible` folds central-beats-declared through `resolvedAccountPool`
+ * — see that function's own docstring. Every production caller now passes a
+ * live `deps.coord?.accountPoolEdges() ?? new Map()` read (`server.ts`);
+ * `test/projected-home.test.ts`'s fixture-driven parity suite against
+ * `_ws_least_loaded` deliberately keeps passing `NO_EDGES` — that harness
+ * tests the DECLARED-roster rule against bash's own declared-only positional,
+ * not the central-edge precedence, which `pools.test.ts` and
+ * `pool-accounts-route.test.ts`'s closure test cover instead.
+ *
  * Kept honest against the bash by shared fixtures: test/fixtures/leastLoaded.ts.
  */
 export function projectHome(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
   cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
   nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectedHome | null {
-  // `new Map()` — RECORDED (T7-R1, D-TBD-poolEligible-required-edges), not a
-  // silent fall-through: `projectHome`
-  // takes no `Deps`/`coord`, so it has no central `pool_edges` to offer, and
-  // `poolEligible`'s required `edges` parameter (T5-R4's reasoning, extended
-  // by T7-R1 to this call site) makes that fact a decision here rather than
-  // an implicit gap. Cost of wiring the real edges through instead: this
-  // function and `projectPlacement` below would both need `edges` threaded
-  // in, and so would their ~30 positional call sites in
-  // `test/projected-home.test.ts` — declined for this task; `GET
-  // /api/projects`'s `placement` field and `GET /api/accounts`'s `projected`
-  // therefore still rank by the DECLARED pool after a central tag has moved
-  // an account elsewhere. `GET /api/accounts`'s `roster[].resolvedPool`
-  // (T7-R2) is the per-account read that does not have this gap.
-  const eligible = poolEligible(roster, pool, new Map()).filter((a) => limits[a.id]?.disabled !== true);
+  const eligible = poolEligible(roster, pool, edges).filter((a) => limits[a.id]?.disabled !== true);
   // POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), and the clause is a
   // FILTER on eligibility exactly as `_pool_ok` is: a lane measured at the
   // class's ceiling drops out here, before scoring and before the condemned
@@ -353,14 +357,21 @@ export function projectHome(
  * COMPOSES `projectHome`; decides nothing new. The pool DECISION is
  * `poolrule.ts`'s (L1) and is reached through `poolUndecidable`/`poolEligible`
  * rather than by testing state tokens here.
+ *
+ * `edges` is REQUIRED and threaded straight through to both `projectHome`
+ * calls below, including the class-blind re-call (ruling T7-R3) — a
+ * central edge must decide the SAME way whichever arm answers, or the
+ * class-blind re-call could silently reintroduce the declared-only
+ * divergence this ruling closes.
  */
 export function projectPlacement(
   roster: Roster, limits: Record<string, AccountLimits>, pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
   cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
   nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectPlacement {
   if (poolUndecidable(pool)) return { kind: 'unmeasurable' };
-  const home = projectHome(roster, limits, pool, cls, shares, nowS);
+  const home = projectHome(roster, limits, pool, edges, cls, shares, nowS);
   if (home === null) {
     const notPlaceable = { kind: 'none' as const, pool: pool.state === 'tagged' ? pool.name : null };
     // The trailing three parameters default so a caller that never passes a
@@ -372,7 +383,7 @@ export function projectPlacement(
     // disabled or the pool tag is undecidable — a fact the class did not
     // cause — so `none` stays plain; only when the class-blind call finds a
     // home does the class-scoped emptiness become the fact worth naming.
-    if (cls !== 'default' && projectHome(roster, limits, pool) !== null) {
+    if (cls !== 'default' && projectHome(roster, limits, pool, edges) !== null) {
       return { ...notPlaceable, class: cls };
     }
     return notPlaceable;
