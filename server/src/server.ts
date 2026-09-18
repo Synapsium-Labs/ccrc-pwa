@@ -99,6 +99,14 @@ function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
 /** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
 const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
 
+/** How long a node may keep deciding from a projection it can no longer
+ *  refresh. THE WHOLE DIAL between "an outage stops tagged placement" and "a
+ *  stale node enforces yesterday's membership", and no value is right for both
+ *  (design §5.8, left open). 15 minutes is fifteen missed pulls at
+ *  `OnUnitActiveSec=60s`. Configurable because the right answer is a property
+ *  of a fleet, not of this file. */
+export const POOL_LEASE_MS = Number(process.env.CCRC_POOL_LEASE_MS ?? 15 * 60 * 1000);
+
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
@@ -2072,11 +2080,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * 409 is "this account is wrong for this project", overridable with
    * `crossPool`. 503 is "nobody can decide", which is NOT overridable here:
    * the tag is unreadable or malformed, and `ccd` refuses it too.
+   *
+   * THE SERVER'S FORECAST READS coord.db DIRECTLY, NEVER THE PROJECTION (spec
+   * §5.7) — `deps.coord?.accountPoolEdges() ?? new Map()`, so every 409/503
+   * this issues is immediate and exact rather than as stale as the fleet's
+   * last pull. A box with no coordination database configured has no central
+   * edges to read, so it falls back to the declared roster tag alone —
+   * unchanged from before account pools existed.
    */
   const refusePool = (
     reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
   ): FastifyReply | null => {
-    const v = poolVerdict(deps.cfg.roster, wrapper, pool);
+    const v = poolVerdict(deps.cfg.roster, wrapper, pool, deps.coord?.accountPoolEdges() ?? new Map());
     if (v.ok) return null;
     return v.reason === 'pool-mismatch'
       ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
@@ -2363,6 +2378,103 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // name" is a thing worth saying and not a thing worth blocking on.
     const warn = body.pool !== null && !poolRostered(deps.cfg.roster, body.pool);
     return { ok: true, pool: measured, ...(warn ? { warning: 'unknown-pool' as const } : {}) };
+  });
+
+  /**
+   * An account's pool membership (account pools, design 2026-09-18 §5.5).
+   * `{ pools: [] }` clears.
+   *
+   * THE STANCE IS THE PROJECT-POOL ROUTE'S, copied deliberately: NOT in
+   * `auth/gate.ts`'s EXEMPT table — session-gated when armed, open dark. NO BOX
+   * TOKEN: this is fleet control, not a coordination write.
+   *
+   * THE 200 IS MEASURED, NOT ECHOED — and here the measurement is cheap and
+   * exact, because the authority is this box's own coord.db, not a file on the
+   * fleet. The epoch returned is re-read from `pool_epoch` after the write.
+   *
+   * `:id` GOES THROUGH UNVALIDATED as an ACCOUNT id, exactly as `:project` does
+   * next door: the roster is the authority on which accounts exist, nothing here
+   * joins the id into a path, and an id no account carries is a WARNING and not
+   * a refusal — this box's `accounts.json` is one of two hand-owned copies and
+   * can lag the fleet's, so "no such account here" may be about to become false.
+   *
+   * NO NUDGE. Convergence is owned by `ccd-pool-sync.timer`'s pull (ruling R2);
+   * the fleet honours this within `OnUnitActiveSec=60s`, and the PWA shows
+   * `epoch N / observed M` so the lag is visible rather than mysterious.
+   */
+  app.post('/api/pools/accounts/:id', async (req, reply) => {
+    // `notConfigured` is a LOCAL const inside `coord/routes.ts:448`, not an
+    // export — these routes live in `server.ts`, so the 501 is spelled here.
+    if (!deps.coord || !deps.poolEdgeLog) {
+      return reply.code(501).send({ ok: false, error: 'not-configured' });
+    }
+    const { id } = req.params as { id: string };
+    const body = (req.body ?? {}) as { pools?: unknown };
+    if (!Array.isArray(body.pools) || body.pools.some((p) => typeof p !== 'string')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    const pools = body.pools as string[];
+    // POOL_NAME_RE imported from shared/roster.ts, never re-spelled here.
+    if (pools.some((p) => !POOL_NAME_RE.test(p))) {
+      return reply.code(400).send({ ok: false, error: 'bad-pool-name' });
+    }
+    // Wave 1 is one pool per account (a PARTIAL UNIQUE INDEX, not a column).
+    if (pools.length > 1) {
+      return reply.code(400).send({ ok: false, error: 'one-pool-per-account' });
+    }
+    const written = deps.coord.setAccountPools(
+      // `addedBy` is NULL on this path and that is a real answer, not a gap:
+      // there is no session-id accessor on an armed request here, and identity
+      // on this fleet is ATTRIBUTION, never authentication. A later wave that
+      // wants a name must add a reader, not guess one.
+      { accountId: id, pools, addedBy: null }, deps.poolEdgeLog);
+    // THE OBLIGATION THE TYPE SYSTEM WILL NOT ENFORCE (store.ts:138-143,
+    // :172-177): `written` MUST be bound and its `.ok` discriminated before any
+    // effect is drawn from it — discarding the call outright compiles clean and
+    // silent, and a refusal would then read as a success. `written.ok === false`
+    // today can only be `multi-pool-not-supported`, which the length check three
+    // lines up already refuses first — but the store's own refusal is what
+    // actually decides, not this route's mirror of its rule, so a caller that
+    // skipped the pre-check (or a wave-2 rule this route has not caught up to)
+    // still gets a structured 400, never a false 200.
+    if (!written.ok) {
+      return reply.code(400).send({ ok: false, error: written.error, pools: written.pools });
+    }
+    const measured = deps.coord.poolEpoch();
+    const warn = !deps.cfg.roster.accounts.some((a) => a.id === id);
+    return {
+      ok: true, epoch: measured.epoch,
+      ...(warn ? { warning: 'unknown-account' as const } : {}),
+    };
+  });
+
+  /**
+   * The projection `ccd-pool-sync` pulls. DUAL-CREDENTIAL, the `GET /api/feed`
+   * shape: a session for the PWA, the box token for the fleet's sync script.
+   *
+   * ALWAYS EMITTED, even when nothing is tagged. `accounts: {}` means SYNCED,
+   * NOTHING TAGGED; no document at all means NEVER SYNCED, which the node reads
+   * as `unreadable` and refuses into a tagged project. Folding those two would
+   * silently lift every constraint on a cold node — the EKS default path.
+   */
+  app.get('/api/pools/epoch', async (req, reply) => {
+    if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
+    // The `GET /api/feed` guard, copied shape-for-shape (coord/routes.ts:2533-2551):
+    // session FIRST, box token as the fallback, 401 only when both fail.
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({ ok: false, error: 'unauthenticated', verdict: session.verdict });
+        }
+      }
+    }
+    const { epoch, issuedAt } = deps.coord.poolEpoch();
+    const edges = deps.coord.accountPoolEdges();
+    const accounts: Record<string, { pools: string[] }> = {};
+    for (const [acct, pools] of edges) accounts[acct] = { pools };
+    return { epoch, issuedAt, leaseUntil: Date.now() + POOL_LEASE_MS, accounts };
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {

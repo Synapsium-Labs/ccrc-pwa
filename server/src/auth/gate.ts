@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 76 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 78 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -74,7 +74,7 @@ import type { SessionStore } from './sessions.js';
  *
  *  2. The twenty-four box-token machine lanes plus `/api/notify` — the fleet
  *     host's ingress. These callers are `curl` inside a Claude Code session and
- *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-five
+ *     ccd's `notify.sh`; they have no cookie jar and never will. All twenty-six
  *     CHECK the box token (`checkMailToken`), and the mail pair records every
  *     refusal — but "checks" is not "requires", and the difference is worth
  *     stating rather than rounding off, in BOTH directions rather than only
@@ -218,6 +218,13 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     '`ccrc-api feed list` is a cookieless fleet-host caller and the PWA reads with a session. The ' +
     'handler requires one of those credentials before revealing even `501 not-configured`, so this ' +
     'entry restores the machine read without making the durable feed anonymous'],
+  ['GET /api/pools/epoch',
+    'EXEMPT-BUT-AUTHENTICATED (account-pool-membership wave 1 task 7), the same dual-credential ' +
+    'arrangement as `GET /api/feed`: `ccd-pool-sync.timer` reads it cookieless from the fleet host ' +
+    'every minute, and the PWA reads the same document with a session for the `epoch N / observed ' +
+    "M` chip. The handler requires one of those credentials before revealing even `501 " +
+    'not-configured`, so this entry restores the machine pull without making the account-pool ' +
+    'projection anonymous'],
   ['GET /api/runs/:id/items',
     "EXEMPT-BUT-AUTHENTICATED (D-149's pattern), the same shape as `GET /api/runs` above and for " +
     'the same caller: the coordinator reads its own wave ledger COOKIELESS from the fleet host. ' +
@@ -716,7 +723,7 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * same-site loads of the SPA shell for no gain.
  *
  * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty-four box-token machine
- * lanes plus `/api/notify` — twenty-five in all — are `curl` inside a Claude Code session (no `Origin`
+ * lanes plus `/api/notify` — twenty-six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

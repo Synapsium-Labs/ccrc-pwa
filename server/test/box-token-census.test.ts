@@ -249,14 +249,22 @@ const passage = (name: string, text: string, from: string, to: string): string =
 describe('the box-token surface is derived, and no prose site under-claims it', () => {
   it('the scan finds what it claims to scan', () => {
     // ANTI-VACUITY FIRST: every assertion below is satisfied by an empty set.
-    // A floor, two named members that must be there, and the arithmetic that
-    // says `server.ts` contributed exactly the one lane it has.
+    // A floor, three named members that must be there, and the arithmetic
+    // that says `server.ts` contributed exactly the two lanes it has.
+    //
+    // TWO, not one, since account-pool-membership wave 1 task 7 added
+    // `GET /api/pools/epoch` (dual-credential, the `GET /api/feed` shape)
+    // beside the long-standing `POST /api/notify` — the route's sibling,
+    // `POST /api/pools/accounts/:id`, consults NO box token at all (same
+    // stance as `POST /api/projects/:project/pool`), so it does not join
+    // this set.
     expect(COORD_LANES.length, 'the coord scan collapsed').toBeGreaterThan(10);
     expect(COORD_LANES, 'the inline-gated mail route is missing — the scanner narrowed')
       .toContain('POST /api/mail');
     expect(COORD_LANES).toContain('GET /api/runs');
     expect(ALL_LANES, 'the server.ts lane is missing').toContain('POST /api/notify');
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 1);
+    expect(ALL_LANES, 'the new server.ts lane is missing').toContain('GET /api/pools/epoch');
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 2);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 

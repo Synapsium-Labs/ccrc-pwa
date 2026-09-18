@@ -44,8 +44,28 @@ export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roste
  * or not, so it must still answer `pool-undecidable` here (spec §5.2's "nobody
  * decides"). A `null` account pool can never produce `pool-mismatch`, so the
  * relabel provably cannot swallow a refusal.
+ *
+ * `edges` is REQUIRED, not optional (T5-R4, account-pool-membership wave 1
+ * task 7). An optional parameter would let a caller that HAS the central
+ * `pool_edges` rows silently fall back to the declared roster tag by simply
+ * forgetting to pass them — a fail-open that compiles clean. Making it
+ * required turns every call site into a compile error that forces its author
+ * to answer "do I have the central edges here?" A caller that genuinely has
+ * none passes `new Map()` and says why in a comment at the call site.
  */
-export function poolVerdict(roster: Roster, wrapper: string, pool: ProjectPoolWire): RosterVerdict {
+export function poolVerdict(
+  roster: Roster, wrapper: string, pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
+): RosterVerdict {
+  // PRECEDENCE, in the one place that can enforce it: projected beats
+  // declared beats untagged (design §5.6). A central edge is authoritative —
+  // it came from `pool_edges`, which is the only writer — so it is consulted
+  // before the roster's retained default, and the roster is not read at all
+  // when one exists.
+  const central = edges.get(wrapper);
+  if (central !== undefined && central.length > 0) {
+    return poolRule({ state: 'tagged', pools: central as readonly [string, ...string[]], origin: 'central' }, pool);
+  }
   const account = roster.byId.get(wrapper);
   if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
   const v = poolRule(declaredAccountPool(null), pool);
@@ -59,6 +79,19 @@ export function poolVerdict(roster: Roster, wrapper: string, pool: ProjectPoolWi
  * EMPTY for an undecidable tag, and that is not the same fact as "every lane
  * is disabled": callers must ask {@link poolUndecidable} first if they need to
  * tell the two apart (`projectPlacement` in `limits.ts` does).
+ *
+ * STILL DECLARED-ONLY (account-pool-membership wave 1, task 7 deviation,
+ * reported): this feeds `projectHome`/`projectPlacement`'s RANKING forecast
+ * (`GET /api/projects`' `placement` field, `GET /api/accounts`' `projected`),
+ * a different forecast from `poolVerdict`'s REFUSAL pre-check that
+ * `refusePool` gates placement on. Giving this the same central-edge
+ * precedence needs an `edges` parameter threaded through `projectHome` and
+ * `projectPlacement` (`limits.ts`) and every one of their ~30 call sites in
+ * `test/projected-home.test.ts` — out of this task's file list and mutation
+ * table, and not exercised by anything `POST /api/pools/accounts/:id` or
+ * `GET /api/pools/epoch` do. Left as a known gap for the task that owns the
+ * ranking forecast: today it can still rank an account by its DECLARED pool
+ * after a central tag has moved it elsewhere.
  */
 export function poolEligible(roster: Roster, pool: ProjectPoolWire): AccountDef[] {
   return roster.homeAble.filter((a) => poolRule(declaredAccountPool(a.pool), pool).ok);

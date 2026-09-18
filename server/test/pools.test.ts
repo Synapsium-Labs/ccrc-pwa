@@ -103,20 +103,27 @@ describe('poolVerdict answers the shared fixture table', () => {
       .toBeGreaterThanOrEqual(10);
   });
 
+  // `new Map()` at every fixture-table call: NO central edges is exactly what
+  // this table's cases assert against — the DECLARED-roster behaviour the
+  // table has always driven. See `describe('poolVerdict and central edges')`
+  // below for the precedence the `edges` argument itself adds.
+  const NO_EDGES = new Map<string, readonly string[]>();
+
   it.each(POOL_RULE_CASES.filter((c) => !SERVER_BLIND(c)).map((c) => [c.name, c] as const))(
     '%s', (_name, c) => {
-      expect(word(poolVerdict(rosterWith(c.accountPool), 'a', c.project))).toBe(c.expect);
+      expect(word(poolVerdict(rosterWith(c.accountPool), 'a', c.project, NO_EDGES))).toBe(c.expect);
     });
 });
 
 describe('poolVerdict and the roster', () => {
   const r = parseRoster(POOLED_TEST_ROSTER);
+  const NO_EDGES = new Map<string, readonly string[]>();
 
   it('passes a wrapper this roster does not have through as account-not-in-roster', () => {
     // ccd's `_is_valid_wrapper` is the authority, and the PWA already offers
     // live non-roster wrappers (spec §5.6). Refusing here would 409 a swap ccd
     // would have carried out.
-    expect(poolVerdict(r, 'nobody', { state: 'tagged', name: 'pool-a' }))
+    expect(poolVerdict(r, 'nobody', { state: 'tagged', name: 'pool-a' }, NO_EDGES))
       .toEqual({ ok: true, why: 'account-not-in-roster' });
   });
 
@@ -124,14 +131,49 @@ describe('poolVerdict and the roster', () => {
     // PRECEDENCE. "If pool(p) cannot be read, NOBODY decides" (spec §5.2) —
     // the relabel above must touch the ok arm only, or an unreadable tag plus
     // an unknown wrapper would permit the very placement 503 exists to stop.
-    expect(poolVerdict(r, 'nobody', { state: 'unreadable' }))
+    expect(poolVerdict(r, 'nobody', { state: 'unreadable' }, NO_EDGES))
       .toEqual({ ok: false, reason: 'pool-undecidable', state: 'unreadable' });
-    expect(poolVerdict(r, 'nobody', { state: 'malformed' }))
+    expect(poolVerdict(r, 'nobody', { state: 'malformed' }, NO_EDGES))
       .toEqual({ ok: false, reason: 'pool-undecidable', state: 'malformed' });
   });
 
-  it('names the two pools on a mismatch, so the 409 can render both sides', () => {
-    expect(poolVerdict(r, 'claude-b', { state: 'tagged', name: 'pool-a' }))
+  it('names the two pools on a mismatch, so the 409 can render both sides — the DECLARED fallback still enforced with no central edges', () => {
+    // Mutation table row: "drop the `declared` fallback" must RED here — with
+    // `NO_EDGES`, `claude-b`'s only pool signal is its roster-declared
+    // `pool-b`, so a `poolVerdict` that stopped consulting the roster once the
+    // central lookup missed would wrongly answer `account-not-in-roster` (an
+    // `ok` verdict) instead of this mismatch.
+    expect(poolVerdict(r, 'claude-b', { state: 'tagged', name: 'pool-a' }, NO_EDGES))
+      .toEqual({ ok: false, reason: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
+  });
+});
+
+describe('poolVerdict and central edges — precedence (design §5.6)', () => {
+  const r = parseRoster(POOLED_TEST_ROSTER);
+
+  it('a central edge outranks the declared roster pool', () => {
+    // `claude-b` is declared `pool-b` in the roster; a central edge says
+    // `pool-a` instead, and central must win.
+    const edges = new Map([['claude-b', ['pool-a']]]);
+    expect(poolVerdict(r, 'claude-b', { state: 'tagged', name: 'pool-a' }, edges))
+      .toEqual({ ok: true, why: 'same-pool' });
+  });
+
+  it('a central edge can also produce a mismatch the declared pool would not have', () => {
+    // `claude-d` is UNTAGGED in the roster (POOL_BY_ID names no pool for it,
+    // so it is unconstrained by the declared default) but centrally tagged
+    // `pool-b` — the central tag must still refuse a project tagged `pool-a`,
+    // which the permissive declared default alone would have let through.
+    const edges = new Map([['claude-d', ['pool-b']]]);
+    expect(poolVerdict(r, 'claude-d', { state: 'tagged', name: 'pool-a' }, edges))
+      .toEqual({ ok: false, reason: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
+  });
+
+  it('an edges entry for another account never leaks onto this one', () => {
+    const edges = new Map([['claude-a', ['pool-a']]]);
+    // `claude-b` is not in `edges` at all, so its DECLARED `pool-b` still
+    // decides — same answer as the no-edges case above.
+    expect(poolVerdict(r, 'claude-b', { state: 'tagged', name: 'pool-a' }, edges))
       .toEqual({ ok: false, reason: 'pool-mismatch', accountPool: 'pool-b', projectPool: 'pool-a' });
   });
 });

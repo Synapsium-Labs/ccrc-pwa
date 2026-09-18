@@ -192,7 +192,7 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(49);
+    expect(scanRoutes('server.ts').length).toBe(51);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -256,7 +256,15 @@ describe('the scanner is looking at something', () => {
     // the merged tree, not taken from a side — 49 + 29 = 78, and routing
     // slice 5's own `POST /api/runs/:id/route` took `coord/routes.ts` 29 -> 30,
     // so the merged tree now reads 49 + 30 = 79.
-    expect(ROUTES.length).toBe(79);
+    //
+    // 51 since account-pool-membership wave 1 task 7 added TWO to `server.ts`:
+    // `POST /api/pools/accounts/:id`, NOT EXEMPT and carrying no box token —
+    // the same "fleet control, not a coordination write" stance as
+    // `POST /api/projects/:project/pool` above — and `GET /api/pools/epoch`,
+    // EXEMPT-BUT-AUTHENTICATED (the `GET /api/feed` shape: a session for the
+    // PWA, the box token for `ccd-pool-sync.timer`). `coord/routes.ts` is
+    // untouched by this task, so 49 -> 51 and 79 -> 81.
+    expect(ROUTES.length).toBe(81);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -387,7 +395,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 79 scanned + the static wildcard when the bundle is built.
+    // 81 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -452,6 +460,14 @@ describe('EXEMPT is complete in both directions', () => {
     // the list against, so it being wrong is worse than it being absent.
     // 31 since `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3,
     // slice 5, Task 2) joined the plain box-token lanes.
+    // 32 since `GET /api/pools/epoch` (account-pool-membership wave 1 task 7)
+    // joined the exempt-but-authenticated class, the ninth member — the same
+    // dual-credential shape as `GET /api/feed`: `ccd-pool-sync.timer` reads it
+    // cookieless from the fleet host, the PWA reads it with a session.
+    // `POST /api/pools/accounts/:id`, task 7's other new route, is
+    // DELIBERATELY NOT here — same stance as `POST /api/projects/:project/pool`
+    // above: session-gated when armed, no box token, fleet control rather
+    // than a coordination write.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/asks',
@@ -463,6 +479,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/mail',
       'GET /api/mail/:id',
       'GET /api/peers',
+      'GET /api/pools/epoch',
       'GET /api/runs',
       'GET /api/runs/:id/items',
       'GET /api/runs/:id/signals',
@@ -498,7 +515,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-five with notify', () => {
+  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-six with notify', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -803,7 +820,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 76 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 78 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -867,7 +884,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 76 HTTP routes, not the 30 exempt.
+          //    is not itself flag-aware — the assertion that covers all 78 HTTP routes, not the 31 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)
