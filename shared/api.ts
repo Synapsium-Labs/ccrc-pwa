@@ -5180,12 +5180,15 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * from `oversize`, which names mail bytes and is shared with mail ingress.
  *
  * `claimant-is-a-worker` (spec 2026-09-16 §12) refuses `POST /api/runs` when
- * `claimedBy` is the `sessionId` of a NON-TERMINAL run claimed by somebody
- * else — a dispatched worker may not coordinate, because the board draws
- * ONE level of bracket and a real chain would render its middle session
- * detached (the operator's own report). `by` names that worker's
- * coordinator. A self-claimed run and an ownerless open run are both
- * admitted (D-3012); a finished worker is not a worker.
+ * ANY non-terminal run names `claimedBy` as its `sessionId` and is claimed by
+ * somebody else — EVERY open claimant of that session is read, never only the
+ * newest, because one session can be the worker of several open runs at once
+ * (the coordinator protocol opens wave N+1 before closing wave N). A
+ * dispatched worker may not coordinate, because the board draws ONE level of
+ * bracket and a real chain would render its middle session detached (the
+ * operator's own report). `by` names the newest such coordinator. A
+ * self-claimed run and an ownerless open run are both admitted (D-3012); a
+ * finished worker is not a worker.
  *
  * `project-mismatch` is cross-repo programmes' first guard (design
  * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
@@ -5365,12 +5368,17 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
  *                     registry row): three different things to fix, never one code
  *    heir-is-a-worker — the NEW claimant is the worker of somebody ELSE's open
  *                     run (spec §12): a worker may not inherit a programme
- *                     any more than open one. 409, `by` names its coordinator.
- *                     A finished worker is not a worker; a self-claimed one is
- *                     admitted (D-3012); and at the RECLAIM door only, so is
- *                     an heir whose one coordinator is the claimant being
- *                     replaced — a programme's own worker may inherit it
- *                     (D-3028) */
+ *                     any more than open one. 409, `by` names that coordinator,
+ *                     the newest of them. EVERY open run naming the heir is
+ *                     read, never only the newest, which is what makes the
+ *                     admission exact: the reclaim goes through only when every
+ *                     one of those runs is claimed by the coordinator being
+ *                     REPLACED, or by the heir itself. A finished worker is not
+ *                     a worker; a self-claimed run is admitted (D-3012); and at
+ *                     the RECLAIM door only, so is an heir whose coordinators
+ *                     are all the claimant being replaced — a programme's own
+ *                     worker may inherit it (D-3028), while an heir a THIRD
+ *                     coordinator's open run still binds may not */
 export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant' | 'heir-is-a-worker';
 const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> =
   { 'claimant-alive': true, 'no-claimant': true, 'heir-is-a-worker': true };

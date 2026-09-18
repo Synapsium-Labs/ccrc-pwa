@@ -354,6 +354,36 @@ describe('reclaimRun — the order is the guard', () => {
     expect(okRun(s.run(wave2))!.claimedBy).toBe(LIVE);
   });
 
+  it('a DOUBLY-BOUND heir is refused — the dying coordinator\'s worker on the newest run is still somebody ELSE\'s on an older one', async () => {
+    // The second fix round's case, and the one the newest-only read could not
+    // see. `parentOfSession(LIVE)` answers about ONE run — the newest — so an
+    // heir whose newest binding is to `from` walked through the rung while an
+    // OLDER open run still bound it to a third coordinator: precisely the
+    // chain §12 exists to prevent, admitted by the door built to prevent it.
+    // `openClaimantsOf` asks about every open run instead, and the admission
+    // becomes what D-3028's sentence always claimed: every open run naming the
+    // heir is claimed by the coordinator being replaced, or by the heir itself.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);              // wave 1, the row being reclaimed
+    // OLDER than the wave-2 row below, and claimed by a THIRD party.
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the programme being reclaimed…
+    s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker too
+    expect(other.id).toBeLessThan(wave2);
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    // THE FIXTURE'S POINT, measured: the newest-only read answers `DEAD`, which
+    // is `from`, which D-3028 admits — so under that read this reclaim SUCCEEDS
+    // with LIVE still bound to `demo-other-coordinator`'s open run.
+    expect(s.parentOfSession(LIVE)).toBe(DEAD);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+    expect(w.calls).toBe(0);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
   it('a re-typed sitting claimant stays a no-op even when that claimant is somebody\'s worker — the rung is INSIDE `to !== from` (D-1136, D-3011)', async () => {
     const home = mkTmp('ccrc-reclaim-');
     const s = store(home);

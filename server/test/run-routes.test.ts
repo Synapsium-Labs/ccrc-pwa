@@ -389,6 +389,33 @@ describe('POST /api/runs', () => {
     expect(res.statusCode).toBe(200);
   });
 
+  it('refuses a session SELF-CLAIMED on its newest run while still somebody\'s worker on an OLDER open one ' +
+     '(second fix round: the door reads every open claimant, not the newest)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // Both rows store-level, because neither can be built through the route:
+    // the OLDER one is the binding this door is about, and an open of the
+    // NEWER self-claimed one would itself be refused by this very rung.
+    const older = w.coord.openRun({ program: 'build5-other', title: 'Other programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    w.coord.bindSession(older.id, 'demo-existing');
+    const newer = w.coord.openRun({ program: 'build5-self', title: 'Its own programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'demo-existing' }) as { id: number };
+    w.coord.bindSession(newer.id, 'demo-existing');
+    expect(older.id).toBeLessThan(newer.id);
+    // THE FIXTURE'S POINT, measured rather than argued: the newest-only read
+    // this door used to make answers the session's OWN id here, which the
+    // self-claim admission then waves through — `demo-existing` is still
+    // `other-coordinator`'s worker on the older open run the whole time.
+    expect(w.coord.parentOfSession('demo-existing')).toBe('demo-existing');
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5-third', title: 'A worker coordinating',
+      claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: 'other-coordinator' });
+  });
+
   it('CONTROL: a claimant that was never any run\'s worker opens as it always did', async () => {
     const home = mkTmp('ccrc-runs-');
     const { run } = makeRunner(home);

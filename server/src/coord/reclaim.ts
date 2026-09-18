@@ -317,21 +317,39 @@ export async function reclaimRun(
     // row exists) and BEFORE rung 4 (the tmux measurement it would otherwise
     // pay for). Same read as `POST /api/runs`' rung (Task 9).
     //
+    // THE ADMISSION, SAID AS THE PREDICATE SAYS IT: this reclaim goes through
+    // only when EVERY open run that names the heir as worker is claimed by the
+    // coordinator being replaced — or by the heir itself. One run claimed by a
+    // THIRD coordinator refuses, whichever run is newest.
+    //
+    // That is what makes "no chain can form out of it" TRUE rather than
+    // likely, and it is why the read is `openClaimantsOf` and not
+    // `parentOfSession` (second fix round). `parentOfSession` is `LIMIT 1`: it
+    // answers about the heir's NEWEST open run and says nothing about the
+    // others, so an heir that is X's live worker on run 100 and the dying
+    // coordinator's on run 105 was ADMITTED — still bound to X, which is
+    // exactly the chain §12 exists to prevent. `runs_by_session` is non-unique
+    // and the coordinator protocol opens wave N+1 before closing wave N, so
+    // "several open runs on one session" is protocol, not corruption.
+    //
     // THREE admissions, not two, and the third is this door's own (D-3028).
-    // `parentOfSession` answers the CLAIMANT of the heir's newest open run,
-    // which on a dead-coordinator programme is exactly `from` — the claimant
-    // being replaced. Refusing that heir refuses the most likely successor in
-    // the one scenario this door exists for: the programme's own live worker,
-    // sitting in the pane beside the corpse. So `heirWorkerOf === from` is
-    // ADMITTED. What it produces is a SELF-CLAIMED run, which the open door
-    // already admits for the same read (D-3012) and which `nestFleet` never
-    // brackets (`r.claimedBy !== r.sessionId`, nestFleet.ts:132) — so §12's
-    // one-level rationale is untouched: no chain can form out of it. A worker
-    // of somebody ELSE's open run is still refused, and rung 4 below still
-    // refuses a `from` that measures alive, so this admission cannot be used
-    // to take a programme off a living coordinator.
-    const heirWorkerOf = deps.coord.parentOfSession(to);
-    if (heirWorkerOf !== null && heirWorkerOf !== to && heirWorkerOf !== from) {
+    // `[]` — a session no open run names, a finished worker — is not a worker
+    // at all and never reaches the refusal. `to` itself is a self-claimed run,
+    // which the open door admits for the same reason (D-3012). And `from` is
+    // the claimant being replaced: refusing that heir would refuse the most
+    // likely successor in the one scenario this door exists for — the
+    // programme's own live worker, sitting in the pane beside the corpse. What
+    // that admission produces is a SELF-CLAIMED run, which `nestFleet` never
+    // brackets (`r.claimedBy !== r.sessionId`, nestFleet.ts:132), so §12's
+    // one-level rationale is untouched. An ownerless open run (`claimedBy`
+    // NULL) is not in the list at all — D-3012's admission, made by the read.
+    // Rung 4 below still refuses a `from` that measures alive, so none of this
+    // can be used to take a programme off a living coordinator.
+    //
+    // `by` is the FIRST offender, and the list is newest-first, so the operator
+    // is sent to the most recent binding rather than the oldest.
+    const heirWorkerOf = deps.coord.openClaimantsOf(to).find((c) => c !== to && c !== from);
+    if (heirWorkerOf !== undefined) {
       return { ok: false, kind: 'heir-is-a-worker', by: heirWorkerOf };
     }
     const claimant = await measureClaimant(deps, from, now);
