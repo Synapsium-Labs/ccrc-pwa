@@ -112,6 +112,37 @@ describe('nestFleet — rule 2: children are in PROGRAMME order, not status orde
     ]);
     expect(shape(rows)).toEqual([['coord', 0], ['earlier', 1], ['later', 1]]);
   });
+
+  it('puts a sibling that is waiting on the operator FIRST, ahead of programme order', () => {
+    // `later` is wave 2 and would sort after `earlier` by programme order
+    // alone; it is blocked on the operator, and an indented row three deep
+    // hides that just as well as a fold does (spec §6).
+    const sessions = [sess('coord'), sess('earlier'), sess('later', { bucket: 'attention' })];
+    const rows = nestFleet(sessions, [
+      run({ id: 20, wave: 1, sessionId: 'earlier', claimedBy: 'coord' }),
+      run({ id: 21, wave: 2, sessionId: 'later', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['coord', 0], ['later', 1], ['earlier', 1]]);
+  });
+
+  it('CONTROL: with no attention sibling the order is programme order exactly as before', () => {
+    // The existing rule-2 cases hard-code `bucket: 'idle'` on every fixture, so
+    // an attention-first key is a no-op on them and they cannot pin it. This
+    // case states that premise; the case above is the pin.
+    const sessions = [sess('coord'), sess('earlier'), sess('later')];
+    const rows = nestFleet(sessions, [
+      run({ id: 21, wave: 2, sessionId: 'later', claimedBy: 'coord' }),
+      run({ id: 20, wave: 1, sessionId: 'earlier', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['coord', 0], ['earlier', 1], ['later', 1]]);
+  });
+
+  it('never lifts a waiting row above its PARENT — the key is scoped to siblings', () => {
+    const sessions = [sess('other'), sess('coord'), sess('kid', { bucket: 'attention' })];
+    const rows = nestFleet(sessions, [run({ id: 20, wave: 1, sessionId: 'kid', claimedBy: 'coord' })]);
+    // Top level is the caller's order, verbatim: `other`, then `coord` with its child.
+    expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['kid', 1]]);
+  });
 });
 
 describe('nestFleet — rule 3: an orphan is never bracketed', () => {
