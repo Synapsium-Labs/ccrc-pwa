@@ -23,7 +23,8 @@
 //     separately against the REAL generated `accounts.sh`, which is the only
 //     thing that can prove the generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, seedAccountsSh, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, plantPoolEpoch, seedAccountsSh, WS_ADD, CCD, type CcdHarness }
+  from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import type { PoolRuleCase } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
@@ -34,32 +35,17 @@ let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-pool-ok-');
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
-  plantPoolEpoch();
+  // The central projection, agreeing with the declared roster above. `_pool_ok`
+  // (Task 2) reads the account side through THIS document, so a fresh harness
+  // with only `seedAccountsSh` would read every account `unreadable` — correct
+  // for a control plane that has never synced (spec §5.8's cold-node fail-shut),
+  // but not what the placement-wiring blocks below are exercising. A case that
+  // wants the cold/absent document instead passes `undefined`, and one that
+  // wants the two carriers to DISAGREE passes its own map — see the
+  // projection-beats-roster case in the `_ws_least_loaded` block.
+  plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });
-
-/** Plant a well-formed `$REG/pool-epoch` document — the central projection
- *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the same accounts
- *  `POOL_BY_ID` declares. Needed because `_pool_ok` (Task 2) now reads the
- *  account side through this document, not through `accounts.sh`'s declared
- *  `_ccrc_pool`: a fresh harness with only `seedAccountsSh` has NO pool-epoch
- *  document at all, so every account would read `unreadable` — correct for a
- *  control plane that has never synced (spec §5.8's cold-node fail-shut), but
- *  not what the placement-wiring tests below are exercising. Any test that
- *  wants the cold/absent-document behaviour instead removes this file or
- *  overrides `_acct_pool_state` inline, which always wins over the sourced
- *  one. Derived from `POOL_BY_ID` rather than a second hand-typed copy of the
- *  same tags. */
-const plantPoolEpoch = (): void => {
-  const dir = path.join(h.home, '.cc-sessions');
-  fs.mkdirSync(dir, { recursive: true });
-  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
-    ...Object.entries(POOL_BY_ID)
-      .filter((e): e is [string, string] => e[1] !== undefined)
-      .map(([id, pool]) => `acct ${id} ${pool}`),
-    'end', ''];
-  fs.writeFileSync(path.join(dir, 'pool-epoch'), lines.join('\n'));
-};
 
 /** The bash word `_project_pool_state` would print for a wire state. The one
  *  place the two languages' spellings meet; it is HERE and not in shipped
@@ -104,12 +90,20 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
     expect(out).toBe(`rc=${WANT_RC[c.expect]}`);
   });
 
-  it('undecidable is a THIRD answer, not a mismatch — an untagged account does not decide either', () => {
-    // The mutant this kills: `*) return 1 ;;`. With it, an unreadable tag
-    // becomes "this account may not serve", every candidate is refused, and a
-    // permissions bug reads exactly like an empty pool.
+  it('an undecidable PROJECT tag is a THIRD answer, not a mismatch — and the account side is never asked', () => {
+    // The mutant this kills: the project arm's `*) return 1 ;;`. With it, an
+    // unreadable tag becomes "this account may not serve", every candidate is
+    // refused, and a permissions bug reads exactly like an empty pool.
+    //
+    // RETITLED AND DESTUBBED (wave 1 Task 2 fix round 1, M2). It carried a
+    // `_ccrc_pool() { return 0; }` stub and a title saying "an untagged
+    // account does not decide either", both left over from the rename: since
+    // the account side moved to `_acct_pool_state`, nothing in this call
+    // reaches `_ccrc_pool`, and the account side is not merely untagged here
+    // — it is never consulted, because the project arm returns first. The
+    // assertion below is unchanged; only the claims about it are.
     for (const word of ['unreadable', 'malformed']) {
-      const out = h.sh(`_ccrc_pool() { return 0; }; _pool_ok anyaccount ${word}; echo "rc=$?"`);
+      const out = h.sh(`_pool_ok anyaccount ${word}; echo "rc=$?"`);
       expect(out, word).toBe('rc=2');
     }
   });
@@ -309,6 +303,50 @@ describe('_ws_least_loaded [project] — placement honours the tag', () => {
     expect(h.sh('_ws_least_loaded demo')).toBe('claude-d');
   });
 
+  it('the PROJECTION decides, not the declared roster — the one case where the two DISAGREE', () => {
+    // THE PIN THIS WHOLE ACCOUNT ARM IS ABOUT, and until fix round 1 it did
+    // not exist anywhere outside a stubbed unit test. Every other pooled
+    // fixture in this tree plants the projection FROM the same map the
+    // declared roster is generated from, so the two carriers agree BY
+    // CONSTRUCTION and no integration case can tell which one decided.
+    // Measured before this case was written: reverting `_pool_ok`'s account
+    // read to the declared `_acct_pool` left all 227 assertions across the
+    // five adapted files GREEN.
+    //
+    // Here they disagree on ONE account, deliberately. The declared roster
+    // (`POOLED_TEST_ROSTER`, untouched, still written by `beforeEach`) says
+    // `claude -> pool-a`; the projection re-planted below says
+    // `claude -> pool-b`. Against a `pool-a` project that is the whole
+    // question:
+    //   declared read  -> `claude` is in pool and by far the cheapest: wins
+    //   projected read -> `claude` is out of pool; `claude-a` wins instead
+    // The two answers are different accounts, so the assertion cannot be
+    // satisfied by both readers — which is what makes it a pin and not a
+    // decoration.
+    plantPoolEpoch(h.home, { ...POOL_BY_ID, claude: 'pool-b' });
+    tag('demo', 'pool-a');
+    writeLimits('claude', 1, 1);        // cheapest — and in pool-a by the ROSTER only
+    writeLimits('claude-a', 90, 90);    // pool-a on BOTH carriers
+    writeLimits('claude-b', 95, 95);    // pool-b on both
+    writeLimits('claude-d', 99, 99);    // untagged on both: unconstrained, but dearest
+    expect(h.sh('_ws_least_loaded demo')).toBe('claude-a');
+  });
+
+  it('guards the guard: the same skew with the declared and projected pools AGREEING picks claude', () => {
+    // Without this the case above proves only that `claude` lost, not that
+    // the PROJECTION is why. Same limits, same tag, same roster — only the
+    // projection's `claude` row moves back to `pool-a`, and the cheapest
+    // account wins again. A `_pool_ok` that had simply stopped serving
+    // `claude` for some unrelated reason would red HERE.
+    plantPoolEpoch(h.home, POOL_BY_ID);
+    tag('demo', 'pool-a');
+    writeLimits('claude', 1, 1);
+    writeLimits('claude-a', 90, 90);
+    writeLimits('claude-b', 95, 95);
+    writeLimits('claude-d', 99, 99);
+    expect(h.sh('_ws_least_loaded demo')).toBe('claude');
+  });
+
   it('falls back to the first IN-POOL account when nothing eligible is measured', () => {
     // The `first` fallback sits AFTER the pool filter, so an all-unmeasured
     // in-pool set falls back to the first IN-POOL account in roster order —
@@ -387,6 +425,47 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
     writeLimits('claude-b', 90, 90);
     h.sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     expect(h.reg('demo-quiet-mesa', 'home')).toBe('claude-b');
+  });
+
+  it('names the PROJECTION and its own remedy when the ACCOUNT side is undecidable, not the project tag', () => {
+    // I1/I2, fix round 1. On a cold node — a box whose control plane has
+    // never synced, which is the EKS default path — the project tag is
+    // perfectly readable and every account is undecidable. What the refusal
+    // said before named the TAG (`tag:`/"pool tag for demo is … fix or clear
+    // it"), which blames a healthy file and whose remedy would UNTAG the
+    // project. The two conditions have different remedies, so they get
+    // different sentences.
+    h.makeRepo('demo');
+    tag('demo', 'pool-b');
+    plantPoolEpoch(h.home, undefined);      // no document at all: never synced
+    const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('projection=unreadable');
+    // NOT the project tag, in either spelling: the tag reads fine here.
+    // ` tag:` is the reason list's own token for an undecidable TAG, and
+    // `pool tag for` is the three verbs' die sentence for the same thing.
+    expect(r.stderr).not.toContain(' tag:');
+    expect(r.stderr).not.toContain('pool tag for');
+    expect(r.stderr).not.toContain(':pool=');
+    // …and the remedy names the carrier that actually decided.
+    expect(r.stderr).toContain(`${h.home}/.cc-sessions/pool-epoch`);
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
+  });
+
+  it('tells STALE from UNREADABLE — one remedy is the control-plane link, the other is this file', () => {
+    // FIVE CONDITIONS REACH rc 2 AND THE MESSAGE HAS TO SAY WHICH. `stale`
+    // and `unreadable` are the pair the spec calls out by name: "both mean
+    // nobody decides, but one's remedy is file permissions and the other's is
+    // the control-plane link". A document that is well-formed and merely past
+    // its lease must not read as an absent one.
+    h.makeRepo('demo');
+    tag('demo', 'pool-b');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });   // 1970: expired
+    const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('projection=stale');
+    expect(r.stderr).not.toContain('projection=unreadable');
+    expect(h.reg('demo-quiet-mesa', 'uuid')).toBeNull();
   });
 
   it('an untagged project keeps the pre-existing refusal sentence exactly', () => {

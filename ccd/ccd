@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=4981cd6f05bc849a9553cf1290d4354b1d9956ba222ef94d8ef6283ddcfdabfe
+# ccrc:generated 1 sha256=5604a96e34f6f2af1cca57a9e481d7d28edaa560bdc5df7f1469e4187f627d7e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2383,10 +2383,14 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 12 of
-# them call sites — the other six are prose, this sentence's own quoting of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 16 matching LINES now, 12 of
+# them call sites — the other four are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
-# of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
+# of them. (18/12 before fix round 1, which deleted two prose mentions along
+# with the falsified paragraphs that carried them: `cmd_ws_add`'s
+# unreachable-equivalence claim and this header's own sentence about that
+# builder folding rc 1 into rc 2. The call-site half did not move, which is
+# again the half that would have meant something.) (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
 # 17/11 after round 3, which rewrapped one prose mention and replaced another
 # with a grep anchor, and 18/12 at routing slice 4, whose `_place_for_class`
 # asks the pool rule before it counts a class's unservable lanes — the
@@ -2409,11 +2413,14 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # this exit code three ways now, refusing or acting on an undecidable tag
 # differently from a mismatch. The two ORIGINAL callers still fold rc 1
 # into rc 2 exactly as before, for the reason already given:
-# `_ws_least_loaded` writes `_pool_ok "$w" "$pps" || continue`, and
-# `cmd_ws_add`'s reason builder uses `elif ! _pool_ok …`, and what
+# `_ws_least_loaded` writes `_pool_ok "$w" "$pps" || continue`, and what
 # preserves the distinction at THAT seam is `cmd_ws_add` separately
 # re-reading the STATE WORD (`pps=$(_project_pool_state "$project")`), not
-# this exit code. Do not "simplify" the exit code to a boolean: several
+# this exit code. ONE OF THE TWO STOPPED FOLDING (fix round 1):
+# `cmd_ws_add`'s reason builder now takes the exit code into a variable and
+# branches three ways, because the account side made rc 2 reachable there
+# with a perfectly readable project tag and the folded arm printed a
+# mismatch token for it. Do not "simplify" the exit code to a boolean: several
 # callers now read rc 2 on its own, so collapsing it would be an adapter
 # narrowing a distinction it received, not a cleanup with nothing riding
 # on it.
@@ -2437,20 +2444,90 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # every project on the box, instead of only the ones somebody deliberately
 # tagged. Moving this below the account read is the difference between an
 # outage nobody notices and a fleet-wide stop.
+#
+# TWO FACTS OUT ALONGSIDE THE EXIT CODE (fix round 1, I1/I2) — `POOL_OK_SIDE`
+# and `POOL_OK_STATE`, set on EVERY call before anything returns.
+#
+# WHY THEY ARE NEEDED. The exit code is three-valued and the WORLD behind it is
+# not: rc 2 now stands for FIVE distinguishable conditions — the project tag
+# `unreadable` or `malformed`, and the account projection `unreadable`, `stale`
+# or `malformed` — and every renderer in this file used to spell exactly one of
+# them ("pool tag for <p> is <pps> … fix or clear it"). On a cold node with a
+# perfectly readable project tag that sentence blamed a healthy file and told
+# the operator to clear it. rc 1 had the twin defect one carrier over: the
+# refusal text read the DECLARED roster (`_acct_pool`) while the PROJECTION is
+# what decided, so a roster/projection skew printed "claude is in pool 'pool-a'
+# and project 'demo' is in pool 'pool-a'" and refused it as a mismatch. An
+# adapter may not narrow a distinction it received; these two variables are how
+# the distinction leaves this function.
+#
+#   POOL_OK_SIDE   project | account — WHICH SIDE produced the answer.
+#   POOL_OK_STATE  that side's own state word, verbatim: `untagged`,
+#                  `named <n>`, `unreadable`, `malformed` or (account only)
+#                  `stale`. For rc 1 it is the account's PROJECTED
+#                  `named <n>` — the name that actually decided.
+#
+# GLOBALS, NOT STDOUT, and the precedent is `_session_probe` below: `$( )`
+# would fork a subshell and eat them. MEASURED rather than assumed, because
+# this only works if no call site captures the call — all 12 invoke it
+# rc-style (`; prc=$?`, `|| continue`, `if ! …`), so the writes land in the
+# caller's own scope. Two consequences a future caller must respect: a caller
+# that runs OTHER functions between the call and the render must SNAPSHOT them
+# first (`cmd_swap` does, because `_crosspool_valid` and `_strand_mark` run in
+# between), and a caller must never read them without having called first —
+# hence the unconditional reset on entry, so a rc-0 return can never leave the
+# previous call's words standing.
 _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
   local ap pp
+  POOL_OK_SIDE=''; POOL_OK_STATE=''
   case "$2" in
-    untagged)  return 0 ;;
+    untagged)  POOL_OK_SIDE=project; POOL_OK_STATE=untagged; return 0 ;;
     "named "*) pp=${2#named } ;;
-    *)         return 2 ;;                     # unreadable | malformed: nobody decides
+    *)         POOL_OK_SIDE=project; POOL_OK_STATE="$2"; return 2 ;;   # unreadable | malformed: nobody decides
   esac
   ap=$(_acct_pool_state "$1")
+  # FROM HERE THE ANSWER IS THE ACCOUNT SIDE'S, whatever it turns out to be —
+  # the project side already answered `named <n>`, which is a readable tag and
+  # never a reason to refuse on its own.
+  POOL_OK_SIDE=account; POOL_OK_STATE="$ap"
   case "$ap" in
     untagged)  return 0 ;;
     "named "*) ap=${ap#named } ;;
     *)         return 2 ;;                     # unreadable | stale | malformed: nobody decides
   esac
   [[ "$ap" == "$pp" ]]
+}
+# ── THE TWO NON-SERVE SENTENCES, EACH SPELLED ONCE ──────────────────────────
+# Both take their facts as ARGUMENTS rather than reading `POOL_OK_SIDE` /
+# `POOL_OK_STATE` themselves, for the reason the variables' own header gives:
+# a caller that runs something else in between must pass its SNAPSHOT, and a
+# renderer that silently read whatever the globals hold now would be the same
+# stale-fact defect one level up.
+_pool_undecidable_why() {   # side state project account-id -> the rc-2 sentence
+  # FIVE CONDITIONS, FIVE REMEDIES, and saying which is the whole obligation:
+  # "both mean nobody decides, but one's remedy is file permissions and the
+  # other's is the control-plane link, and the die message and the chip each
+  # need to say which" (spec §5.7). The account arms each state POSITIVELY that
+  # the project tag is fine, because the sentence they replace said the
+  # opposite and an operator acted on it.
+  local side="$1" state="$2" project="$3" acct="$4"
+  if [[ "$side" == project ]]; then
+    echo "pool tag for $project is $state: $POOLS_DIR/$project — fix or clear it"
+    return 0
+  fi
+  case "$state" in
+    stale)     echo "the pool projection for $acct is stale: $REG/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; project '$project' is tagged and its tag reads fine" ;;
+    malformed) echo "the pool projection for $acct is malformed: $REG/pool-epoch is off the grammar — re-sync or remove it; project '$project' is tagged and its tag reads fine" ;;
+    *)         echo "the pool projection for $acct is unreadable: $REG/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; project '$project' is tagged and its tag reads fine" ;;
+  esac
+}
+_pool_mismatch_why() {   # account-id account-state project project-pool-state -> the rc-1 clause
+  # NAMES THE CARRIER THAT DECIDED. `_acct_pool` — the DECLARED roster read —
+  # is what stood here, and it is spec §5.6's LOWEST precedence: the
+  # projection outranks it, so the two disagree exactly when this sentence
+  # matters most, and the old text then named two identical pools and called
+  # them a mismatch.
+  echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch — not the declared roster) and project '$3' is in pool '${4#named }'"
 }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
@@ -6618,7 +6695,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
     # an EMPTY reason list. Both are harmless because this path is already
     # refusing either way — the second read only picks the WORDING of a
     # refusal that has already happened, never whether one happens.
-    local w why="" pps ppn=""
+    local w why="" pps ppn="" prc
     pps=$(_project_pool_state "$project")
     case "$pps" in "named "*) ppn=${pps#named } ;; esac
     if [[ "$pps" != untagged && -z "$ppn" ]]; then
@@ -6630,23 +6707,47 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         # account rather than the last one that would have.
         if   [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
         elif ! _lane_enabled "$w";       then why+=" $w:disabled"
-        # `pps` is `untagged` or `named …` in this branch, so `_pool_ok` can
-        # only answer 0 or 1 here, and an account reported with `pool=` is
-        # always a TAGGED one — the empty answer never reaches this string.
+        # BOTH NON-SERVE CODES REACH THIS ARM NOW, AND IT TELLS THEM APART
+        # (fix round 1, I1/I2). What stood here read: "`pps` is `untagged` or
+        # `named …` in this branch, so [the rule] can only answer 0 or 1 here,
+        # and an account reported with `pool=` is always a TAGGED one — the
+        # empty answer never reaches this string." BOTH HALVES ARE FALSE since
+        # the account side started reading `_acct_pool_state`, and both were
+        # measured false, not reasoned about: rc 2 arrives here with a
+        # perfectly readable project tag whenever the projection is absent
+        # (a node that never synced), past its lease, or off the grammar; and
+        # the name this arm printed came from `_acct_pool`, the DECLARED
+        # roster, while the PROJECTION is what decided — a skew printed
+        # `claude:pool=pool-a` as the reason `claude` cannot serve a `pool-a`
+        # project. The rc test (rather than `!`) is what buys the split, the
+        # same idiom and the same reason as the `_class_gate` arm below.
         #
-        # THE QUOTING HERE IS UNREACHABLE-EQUIVALENT, NOT UNTESTED — do not
-        # read a missing mutation kill as missing coverage, and do not
-        # "simplify" these quotes away because of it. Measured: unquoting
-        # `_pool_ok $w $pps` at this call site alone leaves the suite
-        # 121/121 green. The reason is `_account_ok` (`[[ -x wrapper ]] &&
-        # _lane_enabled`) is exactly what the two `elif` arms above already
-        # mirror, so only a genuinely wrong-pool account ever reaches this
-        # third arm — and there, rc 1 (mismatch) and the word-split rc 2
-        # (undecidable, from an unquoted multi-word `$pps`) both fall into
-        # this SAME `elif ! …` branch and print the SAME string. Site 1
-        # (`_ws_least_loaded`'s loop) is the one an unquoted `$2` actually
-        # changes, and stays quoted for the reason stated there.
-        elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
+        # THE UNDECIDABLE TOKEN NAMES THE DOCUMENT, NOT THE LANE. All three of
+        # the account side's undecidable words are properties of the one shared
+        # `pool-epoch` file, so `projection=<word>` is the SAME fact for every
+        # lane in this loop and its remedy is that file, never this lane —
+        # unlike `pool=`, which really is per-lane. It is still emitted
+        # per-lane here, deliberately: this loop's contract is one token per
+        # account naming its own first failing predicate, and hoisting a
+        # single token out of it would be a second shape for callers to parse.
+        # `_strand_why`, whose contract is the opposite, hoists.
+        #
+        # THE QUOTING HERE IS NO LONGER UNREACHABLE-EQUIVALENT — corrected in
+        # the same round, because the paragraph that stood here told a future
+        # author not to expect a mutation kill. Unquoting `$pps` word-splits
+        # `named pool-b` so that `$2` is the bare word `named`, which is
+        # neither `untagged` nor `named `* and so takes the PROJECT arm's
+        # `*)` — rc 2, and now a visibly different token
+        # (`projection=named`) rather than the same mismatch string the two
+        # codes used to share. Measured, not argued: unquoting both arguments
+        # at this one call site is 3 failed / 44 passed in
+        # `ccd-pool-ok.test.ts`, the three being "names the pool, each
+        # accounts own first failing predicate, and the remedies" and the two
+        # projection cases beside it.
+        elif _pool_ok "$w" "$pps"; prc=$?; [[ "$prc" -ne 0 ]]; then
+          if [[ "$prc" -eq 2 ]]; then why+=" $w:projection=$POOL_OK_STATE"
+          else                        why+=" $w:pool=${POOL_OK_STATE#named }"
+          fi
         # RC 1 ONLY, and the `$?` test rather than `!` is what makes that true.
         # `_class_gate` answers 1 for a lane MEASURED unable to serve the class
         # and 2 for one nobody measured — and an unmeasured lane is PLACEABLE,
@@ -6673,7 +6774,16 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         fi
       done
     fi
-    die "no account available for placement${ppn:+ in pool $ppn} —${why}; enable one (rm $REG/<w>-disabled)${ppn:+, tag an account into pool $ppn in ~/.ccrc/accounts.json and redeploy the agent lane, or untag the project (ccd project-pool --project $project --clear)} and retry — nothing was touched"
+    # THE POOL REMEDY NAMES BOTH CARRIERS (fix round 1, I2). It used to name
+    # only the DECLARED one — "tag an account into pool <n> in
+    # ~/.ccrc/accounts.json and redeploy the agent lane" — which is where an
+    # operator edits the fact but is no longer what DECIDES it: the account
+    # side of the rule reads the projection, so an account already tagged in
+    # `accounts.json` keeps refusing until the projection carries the same
+    # edge, and this sentence sent the operator to tag an account that is
+    # already tagged. The declared step is kept (it is still the edit that
+    # starts the chain) with the step that ends it said after it.
+    die "no account available for placement${ppn:+ in pool $ppn} —${why}; enable one (rm $REG/<w>-disabled)${ppn:+, tag an account into pool $ppn in ~/.ccrc/accounts.json and redeploy the agent lane, then let the projection ($REG/pool-epoch) carry the same edge — that is what decides — or untag the project (ccd project-pool --project $project --clear)} and retry — nothing was touched"
   fi
 
   # PER PROJECT, and it spans slug selection through the last registry write —
@@ -15882,14 +15992,36 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       # touches `.home`, so `cross_home` keeps validating until something else
       # changes `home`. (`_crosspool_tick` is what then removes an invalid
       # marker and logs `crosspool-ended`.)
-      # rc 2 IS UNREACHABLE HERE BY CONSTRUCTION, and that is a derivation worth
-      # writing down rather than a guard worth adding (#69 review, S1).
-      # `_pool_ok`'s undecidable arm keys ONLY on `$2`, and `$pps` is read once
-      # per call to this function — so once the `-eq 2` return above has fired,
-      # this loop can only ever see rc 0 or 1. A guard here would be one no case
-      # could red. But it IS the second half of the same fold: delete the return
-      # above and `|| continue` silently skips every candidate, producing rc 1
-      # and the identical fabricated strand. Measured.
+      # rc 2 IS UNREACHABLE HERE, and that is a derivation worth writing down
+      # rather than a guard worth adding (#69 review, S1) — but NOT for the
+      # reason this paragraph gave until fix round 1 (I3). It said "the
+      # undecidable arm keys ONLY on `$2`, and `$pps` is read once per call",
+      # which stopped being true the moment the account side started reading
+      # `_acct_pool_state`: the rule now answers 2 on `$1` too, for a
+      # projection that is absent, past its lease, or off the grammar. The
+      # CONCLUSION survives, by a different argument, and the premise is
+      # replaced rather than patched because a comment is what a future author
+      # deletes a guard on the strength of.
+      #
+      # THE ARGUMENT THAT ACTUALLY HOLDS: every one of the account side's
+      # three undecidable words is a property of the ONE shared `pool-epoch`
+      # document, never of the account asked about — so it is the same answer
+      # for `$cur` as for every candidate here, and the `-eq 2` return above
+      # (which asks about `$cur`, and asks first) has already fired on it. The
+      # one id-specific way that arm answers `unreadable` is an EMPTY id, and
+      # an empty `$cur` takes that same return; `_pool_for`'s own output can
+      # never word-split into an empty candidate.
+      #
+      # ONE WINDOW IS LEFT OPEN, and it is the lease, not the argument: the
+      # document can expire BETWEEN the `-eq 2` return above and this loop, at
+      # which point `|| continue` skips a candidate for a condition that is
+      # not that candidate's fault. It is bounded by one 5-second tick and the
+      # next tick answers 4 outright; it is named here rather than guarded so
+      # that "unreachable" is not read as "impossible".
+      #
+      # The `|| continue` below is still the second half of the same fold:
+      # delete the return above and it silently skips every candidate,
+      # producing rc 1 and the identical fabricated strand. Measured.
       _pool_ok "$cand" "$pps" || continue
       _account_ok "$cand" || continue
       _avail "$cand" || continue
@@ -19620,14 +19752,20 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `wrapper` is no longer the caller's argument, so a refusal here would
   # refuse a REVIVAL of a session a retag put in the wrong pool — which
   # ruling 5 moves at the next idle boundary instead. At most a warning.
-  local pps prc
+  local pps prc pside pstate
   pps=$(_project_pool_state "$project")
   _pool_ok "$wrapper" "$pps"; prc=$?
+  # SNAPSHOT THE TWO FACTS IMMEDIATELY (fix round 1, I1/I2) — see the header at
+  # the rule itself. Nothing runs between here and the two `die`s below today,
+  # so reading the globals directly would be correct today and one inserted
+  # call away from being silently wrong; the snapshot is what makes "which side
+  # was undecidable" a fact about THIS call rather than about the last one.
+  local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   if [[ -z "$regw" ]]; then
     [[ "$prc" -eq 2 ]] \
-      && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+      && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$wrapper"); nothing was touched"
     [[ "$prc" -eq 1 && -z "$cross" ]] \
-      && die "pool-mismatch: $wrapper is in pool '$(_acct_pool "$wrapper")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd start --cross-pool $wrapper $project"
+      && die "pool-mismatch: $(_pool_mismatch_why "$wrapper" "$pstate" "$project" "$pps") — to cross on purpose: ccd start --cross-pool $wrapper $project"
   elif [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable; then
     # SAID, NOT DECIDED. `$pps` is `untagged` here because the field could not be
     # read, not because the project carries no tag, so the mismatch arm below
@@ -20618,7 +20756,7 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # NOT AGREE" block is about candidate SET. Neither refutes the other, and they
   # are stated in two places because they are two different questions: which
   # accounts a walk considers, and in which order it rejects them.
-  local id="$1" p="$2" pps cand ap cur out=""
+  local id="$1" p="$2" pps cand ap cur out="" prc
   pps=$(_project_pool_state "$p")
   # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
   # accounts would invent five reasons for one condition. One token, with the
@@ -20628,18 +20766,44 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   cur=$(_reg_get "$id" wrapper)
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
-    if ! _pool_ok "$cand" "$pps"; then
-      # ADDED (final whole-branch review, M-3): `:-none` cannot print here
-      # today — `_pool_ok` returns 1 (this branch) only when `ap` is
-      # NON-EMPTY (its own body: `[[ -z "$ap" || "$ap" == "$pp" ]]`), and
-      # `pps` this deep is always `untagged`/`named …`, never the case that
-      # returns 2. Kept anyway as a belt on this call site's OWN guarantee,
-      # not because the fallback is reachable now — a future change to
-      # `_pool_ok`'s or `_acct_pool`'s contract at this exact point should
-      # degrade to an honest `:pool=none` rather than an empty, easy-to-miss
-      # `:pool=` in an operator-facing banner. No behaviour change: this is
-      # a comment only.
-      ap=$(_acct_pool "$cand"); out+=" $cand:pool=${ap:-none}"
+    _pool_ok "$cand" "$pps"; prc=$?
+    if [[ "$prc" -eq 2 ]]; then
+      # THE SAME RULE THE PROJECT ARM ABOVE OBEYS, now that the ACCOUNT side
+      # can answer undecidable too (fix round 1, I2). The paragraph five lines
+      # up — "Undecidable is NOT a per-candidate fact … annotating five
+      # accounts would invent five reasons for one condition" — was written
+      # about the project tag and was being VIOLATED by this loop the moment
+      # the account arm gained its own undecidable states: `! [the rule]`
+      # takes rc 2 as true, so all five candidates fell into the branch below
+      # and each printed a `pool=` token for one shared condition.
+      #
+      # ONE CONDITION, because every one of the account side's undecidable
+      # words is a property of the ONE shared document, never of the
+      # candidate: absent or unreadable, past its lease, or off the grammar.
+      # So this hoists exactly as the project arm does — one token, with the
+      # path, and the remedy is that file or the control-plane link, not an
+      # account. (`cmd_ws_add`'s reason builder makes the opposite choice for
+      # the opposite contract: its list is one token per account and it says
+      # so.) The project tag is READABLE here, which is why this token names
+      # the projection instead: the arm above already returned for the other
+      # case, so `$pps` cannot be the cause.
+      echo "projection:$POOL_OK_STATE $REG/pool-epoch"; return 0
+    elif [[ "$prc" -eq 1 ]]; then
+      # THE PROJECTED NAME, NOT THE DECLARED ONE (fix round 1, I2). This read
+      # `_acct_pool` — spec §5.6's LOWEST-precedence carrier — while the
+      # projection is what returned rc 1, so a roster/projection skew named
+      # the pool the account is NOT being judged by.
+      #
+      # `:-none` STILL CANNOT PRINT, and the derivation is new, because the
+      # one this replaces cited a body that no longer exists (`[[ -z "$ap" ||
+      # "$ap" == "$pp" ]]`). rc 1 is now the fall-through of the account
+      # `case`, reachable only on its `"named "*` arm, and `_pool_name_valid`
+      # refuses an empty name — so `${POOL_OK_STATE#named }` is non-empty
+      # whenever this branch runs. Kept as a belt on that guarantee, not
+      # because the fallback is reachable: a future contract change here
+      # should degrade to an honest `:pool=none` rather than an empty,
+      # easy-to-miss `:pool=` in an operator-facing banner.
+      ap=${POOL_OK_STATE#named }; out+=" $cand:pool=${ap:-none}"
     elif ! _account_ok "$cand"; then
       if [[ -x "$WRAPPER_DIR/$cand" ]]; then out+=" $cand:disabled"; else out+=" $cand:missing"; fi
     elif ! _avail "$cand"; then
@@ -21291,7 +21455,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # carrying this sentence, a shell gets stderr, and the transient unit's
   # stderr lands in swap.log. Below the detach arm it would refuse in a process
   # nobody is waiting for.
-  local project pps prc prjrc crossing=""
+  local project pps prc prjrc crossing="" pside pstate
   # THE PROJECT FIELD IS MEASURED HERE TOO (#69 review round 4, B3). Round 3
   # converted the tick's two reads and left the VERBS, and the verbs are the half
   # a PWA tap reaches. `_reg_get` folds ABSENT, EMPTY and UNREADABLE into `""`,
@@ -21324,11 +21488,17 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
   pps=$(_project_pool_state "$project")
   _pool_ok "$target" "$pps"; prc=$?
+  # THE SNAPSHOT IS LOAD-BEARING HERE, not a convention (fix round 1, I1/I2).
+  # `_crosspool_valid` and `_strand_mark` both run between this call and the
+  # mismatch `die` below; neither consults the pool rule today, and "today" is
+  # exactly the word that makes reading the globals down there a latent
+  # stale-fact defect. Taken here, one line after the call that filled them.
+  pside="$POOL_OK_SIDE"; pstate="$POOL_OK_STATE"
   # UNDECIDABLE REFUSES EVEN WITH THE FLAG. `--cross-pool` says "cross from
   # pool X to pool Y on purpose"; when the tag cannot be read there is no X to
   # name, so there is no decision to override.
   [[ "$prc" -eq 2 ]] \
-    && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$target"); nothing was touched"
   if [[ "$prc" -eq 1 ]]; then
     # `if` TAKES rc 2 AS FALSE, AND THAT IS THE RIGHT ANSWER HERE (C1) — but it
     # is right for a reason, not by luck, so it is said out loud. This is the
@@ -21361,7 +21531,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
       # P-8, not a stale supervisor.
       [[ "${CCD_SWAP_AUTO:-}" == 1 ]] && _strand_mark "$id" "$cur" "$project" \
         "$target refused as a cross-pool crossing nobody asked for — likely a supervisor still running a pre-deploy ccd; the remedy is the claude-session@* unit sweep"
-      die "pool-mismatch: $target is in pool '$(_acct_pool "$target")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd swap --cross-pool $id $target"
+      die "pool-mismatch: $(_pool_mismatch_why "$target" "$pstate" "$project" "$pps") — to cross on purpose: ccd swap --cross-pool $id $target"
     fi
   fi
   # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
@@ -21547,7 +21717,15 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # they crossed twice.
   if [[ -n "$crossing" ]]; then
     _crosspool_mark "$id" "${pps#named }" "$target"
-    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=$(_acct_pool "$target")]" >> "$REG/swap.log"
+    # `target-pool` IS THE SNAPSHOT, NOT A FRESH DECLARED READ (fix round 1 —
+    # the same carrier correction as the refusals above, applied to the one
+    # renderer of this fact the review did not enumerate). Two reasons the
+    # `$(_acct_pool "$target")` that stood here was wrong: it named spec
+    # §5.6's lowest-precedence carrier while the projection is what ruled this
+    # a crossing at all, and it re-read minutes later — the carry can take
+    # them — so the line recorded a pool that need not be the one the
+    # decision was made against. `$pstate` is that decision's own word.
+    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=${pstate#named }]" >> "$REG/swap.log"
   fi
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
   _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
@@ -21615,10 +21793,12 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
   pps=$(_project_pool_state "$project")
   _pool_ok "$w" "$pps"; prc=$?
+  # SNAPSHOT, for the reason `cmd_start`'s own snapshot states.
+  local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   [[ "$prc" -eq 2 ]] \
-    && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$w"); nothing was touched"
   [[ "$prc" -eq 1 && -z "$cross" ]] \
-    && die "pool-mismatch: $w is in pool '$(_acct_pool "$w")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd prefer --cross-pool $id $w"
+    && die "pool-mismatch: $(_pool_mismatch_why "$w" "$pstate" "$project" "$pps") — to cross on purpose: ccd prefer --cross-pool $id $w"
   old=$(_home_for "$id")
   _reg_set "$id" home "$w"
   local lc_cross=()

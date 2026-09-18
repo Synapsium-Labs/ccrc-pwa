@@ -21,7 +21,7 @@ import { parseRoster } from '../../shared/roster.js';
 import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
-import { CCD, seedAccountsSh } from './ccdWsHelpers.js';
+import { CCD, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
 
 let home: string;
 
@@ -128,29 +128,6 @@ const seedPoolTag = (project: string, tag: string): void => {
   fs.writeFileSync(path.join(dir, project), tag);
 };
 
-/** Plant a well-formed `$REG/pool-epoch` document — the central projection
- *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the case's own
- *  `pools` map. Added by wave 1 Task 2: `_pool_ok` now reads the account
- *  side through this document, not through `accounts.sh`'s declared
- *  `_ccrc_pool`, so `bashPick`'s real, unstubbed `_ws_least_loaded` needs a
- *  central projection that agrees with `rosterWithPools`'s declared tags —
- *  the exact same `pools` map, so the two can never drift apart — or every
- *  account reads `unreadable` (no document at all) and a tagged-project case
- *  refuses as undecidable instead of exercising the pool filter it is
- *  actually about. Absent `pools`, no document is written at all, matching
- *  `seedSweep`'s own "absent means removed, not written empty" idiom. */
-const plantPoolEpoch = (pools: Record<string, string> | undefined): void => {
-  const dir = path.join(home, '.cc-sessions');
-  const f = path.join(dir, 'pool-epoch');
-  fs.rmSync(f, { force: true });
-  if (!pools) return;
-  fs.mkdirSync(dir, { recursive: true });
-  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
-    ...Object.entries(pools).map(([id, pool]) => `acct ${id} ${pool}`),
-    'end', ''];
-  fs.writeFileSync(f, lines.join('\n'));
-};
-
 /** The sweep's own report, `<HOME>/.cc-sessions/usage/sweep/latest.json` —
  *  the server's `readSharesMeasured` and (Task 4) ccd's bash reader both read
  *  it from there. Absent `sweep` means no file at all (removed, not written
@@ -171,14 +148,31 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
   it.each(leastLoadedCases(now()).map((c) => [c.name, c] as const))(
     '%s',
     async (_name, c) => {
-      // BOTH projections of the case's roster into the one fixture home, so the
-      // comparison below is of two RULES and not of two rosters. Re-seeded per
-      // case rather than only in `beforeEach`, because the pool dimension is
-      // the first thing in this fixture that changes the ROSTER itself.
+      // BOTH projections of the case's roster into the one fixture home.
+      // Re-seeded per case rather than only in `beforeEach`, because the pool
+      // dimension is the first thing in this fixture that changes the ROSTER
+      // itself.
+      //
+      // THE TWO SIDES NO LONGER READ THE SAME CARRIER, and the premise here
+      // used to say they did — "so the comparison below is of two RULES and
+      // not of two rosters" (corrected, wave 1 Task 2 fix round 1, I4). Since
+      // `_pool_ok` gained its account arm the bash side reads the central
+      // PROJECTION (`pool-epoch`) while the TypeScript side's
+      // `projectHome`/`poolEligible` still reads the DECLARED roster, so this
+      // parity harness feeds `c.pools` to BOTH and the fixture is what forces
+      // them to agree. That makes this a comparison of two rules ONLY on the
+      // pool dimension's agreeing case: it is deliberately blind to a
+      // roster/projection SKEW, which is a real condition and belongs to
+      // neither side's rule. The bash half of that skew is pinned in
+      // `ccd-pool-ok.test.ts` (`_ws_least_loaded` honours the projection over
+      // the declared roster) and in `ccd-crosspool.test.ts`; the TypeScript
+      // half has no carrier to read yet. Do not read a green run here as
+      // evidence the two carriers agree in the field — it is evidence they
+      // agree in this fixture, by construction.
       const roster = rosterWithPools(c.pools);
       seedRoster(home, roster);
       seedAccountsSh(home, roster);
-      plantPoolEpoch(c.pools);
+      plantPoolEpoch(home, c.pools);
       seed(c.files);
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);

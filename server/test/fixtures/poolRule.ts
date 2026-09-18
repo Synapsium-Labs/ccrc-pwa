@@ -252,6 +252,17 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   {
     name: 'acct-unreadable-project-unreadable', accountPool: null, accountState: 'unreadable',
     project: { state: 'unreadable' }, expect: 'undecidable',
-    why: 'both sides unreadable is still one verdict, and it is not a mismatch',
+    // THIS ROW'S SUBJECT IS THE PROJECT ARM, NOT THE ACCOUNT ARM, and saying so
+    // is the fix for the fix round's M1: the `why` used to read "both sides
+    // unreadable is still one verdict, and it is not a mismatch", which claims
+    // an account-side fact this row cannot possibly measure. Measured: the
+    // project arm answers first and returns, so `_acct_pool_state` is never
+    // called at all here and the row passes with ANY account state — vacuous
+    // for the claim it was making. What it DOES pin is worth keeping: an
+    // unreadable project side is `undecidable` and never a MISMATCH, however
+    // "different" two unmeasurable sides look, and it stays `undecidable` when
+    // the account side would also have refused, so the two do not add up to a
+    // stronger verdict.
+    why: 'an unreadable PROJECT side answers undecidable and returns before the account side is read at all — two unmeasurable sides are one verdict, never a mismatch, and never a stronger one',
   },
 ];

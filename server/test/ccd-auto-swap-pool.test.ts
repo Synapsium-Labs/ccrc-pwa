@@ -13,7 +13,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, plantPoolEpoch, seedAccountsSh, type CcdHarness }
+  from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
@@ -24,30 +25,14 @@ beforeEach(() => {
   // Re-seeded rather than hand-written: a fixture accounts.sh typed out here
   // would be a fourth copy of the roster.
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
-  plantPoolEpoch();
+  // The central projection, agreeing with the declared roster above — this
+  // file's real, unstubbed `_auto_swap_check`/`_swap_target` read the account
+  // side through it since wave 1 Task 2, and without it every account reads
+  // `unreadable` (no document at all) and every decision below becomes
+  // undecidable rather than the pool verdict each case is about.
+  plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });
-
-/** Plant a well-formed `$REG/pool-epoch` document — the central projection
- *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the same accounts
- *  `POOL_BY_ID` declares. Added by wave 1 Task 2: `_pool_ok` now reads the
- *  account side through this document rather than `accounts.sh`'s declared
- *  `_ccrc_pool`, so this file's real, unstubbed `_auto_swap_check`/
- *  `_swap_target` need a central projection that agrees with the declared
- *  roster `seedAccountsSh` already writes, or every account reads
- *  `unreadable` (no document at all) and every decision below becomes
- *  undecidable rather than the pool verdict each case is actually testing.
- *  Same helper as `ccd-pool-ok.test.ts`'s own `plantPoolEpoch`. */
-function plantPoolEpoch(): void {
-  const dir = path.join(h.home, '.cc-sessions');
-  fs.mkdirSync(dir, { recursive: true });
-  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
-    ...Object.entries(POOL_BY_ID)
-      .filter((e): e is [string, string] => e[1] !== undefined)
-      .map(([id, pool]) => `acct ${id} ${pool}`),
-    'end', ''];
-  fs.writeFileSync(path.join(dir, 'pool-epoch'), lines.join('\n'));
-}
 
 const ID = 'claude-demo';
 const PANE_PID = '4242';
@@ -261,6 +246,41 @@ describe('_strand_why names the candidates the decision was actually about', () 
     seed(); tagPool('demo', 'Pool Orate');
     expect(h.sh(`_strand_why ${ID} demo`))
       .toBe(`tag:malformed ${h.home}/.cc-sessions/pools/demo`);
+  });
+
+  it('obeys that same rule for the ACCOUNT side — one projection token, not one per candidate', () => {
+    // I2, fix round 1. The rule above was written about the project TAG, and
+    // this loop was violating it the moment `_pool_ok`'s account arm gained
+    // undecidable states of its own: `! [the rule]` takes rc 2 as true, so a
+    // cold node (no projection document at all) put a `pool=` token on EVERY
+    // candidate — five invented per-candidate reasons for one shared
+    // condition, and each one naming a pool the account may not even be in.
+    // The three account-side undecidable words are all properties of the ONE
+    // document, so the honest answer is one token naming that document.
+    //
+    // THE PROJECT TAG IS READABLE HERE, deliberately: `named pool-b`. If the
+    // token were still `tag:` this case could not tell the two conditions
+    // apart, which is the whole finding.
+    seed(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, undefined);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe(`projection:unreadable ${h.home}/.cc-sessions/pool-epoch`);
+  });
+
+  it('and tells that projection token apart from a STALE one — different remedy, different word', () => {
+    seed(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe(`projection:stale ${h.home}/.cc-sessions/pool-epoch`);
+  });
+
+  it('guards the guard: with the projection readable the per-candidate census is unchanged', () => {
+    // Without this the two cases above would also pass against a `_strand_why`
+    // that had simply stopped annotating candidates at all.
+    seed(); tagPool('demo', 'pool-b');
+    disable('claude-b'); writeLimits('claude-d', 99, 99); writeLimits('claude-a', 99, 99);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe('claude-a:pool=pool-a claude-b:disabled claude-d:limit');
   });
 });
 
