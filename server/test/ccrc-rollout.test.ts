@@ -62,6 +62,7 @@ function plantBox(home: string): void {
     'case "$cmd" in',
     '  *CCRC_ROLE*) [ -f "$d/role" ] && cat "$d/role"; exit 0 ;;',
     '  "ccrc update --check --to "*)',
+    '    [ -f "$d/garbage-check" ] && { echo nonsense; exit 0; }',
     '    tgt="${cmd##* }"',
     '    if [ -z "$ver" ]; then state=unversioned; box=unversioned',
     '    elif [ "$ver" != "$tgt" ]; then state=behind; box="$ver"',
@@ -114,8 +115,8 @@ function twoBoxFleet(prefix: string): string {
   return home;
 }
 
-function run(home: string, args: string[] = []): Result {
-  const env = ghContainedEnv(home, { ...process.env, HOME: home });
+function run(home: string, args: string[] = [], extraEnv: NodeJS.ProcessEnv = {}): Result {
+  const env = ghContainedEnv(home, { ...process.env, HOME: home, ...extraEnv });
   for (const k of ['CCRC_BOX', 'CCRC_AGENT_BOX', 'CCRC_SSH_KEY', 'CCRC_SSH_PORT', 'CCRC_RELEASE_BASE_URL', 'CCRC_DEPLOY_ENV']) delete env[k];
   env['CCRC_DEPLOY_ENV'] = join(home, 'deploy.env');
   env['CCRC_RELEASE_BASE_URL'] = `local://${home}/releases`;
@@ -126,6 +127,20 @@ function run(home: string, args: string[] = []): Result {
 const sshCalls = (home: string): string[] => (existsSync(join(home, 'ssh-argv'))
   ? readFileSync(join(home, 'ssh-argv'), 'utf8').split('\n').filter((l) => l !== '') : []);
 const updates = (home: string): string[] => sshCalls(home).filter((l) => / ccrc update --to /.test(l));
+
+/** PATH with the fixture's `.local/bin` (ssh/curl stubs, no jq — jq's own
+ *  symlink is removed) followed by every real directory on this process's
+ *  own PATH that does NOT itself carry a `jq` binary, so real coreutils
+ *  (bash's external dependencies: grep, cut, tr, mktemp, awk, sed, …) stay
+ *  reachable while `jq` is reachable NOWHERE — not the fixture's, not a
+ *  system one three directories over. Ccrc-install.test.ts's `pathWithout`
+ *  models the identical idea (one absence, real tools otherwise).
+ */
+function pathWithoutJq(home: string): string {
+  rmSync(join(home, '.local', 'bin', 'jq'), { force: true });
+  const real = (process.env['PATH'] ?? '').split(':').filter((d) => d !== '' && !existsSync(join(d, 'jq')));
+  return [join(home, '.local', 'bin'), ...real].join(':');
+}
 
 describe('ccrc rollout: refusals before any box is touched (exit 2, no ssh)', () => {
   it('a missing coordinate names the key and the file', () => {
@@ -151,11 +166,56 @@ describe('ccrc rollout: refusals before any box is touched (exit 2, no ssh)', ()
     expect(updates(home)).toEqual([]);
   });
 
+  // R7: no overloaded null at the role seam — an unreachable box (ssh's own
+  // transport failure) must read differently from a reachable box recording
+  // no role at all.
+  it('an unreachable fleet box is distinguished from a role-less one', () => {
+    const home = twoBoxFleet('ccrc-rollout-unreachable-');
+    rmSync(join(home, 'hosts', FLEET), { recursive: true, force: true });   // no fixture dir -> ssh stub exits 255
+    const r = run(home);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/unreachable over ssh \(exit 255\)/);
+    expect(r.stderr).not.toMatch(/records CCRC_ROLE=/);
+    expect(updates(home)).toEqual([]);
+  });
+
   it('an unknown argument and a malformed --to are usage errors', () => {
     const home = twoBoxFleet('ccrc-rollout-usage-');
     expect(run(home, ['--bogus']).code).toBe(2);
     expect(run(home, ['--to', '2.0.0']).code).toBe(2);
     expect(sshCalls(home)).toEqual([]);
+  });
+
+  // R6: the exit-code contract wins over any literal code below it — every
+  // refusal before the first `ccrc update --to` argv is exit 2, never 1.
+  it('no jq on PATH refuses at exit 2, before any ssh call', () => {
+    const home = twoBoxFleet('ccrc-rollout-nojq-');
+    const r = run(home, [], { PATH: pathWithoutJq(home) });
+    expect(r.code, `stderr: ${r.stderr}`).toBe(2);
+    expect(r.stderr).toMatch(/jq is required/);
+    expect(sshCalls(home)).toEqual([]);
+  });
+
+  it('a release space with no SHA256SUMS refuses at exit 2, nothing touched', () => {
+    const home = mkTmp('ccrc-rollout-norelease-');
+    plantBox(home);
+    plantDeployEnv(home);
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0' });
+    plantHost(home, SERVER, { role: 'server', version: 'v1.0.0' });
+    // No plantRelease(home, ...): the release space stays empty.
+    const r = run(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(2);
+    expect(r.stderr).toMatch(/is there a release\?/);
+    expect(updates(home)).toEqual([]);
+  });
+
+  it('a garbage --check answer from a box refuses at exit 2, before any update', () => {
+    const home = twoBoxFleet('ccrc-rollout-garbage-');
+    mkdirSync(join(home, 'hosts', FLEET), { recursive: true });
+    writeFileSync(join(home, 'hosts', FLEET, 'garbage-check'), '');
+    const r = run(home);
+    expect(r.code, `stderr: ${r.stderr}`).toBe(2);
+    expect(updates(home)).toEqual([]);
   });
 });
 

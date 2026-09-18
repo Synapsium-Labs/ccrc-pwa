@@ -11463,10 +11463,18 @@ _rollout_need() {   # <value> <name> <what> <envfile>
 
 # ── _rollout_role — the ONE line of a box's ccrc.env this verb reads ──────
 # `grep` on the remote, never `cat`: ccrc.env is the box's live config and
-# may carry tokens; only the role's value crosses back.
-_rollout_role() {   # <user@host> -> the recorded CCRC_ROLE, or ""
-  "${ROLLOUT_SSH[@]}" "$1" 'grep -m1 "^CCRC_ROLE=" "$HOME/.ccrc/ccrc.env" 2>/dev/null | cut -d= -f2-' 2>/dev/null \
-    | tr -d '[:space:]' || :
+# may carry tokens; only the role's value crosses back. No overloaded null
+# at this seam (R7): the remote pipeline's own status (grep|cut) is masked
+# by `; exit 0` so an absent file/role — the ordinary "role-less" case —
+# always reads as rc 0 with empty output, and ONLY ssh's own transport
+# failure (unreachable host, bad key, refused port — 255 and friends)
+# reaches the caller as a non-zero return. A caller MUST check the return.
+_rollout_role() {   # <user@host> -> prints the recorded CCRC_ROLE (or nothing); returns ssh's own exit status
+  local out rc
+  out="$("${ROLLOUT_SSH[@]}" "$1" 'grep -m1 "^CCRC_ROLE=" "$HOME/.ccrc/ccrc.env" 2>/dev/null | cut -d= -f2-; exit 0' 2>/dev/null)"
+  rc=$?
+  printf '%s' "$out" | tr -d '[:space:]'
+  return $rc
 }
 
 # ── cmd_rollout — one act, both boxes, in order (release/rollout design §4)
@@ -11498,7 +11506,8 @@ cmd_rollout() {
   fi
   local t
   for t in ssh curl jq; do
-    command -v "$t" >/dev/null 2>&1 || _ccrc_die "$t is required by 'ccrc rollout' but is not on PATH — nothing was touched"
+    command -v "$t" >/dev/null 2>&1 \
+      || { echo "$PROG: rollout: $t is required by 'ccrc rollout' but is not on PATH — nothing was touched" >&2; exit 2; }
   done
 
   # Step 0 — coordinates.
@@ -11511,14 +11520,22 @@ cmd_rollout() {
   ROLLOUT_SSH=(ssh -p "${CCRC_SSH_PORT:-22}" -i "$CCRC_SSH_KEY" -o BatchMode=yes)
 
   # Step 1 — preflight the roles, before touching either box.
-  local single=0 frole="" srole=""
+  local single=0 frole="" srole="" rrc=0
   [ "$CCRC_AGENT_BOX" = "$CCRC_BOX" ] && single=1
-  frole="$(_rollout_role "$CCRC_AGENT_BOX")"
+  frole="$(_rollout_role "$CCRC_AGENT_BOX")"; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    echo "$PROG: rollout: the fleet box (CCRC_AGENT_BOX) is unreachable over ssh (exit $rrc) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
+    exit 2
+  fi
   if [ "$single" -eq 1 ]; then
     [ "$frole" = both ] || {
       echo "$PROG: rollout: CCRC_BOX and CCRC_AGENT_BOX name the same host, which records CCRC_ROLE=${frole:-nothing}, not 'both' — nothing was touched" >&2; exit 2; }
   else
-    srole="$(_rollout_role "$CCRC_BOX")"
+    srole="$(_rollout_role "$CCRC_BOX")"; rrc=$?
+    if [ "$rrc" -ne 0 ]; then
+      echo "$PROG: rollout: the server box (CCRC_BOX) is unreachable over ssh (exit $rrc) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
+      exit 2
+    fi
     [ "$frole" = fleet ] || {
       echo "$PROG: rollout: the fleet box (CCRC_AGENT_BOX) records CCRC_ROLE=${frole:-nothing}, not 'fleet' — its update would install the wrong role; nothing was touched" >&2; exit 2; }
     [ "$srole" = server ] || {
@@ -11526,8 +11543,13 @@ cmd_rollout() {
   fi
 
   # Step 2 — pin the version: ONE SHA256SUMS read, the same read update makes.
-  _upd_resolve "$to"
-  ROLLOUT_VERSION="$UPD_VERSION"
+  # Run in a command substitution so a failure inside _upd_resolve (which
+  # calls _ccrc_die, exit 1) maps to THIS verb's exit-2 contract — nothing
+  # has touched a box yet — while its stderr (the die message itself)
+  # still reaches the terminal, and its EXIT trap still cleans up its own
+  # staging dir in the subshell that ran it.
+  ROLLOUT_VERSION="$( _upd_resolve "$to" >/dev/null && printf '%s' "$UPD_VERSION" )" \
+    || { echo "$PROG: rollout: could not resolve the target release — read the line above; nothing was touched" >&2; exit 2; }
   echo "rollout: target $ROLLOUT_VERSION"
 
   local -a boxes=() labels=()
@@ -11542,7 +11564,8 @@ cmd_rollout() {
     line="${out%%$'\n'*}"
     case "$line" in
       "check: "*) ;;
-      *) _ccrc_die "rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${line:-nothing}) — is ccrc installed there, and new enough to know --check?" ;;
+      *) echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${line:-nothing}) — is ccrc installed there, and new enough to know --check? nothing was touched" >&2
+         exit 2 ;;
     esac
     box="${line#*box=}"; box="${box%% *}"
     sha="${line#*sha=}"; sha="${sha%% *}"
