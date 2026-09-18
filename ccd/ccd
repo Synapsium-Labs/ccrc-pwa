@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=7f7674d8805635780b502a93f680363a100573a98ab1e0eac7eb70c00572016e
+# ccrc:generated 1 sha256=4981cd6f05bc849a9553cf1290d4354b1d9956ba222ef94d8ef6283ddcfdabfe
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -5927,14 +5927,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — TEN dot-prefixed
-# artifacts live under `$REG`; the five above are reachable, these five are
+# NOT reachable this way, and this set IS the boundary — ELEVEN dot-prefixed
+# artifacts live under `$REG`; the five above are reachable, these six are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The five:
+# a paragraph that disagrees with it. The six:
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
@@ -5945,8 +5945,12 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # DIRECTORY for the same reason `.lifecycle/` is one, and unreachable for
 # `.reaped/`'s reason rather than the second-dot one below; its per-id
 # `<id>.json`, its `.<id>.<pid>.tmp` staging files and its `<id>.run/` FIFOs
-# are counted WITH it); `_reg_set`'s own tmps; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
+# are counted WITH it); `_reg_set`'s own tmps; `ccd-pool-sync`'s
+# `$REG/.pool-epoch.$$.tmp` staging file, written by the same tmp-then-rename
+# idiom outside `_reg_set` itself, before it renames into the dot-FREE
+# `$REG/pool-epoch` — the projection's published name carries no dot, only
+# its transient staging copy does; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last three ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
