@@ -1412,6 +1412,18 @@
   color: var(--ink-tertiary);
 }
 
+/* Task 6: the repo slug composed into `.sess-open`'s accessible name, when
+   the card it sits on would otherwise imply another repo. Small and quiet —
+   same ink-tertiary register as `.sess-held` next door — because it is a
+   disambiguator, not a headline fact. */
+.sess-repo {
+  margin-left: var(--sp-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+
 /* A strand is deliberately louder than the neighbouring durable markers.
    Like them, it truncates while its title preserves the complete reason. */
 .sess-stranded {

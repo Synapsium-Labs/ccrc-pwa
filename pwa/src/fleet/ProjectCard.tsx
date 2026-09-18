@@ -14,7 +14,8 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
+import { repoLabel } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
@@ -176,6 +177,7 @@ export function ProjectCard({
   runs = [],
   abroad = [],
   poolFor = () => null,
+  repoFor = () => undefined,
   nowMs = Date.now(),
 }: {
   group: FleetGroup;
@@ -256,6 +258,13 @@ export function ProjectCard({
    *  passes this, or a test that predates the fix, keeps every row on the
    *  card's own project (the common case) rendering exactly as before. */
   poolFor?: (project: string) => ProjectPoolWire | null;
+  /** The repository a project's main checkout was last measured to be, by
+   *  name — `FleetScreen`'s lookup over the same `/api/projects` rows that
+   *  feed `placement`, absent-key-aware (an older server yields `undefined`).
+   *  A displaced row needs ITS OWN project's repo, which is by construction a
+   *  different project from this card's, so a one-project `placement` read is
+   *  the wrong shape and this is a lookup. Defaults to "nothing measured". */
+  repoFor?: (project: string) => ProjectRepoWire | undefined;
   /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
    *  This card is pure and controlled (fold state, roster and projection all
    *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
@@ -425,6 +434,19 @@ export function ProjectCard({
         };
   };
 
+  // Spec §6: the repo label appears where the card stops implying it — on a
+  // row whose repo DIFFERS from this card's, both measured, and nowhere else.
+  // At the REPO grain, not the project name: two projects can resolve to one
+  // repo (a worktree-shaped project beside its parent), and a label there is
+  // noise. Decided HERE, the one level that holds both the card's project and
+  // the lookup; `SessionLine` composes it into the row's name and knows no card.
+  const cardRepo = repoLabel(repoFor(group.project));
+  const repoOf = (s: FleetSession): string | null => {
+    if (s.project === group.project) return null;
+    const own = repoLabel(repoFor(s.project));
+    return own !== null && cardRepo !== null && own !== cardRepo ? own : null;
+  };
+
   const rowBody = (row: FleetRow): ReactNode =>
     row.kind === 'session' ? (
       <SessionLine
@@ -435,6 +457,7 @@ export function ProjectCard({
         roster={roster}
         projectPool={poolOf(row.session)}
         onOpenRun={openRunFor(row.session)}
+        repo={repoOf(row.session)}
       />
     ) : (
       <PendingSpawn run={row.run} nowMs={nowMs} />
@@ -591,7 +614,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} repo={repoOf(s)} />
               ))}
             </div>
           )}

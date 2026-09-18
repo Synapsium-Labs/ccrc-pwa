@@ -2,7 +2,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RunSummary } from '../../shared/api';
 import type { ProjectPlacementRead } from '../src/fleet/ProjectCard';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
@@ -1271,5 +1271,41 @@ describe('the home card lists the waves running abroad', () => {
     expect(container.querySelectorAll('.proj-elsewhere button, .proj-elsewhere a')).toHaveLength(0);
     rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-elsewhere')).toBeNull();
+  });
+});
+
+describe('the repo label appears only where the card stops implying it (spec §6, Task 6)', () => {
+  const repos: Record<string, ProjectRepoWire> = {
+    demo: { state: 'named', slug: 'o/demo' },
+    'custom-tools': { state: 'named', slug: 'o/custom-tools' },
+    twin: { state: 'named', slug: 'o/demo' },          // a second project on the SAME repo
+    dark: { state: 'unmeasured' },
+  };
+  const repoFor = (p: string): ProjectRepoWire | undefined => repos[p];
+  const moved = sess({ id: 'custom-tools-still-river', project: 'custom-tools', workspace: 'still-river', boardProject: 'demo' });
+
+  it('labels a row whose OWN project\'s repo differs from the card\'s', () => {
+    render(<ProjectCard group={grp({ sessions: [sess(), moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(document.querySelectorAll('.sess-repo')).toHaveLength(1);
+  });
+  it('does NOT label a moved row whose repo equals the card\'s — the name differs, the repo does not', () => {
+    const twinRow = sess({ id: 'twin-still-river', project: 'twin', workspace: 'still-river', boardProject: 'demo' });
+    render(<ProjectCard group={grp({ sessions: [sess(), twinRow] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+  });
+  it('does NOT label when either side is unmeasured or absent — no claim over a timeout', () => {
+    const darkRow = sess({ id: 'dark-still-river', project: 'dark', workspace: 'still-river', boardProject: 'demo' });
+    render(<ProjectCard group={grp({ sessions: [sess(), darkRow] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+    cleanup();
+    render(<ProjectCard group={grp({ sessions: [sess(), moved] })} onOpen={() => {}} onActions={() => {}} />);   // no repoFor: an older server
+    expect(document.querySelector('.sess-repo')).toBeNull();
+  });
+  it('two colliding slugs on one card are two distinct accessible names', () => {
+    const own = sess({ id: 'demo-still-river', workspace: 'still-river' });
+    render(<ProjectCard group={grp({ sessions: [own, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: 'still-river' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
   });
 });

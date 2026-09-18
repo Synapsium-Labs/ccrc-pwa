@@ -31,7 +31,7 @@ import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRow } from '../../../shared/api';
+import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire, type ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
@@ -287,6 +287,17 @@ export function FleetScreen({
     const read = placementFor(project);
     return read.kind === 'measured' ? read.pool : null;
   }, [placementFor]);
+
+  // Task 6: a displaced row's repo label needs ITS OWN project's repo, which
+  // is by construction a different project from the card it renders on — the
+  // same shape `poolFor` above threads for the same reason.
+  const repoFor = useCallback((project: string): ProjectRepoWire | undefined => {
+    if (projectRows.kind !== 'ready') return undefined;
+    const row = projectRows.rows.find((candidate) => candidate.name === project);
+    // `Object.hasOwn`: the key ABSENT is an older server and must read as
+    // "nothing measured", never as `{state:'unmeasured'}` (ProjectRow's doc).
+    return row !== undefined && Object.hasOwn(row, 'repo') ? row.repo : undefined;
+  }, [projectRows]);
 
   // D-2721: the selection is a snapshot taken when the card was tapped, and the
   // route remeasures underneath an open sheet — a pools frame, a visible-page
@@ -728,6 +739,7 @@ export function FleetScreen({
                 projected={projected}
                 placement={placementFor(g.project)}
                 poolFor={poolFor}
+                repoFor={repoFor}
                 adding={adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}

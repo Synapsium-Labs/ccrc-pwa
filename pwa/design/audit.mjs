@@ -631,6 +631,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the past-tense signal for an archived row is an ink STEP on the label, not element opacity (see the note above the rule). Its ground is the project card. :not(.sess-line--active) is load-bearing — the selected row inverts to background: var(--ink-primary), where --ink-secondary reads 1.81 dark / 2.24 light',
   },
+  'fleet.css .sess-repo': {
+    under: ['var(--bg-surface)'],
+    why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it",
+  },
   'fleet.css .sess-spawn': {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',
