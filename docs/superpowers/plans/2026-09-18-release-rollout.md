@@ -2152,11 +2152,11 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 
 | Task | Mutation | Case | Result |
 |---|---|---|---|
-| 1 | dirty-tree refusal removed | refuses a dirty tree | |
-| 1 | tagged-HEAD short-circuit removed | already-tagged HEAD exits 0 | |
-| 1 | `sort -V` → `sort` | `v1.9.11` derivation | |
-| 1 | push moved below the build | pushes the tag BEFORE publishing | |
-| 1 | `trap cleanup EXIT` removed | failed publish deletes the tag | |
+| 1 | dirty-tree refusal removed | refuses a dirty tree | GREEN — escaped; see Deviations (build-release.sh's own dirty-tree refusal fires downstream and reproduces the same observable behaviour) |
+| 1 | tagged-HEAD short-circuit removed | already-tagged HEAD exits 0 | RED (1/13 failed) |
+| 1 | `sort -V` → `sort` | `v1.9.11` derivation | RED (2/13 failed) |
+| 1 | push moved below the build | pushes the tag BEFORE publishing | RED (5/13 failed) |
+| 1 | `trap cleanup EXIT` removed | failed publish deletes the tag | RED (1/13 failed) |
 | 2 | `tags: ['v*']` added | triggers on main pushes only | |
 | 2 | `npm ci` step added | owns no second build path | |
 | 2 | `concurrency:` removed | serialises | |
@@ -2187,3 +2187,5 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 ## Deviations found
 
 (Numbers are ISSUED by the allocator at execution time and defined here in the same act — never spelled as a range, never chosen. None yet.)
+
+- **D-3014** — Task 1's "dirty-tree refusal removed" mutation (brief step 5, item 1) was measured GREEN, not the brief's expected RED. With `release-main.sh`'s own `git status --porcelain` refusal deleted, the dirty-tree fixture case (`refuses a dirty tree`) still passes: the script proceeds far enough to tag and push `NEXT`, then invokes `build-release.sh`, which carries the identical dirty-tree guard and dies with the same `refusing a dirty tree` message on stderr before touching `npm`. `release-main.sh`'s `trap cleanup EXIT` then deletes the just-pushed tag, so `originTags`, `npm-argv`'s absence and `gh-argv`'s absence all land exactly where the test expects, coincidentally. The guard in `release-main.sh` is not dead code — it is the ONLY thing that keeps a real invocation from tagging and pushing before discovering the dirty tree — but the test as specified in the brief cannot distinguish its presence from its absence, because `build-release.sh` backstops it one step later. Left as specified (smallest faithful thing); a stronger case would need to check that no tag/push occurred at all when the tree is dirty, e.g. asserting `originTags(home)` before the script exits does not transiently include `v0.0.2`, which is not observable from outside the process without instrumenting the fixture git further. Reported per brief's "impossible as written" clause for the controller to rule on.
