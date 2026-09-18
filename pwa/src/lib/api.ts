@@ -44,6 +44,14 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // all, versus it came back and then would not go).
   'verify-failed': 'Typed it, but the session never echoed it back.',
   'draft-clear-failed': "Couldn't clear the existing draft — open the terminal.",
+  // The box is TALLER THAN THE PANE, so its `❯` row has scrolled out of the
+  // capture the server reads and nothing in the box can be read at all
+  // (`send.ts`'s `box-unreadable`, measured on a live session 2026-09-18).
+  // This sentence has to name the remedy, because it is the one failure the
+  // PWA genuinely cannot fix from here: nothing typed from this app can shrink
+  // that draft — every attempt used to make it taller. The operator clears the
+  // box in the terminal (Ctrl-C once), and sends work again immediately.
+  'box-unreadable': 'The session’s input box is too full to read — clear it in the terminal (Ctrl-C once), then send again.',
   'not-alive': 'That session is not running.',
   // D-2368/D-2369: the recipient's OWN limit recovery is armed (any keystroke
   // cancels it) — only the mail lane's `holdIfAutoContinueArmed` opt-in ever
@@ -89,6 +97,9 @@ const SUBMIT_ERROR_TEXT: Record<string, string> = {
   'dialog-open': 'A question is up — answer that first.',
   'not-alive': 'That session is not running.',
   'enter-ignored': "Still not taking it — open the terminal.",
+  // `submitEnter`'s own copy of the refusal above. Same remedy, and the same
+  // reason it cannot be done from here.
+  'box-unreadable': 'The box is too full to read — clear it in the terminal (Ctrl-C once).',
 };
 
 export const submitErrorText = (code: string): string => SUBMIT_ERROR_TEXT[code] ?? code;

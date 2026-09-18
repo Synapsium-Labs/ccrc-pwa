@@ -16,6 +16,23 @@ export type SendResult =
   | { ok: true }
   | { ok: false;
       error: 'not-alive' | 'dialog-open' | 'draft-present' | 'draft-clear-failed' | 'verify-failed' | 'enter-ignored'
+        // THE CAPTURE HOLDS NO INPUT BOX AT ALL, which is not the same fact as
+        // any other token here and needs its own name. Measured on a live fleet
+        // pane 2026-09-18: a draft ~326 visual rows tall in a 50-row pane
+        // scrolls its OWN marker row out of `capture-pane`'s window, so every
+        // reader in this file — `draftOf` and `continuationRows` alike, both
+        // anchored on the same last-`❯` scan — answers "empty box" for a box
+        // holding 2.8 KB of the operator's text. It is not `draft-present` (we
+        // cannot read the draft), not `verify-failed` (on the guard arm nothing
+        // was typed), and emphatically not success.
+        //
+        // WHY IT MATTERS THAT IT REFUSES BEFORE TYPING: without this the state
+        // is ABSORBING. The guard fell open, the type loop appended onto the
+        // unreadable box, the echo could never match, and the arm left the text
+        // in place by ruling — so every retry made the box TALLER and the marker
+        // row further out of reach. Measured: five copies of one sentence
+        // concatenated with no separator, and no send could ever land again.
+        | 'box-unreadable'
         // D-2368. The pane's own status line says Claude Code will continue on
         // its own; nothing was pressed. Only reachable when the caller opted
         // in via `holdIfAutoContinueArmed` — see that option's own docstring.
@@ -124,10 +141,39 @@ const DIM_SPAN = /\x1b\[2m(?:\x1b\[(?!0[;m])[0-9;]*m|[^\x1b])*?\x1b\[0[0-9;]*m/g
  *    typing replaces it), so strip dim spans before reading the box — otherwise
  *    every send into a session showing a suggestion fails draft-clear-failed.
  */
-export const draftOf = (ansiPane: string): string => {
+export type BoxRead =
+  | { box: 'present'; draft: string }
+  | { box: 'absent' };
+
+/**
+ * The measured reading: tells AN EMPTY BOX from NO BOX IN THIS CAPTURE.
+ *
+ * The fourth subtlety, and the one that cost a live session (2026-09-18): the
+ * box is not always in the window. `captureAnsi` is `capture-pane -p -e` with
+ * no `-S`, i.e. the VISIBLE 50 rows; Claude Code renders a draft taller than
+ * that by scrolling the box's own interior, and the marker row — the only row
+ * that carries `❯` — goes with it. The scan then finds nothing, which is a
+ * fact about THE CAPTURE, never about the box. Callers that would type, clear
+ * or claim a submit must refuse on `absent`; see `SendResult`'s
+ * `box-unreadable`.
+ */
+export const draftOfMeasured = (ansiPane: string): BoxRead => {
   const boxLine = ansiPane.split('\n').filter((l) => l.replace(SGR, '').startsWith('❯')).at(-1);
-  if (boxLine === undefined) return '';
-  return boxLine.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim();
+  if (boxLine === undefined) return { box: 'absent' };
+  return { box: 'present', draft: boxLine.replace(DIM_SPAN, '').replace(SGR, '').slice(1).trim() };
+};
+
+/**
+ * THE DELIBERATE COLLAPSE, kept so every older caller keeps its exact meaning:
+ * a capture with no box reads as an empty one. It DERIVES from
+ * `draftOfMeasured` rather than re-scanning, so this file has one definition of
+ * where the box is and no adapter narrows a distinction it was never handed —
+ * the same shape `io.ts`'s convenience reads take beside their measured
+ * siblings. Anything that acts on the answer wants the sibling.
+ */
+export const draftOf = (ansiPane: string): string => {
+  const read = draftOfMeasured(ansiPane);
+  return read.box === 'present' ? read.draft : '';
 };
 
 /**
@@ -156,7 +202,16 @@ async function submitted(
     await sleep(SUBMIT_POLL_MS);
     const pane = await d.tmux.captureAnsi(id);
     if (pane === null) return false;
-    const draft = draftOf(pane);
+    const read = draftOfMeasured(pane);
+    // ABSENCE IS NOT PROOF OF DEPARTURE, and this is the one place where the
+    // collapse read as the OPPOSITE of the truth: with no box in the capture
+    // `draftOf` answers '', `!''.startsWith(needle)` is true, and this function
+    // reported "our text left the box" — a send claimed DELIVERED while it sat
+    // unsubmitted. Reachable exactly when our own typing grows the box past the
+    // window between the echo poll and this one. Skip the poll instead; if every
+    // poll is blind the loop falls out below and the caller refuses.
+    if (read.box === 'absent') continue;
+    const draft = read.draft;
     if (needle === '' ? draft === '' : !draft.startsWith(needle)) return true;
   }
   return false;
@@ -182,9 +237,20 @@ async function pressEnterAndConfirm(
   await d.tmux.sendKey(id, 'Enter');
   if (await submitted(d, id, sleep, needle)) return { ok: true };
   const stuck = await d.tmux.capture(id);
+  const last = draftOfMeasured(await d.tmux.captureAnsi(id) ?? '');
+  // THE NAME STAYS `enter-ignored` — we pressed twice and the text never left,
+  // which is what that token reports and is true whatever the last capture
+  // shows. What CANNOT survive an absent box is the CLAIM beside it:
+  // `submittable` asserts "the box row IS the message and one Enter sends
+  // exactly it", and `draft` is the correspondence claim `submitEnter` gates
+  // that rescue on. With no box in the capture, `draftOf` would hand both of
+  // them '' — a rescue button wired to a reading of nothing. Withhold the
+  // claim, keep the diagnosis. (The PWA gates its button on a non-blank
+  // `draft` as well, so this is the second lock on the same door.)
+  if (last.box === 'absent') return { ok: false, error: 'enter-ignored', pane: (stuck ?? '').slice(-PANE_TAIL) };
   return {
     ok: false, error: 'enter-ignored',
-    draft: draftOf(await d.tmux.captureAnsi(id) ?? ''),
+    draft: last.draft,
     pane: (stuck ?? '').slice(-PANE_TAIL),
     // We typed it, we watched it echo, and nothing has cleared it: the box row
     // IS the message and Enter would send exactly it. See `SendResult`.
@@ -263,7 +329,10 @@ type ClearOutcome =
   | { state: 'cleared' }
   | { state: 'residue'; draft: string }
   | { state: 'menu' }
-  | { state: 'dead' };
+  | { state: 'dead' }
+  /** No box in the capture — the presses are landing somewhere we cannot read,
+   *  so neither `cleared` nor `residue` can be claimed. See `draftOfMeasured`. */
+  | { state: 'unreadable' };
 
 /**
  * Empty the input box and report what is left.
@@ -331,6 +400,11 @@ async function clearBox(
     // hammering C-u into a live menu and then report the user their own
     // "1. Yes" as leftover text. Bail and let the caller say so.
     if (hasMenu(ansi.replace(SGR, ''))) return { state: 'menu' };
+    // THE BOX IS NOT IN THIS CAPTURE. Every terminator below reads the box, so
+    // continuing would hammer C-u into a pane whose content we cannot see and
+    // then report `cleared` off a scan that found nothing — destroying an
+    // operator's draft and calling it success. Stop and say which it is.
+    if (draftOfMeasured(ansi).box === 'absent') return { state: 'unreadable' };
     // THE WHOLE BOX, not the marker row. `draftOf` reads row one only, and this
     // used to terminate on that alone.
     if (draftOf(ansi) === '' && !hasContentBelowMarker(ansi)) return { state: 'cleared' };
@@ -540,7 +614,17 @@ export function sendPrompt(
     // caller's job is to answer the question.
     if (hasMenu(plain)) return { ok: false, error: 'dialog-open' };
 
-    const draft = draftOf(pane);
+    // THE BOX HAS TO BE IN THE CAPTURE BEFORE ANY READING BELOW MEANS ANYTHING.
+    // Both halves of the clobber guard — `draftOf` and `hasContentBelowMarker`
+    // — are anchored on the same last-`❯` scan, so a capture without one fails
+    // them OPEN TOGETHER and the type loop appends onto whatever is really
+    // there. This is the one keystroke-free refusal that keeps that from being
+    // reachable, and it is deliberately the FIRST box reading in the function.
+    // See `SendResult`'s `box-unreadable` for the live measurement.
+    const box = draftOfMeasured(pane);
+    if (box.box === 'absent') return { ok: false, error: 'box-unreadable', pane: plain.slice(-PANE_TAIL) };
+
+    const draft = box.draft;
     // THE BOX HOLDS ANYTHING — not "the marker row is non-blank". A wedge whose
     // FIRST row is blank was invisible here: measured, a send into such a box
     // issued zero C-u and typed onto the end of the existing content, so the
@@ -611,6 +695,10 @@ export function sendPrompt(
         const cleared = await clearBox(d, id, sleep, { blind: 1, look: REPLACE_MAX_PRESSES - 1 });
         if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
         if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
+        // A clear whose own reads went blind cannot claim either outcome; the
+        // caller gets the box's own name for it rather than a residue report
+        // built from a scan that found no box.
+        if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
         // cleared.state === 'cleared' → fall through to the type loop below.
       } else if (!opts.replaceDraft) {
@@ -632,6 +720,10 @@ export function sendPrompt(
         // A menu that opened while we were clearing owns the keyboard exactly as
         // one that was up before we started does, and gets the same answer.
         if (cleared.state === 'menu') return { ok: false, error: 'dialog-open' };
+        // A clear whose own reads went blind cannot claim either outcome; the
+        // caller gets the box's own name for it rather than a residue report
+        // built from a scan that found no box.
+        if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable' };
         if (cleared.state === 'residue') return { ok: false, error: 'draft-clear-failed', draft: cleared.draft };
       }
     }
@@ -664,14 +756,36 @@ export function sendPrompt(
       // just typed. Ordinary text (the branch below) has no such collision
       // risk and keeps the battle-tested whole-pane check.
       let echoed = needle === '';
+      // Did any poll actually contain an input box? Separate from `echoed`
+      // because the two have opposite remedies: a box that echoed nothing gets
+      // cleared, a box that was never in the capture must not be touched.
+      let sawBox = false;
+      // And did any poll come back with a PANE? The ordinary arm below has kept
+      // this distinction since it shipped, for the reason a passing test states
+      // out loud: when every capture fails the session is GONE, and the answer
+      // is `not-alive` — not a statement about a box. Here the clear's own
+      // `dead` outcome used to carry that, and it still does; this flag only
+      // stops the unreadable-box refusal from pre-empting it.
+      let sawPane = false;
       for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
-        if (draftOf(ansi).startsWith(needle)) echoed = true;
+        sawPane = true;
+        const read = draftOfMeasured(ansi);
+        if (read.box === 'absent') continue;
+        sawBox = true;
+        if (read.draft.startsWith(needle)) echoed = true;
       }
       if (!echoed) {
         after ??= await d.tmux.capture(id);
+        // BEFORE THE CLEAR, because the clear is the dangerous half. The floor
+        // below is fired BLIND — 2 presses per visual row of OUR text, sized off
+        // what we typed and not off what the box holds — and the box we cannot
+        // read may hold an operator's own hundreds of rows. Firing into it would
+        // shred exactly the draft this file's refuse-never-destroy ruling exists
+        // to protect. Say the box is unreadable and touch nothing.
+        if (sawPane && !sawBox) return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
         // A failed send must not stand a bare clip path in the live box — but
         // C-u can fail just like the replaceDraft clear above can, so clearBox
         // re-reads and reports what's left rather than assuming it worked.
@@ -724,6 +838,9 @@ export function sendPrompt(
       // rather than joining it, so the success path's budget is unchanged.
       let echoed = needle === '';
       let lastAnsi = '';
+      // See the attachment arm's twin: "no box in any capture" is a third
+      // answer, and it is the one this build measured in the wild.
+      let sawBox = false;
       // Did ANY poll come back with a pane? `lastAnsi` cannot answer that: it
       // is '' both for "twelve dead captures" and for "a live pane whose box
       // read empty", and those need opposite answers. See the refusal below.
@@ -734,7 +851,10 @@ export function sendPrompt(
         if (ansi === null) continue;
         lastAnsi = ansi;
         sawPane = true;
-        if (draftOf(ansi).startsWith(needle)) echoed = true;
+        const read = draftOfMeasured(ansi);
+        if (read.box === 'absent') continue;
+        sawBox = true;
+        if (read.draft.startsWith(needle)) echoed = true;
       }
       if (!echoed) {
         // EVERY capture failed: the session is gone, and none of what the arm
@@ -760,6 +880,14 @@ export function sendPrompt(
         // The pane tail is a PLAIN capture, taken once, here — it is display
         // for a human, and the escape codes would only make it unreadable.
         after = await d.tmux.capture(id);
+        // EVERY POLL CAME BACK WITHOUT A BOX. `verify-failed` would be a claim
+        // about the box ("it never echoed the text"), and there was no box to
+        // make a claim about; `draft` would be '' from the collapse, which the
+        // PWA renders as "the session never echoed it back" — false, and it
+        // sends the operator looking in the wrong place. The text is in the box
+        // and untouched either way; only the name changes, and the name is what
+        // tells them to go clear an over-tall draft.
+        if (!sawBox) return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
         const lastDraft = draftOf(lastAnsi);
         // THE FOURTH SHAPE, and the one the flag's own docstring called
         // unreachable. Claude Code collapses a large typed burst into
@@ -927,7 +1055,7 @@ export function submitEnter(
   d: SendDeps,
   id: string,
   expect: string,
-): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'dialog-open' | 'nothing-to-submit' | 'blank-first-row' | 'box-mismatch' | 'enter-ignored' }> {
+): Promise<{ ok: true } | { ok: false; error: 'not-alive' | 'dialog-open' | 'box-unreadable' | 'nothing-to-submit' | 'blank-first-row' | 'box-mismatch' | 'enter-ignored' }> {
   const sleep = d.sleep ?? defaultSleep;
   return d.queue.run(id, async () => {
     const pane = await d.tmux.captureAnsi(id);
@@ -936,7 +1064,16 @@ export function submitEnter(
     // screen is the cursor on the selected OPTION, so draftOf would read a menu
     // row as a draft and this would press Enter on somebody's question.
     if (hasMenu(pane.replace(SGR, ''))) return { ok: false, error: 'dialog-open' as const };
-    const draft = draftOf(pane);
+    // No box in the capture: `nothing-to-submit` and `blank-first-row` are both
+    // claims about a box that is there, and the correspondence gate below would
+    // compare the operator's `expect` against a reading of nothing. Pressing
+    // Enter on that is exactly the unproven submit this function's gate exists
+    // to refuse. (The rescue button is gated on `submittable`, which no arm sets
+    // for an unreadable box, so this is belt and braces — and belt and braces is
+    // the standing of every other check in here.)
+    const read = draftOfMeasured(pane);
+    if (read.box === 'absent') return { ok: false, error: 'box-unreadable' as const };
+    const draft = read.draft;
     if (draft === '') {
       // Blank marker row: usually a genuinely empty box, but see
       // `hasContentBelowMarker` — a box whose FIRST row is blank with real text
