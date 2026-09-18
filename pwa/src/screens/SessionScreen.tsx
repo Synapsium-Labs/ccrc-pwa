@@ -172,8 +172,10 @@ export function SessionScreen({
   const wrapper = live?.wrapper ?? wrapperFromId;
   // R3: the session view's repo label is unconditional — not conditioned on
   // a card's context. `projects` is the fleet store's last successful
-  // `/api/projects` read (Task 7); `null` before the fleet screen has ever
-  // fetched (D-3013) or when this project has no row renders nothing.
+  // `/api/projects` read (Task 7). Three conditions render nothing here: no
+  // read yet on this store instance (`projects === null`, D-3013), no row
+  // for this project in that read, or a row whose `repo` is not `named` —
+  // all three collapse deliberately at `repoLabel`, the one reader.
   const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
 
   // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'

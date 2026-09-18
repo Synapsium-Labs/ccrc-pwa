@@ -286,12 +286,30 @@ describe('fleet store hydration + persistence', () => {
   // `/api/projects` read, lifted into the store so the session view can
   // label a repo without a second agent round trip. It is deliberately NOT
   // part of the persisted snapshot — same reason as `pools`.
+  //
+  // Fix round 1, finding 1: `loadFleetSnapshot` REBUILDS its return literal
+  // (`{ savedAt, sessions, roster }`, offline.ts's own `loadFleetSnapshot`)
+  // on every read, so a `"projects"` key can never survive a round trip
+  // through it — asserting over `loadFleetSnapshot()`'s OUTPUT can never red,
+  // whatever was actually stored. This pins the RAW stored string after a
+  // REAL save instead.
   it('projects start null and are NOT part of the persisted snapshot (Task 7)', () => {
     const store = createFleetStore({ makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket });
     expect(store.getState().projects).toBeNull();
     store.getState().setProjects([{ name: 'demo', workdir: '/w/demo', repo: { state: 'named', slug: 'o/demo' } }]);
     expect(store.getState().projects?.[0]?.name).toBe('demo');
-    expect(JSON.stringify(loadFleetSnapshot() ?? {})).not.toContain('"projects"');
+
+    // `saveFleetSnapshot` returns early on an empty sessions list (Task 2) —
+    // seed one non-degraded session so the save actually writes.
+    store.setState({ sessions: [session('claude:OpenClawHetzner')] });
+    saveFleetSnapshot(store.getState().sessions, store.getState().roster);
+
+    // `KEY` (offline.ts, `'ccrc.fleet-snapshot.v1'`) is module-private, not
+    // exported — the literal is the only way to read the raw stored string.
+    const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+    expect(raw).not.toBeNull();
+    expect(raw).toContain('"sessions"'); // control: proves a save actually happened
+    expect(raw).not.toContain('"projects"');
   });
 });
 
