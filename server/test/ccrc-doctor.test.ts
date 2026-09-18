@@ -2966,11 +2966,35 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.code).toBe(1);
     expect(r.stdout).toMatch(/^FAIL skills: 1 installed skill\(s\) differ from the shipped tree: claude: ccrc-reviewer differs$/m);
     expect(r.stdout).toMatch(/remedy: run 'ccrc update'/);
-    // The remedy works: the shipped installer converges the home.
+    // R10: the remedy's second arm must converge from the TREE the check
+    // measured ($HOME/ccrc/ccd/reviewer-skill, i.e. installCcrc's planted
+    // BOX_TREE_DIR copy), not the .cc-sessions placed copy — that copy was
+    // stale on 2026-09-17. Pin the printed remedy names that seam.
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/reviewer-skill"/);
+    // The remedy works: run the reviewer installer with CCRC_SKILL_SRC
+    // pointed at what "$HOME/ccrc/ccd/reviewer-skill" resolves to on this
+    // fixture's box (join(home, 'ccrc', 'ccd', 'reviewer-skill') —
+    // installCcrc's planted tree). The installer SCRIPT itself is still
+    // invoked from the repo path: the fixture plants no .cc-sessions copy
+    // of the installer scripts, only of the skill trees they read from.
     spawnSync(BASH, [join(REPO, 'ccd', 'install-reviewer-skill.sh'), '--homes', join(home, '.claude')],
-      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: join(REPO, 'ccd', 'reviewer-skill') } });
+      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: join(home, 'ccrc', 'ccd', 'reviewer-skill') } });
     r = runDoctor(home);
     expect(r.stdout).toMatch(/^PASS skills:/m);
+  });
+
+  it('the remedy names the override seam, not the bare installer (R10)', () => {
+    // Mutation pin: a remedy that reverted to bare installer invocations
+    // (no CCRC_SKILL_SRC) would converge from $HOME/.cc-sessions instead of
+    // the measured tree — silently wrong when .cc-sessions is stale. This
+    // case reds if that override is dropped from the printed remedy.
+    const home = healthy('ccrc-doctor-skills-remedy-seam-');
+    const f = join(installed(home, '.claude', 'ccrc-reviewer'), 'SKILL.md');
+    writeFileSync(f, readFileSync(f, 'utf8').replace('$HOME/.cc-clips/', '$WT/.ccrc-review/'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/coordinator-skill"/);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/worker-skill"/);
+    expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/reviewer-skill"/);
   });
 
   it('a missing skill directory is a FAIL in its own words', () => {

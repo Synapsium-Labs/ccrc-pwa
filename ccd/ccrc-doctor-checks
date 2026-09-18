@@ -2770,7 +2770,7 @@ _check_skills() {
     return 0
   fi
   _dr_fail skills "${#stale[@]} installed skill(s) differ from the shipped tree: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc update' — or, when 'ccrc version' already names the intended build, re-run the installers on this box: bash \$HOME/.cc-sessions/install-coordinator-skill.sh; bash \$HOME/.cc-sessions/install-worker-skill.sh; bash \$HOME/.cc-sessions/install-reviewer-skill.sh"
+    "run 'ccrc update' (re-places \$HOME/.cc-sessions from the tree and re-runs the installers) — or, when 'ccrc version' already names the intended build, converge from the tree the check just measured by overriding the installer's source: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/.cc-sessions/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/.cc-sessions/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/.cc-sessions/install-reviewer-skill.sh\""
   return 1
 }
 
