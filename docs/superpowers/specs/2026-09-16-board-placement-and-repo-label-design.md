@@ -371,8 +371,8 @@ workspaces of its own so that only the parent coordinator has that right.
    rule 4 lifts the middle session to depth 0 with its own child beneath it and the top coordinator's
    bracket to it is never drawn. The one-level bracket is therefore truthful only if the chain cannot
    form. So `POST /api/runs` **refuses a `claimedBy` that is currently the `sessionId` of a
-   non-terminal run** — measured by the store's existing `parentOfSession`, the same read the ask lane
-   uses to find a worker's parent — with `409 {ok:false, refused:'claimant-is-a-worker', by:<that
+   non-terminal run** — measured by the store's `openClaimantsOf` — every open claimant of the session; the ask
+   lane's `parentOfSession` reads only the newest (D-3054) — with `409 {ok:false, refused:'claimant-is-a-worker', by:<that
    worker's own coordinator>}`, placed with the other pre-open rungs so a refusal leaves no `planned`
    orphan and places no hold. `POST /api/runs/:id/reclaim` refuses the same heir (`ReclaimOutcome`
    kind `heir-is-a-worker`, `409`, `by:` its coordinator), because a reclaim decides a coordinator too
@@ -389,7 +389,7 @@ workspaces of its own so that only the parent coordinator has that right.
    widened at wave 2's second fix round.)
 
 **What the guard deliberately does NOT refuse.** A session that was a worker of a programme whose runs
-are all terminal — `parentOfSession` answers `null` for it — may coordinate later; the operator reuses
+are all terminal — `openClaimantsOf` answers `[]` for it — may coordinate later; the operator reuses
 workspaces, and a finished worker is not a worker. A review run's `claimedBy` must already equal the
 reviewed run's coordinator, so the guard is reached there only through a claimant it has already
 admitted. Restricting coordination to main checkouts was considered and rejected: six of the nine

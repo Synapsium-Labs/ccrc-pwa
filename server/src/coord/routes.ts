@@ -1307,7 +1307,7 @@ export function registerCoordRoutes(
     // its worker and is claimed by SOMEBODY ELSE, so the read is
     // `openClaimantsOf` — every coordinator this session currently works for —
     // and not `parentOfSession`, which is `LIMIT 1` and answers only about the
-    // NEWEST such run (second fix round). A session self-claimed on its newest
+    // NEWEST such run (second fix round, D-3054). A session self-claimed on its newest
     // run while still somebody's worker on an older open one used to walk
     // straight through here; `runs_by_session` is non-unique and the
     // coordinator protocol opens wave N+1 before closing wave N, so that state

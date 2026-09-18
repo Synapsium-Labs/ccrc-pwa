@@ -4884,7 +4884,7 @@ export class CoordStore {
    *  every read on this store. */
   openClaimantsOf(sessionId: string): string[] {
     const rows = this.db.prepare(
-      // `GROUP BY claimedBy` is what makes the answer DISTINCT — no `DISTINCT`
+      // D-3054. `GROUP BY claimedBy` is what makes the answer DISTINCT — no `DISTINCT`
       // keyword beside it, which would be a second spelling of the same fact —
       // and `MAX(id)` is what "newest first" is ordered on: each claimant is
       // placed by its most recent open run, so one claimant appearing on three

@@ -54,10 +54,10 @@ export const RECLAIM_COPY: Record<
   // `detail`, unlike `claimant-alive`), so the sentence names the CONDITION
   // and `by` is appended the same way `claimant-alive`'s evidence is.
   // "ANOTHER COORDINATOR'S OPEN RUN", never "another programme" (final fix
-  // round): the server measured a RUN and its claimant — `parentOfSession`
-  // reads the runs table, and nothing in that read is a programme — and since
+  // round): the server measured a RUN and its claimants — `openClaimantsOf`
+  // reads every open claimant off the runs table, and nothing in that read is a programme — and since
   // D-3028 the refused case is precisely somebody ELSE's open run, because an
-  // heir whose one coordinator is the claimant being replaced is now admitted.
+  // heir all of whose open coordinators are the claimant being replaced is now admitted.
   // A sentence naming a programme would have the operator looking for the
   // wrong thing on the board.
   // THE TRAILING CLAUSE IS CONDITIONAL, second fix round: a flat "a worker may

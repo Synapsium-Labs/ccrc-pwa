@@ -1653,7 +1653,9 @@ the programme's own live worker is the likeliest successor to a dead coordinator
 and the run it takes over is self-claimed, which the board never brackets, so the
 one level stays honest. An heir a THIRD coordinator's open run still binds is
 refused however new the dying coordinator's own binding is, and a claimant that
-measures alive is still refused ahead of any of this.
+measures alive is still refused ahead of any of this. A session so refused is
+released by closing or abandoning the run that binds it (`POST
+/api/runs/:id/abandon` is one of the ungated operator doors).
 ```
 
 - [ ] **Step 3: Commit**

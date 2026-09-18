@@ -324,7 +324,7 @@ export async function reclaimRun(
     //
     // That is what makes "no chain can form out of it" TRUE rather than
     // likely, and it is why the read is `openClaimantsOf` and not
-    // `parentOfSession` (second fix round). `parentOfSession` is `LIMIT 1`: it
+    // `parentOfSession` (second fix round, D-3054). `parentOfSession` is `LIMIT 1`: it
     // answers about the heir's NEWEST open run and says nothing about the
     // others, so an heir that is X's live worker on run 100 and the dying
     // coordinator's on run 105 was ADMITTED — still bound to X, which is
