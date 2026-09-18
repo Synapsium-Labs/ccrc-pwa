@@ -13,8 +13,8 @@ scrollback it exists to render.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | the latch (pin before every attach) + the salvaged reader, with nine corrections | server | [#106](https://github.com/Synapsium-Labs/ccrc-pwa/pull/106) → `6d46bab7` | **MERGED 2026-09-15** |
-| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) @ `436d773d` | **review COMPLETE, ACCEPTED 2026-09-16** (run 62; six findings carried to wave 3) |
-| **3 (NEW)** | **anchored tmux targeting `=cc-<id>:` — all four constructions, plus the ingress predicate** | **AGENT-FIRST** | — | planned (operator ruling 2026-09-16) |
+| 2 | `ccd win-size` verb + grant + the fleet-box readers standing down | **AGENT-FIRST** | [#117](https://github.com/Synapsium-Labs/ccrc-pwa/pull/117) → `7a6220f6` | **MERGED 2026-09-18** (run 62 closed `done`; six findings to wave 3; fleet deploy still owed) |
+| **3 (NEW)** | **anchored tmux targeting `=cc-<id>:` — all four constructions, plus the ingress predicate** | **AGENT-FIRST** | — | **run 83 OPEN** (opened 2026-09-18, not yet dispatched) |
 | 4 | the deliberate un-pin under a measured fit guard (was wave 3) | server | — | planned |
 | 5 | whole-branch pass, README, the CLAUDE.md sentence, ledger reconcile (was wave 4) | docs | — | planned |
 
@@ -42,7 +42,7 @@ never calls the allocator mid-wave (coordinator clause 10); it names the departu
 mail and the coordinator assigns from the block. **Wave 1 owes none as planned** — both departures an
 earlier draft carried were ruled into the spec instead (§11 rulings 9 and 10).
 
-Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62**.
+Run ids: wave 1 = **51** (closed `done`, `final:false`), wave 2 = **62** (closed `done`, `final:false`, 5/6 items), wave 3 = **83** (open). Wave 3 draws a block of twelve minted at its own run-open, starting 2996 — per-RUN, never per-programme.
 
 **Run 66 is a coordinator error, and it needs an operator act — for a STRONGER reason than this
 paragraph first gave.** Probing whether the DEPLOYED server supports `kind:'review'` runs, this
@@ -110,6 +110,66 @@ unanchored targets". It does not reproduce — the tree gains ONE new target con
 `_pane_measurable`. Measured independently here: 25 `_tmux` uses, 19 of them `-t` targets. The error
 direction is the dangerous one, because **wave 3 is the anchoring wave and sizes directly from those
 two sentences**: a worker expecting a `-t cc-` scan that over-reds would build one that under-covers.
+
+### WAVE 2 IS MERGED — #117 at `7a6220f6`, run 62 closed, wave 3 open as run 83 (2026-09-18)
+
+`ws/plain-basin` merged at `4f38a04b` after a **fourth** merge with main. Squash body carried the
+trailer derived from the PR's 32 commits and read back off `origin/main` — the #106 rule, applied and
+verified. All 32 commits carried one identity, so nothing was dropped.
+
+**Merged on five of six legs, deliberately, on operator authorisation.** `test-macos` was still
+running; its only known failure mode on this branch is the documented D-2661 darwin FIFO timing
+probe, which had already reddened once on `9dc9d45e` as the SOLE failure in that job. The operator's
+ruling was to merge past it and fix the test in a follow-up. What made that safe rather than hopeful:
+`test (server)` — the leg that would catch a real break — passed at 18m53s on the exact tip, and
+**`probe-macos`, which runs that same D-2661 probe in its own step, passed on this tree**. The branch
+touches nothing matching `plat|darwin|macos|timeout`, measured on the three-dot diff.
+
+**The window is why.** The previous window was lost by waiting for exactly this leg: `ad3d2fbc` landed
+mid-cycle and #117 re-conflicted, costing a whole merge round. Main took four landings in under a day.
+
+#### What I verified on merge 4 rather than read
+
+Tip `4f38a04b` across `ls-remote`, `gh` and a fresh fetch; `it()` 324 / `describe()` 30, identical to
+main, the counting rule's first application; the ratified guard arrangement intact at its new numbers
+(`_idle_for_keystroke` 17230, `_auto_compact_check`'s own 17348, the post-wait one 19305); `ccd/ccd`
+re-stamped. **Both corpus documents byte-identical to `origin/main`** — the claim the whole
+shrink-is-not-a-repair argument rests on — and three of the fourteen anchor moves read at both trees,
+all naming different content, `5828` matching its comment verbatim.
+
+**One sentence did not hold.** The report said `session-hook.test.ts` is "byte-identical to main's
+copy". It is not — sha256 differs, 77 lines — and the report's own next paragraph says six numbers
+were re-derived on top. What was byte-identical is the RESOLUTION, not the delivered file. The file is
+correct; the sentence describes an intermediate state as though it described the artifact, which is
+this programme's own recurring shape. Recorded, not sent back.
+
+#### The lifecycle, in the order that protects the programme
+
+1. **Wave 3's run opened FIRST** — `POST /api/runs` → **run 83**, wave 3 of 5, workspace reclaimed via
+   `sessionId`. Opening before the close is what stops the server retiring the programme on zero open
+   runs.
+2. **The programme title is restored.** It had read `probe` since this session used a write route as
+   one; `POST /api/runs`'s conflict arm rewrites the title, and all three rows now read correctly.
+3. **Run 62 closed** `done`, `final:false`, `released:false` — the workspace stays held for wave 3.
+   Fingerprint `4f38a04b` / PR 117 / `merged`, measured: `ccd pr-state` still reported the binding
+   **after** GitHub deleted the branch on merge, exactly as the binding's own mechanism predicts —
+   `is_ours` reads the workspace's LOCAL tip and never the remote.
+
+**Run 62 closes at 5 of 6 items, honestly.** Task 6 bundles "whole-branch verification, AGENT-FIRST
+deploy, PR". Verification and the PR are done; **the fleet-host deploy has not happened**, and the
+board should not claim it. That deploy is the outstanding operational act on this wave.
+
+**Wave 3's deviation block is minted at run-open (clause 10): twelve numbers from 2996.** Written as
+neither a range nor a tail, for the reason this ledger gives twice already. The floor stood at 2996
+and reads 3008 after.
+
+#### Owed, and now authorised
+
+**The D-2661 darwin FIFO probe.** The operator authorised merging past it *and* asked for the test to
+be fixed in a follow-up. It is `server/test/platform-hazards.test.ts`'s `itDarwin('BSD: after the
+deadline fires, does the output FIFO reach EOF? — candidate (b)')`, a 15-second timing probe that has
+now reddened on unchanged trees on PR #116, on main's `probe-macos`, and here. It is its own item,
+against main, not a wave-3 entry.
 
 ### The merge landed, and the guard followed the phrase — RATIFIED (2026-09-17)
 
