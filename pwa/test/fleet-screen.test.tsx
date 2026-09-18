@@ -2521,6 +2521,33 @@ describe('the programme tree on the fleet screen', () => {
     expect(line.querySelector('button, a')).toBeNull();
   });
 
+  it('threads coordOf/frameSeen down to the marker — a coordinator measured dead reaches the operator (Task 8 fix round 1, Finding 1)', () => {
+    // D-3009: `coordOf` must be a FLEET-WIDE lookup, not the card's own
+    // `g.sessions` — the coordinator sits on alpha's card while the marker is
+    // drawn on beta's. Nothing in project-card.test.tsx alone can catch a
+    // regression at the wiring site (it passes the props directly), so this
+    // case mounts the whole screen and seeds the store the way `coordPresence`
+    // actually needs: a dead-measured session fleet-wide, and BOTH frame-seen
+    // flags true.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove', boardProject: null }),
+      ],
+      runs: [runRow({ id: 42, project: 'beta', sessionId: 'claude:worker', claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+      fleetFrameSeen: true,
+    });
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
+    const marker = beta.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('dead');
+    expect(marker.getAttribute('title')).toContain('reclaim');
+  });
+
   it('a pending spawn still reaches its coordinator\'s card — the null-session arm of runCard', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);

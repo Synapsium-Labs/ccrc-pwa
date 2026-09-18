@@ -1196,6 +1196,23 @@ describe('the orphan worker says which programme it belongs to', () => {
     expect(marker.getAttribute('data-presence')).toBe('unknown');
     expect(marker.getAttribute('title')).not.toContain('reclaim');
   });
+
+  it('reads dead as unknown while frameSeen is not passed — D-1138\'s half: a dead session alone is not enough', () => {
+    // `coordOf` alone is not the whole guard: without `frameSeen` the DEFAULT
+    // (false) governs, and `coordPresence` treats an unseen frame as
+    // "nothing measured" regardless of what the looked-up session says —
+    // otherwise a coordinator merely absent from a STALE fleet array would
+    // read as gone.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const deadCoord = sess({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN}
+                   coordOf={() => deadCoord}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('unknown');
+    expect(marker.getAttribute('title')).not.toContain('reclaim');
+  });
 });
 
 // ── cross-repo wave 2: the home card knows where its waves went ──────────────
