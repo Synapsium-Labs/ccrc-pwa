@@ -5362,9 +5362,15 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
  *                     a fourth code nobody would branch on
  *    no-claimant    — the run names nobody. Distinct from `unknown-run` (there is no
  *                     such run) and from `unknown-session` (the NEW claimant has no
- *                     registry row): three different things to fix, never one code */
-export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant';
-const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> = { 'claimant-alive': true, 'no-claimant': true };
+ *                     registry row): three different things to fix, never one code
+ *    heir-is-a-worker — the NEW claimant is the worker of somebody else's open
+ *                     run (spec §12): a worker may not inherit a programme
+ *                     any more than open one. 409, `by` names its coordinator.
+ *                     A finished worker is not a worker; a self-claimed one is
+ *                     admitted (D-3012) */
+export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant' | 'heir-is-a-worker';
+const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> =
+  { 'claimant-alive': true, 'no-claimant': true, 'heir-is-a-worker': true };
 export const RECLAIM_REFUSE_CODES: readonly ReclaimRefuseCode[] =
   Object.keys(RECLAIM_REFUSE_CODE_MAP) as ReclaimRefuseCode[];
 /** `hasOwnProperty`, not `in` and not `MAP[v]`: `'toString' in RECLAIM_REFUSE_CODE_MAP`

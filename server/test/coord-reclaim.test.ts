@@ -315,6 +315,43 @@ describe('reclaimRun — the order is the guard', () => {
     expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
+  it('heir-is-a-worker when the INCOMING coordinator is a live worker of another run — and NOTHING is written (spec §12, D-3011)', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    // LIVE is somebody else's worker on an OPEN run.
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+    expect(w.calls).toBe(0);                      // `watchCommit` counts `reclaimProgram` calls
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('a re-typed sitting claimant stays a no-op even when that claimant is somebody\'s worker — the rung is INSIDE `to !== from` (D-1136, D-3011)', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD);
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, DEAD);
+    const r = await reclaimRun(depsFor(home, s, ALIVE), id, DEAD);
+    expect(r).toMatchObject({ ok: true, to: DEAD });
+  });
+
+  it('the heir rung sits AFTER the registry-existence rung — an unseeded heir is still unknown-session', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD);                        // LIVE has no row AND is a worker
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'unknown-session' });
+  });
+
   it('registry-unmeasurable when the directory will not list — and NOTHING is written', async () => {
     const home = mkTmp('ccrc-reclaim-');
     const s = store(home);

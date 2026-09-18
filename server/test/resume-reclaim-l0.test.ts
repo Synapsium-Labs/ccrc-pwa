@@ -47,7 +47,7 @@ const flat = (s: string): string => s.replace(/^\s*\*\s?/gm, '').replace(/\s+/g,
 
 describe('the sixth refusal union', () => {
   it('derives the runtime list from the map, in declaration order', () => {
-    expect(RECLAIM_REFUSE_CODES).toEqual(['claimant-alive', 'no-claimant']);
+    expect(RECLAIM_REFUSE_CODES).toEqual(['claimant-alive', 'no-claimant', 'heir-is-a-worker']);
   });
 
   it('is total in both directions at compile time', () => {
@@ -55,7 +55,8 @@ describe('the sixth refusal union', () => {
     // the map gains one the union does not have. `typecheck-tests.test.ts` compiles
     // this directory under `test/tsconfig.tests.json`, whose `include` carries
     // `../../shared/**/*.ts`, so this is a gate and not a comment.
-    const total: Record<ReclaimRefuseCode, true> = { 'claimant-alive': true, 'no-claimant': true };
+    const total: Record<ReclaimRefuseCode, true> =
+      { 'claimant-alive': true, 'no-claimant': true, 'heir-is-a-worker': true };
     expect(Object.keys(total)).toEqual([...RECLAIM_REFUSE_CODES]);
   });
 

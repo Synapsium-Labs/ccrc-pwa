@@ -1608,6 +1608,8 @@ export function registerCoordRoutes(
       // operator with a refusal and no next move.
       case 'claimant-alive':
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      case 'heir-is-a-worker':
+        return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });

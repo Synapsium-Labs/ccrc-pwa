@@ -235,7 +235,9 @@ export type ReclaimOutcome =
   | { ok: false; kind: 'no-claimant' }
   | { ok: false; kind: 'unknown-session' }              // the NEW claimant has no registry row
   | { ok: false; kind: 'registry-unmeasurable'; detail: string }
-  | { ok: false; kind: 'claimant-alive'; detail: string; by: string };
+  | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
+  // the NEW claimant is a live worker of another run (spec §12)
+  | { ok: false; kind: 'heir-is-a-worker'; by: string };
 
 /**
  * Hand a program's coordination to `to`, after PROVING the session holding it is
@@ -302,6 +304,15 @@ export async function reclaimRun(
     return { ok: false, kind: 'unknown-session' };
   }
   if (to !== from) {
+    // §12 / D-3011: a worker may not inherit a programme. INSIDE this branch,
+    // so an operator re-typing the id the board already shows stays the
+    // no-op D-1136 made it; AFTER rung 3 (the heir's row exists) and BEFORE
+    // rung 4 (the tmux measurement it would otherwise pay for). Same read and
+    // same two admissions as `POST /api/runs`' rung (Task 9).
+    const heirWorkerOf = deps.coord.parentOfSession(to);
+    if (heirWorkerOf !== null && heirWorkerOf !== to) {
+      return { ok: false, kind: 'heir-is-a-worker', by: heirWorkerOf };
+    }
     const claimant = await measureClaimant(deps, from, now);
     if (claimant.state === 'unmeasurable') {
       return { ok: false, kind: 'registry-unmeasurable', detail: claimant.why };
