@@ -67,7 +67,11 @@ const programOrder = (a: RunSummary, b: RunSummary): number => a.wave - b.wave |
  *  one thing this screen exists to surface (`groupFleet.ts`'s own principle);
  *  `programOrder`'s "a worker does not climb the tree by being busy" is about
  *  busy-ness, and this is not that. A pending spawn has no session and so no
- *  bucket; it keeps programme order (rule 5). */
+ *  bucket; it keeps programme order (rule 5). The `r.sessionId !== null` and
+ *  `?.` guards below are type-driven, not a defensive scope widener: `settled`
+ *  is pre-filtered by `onList` before this ever runs, so on that list they
+ *  never fire — they are not a licence to call this comparator on an
+ *  unfiltered one. */
 const attentionFirst =
   (byId: ReadonlyMap<string, FleetSession>) =>
   (a: RunSummary, b: RunSummary): number => {
@@ -121,8 +125,9 @@ export function nestFleet(
   const onList = (id: string | null): boolean => id !== null && byId.has(id);
 
   // The edges that can actually be DRAWN — both ends on this list, and never a
-  // session pointing at itself. Sorted once, in programme order; every list
-  // built below inherits it by construction rather than re-sorting.
+  // session pointing at itself. Sorted once, attention-first then in programme
+  // order (`attentionFirst`); every list built below inherits it by
+  // construction rather than re-sorting.
   const settled = runs
     .filter((r) => onList(r.sessionId) && onList(r.claimedBy) && r.claimedBy !== r.sessionId)
     .slice()

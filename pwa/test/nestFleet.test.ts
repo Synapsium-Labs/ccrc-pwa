@@ -90,7 +90,7 @@ describe('nestFleet — rule 1: the happy shape', () => {
   });
 });
 
-describe('nestFleet — rule 2: children are in PROGRAMME order, not status order', () => {
+describe("nestFleet — rule 2: children are attention-first, then in PROGRAMME order — never the list's own", () => {
   it('sorts children by the run’s wave ascending, then by run id — against the list’s own order', () => {
     // The input order DISAGREES with the programme order on purpose: `w2` is
     // ahead of `w1` in `sortFleet`'s result (it was interacted with more
@@ -138,10 +138,15 @@ describe('nestFleet — rule 2: children are in PROGRAMME order, not status orde
   });
 
   it('never lifts a waiting row above its PARENT — the key is scoped to siblings', () => {
-    const sessions = [sess('other'), sess('coord'), sess('kid', { bucket: 'attention' })];
-    const rows = nestFleet(sessions, [run({ id: 20, wave: 1, sessionId: 'kid', claimedBy: 'coord' })]);
-    // Top level is the caller's order, verbatim: `other`, then `coord` with its child.
-    expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['kid', 1]]);
+    // Two children under `coord`, the waiting one at a LATER wave, and a
+    // top-level row ahead of `coord`: the waiting child rises among its
+    // siblings and no further — the top level is the caller's order, verbatim.
+    const sessions = [sess('other'), sess('coord'), sess('kidLate', { bucket: 'attention' }), sess('kidEarly')];
+    const rows = nestFleet(sessions, [
+      run({ id: 20, wave: 1, sessionId: 'kidEarly', claimedBy: 'coord' }),
+      run({ id: 21, wave: 2, sessionId: 'kidLate', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['kidLate', 1], ['kidEarly', 1]]);
   });
 });
 
