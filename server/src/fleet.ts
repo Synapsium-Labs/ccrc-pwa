@@ -188,9 +188,19 @@ function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly strin
 }
 
 /** `boardPlacement`'s empty port: nothing stamped, so every row goes home.
- *  Handed back by `readCoordPlacements`'s guards below — a dark box, an empty
- *  registry, a refused or throwing read. */
+ *  Handed back by `readCoordPlacements`'s guards below when there is nothing
+ *  TO read — no `coord` wired, or `sessionCount === 0` (an empty registry) —
+ *  and by a successful read that found nothing stamped
+ *  (`foldCoordPlacements([])`). A refused or throwing read no longer hands
+ *  this back: since wave 2 (D-2875) it answers `{ ok: false }` instead. */
 const emptyCoordPlacements = (): StampLookup => () => null;
+
+/** What `readCoordPlacements` hands back: the port when the store answered
+ *  (including "nothing stamped" — an empty port is a measurement), or `ok:
+ *  false` when the READ itself failed. The two used to fold to one empty
+ *  port, so every row of a broken box read `boardProject === project` as if
+ *  measured (D-2875; the field's own docstring carried the gap as prose). */
+type CoordPlacementsRead = { ok: true; stampOf: StampLookup } | { ok: false };
 
 /**
  * Task 3's own batched, guarded read — the `boardPlacement` port supply,
@@ -200,12 +210,13 @@ const emptyCoordPlacements = (): StampLookup => () => null;
  * sit beside the walk it feeds). Same guard shape as `readCurrentAsks` right
  * above: `coord` is absent on a dark box and in every pre-Task-3 test, and
  * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
- * race — either way this degrades to "nothing stamped", never throws out of
- * `assembleFleet`, so a broken coord.db costs every row its placement
- * (falls back to `ownProject`, per `boardPlacement`'s own total contract)
- * rather than the whole tick. `sessionCount === 0` (an empty registry) also
- * skips the read entirely — `readCurrentAsks`'s own `childIds.length === 0`
- * short-circuit, restated here: no row exists to spend the answer on.
+ * race — either failure is caught, never thrown out of `assembleFleet`, and
+ * answers `{ ok: false }`, which the row literal emits as `boardProject:
+ * null` (the wire's own word for "this server did not decide", D-2875) — a
+ * broken coord.db costs every row its placement rather than the whole tick.
+ * `sessionCount === 0` (an empty registry) also skips the read entirely —
+ * `readCurrentAsks`'s own `childIds.length === 0` short-circuit, restated
+ * here: no row exists to spend the answer on.
  *
  * Fix round 1: this used to call `coord.runs({includeClosed:true})`, which
  * hydrates every row (`itemTally`, `unreadMailCount`, batch health, a
@@ -219,18 +230,7 @@ const emptyCoordPlacements = (): StampLookup => () => null;
  * includes closed runs, up to its own clamp): a placement keyed on open runs
  * alone would bounce every worker between cards at the close-then-open wave
  * boundary, one of the four defects this design exists to end.
- *
- * Since wave 2 (D-2875) a failed read is `ok: false`, and the row literal
- * emits `boardProject: null` for it — the wire's own word for "this server
- * did not decide".
  */
-/** What `readCoordPlacements` hands back: the port when the store answered
- *  (including "nothing stamped" — an empty port is a measurement), or `ok:
- *  false` when the READ itself failed. The two used to fold to one empty
- *  port, so every row of a broken box read `boardProject === project` as if
- *  measured (D-2875; the field's own docstring carried the gap as prose). */
-type CoordPlacementsRead = { ok: true; stampOf: StampLookup } | { ok: false };
-
 function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): CoordPlacementsRead {
   if (!coord || sessionCount === 0) return { ok: true, stampOf: emptyCoordPlacements() };
   try {
