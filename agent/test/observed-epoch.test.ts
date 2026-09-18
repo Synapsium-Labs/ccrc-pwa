@@ -24,16 +24,30 @@ import type { AgentReady } from '../../shared/agent-protocol.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
+/** Plant `~/.cc-sessions/pool-epoch` with the given body EXACTLY as given —
+ *  no terminator added. Used only where a test needs precise control over
+ *  whether `end` is present — the terminator's OWN tests (review T8-R2, I1:
+ *  same `plant`/`plantRaw` split `ccd-acct-pool-state.test.ts:19-40` already
+ *  uses, for the same reason — a fixture missing `end` silently stops
+ *  exercising the condition its own test claims to cover, since the
+ *  terminator guard now returns `null` first for ANY reason). */
+function plantRaw(home: string, body: string): void {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(path.join(reg, 'pool-epoch'), body, 'utf8');
+}
+
+/** Plant the projection with the given body PLUS its required `end`
+ *  terminator — every fixture in this file EXCEPT the terminator's own tests
+ *  wants a well-formed document. */
+function plant(home: string, body: string): void {
+  plantRaw(home, body.endsWith('\n') ? `${body}end\n` : `${body}\nend\n`);
+}
+
 describe('readObservedEpoch — the reader', () => {
   it('reports the epoch it has actually got', () => {
     const home = mkTmp('ccrc-observed-epoch-');
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    // Terminated with `end` — review T8-R1, F1: the brief's own fixture for
-    // this test originally lacked it, which was the fixture's bug, not
-    // license for the reader. Every other fixture in this file already
-    // carries `end`; this is the one that gets it here.
-    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\nend\n', 'utf8');
+    plant(home, 'epoch 43\nissued 1\nlease 2');
     expect(readObservedEpoch(home)).toBe(43);
   });
 
@@ -48,11 +62,9 @@ describe('readObservedEpoch — the reader', () => {
     // must be `null` and not, say, `stale`: reporting a number here
     // UNDER-reports lag — Task 9's indicator goes silent exactly where a
     // node is refusing tagged placement, and nobody goes looking for a
-    // silence. This is the exact document test 1 above used to write.
+    // silence. This is the exact document test 1 above writes, minus `end`.
     const home = mkTmp('ccrc-observed-epoch-');
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\n', 'utf8');
+    plantRaw(home, 'epoch 43\nissued 1\nlease 2\n');
     expect(readObservedEpoch(home)).toBe(null);
   });
 
@@ -64,9 +76,7 @@ describe('readObservedEpoch — the reader', () => {
     // matching `ccd/ccd:2218-2225`'s own algorithm exactly, rather than
     // trimming all trailing whitespace (which would wrongly accept this).
     const home = mkTmp('ccrc-observed-epoch-');
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\nend\n\n', 'utf8');
+    plantRaw(home, 'epoch 43\nissued 1\nlease 2\nend\n\n');
     expect(readObservedEpoch(home)).toBe(null);
   });
 
@@ -77,18 +87,20 @@ describe('readObservedEpoch — the reader', () => {
   });
 
   it('reports null for a document with no epoch line', () => {
+    // Review T8-R2, I1: this fixture used to have no `end` terminator either,
+    // which meant the F1 terminator guard returned `null` first and this
+    // test never actually exercised "no epoch line" — measured: mutating the
+    // reader so a TERMINATED document with no epoch line answered `0` left
+    // this suite 11/11 green. `plant()` supplies the terminator this
+    // condition needs to be tested on its own.
     const home = mkTmp('ccrc-observed-epoch-');
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'pool-epoch'), 'acct a pool-a\n', 'utf8');
+    plant(home, 'acct a pool-a');
     expect(readObservedEpoch(home)).toBe(null);
   });
 
   it('reports epoch 0 as 0, not as "never synced" — a real, distinct answer from null', () => {
     const home = mkTmp('ccrc-observed-epoch-');
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 0\nissued 1\nlease 2\nend\n', 'utf8');
+    plant(home, 'epoch 0\nissued 1\nlease 2');
     expect(readObservedEpoch(home)).toBe(0);
     expect(readObservedEpoch(home)).not.toBe(null);
   });
@@ -99,9 +111,36 @@ describe('readObservedEpoch — the reader', () => {
     // can never emit one. A hand-edited or torn value off that grammar must
     // not be silently coerced into a number this reader does not recognise.
     const home = mkTmp('ccrc-observed-epoch-');
-    const reg = path.join(home, '.cc-sessions');
-    mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 007\nissued 1\nlease 2\nend\n', 'utf8');
+    plant(home, 'epoch 007\nissued 1\nlease 2');
+    expect(readObservedEpoch(home)).toBe(null);
+  });
+
+  it('reports null for a document with a duplicate epoch line — nothing says which value is true', () => {
+    // Ruling T8-R2, I2. `ccd/ccd:2246-2252`'s own reason for refusing a
+    // second `epoch` line is a statement about the epoch ITSELF — "nothing
+    // says which value is true" — not one of the placement-trust questions
+    // this reader otherwise defers to `_acct_pool_state` (a duplicate
+    // `issued`/`lease`/`acct` line, a second `end`, …). Direction of error is
+    // the same one F1 established: reporting EITHER number off a
+    // self-contradictory document risks under-reporting lag on a node that
+    // is, per bash, refusing all tagged placement.
+    const home = mkTmp('ccrc-observed-epoch-');
+    plant(home, 'epoch 43\nepoch 7\nissued 1\nlease 2');
+    expect(readObservedEpoch(home)).toBe(null);
+  });
+
+  it('reports null for a huge epoch that cannot round-trip through Number — never a fabricated, imprecise value', () => {
+    // Ruling T8-R2, M1. `Number('99999999999999999999')` silently becomes
+    // `1e20`, a DIFFERENT number than the document states — bash answers
+    // `named pool-a` (a healthy, placement-serving node) for this same
+    // document. Sending the imprecise number as-is would let the server's F4
+    // validator (`remote/client.ts`, `Number.isSafeInteger`) discard it as
+    // off-grammar and record `undefined` — "this build cannot tell you" — for
+    // a node that plainly can. Refusing HERE, at the agent (where the file
+    // is), means the wire carries `null` — a fact this box CAN prove — never
+    // a fabricated one read downstream as absence.
+    const home = mkTmp('ccrc-observed-epoch-');
+    plant(home, 'epoch 99999999999999999999\nissued 1\nlease 2');
     expect(readObservedEpoch(home)).toBe(null);
   });
 
@@ -136,7 +175,7 @@ describe('the ready frame carries observedEpoch', () => {
 
   it('always carries the key, as a number, when the projection has one — never omitted', async () => {
     fixture = makeFixture();
-    writeFileSync(path.join(fixture.home, '.cc-sessions', 'pool-epoch'), 'epoch 7\nissued 1\nlease 2\nend\n', 'utf8');
+    plant(fixture.home, 'epoch 7\nissued 1\nlease 2');
     agent = await boot(fixture);
 
     const ready = await connect(agent.port).hello() as AgentReady;
@@ -163,7 +202,7 @@ describe('the ready frame carries observedEpoch', () => {
 
     expect((await connect(agent.port).hello() as AgentReady).observedEpoch).toBe(null);
 
-    writeFileSync(path.join(fixture.home, '.cc-sessions', 'pool-epoch'), 'epoch 9\nissued 1\nlease 2\nend\n', 'utf8');
+    plant(fixture.home, 'epoch 9\nissued 1\nlease 2');
     expect((await connect(agent.port).hello() as AgentReady).observedEpoch).toBe(9);
   });
 });

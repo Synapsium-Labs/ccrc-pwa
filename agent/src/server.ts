@@ -590,9 +590,23 @@ export const OBSERVED_EPOCH_NUM = '(?:0|[1-9][0-9]*)';
 
 /** Matches a well-formed `epoch <n>` line ANYWHERE in the document, not only
  *  the first line: `_acct_pool_state`'s own per-line parser is order-agnostic
- *  (`ccd/ccd:2225` onward — a `case` over each line's key, not a positional
- *  read), so this reader must not be stricter than the format actually is. */
+ *  (`ccd/ccd:2226` onward — the `while` loop whose `case "$k" in` at `:2245`
+ *  dispatches on each line's KEY, not a positional read; `:2225` — cited here
+ *  in a previous round, review T8-R2 M2 — is the terminator check the line
+ *  before, not the loop), so this reader must not be stricter than the
+ *  format actually is. */
 const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
+
+/** Matches ANY line KEYED `epoch` — the same first-token test
+ *  `_acct_pool_state` makes (`k=${line%% *}`, `ccd/ccd:2243`), regardless of
+ *  whether the rest of the line is a well-formed value. Used only to COUNT
+ *  such lines (review T8-R2, I2, Ruling): bash refuses a document carrying
+ *  two, and the reason (`ccd/ccd:2246-2252`, "nothing says which value is
+ *  true") is a statement about the epoch ITSELF — the exact fact this field
+ *  exists to report — not one of the placement-trust questions the rest of
+ *  that grammar answers and this reader defers (a duplicate `issued`/
+ *  `lease`/`acct` line, a second `end`, …). */
+const EPOCH_KEYED_LINE_RE = /^epoch(?: .*)?$/gm;
 
 /**
  * The epoch of the pool-membership projection THIS node actually has —
@@ -600,7 +614,7 @@ const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
  * writes and `_acct_pool_state` (`ccd/ccd`) reads for placement decisions.
  *
  * `null` means this node has never synced — no file, an unreadable one, or one
- * that fails either check below. That is NOT the same as epoch 0 (the control
+ * that fails any check below. That is NOT the same as epoch 0 (the control
  * plane has issued nothing yet, but this node has a real, if trivial,
  * projection) and NOT the same as the field being absent from the `ready`
  * frame (an older agent build that cannot even ASK the question) —
@@ -608,7 +622,7 @@ const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
  * three apart; `undefined` is what an ABSENT reader sees, never what this
  * function returns.
  *
- * TWO CHECKS — deliberately not the whole of `_acct_pool_state`'s grammar:
+ * THREE CHECKS — deliberately not the whole of `_acct_pool_state`'s grammar:
  *
  * 1. THE TERMINATOR (review T8-R1, F1 — a fixture of this function's OWN
  *    first test originally lacked it, which was the fixture's bug, not
@@ -627,16 +641,37 @@ const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
  *    below), but a torn one proves nothing, and a number reported off it
  *    UNDER-reports lag exactly where Task 9's indicator goes silent — the
  *    worse failure, because nobody goes looking for a silence.
- * 2. THE `epoch <n>` LINE'S OWN GRAMMAR (`EPOCH_LINE_RE`, `OBSERVED_EPOCH_NUM`
- *    above) — matched anywhere in the document, not only the first line.
+ * 2. EXACTLY ONE `epoch`-KEYED LINE (review T8-R2, I2, Ruling — see
+ *    `EPOCH_KEYED_LINE_RE` above for why this one duplicate IS this reader's
+ *    concern, unlike every other duplicate `_acct_pool_state` guards
+ *    against). Zero is "no epoch line" (`null`, unreadable as a projection at
+ *    all); two or more is a self-contradiction this reader cannot resolve —
+ *    the same direction-of-error argument as the terminator: reporting
+ *    EITHER value risks under-reporting lag on a node that is, per bash,
+ *    refusing all tagged placement.
+ * 3. THAT ONE LINE'S OWN GRAMMAR AND PRECISION (`EPOCH_LINE_RE`,
+ *    `OBSERVED_EPOCH_NUM` above, plus the round-trip check below — review
+ *    T8-R2, M1). `Number(...)` on a digit run requiring ≥ 2^53 to represent
+ *    exactly silently ROUNDS — `Number('99999999999999999999')` becomes
+ *    `1e20`, a different number than the document states, while bash reports
+ *    a real, healthy epoch for that same document. Forwarding the rounded
+ *    value would let the server's own wire-level validator
+ *    (`remote/client.ts`, `Number.isSafeInteger`) discard it as off-grammar
+ *    and record `undefined` — "this build cannot tell you" — for a node that
+ *    plainly can. Refusing HERE, where the file is, means the wire carries
+ *    `null` — a fact this box CAN prove — instead of a fabricated number a
+ *    downstream reader takes for absence. `String(n) !== digits` is the
+ *    check: `OBSERVED_EPOCH_NUM` forbids a leading zero, so for every digit
+ *    run this reader accepts, the canonical round-trip is exact equality —
+ *    a mismatch means precision was lost.
  *
- * Everything else in `_acct_pool_state`'s grammar — duplicate `epoch`/
- * `issued`/`lease`/`acct` lines, a second `end`, an off-grammar `acct` row, a
- * NUL byte, the 64 KiB cap, `issued`/`lease`'s own numeric validation,
- * lease-staleness — is NOT re-implemented here. Those exist to decide whether
- * a TAG may be trusted for PLACEMENT, a different question from the one this
- * field answers: "what epoch does this node have", true of a stale
- * projection too — staleness stays `_acct_pool_state`'s own concern.
+ * Everything else in `_acct_pool_state`'s grammar — a duplicate `issued`/
+ * `lease`/`acct` line, a second `end`, an off-grammar `acct` row, a NUL byte,
+ * the 64 KiB cap, `issued`/`lease`'s own numeric validation, lease-staleness —
+ * is NOT re-implemented here. Those exist to decide whether a TAG may be
+ * trusted for PLACEMENT, a different question from the one this field
+ * answers: "what epoch does this node have", true of a stale projection too —
+ * staleness stays `_acct_pool_state`'s own concern.
  *
  * Read fresh on every `ready`, synchronously, for the same reason
  * `readRosterFp`/`readBuildStamp` are: one small file read, at most once per
@@ -654,8 +689,14 @@ export function readObservedEpoch(home: string): number | null {
     const lastNewline = stripped.lastIndexOf('\n');
     const lastLine = lastNewline === -1 ? stripped : stripped.slice(lastNewline + 1);
     if (lastLine !== 'end') return null;
-    const m = EPOCH_LINE_RE.exec(text);
-    return m === null ? null : Number(m[1]);
+    const epochKeyedLines = text.match(EPOCH_KEYED_LINE_RE) ?? [];
+    if (epochKeyedLines.length !== 1) return null;
+    const m = EPOCH_LINE_RE.exec(epochKeyedLines[0]!);
+    if (m === null) return null;
+    const digits = m[1]!;
+    const n = Number(digits);
+    if (String(n) !== digits) return null;
+    return n;
   } catch {
     return null;
   }
