@@ -208,6 +208,55 @@ describe('ccd-pool-sync', () => {
   // title for the same "renders as two well-formed lines" reasoning, and the
   // mutation table for the `NAME.fullmatch` deletion that reds it directly.
 
+  // Fix round 3 (coordinator-caught — the round-2 disclosure on
+  // `ID.fullmatch` -> `ID.match` was WRONG to call this case unpinnable; see
+  // the corrected comment in `ccd/ccd-pool-sync` itself). The id check runs
+  // ONCE PER ACCOUNT, independent of whether that account's `pools` ever
+  // renders a line — an empty (or absent) `pools` list is explicitly
+  // anticipated by `accts[k].get("pools", [])`, so this is
+  // contract-reachable, not a contrived edge case. When `pools` is `[]`,
+  // a malformed id is never spliced into any line, so the whole-document
+  // pass never gets a chance to see it — a document simply missing that
+  // account renders as perfectly well-formed. Only `ID.fullmatch` stands
+  // between this payload and a mutant that silently drops the malformed
+  // account rather than refusing the whole response (which, against a real
+  // fleet node, could overwrite an in-lease document that said `named
+  // <pool>` for that very account with one where it now reads `untagged` —
+  // fail-open). This is the isolation case: it must RED under
+  // `ID.fullmatch` -> `ID.match`, and must stay GREEN with the
+  // whole-document per-line pass deleted entirely, proving the two checks
+  // are NOT redundant here the way they are for the trailing-newline-only
+  // shape.
+  it('refuses (writes nothing) when an account id is malformed but its pools list is empty — nothing gets rendered for it, so only the ID field check can catch it', () => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a\\n":{"pools":[]}}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+  });
+
+  // Fix round 3 (coverage gap the reviewer noticed): the writer's own
+  // documented default at the `pools = acct.get("pools", [])` line — an
+  // account present in the control plane's answer but carrying no pool —
+  // must render NO `acct` row for it (synced, this account untagged, not
+  // synced-and-then-omitted), and the reader must then answer `untagged`
+  // for that id, not `unreadable` (the file exists and is readable; the
+  // account simply is not tagged) and not `named <something>` (there is
+  // nothing to name).
+  it('renders no acct row for an account whose pools list is empty, and the reader answers untagged for it, not unreadable', () => {
+    const bin = stubCurl('{"epoch":9,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":[]}}}');
+    expect(run(bin).rc).toBe(0);
+    expect(doc()).toBe('epoch 9\nissued 1\nlease 9999999999\nend\n');
+    const h2 = makeCcdHarness('pool-sync-untagged-x');
+    try {
+      const reg = path.join(h2.home, '.cc-sessions');
+      mkdirSync(reg, { recursive: true });
+      writeFileSync(path.join(reg, 'pool-epoch'), doc(), 'utf8');
+      const out = h2.sh('_acct_pool_state acct-a');
+      expect(out).toBe('untagged');
+    } finally {
+      h2.cleanup();
+    }
+  });
+
   // T1-R3: the reader is line-oriented and cannot tell a complete final row
   // from a torn one — a document truncated right after its last `acct` line
   // must not answer `named <pool>` for that account. (T3-R2: this briefly

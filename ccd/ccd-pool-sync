@@ -94,7 +94,7 @@ if [ "$rc" -ne 0 ]; then
   # still says the number rather than inventing a wrong guess.
   case "$rc" in
     1)  say "unmeasured — curl exited 1 (unsupported protocol — check CCRC_SERVER_URL's scheme in $AGENT_ENV)" ;;
-    6)  say "unmeasured — curl exited 6 (could not resolve host in \$url)" ;;
+    6)  say "unmeasured — curl exited 6 (could not resolve host in $url)" ;;
     7)  say "unmeasured — curl exited 7 (could not connect)" ;;
     28) say "unmeasured — curl exited 28 (timed out after ${TIMEOUT}s)" ;;
     *)  say "unmeasured — curl exited $rc" ;;
@@ -170,6 +170,17 @@ def whole_num(name, v):
         raise ValueError("%s must be a non-negative integer, got %r" % (name, v))
     return v
 
+def trunc_repr(v, cap=200):
+    # Fix round 3: a diagnostic exists to be READ, and this one is read off
+    # a journal line on a timer, not a terminal a human sized. `%r` on the
+    # FULL offending value (a control plane could send a pools field that is
+    # a multi-megabyte string, not merely a wrong-shaped one) would put that
+    # whole value into the journal on every failing tick. Bounded the same
+    # way the whole-document pass bounds the rendered document, at a size
+    # meant for a human glance, not for round-tripping the value back out.
+    r = repr(v)
+    return r if len(r) <= cap else r[:cap] + "...(truncated, %d bytes total)" % len(r)
+
 try:
     d = json.load(sys.stdin)
     e = whole_num("epoch", d["epoch"])
@@ -196,21 +207,46 @@ try:
         # was verified against it directly, not assumed from the docs) without
         # changing what a clean id/pool name matches.
         #
-        # TWO MUTATION SURVIVORS, disclosed and measured (fix round 2):
-        # `ID.fullmatch` -> `ID.match`, and the same swap on `NAME.fullmatch`
-        # below, both stay GREEN against every test in this suite as of round
-        # 1. Traced by hand and confirmed by running it: the one value shape
-        # `.match` lets through that `.fullmatch` refuses is "<valid-chars>
-        # plus exactly one trailing newline, nothing else" — and when that
-        # value is spliced into `"acct %s %s" % (k, p)` and the document is
-        # later split back into lines (the whole-document pass below), the
-        # embedded newline fragments that ONE list element into TWO lines,
-        # one of which is always an empty string (from the resulting `\n\n`)
-        # that matches no grammar alternative — so the whole-document pass
-        # independently refuses it either way. These two per-field checks and
-        # the whole-document pass are MUTUALLY REDUNDANT against every input
-        # shape this suite can currently produce for THAT narrow case.
-        # They are NOT redundant in general — see the next disclosure.
+        # ONE MUTATION SURVIVOR, disclosed and measured (fix round 2, scope
+        # corrected in fix round 3 — see the paragraph after this one):
+        # `NAME.fullmatch` -> `NAME.match` on the pool check further down
+        # stays GREEN against every test in this suite. Traced by hand and
+        # confirmed by running it: the one value shape `.match` lets through
+        # that `.fullmatch` refuses is "<valid-chars> plus exactly one
+        # trailing newline, nothing else" — and because every `p` that
+        # passes the pool check is appended to `lines` immediately (no code
+        # path validates a pool value without also rendering it in the same
+        # step), that value always reaches `"\n".join(lines)`, and the
+        # embedded newline always fragments the resulting element into two
+        # lines once the document is split back apart, one of them an empty
+        # string (from the resulting double newline) that matches no grammar
+        # alternative — so the whole-document pass independently refuses it
+        # either way. `NAME.fullmatch` and the whole-document pass are
+        # MUTUALLY REDUNDANT against every input shape this suite can
+        # produce for THAT narrow case.
+        #
+        # `ID.fullmatch` -> `ID.match` is a DIFFERENT case, and the fix
+        # round 2 disclosure here was WRONG to lump it in as unpinnable —
+        # corrected in fix round 3, after the coordinator measured the
+        # divergence directly rather than trusting either side'"'"'s
+        # characterisation of it. The id check runs ONCE PER ACCOUNT,
+        # independent of whether `pools` for that account ever renders a
+        # line at all — `accts[k].get("pools", [])` explicitly anticipates
+        # an empty or absent list, which is contract-reachable, not
+        # hypothetical. When `pools` is `[]`, nothing is ever spliced into
+        # `lines` for that account, so the whole-document pass never gets a
+        # malformed line to see: a document simply missing that account
+        # renders as perfectly well-formed. Measured directly against
+        # `{"acct-a\n": {"pools": []}}`: the shipped script refuses it
+        # (the diagnostic names the id, via `.fullmatch`); the `.match` mutant
+        # instead INSTALLS `"epoch 1\nissued 1\nlease 9999999999\nend\n"` —
+        # a document that silently drops the malformed account rather than
+        # refusing the whole response. Against a real fleet node this can
+        # overwrite an in-lease document that said `named <pool>` for that
+        # very account with one where the account now reads `untagged` —
+        # unconstrained. Fail-open, not fail-shut. Pinned below by a
+        # dedicated test: `ID.fullmatch` IS load-bearing on its own here and
+        # stays a plain guard, not a disclosed survivor.
         #
         # REAL FINDING, not a survivor (fix round 2, coordinator-caught): a
         # value shaped as "<valid-chars> <valid-chars>\n<valid-chars>" (an
@@ -232,7 +268,7 @@ try:
         if not isinstance(acct, dict): raise ValueError("account %r must be an object" % k)
         pools = acct.get("pools", [])
         if not isinstance(pools, list):
-            raise ValueError("account %r pools must be a list, got %r" % (k, pools))
+            raise ValueError("account %r pools must be a list, got %s" % (k, trunc_repr(pools)))
         if len(pools) > 1:
             raise ValueError("account %r carries %d pools, at most one is supported" % (k, len(pools)))
         for p in pools:
@@ -267,6 +303,19 @@ try:
     body_lines = doc.split("\n")
     if body_lines and body_lines[-1] == "":
         body_lines = body_lines[:-1]   # doc always ends in exactly one \n
+    # MUTATION SURVIVOR, disclosed and measured (fix round 3, previously
+    # undisclosed and sitting inside the NEXT comment'"'"'s block where a
+    # reader would wrongly assume it was already covered): this check can
+    # also be deleted with the suite green, on the same 12 payloads probed
+    # for the loop below and for the same reason — `lines.append("end")`
+    # above runs UNCONDITIONALLY, so every document this renderer ever
+    # builds already ends with "end" by construction, and there is no path
+    # through this function that reaches here without it. Kept as the same
+    # kind of backstop as the loop immediately below: against a future
+    # change to the builder that stops guaranteeing the terminator, which by
+    # definition has no test yet. This comment and the one on the loop below
+    # are two SEPARATE disclosures, each naming its own check, not one
+    # disclosure covering both by proximity.
     if not body_lines or body_lines[-1] != "end":
         raise ValueError("rendered document'"'"'s last line is not exactly \"end\"")
     # MUTATION SURVIVOR, disclosed and measured, and unpinnable BY
@@ -289,7 +338,13 @@ try:
 
     sys.stdout.write(doc)
 except Exception as ex:
-    sys.stderr.write(str(ex)); sys.exit(1)
+    # Fix round 3: a trailing newline, previously missing — without it the
+    # next line'"'"'s own `say "unmeasured -- ..."` (bash side, below) runs
+    # into this one on the SAME journal line, e.g. "pool 123ccd-pool-sync:
+    # unmeasured -- ...". These failures only ever surface as journal lines
+    # off a timer, so a diagnostic nobody can read is worth as little as no
+    # diagnostic at all.
+    sys.stderr.write(str(ex) + "\n"); sys.exit(1)
 ') || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }
 
 mkdir -p -- "$REG" || { say "could not create $REG"; exit 1; }
