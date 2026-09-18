@@ -357,6 +357,30 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/**
+ * The ACCOUNT-ID grammar of the pool-epoch document's `acct <id> <pool>` line
+ * (account-pool-membership wave 1, "THE PROJECTION GRAMMAR — frozen by Task
+ * 1, binding on Task 3"): `^[A-Za-z0-9._-]{1,64}$`. DELIBERATELY NOT {@link
+ * ID_RE} — this box's OWN roster ids are the stricter, lowercase-only
+ * `^[a-z][a-z0-9-]{0,31}$`, but `pool_edges.subjectId` (and therefore this
+ * document's `acct` key) is a wrapper name off the FLEET side, which ccd's
+ * own wrapper grammar permits wider than this box's JSON schema does — an
+ * account can be centrally tagged before this box's `accounts.json` has ever
+ * heard of it (spec §3.3, O4).
+ *
+ * Two independent hand-kept spellings already exist and must agree with this
+ * one: `ccd/ccd-pool-sync:154`'s python `ID = re.compile(...)` (the writer)
+ * and `ccd/ccd:2300`'s bash `[[ "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]]` (the
+ * reader) — `pool-accounts-route.test.ts`'s parity scan holds this constant's
+ * `.source` equal to both by text extraction, `POOL_NAME_RE`'s own D-2480
+ * pattern. `POST /api/pools/accounts/:id` (`server/src/server.ts`) is the
+ * THIRD spelling this grammar must never be allowed to become: an id off this
+ * grammar becomes a key in the document `ccd-pool-sync`'s renderer refuses
+ * OUTRIGHT (the whole document, not just the bad row), which stops
+ * convergence fleet-wide until the next operator notices (D-TBD-pools-id-poison).
+ */
+export const ACCOUNT_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
+
 /** C0 controls plus DEL — everything a one-line status bar cannot survive.
  *  Deliberately NOT a whitelist of "printable" characters: real labels are
  *  `team·max` and `team·alt`, so anything narrower than "no control bytes"

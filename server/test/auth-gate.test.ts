@@ -62,7 +62,22 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
   ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
-   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
+   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks',
+   'GET /api/pools/epoch']);
+
+/** DERIVED from `EXEMPT`'s own reason strings, and asserted equal to the
+ *  hand-written set above (review round 1, I3+I4): a NINTH entry — `GET
+ *  /api/pools/epoch` — joined `gate.ts`'s table without this file's own
+ *  hand-kept copy being updated to match, which is exactly why the
+ *  session-cookie arm of its dual credential went unmeasured by the property
+ *  sweep below (it fell into the plain `EXEMPT` branch instead of the
+ *  stronger `EXEMPT_BUT_AUTHENTICATED` one). Pinning the two together here
+ *  means the NEXT entry cannot repeat that silently — either this set is
+ *  updated in the same change, or this test reds and says so by name. */
+const EXEMPT_BUT_AUTHENTICATED_DERIVED = new Set(
+  [...EXEMPT.entries()]
+    .filter(([, reason]) => reason.includes('EXEMPT-BUT-AUTHENTICATED'))
+    .map(([k]) => k));
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -513,6 +528,18 @@ describe('EXEMPT is complete in both directions', () => {
     // someone tidying the table into a `/api/auth/passkey/*` wildcard.
     expect(EXEMPT.has('POST /api/auth/passkey/register/start')).toBe(false);
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
+  });
+
+  it('EXEMPT_BUT_AUTHENTICATED (the property sweep\'s hand-kept set) equals what gate.ts actually declares', () => {
+    // Review round 1, I3+I4: `gate.ts` grew a NINTH exempt-but-authenticated
+    // entry (`GET /api/pools/epoch`) and this file's own hand-kept set stayed
+    // at eight — nothing pinned the two together, so the property sweep below
+    // silently fell back to treating the new route as a PLAIN exempt route
+    // (dark-vs-anonymous only) instead of the stronger class (anonymous MUST
+    // be 401), and the session-cookie arm of its dual credential went
+    // untested. Comparing SETS, not sizes: a size-only check would pass if
+    // one name were swapped for another.
+    expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
   it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-six with notify', () => {

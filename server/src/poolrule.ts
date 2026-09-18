@@ -1,5 +1,5 @@
 import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
-import type { PoolVerdict } from '../../shared/poolrule.js';
+import type { AccountPoolWire, PoolVerdict } from '../../shared/poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
 
@@ -33,6 +33,34 @@ import type { AccountDef, Roster } from '../../shared/roster.js';
  */
 export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roster' };
 
+/** Build the wire shape for a CENTRAL edge — the one place `{ state: 'tagged',
+ *  origin: 'central' }` is spelled, shared by every reader of `pool_edges`
+ *  below so they cannot disagree about what a central row means. `pools` is
+ *  asserted non-empty by every caller before this runs (T5-R2's tuple type
+ *  makes an empty array a compile error at the point of construction, so the
+ *  cast here is not smuggling one past the type). */
+function centralAccountPool(pools: readonly string[]): AccountPoolWire {
+  return { state: 'tagged', pools: pools as readonly [string, ...string[]], origin: 'central' };
+}
+
+/**
+ * The pool this ACCOUNT is in, RESOLVED — central beats declared beats
+ * untagged (design §5.6, T7-R2, D-TBD-resolved-pool-wire). Distinct question
+ * from {@link poolVerdict}:
+ * this names a pool, `poolVerdict` names a VERDICT against one project's tag.
+ * `GET /api/accounts`'s wire uses this so the PWA can render (and reason
+ * about crossings from) the same precedence the server enforces, rather than
+ * re-deriving it from the declared `RosterWire.pool` field alone — the defect
+ * T7-R2 found live in `NewSessionSheet.tsx` before this field existed.
+ */
+export function resolvedAccountPool(
+  account: AccountDef, edges: ReadonlyMap<string, readonly string[]>,
+): AccountPoolWire {
+  const central = edges.get(account.id);
+  if (central !== undefined && central.length > 0) return centralAccountPool(central);
+  return declaredAccountPool(account.pool);
+}
+
 /**
  * May `wrapper` serve a project whose tag reads `pool`?
  *
@@ -52,6 +80,14 @@ export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roste
  * required turns every call site into a compile error that forces its author
  * to answer "do I have the central edges here?" A caller that genuinely has
  * none passes `new Map()` and says why in a comment at the call site.
+ *
+ * NOT WRITTEN AS `poolRule(resolvedAccountPool(...), pool)`, deliberately: a
+ * central edge decides the verdict DIRECTLY, without ever consulting
+ * `roster.byId` — so a wrapper this box's roster does not have still gets a
+ * real mismatch/match answer (never the `account-not-in-roster` relabel) when
+ * a central row exists for it. `resolvedAccountPool` requires an already-known
+ * `AccountDef` for exactly this reason: it answers "what pool is THIS
+ * (roster-known) account in", not "does this wrapper exist".
  */
 export function poolVerdict(
   roster: Roster, wrapper: string, pool: ProjectPoolWire,
@@ -64,7 +100,7 @@ export function poolVerdict(
   // when one exists.
   const central = edges.get(wrapper);
   if (central !== undefined && central.length > 0) {
-    return poolRule({ state: 'tagged', pools: central as readonly [string, ...string[]], origin: 'central' }, pool);
+    return poolRule(centralAccountPool(central), pool);
   }
   const account = roster.byId.get(wrapper);
   if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
@@ -80,21 +116,25 @@ export function poolVerdict(
  * is disabled": callers must ask {@link poolUndecidable} first if they need to
  * tell the two apart (`projectPlacement` in `limits.ts` does).
  *
- * STILL DECLARED-ONLY (account-pool-membership wave 1, task 7 deviation,
- * reported): this feeds `projectHome`/`projectPlacement`'s RANKING forecast
- * (`GET /api/projects`' `placement` field, `GET /api/accounts`' `projected`),
- * a different forecast from `poolVerdict`'s REFUSAL pre-check that
- * `refusePool` gates placement on. Giving this the same central-edge
- * precedence needs an `edges` parameter threaded through `projectHome` and
- * `projectPlacement` (`limits.ts`) and every one of their ~30 call sites in
- * `test/projected-home.test.ts` — out of this task's file list and mutation
- * table, and not exercised by anything `POST /api/pools/accounts/:id` or
- * `GET /api/pools/epoch` do. Left as a known gap for the task that owns the
- * ranking forecast: today it can still rank an account by its DECLARED pool
- * after a central tag has moved it elsewhere.
+ * `edges` is REQUIRED (T7-R1, account-pool-membership wave 1, D-TBD-poolEligible-required-edges), on `poolVerdict`'s
+ * exact reasoning: an optional parameter lets a caller that HAS central edges
+ * silently fall back to declared-only by forgetting to pass them, which is the
+ * fail-open T5-R4 was written to close at every call site, not only
+ * `refusePool`'s. This function's ONE call site is `projectHome` (`limits.ts`),
+ * which has no `Deps`/`coord` access and passes `new Map()` — RECORDED, not
+ * silent: `limits.ts`'s own comment at that call states the reason and the
+ * cost of wiring the real edges through `projectHome`/`projectPlacement` and
+ * their ~30 positional call sites in `test/projected-home.test.ts`, which
+ * this task declined to spend (a decision, not an oversight — `GET
+ * /api/projects`' `placement` field and `GET /api/accounts`'s `projected`
+ * can therefore still rank an account by its DECLARED pool after a central
+ * tag has moved it elsewhere; `resolvedAccountPool` above is what closes that
+ * gap for a per-account READ, `GET /api/accounts`'s `roster[].resolvedPool`).
  */
-export function poolEligible(roster: Roster, pool: ProjectPoolWire): AccountDef[] {
-  return roster.homeAble.filter((a) => poolRule(declaredAccountPool(a.pool), pool).ok);
+export function poolEligible(
+  roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,
+): AccountDef[] {
+  return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a, edges), pool).ok);
 }
 
 /**

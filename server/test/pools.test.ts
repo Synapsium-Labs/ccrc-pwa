@@ -180,8 +180,10 @@ describe('poolVerdict and central edges — precedence (design §5.6)', () => {
 
 describe('poolEligible', () => {
   const r = parseRoster(POOLED_TEST_ROSTER);
-  const ids = (pool: Parameters<typeof poolEligible>[1]): string[] =>
-    poolEligible(r, pool).map((a) => a.id);
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const ids = (
+    pool: Parameters<typeof poolEligible>[1], edges: ReadonlyMap<string, readonly string[]> = NO_EDGES,
+  ): string[] => poolEligible(r, pool, edges).map((a) => a.id);
 
   it('keeps in-pool AND untagged home-able accounts for a tagged project', () => {
     // An untagged account is unconstrained — tagging only tightens (ruling 3).
@@ -196,6 +198,15 @@ describe('poolEligible', () => {
   it('is EMPTY when nobody can decide — an undecidable tag places nothing', () => {
     expect(ids({ state: 'unreadable' })).toEqual([]);
     expect(ids({ state: 'malformed' })).toEqual([]);
+  });
+
+  it('a central edge outranks the declared pool here too (T7-R1)', () => {
+    // `claude-b` is declared `pool-b`; a central edge says `pool-a` instead,
+    // and the eligibility filter must follow the central tag, not the
+    // declared one — `claude` is dropped from `pool-a`'s list and `claude-b`
+    // joins it.
+    const edges = new Map([['claude-b', ['pool-a']], ['claude', ['pool-b']]]);
+    expect(ids({ state: 'tagged', name: 'pool-a' }, edges)).toEqual(['claude-a', 'claude-b', 'claude-d']);
   });
 });
 

@@ -16,8 +16,8 @@ import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
   poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
-import { poolRostered, poolVerdict } from './poolrule.js';
-import { POOL_NAME_RE } from '../../shared/roster.js';
+import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
+import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
 import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type FleetState } from './fleetstate.js';
 // The first `.mjs` imports in `server/src/`. Those two files are deliberately
 // not TypeScript — `deploy/deploy.sh` runs them under a bare `node`, with no
@@ -99,13 +99,46 @@ function asSessionClientMsg(raw: unknown): SessionClientMsg | null {
 /** Aggregate pool-read budget for one HTTP request. Watchers own a separate cadence-derived policy. */
 const PROJECT_POOLS_REQUEST_BUDGET_MS = 10_000;
 
+const DEFAULT_POOL_LEASE_MS = 15 * 60 * 1000;
+
 /** How long a node may keep deciding from a projection it can no longer
  *  refresh. THE WHOLE DIAL between "an outage stops tagged placement" and "a
  *  stale node enforces yesterday's membership", and no value is right for both
  *  (design §5.8, left open). 15 minutes is fifteen missed pulls at
  *  `OnUnitActiveSec=60s`. Configurable because the right answer is a property
- *  of a fleet, not of this file. */
-export const POOL_LEASE_MS = Number(process.env.CCRC_POOL_LEASE_MS ?? 15 * 60 * 1000);
+ *  of a fleet, not of this file.
+ *
+ *  VALIDATED (review round 1, Minor 8) rather than a bare `Number(env)`: a
+ *  typo'd `CCRC_POOL_LEASE_MS` (`config.ts`'s `CCRC_PORT` bug, same shape)
+ *  used to yield `NaN`, and `Date.now() + NaN` is `NaN` — a `leaseUntil` of
+ *  `null` on the wire, which `ccd-pool-sync`'s renderer refuses outright
+ *  (`whole_num` demands an integer), silently stopping every node's sync with
+ *  no boot complaint anywhere. Falls back to the 15-minute default and warns
+ *  once, loudly, on anything that is not a positive finite number — the same
+ *  "quieter than the crash it replaces, so it must say so" rule `CCRC_PORT`
+ *  follows.
+ *
+ *  PURE AND EXPORTED (review round 1, Minor 8 follow-up): `POOL_LEASE_MS`
+ *  itself is a module-level constant resolved once at import time, which
+ *  `config.ts`'s `CCRC_PORT` validation (a per-call `loadConfig(env)`) is
+ *  not — so the DECISION is split out into this function precisely so a test
+ *  can drive it directly with different `env` objects, the way
+ *  `config.test.ts` drives `CCRC_PORT`, rather than only through the
+ *  module-load-time side effect. */
+export function resolvePoolLeaseMs(
+  env: NodeJS.ProcessEnv,
+): { value: number; warning: string | null } {
+  const num = Number(env.CCRC_POOL_LEASE_MS);
+  if (Number.isFinite(num) && num > 0) return { value: num, warning: null };
+  const warning = env.CCRC_POOL_LEASE_MS !== undefined && env.CCRC_POOL_LEASE_MS !== ''
+    ? `ccrc-server: CCRC_POOL_LEASE_MS=${JSON.stringify(env.CCRC_POOL_LEASE_MS.slice(0, 40))} is not a ` +
+      `positive number; falling back to the ${DEFAULT_POOL_LEASE_MS}ms default.`
+    : null;
+  return { value: DEFAULT_POOL_LEASE_MS, warning };
+}
+const poolLease = resolvePoolLeaseMs(process.env);
+if (poolLease.warning !== null) console.warn(poolLease.warning);
+export const POOL_LEASE_MS = poolLease.value;
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
@@ -1246,6 +1279,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,
+        // T7-R2 (D-TBD-resolved-pool-wire): the RESOLVED membership (central beats declared beats
+        // untagged, design §5.6), folded in server-side — `pool` above is the
+        // declared carrier alone, and a client that computed its own crossing
+        // warning from it would contradict what `POST /api/sessions`/`POST
+        // /api/sessions/:id/swap`'s `refusePool` actually decides the moment
+        // a central `pool_edges` row exists (`NewSessionSheet.tsx:186-188`,
+        // measured live before this field existed). Caught, not propagated:
+        // this is a READ for display, not a placement refusal, so an
+        // unreadable coord.db degrades to the declared-only answer (the
+        // pre-account-pools shape) rather than 500ing the whole accounts
+        // screen — `refusePool`'s OWN 503 (Minor 9) is the placement-time
+        // equivalent that does refuse, because that call IS a decision.
+        ...(() => {
+          try {
+            return { resolvedPool: resolvedAccountPool(a, deps.coord?.accountPoolEdges() ?? new Map()) };
+          } catch {
+            return {};
+          }
+        })(),
       })),
     };
   });
@@ -2087,11 +2139,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * last pull. A box with no coordination database configured has no central
    * edges to read, so it falls back to the declared roster tag alone —
    * unchanged from before account pools existed.
+   *
+   * GUARDED (review round 1, Minor 9): `accountPoolEdges()` is a synchronous
+   * `node:sqlite` read on every call into this function — every session
+   * create, swap and prefer now touches coord.db, not only the four new pool
+   * routes — and a throwing `DatabaseSync` (a locked or corrupt file) would
+   * otherwise turn this 503-shaped condition ("nobody can decide") into an
+   * uncaught 500. Reads as `pool-undecidable`/`unreadable`, the same
+   * vocabulary `refusePool`'s other undecidable arms already use, rather than
+   * inventing a fifth word for a read that failed.
    */
   const refusePool = (
     reply: FastifyReply, wrapper: string, pool: ProjectPoolWire,
   ): FastifyReply | null => {
-    const v = poolVerdict(deps.cfg.roster, wrapper, pool, deps.coord?.accountPoolEdges() ?? new Map());
+    let edges: ReadonlyMap<string, readonly string[]>;
+    try {
+      edges = deps.coord?.accountPoolEdges() ?? new Map();
+    } catch {
+      return reply.code(503).send({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
+    }
+    const v = poolVerdict(deps.cfg.roster, wrapper, pool, edges);
     if (v.ok) return null;
     return v.reason === 'pool-mismatch'
       ? reply.code(409).send({ ok: false, error: 'pool-mismatch', accountPool: v.accountPool, projectPool: v.projectPool })
@@ -2392,11 +2459,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * exact, because the authority is this box's own coord.db, not a file on the
    * fleet. The epoch returned is re-read from `pool_epoch` after the write.
    *
-   * `:id` GOES THROUGH UNVALIDATED as an ACCOUNT id, exactly as `:project` does
-   * next door: the roster is the authority on which accounts exist, nothing here
-   * joins the id into a path, and an id no account carries is a WARNING and not
-   * a refusal — this box's `accounts.json` is one of two hand-owned copies and
-   * can lag the fleet's, so "no such account here" may be about to become false.
+   * `:id` IS VALIDATED against {@link ACCOUNT_ID_RE}, 400 `bad-account-id` —
+   * NOT unvalidated the way `:project` is next door (review round 1, I5).
+   * `:project` is safe unvalidated because nothing downstream joins it into
+   * anything but a Map lookup; this `:id` becomes a KEY IN THE POOL-EPOCH
+   * DOCUMENT `ccd-pool-sync` renders, and that document's grammar refuses the
+   * WHOLE thing — not just the one bad row — on an id off-grammar (measured:
+   * `acct%20a` poisons the document, every node then reads `unmeasured`,
+   * keeps its stale projection and retries every 60s indefinitely). An id
+   * OFF THIS GRAMMAR is refused before it ever reaches the store; an id ON
+   * the grammar that no ROSTERED account carries is still a WARNING, not a
+   * refusal — this box's `accounts.json` is one of two hand-owned copies and
+   * can lag the fleet's, so "no such account here" may be about to become
+   * false.
    *
    * NO NUDGE. Convergence is owned by `ccd-pool-sync.timer`'s pull (ruling R2);
    * the fleet honours this within `OnUnitActiveSec=60s`, and the PWA shows
@@ -2409,6 +2484,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       return reply.code(501).send({ ok: false, error: 'not-configured' });
     }
     const { id } = req.params as { id: string };
+    if (!ACCOUNT_ID_RE.test(id)) {
+      return reply.code(400).send({ ok: false, error: 'bad-account-id' });
+    }
     const body = (req.body ?? {}) as { pools?: unknown };
     if (!Array.isArray(body.pools) || body.pools.some((p) => typeof p !== 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
@@ -2418,10 +2496,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (pools.some((p) => !POOL_NAME_RE.test(p))) {
       return reply.code(400).send({ ok: false, error: 'bad-pool-name' });
     }
-    // Wave 1 is one pool per account (a PARTIAL UNIQUE INDEX, not a column).
-    if (pools.length > 1) {
-      return reply.code(400).send({ ok: false, error: 'one-pool-per-account' });
-    }
+    // NO length>1 PRE-CHECK HERE (review round 1, Minor 7 — dropped): it used
+    // to re-spell the store's own one-pool-per-account rule under a SECOND
+    // error token (`one-pool-per-account`), a second vocabulary for one
+    // condition, and it made `setAccountPools`'s real refusal branch below
+    // unreachable through this route, so the "never a silent 200" test could
+    // only prove the PRE-CHECK worked, not the discrimination. The store
+    // (`multi-pool-not-supported`, `SET_ACCOUNT_POOLS_REFUSE_CODES`) is the
+    // one place wave 1's one-pool-per-account rule is now spelled.
     const written = deps.coord.setAccountPools(
       // `addedBy` is NULL on this path and that is a real answer, not a gap:
       // there is no session-id accessor on an armed request here, and identity
@@ -2431,17 +2513,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // THE OBLIGATION THE TYPE SYSTEM WILL NOT ENFORCE (store.ts:138-143,
     // :172-177): `written` MUST be bound and its `.ok` discriminated before any
     // effect is drawn from it — discarding the call outright compiles clean and
-    // silent, and a refusal would then read as a success. `written.ok === false`
-    // today can only be `multi-pool-not-supported`, which the length check three
-    // lines up already refuses first — but the store's own refusal is what
-    // actually decides, not this route's mirror of its rule, so a caller that
-    // skipped the pre-check (or a wave-2 rule this route has not caught up to)
-    // still gets a structured 400, never a false 200.
+    // silent, and a refusal would then read as a success.
     if (!written.ok) {
       return reply.code(400).send({ ok: false, error: written.error, pools: written.pools });
     }
     const measured = deps.coord.poolEpoch();
-    const warn = !deps.cfg.roster.accounts.some((a) => a.id === id);
+    // `roster.byId`, not `.accounts.some(...)` (review round 1, Minor 11): the
+    // index this Map exists for, rather than a linear scan that reimplements it.
+    const warn = !deps.cfg.roster.byId.has(id);
     return {
       ok: true, epoch: measured.epoch,
       ...(warn ? { warning: 'unknown-account' as const } : {}),
@@ -2456,11 +2535,31 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * NOTHING TAGGED; no document at all means NEVER SYNCED, which the node reads
    * as `unreadable` and refuses into a tagged project. Folding those two would
    * silently lift every constraint on a cold node — the EKS default path.
+   *
+   * AUTHENTICATE BEFORE `not-configured` (review round 1, I3+I4 — fixed;
+   * this route is EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, so its own check
+   * is the ONLY door on an armed box, and answering `501` to an anonymous
+   * caller before that check ran would be an information leak the route's own
+   * comment and EXEMPT reason both claimed did not exist). `GET /api/feed`
+   * does this for the identical reason — `coord/routes.ts:2533-2551`'s own
+   * comment: "Authenticate before `not-configured`, preserving the global
+   * gate's information boundary on an armed box."
+   *
+   * `leaseUntil`/`issuedAt` are UNIX SECONDS, not milliseconds (review round 1,
+   * C1 — CRITICAL, fixed). Every reader in the tree (`ccd/ccd:2366-2367`'s
+   * `now=$(date +%s)`) compares in seconds; emitting `Date.now()` (ms) made
+   * the `stale` arm unreachable for ~56,700 years, pinning
+   * `POOL_LEASE_MS`'s whole dial to "a dead control plane's last projection
+   * is enforced forever" — exactly the hazard spec §5.8 exists to bound.
+   * `pool-accounts-route.test.ts`'s cross-side test feeds this route's own
+   * output through `ccd-pool-sync`'s real python renderer to keep this from
+   * silently drifting back to milliseconds.
    */
   app.get('/api/pools/epoch', async (req, reply) => {
-    if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
     // The `GET /api/feed` guard, copied shape-for-shape (coord/routes.ts:2533-2551):
-    // session FIRST, box token as the fallback, 401 only when both fail.
+    // session FIRST, box token as the fallback, 401 only when both fail —
+    // and BEFORE the `not-configured` check below, on that same route's
+    // reasoning.
     if (deps.cfg.authEnabled) {
       const session = sessionAuth(req);
       if (session.reason !== 'session') {
@@ -2470,11 +2569,18 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         }
       }
     }
+    if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
     const { epoch, issuedAt } = deps.coord.poolEpoch();
     const edges = deps.coord.accountPoolEdges();
     const accounts: Record<string, { pools: string[] }> = {};
     for (const [acct, pools] of edges) accounts[acct] = { pools };
-    return { epoch, issuedAt, leaseUntil: Date.now() + POOL_LEASE_MS, accounts };
+    const nowS = Math.floor(Date.now() / 1000);
+    return {
+      epoch,
+      issuedAt: Math.floor(issuedAt / 1000),
+      leaseUntil: nowS + Math.floor(POOL_LEASE_MS / 1000),
+      accounts,
+    };
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {

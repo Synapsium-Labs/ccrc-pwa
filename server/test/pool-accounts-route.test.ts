@@ -14,7 +14,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { buildServer, type Deps } from '../src/server.js';
+import { buildServer, resolvePoolLeaseMs, type Deps } from '../src/server.js';
 import { loadConfig } from '../src/config.js';
 import { Tmux, type Runner } from '../src/exec.js';
 import { localIO } from '../src/io.js';
@@ -24,8 +24,11 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { PoolEdgeLog } from '../src/coord/pooledgelog.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
+import { ACCOUNT_ID_RE } from '../../shared/roster.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { execFileSync } from 'node:child_process';
+import { CCD, ghContainedEnv, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 
 const TOKEN = 'f'.repeat(64);
 
@@ -79,11 +82,19 @@ const open = async (
 const post = async (a: FastifyInstance, id: string, body: unknown) =>
   a.inject({ method: 'POST', url: `/api/pools/accounts/${id}`, payload: body as never });
 
+const get = async (a: FastifyInstance, headers: Record<string, string> = {}) =>
+  a.inject({ method: 'GET', url: '/api/pools/epoch', headers });
+
 beforeEach(() => { coord = undefined; });
 
 afterEach(async () => {
   if (app) await app.close();
   app = undefined;
+  // `store.db.close()` — the convention `pool-edges-store.test.ts` sets
+  // (review round 1, Minor 10): checkpoints WAL into the main file and
+  // releases the handle rather than leaking one per test.
+  if (coord) coord.db.close();
+  coord = undefined;
 });
 
 describe('POST /api/pools/accounts/:id', () => {
@@ -126,6 +137,34 @@ describe('POST /api/pools/accounts/:id', () => {
     expect(r.json()).toMatchObject({ error: 'bad-pool-name' });
   });
 
+  it('refuses an :id off the pool-epoch document\'s account-id grammar with 400 bad-account-id (review round 1, I5)', async () => {
+    // Measured: an id off `ACCOUNT_ID_RE` stored verbatim becomes a key in
+    // the epoch document, and `ccd-pool-sync`'s renderer refuses the WHOLE
+    // document on ANY bad key — not just the bad row — so every node then
+    // keeps its stale projection and retries every 60s. One request stops
+    // fleet-wide convergence. This is a CHARSET refusal, distinct from the
+    // MEMBERSHIP warning below: an id ON the grammar that no rostered
+    // account carries still only warns.
+    app = await open();
+    // Each of these is one path SEGMENT once decoded (no `/`, no control
+    // characters) — `encodeURIComponent` on the raw id is exactly what a real
+    // client sends for "acct a" and the reviewer's own measured `acct%20a`
+    // repro, and `a`.repeat(65) needs no encoding at all.
+    for (const id of ['acct a', ' ', 'a'.repeat(65)]) {
+      const r = await post(app, encodeURIComponent(id), { pools: ['pool-a'] });
+      expect(r.statusCode, JSON.stringify(id)).toBe(400);
+      expect(r.json()).toMatchObject({ error: 'bad-account-id' });
+    }
+    expect(coord!.accountPoolEdges().size).toBe(0);
+  });
+
+  it('accepts an :id on the grammar the roster does not have, as a WARNING — charset and membership are different questions', async () => {
+    app = await open();
+    const r = await post(app, 'not.a_real-Account99', { pools: ['pool-a'] });
+    expect(r.statusCode).toBe(200);
+    expect(r.json()).toMatchObject({ ok: true, warning: 'unknown-account' });
+  });
+
   it('400 bad-request when `pools` is missing or not an array of strings', async () => {
     app = await open();
     for (const payload of [{}, { pools: 'pool-a' }, { pools: [7] }, { pools: [null] }]) {
@@ -140,27 +179,33 @@ describe('POST /api/pools/accounts/:id', () => {
     // discards `setAccountPools`'s result compiles clean and a refusal reads
     // as a success. Wave 1 is one-pool-per-account (a partial unique index),
     // and this is the one input shape that exercises it end to end.
+    //
+    // NO ROUTE-LEVEL PRE-CHECK (review round 1, Minor 7 — dropped): this
+    // refusal is now the STORE's own (`multi-pool-not-supported`,
+    // `SET_ACCOUNT_POOLS_REFUSE_CODES`), reached only if the route actually
+    // binds and discriminates `setAccountPools`'s result — a pre-check that
+    // re-spelled the same rule under `one-pool-per-account` used to make this
+    // exact test pass without ever exercising that discrimination.
     app = await open();
     const r = await post(app, 'acct-a', { pools: ['pool-a', 'pool-b'] });
     expect(r.statusCode).not.toBe(200);
     expect(r.statusCode).toBe(400);
-    expect(r.json().ok).toBe(false);
-    expect(typeof r.json().error).toBe('string');
+    expect(r.json()).toEqual({ ok: false, error: 'multi-pool-not-supported', pools: ['pool-a', 'pool-b'] });
     // Nothing was written — a refused call must not leave a partial edge.
     expect(coord!.accountPoolEdges().has('acct-a')).toBe(false);
   });
 
-  it('a SINGLE-pool POST is still refused when the STORE itself refuses — the route does not rely only on its own pre-check', async () => {
-    // The two-pool test above is satisfied by this route's OWN `pools.length
-    // > 1` pre-check alone, before `setAccountPools` is ever called — so it
-    // cannot, by itself, prove the route actually DISCRIMINATES the store's
-    // return value rather than discarding it. Measured (mutation): deleting
-    // the `if (!written.ok)` branch and replacing it with `void written`
-    // stays GREEN on every other test in this file, because nothing else
-    // makes the store refuse. This test closes that gap by making the STORE
-    // refuse a request the route's own pre-check would have let through — a
-    // single pool — so only genuine discrimination of `written.ok` can pass
-    // it.
+  it('a SINGLE-pool POST is still refused when the STORE itself refuses — extra regression cover beyond the two-pool case', async () => {
+    // Now that the two-pool test above exercises the store's REAL refusal
+    // (Minor 7), this is belt-and-braces: it proves the route's `written.ok`
+    // discrimination generalises to ANY store refusal, not just today's one
+    // reason, by making the store refuse an input its own rule would allow.
+    // Measured (mutation): deleting the `if (!written.ok)` branch and
+    // replacing it with `void written` now REDS on the two-pool test above
+    // too — this second test is no longer the only thing standing between
+    // the route and a silent lie, but it still closes the "what if a future
+    // rule adds a second refusal reason this route's own mirror doesn't
+    // know about" gap.
     app = await open();
     const real = coord!.setAccountPools.bind(coord!);
     coord!.setAccountPools = (input, log) => {
@@ -209,6 +254,26 @@ describe('POST /api/pools/accounts/:id', () => {
     expect(r.json()).toMatchObject({ ok: false, error: 'not-configured' });
   });
 
+  it('501 not-configured when coord is present but poolEdgeLog is absent (review round 1, Minor 10)', async () => {
+    // Ruling P2: T6 constructs `PoolEdgeLog` beside `coord` in `index.ts` — a
+    // box could still reach this handler with one and not the other only
+    // through a test that builds `Deps` by hand, but the route's own guard
+    // (`!deps.coord || !deps.poolEdgeLog`) must refuse THIS half too, not
+    // only the half every other test exercises.
+    home = mkTmp('ccrc-pool-accounts-route-noedgelog-');
+    seedRoster(home, ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    app = await buildServer({
+      cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner),
+      io: localIO, queue: new KeyedQueue(), coord,
+    } as Deps);
+    await app.ready();
+    const r = await post(app, 'acct-a', { pools: ['pool-a'] });
+    expect(r.statusCode).toBe(501);
+    expect(r.json()).toMatchObject({ ok: false, error: 'not-configured' });
+  });
+
   it('carries NO box token — it is fleet control, like the project-pool route', async () => {
     const src = readFileSync(
       path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'server.ts'), 'utf8');
@@ -218,8 +283,6 @@ describe('POST /api/pools/accounts/:id', () => {
 });
 
 describe('GET /api/pools/epoch', () => {
-  const get = async (a: FastifyInstance, headers: Record<string, string> = {}) =>
-    a.inject({ method: 'GET', url: '/api/pools/epoch', headers });
 
   it('renders what ccd-pool-sync parses', async () => {
     app = await open();
@@ -266,5 +329,163 @@ describe('GET /api/pools/epoch', () => {
     const withNeither = await get(app);
     expect(withNeither.statusCode).toBe(401);
     expect(withNeither.json()).toMatchObject({ ok: false, error: 'unauthenticated' });
+  });
+});
+
+describe('ACCOUNT_ID_RE parity — the one TypeScript spelling against the two fleet-side ones', () => {
+  // Lighter-weight than `pool-name-parity.test.ts`'s "exactly one occurrence"
+  // machinery (that file's own precedent for why hand-kept copies across
+  // languages must be held equal HERE: neither `ccd/ccd` nor
+  // `ccd/ccd-pool-sync` can import a TypeScript constant) — this extracts the
+  // FIRST literal match rather than proving there is exactly one, which is
+  // enough to catch the drift this review round is about: a THIRD spelling
+  // (this route's own validation) disagreeing with either of the first two.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const repoRoot = path.resolve(here, '..', '..');
+
+  it('equals ccd/ccd-pool-sync\'s python ID regex', () => {
+    const src = readFileSync(path.join(repoRoot, 'ccd', 'ccd-pool-sync'), 'utf8');
+    const m = /ID = re\.compile\(r"(\^\[A-Za-z0-9\._-\]\{1,64\}\$)"\)/.exec(src);
+    expect(m, 'ccd-pool-sync\'s ID literal moved or was not found — this parity check is over nothing')
+      .not.toBeNull();
+    expect(ACCOUNT_ID_RE.source).toBe(m![1]);
+  });
+
+  it('equals ccd/ccd\'s bash account-id check', () => {
+    // `CCD` (`ccdWsHelpers.js`) — the ONE path to `ccd/ccd`,
+    // `single-definition.test.ts`'s own canonical holder, not re-derived here.
+    const src = readFileSync(CCD, 'utf8');
+    const m = /\[\[ "\$v" =~ (\^\[A-Za-z0-9\._-\]\{1,64\}\$) \]\]/.exec(src);
+    expect(m, 'ccd\'s bash account-id literal moved or was not found — this parity check is over nothing')
+      .not.toBeNull();
+    expect(ACCOUNT_ID_RE.source).toBe(m![1]);
+  });
+});
+
+/**
+ * C1 (CRITICAL, review round 1) — `leaseUntil`/`issuedAt` were emitted in
+ * MILLISECONDS while every reader in the tree (`ccd/ccd:2366-2367`'s
+ * `now=$(date +%s)`) compares in UNIX SECONDS, pinning the `stale` arm
+ * unreachable for ~56,700 years — a control plane that dies would have left
+ * every node enforcing its last projection FOREVER, exactly the hazard spec
+ * §5.8 exists to bound. Nothing reds this by construction: every ccd-side
+ * fixture is hand-written in seconds and the server-side test asserted only
+ * `typeof leaseUntil === 'number'` — two sides, each internally consistent,
+ * each green against its OWN fixtures, disagreeing at the seam.
+ *
+ * So this suite feeds the WRITER'S OWN, LIVE output — `GET /api/pools/epoch`'s
+ * real JSON response, from a real running server — through the REAL fleet-side
+ * pipeline: `ccd/ccd-pool-sync`'s python renderer (via a stubbed `curl`, the
+ * same technique `ccd-pool-sync.test.ts` uses) writing directly into a real
+ * `CcdHarness`'s `$REG/pool-epoch`, then `ccd/ccd`'s own `_acct_pool_state`
+ * reading that exact file. Neither side's OWN fixtures can see this defect —
+ * only a body built by ONE side and read by the OTHER can.
+ */
+describe('C1 — the writer\'s output through the REAL renderer and the REAL reader', () => {
+  let h: CcdHarness | undefined;
+  afterEach(() => { if (h) h.cleanup(); h = undefined; });
+
+  const repoRootForSync = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  const CCD_POOL_SYNC = path.join(repoRootForSync, 'ccd', 'ccd-pool-sync');
+
+  /** Run the REAL `ccd-pool-sync` against `home`, with a stubbed `curl` that
+   *  answers `body` — writing directly to `home/.cc-sessions/pool-epoch`, the
+   *  exact file `_acct_pool_state` reads, so no hand-copy of the rendered text
+   *  can drift from what the real python renderer actually produced. */
+  const syncInto = (home: string, body: string): void => {
+    const bin = path.join(home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const escaped = body.replace(/'/g, `'\\''`);
+    writeFileSync(path.join(bin, 'curl'),
+      `#!/usr/bin/env bash\ncat > /dev/null\nprintf '%s\\n%s' '${escaped}' '200'\n`, { mode: 0o755 });
+    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_SERVER_URL=https://example.invalid\n', 'utf8');
+    mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
+    writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), 'tok\n', 'utf8');
+    const env = ghContainedEnv(
+      home, { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` },
+      { systemd: true, tmux: true });
+    execFileSync('bash', [CCD_POOL_SYNC], { encoding: 'utf8', env });
+  };
+
+  it('the LIVE writer\'s fresh output reads as current, not stale', async () => {
+    app = await open();
+    await post(app, 'acct-a', { pools: ['pool-a'] });
+    const body = (await get(app, { 'x-ccrc-mail-token': TOKEN })).body;
+    h = makeCcdHarness('pools-cross-side-fresh');
+    syncInto(h.home, body);
+    expect(h.sh('_acct_pool_state acct-a')).toBe('named pool-a');
+  });
+
+  it('the writer\'s own output, with an ALREADY-ELAPSED lease, reads as stale — the exact regression C1 found', async () => {
+    app = await open();
+    await post(app, 'acct-a', { pools: ['pool-a'] });
+    const real = (await get(app, { 'x-ccrc-mail-token': TOKEN })).json() as { leaseUntil: number };
+    // The WRITER'S OWN OUTPUT, ONE FIELD PERTURBED to simulate an elapsed
+    // lease deterministically (waiting out a real 15-minute lease is not a
+    // test) — `epoch`/`issuedAt`/`accounts`, and crucially the UNITS every
+    // field is in, are exactly what the route emitted.
+    //
+    // MUTATION-PROVABLE: reverting `leaseUntil` to milliseconds
+    // (`Date.now() + POOL_LEASE_MS`) leaves this value roughly 1000x larger
+    // than `now` in seconds — subtracting 100000 barely dents it, so the
+    // reader would still answer `named pool-a`, not `stale`, and this test
+    // reds on exactly the regression C1 measured.
+    const stale = { ...real, leaseUntil: real.leaseUntil - 100_000 };
+    h = makeCcdHarness('pools-cross-side-stale');
+    syncInto(h.home, JSON.stringify(stale));
+    expect(h.sh('_acct_pool_state acct-a')).toBe('stale');
+  });
+});
+
+describe('resolvePoolLeaseMs (review round 1, Minor 8)', () => {
+  it('a valid positive number is used as-is, no warning', () => {
+    expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '5000' })).toEqual({ value: 5000, warning: null });
+  });
+
+  it('absent or empty falls back to the default SILENTLY — nobody set anything', () => {
+    expect(resolvePoolLeaseMs({}).warning).toBeNull();
+    expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '' }).warning).toBeNull();
+  });
+
+  it('a typo\'d value falls back to the default and WARNS, naming the bad value', () => {
+    // The regression this closes: `Number('abc')` is `NaN`, and
+    // `Date.now() + NaN` is `NaN` — a `leaseUntil` the wire could not carry,
+    // silently stopping every node's sync with no boot complaint anywhere.
+    const r = resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: 'abc' });
+    expect(r.value).toBeGreaterThan(0);
+    expect(r.warning).toContain('abc');
+    expect(r.warning).toContain('CCRC_POOL_LEASE_MS');
+  });
+
+  it('zero and negative values are refused too — not merely non-numeric ones', () => {
+    expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '0' }).warning).not.toBeNull();
+    expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '-1000' }).warning).not.toBeNull();
+  });
+});
+
+describe('refusePool guards a throwing coord.db (review round 1, Minor 9)', () => {
+  let app2: FastifyInstance | undefined;
+  afterEach(async () => { if (app2) await app2.close(); app2 = undefined; });
+
+  it('a throwing accountPoolEdges() answers 503 pool-unreadable, never an uncaught 500', async () => {
+    const home = mkTmp('ccrc-pool-refusepool-throw-');
+    seedRoster(home, ROSTER);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    coord.accountPoolEdges = () => { throw new Error('simulated DatabaseSync failure'); };
+    app2 = await buildServer({
+      cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner),
+      io: localIO, queue: new KeyedQueue(), coord,
+    } as Deps);
+    await app2.ready();
+    // `POST /api/sessions` is a `refusePool` caller for a NEW (non-revival)
+    // session — the project has no pool tag written, so the ONLY thing that
+    // can turn this into anything but a clean pass is the throwing read.
+    const r = await app2.inject({
+      method: 'POST', url: '/api/sessions', payload: { wrapper: 'acct-a', project: 'demo' },
+    });
+    expect(r.statusCode).toBe(503);
+    expect(r.json()).toMatchObject({ ok: false, error: 'pool-unreadable', state: 'unreadable' });
   });
 });

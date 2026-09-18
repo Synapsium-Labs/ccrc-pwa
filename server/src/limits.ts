@@ -279,7 +279,20 @@ export function projectHome(
   cls: ModelClass | 'default' = 'default', shares: SharesRead = { kind: 'absent' },
   nowS: number = Math.floor(Date.now() / 1000),
 ): ProjectedHome | null {
-  const eligible = poolEligible(roster, pool).filter((a) => limits[a.id]?.disabled !== true);
+  // `new Map()` — RECORDED (T7-R1, D-TBD-poolEligible-required-edges), not a
+  // silent fall-through: `projectHome`
+  // takes no `Deps`/`coord`, so it has no central `pool_edges` to offer, and
+  // `poolEligible`'s required `edges` parameter (T5-R4's reasoning, extended
+  // by T7-R1 to this call site) makes that fact a decision here rather than
+  // an implicit gap. Cost of wiring the real edges through instead: this
+  // function and `projectPlacement` below would both need `edges` threaded
+  // in, and so would their ~30 positional call sites in
+  // `test/projected-home.test.ts` — declined for this task; `GET
+  // /api/projects`'s `placement` field and `GET /api/accounts`'s `projected`
+  // therefore still rank by the DECLARED pool after a central tag has moved
+  // an account elsewhere. `GET /api/accounts`'s `roster[].resolvedPool`
+  // (T7-R2) is the per-account read that does not have this gap.
+  const eligible = poolEligible(roster, pool, new Map()).filter((a) => limits[a.id]?.disabled !== true);
   // POOL FIRST, THEN SERVICEABILITY (routing spec §5.4), and the clause is a
   // FILTER on eligibility exactly as `_pool_ok` is: a lane measured at the
   // class's ceiling drops out here, before scoring and before the condemned

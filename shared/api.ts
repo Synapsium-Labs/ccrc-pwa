@@ -7,6 +7,7 @@
 // `parseRoster` is what validates and auto-assigns it; `RosterWire` below only
 // carries it.
 import type { Hue } from './roster.js';
+import type { AccountPoolWire } from './poolrule.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -3461,6 +3462,24 @@ export interface RosterWire {
    *  compiler is the only thing that can catch a field-by-field rebuild
    *  dropping one. */
   pool: string | null;
+  /** The RESOLVED membership — central beats declared beats untagged (design
+   *  §5.6), folded in SERVER-SIDE (account-pool-membership wave 1, T7-R2, D-TBD-resolved-pool-wire).
+   *  `pool` above is the declared carrier alone; this is what `POST
+   *  /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool` pre-check
+   *  actually decides from — a UI that computed its own crossing warning from
+   *  `pool` (the declared field) would contradict the server the moment a
+   *  central `pool_edges` row exists for this account. THE SERVER HOLDS BOTH
+   *  CARRIERS; A READER SHOULD HOLD ONE — `resolvedAccountPool`
+   *  (`server/src/poolrule.ts`) is the one function that folds the precedence,
+   *  shared with `poolVerdict`'s own central-edge branch so the two can never
+   *  disagree about what a central row means.
+   *
+   *  ADDITIVE, `FLEET_PROTO` not bumped, on `hidden`'s exact terms: OPTIONAL
+   *  so an older server's payload (this field absent) still type-checks, and
+   *  a reader falls back to the declared `pool` field only when this key is
+   *  absent — never when its `state` merely disagrees with `pool`, which is
+   *  the live, correct case this field exists to carry. */
+  resolvedPool?: AccountPoolWire;
 }
 
 /**
