@@ -51,17 +51,26 @@ const state = (id: string): string => h.sh(`_acct_pool_state ${id}`);
  *  surrounding `;` list." That is FALSE for the exact shape C2 measures,
  *  and the false claim is exactly M1's own standard turned back on this
  *  file. Measured directly: with the id-grammar guard deleted, a bad array
- *  subscript INSIDE A SOURCED FILE — which `ccd/ccd` always is, via
- *  `source "$CCD"` — is fatal to the WHOLE invoking shell, not merely to
- *  the failing statement, `set -e` or not; neither `RC:` nor a trailing
- *  `echo AFTER` ever runs, and `h.sh` (whose `execFileSync` throws on a
- *  nonzero exit) throws instead of returning truncated output. A function
- *  defined and called INLINE in the same `-c` string does not share this
- *  behaviour — the same bad-subscript error there returns control to the
- *  caller normally — so the failure mode is specific to sourcing, which is
- *  exactly how the real caller (and this harness) always runs `ccd`. The
- *  pin below still holds either way: it is `stateRc`'s own `throw`, not a
- *  printed `RC:` line, that fails the assertion when this shape regresses. */
+ *  subscript is fatal to the WHOLE invoking shell — neither `RC:` nor a
+ *  trailing `echo AFTER` ever runs, and `h.sh` (whose `execFileSync`
+ *  throws on a nonzero exit) throws instead of returning truncated
+ *  output.
+ *
+ *  FIX ROUND 4 CORRECTION: this comment used to attribute that fatality
+ *  to the statement living inside a SOURCED file — a measured claim, but
+ *  one whose control was not isolated (two variables moved at once,
+ *  sourced-vs-inline AND which statement, and the effect landed on the
+ *  wrong one). Re-measured on four cells, crossing read-only
+ *  (`${seen[$v]+x}`) vs. the assignment (`seen[$v]=1`) with inline-in-`-c`
+ *  vs. sourced: the fatal statement is the ASSIGNMENT `seen[$v]=1`, not
+ *  the read `${seen[$v]+x}` that precedes it — bash treats a bad
+ *  subscript in an assignment as a fatal expansion error that exits a
+ *  non-interactive shell, while the same bad subscript in a parameter
+ *  expansion merely prints and yields empty. This is identical whether
+ *  `ccd` is sourced or the function is defined inline, and independent of
+ *  `set -e` and `set -u`. The pin below still holds either way: it is
+ *  `h.sh`'s `execFileSync` throwing on the nonzero exit, not a printed
+ *  `RC:` line, that fails the assertion when this shape regresses. */
 function stateRc(id: string): { out: string; rc: number } {
   const raw = h.sh(`_acct_pool_state ${id}; echo "RC:$?"`);
   const lines = raw.split('\n');

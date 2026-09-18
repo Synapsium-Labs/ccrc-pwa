@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=70d2aa6dd1c89805f3ef5d714173100aaec7f209aae9efc8b3fc2569fb3f6420
+# ccrc:generated 1 sha256=00cd348b2b395ae3f5a48907ff9cf68502c2e3a3ec7006373a0c33230fcfd2fc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2074,6 +2074,14 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # nobody decides, but one's remedy is file permissions and the other's is the
 # control-plane link, and the die message a human reads has to say which.
 # An adapter may not narrow a distinction it received.
+#
+# A THIRD REMEDY NOW SHARES `unreadable`'s WORD, SINCE T1-R4 (fix round 3):
+# an empty or absent id also answers `unreadable`, and its fix is neither
+# file permissions nor the control-plane link — it is "fix the caller, the
+# subject is unnameable." Nothing here is fail-open (every caller still
+# routes `unreadable` to refuse, the same as the other two causes), but an
+# operator reading `unreadable` off a die message and reaching for `chmod`
+# will find a perfectly readable file when the real fault was upstream.
 #
 # NO PROCESS-LOCAL MEMOISATION, ON PURPOSE (fix round 1, T1-R1 — this reader
 # cached through a load flag and an associative array for one review round;
