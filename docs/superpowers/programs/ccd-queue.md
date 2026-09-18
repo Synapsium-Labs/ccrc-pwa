@@ -2032,3 +2032,66 @@ declared.
 
 Review run **81** dispatched to `ccrc-pwa-warm-canyon`, five items, explicitly told to be FAST and to
 scale the panel to a two-commit diff — the window is the scarce resource, not thoroughness.
+
+## 2026-09-18 00:2x UTC — **MERGED as `ad3d2fbc`. Run 42 closed `done`, `released: true`. Programme complete.**
+
+Six CI legs green, `--admin` for the review gate. **Read back:** `git log -1 origin/main` carries both
+derived trailers — `Claude Opus 5` and `Claude Sonnet 5` — and the 49-line body intact. **The Sonnet
+line is one I would not have remembered**, which is the whole reason the trailers are derived from
+`gh api …/pulls/136/commits` and never recalled.
+
+**A defect in my own merge, recorded because it is repeatable:** `gh pr merge --body-file` sets the
+BODY, not the subject. My hand-written subject became the body's first line and the PR TITLE became
+the commit subject — so the subject omits **D-2989 and D-2995**, this wave's two central deviations.
+`--subject` is the flag I needed. `main` is protected, so no amend reaches it; the body carries the
+full account.
+
+### F1 — the finding is right and important; the remedy is nothing, and that is MEASURED
+
+The merge dropped three `CCR-10 re-measure` comments that exist on main (3 → 0, verified). **The
+worker's "taking one side drops nothing — checked, not assumed" was false**, and the check that was
+meant to prove it **stripped comments before comparing**, so it was structurally blind to precisely
+the category that was lost. **That is the THIRD instance in this wave of a check that normalises away
+a category being unable to see losses in that category** — after the field-path grammar and the
+`git ls-files ccd/` scope. It is the durable finding and I record it without hedging.
+
+The remedy is nothing, and I measured rather than waved: `it(` 325=325, `expect(` 1115=1115,
+`toEqual(` 194=194, no test title dropped, the assertion I suspected lost present at `:8285`/`:8691`.
+**Every lost line is either a provenance comment sitting directly above a value the branch legitimately
+re-derived** — one sits on `'ccd/ccd': 127`, which ships as 145 — **or one instance of a line still
+present elsewhere** (`S6-R10` 9→8, `1c71be12` 3→2, `No D-number (S6-R11)` 2→1). Restoring them
+verbatim would ship three explanations of numbers the tree does not contain: this wave's signature
+defect, committed one last time on the way out. The one non-provenance loss, *"NOT ONE reference in
+the corpus is anchored…"*, is a sentence **two reviews measured FALSE**, and its mechanised form —
+the assertion that found `ccd/ccd:2964` — survives.
+
+### Four corrections to THIS ledger, from review 81. Stated rather than left as two claims.
+
+1. **F2 — my anchors were wrong.** I wrote the `+418` siblings as `:8262`/`:8337`/`:8720`; on the
+   shipping tree they are **`:8271`/`:8346`/`:8733`**, and `:8720` is unrelated content. The commit
+   message cannot be fixed; this ledger and the next brief can, and this is that.
+2. **F4 — my characterisation was not quite what happened.** I wrote that the worker "corrected
+   `+418` only in the comment act 2 was already rewriting". Act 2 **did** rewrite the `:8720` block,
+   so the correction is narrower than I described. The reasoning behind the ruling is untouched.
+3. **`total` is a SUM, not a measurement.** It is `Object.values(byFile).reduce(…)`. So the derive was
+   **three measured values and one sum**, not "four derived values" as I wrote.
+4. **My round-6 stale clause is wider than I ruled.** Not only the exit code but its justifying clause
+   AND its instruction are stale at the shipping tree — two-dot and three-dot return the identical 22
+   paths here. All three become true again the moment main moves. Shipped; carried.
+
+### Still open, and owed a programme of its own
+
+The 19-site read-through census, `server/src/registry.ts:1010`/`:1119` (a symlinked `.uuid` fabricates
+a whole session ROW), `deploy/deploy.sh:568-570`, `ccd/ccd-usage-sweep.py:272` (the tool's only
+destructive path — `os.path.isdir` gating an `os.walk` that empties the directory a symlink points
+at), the six escalated sites, and review 81's six **main-side** findings. **These get their own spec,
+plan and programme — not a bolted-on wave 2** of a programme whose subject was the darwin shim, and
+not a late expansion that would ship with zero review rounds.
+
+### NOT DONE, and it is the next act
+
+**This change is AGENT-FIRST** (`CLAUDE.md`): it touches `ccd/`, `ccd/session-hook.sh` and
+`ccd/ccd-telemetry-keepalive`, so it ships to the **fleet host before the server** —
+`bash deploy/deploy.sh agent <host>` then `bash deploy/deploy.sh`. **I have not deployed.** A
+fleet-wide deploy touching the registry readers of ~20 live sessions is the operator's call, and the
+live stamp should be checked before it runs.
