@@ -203,7 +203,7 @@ describe('pin', () => {
     expect(g!.pin).toEqual({ state: 'shared', home: 'claude' });
   });
 
-  it('is null when they disagree — the card must not claim one of them', () => {
+  it('is mixed when they disagree — the card must not claim one of them', () => {
     const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')], []);
     expect(g!.pin).toEqual({ state: 'mixed' });
   });
@@ -258,7 +258,7 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
   it('excludes archived rows from the pin', () => {
     // demo-a and the archived row deliberately disagree on home: if pin were
     // computed over the whole membership (archived included), the mismatch
-    // would read as disagreement (pin: null). Excluding the archived row
+    // would read as disagreement (pin: mixed). Excluding the archived row
     // leaves demo-a as the pin's only voter. `attention`/`busy` cannot be
     // discriminated this way any more and the fixture no longer pretends to:
     // the split is now the bucket itself, so an archived-bucket row is
@@ -275,8 +275,10 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
   it('still computes a pin when every session is archived', () => {
     // The `live.length > 0 ? live : members` fallback (see the comment in
     // groupFleet.ts) exists so this branch never indexes an empty array —
-    // dropping the `: members` half leaves `forPin` empty here, which is
-    // exactly what the "ALL archived" test above does not check.
+    // dropping the `: members` half would now yield `{ state: 'empty' }` for
+    // this all-archived project, which this assertion rejects (the pin here
+    // must be 'claude-corp', not empty). The empty-membership guard itself is
+    // `first === undefined` in groupFleet.ts.
     const [g] = groupFleet([arch('demo-b', { home: 'claude-corp' })], []);
     expect(g!.pin).toEqual({ state: 'shared', home: 'claude-corp' });
   });

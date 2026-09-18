@@ -63,6 +63,16 @@ export interface FleetGroup {
    *  log line and a banner, and this is the number the card wears so a fold
    *  cannot hide it.
    *
+   *  Counted as `(m.stranded ?? null) !== null`, never a truthiness test and
+   *  never a read of `m.stranded.at`. TWO reasons, both producible: the live
+   *  `fleet` frame is CAST, not revived (`stores/fleet.ts`'s `asFleetMsg`
+   *  validates only `Array.isArray(sessions)`), so a row from a server
+   *  predating this field has no key at runtime whatever the type says; and
+   *  the registry's fail-shut arm answers `{at: 0, reason:
+   *  STRANDED_UNREADABLE}` for a marker it could see and not read — a REAL
+   *  strand whose date is unknown, which `at`-truthiness would drop in
+   *  exactly the direction that hides a stuck session.
+   *
    *  Scoped to `sessions` for the reason `attention`/`busy` are, and for one
    *  more: an archived session is stopped, so a marker it still carries
    *  describes a rescue that no longer has anything to rescue. */
