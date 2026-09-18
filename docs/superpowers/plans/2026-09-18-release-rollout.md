@@ -2182,7 +2182,7 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 | 6 | `BuildInfo` import line removed from `shared/api.ts` | L0 import-count pin (`peers-claims-l0.test.ts`) | RED (1/19 failed) |
 | 7 | skewed arm removed | three banner cases | RED (3/18 failed) |
 | 7 | `warn = false` | amber case | RED (1/4 failed) |
-| 7 | line rendered in local mode | nothing case | RED (1/4 failed — crashes on `health.builds` being absent) |
+| 7 | `health.mode !== 'remote' \|\|` removed from BuildLine's guard (fix round 1, narrow mutation — the fixture now supplies a full `builds` object in the local-mode rerender so only the mode clause can be hiding the line) | nothing case (local-mode sub-assertion) | RED (1/4 failed) |
 | 7 | `pollMs <= 0` guard removed | does-not-poll case | RED (1/18 failed) |
 | 7 | `fleet.css .build-line`/`.build-line-side--warn` INHERITED_GROUNDS entries removed (fix round 1) | 'contains no identities beyond the grandfathered blind spots' | RED (1/242 failed — `additions` becomes `['fleet.css .build-line', 'fleet.css .build-line-side--warn']` instead of `[]`) |
 | 8 | `diff -r -q` → existence | one edited byte | |

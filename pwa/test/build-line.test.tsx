@@ -33,10 +33,14 @@ describe('BuildLine', () => {
   });
 
   it('renders nothing in local mode, for a null health, or when the server sends no builds', () => {
+    const fullBuilds = { fleet: stamp('bd2bf57a' + '0'.repeat(32), 'v0.0.7'), own: stamp('2985b9d1' + '0'.repeat(32), 'v0.0.9') };
     const { rerender } = render(<BuildLine health={null} />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
-    rerender(<BuildLine health={{ mode: 'local', connected: true, downSince: null }} />);
+    // Local mode with a FULL builds object present — only the mode clause
+    // can be hiding the line here, not the `!builds` clause.
+    rerender(<BuildLine health={{ mode: 'local', connected: true, downSince: null, build: 'agreed', builds: fullBuilds } as FleetHealth} />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
+    // A server older than the `builds` field — remote, but no builds key at all.
     rerender(<BuildLine health={remote({ build: 'agreed' })} />);
     expect(screen.queryByRole('status')).not.toBeInTheDocument();
   });
