@@ -95,6 +95,14 @@ function installCcrc(home: string): void {
   for (const n of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
     symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
   }
+  // …and the three INSTALLERS that ship beside them (R12). `_check_skills`'
+  // FAIL remedy now names `$HOME/ccrc/ccd/install-<role>-skill.sh` — the
+  // script out of the same measured tree as the source — so a fixture that
+  // planted only the skill trees could not run the remedy it prints. A real
+  // box has them: `_inst_tree` rsyncs `ccd/` whole.
+  for (const n of ['install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh']) {
+    symlinkSync(join(REPO, 'ccd', n), join(ccd, n));
+  }
   // ── the `auth` check's two artifacts (Task 9) ──────────────────────────
   // `_check_auth` measures `~/.ccrc/auth.scrypt` by running
   // `deploy/gen-auth-hash.mjs --check`, which imports the compiled reader out
@@ -2964,21 +2972,35 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     writeFileSync(f, readFileSync(f, 'utf8').replace('$HOME/.cc-clips/', '$WT/.ccrc-review/'));   // the 2026-09-17 clause, put back
     let r = runDoctor(home);
     expect(r.code).toBe(1);
-    expect(r.stdout).toMatch(/^FAIL skills: 1 installed skill\(s\) differ from the shipped tree: claude: ccrc-reviewer differs$/m);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 installed skill\(s\) differ from, or are missing in, the shipped tree: claude: ccrc-reviewer differs$/m);
     expect(r.stdout).toMatch(/remedy: run 'ccrc update'/);
     // R10: the remedy's second arm must converge from the TREE the check
     // measured ($HOME/ccrc/ccd/reviewer-skill, i.e. installCcrc's planted
     // BOX_TREE_DIR copy), not the .cc-sessions placed copy — that copy was
     // stale on 2026-09-17. Pin the printed remedy names that seam.
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/reviewer-skill"/);
-    // The remedy works: run the reviewer installer with CCRC_SKILL_SRC
-    // pointed at what "$HOME/ccrc/ccd/reviewer-skill" resolves to on this
-    // fixture's box (join(home, 'ccrc', 'ccd', 'reviewer-skill') —
-    // installCcrc's planted tree). The installer SCRIPT itself is still
-    // invoked from the repo path: the fixture plants no .cc-sessions copy
-    // of the installer scripts, only of the skill trees they read from.
-    spawnSync(BASH, [join(REPO, 'ccd', 'install-reviewer-skill.sh'), '--homes', join(home, '.claude')],
-      { env: { ...process.env, HOME: home, CCRC_SKILL_SRC: join(home, 'ccrc', 'ccd', 'reviewer-skill') } });
+    // R12: BOTH halves come out of the measured tree — the source AND the
+    // script. The remedy used to name `$HOME/.cc-sessions/install-*.sh`,
+    // the other copy that was stale on 2026-09-17.
+    expect(r.stdout).toMatch(/bash "\$HOME\/ccrc\/ccd\/install-reviewer-skill\.sh"/);
+    // The remedy works — and it is EXACTLY the printed command that is run,
+    // resolved on this fixture's box: `$HOME/ccrc/ccd/install-reviewer-skill.sh`
+    // is join(home,'ccrc','ccd','install-reviewer-skill.sh') and
+    // `$HOME/ccrc/ccd/reviewer-skill` is join(home,'ccrc','ccd','reviewer-skill'),
+    // both installCcrc's planted tree. Invoking the REPO's copy instead (what
+    // this case did before) would have stayed green with a remedy naming a
+    // script the box does not have. Contained through `ghContainedEnv` like
+    // every other spawn in this suite.
+    const rem = spawnSync(BASH,
+      [join(home, 'ccrc', 'ccd', 'install-reviewer-skill.sh'), '--homes', join(home, '.claude')],
+      {
+        env: ghContainedEnv(home, {
+          ...process.env, HOME: home,
+          CCRC_SKILL_SRC: join(home, 'ccrc', 'ccd', 'reviewer-skill'),
+        }),
+        encoding: 'utf8',
+      });
+    expect(rem.status, `${rem.stdout}${rem.stderr}`).toBe(0);
     r = runDoctor(home);
     expect(r.stdout).toMatch(/^PASS skills:/m);
   });
@@ -2995,6 +3017,12 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/coordinator-skill"/);
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/worker-skill"/);
     expect(r.stdout).toMatch(/CCRC_SKILL_SRC="\$HOME\/ccrc\/ccd\/reviewer-skill"/);
+    // R12, the other half: the SCRIPT comes from the measured tree too, and
+    // the remedy no longer sends the operator to `$HOME/.cc-sessions` for it.
+    for (const role of ['coordinator', 'worker', 'reviewer']) {
+      expect(r.stdout).toMatch(new RegExp(`bash "\\$HOME/ccrc/ccd/install-${role}-skill\\.sh"`));
+    }
+    expect(r.stdout).not.toMatch(/\.cc-sessions\/install-/);
   });
 
   it('a missing skill directory is a FAIL in its own words', () => {
@@ -3002,6 +3030,10 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     rmSync(installed(home, '.claude', 'ccrc-worker'), { recursive: true });
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^FAIL skills: .*claude: ccrc-worker missing/m);
+    // The headline says the condition the entry says: every entry here is
+    // `missing`, and a headline that only knew how to say "differ" sent the
+    // operator looking for a diff that does not exist.
+    expect(r.stdout).toMatch(/^FAIL skills: 1 installed skill\(s\) differ from, or are missing in, the shipped tree:/m);
   });
 
   it('a second rostered home is measured too, and its config dir comes from configDirSuffix', () => {

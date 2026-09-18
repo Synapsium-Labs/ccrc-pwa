@@ -2769,8 +2769,22 @@ _check_skills() {
     _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer"
     return 0
   fi
-  _dr_fail skills "${#stale[@]} installed skill(s) differ from the shipped tree: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc update' (re-places \$HOME/.cc-sessions from the tree and re-runs the installers) — or, when 'ccrc version' already names the intended build, converge from the tree the check just measured by overriding the installer's source: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/.cc-sessions/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/.cc-sessions/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/.cc-sessions/install-reviewer-skill.sh\""
+  # THE HEADLINE SAYS BOTH CONDITIONS THE ENTRIES CAN SAY. An entry is
+  # either "<id>: <skill> differs" or "<id>: <skill> missing", and a headline
+  # naming only the first made a run whose every entry was `missing` read as
+  # a diff nobody could find.
+  #
+  # THE REMEDY NAMES THE SHIPPED TREE'S OWN INSTALLERS, both halves (R12).
+  # R10 already moved the SOURCE to `$BOX_TREE_DIR` — the tree this check
+  # measured — while leaving the SCRIPT at `$HOME/.cc-sessions/…`, which is
+  # the other copy that was stale on 2026-09-17, and which this check has
+  # never measured. `ccd/install-*-skill.sh` ships in the tree (`_inst_tree`
+  # rsyncs `ccd/` whole), so both halves can come from the one place the
+  # build stamp stands behind. It also keeps `.cc-sessions/<dir>` spelled
+  # exactly once in this file — `_check_pools`' own literal — which
+  # `pool-name-parity.test.ts` pins.
+  _dr_fail skills "${#stale[@]} installed skill(s) differ from, or are missing in, the shipped tree: $(_dr_join "${stale[@]}")" \
+    "run 'ccrc update' (re-places the tree and re-runs the installers) — or, when 'ccrc version' already names the intended build, converge from the tree the check just measured: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
   return 1
 }
 
@@ -4216,15 +4230,23 @@ _check_fleet() {
 # `.kimi` for account id "kimi") — is invisible to this check exactly as it is
 # invisible to `_mem_homes` (ccd/ccrc), while the hook
 # (`_hook_memory_converge`) takes the home from the transcript path with no
-# name filter at all and WOULD converge such a home regardless. Left alone
-# deliberately: `_mem_homes` and the hook are owned by other work in this same
-# review wave, and widening only THIS copy's glob (say, by reading
-# `~/.ccrc/accounts.json` for `configDirSuffix`, which no other enumerator
-# does) would make doctor report — and hand a `ccrc memory --apply` remedy
-# for — a home the census and `--apply` still cannot see or migrate, which is
-# a worse lie than today's shared blind spot. A real fix has to land in
-# `_mem_homes`, this check and the hook together (D-2181's four-site parity),
-# or not at all.
+# name filter at all and WOULD converge such a home regardless.
+#
+# THE WIDENING IS AVAILABLE — AND STILL NOT TAKEN. Reading
+# `~/.ccrc/accounts.json` for `configDirSuffix` is no longer a technique
+# nothing here uses: `_check_skills`, in this same file, enumerates its
+# homes exactly that way (its node reader takes `a.id` and
+# `a.configDirSuffix` off the roster). So the reason this check keeps the
+# glob is NOT that the roster is out of reach; it is D-2181's four-site
+# PARITY. `_mem_homes` (ccd/ccrc) is what the census and `ccrc memory
+# --apply` enumerate with, and this check's verdict names `--apply` as its
+# remedy. Widening only THIS copy would make doctor report — and hand that
+# remedy for — a home `--apply` still cannot see or migrate: a verdict whose
+# own fix is a no-op, which is a worse lie than today's shared blind spot.
+# `_check_skills` is under no such constraint; its remedy is an installer
+# that takes the home as an argument, so it can honestly name any home it
+# can enumerate. A real fix here has to land in `_mem_homes`, this check and
+# the hook together, or not at all.
 #
 # THREE CONDITIONS, NEVER TWO. "Forked" and "unreachable" have different
 # remedies: the first is `ccrc memory --apply`, the second is wiring the home
