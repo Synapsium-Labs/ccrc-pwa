@@ -91,16 +91,23 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
   `main` becomes a GitHub Release within about a minute (`.github/workflows/release-main.yml` → `deploy/release-main.sh`
   → `build-release.sh`; patch-per-merge, a hand-pushed `vX.Y.0` tag for a minor rides `release.yml`). Moving the fleet
-  is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check]` — it
+  is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check] [--force]` — it
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
-  fleet box then the server box, stops at the first failure, and re-measures both. Any single box is `ccrc update`;
-  a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is left alone — `--force` reinstalls. **What is
+  fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
+  anyway). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
+  left alone — `--force` reinstalls there too. **What is
   running where:** `ccrc version` (with its `install:` line), `ccrc update --check`, `/health`'s `version`, the PWA's
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
-  `deploy/reference-fleet.md`, gitignored). **`deploy/deploy.sh` is the FALLBACK, not the path:** it pushes a working
-  tree, stamps no `version` (the PWA shows such a box amber as unversioned), ships skills on its agent arm only, and
-  still refuses with exit 2 without a target. The ordering rule survives as `rollout`'s default: fleet box first
+  `deploy/reference-fleet.md`, gitignored — env vars override that file and `CCRC_DEPLOY_ENV` points at another;
+  `CCRC_SW_DENYLIST` for a box with co-tenants; the roster seed defaults to `deploy/accounts.default.json`).
+  **`deploy/deploy.sh` is the FALLBACK, not the path:** it pushes a working tree, writes NO `~/.ccrc/installed`
+  record — so `ccrc version` reports `install: incomplete` and `update --check` reports `incomplete`, or
+  `unversioned` when the stamp carries no `version` at all — ships skills on its agent arm only, and still refuses
+  with exit 2 without a target (`server/test/deploy-coordinates.test.ts` pins that refusal). It DOES stamp
+  `version`, but only when a release tag points at the built commit (`stamp_build`'s `git tag --points-at HEAD`),
+  which auto-tagging makes the ordinary case on `main`; the PWA shows a box amber for a MISSING `version`, which
+  is what an untagged working-tree deploy leaves. The ordering rule survives as `rollout`'s default: fleet box first
   because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
   wave's server arm is a reader-widening.
 

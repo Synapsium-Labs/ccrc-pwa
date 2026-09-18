@@ -419,7 +419,7 @@ transcript, the phone proof — is step 11 of
 ## Releases — install from an artifact, update, uninstall
 
 Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook step 12 (same file
-as above) is the two-box worked proof of everything in this section.
+as above) is the two-box worked proof of the install and update verbs in this section.
 
 **The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
 sibling: `deploy/release-main.sh` derives the next patch tag from the highest `vX.Y.Z`, pushes it,
@@ -2497,8 +2497,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7311-7313`), each with an operator sentence of its own at `:7351`,
-`:7359` and `:7372`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7323-7325`), each with an operator sentence of its own at `:7363`,
+`:7371` and `:7384`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 
@@ -2996,11 +2996,11 @@ bash deploy/deploy.sh                # server: build PWA here (freshness-gated) 
 bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
 ```
 
-`deploy/deploy.sh` is the FALLBACK — it pushes a working tree onto a box that is
-**already installed**, stamps no `version`, and ships skills on its agent arm
-only. The path is a release (`release-main.yml`) and `ccrc rollout`; see
-"Releases" above. It still has **no default target** and refuses with exit 2
-until it knows where it is going, for the reason it always did.
+`deploy/deploy.sh` is the FALLBACK — it pushes a working tree onto a box that is **already installed**,
+writes no `~/.ccrc/installed` record, and stamps `version` only when a release tag points at the built
+commit (auto-tagging makes that the ordinary case on `main`). A box it deploys therefore reports
+`install: incomplete` from `ccrc version`, and `incomplete` or `unversioned` from `ccrc update --check`.
+Skills ship on its agent arm only; the path is a release and `ccrc rollout` ("Releases" above). Still **no default target** — exit 2.
 
 Put the coordinates in `~/.ccrc/deploy.env` — the deploying machine's own file,
 outside every checkout, so it survives worktrees and can never be committed:

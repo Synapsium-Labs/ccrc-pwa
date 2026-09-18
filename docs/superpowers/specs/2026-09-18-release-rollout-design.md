@@ -23,7 +23,7 @@ doctor. `deploy.sh` stays, untouched, as the documented fallback; retiring it is
 |---|---|
 | The release pipeline exists and is tested | `build-release.sh` (refuses dirty/untagged; builds three packages; `ccrc-vX.Y.Z.tar.gz` + `MANIFEST` + `SHA256SUMS`; `build.json` with `version`); `release.yml` on `push: tags: v*`; `install.sh --release [tag]`; `ccrc update [--to tag]` (fetch+verify → backup → staged `ccrc install` → supervisor sweep → report). `build-release.test.ts`, `install-sh.test.ts`, `ccrc-update.test.ts`. |
 | It has shipped once | `gh release list`: one row, `v0.0.1`, 2026-08-24. No tag since. |
-| The fleet has never been moved by it | The fleet box's `~/.ccrc/build.json` reads `{"sha":"bd2bf57a…","ref":"HEAD","builtAt":"2026-09-17T17:16:09Z","dirty":false}` — **no `version`**. `build-release.sh` always writes one; `deploy.sh`'s `stamp_build` never does. |
+| The fleet has never been moved by it | The fleet box's `~/.ccrc/build.json` reads `{"sha":"bd2bf57a…","ref":"HEAD","builtAt":"2026-09-17T17:16:09Z","dirty":false}` — **no `version`**. `build-release.sh` always writes one; `deploy.sh`'s `stamp_build` writes one only when a release tag points at the built commit (`git tag --points-at HEAD`), which an untagged working-tree deploy is not. What a `deploy.sh` box never carries is the completed-install record, §5's `~/.ccrc/installed`. |
 | `ccrc update` would have converged the skills | Its step 3 re-runs the staged `ccrc install`, whose spine calls `_inst_skills`, which places the three skill trees and runs each installer over every rostered home. |
 | `deploy.sh` ships skills on one lane only | The four `install-*-skill.sh` invocations sit inside the agent arm (`if [ "$TARGET" = "agent" ]`); the server arm ships none. "Merged" and "server deployed" are both compatible with every reviewer reading a month-old clause. |
 | Build time is not the slow part | The one `release.yml` run took **41 s**. `ci.yml` on `main` takes 42–49 min wall-clock and does not gate releases (nor did `deploy.sh`); it was red on 2 of the last 6 `main` runs, both on the known macOS FIFO-probe flake. |
@@ -107,7 +107,10 @@ New verb in `ccd/ccrc`, run on the deploying machine. **No checkout needed.**
 
 **Step 0 — coordinates.** Source `$CCRC_DEPLOY_ENV` (default `~/.ccrc/deploy.env`); refuse at exit 2 naming the
 missing key, `deploy.sh`'s `_deploy_need` discipline. `CCRC_AGENT_BOX` is never defaulted from `CCRC_BOX`. The ssh
-argv is `deploy.sh`'s: `ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY"`, port defaulting to 22.
+argv is `deploy.sh`'s: `ssh -p "$CCRC_SSH_PORT" -i "$CCRC_SSH_KEY"`, port defaulting to 22, plus
+`-o BatchMode=yes` — RATIFIED here (R15) rather than inherited: this verb is unattended by construction, so an ssh
+that stopped to ask for a passphrase or a host-key confirmation would hang a rollout mid-fleet with no terminal to
+answer it. BatchMode turns that into a refusal the verb can report.
 
 **Step 1 — preflight the roles, before touching either box.** Over ssh, read each box's recorded `CCRC_ROLE` —
 the one `^CCRC_ROLE=` line of `~/.ccrc/ccrc.env`, never the file (it is the box's live config). Refuse at exit 2 unless the fleet coordinate records `fleet` and the server coordinate records
@@ -162,7 +165,9 @@ box one non-zero → no box-two argv; `--check` issues no `update`; both current
 **The completed-install record.** `~/.ccrc/installed` — one line, the sha — written **last** in `cmd_install`
 (after `_inst_wrappers`, before the closing `cmd_doctor`), by temp file and `mv`. One writer: `cmd_install`, which
 both `install` and `update` run. `deploy.sh` never writes it, so a `deploy.sh`-stamped box never satisfies the gate
-(those stamps carry no version either). `ccrc uninstall` removes it. Absent = no completed install recorded =
+— and that record, not the `version` field, is what separates the two: `stamp_build` DOES write `version` whenever
+a release tag points at the built commit, which auto-tagging makes the ordinary case on `main`, so the record is
+the only thing that tells a completed install from a working-tree push. `ccrc uninstall` removes it. Absent = no completed install recorded =
 proceed. Stale (an older sha, from a run that died late) ≠ stamp sha = proceed.
 
 **The gate, two stages, no writes on the no-op path.** `_upd_fetch` splits into `_upd_resolve` (SHA256SUMS →
@@ -199,8 +204,11 @@ and the PWA renders nothing new — one reader, no `FLEET_PROTO` bump.
    A side with no `version` prints as `unversioned (sha)`.
 2. `BuildLine` (new, `pwa/src/fleet/BuildLine.tsx`), always visible at the foot of `FleetScreen`: `fleet v0.0.7 ·
    server v0.0.7`. Unversioned or dirty sides render amber; `unknown` renders `—`. It shares the banner's 15 s poll through a
-   small `useFleetHealth` hook (one request, not two). This is what makes a `deploy.sh` box *look* second-class
-   without a warning that fires when nothing is wrong.
+   small `useFleetHealth` hook (one request, not two). This is what shows an UNVERSIONED box as unversioned
+   without a warning that fires when nothing is wrong — an untagged working-tree deploy, not every `deploy.sh`
+   box: one whose HEAD carries a release tag stamps `version` like any other and renders the same as a release
+   box. What a `deploy.sh` box always lacks is §5's completed-install record, and `ccrc version`'s `install:`
+   line is where that reads.
 
 **CLI.**
 - `ccrc update --check [--to vX.Y.Z]`: runs `_upd_resolve` only. Its **first line is fixed-shape**, for `rollout`
