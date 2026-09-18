@@ -130,6 +130,11 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(bin, 'ccd-usage-sweep'), '#!/bin/sh\n# usage sweep\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-usage-sweep.py'), '#!/usr/bin/env python3\n# usage sweep scanner\n', { mode: 0o755 });
   writeFileSync(join(bin, 'ccd-account-health'), '#!/bin/sh\n# account health\n', { mode: 0o755 });
+  // account-pool-membership wave 1, Task 4 fix round 1 (F1/F4): the leased-
+  // projection puller. `_inst_bins` places it on the non-Darwin arm for every
+  // role, so an installed Linux box has it and `_uninst_tree_bins` must take
+  // it away — planted here so that removal can be MEASURED rather than read.
+  writeFileSync(join(bin, 'ccd-pool-sync'), '#!/bin/sh\n# pool sync\n', { mode: 0o755 });
   // spec 2026-09-07 §C: the telemetry keepalive, beside the health probe above.
   writeFileSync(join(bin, 'ccd-telemetry-keepalive'), '#!/bin/sh\n# keepalive\n', { mode: 0o755 });
   // The account wave's own, and UNMARKED exactly as every name above is:
@@ -162,6 +167,10 @@ function plantInstalledBox(home: string): void {
   mkdirSync(join(units, 'app-claude\\x2dsession.slice.d'), { recursive: true });
   for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
     'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+    // account-pool-membership wave 1, Task 4: the pool-sync pair. UNLIKE
+    // every role-gated pair below it, `_inst_units` ships this one on every
+    // non-Darwin role — so it is on the box under test whatever role it had.
+    'ccd-pool-sync.service', 'ccd-pool-sync.timer',
     // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
     'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
     // Routing slice 0 Task 7: the usage-accounting sweep's pair, on the same
@@ -346,6 +355,10 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const units = join(home, '.config', 'systemd', 'user');
     for (const u of ['ccrc.service', 'ccrc-agent.service', 'claude-session@.service',
       'ccd-cap-scopes.service', 'ccd-cap-scopes.timer',
+      // account-pool-membership wave 1, Task 4: the pool-sync pair, which
+      // `_uninst_units` had never heard of — `ccrc uninstall` removed the
+      // binary's siblings and left this timer ENABLED and orphaned.
+      'ccd-pool-sync.service', 'ccd-pool-sync.timer',
       // graphify Task 10 (O3/O6b): the sweep pair, mirroring cap-scopes.
       'ccd-graph-sweep.service', 'ccd-graph-sweep.timer',
       'ccd-account-health.service', 'ccd-account-health.timer',
@@ -361,6 +374,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     expect(calls).toContain('--user disable --now ccrc.service');
     expect(calls).toContain('--user disable --now ccrc-agent.service');
     expect(calls).toContain('--user disable --now ccd-cap-scopes.timer');
+    // The half a file-absence assertion cannot see: a unit file deleted under
+    // a still-enabled unit leaves systemd holding a dangling enablement.
+    expect(calls).toContain('--user disable --now ccd-pool-sync.timer');
     expect(calls).toContain('--user disable --now ccd-graph-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-usage-sweep.timer');
     expect(calls).toContain('--user disable --now ccd-account-health.timer');
@@ -515,9 +531,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // on every session's PATH: worse than the box was before ccrc, because the
     // pip shim that used to answer there was copied aside by the install and
     // never put back.
+    // account-pool-membership wave 1, Task 4 fix round 1 (F4): `ccd-pool-sync`
+    // joins the set on `ccd-graph-sweep`'s own terms — its units go above and
+    // the binary would otherwise stay on PATH for ever.
     for (const b of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-usage-sweep',
       'ccd-usage-sweep.py', 'ccd-account-health',
-      'ccd-telemetry-keepalive', 'ccd-account-auth', 'graphify']) {
+      'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-pool-sync', 'graphify']) {
       expect(existsSync(join(home, '.local', 'bin', b)), `${b} survived`).toBe(false);
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);

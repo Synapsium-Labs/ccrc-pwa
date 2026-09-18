@@ -2309,6 +2309,13 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // account-pool-membership wave 1, Task 4: the pool-sync timer, and
+      // UNCONDITIONAL — unlike every enable below it, which is role-gated.
+      // Its position is the one `_inst_enable` gives it: after the
+      // `_ccrc_die`-guarded loop (`ccrc.service`, `ccd-cap-scopes.timer`) and
+      // before the role-gated block, because it degrades rather than dies —
+      // a cache refresh, not the guardrail `ccd-cap-scopes.timer` is.
+      '--user enable --now ccd-pool-sync.timer',
       // graphify Task 10 (O3/O6b): a THIRD enable, beside cap-scopes', for the
       // role-gated sweep timer — the default install here is role `both`, so
       // it fires. Degrades rather than dies on failure (`_inst_linger`'s own
@@ -2739,8 +2746,14 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
         // and the three timer-bound ones, macOS is a supported box for it.
         ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
+        // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
+        // joins the non-Darwin list on the timer-bound names' own terms. THIS
+        // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
+        // an exact set, so deleting the install reds here rather than leaving
+        // `ccd-pool-sync.timer` enabled against a 203/EXEC.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py', 'ccrc', 'graphify']);
+           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
+           'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3444,6 +3457,10 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // account-pool-membership wave 1, Task 4: unconditional, so `--role
+      // both` sees it exactly where a plain install does — this list is the
+      // half of "byte-identical" that a role gate could silently break.
+      '--user enable --now ccd-pool-sync.timer',
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-account-health.timer',

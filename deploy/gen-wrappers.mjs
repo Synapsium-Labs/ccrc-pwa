@@ -175,9 +175,15 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  terms again — non-Darwin only, no marker. Its scanner, `ccd-usage-sweep.py`,
  *  is placed alongside it but carries a dot, which `ID_RE` never matches before
  *  this Set is even consulted — so it needs no entry here, the same property
- *  `ccd/ccrc`'s own orphan-scan comment documents for that name. */
+ *  `ccd/ccrc`'s own orphan-scan comment documents for that name.
+ *
+ *  account-pool-membership wave 1, Task 4 fix round 1 (F3): `ccd-pool-sync`
+ *  is the NINTH, on `ccd-graph-sweep`'s own terms — non-Darwin only (its
+ *  only runner is a systemd timer), no provenance marker, so the scan's
+ *  `verifyMarker(text) === 'foreign'` clause already skips it today too —
+ *  this entry is the defence that survives the day it gains one. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep']);
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

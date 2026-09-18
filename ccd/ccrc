@@ -9685,6 +9685,16 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   # though this box had gained something. Skipped, and said out loud.
   if [ "$CCD_OS" != darwin ]; then
     _inst_atomic "$tree/ccd/ccd-cap-scopes" "$bin/ccd-cap-scopes" 755
+    # account-pool-membership wave 1, Task 4 fix round 1 (F1): the
+    # leased-projection puller, on cap-scopes' own terms — every ROLE, not
+    # Darwin, because its only runner is `ccd-pool-sync.timer` (systemd),
+    # which `_inst_units`' Darwin arm never installs. Without this line
+    # `ccd-pool-sync.timer` was enabled with no binary at
+    # `ExecStart=%h/.local/bin/ccd-pool-sync` on every non-fleet install —
+    # a 203/EXEC failure every 60 seconds, forever.
+    # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name too,
+    # so the orphan scan in `_inst_wrappers` cannot report it.
+    _inst_atomic "$tree/ccd/ccd-pool-sync" "$bin/ccd-pool-sync" 755
     # graphify Task 10 (O3/O6b): the sweep executable, every ROLE but — like
     # `ccd-cap-scopes` above — not Darwin: its timer only installs on the
     # systemd arm, and the script leans on GNU stat/date and flock(1), which
@@ -11588,6 +11598,7 @@ _uninst_units() {
     : "${XDG_RUNTIME_DIR:=/run/user/$UID}"; export XDG_RUNTIME_DIR
     : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
     for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
+      ccd-pool-sync.timer ccd-pool-sync.service \
       ccd-graph-sweep.timer ccd-graph-sweep.service \
       ccd-usage-sweep.timer ccd-usage-sweep.service \
       ccd-account-health.timer ccd-account-health.service \
@@ -11602,6 +11613,7 @@ _uninst_units() {
   fi
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
+    "$dir/ccd-pool-sync.service" "$dir/ccd-pool-sync.timer" \
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
     "$dir/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
@@ -11794,7 +11806,12 @@ _uninst_tree_bins() {
   # uninstall that removed a binary's units (above) and left the binary itself
   # strands an orphan on PATH for ever. That covers `ccd-cap-scopes` (spec §7
   # predates it), `ccd-graph-sweep` (graphify Task 10/fix-round F2),
-  # `ccd-account-health`, `ccd-telemetry-keepalive`, `ccd-account-auth` and the
+  # `ccd-account-health`, `ccd-telemetry-keepalive`, `ccd-account-auth`,
+  # `ccd-pool-sync` (account-pool-membership wave 1, Task 4 fix round 1 (F4):
+  # `_inst_bins` gained it on the non-Darwin arm, and `_uninst_units` above
+  # gained its unit pair in the same round — a binary whose units this verb
+  # removes and whose file it leaves is the exact orphan this rule exists to
+  # prevent) and the
   # usage sweep's PAIR — `ccd-usage-sweep` and its Python engine
   # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
   # must therefore be removed as two. (`graphify`, below, keeps its own rule
@@ -11815,8 +11832,9 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-graph-sweep" "$HOME/.local/bin/ccd-account-health" \
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
+    "$HOME/.local/bin/ccd-pool-sync" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py and the ccrc launcher removed from \$HOME/.local/bin"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
