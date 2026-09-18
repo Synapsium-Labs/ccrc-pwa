@@ -5170,14 +5170,22 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Eighteen codes exist below today; the next new one would be the
- * nineteenth, not the ninth.
+ * Nineteen codes exist below today; the next new one would be the
+ * twentieth, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
  * the separate grammar/domain refusal: the serialized slug or an included
  * wave, denominator, or run id cannot be accepted by the hook. Both differ
  * from `oversize`, which names mail bytes and is shared with mail ingress.
+ *
+ * `claimant-is-a-worker` (spec 2026-09-16 §12) refuses `POST /api/runs` when
+ * `claimedBy` is the `sessionId` of a NON-TERMINAL run claimed by somebody
+ * else — a dispatched worker may not coordinate, because the board draws
+ * ONE level of bracket and a real chain would render its middle session
+ * detached (the operator's own report). `by` names that worker's
+ * coordinator. A self-claimed run and an ownerless open run are both
+ * admitted (D-3012); a finished worker is not a worker.
  *
  * `project-mismatch` is cross-repo programmes' first guard (design
  * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
@@ -5227,7 +5235,8 @@ export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight';
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
+  | 'claimant-is-a-worker';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5235,7 +5244,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
-  'review-in-flight': true,
+  'review-in-flight': true, 'claimant-is-a-worker': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 

@@ -339,6 +339,63 @@ describe('POST /api/runs', () => {
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
   });
 
+  it('refuses a claimedBy that is currently a WORKER of an open run — before anything is opened (spec §12)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // wave 1 binds demo-existing as CLAIMED_BY's worker; the run is `planned` — non-terminal.
+    expect((await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' })).statusCode).toBe(200);
+    const runsBefore = okRuns(w.coord.runs()).length;
+    const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'A worker coordinating',
+      claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: CLAIMED_BY });
+    expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('admits that same session once its run is TERMINAL — a finished worker is not a worker', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => { w.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(first.json().id); });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('admits a SELF-claimed run\'s session — it is its own worker, not somebody\'s', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-self');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, claimedBy: 'demo-self', sessionId: 'demo-self' })).statusCode).toBe(200);
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Self', claimedBy: 'demo-self' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('admits the session of an OWNERLESS open run — there is no `by` to name (D-3012)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-orphaned');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-orphaned' });
+    // A reconstructed row's shape: `claimedBy` NULL stays NULL (D-12).
+    tx(w.coord.db, () => { w.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(first.json().id); });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Orphan', claimedBy: 'demo-orphaned' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('CONTROL: a claimant that was never any run\'s worker opens as it always did', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app)).statusCode).toBe(200);
+  });
+
   it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
     // F2. The body guard used to test `.trim()` and then store the RAW value;
     // `setProgramHome` is `WHERE homeProject IS NULL`, so the whitespace was
