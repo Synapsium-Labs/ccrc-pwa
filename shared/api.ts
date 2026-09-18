@@ -365,19 +365,15 @@ export interface FleetSession {
    *  with both. What is NOT folded is "placed elsewhere" vs "placed home",
    *  which a reader gets from `boardProject !== project` and needs no field.
    *
-   *  A THIRD condition exists and does NOT reach this field as `null`, which is
-   *  a gap in what the wire can say rather than a third meaning for it: when
-   *  the server's placement read fails — `coordPlacementStamps` refusing, or
-   *  `node:sqlite` throwing on a closed connection or a lock race — every row
-   *  degrades to a NON-NULL `boardProject` equal to its own `project`
-   *  (`readCoordPlacements`, `server/src/fleet.ts`). A reader therefore cannot
-   *  tell "this server measured, and this row belongs at home" from "this
-   *  server could not measure at all". It renders identically today and is
-   *  recorded as wave 2's ~4 lines (D-2875): emit `null` on a failed read,
-   *  which is the vocabulary this field already has for exactly that. Stated
-   *  here because this docstring IS the wire contract, and a contract that
-   *  enumerates two producers while a third exists is false whatever the
-   *  renderer happens to do with it (D-2923). */
+   *  THREE conditions reach `null`, and they collapse deliberately: an older
+   *  peer, a snapshot revived from a build predating the field, and — since
+   *  wave 2 (D-2875) — a server whose placement read failed this tick
+   *  (`coordPlacementStamps` refusing, or `node:sqlite` throwing on a closed
+   *  connection or a lock race; `readCoordPlacements`, `server/src/fleet.ts`).
+   *  The single reader (`boardHome`, below) does the identical thing with all
+   *  three, and no reader may branch on `=== null` to tell them apart — that
+   *  distinction is not on the wire. What IS distinct: "nothing stamped" is
+   *  NOT a failure and answers the session's own project, a measurement. */
   boardProject: string | null;
   /**
    * The routing record ccd owns for this session (routing slice 6, Task 4;

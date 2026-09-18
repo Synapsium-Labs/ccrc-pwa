@@ -219,19 +219,30 @@ const emptyCoordPlacements = (): StampLookup => () => null;
  * includes closed runs, up to its own clamp): a placement keyed on open runs
  * alone would bounce every worker between cards at the close-then-open wave
  * boundary, one of the four defects this design exists to end.
+ *
+ * Since wave 2 (D-2875) a failed read is `ok: false`, and the row literal
+ * emits `boardProject: null` for it — the wire's own word for "this server
+ * did not decide".
  */
-function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): StampLookup {
-  if (!coord || sessionCount === 0) return emptyCoordPlacements();
+/** What `readCoordPlacements` hands back: the port when the store answered
+ *  (including "nothing stamped" — an empty port is a measurement), or `ok:
+ *  false` when the READ itself failed. The two used to fold to one empty
+ *  port, so every row of a broken box read `boardProject === project` as if
+ *  measured (D-2875; the field's own docstring carried the gap as prose). */
+type CoordPlacementsRead = { ok: true; stampOf: StampLookup } | { ok: false };
+
+function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): CoordPlacementsRead {
+  if (!coord || sessionCount === 0) return { ok: true, stampOf: emptyCoordPlacements() };
   try {
     const read = coord.coordPlacementStamps();
     if (!read.ok) {
-      console.warn(`ccrc-server: coordPlacementStamps refused while computing board placement — ${read.detail} — placements degrade to ownProject`);
-      return emptyCoordPlacements();
+      console.warn(`ccrc-server: coordPlacementStamps refused while computing board placement — ${read.detail} — boardProject reads null this tick`);
+      return { ok: false };
     }
-    return foldCoordPlacements(read.stamps);
+    return { ok: true, stampOf: foldCoordPlacements(read.stamps) };
   } catch (err) {
-    console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — placements degrade to ownProject`);
-    return emptyCoordPlacements();
+    console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — boardProject reads null this tick`);
+    return { ok: false };
   }
 }
 
@@ -464,7 +475,7 @@ export async function assembleFleet(
   // Task 3: ONE pass over the stamped runs, reused by every row below — see
   // `readCoordPlacements`'s own docstring for why this is batched rather than
   // a per-row query.
-  const stampOf = readCoordPlacements(coord, recs.length);
+  const placements = readCoordPlacements(coord, recs.length);
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
@@ -615,9 +626,10 @@ export async function assembleFleet(
       // (D-2921) — the walk starts at this row's own id and every later hop
       // asks the same question of the coordinator it just reached. Built ONCE
       // above, outside this per-row map.
-      boardProject: boardPlacement({
-        sessionId: r.id, ownProject: r.project, held: r.held !== null, stampOf,
-      }),
+      // D-2875: a failed read is the wire's null, never a non-null that reads as measured.
+      boardProject: placements.ok
+        ? boardPlacement({ sessionId: r.id, ownProject: r.project, held: r.held !== null, stampOf: placements.stampOf })
+        : null,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
       // AskUserQuestion/permission menu the hook never gets a write for
