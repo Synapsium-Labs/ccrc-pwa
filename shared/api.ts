@@ -1980,8 +1980,18 @@ export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
  * `divergence` frame already makes for itself.
  */
 export type ProjectPoolsWire =
-  | { listed: true; byProject: Record<string, ProjectPoolWire>; enforcement: PoolsEnforcement }
-  | { listed: false; enforcement: PoolsEnforcement };
+  | {
+      listed: true; byProject: Record<string, ProjectPoolWire>; enforcement: PoolsEnforcement;
+      /** Whether the fleet's `ccd` honours ACCOUNT pools — the same three-state
+       *  version-skew channel as `enforcement`, sourced from `_acct_pool_state`'s
+       *  presence in `ccd caps`. ABSENT on an older server, which reads `unknown`. */
+      accountPools?: PoolsEnforcement;
+    }
+  | {
+      listed: false; enforcement: PoolsEnforcement;
+      /** See the `listed: true` arm's `accountPools` — same field, same fold. */
+      accountPools?: PoolsEnforcement;
+    };
 
 /** Fold one skill's answer across every rostered HOME. A proven absence
  *  anywhere dominates; a home we could not read downgrades a clean sweep to an

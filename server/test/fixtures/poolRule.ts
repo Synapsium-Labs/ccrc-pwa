@@ -16,6 +16,7 @@
 // this repository at all (spec §8, "Single definition"); `topology-clean.test.ts`
 // is what keeps that true.
 import type { ProjectPoolWire } from '../../../shared/api.js';
+import type { AccountPoolWire } from '../../../shared/poolrule.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 
 /** Which fixture accounts carry a tag. Two accounts share `pool-a` on purpose —
@@ -125,6 +126,14 @@ export interface PoolRuleCase {
   expect: 'serve' | 'mismatch' | 'undecidable';
   /** Why this row is in the table, in one sentence — what breaks if it goes. */
   why: string;
+  /** OPTIONAL (added by wave 1 Task 5): when set, the driver builds the row's
+   *  `AccountPoolWire` from this bare state instead of from `accountPool` —
+   *  the only way this table can express `unreadable` / `malformed` / `stale`
+   *  on the ACCOUNT side, which `accountPool: string | null` has no vocabulary
+   *  for. Every existing row leaves this `undefined` and MUST keep producing
+   *  exactly the verdict it produces today; a row that opts in owes its own
+   *  `accountPool` no meaning (the driver ignores it in that case). */
+  accountState?: AccountPoolWire['state'];
 }
 
 export const POOL_RULE_CASES: readonly PoolRuleCase[] = [

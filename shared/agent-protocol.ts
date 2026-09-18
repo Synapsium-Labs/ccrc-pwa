@@ -59,8 +59,17 @@ export interface AgentHello { t: 'hello'; token: string }
  *  disagree". A stamp that fails validation is omitted too, never forwarded as
  *  a partial: a `build` whose `sha` is absent compares unequal to the server's
  *  sha and would manufacture a skew alarm out of a file the fleet host could
- *  not read. */
-export interface AgentReady { t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo }
+ *  not read.
+ *
+ *  `observedEpoch` is the epoch of the pool projection this node has actually
+ *  got, or `null` when it has none. ABSENT from an older agent, which is NOT
+ *  the same as `null`: absent means "this build cannot tell you", null means
+ *  "I have never synced". The reader keeps them apart
+ *  (`observedEpoch === undefined` -> unknown). */
+export interface AgentReady {
+  t: 'ready'; v: 1; ccdVerbs?: string[]; rosterFp?: string; build?: BuildInfo;
+  observedEpoch?: number | null;
+}
 
 /** `ccd caps` output -> the list both readers keep: one token per non-empty
  *  line shaped like a bash identifier (`/^[a-z][a-z0-9-]*$/`) — verbs AND
