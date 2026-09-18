@@ -347,10 +347,12 @@ export function ProjectCard({
   // run itself and are always available. The HOME clause is Task 5's own
   // decision — `crossingNote`, not a second copy of its predicate (D-2575) —
   // asked against THIS CARD's project, `group.project`, not `run.project`
-  // (D-2576): the two agree today only because `FleetScreen` filters `runs` by
-  // project before handing them down, an invariant enforced in a different
-  // file and not one this component may lean on now that Task 7 adds an
-  // `abroad` list whose whole point is a run naming a DIFFERENT project.
+  // (D-2576, re-read for wave 2): `group.project` is now the card this row
+  // was PLACED on, which for a moved worker is its COORDINATOR's project. The
+  // question the home clause asks is therefore "is this programme homed
+  // somewhere other than the card the reader is looking at", which is still
+  // the right question for a sentence printed on that card; `run.project`
+  // would ask about a card the row is not on.
   // `crossingNote` answers `null` for two distinct reasons — home unknown (the
   // legacy generation, or an older server) or home genuinely IS this card's
   // project (measured sameness) — and both read the same way here: nothing to
@@ -530,6 +532,19 @@ export function ProjectCard({
                 <span key={r.id} className="proj-abroad-line">
                   <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
                   {`${r.program} ${waveLabel(r)} in ${r.project}`}
+                </span>
+              ))}
+            </div>
+          )}
+          {group.elsewhere.length > 0 && (
+            /* Spec §6: an emptied card says where its work went, as PLAIN TEXT —
+               never a link. A tappable route here would be the second access
+               path R2 excludes, the same reason the abroad line above is a bare
+               span with no onClick. */
+            <div className="proj-elsewhere">
+              {group.elsewhere.map((e) => (
+                <span key={e.project} className="proj-elsewhere-line">
+                  {`${e.count} ${e.count === 1 ? 'workspace' : 'workspaces'} under ${e.project}`}
                 </span>
               ))}
             </div>

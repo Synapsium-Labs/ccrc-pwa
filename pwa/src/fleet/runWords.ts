@@ -264,6 +264,30 @@ export function runForSession(
   return current;
 }
 
+/**
+ * Which card a run's rows belong on: the card its WORKER renders on. Wave 2
+ * of board placement moves a coordinated workspace to its coordinator's card,
+ * and `nestFleet` can only draw the edge when the run reaches THAT card — a
+ * run left on `run.project`'s card is spec §1's pure regression (no edge, no
+ * marker, no `/runs` door).
+ *
+ * TWO fallbacks to `run.project`, both load-bearing: a run with no session
+ * yet (rule 5's pending spawn — there is nothing to look up) and a bound
+ * session the fleet list does not carry this pass (reaped, unmeasured, an
+ * older snapshot). Without them the phantom under a coordinator vanishes and
+ * an orphaned run renders on no card at all.
+ *
+ * `cardOf` is built ONCE per render by the caller from `boardHome` over the
+ * whole session list — never inside a card, which sees only its own rows.
+ */
+export function runCard(
+  run: { sessionId: string | null; project: string },
+  cardOf: ReadonlyMap<string, string>,
+): string {
+  if (run.sessionId === null) return run.project;
+  return cardOf.get(run.sessionId) ?? run.project;
+}
+
 /** What the board says about a wave that RESUMED its session rather than
  *  spawning one (Task 5). Two shapes, never one, because they are two
  *  different facts about the same run:

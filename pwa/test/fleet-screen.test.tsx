@@ -2470,6 +2470,48 @@ describe('the programme tree on the fleet screen', () => {
     expect(gamma!.querySelector('.proj-abroad')).toBeNull();
   });
 
+  it('brackets a cross-repo worker under its coordinator ON THE COORDINATOR\'S CARD — the run follows the row (Task 4)', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove', boardProject: 'alpha' }),
+      ],
+      runs: [runRow({ id: 40, project: 'beta', homeProject: 'alpha', sessionId: 'claude:worker', claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+    });
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const alpha = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'alpha')!;
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
+    // The edge is drawn on alpha…
+    expect(alpha.querySelectorAll('.proj-nest')).toHaveLength(1);
+    expect(alpha.querySelector('.proj-nest .sess-label')?.textContent).toBe('still-cove');
+    // …with no orphan marker (the coordinator IS on this card) and NO abroad
+    // line (the worker renders here — stating the run twice is the defect §6 names)…
+    expect(alpha.querySelector('.proj-crossing')).toBeNull();
+    expect(alpha.querySelector('.proj-abroad')).toBeNull();
+    // …and beta, emptied, says where its work went, as text with no control.
+    expect(beta.querySelector('.sess-line')).toBeNull();
+    const line = beta.querySelector('.proj-elsewhere-line')!;
+    expect(line.textContent).toBe('1 workspace under alpha');
+    expect(line.closest('button, a')).toBeNull();
+    expect(line.querySelector('button, a')).toBeNull();
+  });
+
+  it('a pending spawn still reaches its coordinator\'s card — the null-session arm of runCard', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' })],
+      runs: [runRow({ id: 41, project: 'alpha', state: 'planned', dispatchStartedAt: RUN_FROZEN - 1_000, sessionId: null, claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+    });
+    expect(document.querySelector('.proj-pending')).not.toBeNull();
+  });
+
   it('gives a single-project programme no abroad line at all', () => {
     const store = makeStore();
     render(<FleetScreen store={store} />);

@@ -387,3 +387,48 @@ describe('durable cards (R5, D-3010)', () => {
     expect(g.map((x) => x.project)).toEqual(['worktree-only', 'other']);
   });
 });
+
+describe('the grouping key is boardHome (spec §6, Task 4)', () => {
+  it('places a session on its boardProject card, not its own project\'s', () => {
+    const g = groupFleet([
+      s({ id: 'coord', project: 'intake' }),
+      s({ id: 'w', project: 'custom-tools', boardProject: 'intake' }),
+    ], []);
+    expect(g.map((x) => x.project)).toEqual(['intake', 'custom-tools']);
+    expect(g[0]!.sessions.map((x) => x.id)).toEqual(['coord', 'w']);
+    expect(g[1]!.sessions).toEqual([]);                          // the own-project card survives, empty
+  });
+
+  it('counts on the DESTINATION card — attention, busy, unseen, stranded and the archived split follow the row', () => {
+    const g = groupFleet([
+      s({ id: 'coord', project: 'intake' }),
+      s({ id: 'w', project: 'custom-tools', boardProject: 'intake', bucket: 'attention', bucketSince: 10 }),
+      s({ id: 'a', project: 'custom-tools', boardProject: 'intake', bucket: 'archived', archivedAt: 5 }),
+    ], []);
+    const intake = g.find((x) => x.project === 'intake')!;
+    expect(intake.attention).toBe(true);
+    expect(intake.unseen).toBe(1);
+    expect(intake.archived.map((x) => x.id)).toEqual(['a']);
+    const own = g.find((x) => x.project === 'custom-tools')!;
+    expect(own.attention).toBe(false);
+    expect(own.archived).toEqual([]);
+  });
+
+  it('a placement naming a project nobody knows still renders — on a card of that name', () => {
+    const g = groupFleet([s({ id: 'w', project: 'custom-tools', boardProject: 'nowhere' })], ['custom-tools']);
+    expect(g.map((x) => x.project)).toEqual(['nowhere', 'custom-tools']);
+  });
+
+  it('the emptied card says where its work went, per destination, live rows only', () => {
+    const g = groupFleet([
+      s({ id: 'w1', project: 'custom-tools', boardProject: 'intake' }),
+      s({ id: 'w2', project: 'custom-tools', boardProject: 'intake' }),
+      s({ id: 'w3', project: 'custom-tools', boardProject: 'data' }),
+      s({ id: 'a', project: 'custom-tools', boardProject: 'intake', bucket: 'archived', archivedAt: 5 }),
+      s({ id: 'home', project: 'custom-tools' }),
+    ], []);
+    const own = g.find((x) => x.project === 'custom-tools')!;
+    expect(own.elsewhere).toEqual([{ project: 'intake', count: 2 }, { project: 'data', count: 1 }]);
+    expect(g.find((x) => x.project === 'intake')!.elsewhere).toEqual([]);
+  });
+});

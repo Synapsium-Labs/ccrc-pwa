@@ -1950,6 +1950,23 @@ button.proj-card-pool::before {
 }
 .proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
 
+/* Wave 2 (board placement): the emptied card's sentence about where its own
+   workspaces render now. Same register and ground as `.proj-abroad` — about
+   rows that are NOT on this card — and never a tap surface (R2). */
+.proj-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+}
+.proj-elsewhere-line {
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
 .proj-archived-toggle {
   display: flex; align-items: center; gap: var(--sp-1);

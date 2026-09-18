@@ -20,7 +20,7 @@ import { groupFleet } from '../fleet/groupFleet';
 import { ProjectCard, type ProjectPlacementRead } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { anyDispatchPending, isRunClosed, runHomeProject } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
 import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
@@ -31,7 +31,7 @@ import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import type { FleetSession, ProjectPoolsWire, ProjectRow } from '../../../shared/api';
+import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
@@ -443,6 +443,12 @@ export function FleetScreen({
   // made yet. Not hydrated and not persisted, for `pools`' own reason.
   const knownProjects = projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [];
 
+  // Task 4: which card each run belongs on — the card its WORKER renders on.
+  // Built ONCE here from the whole session list, because a card sees only
+  // its own rows and cannot answer it (`runCard`'s docstring has the two
+  // fallbacks and why each is load-bearing).
+  const cardOf = new Map(sessions.map((s) => [s.id, boardHome(s)] as const));
+
   return (
     <main className="fleet" data-conn={conn}>
       <header className="fleet-head">
@@ -719,15 +725,11 @@ export function FleetScreen({
                   setPoolSelection(poolSelectionFor(p, placementFor(p), poolWrite.current));
                   setPoolOpen(true);
                 }}
-                /* Task 4: THIS card's own runs. Scoped here rather than inside
-                   the card because "which card does a run belong on" is a
-                   question about the run's `project`, and a card handed one
-                   session list cannot answer it — an all-archived project's
-                   list is empty and still has a spawn to show. A run whose
-                   coordinator lives on another project therefore reaches only
-                   the worker's card, where `nestFleet`'s rule 3 leaves it
-                   unbracketed: a `└─` never crosses two cards. */
-                runs={activeRuns.filter((r) => r.project === g.project)}
+                /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
+                   renders here — `runCard`, never `r.project`. A run kept on
+                   its worker's OWN project's card after the row moved would be
+                   spec §1's pure regression: one end on each card, no edge. */
+                runs={activeRuns.filter((r) => runCard(r, cardOf) === g.project)}
                 /* The SECOND list (spec §3 F4): the runs this project is the
                    HOME of, working somewhere else. NOT the exact complement of
                    the filter above (D-2582): a run homed on a third project
@@ -755,9 +757,13 @@ export function FleetScreen({
                    whose project is neither necessarily the run's work nor its
                    home. Named here so the next reader neither deletes it as a
                    duplicate of that decision nor forks it into a second copy
-                   of it. */
+                   of it. Since wave 2 it also SUBTRACTS a run whose worker now
+                   renders on this very card — that run is a bracketed row
+                   here, and a second line for it would state the same wave
+                   twice (spec §6). */
                 abroad={activeRuns.filter(
-                  (r) => runHomeProject(r) === g.project && r.project !== g.project)}
+                  (r) => runHomeProject(r) === g.project && r.project !== g.project
+                    && runCard(r, cardOf) !== g.project)}
                 nowMs={nowMs}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for

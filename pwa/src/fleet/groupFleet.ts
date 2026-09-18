@@ -1,4 +1,4 @@
-import type { FleetSession } from '../../../shared/api';
+import { boardHome, type FleetSession } from '../../../shared/api';
 import { isUnseen, type Acks } from '../lib/seen';
 import { sortFleet } from './sortFleet';
 
@@ -100,6 +100,12 @@ export interface FleetGroup {
    *  is the disk fact — which is why it no longer says the bare word
    *  "Archived". */
   archived: FleetSession[];
+  /** Where this project's OWN workspaces render when it is not here — one
+   *  entry per destination card, live rows only, most first. Spec §6: "an
+   *  emptied card says where its work went", as PLAIN TEXT, never a link — a
+   *  tappable route would be the second access path R2 excludes. Empty on a
+   *  card that has lost nothing. */
+  elsewhere: readonly { project: string; count: number }[];
 }
 
 /**
@@ -121,7 +127,7 @@ export function groupFleet(
 ): FleetGroup[] {
   const byProject = new Map<string, FleetSession[]>();
   for (const s of sortFleet(sessions)) {
-    const card = s.project;              // Task 4 makes this `boardHome(s)`
+    const card = boardHome(s);
     const list = byProject.get(card);
     if (list) list.push(s);
     else byProject.set(card, [s]);
@@ -150,6 +156,15 @@ export function groupFleet(
       first === undefined ? { state: 'empty' }
       : forPin.every((m) => m.home === first.home) ? { state: 'shared', home: first.home }
       : { state: 'mixed' };
+    const away = new Map<string, number>();
+    for (const s of sessions) {
+      if (s.project !== project || s.bucket === 'archived') continue;
+      const dest = boardHome(s);
+      if (dest === project) continue;
+      away.set(dest, (away.get(dest) ?? 0) + 1);
+    }
+    const elsewhere = [...away.entries()].map(([dest, count]) => ({ project: dest, count }))
+      .sort((a, b) => b.count - a.count || a.project.localeCompare(b.project));
     groups.push({
       project,
       sessions: live,
@@ -164,6 +179,7 @@ export function groupFleet(
       stranded: live.filter(
         (m) => m.status !== 'dead' && (m.stranded ?? null) !== null,
       ).length,
+      elsewhere,
     });
   }
   return groups;

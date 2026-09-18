@@ -26,7 +26,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
   project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: { state: 'shared', home: 'claude' },
-  stranded: 0, archived: [], ...over,
+  stranded: 0, archived: [], elsewhere: [], ...over,
 });
 
 describe('uniform shape', () => {
@@ -1202,5 +1202,16 @@ describe('the home card lists the waves running abroad', () => {
       <ProjectCard group={grp({ sessions: [sess(), worker] })} runs={[]} abroad={[settledAway]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).toBeNull();
+  });
+
+  it('renders the elsewhere lines as text with no control, and nothing when nothing moved', () => {
+    const { container, rerender } = render(
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'intake', count: 2 }] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const line = container.querySelector('.proj-elsewhere-line')!;
+    expect(line.textContent).toBe('2 workspaces under intake');
+    expect(container.querySelectorAll('.proj-elsewhere button, .proj-elsewhere a')).toHaveLength(0);
+    rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-elsewhere')).toBeNull();
   });
 });

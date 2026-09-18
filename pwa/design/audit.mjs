@@ -687,6 +687,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: "the abroad line's glyph, same ground and same reason as .proj-crossing-glyph above",
   },
+  'fleet.css .proj-elsewhere-line': {
+    under: ['var(--bg-surface)'],
+    why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
+  },
   'fleet.css .mail-chip': {
     under: ['var(--bg-page)'],
     why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
