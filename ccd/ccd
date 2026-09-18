@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=796f806581382512960fc9c2f456d2975363317887edc930e135a094a2b51e5a
+# ccrc:generated 1 sha256=17ff3463c92cf6d5e89cc038ea6357e9df56d98fbf9bdc3cd86187c29e4c4f0f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2075,68 +2075,147 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # control-plane link, and the die message a human reads has to say which.
 # An adapter may not narrow a distinction it received.
 #
-# READ ONCE, ANSWERED MANY TIMES. `_pool_ok` runs per CANDIDATE account, so a
-# per-call read would turn one placement into N reads of the same file — the
-# cost `_pool_ok`'s own comment already refuses for the project side. The
-# memoisation is a load flag plus one associative array, both process-local.
-_APS_LOADED=0
-_APS_STATE=''
-_APS_EPOCH=''
-declare -A _APS_POOL=()
-_acct_pool_load() {   # -> sets _APS_STATE to '' (usable) or a verdict word
-  [[ "$_APS_LOADED" == 1 ]] && return 0
-  _APS_LOADED=1
-  # The same LOCALE shadow `_project_pool_state` argues for (D-2520): the
-  # grammar, the trailing strip and `_pool_name_valid` are ASCII rules about a
-  # file whose only legal content is ASCII, and without this they follow
-  # whatever locale the caller ran under.
+# NO PROCESS-LOCAL MEMOISATION, ON PURPOSE (fix round 1, T1-R1 — this reader
+# cached through a load flag and an associative array for one review round;
+# both are gone). The reviewer measured why: `_pool_ok`'s ONLY caller shape
+# for the account side is `ap=$(_acct_pool "$1")` (`_pool_ok`, below) — a
+# COMMAND SUBSTITUTION, which forks a SUBSHELL. A cache built inside that
+# subshell dies with it; the parent's own "loaded" flag never moves off 0,
+# so every call would still pay the full read AND carry dead state nobody
+# ever reads back. Priming the cache with a direct, non-subshell call first
+# would be worse, not better: `_pool_ok` is reachable from
+# `_auto_swap_check`, itself polled every tick from inside `cmd_supervise` —
+# a loop that supervises one session for DAYS — so a `now` and a `lease`
+# frozen at the first call would never notice the lease expiring or a
+# resynced projection landing. Reading and parsing the file on every call is
+# the correct cost, not a compromise; I3 below is what keeps that cost
+# bounded.
+_acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | malformed | stale ; always rc 0
+  # THIS FUNCTION'S OWN REASON FOR THE SHADOW (fix round 1, M1) — the earlier
+  # comment here credited it with a trailing strip this function never had,
+  # and with keeping `_pool_name_valid`'s locale honest, which that function
+  # already does for itself (`local LC_ALL=C` at :1588, independent of
+  # whatever the caller set — a false comment is worse than none). What IS
+  # locale-sensitive here: the bounded read below uses `-n 65536` as a BYTE
+  # cap, the same reason `_project_pool_state` gives for its own `-n 64`
+  # (D-2520) — under a multi-byte locale `-n` counts CHARACTERS, not bytes,
+  # and the cap's whole job (I3) is bounding what one `cmd_supervise` tick
+  # reads off disk regardless of what is in it.
   local LC_ALL=C
-  local f="$REG/pool-epoch" line k v p now lease=''
+  # FIRST PREDICATE, deliberately — mirrors `_project_pool_state`'s own
+  # first line (:1675) and fixes fix round 1's I5: without this, indexing an
+  # unset `$1` printed `bad array subscript` to stderr and fell through to
+  # `untagged` regardless — and in a `$( )` capture that stderr leaks
+  # straight into the supervisor's own output.
+  [[ -n "${1-}" ]] || { echo untagged; return 0; }
+  local id="$1" f="$REG/pool-epoch" line k v p epoch='' issued='' lease='' now body=''
+  local found=''
+  local -A seen=()
   # ABSENCE PROVEN AT EVERY LEVEL IT IS CLAIMED, exactly as
   # `_project_pool_state` does it one directory down.
-  [[ -d "$REG" && -x "$REG" ]] || { _APS_STATE=unreadable; return 0; }
-  [[ -e "$f" || -L "$f" ]]     || { _APS_STATE=unreadable; return 0; }
-  [[ -f "$f" && -r "$f" ]]     || { _APS_STATE=unreadable; return 0; }
+  [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  [[ -e "$f" || -L "$f" ]]     || { echo unreadable; return 0; }
+  [[ -f "$f" && -r "$f" ]]     || { echo unreadable; return 0; }
+  # BOUNDED, NUL-AWARE, NO SUBSHELL — the same move `_project_pool_state`
+  # makes (:1736-1793), adapted for a MULTI-LINE document instead of one
+  # token: `read -d ''` treats NUL as the field terminator, so a NUL found
+  # before EOF (fix round 1's I2 — `acct acct-a pool\0-a` fabricates the
+  # token `pool-a`, which appears NOWHERE in the file, because bash drops
+  # the NUL when the string is later used — this read is what actually SEES
+  # it) and the `-n` cap being reached before EOF (I3 — this file is one
+  # symlink away from an unbounded one, exactly like `pools/<project>`, and
+  # the wave-1 measurement clocked an unbounded read at 17.9s/33MB RSS for
+  # ONE call on the supervisor's 5-second tick) report the SAME exit status:
+  # 0, "stopped short of EOF" — both illegal, both answered `malformed`,
+  # neither ever `untagged`. 65536 (64 KiB) is chosen the same way the
+  # sibling chose 64: a legal row is `acct <=32-char id> <=32-char pool>\n`,
+  # under 70 bytes, so 64 KiB holds 900+ accounts — an order of magnitude
+  # past any fleet this file is sized for — while still refusing a
+  # multi-megabyte runaway file outright.
+  if { IFS= read -r -d '' -n 65536 body; } 2>/dev/null < "$f"; then
+    echo malformed; return 0
+  fi
+  # I6, DISCLOSED — same choice the sibling makes at :1794-1797, for the
+  # same reason: `read -d ''` returns 1 (the "proceed" branch above) both
+  # for a clean EOF with no NUL and for a read that FAILED before reaching
+  # EOF or the cap, and bash's `read` builtin exposes no way to tell those
+  # apart. Closing it would need a mechanism this builtin does not have; a
+  # failure here reads as "a small, clean document" and is parsed as one.
+  # Unlike the OLD shape (`done < "$f" ... || unreadable`), this is not
+  # merely UNCHECKED — `$?` from the read above IS the check — it is the
+  # one ambiguity that checking it cannot resolve, named rather than hidden.
   while IFS= read -r line || [[ -n "$line" ]]; do
-    k=${line%% *}; v=${line#* }
+    # C1 — an indented line is a line this reader cannot KEY AT ALL, not a
+    # blank one, and must not fall into the blank-line no-op. `k` is
+    # computed FIRST (harmless even for a genuinely blank line — it just
+    # comes out empty) so the skip decision below can be made on `$line`
+    # itself, the RAW input, rather than on the derived `$k`: those two are
+    # NOT the same test. ` acct acct-a pool-a` (one leading space) is not an
+    # empty line, but `k=${line%% *}` on it still yields the empty string —
+    # the pattern " *" matches the WHOLE line as its own longest suffix —
+    # and the old code tested `$k` for this decision, so it read that empty
+    # key as the blank-line marker and silently dropped the row, leaving
+    # `acct-a` `untagged`: the fail-OPEN direction the whole design exists
+    # to prevent. Testing `$line` instead means a non-blank line that still
+    # keys empty falls through to the `case` below unskipped, where the
+    # `*)` wildcard — there is no `''` arm — refuses it as `malformed`,
+    # exactly like any other key this reader does not recognise.
+    k=${line%% *}
+    [[ -z "$line" ]] && continue
+    v=${line#* }
     case "$k" in
-      epoch)  _APS_EPOCH=$v ;;
+      epoch)  epoch=$v ;;
       # R3's wire format carries an `issued` line (the projection's own
       # issuedAt) between `epoch` and `lease`; this reader has no use for it
-      # today and no `_APS_ISSUED` global to put it in (see Task 1's
-      # Interfaces list), so it is read and discarded exactly as a blank line
-      # is — recognised, not merely tolerated by falling through.
-      issued) ;;
+      # in any decision, but fix round 1's M2 asks the same question of it
+      # that `epoch` already answers — validated numeric below, not merely
+      # accepted — so a torn or hand-edited `issued` field poisons the
+      # document exactly like a torn `epoch` does, rather than passing
+      # silently because nothing downstream happened to read it.
+      issued) issued=$v ;;
       lease)  lease=$v ;;
-      acct)   p=${v#* }; v=${v%% *}
+      acct)   # I4 — a row missing its pool field (`acct acct-a`, or a bare
+              # `acct` with nothing after it at all) leaves `v` as a SINGLE
+              # token: `${v#* }` with no space to strip returns the string
+              # unchanged, so the old code handed `_pool_name_valid` the
+              # ACCOUNT ID itself (or the literal word `acct`) as if it
+              # were the pool name — both happen to be legal-looking tokens,
+              # so a truncated row fabricated a tag. Require a SECOND field
+              # to exist before ever splitting on it.
+              [[ "$v" == *' '* ]] || { echo malformed; return 0; }
+              p=${v#* }; v=${v%% *}
               # A name off the grammar poisons the WHOLE document: a reader
               # that skipped the bad row would serve the rest under a tag it
               # could not validate.
-              _pool_name_valid "$p" || { _APS_STATE=malformed; return 0; }
-              _APS_POOL["$v"]=$p ;;
-      '')     ;;
-      *)      _APS_STATE=malformed; return 0 ;;
+              _pool_name_valid "$p" || { echo malformed; return 0; }
+              # M3 — a SECOND `acct` row for an id already seen makes the
+              # document self-contradictory (nothing says which row is
+              # true, so honouring either — first-win or last-win — would
+              # fabricate an agreement the file never actually stated) and
+              # poisons the whole document exactly like an unparseable row
+              # does, even when the two rows happen to agree: the CONTRACT
+              # this file is built to ("one row per account") is what
+              # broke, not merely this one account's answer.
+              [[ -z "${seen[$v]+x}" ]] || { echo malformed; return 0; }
+              seen[$v]=1
+              [[ "$v" == "$id" ]] && found=$p ;;
+      *)      echo malformed; return 0 ;;
     esac
-  done < "$f" 2>/dev/null || { _APS_STATE=unreadable; return 0; }
-  # No epoch line is not an empty document — it is a document this reader does
-  # not recognise, and recognising it partially is how a stale format gets
-  # served as fact.
-  [[ "$_APS_EPOCH" =~ ^[0-9]+$ ]] || { _APS_STATE=malformed; return 0; }
-  [[ "$lease" =~ ^[0-9]+$ ]]      || { _APS_STATE=malformed; return 0; }
+  done <<< "$body"
+  # No epoch (or, since M2, issued/lease) line is not an empty document — it
+  # is a document this reader does not recognise, and recognising it
+  # partially is how a stale format gets served as fact.
+  [[ "$epoch"  =~ ^[0-9]+$ ]] || { echo malformed; return 0; }
+  [[ "$issued" =~ ^[0-9]+$ ]] || { echo malformed; return 0; }
+  [[ "$lease"  =~ ^[0-9]+$ ]] || { echo malformed; return 0; }
   now=$(date +%s)
-  (( now > lease )) && { _APS_STATE=stale; return 0; }
-  return 0
-}
-_acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | malformed | stale ; always rc 0
-  _acct_pool_load
-  [[ -n "$_APS_STATE" ]] && { echo "$_APS_STATE"; return 0; }
-  local p="${_APS_POOL[${1-}]-}"
+  (( now > lease )) && { echo stale; return 0; }
   # An account the document does not name is UNTAGGED, not unknown: the
   # document is complete by construction (the control plane always emits every
   # edge it holds), so silence about an account is a positive statement that
   # it carries no pool. This is the one fold that is honest here.
-  [[ -z "$p" ]] && { echo untagged; return 0; }
-  echo "named $p"
+  [[ -n "$found" ]] || { echo untagged; return 0; }
+  echo "named $found"
 }
 # THE RULE, spelled once in this language: an account may serve a project iff
 # the account is untagged, or the project is untagged, or the names are equal.

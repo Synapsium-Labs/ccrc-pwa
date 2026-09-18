@@ -3,6 +3,14 @@
 // `server/test/ccd-project-pool.test.ts:1-88` — see that file's own header
 // for why a fresh `CcdHarness` per test (not a shared one with a `.reset()`)
 // is the idiom: `CcdHarness` exposes no `reset()`, only `cleanup()`.
+//
+// Fix round 1 (coordinator review of the original Task 1 submission) dropped
+// the process memoisation entirely (T1-R1 — `_pool_ok` calls this through a
+// `$( )` command substitution, which forks a subshell, so a cache built
+// there never reaches the caller) and hardened the reader against six
+// measured fail-open defects (C1, I2-I6, M1-M3). This file's cases below are
+// organised to match that review, each one commented with the finding it
+// pins.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { writeFileSync, mkdirSync, chmodSync } from 'node:fs';
@@ -81,15 +89,89 @@ describe('_acct_pool_state', () => {
   // stay green. A test that cannot fail for the reason it names is worse
   // than no test; deleted rather than kept as decoration.
 
-  it('reads the file ONCE — a second call answers from memory, not the disk', () => {
-    plant('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n');
-    const out = h.sh(
-      '_acct_pool_state acct-a; ' +
-      'rm -f "$HOME/.cc-sessions/pool-epoch"; ' +
-      '_acct_pool_state acct-a');
-    // Both answers are `named pool-a`: the second one CANNOT have come from the
-    // file, which no longer exists. Without the load guard the second answer is
-    // `unreadable`, which is the mutation this test exists to catch.
-    expect(out.split('\n').map((s) => s.trim())).toEqual(['named pool-a', 'named pool-a']);
+  // T1-R1 / M4: the process-memoisation behavioural test ("reads the file
+  // ONCE — a second call answers from memory, not the disk") is GONE, not
+  // merely renamed. It pinned a cache that could never work in the shape
+  // `_pool_ok` actually calls this in (a `$( )` subshell), so keeping it
+  // around — even fixed — would pin a design fix round 1 reverted. Mutation
+  // row 5 (the old load-guard mutation) is deleted with it; there is no
+  // more load guard to mutate.
+
+  // --- C1: an indented line must not be swallowed as blank ---
+  it('answers `malformed` for an `acct` line with a leading space, not `untagged`', () => {
+    // `k=${line%% *}` on a leading-space line yields the empty string — the
+    // SAME `$k` a genuinely blank line produces — so the old blank-line arm
+    // swallowed it and the account read `untagged`: the fail-open the whole
+    // design exists to prevent.
+    plant('epoch 43\nissued 1000\nlease 9999999999\n acct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('answers `malformed` for an `acct` line with a leading tab, not `untagged`', () => {
+    plant('epoch 43\nissued 1000\nlease 9999999999\n\tacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- I2: an embedded NUL byte must not fabricate a legal token ---
+  it('answers `malformed` when an `acct` row carries an embedded NUL byte', () => {
+    // The reviewer's own measured case: `acct acct-a pool\0-a` used to
+    // answer `named pool-a` — a token that appears NOWHERE in the file,
+    // because bash drops the NUL once the bytes reach a normal string.
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool\0-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- I3: the document is size-capped, never read unbounded ---
+  it('answers `malformed` for a document over the 64 KiB cap, even if every row is otherwise legal', () => {
+    // Every row here is independently well-formed (`acct acct-<n> pool-a`),
+    // and the queried id is not among them — so an UNCAPPED reader would
+    // correctly and legitimately answer `untagged`. Answering `malformed`
+    // instead is the cap firing, not some other guard: proof the size gate
+    // is real and not merely load-bearing prose.
+    const rows = Array.from({ length: 4000 }, (_, i) => `acct acct-${i} pool-a`).join('\n');
+    const body = `epoch 43\nissued 1000\nlease 9999999999\n${rows}\n`;
+    expect(Buffer.byteLength(body, 'utf8')).toBeGreaterThan(65536);
+    plant(body);
+    expect(state('ghost-account')).toBe('malformed');
+  });
+
+  // --- I4: a truncated `acct` row must not fabricate a tag ---
+  it('answers `malformed` for an `acct` row missing its pool field', () => {
+    // `${v#* }` on `acct-a` (no space left to strip) used to hand
+    // `_pool_name_valid` the ACCOUNT ID as if it were the pool name.
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('answers `malformed` for a bare `acct` row with nothing after it', () => {
+    // Same defect, more truncated still: `${v#* }` on the literal word
+    // `acct` used to hand `_pool_name_valid` the word `acct` itself.
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- I5: an empty/absent id must not touch the filesystem or leak stderr ---
+  it('answers `untagged` for an absent id, with nothing on stderr', () => {
+    // No file planted at all: if the guard is missing, indexing an unset
+    // `$1` prints `bad array subscript` to stderr and falls through to
+    // `untagged` anyway — same stdout, but the stderr leaks into a `$( )`
+    // capture in the real caller. Capturing stderr here is what makes this
+    // test able to see that difference; a bare stdout check could not.
+    const out = h.sh('{ _acct_pool_state; } 2>&1');
+    expect(out).toBe('untagged');
+  });
+
+  // --- M2: `issued` is validated numeric exactly like `epoch` ---
+  it('answers `malformed` when `issued` is not numeric', () => {
+    plant('epoch 43\nissued abc\nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- M3: two `acct` rows for the same id is a self-contradictory document ---
+  it('answers `malformed` for a duplicate `acct` row naming the same id twice', () => {
+    plant(
+      'epoch 43\nissued 1000\nlease 9999999999\n'
+      + 'acct acct-a pool-a\nacct acct-a pool-b\n');
+    expect(state('acct-a')).toBe('malformed');
   });
 });
