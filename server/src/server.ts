@@ -53,6 +53,7 @@ import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
+import type { PoolEdgeLog } from './coord/pooledgelog.js';
 import { AuthSecretUnusable, readAuthSecret, verifyPassphrase, type AuthSecret } from './auth/secret.js';
 import { ABSOLUTE_TTL_MS, SessionStore } from './auth/sessions.js';
 import { LoginRateLimiter, PASSKEY_MAX_FAILURES } from './auth/ratelimit.js';
@@ -234,6 +235,14 @@ export interface Deps {
    *  never runs, which is what a box with no coordination configured should
    *  do. */
   coord?: CoordStore;
+  /** The flat-file journal under `pool_edges`/`pool_epoch` (account-pool
+   *  membership, design 2026-09-18 §5.2). Constructed in `index.ts` beside
+   *  `coord`, not inside a route: `CoordStore.setAccountPools` calls
+   *  `PoolEdgeLog.append` INSIDE its transaction, so the route needs the
+   *  process's one instance, not a fixture-homed one — same shape as `coord`
+   *  itself. Optional the same way `coord` is: a box with no coordination
+   *  configured serves no pool-membership routes either. */
+  poolEdgeLog?: PoolEdgeLog;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this

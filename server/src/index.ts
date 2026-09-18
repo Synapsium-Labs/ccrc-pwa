@@ -16,6 +16,7 @@ import { KeyedQueue } from './inject/queue.js';
 import { readMailToken } from './coord/token.js';
 import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
+import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { readLocalCcdCaps } from './localcaps.js';
 import path from 'node:path';
 
@@ -65,6 +66,12 @@ if (mailToken === null) {
 // three-second crash loop.
 const coord = new CoordStore(openCoordDb(cfg.coordDbPath));
 
+// The process's ONE `PoolEdgeLog` — beside `coord`, same reason as
+// `routes.ts`'s `LedgerLog`: `CoordStore.setAccountPools` calls `log.append`
+// INSIDE its transaction, so every caller needs to share this one instance
+// rather than each route constructing its own.
+const poolEdgeLog = new PoolEdgeLog(defaultPoolEdgeLogPath(cfg.home));
+
 // ONE queue, above the mode branch, so both modes and both consumers get the
 // same object. Serialising the naming sweep's rename against
 // POST /workspace/reap is the point; a per-consumer queue would serialise a
@@ -84,6 +91,7 @@ if (cfg.fleetMode === 'remote') {
   deps = {
     cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
+    poolEdgeLog,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
   };
 } else {
@@ -123,6 +131,7 @@ if (cfg.fleetMode === 'remote') {
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    poolEdgeLog,
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

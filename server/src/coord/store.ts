@@ -8,6 +8,11 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LedgerLog } from './ledgerlog.js';
+import type { PoolEdgeLog } from './pooledgelog.js';
+// `bodyDigest` comes from `shared/mark.mjs` — `server.ts:30` imports it as
+// `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
+// deeper.
+import { bodyDigest } from '../../../shared/mark.mjs';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
   holdReasonVerdict,
@@ -5240,5 +5245,63 @@ export class CoordStore {
       "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
+  }
+
+  // ── pool edges ────────────────────────────────────────────────────────
+  //
+  // Account-pool membership. `setAccountPools` copies `allocateDeviations`'s
+  // sequence exactly: the journal is appended INSIDE the transaction, BEFORE
+  // the commit, and recovery takes MAX(file, db) so an epoch is SKIPPED,
+  // NEVER REISSUED. See `pooledgelog.ts` for why a reissue is the one
+  // outcome this whole design exists to prevent.
+
+  setAccountPools(input: {
+    accountId: string; pools: readonly string[]; addedBy: string | null; now?: number;
+  }, log: PoolEdgeLog): { ok: true; epoch: number } {
+    const now = input.now ?? Date.now();
+    return tx(this.db, () => {
+      const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
+        .get() as { e: number }).e;
+      const fileMax = log.maxEpoch();
+      const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
+      log.append([{ epoch, accountId: input.accountId, pools: input.pools,
+                    addedBy: input.addedBy, at: now }]);
+      this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
+        .run(input.accountId);
+      for (const p of input.pools) {
+        this.db.prepare(
+          'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+          "VALUES ('account', ?, ?, ?, ?)",
+        ).run(input.accountId, p, now, input.addedBy);
+      }
+      const digest = this.poolEdgeDigest();
+      this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
+        .run(epoch, now, digest);
+      return { ok: true as const, epoch };
+    });
+  }
+
+  accountPoolEdges(): Map<string, string[]> {
+    const rows = this.db.prepare(
+      "SELECT subjectId, pool FROM pool_edges WHERE subjectKind = 'account' ORDER BY subjectId, pool",
+    ).all() as { subjectId: string; pool: string }[];
+    const out = new Map<string, string[]>();
+    for (const r of rows) {
+      const cur = out.get(r.subjectId);
+      if (cur === undefined) out.set(r.subjectId, [r.pool]); else cur.push(r.pool);
+    }
+    return out;
+  }
+
+  poolEpoch(): { epoch: number; issuedAt: number; digest: string } {
+    return this.db.prepare('SELECT epoch, issuedAt, digest FROM pool_epoch WHERE id = 1')
+      .get() as { epoch: number; issuedAt: number; digest: string };
+  }
+
+  private poolEdgeDigest(): string {
+    const rows = this.db.prepare(
+      "SELECT subjectId, pool FROM pool_edges WHERE subjectKind = 'account' ORDER BY subjectId, pool",
+    ).all() as { subjectId: string; pool: string }[];
+    return bodyDigest(rows.map((r) => `${r.subjectId} ${r.pool}`).join('\n'));
   }
 }
