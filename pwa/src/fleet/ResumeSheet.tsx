@@ -32,7 +32,7 @@ import './fleet.css';
  *  what `ABANDON_COPY`'s own docstring argues against, one file over. */
 export const RECLAIM_COPY: Record<
   'unknown-run' | 'unknown-session' | 'no-claimant' | 'claimant-alive'
-  | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
+  | 'heir-is-a-worker' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
   string
 > = {
   'unknown-run': 'that run is gone — the board will catch up',
@@ -42,6 +42,12 @@ export const RECLAIM_COPY: Record<
   'unknown-session': 'this box has no registry row for that id — type one it knows',
   'no-claimant': 'nobody claims this run, so there is nothing to hand over',
   'claimant-alive': 'the coordinator is not dead',
+  // spec §12 / D-3011, fix round 1: the door refuses an heir that is a live
+  // worker elsewhere — `heir-is-a-worker` carries `by` and nothing else (no
+  // `detail`, unlike `claimant-alive`), so the sentence names the CONDITION
+  // and `by` is appended the same way `claimant-alive`'s evidence is.
+  'heir-is-a-worker': 'that session is a worker of another programme right now — a worker may not '
+    + 'inherit a programme (its coordinator is named below)',
   'registry-unmeasurable': 'the registry could not be read, so this box cannot say who is alive',
   'not-configured': 'this box does not run coordination — there is no ledger to rewrite',
   'bad-request': 'that id is not one this box will accept',
@@ -80,6 +86,17 @@ function reclaimErrorText(err: unknown): string {
         ? body.detail.trim() : null;
       const who = by === null ? RECLAIM_COPY['claimant-alive'] : `${by} is not dead`;
       return detail === null ? who : `${who} — ${detail}`;
+    }
+    if (code === 'heir-is-a-worker') {
+      // Mirrors `claimant-alive` immediately above: a base sentence naming
+      // the CONDITION, and the evidence this refusal carries — here just
+      // `by`, since `heir-is-a-worker` has no `detail` — appended the same
+      // way. An adapter may not narrow a distinction it received (fix round
+      // 1, finding 3): `by` must reach the operator, not fall through to
+      // `RECLAIM_COPY.unknown`.
+      const by = typeof body.by === 'string' && body.by !== '' ? body.by : null;
+      const who = RECLAIM_COPY['heir-is-a-worker'];
+      return by === null ? who : `${who} — ${by}`;
     }
     return RECLAIM_COPY.unknown;
   }

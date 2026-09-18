@@ -103,7 +103,7 @@ describe('the sixth refusal union', () => {
     }
   });
 
-  it('both members are kebab tokens the coord scanner will actually see', () => {
+  it('every member is a kebab token the coord scanner will actually see', () => {
     // Anti-vacuity for the arm added to `mail-routes.test.ts:606` in this same
     // commit. That scanner matches `/'([a-z]+(?:-[a-z]+)+)'/` over every `.ts` under
     // `server/src/coord`; a single-word member would need no arm at all and the arm

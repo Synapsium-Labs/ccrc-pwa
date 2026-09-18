@@ -209,6 +209,20 @@ describe('ResumeSheet — the reclaim refusals, each with its own sentence', () 
     expect(said).toContain('the supervisor is restarting it');
   });
 
+  // Fix round 1, finding 3: the door slice (Task 10) was scoped server-only,
+  // so `heir-is-a-worker` used to fall through to `RECLAIM_COPY.unknown` and
+  // `by` never reached the operator — an L4 adapter narrowing a distinction
+  // it received. This case is the refutation: the new sentence renders AND
+  // `by` renders, and the "does not recognise" fallback never fires.
+  it('409 heir-is-a-worker — names the condition AND the heir\'s own coordinator, never the fallback', async () => {
+    reclaimFailing(new ApiError(409, {
+      ok: false, refused: 'heir-is-a-worker', by: 'demo-other-coordinator',
+    }));
+    const said = (await screen.findByText(/worker of another programme/i)).textContent ?? '';
+    expect(said).toContain('demo-other-coordinator');
+    expect(screen.queryByText(/this build does not recognise/i)).toBeNull();
+  });
+
   it('502 registry-unmeasurable — the box could not look, and says the box could not look', async () => {
     reclaimFailing(new ApiError(502, {
       ok: false, error: 'registry-unmeasurable', detail: 'the registry directory could not be listed',
