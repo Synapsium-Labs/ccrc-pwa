@@ -2887,6 +2887,39 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
   }
 }
 
+/**
+ * WHICH CARD a session's row renders on — the ONE reader of
+ * `FleetSession.boardProject`, and the only place `boardProject ?? project`
+ * is spelled (`server/test/single-definition.test.ts` scans for a second).
+ *
+ * `??`, never `=== null`: the live `fleet` frame is CAST on arrival
+ * (`pwa/src/stores/fleet.ts`'s `asFleetMsg`), so a row from a server that
+ * predates the field has NO KEY at runtime, and an older snapshot revives it
+ * as `null`. Both, and a failed server-side read (D-2875, wave 2), fall back to
+ * the session's own project — the identical thing, which is why the field's
+ * docstring lets the three collapse. NO reader may branch on
+ * `boardProject === null` to tell them apart; that distinction is not on the
+ * wire and the fold is deliberate.
+ */
+export function boardHome(s: { project: string; boardProject?: string | null }): string {
+  return s.boardProject ?? s.project;
+}
+
+/**
+ * The repo label a renderer may show for a `ProjectRow.repo` cell — the ONE
+ * place `state === 'named'` is asked of `ProjectRepoWire`, so the card row and
+ * the session view cannot drift onto two different readings of the three
+ * states. The slug on `named`; `null` for `absent`, `unmeasured` AND an absent
+ * key (an older server). Three conditions, one render, and that fold is
+ * deliberate: the label is the only affordance behind this field, and none of
+ * the three is something the label can say. `absent` still means only "no
+ * usable origin AT THE PATH THE SWEEP LOOKED AT" (the type's own leading
+ * sentence, D-2923) — this function renders nothing for it and claims nothing.
+ */
+export function repoLabel(repo: ProjectRepoWire | undefined): string | null {
+  return repo !== undefined && repo.state === 'named' ? repo.slug : null;
+}
+
 /** A persisted `sessions` array in today's shape, or null — one unrevivable
  *  session rejects the file, which both readers already handle as "no data". */
 export function reviveFleetSessions(raw: unknown): FleetSession[] | null {
