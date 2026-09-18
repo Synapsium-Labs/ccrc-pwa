@@ -91,6 +91,14 @@ export interface ReadFromReq { t: 'req'; id: number; op: 'readFrom'; path: strin
 export interface ReadB64Req { t: 'req'; id: number; op: 'readB64'; path: string }
 export interface ReaddirReq{ t: 'req'; id: number; op: 'readdir'; path: string }
 export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
+/** The PATH's own type, never its target's — the one question `stat` cannot
+ *  answer because it follows. Its own op rather than a field on `stat` for
+ *  the reason `agent/src/fileops.ts`'s `StatResult` records for declining an
+ *  `lstat` ladder there: a second syscall on every field read, to separate a
+ *  state no ccd verb produces. That argument is about the HOT path and holds;
+ *  it says nothing about a caller that asks only where the answer decides
+ *  something, which is the only caller this op has. */
+export interface LstatReq  { t: 'req'; id: number; op: 'lstat'; path: string }
 export interface CapsReq   { t: 'req'; id: number; op: 'caps' }
 export interface WriteB64Req { t: 'req'; id: number; op: 'writeB64'; path: string; dataB64: string }
 export interface TailOpenReq { t: 'req'; id: number; op: 'tailOpen'; path: string; offset: number }
@@ -99,11 +107,16 @@ export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: s
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
 // readB64 → {dataB64: string|null, absent?: true, tooLarge?: true, size?: number}; readdir → {names: string[]|null}; stat → {mtimeMs, size}|{missing: true, absent?: true};
+// lstat → {kind: 'regular'|'symlink'|'other'}|{missing: true, absent?: true}. TWO positive markers and no
+//   silent third answer: an agent that does not implement this op fails the request outright
+//   (`not-implemented`), so the server reads UNMEASURED rather than mistaking an older peer's
+//   silence for `regular` — the D-114 shape, in the one direction that matters here, because
+//   `regular` is the only answer that lets a caller condemn anything.
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —

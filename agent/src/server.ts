@@ -19,6 +19,7 @@ import type {
   ReaddirReq,
   ResErr,
   ResOk,
+  LstatReq,
   StatReq,
   TailCloseReq,
   TailData,
@@ -33,12 +34,14 @@ import {
   readB64Measured,
   readFromMeasured,
   listDir,
+  lstatMeasured,
   readWhole,
   statMeasured,
   writeB64,
   type ReadB64Result,
   type ReadFromResult,
   type ReadResult,
+  type PathKindResult,
   type StatResult,
 } from './fileops.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
@@ -194,6 +197,17 @@ function statPayload(r: StatResult): { mtimeMs: number; size: number } | { missi
   return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
 }
 
+/** Builds the `lstat` op's payload. `kind` is a POSITIVE answer in all three
+ *  arms, and its absence is therefore never an answer: an agent too old to
+ *  implement this op rejects the request outright with `not-implemented`, which
+ *  is what lets the server tell UNMEASURED from `regular` instead of reading an
+ *  older peer's silence as proof the path is a plain file. That direction is the
+ *  load-bearing one — `regular` is the only kind any caller may condemn on. */
+function lstatPayload(r: PathKindResult): { kind: 'regular' | 'symlink' | 'other' } | { missing: true; absent?: true } {
+  if (r.ok) return { kind: r.kind };
+  return { missing: true, ...(r.absent ? { absent: true as const } : {}) };
+}
+
 /** Builds the `readB64` op's payload. `dataB64` keeps its exact pre-existing
  *  meaning (null for every failure), so an older server's
  *  `typeof data === 'string' ? data : null` reader is unaffected. TWO
@@ -325,6 +339,35 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
       send(ws, ok(req.id, statPayload(await statMeasured(p))));
       return;
     }
+    case 'lstat': {
+      // THE WHITELIST DECISION IS UNCHANGED and still made on the FULLY
+      // RESOLVED path: a link escaping the whitelist is refused here exactly as
+      // it is for every other op.
+      const p = await checkPath(req.path, ctx.cfg, 'read');
+      if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
+      // BUT NOT `p` ITSELF AS THE SUBJECT. `checkPath` canonicalizes, and
+      // canonicalization destroys precisely the fact this op exists to report
+      // — `lstat(p)` follows nothing because there is nothing left to follow,
+      // so a symlinked marker could only ever come back `regular`. That is a
+      // fix that looks like one and is not, and it was caught by an end-to-end
+      // case, not by reading: the local adapter answered `symlink` and this
+      // wire answered `regular` on the same fixture.
+      //
+      // So the subject is the path whose PARENT is canonical and whose last
+      // component is literal. The parent is whitelist-checked in its own right
+      // and exactly one component is appended, so this can only ever name an
+      // entry of a directory the connection may already `readdir` — which
+      // lists this very name. Strictly less disclosure than `readdir`, and
+      // `lstat` reads no content and follows no final link.
+      //
+      // `parent === null` is the whitelist ROOT itself (`.cc-sessions`, whose
+      // parent is $HOME and is not whitelisted): fall back to the canonical
+      // path, which for a directory is the same answer.
+      const parent = await checkPath(path.dirname(req.path), ctx.cfg, 'read');
+      const subject = parent === null ? p : path.join(parent, path.basename(req.path));
+      send(ws, ok(req.id, lstatPayload(await lstatMeasured(subject))));
+      return;
+    }
     case 'writeB64': {
       const p = await checkPath(req.path, ctx.cfg, 'write');
       if (!p) { send(ws, fail(req.id, 'forbidden')); return; }
@@ -436,6 +479,10 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     case 'stat': {
       if (typeof msg.path !== 'string') return null;
       return { t: 'req', id, op: 'stat', path: msg.path } satisfies StatReq;
+    }
+    case 'lstat': {
+      if (typeof msg.path !== 'string') return null;
+      return { t: 'req', id, op: 'lstat', path: msg.path } satisfies LstatReq;
     }
     case 'writeB64': {
       if (typeof msg.path !== 'string') return null;

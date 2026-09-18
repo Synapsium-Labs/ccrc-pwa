@@ -1111,7 +1111,7 @@ _hook_family_sweepable() {   # <suffix after the literal `.<id>.` strip> -> 0 if
 # rc 2 as fail-CLOSED (spec §3.4, "Platform outcome"), which is why this file
 # still publishes no compaction artifact on a box without `flock`.
 _hook_lock_same() {   # <fd> <canonical> -> 0 iff the FD's target and canonical are one regular inode
-  local fd="$1" lock="$2" p=""
+  local fd="$1" lock="$2" p="" a="" b=""   # `a`/`b` declared here (F20, review 71): both were assigned bare below, leaking into the caller's scope
   if [ -e "/proc/self/fd/$fd" ]; then p="/proc/self/fd/$fd"
   elif [ -e "/dev/fd/$fd" ]; then p="/dev/fd/$fd"
   else return 1; fi
