@@ -52,13 +52,21 @@ function centralAccountPool(pools: readonly string[]): AccountPoolWire {
  * about crossings from) the same precedence the server enforces, rather than
  * re-deriving it from the declared `RosterWire.pool` field alone — the defect
  * T7-R2 found live in `NewSessionSheet.tsx` before this field existed.
+ *
+ * `GET /api/pools/epoch` (ruling T7-R4) is the SECOND caller, and the reason
+ * `account` is `AccountDef | undefined` rather than required: that document
+ * carries every id with a CENTRAL edge, which can name a wrapper this box's
+ * roster does not have (spec §3.3, O4) — there is no `AccountDef` to pass for
+ * one of those. `id` is a separate parameter, not read off `account.id`, for
+ * exactly that case; when `account` is present its `.id` must equal `id`, but
+ * nothing here asserts that — the caller owns pairing them correctly.
  */
 export function resolvedAccountPool(
-  account: AccountDef, edges: ReadonlyMap<string, readonly string[]>,
+  id: string, account: AccountDef | undefined, edges: ReadonlyMap<string, readonly string[]>,
 ): AccountPoolWire {
-  const central = edges.get(account.id);
+  const central = edges.get(id);
   if (central !== undefined && central.length > 0) return centralAccountPool(central);
-  return declaredAccountPool(account.pool);
+  return declaredAccountPool(account?.pool ?? null);
 }
 
 /**
@@ -138,7 +146,7 @@ export function poolVerdict(
 export function poolEligible(
   roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,
 ): AccountDef[] {
-  return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a, edges), pool).ok);
+  return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a.id, a, edges), pool).ok);
 }
 
 /**

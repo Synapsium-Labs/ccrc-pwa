@@ -1231,17 +1231,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // the per-account `.map` used to run N synchronous sqlite reads on a
     // route the PWA polls every 20s, AND risked a TORN VIEW — a
     // `setAccountPools` landing mid-iteration could mix pre- and post-write
-    // membership across the same response. Caught here, not per-account: an
-    // unreadable coord.db degrades the WHOLE response to the declared-only
-    // answer (the pre-account-pools shape), never a 500 — this is a READ for
-    // display, not `refusePool`'s placement decision (Minor 9's guard, which
-    // DOES refuse, because that call IS one).
-    let accountEdges: ReadonlyMap<string, readonly string[]>;
-    try {
-      accountEdges = deps.coord?.accountPoolEdges() ?? new Map();
-    } catch {
-      accountEdges = new Map();
-    }
+    // membership across the same response. `readAccountPoolEdges()` (review
+    // round 3, M3) degrades the WHOLE response to the declared-only answer
+    // (the pre-account-pools shape) on a throw, never a 500 — this is a READ
+    // for display, not `refusePool`'s placement decision (Minor 9's guard,
+    // which DOES refuse and warn, because that call IS one).
+    const accountEdges = readAccountPoolEdges();
     // Rebuilt per request from `deps.cfg.roster`, not hoisted to module scope:
     // the roster is runtime data read at boot (`~/.ccrc/accounts.json`), so a
     // module-level rank table would be built before any roster exists.
@@ -1308,7 +1303,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // (`NewSessionSheet.tsx:186-188`, measured live before this field
         // existed). Reads the ONE `accountEdges` snapshot above, not a
         // fresh per-account read.
-        resolvedPool: resolvedAccountPool(a, accountEdges),
+        resolvedPool: resolvedAccountPool(a.id, a, accountEdges),
       })),
     };
   });
@@ -2134,6 +2129,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `deps.runCcd` is the call, and routes needing another shape (a 200 carrying
   // `phase:unknown`, a parsed WsAudit/ReapResult, a 501 hoisted out of a queued
   // fn) compose from `deps.runCcd` directly rather than reaching for a runner.
+
+  /**
+   * `accountPoolEdges()`, degraded to declared-only on a throw — the shape
+   * `GET /api/accounts` and `GET /api/projects` both want (review round 3,
+   * M3). THE TWO DISTINCT DEGRADE BEHAVIOURS in this file are now exactly
+   * two, not three: this ONE helper for the two READS-for-display, and
+   * `refusePool` below keeps its OWN inline version, which additionally
+   * `console.warn`s and REFUSES (503) rather than degrading — because that
+   * call is a placement DECISION and an operator needs a trace when coord.db
+   * is unreadable, while a display read (the PWA polls `GET /api/accounts`
+   * every 20s) would turn a warn into noise nobody could act on. Divergence
+   * is deliberate; duplication of the SILENT half is not.
+   */
+  const readAccountPoolEdges = (): ReadonlyMap<string, readonly string[]> => {
+    try {
+      return deps.coord?.accountPoolEdges() ?? new Map();
+    } catch {
+      return new Map();
+    }
+  };
+
   /**
    * The pool pre-check every placement route makes (account pools, spec §5.6).
    * Returns `null` when the caller may proceed, or a REPLY that has already
@@ -2294,15 +2310,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // reads the SAME snapshot, so a `setAccountPools` landing mid-response
     // cannot mix pre- and post-write membership across rows, and this
     // now agrees with `refusePool`'s own per-request read about which
-    // accounts a central tag has moved. Degrades to declared-only on a
-    // throwing coord.db (a READ for display, not `refusePool`'s placement
-    // decision — Minor 9's guard is the one that refuses).
-    let projectEdges: ReadonlyMap<string, readonly string[]>;
-    try {
-      projectEdges = deps.coord?.accountPoolEdges() ?? new Map();
-    } catch {
-      projectEdges = new Map();
-    }
+    // accounts a central tag has moved. `readAccountPoolEdges()` (review
+    // round 3, M3) degrades to declared-only on a throwing coord.db (a READ
+    // for display, not `refusePool`'s placement decision — Minor 9's guard
+    // is the one that refuses and warns).
+    const projectEdges = readAccountPoolEdges();
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
       return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, projectEdges, cls, shares, nowS) };
@@ -2568,6 +2580,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * as `unreadable` and refuses into a tagged project. Folding those two would
    * silently lift every constraint on a cold node — the EKS default path.
    *
+   * EMITS THE RESOLVED POOL, central-if-present-else-declared, not central
+   * edges alone (review round 3, W1 — the fail-open the whole wave missed).
+   * MEASURED: `_acct_pool_state` (`ccd/ccd:2101`) reads ONLY `$REG/pool-epoch`
+   * — Task 2 deliberately stopped `_pool_ok` consulting the declared
+   * `accounts.sh` tag at placement — so an id this document omitted read
+   * `untagged` on the fleet. Emitting central edges alone meant a DECLARED-only
+   * account (no central row) vanished from the document entirely: `ccd`
+   * answered `untagged` and SERVED a project the server's own
+   * `resolvedAccountPool` would answer `tagged` and 409 — the declared
+   * constraint enforced by the server and NOT by the fleet, spec §5.6 rule 2's
+   * fail-open arriving through the new path instead of the old one it was
+   * written to close. The document GRAMMAR is unchanged (still `acct <id>
+   * <pool>` lines, one per tagged account) — only WHICH accounts and WHICH
+   * pool value are chosen, so `ccd-pool-sync`'s renderer and
+   * `_acct_pool_state`'s reader need no edit and neither of those closed
+   * tasks reopens.
+   *
    * AUTHENTICATE BEFORE `not-configured` (review round 1, I3+I4 — fixed;
    * this route is EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, so its own check
    * is the ONLY door on an armed box, and answering `501` to an anonymous
@@ -2604,8 +2633,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!deps.coord) return reply.code(501).send({ ok: false, error: 'not-configured' });
     const { epoch, issuedAt } = deps.coord.poolEpoch();
     const edges = deps.coord.accountPoolEdges();
+    // THE UNION, not `edges.keys()` alone: a DECLARED-only account (roster
+    // `pool` set, no `pool_edges` row) must still appear here, or it silently
+    // reads `untagged` on the fleet (W1). A central edge can also name a
+    // wrapper this box's roster does not carry (spec §3.3, O4), which is why
+    // the roster side of the union is `.accounts`, not filtered to home-able.
+    const ids = new Set<string>([...deps.cfg.roster.accounts.map((a) => a.id), ...edges.keys()]);
     const accounts: Record<string, { pools: string[] }> = {};
-    for (const [acct, pools] of edges) accounts[acct] = { pools };
+    for (const id of ids) {
+      // ONE PLACE COMPUTES PRECEDENCE: the same `resolvedAccountPool` the
+      // ranking forecast (`GET /api/projects`, `GET /api/accounts`) and the
+      // refusal pre-check (`refusePool`) use, so this document's central/
+      // declared choice can never drift from what those two decide. Omits
+      // exactly the accounts `resolvedAccountPool` calls `untagged` — no
+      // central row AND no declared `pool` — which is the one case this
+      // document has always left out.
+      const resolved = resolvedAccountPool(id, deps.cfg.roster.byId.get(id), edges);
+      if (resolved.state === 'tagged') accounts[id] = { pools: [...resolved.pools] };
+    }
     const nowS = Math.floor(Date.now() / 1000);
     return {
       epoch,

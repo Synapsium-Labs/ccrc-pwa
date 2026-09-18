@@ -168,22 +168,36 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // dimension is the first thing in this fixture that changes the ROSTER
       // itself.
       //
-      // THE TWO SIDES NO LONGER READ THE SAME CARRIER, and the premise here
-      // used to say they did — "so the comparison below is of two RULES and
-      // not of two rosters" (corrected, wave 1 Task 2 fix round 1, I4). Since
-      // `_pool_ok` gained its account arm the bash side reads the central
-      // PROJECTION (`pool-epoch`) while the TypeScript side's
-      // `projectHome`/`poolEligible` still reads the DECLARED roster, so this
-      // parity harness feeds `c.pools` to BOTH and the fixture is what forces
-      // them to agree. That makes this a comparison of two rules ONLY on the
-      // pool dimension's agreeing case: it is deliberately blind to a
-      // roster/projection SKEW, which is a real condition and belongs to
-      // neither side's rule. The bash half of that skew is pinned in
-      // `ccd-pool-ok.test.ts` (`_ws_least_loaded` honours the projection over
-      // the declared roster) and in `ccd-crosspool.test.ts`; the TypeScript
-      // half has no carrier to read yet. Do not read a green run here as
-      // evidence the two carriers agree in the field — it is evidence they
-      // agree in this fixture, by construction.
+      // THE TWO SIDES DELIBERATELY READ DIFFERENT CARRIERS HERE, and the
+      // premise used to say otherwise — "so the comparison below is of two
+      // RULES and not of two rosters" (corrected, wave 1 Task 2 fix round 1,
+      // I4). Since `_pool_ok` gained its account arm the bash side reads the
+      // central PROJECTION (`pool-epoch`) while this harness calls
+      // `projectHome` with `NO_EDGES`, i.e. the DECLARED roster ONLY — so it
+      // feeds `c.pools` to BOTH sides' DECLARED carrier and the fixture is
+      // what forces them to agree on that one dimension. That makes this a
+      // comparison of two rules ONLY on the declared-pool case: it is
+      // deliberately blind to a roster/projection SKEW, which is a real
+      // condition and belongs to neither side's rule. The bash half of that
+      // skew is pinned in `ccd-pool-ok.test.ts` (`_ws_least_loaded` honours
+      // the projection over the declared roster) and in
+      // `ccd-crosspool.test.ts`.
+      //
+      // CORRECTED (review round 3, M1): this paragraph used to say the
+      // TypeScript side "has no carrier to read yet" for the central
+      // projection — false since ruling T7-R3, which gave `projectHome` a
+      // real `edges` parameter and wired live central reads through
+      // `server.ts`. The reason this harness still passes `NO_EDGES` is NOT
+      // a gap; it is that the spec makes DECLARED and CENTRAL two carriers
+      // by design (§5.6), and this harness's whole point is parity against
+      // bash's own DECLARED-only positional (`_ws_least_loaded` with no
+      // central read) — mixing central edges in here would test a THIRD
+      // question this fixture table was never built to answer. The central
+      // carrier is pinned instead in `pools.test.ts` (`poolVerdict`/
+      // `poolEligible`) and `pool-accounts-route.test.ts`'s W1/T7-R3 closure
+      // tests, which run the real central-edge path end to end. Do not read
+      // a green run here as evidence the two carriers agree in the field —
+      // it is evidence they agree on the declared dimension, by construction.
       const roster = rosterWithPools(c.pools);
       seedRoster(home, roster);
       seedAccountsSh(home, roster);
@@ -560,6 +574,35 @@ describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
     };
     expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, NO_EDGES, 'fable', overCeiling, nowS))
       .toEqual({ kind: 'none', pool: null, class: 'fable' });
+  });
+
+  // Review round 3, I1: `limits.ts`'s class-blind re-call
+  // (`projectHome(roster, limits, pool, edges)`, no class, no shares) must
+  // pass the SAME `edges` as the main call, or a central mismatch reads as a
+  // class-caused emptiness. Measured: reverting that one re-call to
+  // `new Map()` leaves 151 OTHER tests green — this is the only one that
+  // reds, because it is the only case where the declared and central pools
+  // for the SAME account disagree.
+  it('the class-blind re-call must use the SAME edges as the main call — a central mismatch is not the class\'s doing', () => {
+    // ONE account, declared `pool-a` (matches the project) but centrally
+    // `pool-b` (mismatches) — no other home-able account exists to stay
+    // eligible via the untagged-is-unconstrained rule and mask the defect.
+    seedRoster(home, {
+      version: 1,
+      accounts: [{
+        id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' },
+        homeAble: true, hue: 'cyan', telemetry: 'anthropic', pool: 'pool-a',
+      }],
+    });
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const edges = new Map([['claude', ['pool-b']]]);
+    // Under the mutation (class-blind re-call passes `new Map()` instead of
+    // `edges`), that re-call would see `claude` as declared `pool-a` — a
+    // match — and find a home, wrongly naming `class: 'fable'` on the result
+    // below. With `edges` threaded through correctly, the central mismatch
+    // empties the pool on BOTH calls and `class` is correctly omitted.
+    expect(projectPlacement(cfg.roster, { claude: L(5, 5) }, { state: 'tagged', name: 'pool-a' }, edges, 'fable'))
+      .toEqual({ kind: 'none', pool: 'pool-a' });
   });
 });
 

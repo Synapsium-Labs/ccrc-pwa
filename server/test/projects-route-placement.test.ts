@@ -15,6 +15,8 @@ import { localIO } from '../src/io.js';
 import { ccdRunner } from '../src/lifecycle.js';
 import { KeyedQueue } from '../src/inject/queue.js';
 import { POOLS_DIR_NAME } from '../src/pools.js';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore } from '../src/coord/store.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -223,6 +225,35 @@ describe('GET /api/projects — pool and placement per row', () => {
     app = await open();
     const res = await app.inject({ method: 'GET', url: '/api/accounts' });
     expect(res.json().projected).toEqual({ wrapper: 'claude-a', score: 10 });
+  });
+
+  // Review round 3, M2: the prior `try/catch` around `accountPoolEdges()` was
+  // pinned by NOTHING that actually throws a `DatabaseSync`-shaped error —
+  // deleting it reds 4 tests in `lifecycle.test.ts` only because that file's
+  // coord stubs lack an `accountPoolEdges` method at all (a `TypeError`, not
+  // the hazard the comment names), so a `coord` that genuinely throws would
+  // have silently run the degraded path with nothing catching a regression.
+  // This test constructs the REAL condition.
+  it('a throwing accountPoolEdges() degrades placement to declared-only, never a 500', async () => {
+    tag('demo', 'pool-a');
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    coord.accountPoolEdges = () => { throw new Error('simulated DatabaseSync failure'); };
+    const cfg = loadConfig({ CCRC_HOME: home, CCRC_PROJECTS_ROOT: projectsRoot });
+    app = await buildServer({
+      cfg, runCcd: ccdRunner(dead, cfg), tmux: new Tmux(dead), io: localIO, queue: new KeyedQueue(), coord,
+    });
+    await app.ready();
+    try {
+      const res = await app.inject({ method: 'GET', url: '/api/projects' });
+      expect(res.statusCode).toBe(200);
+      // Degrades to the DECLARED-only forecast (`claude`, pool-a's only
+      // declared member) rather than 500ing the whole route.
+      const demo = Object.fromEntries((res.json().projects as { name: string; placement: ProjectPlacement }[])
+        .map((p) => [p.name, p.placement]))['demo'];
+      expect(demo).toEqual({ kind: 'projected', wrapper: 'claude', score: 70 });
+    } finally {
+      coord.db.close();
+    }
   });
 });
 

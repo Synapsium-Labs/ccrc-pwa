@@ -382,32 +382,34 @@ describe('ACCOUNT_ID_RE parity — the one TypeScript spelling against the two f
  * reading that exact file. Neither side's OWN fixtures can see this defect —
  * only a body built by ONE side and read by the OTHER can.
  */
+const repoRootForSync = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const CCD_POOL_SYNC = path.join(repoRootForSync, 'ccd', 'ccd-pool-sync');
+
+/** Run the REAL `ccd-pool-sync` against `home`, with a stubbed `curl` that
+ *  answers `body` — writing directly to `home/.cc-sessions/pool-epoch`, the
+ *  exact file `_acct_pool_state` reads, so no hand-copy of the rendered text
+ *  can drift from what the real python renderer actually produced. Hoisted to
+ *  module scope (review round 3) so both the C1 and W1 cross-side suites
+ *  share one definition rather than two copies that could drift. */
+const syncInto = (home: string, body: string): void => {
+  const bin = path.join(home, 'bin');
+  mkdirSync(bin, { recursive: true });
+  const escaped = body.replace(/'/g, `'\\''`);
+  writeFileSync(path.join(bin, 'curl'),
+    `#!/usr/bin/env bash\ncat > /dev/null\nprintf '%s\\n%s' '${escaped}' '200'\n`, { mode: 0o755 });
+  mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+  writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_SERVER_URL=https://example.invalid\n', 'utf8');
+  mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
+  writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), 'tok\n', 'utf8');
+  const env = ghContainedEnv(
+    home, { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` },
+    { systemd: true, tmux: true });
+  execFileSync('bash', [CCD_POOL_SYNC], { encoding: 'utf8', env });
+};
+
 describe('C1 — the writer\'s output through the REAL renderer and the REAL reader', () => {
   let h: CcdHarness | undefined;
   afterEach(() => { if (h) h.cleanup(); h = undefined; });
-
-  const repoRootForSync = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
-  const CCD_POOL_SYNC = path.join(repoRootForSync, 'ccd', 'ccd-pool-sync');
-
-  /** Run the REAL `ccd-pool-sync` against `home`, with a stubbed `curl` that
-   *  answers `body` — writing directly to `home/.cc-sessions/pool-epoch`, the
-   *  exact file `_acct_pool_state` reads, so no hand-copy of the rendered text
-   *  can drift from what the real python renderer actually produced. */
-  const syncInto = (home: string, body: string): void => {
-    const bin = path.join(home, 'bin');
-    mkdirSync(bin, { recursive: true });
-    const escaped = body.replace(/'/g, `'\\''`);
-    writeFileSync(path.join(bin, 'curl'),
-      `#!/usr/bin/env bash\ncat > /dev/null\nprintf '%s\\n%s' '${escaped}' '200'\n`, { mode: 0o755 });
-    mkdirSync(path.join(home, '.ccrc'), { recursive: true });
-    writeFileSync(path.join(home, '.ccrc', 'agent.env'), 'CCRC_SERVER_URL=https://example.invalid\n', 'utf8');
-    mkdirSync(path.join(home, '.cc-secrets'), { recursive: true });
-    writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'), 'tok\n', 'utf8');
-    const env = ghContainedEnv(
-      home, { ...process.env, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` },
-      { systemd: true, tmux: true });
-    execFileSync('bash', [CCD_POOL_SYNC], { encoding: 'utf8', env });
-  };
 
   it('the LIVE writer\'s fresh output reads as current, not stale', async () => {
     app = await open();
@@ -436,6 +438,80 @@ describe('C1 — the writer\'s output through the REAL renderer and the REAL rea
     h = makeCcdHarness('pools-cross-side-stale');
     syncInto(h.home, JSON.stringify(stale));
     expect(h.sh('_acct_pool_state acct-a')).toBe('stale');
+  });
+});
+
+/**
+ * W1 (review round 3) — a fail-open the whole wave missed, and it is the
+ * exact one spec §5.6 rule 2 exists to prevent. `_acct_pool_state`
+ * (`ccd/ccd:2101`) reads ONLY `$REG/pool-epoch` — Task 2 deliberately
+ * stopped `_pool_ok` consulting the declared `accounts.sh` tag at placement
+ * — so an id this document OMITTED read `untagged` on the fleet. Before
+ * ruling T7-R4, `GET /api/pools/epoch` emitted central edges alone: a
+ * DECLARED-only account (roster `pool` set, no central row) never appeared,
+ * so `ccd` answered `untagged` and SERVED a project the server's own
+ * `resolvedAccountPool` would answer `tagged` and 409 — the declared
+ * constraint enforced server-side and not on the fleet.
+ *
+ * This suite uses the SAME cross-side harness as C1 (the real
+ * `ccd-pool-sync` renderer, the real `ccd` `_acct_pool_state` reader) because
+ * that harness's absence from this specific claim is exactly why it
+ * survived: nothing fed a declared-only account through both real halves.
+ */
+describe('W1 — a declared-only account appears in the document, and a central one still wins', () => {
+  let h: CcdHarness | undefined;
+  let app4: FastifyInstance | undefined;
+  let coord4: CoordStore | undefined;
+  afterEach(async () => {
+    if (h) h.cleanup();
+    h = undefined;
+    if (app4) await app4.close();
+    app4 = undefined;
+    if (coord4) coord4.db.close();
+    coord4 = undefined;
+  });
+
+  it('a declared-only account (no central edge) now appears, and a centrally-tagged one still shows the central value', async () => {
+    const home = mkTmp('ccrc-pool-w1-');
+    const roster = {
+      version: 1,
+      accounts: [
+        // Declared `pool-a`, no central edge — the exact gap W1 found: this
+        // account used to be ABSENT from the document entirely.
+        { id: 'acct-a', label: 'acct-a', configDirSuffix: '.acct-a',
+          exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+          pool: 'pool-a' },
+        // Declared UNTAGGED, but centrally `pool-c` — central must still win.
+        { id: 'acct-b', label: 'acct-b', configDirSuffix: '.acct-b',
+          exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+      ],
+    };
+    seedRoster(home, roster);
+    const cfg = loadConfig({ CCRC_HOME: home });
+    coord4 = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const poolEdgeLog = new PoolEdgeLog(path.join(home, '.ccrc', 'pool-edges.log'));
+    coord4.setAccountPools({ accountId: 'acct-b', pools: ['pool-c'], addedBy: null }, poolEdgeLog);
+    app4 = await buildServer({
+      cfg, runCcd: ccdRunner(failingRunner, cfg), tmux: new Tmux(failingRunner),
+      io: localIO, queue: new KeyedQueue(), coord: coord4, poolEdgeLog,
+    } as Deps);
+    await app4.ready();
+
+    const res = await app4.inject({ method: 'GET', url: '/api/pools/epoch' });
+    expect(res.statusCode).toBe(200);
+    // BOTH carriers on the wire, from the ONE `resolvedAccountPool` call.
+    expect(res.json().accounts).toEqual({
+      'acct-a': { pools: ['pool-a'] },
+      'acct-b': { pools: ['pool-c'] },
+    });
+
+    h = makeCcdHarness('pools-w1-cross-side');
+    syncInto(h.home, res.body);
+    // THE FLEET SIDE, over the SAME bytes the server emitted: a declared-only
+    // account now reads `named <pool>`, not `untagged` — closing the fail-open
+    // — and a centrally-tagged account still reads its central value.
+    expect(h.sh('_acct_pool_state acct-a')).toBe('named pool-a');
+    expect(h.sh('_acct_pool_state acct-b')).toBe('named pool-c');
   });
 });
 
