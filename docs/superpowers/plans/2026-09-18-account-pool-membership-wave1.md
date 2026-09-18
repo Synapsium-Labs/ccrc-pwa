@@ -262,6 +262,11 @@ _acct_pool_load() {   # -> sets _APS_STATE to '' (usable) or a verdict word
     k=${line%% *}; v=${line#* }
     case "$k" in
       epoch)  _APS_EPOCH=$v ;;
+      # `issued` is CARRIED BUT NOT READ here: the lease is what this reader
+      # decides on, and issuedAt is for the operator and the PWA's lag chip.
+      # It still needs an arm — without one it falls to `*)` and every real
+      # document reads `malformed`, because R3's format always emits it.
+      issued) ;;
       lease)  lease=$v ;;
       acct)   p=${v#* }; v=${v%% *}
               # A name off the grammar poisons the WHOLE document: a reader
