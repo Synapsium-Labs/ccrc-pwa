@@ -2078,6 +2078,51 @@ describe('ccrc doctor: services knows about the models catalogue timer', () => {
   });
 });
 
+describe('ccrc doctor: services knows about the pool-sync timer', () => {
+  // account-pool-membership wave 1, Task 4: `ccd-pool-sync.timer` ships
+  // (deploy/systemd/ccd-pool-sync.timer) but until this task `_check_services`'s
+  // `known` array never named it. Ruling (task-4-brief.md): `ccd-pool-sync`
+  // goes IN `known`, unlike `ccd-graph-sweep`/`ccrc-ddns` (covered by an
+  // effect-based design reading what the timer PRODUCES) and unlike
+  // `ccd-usage-sweep` (a disclosed gap in neither design) — because a stopped
+  // sync is SILENT: a node just stops refreshing its cached projection, and
+  // nothing surfaces until the lease expires, minutes later, and placement
+  // starts refusing into every tagged project with no error anywhere.
+  itLinux('warns — with its OWN consequence — when the pool-sync timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-pool-sync-timer-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-pool-sync.timer is installed but inactive');
+    expect(lines[i]).toContain('stops refreshing');
+    expect(lines[i]).toContain('lease expires');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i]).not.toContain('credential is being probed');
+    expect(lines[i]).not.toContain('catalogue goes stale');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-pool-sync\.timer$/);
+    // A stopped reading is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-pool-sync-timer-ok-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-pool-sync.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-pool-sync-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-pool-sync');
+  });
+});
+
 // ── the box's own config file ─────────────────────────────────────────────
 // Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
 // `CCRC_FLEET=remote` with no agent URL or token makes the server print one
