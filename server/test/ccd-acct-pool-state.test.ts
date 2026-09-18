@@ -30,6 +30,21 @@ function plant(body: string): string {
 }
 const state = (id: string): string => h.sh(`_acct_pool_state ${id}`);
 
+/** Like `state()`, but also returns the REAL exit code — `h.sh` alone only
+ *  sees stdout, so a defect that empties stdout AND breaks rc (fix round 2's
+ *  C2 — a `bad array subscript` unwinding the whole function) is invisible
+ *  to a word-only assertion. `echo "RC:$?"` runs whether or not
+ *  `_acct_pool_state` itself produced any stdout — ccd has no `set -e`, so a
+ *  failing statement inside it does not abort the surrounding `;` list. */
+function stateRc(id: string): { out: string; rc: number } {
+  const raw = h.sh(`_acct_pool_state ${id}; echo "RC:$?"`);
+  const lines = raw.split('\n');
+  const last = lines.pop() ?? '';
+  const m = /^RC:(-?\d+)$/.exec(last);
+  if (!m) throw new Error(`stateRc(${id}): no RC line in [${raw}]`);
+  return { out: lines.join('\n'), rc: Number(m[1]) };
+}
+
 describe('_acct_pool_state', () => {
   it('answers `unreadable` when the file does not exist — absence is NOT untagged', () => {
     expect(state('acct-a')).toBe('unreadable');
@@ -173,5 +188,121 @@ describe('_acct_pool_state', () => {
       'epoch 43\nissued 1000\nlease 9999999999\n'
       + 'acct acct-a pool-a\nacct acct-a pool-b\n');
     expect(state('acct-a')).toBe('malformed');
+  });
+
+  // ============================================================
+  // Fix round 2 (re-review of round 1's own new lines) — C2-C4, M5-M7.
+  // ============================================================
+
+  // --- C2: an empty id after the split must not reach `seen`, and the
+  // "always rc 0" contract must hold even when it is refused ---
+  it('C2: two spaces after `acct` (empty id) answers `malformed` at rc 0, not empty stdout at rc 1', () => {
+    // Measured before this fix: `${v%% *}` on an all-whitespace remainder
+    // strips it to nothing, so `v` (the id) comes out EMPTY; indexing
+    // `seen[$v]`/`seen[$v]=1` with an empty subscript is `bad array
+    // subscript`, a hard bash error that unwinds the WHOLE function —
+    // empty stdout, rc 1. `{1,64}` in C4's grammar requires at least one
+    // character, so the id-grammar check below closes this before `seen`
+    // is ever touched.
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct  pool-a\n');
+    const { out, rc } = stateRc('acct-a');
+    expect(out).toBe('malformed');
+    expect(rc).toBe(0);
+  });
+
+  // --- C3: epoch/issued/lease must refuse a leading zero, never parse it as octal ---
+  it('C3: a leading-zero `lease` is refused in the grammar, never reaches the octal `((  ))`', () => {
+    // Measured before this fix: `lease 0000000009` (expired in 1970) threw
+    // `value too great for base` inside `(( now > lease ))` — bash reads a
+    // leading-zero operand as octal, and `9` is not a valid octal digit —
+    // and because that arithmetic error does not abort the function, fell
+    // through the (skipped) stale gate to `named pool-a`, serving an
+    // expired tag as current.
+    plant('epoch 43\nissued 1000\nlease 0000000009\nacct acct-a pool-a\n');
+    const { out, rc } = stateRc('acct-a');
+    expect(out).toBe('malformed');
+    expect(rc).toBe(0);
+  });
+
+  it('C3: a leading-zero `epoch` is refused', () => {
+    plant('epoch 007\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('C3: a leading-zero `issued` is refused', () => {
+    plant('epoch 43\nissued 007\nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('C3: a bare `0` (not leading-zero-padded) is still a legal numeric value', () => {
+    // The grammar is `^(0|[1-9][0-9]*)$`, not "no zero anywhere" — the
+    // single digit `0` is the one legal way to spell zero.
+    plant('epoch 0\nissued 0\nlease 9999999999\n');
+    expect(state('acct-a')).toBe('untagged');
+  });
+
+  // --- C4: the account-id field is validated against the same grammar
+  // Task 3's writer uses, and an off-grammar id poisons the document ---
+  it('C4: an id with an embedded tab is refused, not silently discarded to `untagged`', () => {
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct \tacct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('C4: a quoted id is refused, not silently discarded to `untagged`', () => {
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct "acct-a" pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('C4: a glob-shaped id is refused, not silently discarded to `untagged`', () => {
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct */.. pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('C4: an uppercase id is WITHIN the grammar — a different, well-formed id, not a poison', () => {
+    // `^[A-Za-z0-9._-]{1,64}$` allows both cases, matching Task 3's writer
+    // exactly. `ACCT-A` is a legitimate row for a DIFFERENT account than
+    // the one queried, so this document is well-formed and the query for
+    // the lowercase `acct-a` correctly reads `untagged` — not `malformed`.
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct ACCT-A pool-a\n');
+    expect(state('acct-a')).toBe('untagged');
+  });
+
+  // --- M7: duplicate epoch/issued/lease lines are self-contradictory too ---
+  it('M7: a duplicate `epoch` line is a self-contradictory document', () => {
+    plant('epoch 43\nepoch 44\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('M7: a duplicate `issued` line is a self-contradictory document', () => {
+    plant('epoch 43\nissued 1000\nissued 1001\nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('M7: a duplicate `lease` line is a self-contradictory document', () => {
+    plant('epoch 43\nissued 1000\nlease 9999999999\nlease 8888888888\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- rc-0 sweep across every `malformed` shape this round touched ---
+  it('every `malformed` verdict stays rc 0, swept across this round\'s shapes', () => {
+    // The reviewer's own point: a word-only assertion misses an rc
+    // violation entirely (C2 produced EMPTY stdout, which no existing
+    // `toBe('malformed')` check could have distinguished from a passing
+    // test that merely forgot to plant a fixture). Each shape here is
+    // independently pinned above; this sweep is the general net.
+    const shapes = [
+      'epoch 43\nissued 1000\nlease 9999999999\nacct acct-a Pool_A\n',        // bad pool grammar
+      'epoch 43\nissued 1000\nlease 9999999999\nacct  pool-a\n',              // C2: empty id
+      'epoch 43\nissued 1000\nlease 0000000009\nacct acct-a pool-a\n',        // C3: octal lease
+      'epoch 43\nissued 1000\nlease 9999999999\nacct \tacct-a pool-a\n',      // C4: tab in id
+      'epoch 43\nissued 1000\nlease 9999999999\nacct "acct-a" pool-a\n',      // C4: quoted id
+      'epoch 43\nepoch 44\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n', // M7: dup epoch
+    ];
+    for (const body of shapes) {
+      plant(body);
+      const { out, rc } = stateRc('acct-a');
+      expect(out).toBe('malformed');
+      expect(rc).toBe(0);
+    }
   });
 });

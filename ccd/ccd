@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=17ff3463c92cf6d5e89cc038ea6357e9df56d98fbf9bdc3cd86187c29e4c4f0f
+# ccrc:generated 1 sha256=45b265365966ead27748814a4a0916454290ad33ed8330fbb03928d29bfcb689
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2109,7 +2109,7 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # straight into the supervisor's own output.
   [[ -n "${1-}" ]] || { echo untagged; return 0; }
   local id="$1" f="$REG/pool-epoch" line k v p epoch='' issued='' lease='' now body=''
-  local found=''
+  local found='' numRe='^(0|[1-9][0-9]*)$'
   local -A seen=()
   # ABSENCE PROVEN AT EVERY LEVEL IT IS CLAIMED, exactly as
   # `_project_pool_state` does it one directory down.
@@ -2131,7 +2131,11 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # sibling chose 64: a legal row is `acct <=32-char id> <=32-char pool>\n`,
   # under 70 bytes, so 64 KiB holds 900+ accounts — an order of magnitude
   # past any fleet this file is sized for — while still refusing a
-  # multi-megabyte runaway file outright.
+  # multi-megabyte runaway file outright. M6 — THE CAP IS STRICT, not
+  # inclusive: `-n 65536` means a document of EXACTLY 65536 bytes also
+  # "stops short of EOF" (measured) and is refused along with everything
+  # larger, so the true accepted range is bytes 0..65535, under 64 KiB, not
+  # up to and including it.
   if { IFS= read -r -d '' -n 65536 body; } 2>/dev/null < "$f"; then
     echo malformed; return 0
   fi
@@ -2144,6 +2148,15 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # Unlike the OLD shape (`done < "$f" ... || unreadable`), this is not
   # merely UNCHECKED — `$?` from the read above IS the check — it is the
   # one ambiguity that checking it cannot resolve, named rather than hidden.
+  # M5 — SAYING THE WORD, not just the outcome, matching the sibling's own
+  # "TWO ARMS, TWO PARKS" discipline of naming which word each arm can
+  # produce: a document truncated mid-read (before the queried row, or
+  # before `epoch`/`issued`/`lease`) is parsed as whatever prefix survived,
+  # and for a queried id that prefix never mentions, the answer is
+  # `untagged` — the FAIL-OPEN word. This is the one place in this function
+  # a park, not a guard, can still produce it; every other `untagged` in
+  # this file is the deliberate, honest "document is complete and silent
+  # about this id" answer.
   while IFS= read -r line || [[ -n "$line" ]]; do
     # C1 — an indented line is a line this reader cannot KEY AT ALL, not a
     # blank one, and must not fall into the blank-line no-op. `k` is
@@ -2164,7 +2177,14 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
     [[ -z "$line" ]] && continue
     v=${line#* }
     case "$k" in
-      epoch)  epoch=$v ;;
+      epoch)  # M7 — a SECOND `epoch` line is the same self-contradiction
+              # M3 catches for `acct` rows: nothing says which value is
+              # true. `-z "$epoch"` as the "not seen yet" test is safe even
+              # though a legal value can BE the string "0" — that is still
+              # non-empty as a string, so this only trips on an actual
+              # repeat, never on the first line.
+              [[ -z "$epoch" ]] || { echo malformed; return 0; }
+              epoch=$v ;;
       # R3's wire format carries an `issued` line (the projection's own
       # issuedAt) between `epoch` and `lease`; this reader has no use for it
       # in any decision, but fix round 1's M2 asks the same question of it
@@ -2172,8 +2192,10 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
       # accepted — so a torn or hand-edited `issued` field poisons the
       # document exactly like a torn `epoch` does, rather than passing
       # silently because nothing downstream happened to read it.
-      issued) issued=$v ;;
-      lease)  lease=$v ;;
+      issued) [[ -z "$issued" ]] || { echo malformed; return 0; }
+              issued=$v ;;
+      lease)  [[ -z "$lease" ]] || { echo malformed; return 0; }
+              lease=$v ;;
       acct)   # I4 — a row missing its pool field (`acct acct-a`, or a bare
               # `acct` with nothing after it at all) leaves `v` as a SINGLE
               # token: `${v#* }` with no space to strip returns the string
@@ -2184,6 +2206,30 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
               # to exist before ever splitting on it.
               [[ "$v" == *' '* ]] || { echo malformed; return 0; }
               p=${v#* }; v=${v%% *}
+              # C2 / C4 — the id field was validated against NO grammar at
+              # all: `acct␣␣pool-a` (two spaces) leaves `v` EMPTY after the
+              # split above (`${v%% *}` on a value that is itself all
+              # leading whitespace strips the whole thing), and
+              # `seen[$v]=1`/`${seen[$v]+x}` with an empty subscript is
+              # `bad array subscript` — a hard bash error that unwinds the
+              # WHOLE FUNCTION, breaking the "always rc 0" contract outright
+              # (measured: empty stdout, rc 1). An off-grammar but non-empty
+              # id (a tab, `ACCT-A`, a quoted or globby id) had NO check at
+              # all and silently discarded the row, reading the account
+              # `untagged` — C1's exact defect, one field to the right, and
+              # a direct contradiction of the very next comment below, which
+              # already treats the POOL half of this same row as
+              # poison-the-document. `^[A-Za-z0-9._-]{1,64}$` — MUST agree
+              # with Task 3's `ccd-pool-sync` writer, which validates an
+              # account id against this identical pattern before it ever
+              # renders a line (`re.match(r"^[A-Za-z0-9._-]{1,64}$", k)`) —
+              # a disagreement between the two would mean one side emits
+              # rows the other refuses. `{1,64}` requires AT LEAST one
+              # character, so this one check closes C2 (empty id) as a
+              # special case of C4 (off-grammar id) rather than needing a
+              # second, separate emptiness check — verified: `[[ "" =~
+              # ^[A-Za-z0-9._-]{1,64}$ ]]` is false.
+              [[ "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo malformed; return 0; }
               # A name off the grammar poisons the WHOLE document: a reader
               # that skipped the bad row would serve the rest under a tag it
               # could not validate.
@@ -2205,11 +2251,25 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # No epoch (or, since M2, issued/lease) line is not an empty document — it
   # is a document this reader does not recognise, and recognising it
   # partially is how a stale format gets served as fact.
-  [[ "$epoch"  =~ ^[0-9]+$ ]] || { echo malformed; return 0; }
-  [[ "$issued" =~ ^[0-9]+$ ]] || { echo malformed; return 0; }
-  [[ "$lease"  =~ ^[0-9]+$ ]] || { echo malformed; return 0; }
+  #
+  # C3 — `^[0-9]+$` PERMITS A LEADING ZERO, and `(( ))` treats a leading-zero
+  # operand as OCTAL: a document saying `lease 0000000009` (expired in 1970)
+  # threw `value too great for base` on the digit `9` and then, because that
+  # arithmetic error does not abort this function the way an array-subscript
+  # error does, fell straight through past the stale gate to `named <n>` —
+  # serving an expired tag as current. Fixed IN THE GRAMMAR, not only the
+  # arithmetic: `%d` is what the (future) writer emits, and `%d` can never
+  # produce a leading zero, so `^(0|[1-9][0-9]*)$` — zero, or a non-zero
+  # digit followed by any digits — IS the true grammar for all three numeric
+  # fields, spelled ONCE and reused, rather than duplicated three times only
+  # to drift. `10#` at the one place a value reaches `(( ))` is defence IN
+  # DEPTH, not the primary fix: it forces base-10 even if some future caller
+  # of `lease` bypassed this validation.
+  [[ "$epoch"  =~ $numRe ]] || { echo malformed; return 0; }
+  [[ "$issued" =~ $numRe ]] || { echo malformed; return 0; }
+  [[ "$lease"  =~ $numRe ]] || { echo malformed; return 0; }
   now=$(date +%s)
-  (( now > lease )) && { echo stale; return 0; }
+  (( now > 10#$lease )) && { echo stale; return 0; }
   # An account the document does not name is UNTAGGED, not unknown: the
   # document is complete by construction (the control plane always emits every
   # edge it holds), so silence about an account is a positive statement that
