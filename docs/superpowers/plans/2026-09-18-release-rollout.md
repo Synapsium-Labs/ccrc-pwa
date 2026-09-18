@@ -2162,9 +2162,9 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 | 2 | `npm ci` step added | owns no second build path | RED (1/1 failed) |
 | 2 | `concurrency:` removed | serialises | RED (1/1 failed) |
 | 2 | `timeout-minutes: 360` | oss-metadata deadline | RED (1/1 failed) |
-| 3 | `_inst_installed` above `_inst_skills` | fault half of the install case | |
-| 3 | uninstall `rm` removed | preserve-set case | |
-| 3 | `cmd_version` compares `$rec == $rec` | `def456` sub-case | |
+| 3 | `_inst_installed` above `_inst_skills` | fault half of the install case | RED (1/1 failed) |
+| 3 | uninstall `rm` removed | preserve-set case | RED (1/1 failed) |
+| 3 | `cmd_version` compares `$rec == $rec` | `def456` sub-case | RED (1/1 failed) |
 | 4 | version comparison dropped | different version never consults the record | |
 | 4 | staged==box dropped | moved tag proceeds | |
 | 4 | record comparison dropped | record absent / stale proceeds | |

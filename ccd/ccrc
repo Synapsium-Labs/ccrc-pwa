@@ -1117,6 +1117,15 @@ CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 BOX_STAMP_FILE="$HOME/.ccrc/build.json"
 BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 
+# The completed-install record (release/rollout design §5): one line, the
+# sha of the stamp the install spine COMPLETED under. Written by
+# `_inst_installed`, the LAST step of `cmd_install`, so it exists only when
+# every step before it did. `build.json` cannot carry this — `_inst_stamp`
+# sits mid-spine because the server `_inst_enable` restarts reads the stamp
+# at boot — and a stamp that means both "installed" and "half-installed" is
+# the overloaded value this tree bans at a seam. deploy.sh never writes it.
+BOX_INSTALLED_FILE="$HOME/.ccrc/installed"
+
 # ── THE EXPOSURE FILE, WHICH `expose` WRITES AND THE SERVER UNIT READS ────
 # `~/.ccrc/exposure.env` — stage 3b, spec D3. Exposure keys (CCRC_ORIGIN,
 # CCRC_RP_ID, the DuckDNS trio) get their OWN EnvironmentFile because ccrc.env
@@ -1705,6 +1714,17 @@ cmd_version() {
   # line, so an unversioned box's output is byte-identical to before.
   if [[ -n "${BOX_BUILD[4]}" ]]; then
     echo "version ${BOX_BUILD[4]}"
+  fi
+  local rec=""
+  if [[ -f "$BOX_INSTALLED_FILE" ]]; then
+    IFS= read -r rec < "$BOX_INSTALLED_FILE" || rec=""
+    if [[ "$rec" == "${BOX_BUILD[0]}" ]]; then
+      echo "install: complete"
+    else
+      echo "install: incomplete — stamp ${BOX_BUILD[0]}, completed-install record names ${rec:-nothing}"
+    fi
+  else
+    echo "install: incomplete — stamp ${BOX_BUILD[0]}, no completed-install record (ccrc install and ccrc update write one last; deploy.sh never does)"
   fi
 }
 
@@ -9046,6 +9066,7 @@ cmd_install() {
   _inst_graph_excludes
   _inst_graph_hooks_off
   _inst_wrappers
+  _inst_installed
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
   # Every step above either converged or died, so "done" is a statement about
@@ -10851,6 +10872,23 @@ _inst_wrappers() {
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
 
+# ── _inst_installed — the completed-install record, the spine's LAST write ─
+# Not degraded when the box has no readable stamp (a git-less checkout):
+# `ccrc version` already explains "unstamped", and a record naming no sha
+# would let update's gate skip a box it cannot identify.
+_inst_installed() {
+  local rc=0 tmp dest="$BOX_INSTALLED_FILE"
+  _box_build_fields || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "install: installed: not recorded — this box has no readable build stamp (ccrc version explains), so 'ccrc update' will never treat it as already installed"
+    return 0
+  fi
+  tmp="$dest.tmp.$$"
+  printf '%s\n' "${BOX_BUILD[0]}" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
+    || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
+  echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it)"
+}
+
 # ── cmd_update — the box moves to a published release (stage 4, Task 6) ───
 # Per box, explicit, never automatic (spec §4). The sequence, each step
 # refusing loudly rather than degrading:
@@ -11773,6 +11811,8 @@ _uninst_graphify_skills() {
 _uninst_tree_bins() {
   rm -rf -- "$BOX_TREE_DIR" \
     || _ccrc_die "removing $BOX_TREE_DIR failed"
+  rm -f -- "$BOX_INSTALLED_FILE" \
+    || _ccrc_die "removing $BOX_INSTALLED_FILE failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself
@@ -11800,7 +11840,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py and the ccrc launcher removed from \$HOME/.local/bin"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record removed"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an

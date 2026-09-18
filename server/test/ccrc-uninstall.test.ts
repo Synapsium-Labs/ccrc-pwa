@@ -194,6 +194,7 @@ function plantInstalledBox(home: string): void {
   writeFileSync(join(home, '.ccrc', 'build.json'),
     '{"sha":"fixturesha000000000000000000000000000000","ref":"main",'
     + '"builtAt":"2026-08-21T00:00:00Z","dirty":false}\n');
+  writeFileSync(join(home, '.ccrc', 'installed'), 'fixturesha000000000000000000000000000000\n');
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -522,6 +523,9 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
     expect(r.stdout).toMatch(/uninstall: tree: graphify removed from \$HOME\/\.local\/bin/);
     // The preserve set, whole.
+    // The completed-install record is NOT config: a box with no tree has no
+    // completed install, and leaving it would let a later `ccrc update` skip.
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);
