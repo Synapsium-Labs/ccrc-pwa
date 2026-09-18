@@ -1350,6 +1350,20 @@ describe('FleetScreen', () => {
     });
   });
 
+  it('renders a card for a known project with no session on it, once /api/projects lands (R5)', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [
+      { name: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner' },
+      { name: 'ghost', workdir: '/home/rc/projects/ghost' },
+    ] });
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session()], pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+    await waitFor(() => {
+      const names = [...document.querySelectorAll('.proj-card-name')].map((n) => n.textContent);
+      expect(names).toEqual(['OpenClawHetzner', 'ghost']);
+    });
+  });
+
   it('creates a workspace on the tapped project', async () => {
     const calls: string[] = [];
     vi.spyOn(api, 'workspaceAdd').mockImplementation(async (p: string) => {

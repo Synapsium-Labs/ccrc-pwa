@@ -19,7 +19,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'working' }),
       s({ id: 'z', project: 'zeta', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g.map((x) => x.project)).toEqual(['zeta', 'alpha']);
   });
 
@@ -27,7 +27,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha' }),
       s({ id: 'b', project: 'alpha', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.attention).toBe(true);
   });
@@ -35,7 +35,7 @@ describe('groupFleet', () => {
   it('counts from the server bucket, so the head cannot contradict its rows', () => {
     const g = groupFleet([
       s({ id: 'a', bucket: 'attention' }), s({ id: 'b', bucket: 'working' }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.attention).toBe(true);
     expect(g.busy).toBe(1);
   });
@@ -45,7 +45,7 @@ describe('groupFleet', () => {
       s({ id: 'a', project: 'alpha', bucket: 'working' }),
       s({ id: 'b', project: 'alpha', bucket: 'working' }),
       s({ id: 'c', project: 'alpha', bucket: 'idle' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.busy).toBe(2);
   });
@@ -60,7 +60,7 @@ describe('groupFleet', () => {
     // to prove, only that `busy` reads the field SessionLine's own word reads.
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.busy).toBe(0);
     expect(g[0]!.attention).toBe(true);
@@ -70,13 +70,13 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'attention' }),
       s({ id: 'b', project: 'alpha', bucket: 'working' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.busy).toBe(1);
   });
 
   it('reports how many members are unseen', () => {
-    const g = groupFleet([s({ id: 'a', bucket: 'attention', bucketSince: 10 })], { a: 5 })[0]!;
+    const g = groupFleet([s({ id: 'a', bucket: 'attention', bucketSince: 10 })], [], { a: 5 })[0]!;
     expect(g.unseen).toBe(1);
   });
 
@@ -86,6 +86,7 @@ describe('groupFleet', () => {
         s({ id: 'a', project: 'alpha', bucket: 'attention', bucketSince: 10 }), // acked after
         s({ id: 'b', project: 'alpha', bucket: 'working', bucketSince: 999 }),  // never badged
       ],
+      [],
       { a: 20 },
     )[0]!;
     expect(g.unseen).toBe(0);
@@ -95,7 +96,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', bucket: 'working' }),
       s({ id: 'b', project: 'alpha', bucket: 'attention' }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.sessions.map((x) => x.id)).toEqual(['b', 'a']);
   });
@@ -103,7 +104,7 @@ describe('groupFleet', () => {
   it('is pure — it does not reorder its argument', () => {
     const input = [s({ id: 'a', project: 'zeta' }), s({ id: 'b', project: 'alpha' })];
     const copy = [...input];
-    groupFleet(input);
+    groupFleet(input, []);
     expect(input).toEqual(copy);
   });
 
@@ -114,7 +115,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', project: '99', bucket: 'attention' }),
       s({ id: 'b', project: '1', bucket: 'working' }),
-    ]);
+    ], []);
     expect(g.map((x) => x.project)).toEqual(['99', '1']);
   });
 
@@ -132,7 +133,7 @@ describe('groupFleet', () => {
     // the one that can.
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', status: 'dead', dialogPending: true }),
-    ]);
+    ], []);
     expect(g).toHaveLength(1);
     expect(g[0]!.attention).toBe(false);
   });
@@ -146,7 +147,7 @@ describe('groupFleet', () => {
     // bucket is the entire answer, so a session cannot be both.
     const g = groupFleet([
       s({ id: 'a', project: 'alpha', status: 'busy', dialogPending: true, bucket: 'working' }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.attention).toBe(false);
     expect(g.busy).toBe(1);
   });
@@ -161,7 +162,7 @@ describe('groupFleet', () => {
       s({ id: 'away', status: 'idle', bucket: 'idle', wrapper: 'claude2', home: 'claude', stranded: marker }),
       s({ id: 'dead', status: 'dead', bucket: 'dead', stranded: marker }),
       s({ id: 'archived', status: 'dead', bucket: 'archived', stranded: marker }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.stranded).toBe(3);
   });
 
@@ -169,7 +170,7 @@ describe('groupFleet', () => {
     // `server/src/registry.ts` reads `.stranded` fail-shut: a present but
     // unreadable marker arrives as `{at: 0, reason: STRANDED_UNREADABLE}`.
     // `at === 0` is a real row, and a truthiness test on `at` would drop it.
-    const g = groupFleet([s({ id: 'a', stranded: { at: 0, reason: 'registry field unreadable' } })])[0]!;
+    const g = groupFleet([s({ id: 'a', stranded: { at: 0, reason: 'registry field unreadable' } })], [])[0]!;
     expect(g.stranded).toBe(1);
   });
 
@@ -180,7 +181,7 @@ describe('groupFleet', () => {
     // — the same discipline `graphReadCount` carries for its own field.
     const older = { ...s({ id: 'a' }) } as Record<string, unknown>;
     delete older['stranded'];
-    const g = groupFleet([older as unknown as FleetSession])[0]!;
+    const g = groupFleet([older as unknown as FleetSession], [])[0]!;
     expect(g.stranded).toBe(0);
   });
 
@@ -188,7 +189,7 @@ describe('groupFleet', () => {
     const g = groupFleet([
       s({ id: 'a', bucket: 'archived', stranded: { at: 1, reason: 'nowhere to go' } }),
       s({ id: 'b', stranded: { at: 2, reason: 'nowhere to go' } }),
-    ])[0]!;
+    ], [])[0]!;
     expect(g.stranded).toBe(1);
   });
 });
@@ -198,18 +199,18 @@ describe('pin', () => {
     ({ ...s({ id, project: 'demo' }), home });
 
   it('is the account all of a project\'s sessions call home', () => {
-    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude')]);
-    expect(g!.pin).toBe('claude');
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude')], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude' });
   });
 
   it('is null when they disagree — the card must not claim one of them', () => {
-    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')]);
-    expect(g!.pin).toBeNull();
+    const [g] = groupFleet([at('demo-a', 'claude'), at('demo-b', 'claude2')], []);
+    expect(g!.pin).toEqual({ state: 'mixed' });
   });
 
   it('is the lone session\'s home for a single-session project', () => {
-    const [g] = groupFleet([at('demo-a', 'claude-corp')]);
-    expect(g!.pin).toBe('claude-corp');
+    const [g] = groupFleet([at('demo-a', 'claude-corp')], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-corp' });
   });
 });
 
@@ -224,7 +225,7 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     s({ id, project: 'demo', archivedAt: 1785300000, bucket: 'cleanup', ...over });
 
   it('splits archived sessions out of the live list without dropping them', () => {
-    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), arch('demo-b')]);
+    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), arch('demo-b')], []);
     expect(g!.sessions.map((x) => x.id)).toEqual(['demo-a']);
     expect(g!.archived.map((x) => x.id)).toEqual(['demo-b']);
   });
@@ -234,7 +235,7 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
   // counted `Cleanup 1` and offered "Mark all seen" for a row that rendered
   // nowhere on the screen, under a fold that read `Archived (2)`.
   it('leaves a cleanup row in the live list, where its own chip counts it', () => {
-    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), clean('demo-merged')]);
+    const [g] = groupFleet([s({ id: 'demo-a', project: 'demo' }), clean('demo-merged')], []);
     expect(g!.sessions.map((x) => x.id)).toContain('demo-merged');
     expect(g!.archived.map((x) => x.id)).toEqual([]);
   });
@@ -243,13 +244,13 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
   // `Archived (n)` is exactly the `Archived` chip's members, never the union.
   it('makes the fold the same set the Archived chip counts', () => {
     const fleet = [arch('demo-b'), clean('demo-merged'), s({ id: 'demo-a', project: 'demo' })];
-    const [g] = groupFleet(fleet);
+    const [g] = groupFleet(fleet, []);
     expect(g!.archived).toHaveLength(fleet.filter((x) => x.bucket === 'archived').length);
   });
 
   it('keeps a project whose sessions are ALL archived', () => {
     // Dropping it would make the workspace reachable only by a URL nobody has.
-    const [g] = groupFleet([arch('demo-b')]);
+    const [g] = groupFleet([arch('demo-b')], []);
     expect(g!.sessions).toEqual([]);
     expect(g!.archived).toHaveLength(1);
   });
@@ -265,10 +266,10 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     const [g] = groupFleet([
       s({ id: 'demo-a', project: 'demo', home: 'claude' }),
       arch('demo-b', { home: 'claude2' }),
-    ]);
+    ], []);
     expect(g!.busy).toBe(0);
     expect(g!.attention).toBe(false);
-    expect(g!.pin).toBe('claude');
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude' });
   });
 
   it('still computes a pin when every session is archived', () => {
@@ -276,17 +277,17 @@ describe('the archived sub-fold is split on the BUCKET, not on archivedAt', () =
     // groupFleet.ts) exists so this branch never indexes an empty array —
     // dropping the `: members` half leaves `forPin` empty here, which is
     // exactly what the "ALL archived" test above does not check.
-    const [g] = groupFleet([arch('demo-b', { home: 'claude-corp' })]);
-    expect(g!.pin).toBe('claude-corp');
+    const [g] = groupFleet([arch('demo-b', { home: 'claude-corp' })], []);
+    expect(g!.pin).toEqual({ state: 'shared', home: 'claude-corp' });
   });
 
   it('counts an unseen cleanup member in `unseen`, since it is a live row now', () => {
     // `cleanup` is a BADGED bucket (seen.ts). A per-project badge that
     // skipped it would undercount against the bucket bar's Cleanup chip —
     // the two would be describing the same rows and disagreeing.
-    const [g] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], {});
+    const [g] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], [], {});
     expect(g!.unseen).toBe(1);
-    const [seenGroup] = groupFleet([clean('demo-merged', { bucketSince: 5000 })],
+    const [seenGroup] = groupFleet([clean('demo-merged', { bucketSince: 5000 })], [],
       { 'demo-merged': 6000 });
     expect(seenGroup!.unseen).toBe(0);
   });
@@ -345,5 +346,42 @@ describe('the unseen field\'s doc', () => {
       expect(readFileSync(path.join(srcDir, file), 'utf8')).not.toMatch(/isUnseen/);
     }
     expect(doc).toMatch(/when a row badge or a bell counter arrives/i);
+  });
+});
+
+describe('durable cards (R5, D-3010)', () => {
+  it('renders a known project with zero sessions as a group with no members', () => {
+    const g = groupFleet([s({ id: 'a', project: 'alpha' })], ['alpha', 'ghost']);
+    expect(g.map((x) => x.project)).toEqual(['alpha', 'ghost']);
+    const ghost = g[1]!;
+    expect(ghost.sessions).toEqual([]);
+    expect(ghost.archived).toEqual([]);
+    expect(ghost.attention).toBe(false);
+    expect(ghost.busy).toBe(0);
+    expect(ghost.unseen).toBe(0);
+    expect(ghost.stranded).toBe(0);
+    expect(ghost.pin).toEqual({ state: 'empty' });   // not `mixed`: nothing disagrees
+  });
+
+  it('keeps the populated cards in urgency order and appends the empty ones in list order', () => {
+    // `zeta` is more urgent than `alpha`; `ghost-b`/`ghost-a` are empty and
+    // arrive in the list's order, which is the server's alphabetical one.
+    const g = groupFleet([
+      s({ id: 'a', project: 'alpha', bucket: 'working' }),
+      s({ id: 'z', project: 'zeta', bucket: 'attention' }),
+    ], ['alpha', 'ghost-b', 'ghost-a', 'zeta']);
+    expect(g.map((x) => x.project)).toEqual(['zeta', 'alpha', 'ghost-b', 'ghost-a']);
+  });
+
+  it('dedupes a project the list names twice — one card, one key', () => {
+    const g = groupFleet([], ['twice', 'twice']);
+    expect(g.map((x) => x.project)).toEqual(['twice']);
+  });
+
+  it('a project absent from the list still renders a card for its own sessions', () => {
+    // `listProjects` skips linked worktrees, so a workspace-only project is
+    // NOT in the list; the fallback is load-bearing, not decorative.
+    const g = groupFleet([s({ id: 'w', project: 'worktree-only' })], ['other']);
+    expect(g.map((x) => x.project)).toEqual(['worktree-only', 'other']);
   });
 });

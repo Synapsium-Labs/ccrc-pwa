@@ -19,7 +19,7 @@ import { accountColorVar, accountLabel } from '../lib/accounts';
 import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
 import { formatElapsed } from './formatReset';
-import type { FleetGroup } from './groupFleet';
+import type { FleetGroup, FleetPin } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
@@ -135,6 +135,26 @@ function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): React
         <span className="proj-pending-elapsed">{formatElapsed(spawn.elapsedMs)}</span>
       </span>
     </div>
+  );
+}
+
+/** The header's pin chip. Nothing at all on an empty card: `mixed` is a claim
+ *  about disagreement, and zero sessions do not disagree (D-3010). */
+function PinChip({ pin, roster }: { pin: FleetPin; roster: readonly RosterWire[] }): ReactNode {
+  if (pin.state === 'empty') return null;
+  if (pin.state === 'mixed') {
+    return (
+      <span className="proj-card-pin" data-mixed aria-label="pinned accounts differ">mixed</span>
+    );
+  }
+  return (
+    <span
+      className="proj-card-pin"
+      aria-label={`pinned to ${accountLabel(roster, pin.home)}`}
+      style={{ color: `var(${accountColorVar(roster, pin.home)})` }}
+    >
+      {accountLabel(roster, pin.home)}
+    </span>
   );
 }
 
@@ -424,14 +444,7 @@ export function ProjectCard({
               line. `mixed` when the sessions disagree: a header asserting one
               account while two lines show two different ones would be a lie,
               and divergent pins across one project is worth noticing. */}
-          <span
-            className="proj-card-pin"
-            data-mixed={group.pin === null || undefined}
-            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(roster, group.pin)}`}
-            style={group.pin === null ? undefined : { color: `var(${accountColorVar(roster, group.pin)})` }}
-          >
-            {group.pin === null ? 'mixed' : accountLabel(roster, group.pin)}
-          </span>
+          <PinChip pin={group.pin} roster={roster} />
           {/* A fold must not hide a session stranded with no valid destination. */}
           {group.stranded > 0 && (
             <span className="proj-card-stranded">{group.stranded} stranded</span>

@@ -25,7 +25,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: 'claude',
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: { state: 'shared', home: 'claude' },
   stranded: 0, archived: [], ...over,
 });
 
@@ -50,6 +50,13 @@ describe('uniform shape', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'b', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('2')).toBeInTheDocument();
+  });
+
+  it('renders NO pin chip on an empty card — nothing is pinned and nothing disagrees', () => {
+    const { container } = render(
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card-pin')).toBeNull();
+    expect(screen.getByText('demo')).toBeInTheDocument();
   });
 });
 
@@ -118,17 +125,17 @@ describe('the + button', () => {
 
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
-    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude-corp' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
   it('says "mixed" when the sessions disagree rather than picking one', () => {
-    render(<ProjectCard group={grp({ pin: null })} onOpen={() => {}} onActions={() => {}} />);
+    render(<ProjectCard group={grp({ pin: { state: 'mixed' } })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('mixed')).toBeInTheDocument();
   });
 
   it('names the pin for assistive tech — a bare label reads as decoration', () => {
-    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('pinned to team·max')).toBeInTheDocument();
   });
 });
@@ -224,7 +231,7 @@ describe('status owns the perimeter only for attention', () => {
     // gone now — `bucket` is the one field both `group.busy` and the row's
     // own word read — so this is structurally impossible rather than merely
     // untested; the assertions below are the same ones that caught it.
-    const [g] = groupFleet([sess({ bucket: 'attention' })]);
+    const [g] = groupFleet([sess({ bucket: 'attention' })], []);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('working')).toBeNull();
@@ -239,7 +246,7 @@ describe('status owns the perimeter only for attention', () => {
     const [g] = groupFleet([
       sess({ bucket: 'attention' }),
       sess({ id: 'demo-still-cove', workspace: 'still-cove', bucket: 'working' }),
-    ]);
+    ], []);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('2 working')).toBeNull();
@@ -757,7 +764,7 @@ describe('the stranded cell', () => {
     const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
     const [group] = groupFleet([
       sess({ status: 'dead', bucket: 'dead', stranded: marker }),
-    ]);
+    ], []);
     render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
 
     expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();

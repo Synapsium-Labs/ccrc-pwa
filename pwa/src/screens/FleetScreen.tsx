@@ -436,6 +436,13 @@ export function FleetScreen({
   const feed = useStore((s) => s.feed);
   const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
 
+  // R5 (D-3010): the card set is seeded from the known-project list once it
+  // lands. Before it lands — `legacy`, `pending`, `failed` — the cards are
+  // session-derived exactly as before, and the set only ever GROWS when the
+  // read arrives: a card cannot be destroyed by a read this device has not
+  // made yet. Not hydrated and not persisted, for `pools`' own reason.
+  const knownProjects = projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [];
+
   return (
     <main className="fleet" data-conn={conn}>
       <header className="fleet-head">
@@ -693,7 +700,7 @@ export function FleetScreen({
           <div className="sr-only" role="status">{ackNote}</div>
 
           <div className="fleet-list">
-            {groupFleet(sessions, acks).map((g) => (
+            {groupFleet(sessions, knownProjects, acks).map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}
