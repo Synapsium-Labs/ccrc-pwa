@@ -50,7 +50,7 @@
 //     → "the health timer lost its boot anchor: expected [ '[Unit]', …(7) ] to
 //        include 'OnBootSec=7min'"
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 
 const SYSTEMD = path.join(import.meta.dirname, '..', '..', 'deploy', 'systemd');
@@ -100,16 +100,40 @@ describe('first-run anchors: the two new timers answer the deploy differently, o
   });
 
   it('every timer in deploy/systemd carries exactly one first-run anchor', () => {
-    // The census, so a fifth timer joining the four cannot arrive with no
-    // anchor at all (first run then waits for OnUnitActiveSec from an
-    // activation that never happened) or with both (two elapse points, and
-    // `man 5 systemd.timer` fires on whichever comes first — a stagger nobody
-    // chose). `ccrc-ddns.timer` is the one deliberate abstainer: it is a
-    // CALENDAR timer, which is also the only shape `Persistent=` means anything
-    // for, and it carries that key.
+    // The census, so a timer joining the others cannot arrive with no anchor
+    // at all (first run then waits for OnUnitActiveSec from an activation that
+    // never happened) or with both (two elapse points, and `man 5
+    // systemd.timer` fires on whichever comes first — a stagger nobody chose).
+    // `ccrc-ddns.timer` is the one deliberate abstainer: it is a CALENDAR
+    // timer, which is also the only shape `Persistent=` means anything for,
+    // and it carries that key.
+    //
+    // DERIVED FROM THE DIRECTORY (ruling T4-R2), not hand-kept, on
+    // `macos-platform.test.ts:184-189`'s precedent under D-1250: "Deriving the
+    // list makes the next file added a decision someone records here rather
+    // than a gap nobody sees." Measured before the change: this test's
+    // six-name literal was missing BOTH `ccd-pool-sync.timer` (this wave) and
+    // `ccrc-ddns.timer`'s co-abstainer-in-spirit `ccrc-models.timer` (which
+    // predates it), against eight `.timer` files on disk — so a test whose own
+    // title says "every timer in deploy/systemd" was passing four cases while
+    // never opening two of the files it claims. Deriving closed both in one
+    // move, and neither new timer needed an exception: both carry exactly one
+    // `OnBootSec=`.
     const CALENDAR = new Set(['ccrc-ddns.timer']);
-    const timers = ['ccd-account-health.timer', 'ccd-cap-scopes.timer', 'ccd-graph-sweep.timer',
-      'ccd-telemetry-keepalive.timer', 'ccd-usage-sweep.timer', 'ccrc-ddns.timer'];
+    const timers = readdirSync(SYSTEMD).filter((n) => n.endsWith('.timer')).sort();
+    // ANTI-VACUITY: a `readdirSync` that suddenly answers nothing (a moved
+    // directory, a renamed suffix) would make this loop green over an empty
+    // set. The floor is the length of the hand-written list this derivation
+    // replaces, so it is a ratchet nobody has to bump for a new timer.
+    expect(timers.length, 'deploy/systemd listed fewer .timer files than the hand-kept list carried')
+      .toBeGreaterThanOrEqual(6);
+    // And the abstainer set must still name a timer that EXISTS, or the
+    // calendar arm below becomes an exemption for nothing while the file it
+    // excused has been renamed out from under it.
+    for (const name of CALENDAR) {
+      expect(timers, `${name} is exempted as a calendar timer but is not in deploy/systemd`)
+        .toContain(name);
+    }
     for (const name of timers) {
       const anchors = keys(name).filter((l) => /^On(Boot|Active|Startup)Sec=/.test(l));
       if (CALENDAR.has(name)) {

@@ -571,6 +571,33 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .toMatch(/uninstall: tree: .*ccd-account-auth.* removed from \$HOME\/\.local\/bin/);
   });
 
+  it('a STAMPED ccd-pool-sync is the bin arm\'s subject too — the uninstall twin of its TOOLCHAIN_EXECUTABLES entry', () => {
+    // account-pool-membership wave 1, Task 4 fix round 2 (B1). The sibling
+    // above states the mechanism; this is the same claim for the name that
+    // shipped into `_inst_bins`, `_uninst_tree_bins` and
+    // `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` in fix round 1
+    // while `_uninst_wrappers`' exclusion case was left without it — the one
+    // place in the five-path census that got no entry.
+    //
+    // INERT ON A REAL BOX TODAY, and pinned anyway for the reason the case's
+    // own comment gives: `_inst_atomic` does not stamp, so the installed copy
+    // is unmarked and `verifyMarker` answers `foreign` whether or not the
+    // case names it. A marked fixture is the only thing that can tell the two
+    // worlds apart, which is why it is the fixture rather than a text scan.
+    const home = mkTmp('ccrc-uninst-poolsync-marked-');
+    plantInstalledBox(home);
+    writeFileSync(join(home, '.local', 'bin', 'ccd-pool-sync'),
+      markGenerated('#!/bin/sh\n# pool sync\n'), { mode: 0o755 });
+    const r = runVerb(home, 'uninstall');
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, '.local', 'bin', 'ccd-pool-sync')),
+      'the puller survived the uninstall').toBe(false);
+    expect(r.stdout, 'a toolchain executable was counted in the wrapper census')
+      .not.toMatch(/uninstall: wrappers: removed .*ccd-pool-sync/);
+    expect(r.stdout, 'the bin census does not name it')
+      .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
+  });
+
   // The other half of D-1347, and the half that makes the removal safe: the
   // install REFUSES to touch a `graphify` it did not write (`ccrc did not
   // write it — left in place`), so the uninstall may not remove one either.

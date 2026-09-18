@@ -659,9 +659,15 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(keepaliveTimerAt, 'the keepalive timer is never enabled').toBeGreaterThan(reloadAt);
     const modelsTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccrc-models.timer'));
     expect(modelsTimerAt, 'the models timer is never enabled').toBeGreaterThan(reloadAt);
-    // account-pool-membership wave 1, Task 4: a sixth timer, needing the same
-    // daemon-reload to have already picked up the unit AGENT_BUILD_CMD
-    // installed.
+    // account-pool-membership wave 1, Task 4: the pool-sync timer, needing the
+    // same daemon-reload to have already picked up the unit AGENT_BUILD_CMD
+    // installed. NO ORDINAL (ruling T4-R4, fix round 2): this one shipped
+    // reading "a sixth timer", which was wrong on the day it was written —
+    // `deploy.sh`'s agent lane enables SEVEN, and the ordinals above it skip
+    // `ccrc-models.timer` and `ccd-usage-sweep.timer` entirely. `ccd/ccrc`
+    // retired its own spelled-out ordinals for exactly this (D-1347, D-2594):
+    // nothing can measure one, so it is a standing request for a reader to do
+    // a machine's job. The assertions below ARE the census.
     const poolSyncTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-pool-sync.timer'));
     expect(poolSyncTimerAt, 'the pool-sync timer is never enabled').toBeGreaterThan(reloadAt);
 

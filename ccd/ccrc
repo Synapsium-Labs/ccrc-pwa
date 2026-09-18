@@ -9730,9 +9730,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive and no ccd-usage-sweep — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep and no ccd-pool-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-pool-sync and the ccrc launcher in \$HOME/.local/bin"
   fi
 }
 
@@ -10108,10 +10108,29 @@ _inst_units() {
   _inst_atomic "$tree/ccd/claude-session@.service" "$dir/claude-session@.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.service" 644
   _inst_atomic "$tree/deploy/systemd/ccd-cap-scopes.timer" "$dir/ccd-cap-scopes.timer" 644
-  # account-pool-membership wave 1, Task 4: the leased-projection puller's
-  # pair, unconditional here on the same terms as its sibling above.
-  _inst_atomic "$tree/deploy/systemd/ccd-pool-sync.service" "$dir/ccd-pool-sync.service" 644
-  _inst_atomic "$tree/deploy/systemd/ccd-pool-sync.timer" "$dir/ccd-pool-sync.timer" 644
+  # account-pool-membership wave 1, Task 4 fix round 2 (ruling T4-R1): the
+  # leased-projection puller's pair, GATED ON `fleet` AND ON NOTHING ELSE —
+  # the one gate in this function that is not `[ "$INST_ROLE" != server ]`,
+  # and the difference IS the fix.
+  #
+  # DERIVED FROM ITS PRECONDITION, NOT FROM A SIBLING. `ccd-pool-sync:52`
+  # refuses without `$HOME/.ccrc/agent.env`, and the only thing in this tree
+  # that writes that file is `_inst_agent_env`, whose whole condition is
+  # `[ "$INST_ROLE" = fleet ] || return 0`. Copying the siblings' gate would
+  # be INSUFFICIENT rather than merely inelegant: `both` is not `server`, and
+  # `both` is the DEFAULT role (`:1381`, `:8925`), so `!= server` would leave
+  # the default install arming a timer whose binary exits 1 every 60 seconds
+  # forever — a permanently failed oneshot under a timer that stays ACTIVE,
+  # which is what `_check_services` measures, so `ccrc doctor` would print
+  # PASS on a box where the sync has never once succeeded. That is gating by
+  # imitation, which the account-health comment below refuses by name.
+  #
+  # The binary stays unconditional in `_inst_bins` — graph-sweep's rule, and
+  # `_uninst_tree_bins` removes it on every role to match.
+  if [ "$INST_ROLE" = fleet ]; then
+    _inst_atomic "$tree/deploy/systemd/ccd-pool-sync.service" "$dir/ccd-pool-sync.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-pool-sync.timer" "$dir/ccd-pool-sync.timer" 644
+  fi
   # graphify Task 10 (O3/O6b): ROLE-GATED, unlike every unit above — a server
   # box runs no per-tree AST sweep at all, so its unit files stay off it
   # entirely (`_inst_enable`'s own gate on the ENABLE side matches this one).
@@ -10197,17 +10216,24 @@ _inst_enable() {
     systemctl --user enable --now "$u" \
       || _ccrc_die "systemctl --user enable --now $u failed — read what it says: systemctl --user status $u"
   done
-  # account-pool-membership wave 1, Task 4: the pool-sync timer, unconditional
-  # here on the same terms as `_inst_units` ships its pair — but DEGRADES
-  # rather than dies (`_inst_linger`'s own idiom, and every timer below this
-  # point): a systemd that will not take this one timer must not turn an
-  # otherwise-converged install into a failed one the way `ccrc.service`'s own
-  # enable is entitled to — the sync is a cache refresh, not the guardrail
-  # `ccd-cap-scopes.timer` is. Its own failure mode is silent rather than loud
-  # (`ccrc-doctor-checks`'s `known` array covers it for exactly that reason),
-  # which is an argument for doctor catching a stopped timer, not for dying
-  # here over one that merely would not enable.
-  systemctl --user enable --now ccd-pool-sync.timer \
+  # account-pool-membership wave 1, Task 4 fix round 2 (ruling T4-R1): the
+  # pool-sync timer, on THE SAME GATE `_inst_units` puts on its unit files and
+  # for the same reason — `fleet`, because `_inst_agent_env` writes this
+  # timer's one precondition under exactly `[ "$INST_ROLE" = fleet ]`, and
+  # `both` (the default) gets no agent.env either. Spelled `!= fleet ||` so it
+  # reads in the shape of the role-gated enables below while naming the
+  # opposite set; an enable for a unit file this role never installed is
+  # `Unit ccd-pool-sync.timer does not exist` on stderr and nothing else.
+  #
+  # DEGRADES rather than dies (`_inst_linger`'s own idiom, and every timer
+  # below this point): a systemd that will not take this one timer must not
+  # turn an otherwise-converged install into a failed one the way
+  # `ccrc.service`'s own enable is entitled to — the sync is a cache refresh,
+  # not the guardrail `ccd-cap-scopes.timer` is. Its own failure mode is
+  # silent rather than loud (`ccrc-doctor-checks`'s `known` array covers it
+  # for exactly that reason), which is an argument for doctor catching a
+  # stopped timer, not for dying here over one that merely would not enable.
+  [ "$INST_ROLE" != fleet ] || systemctl --user enable --now ccd-pool-sync.timer \
     || echo "install: pool-sync: could not enable ccd-pool-sync.timer — run: systemctl --user enable --now ccd-pool-sync.timer" >&2
   # graphify Task 10 (O3/O6b): the sweep timer, gated exactly as
   # `_inst_units` gates its unit files — SKIPPED on a server box, which runs
@@ -11702,7 +11728,16 @@ _uninst_wrappers() {
     # adds `ccd-account-auth` on those same terms again — id-shaped, a
     # WRAPPER_ID_RE match, and `_inst_bins`' only executable that lands on
     # BOTH platform arms, so it is the one most likely to be met here.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep) continue ;; esac
+    # account-pool-membership wave 1, Task 4 fix round 2 (B1): `ccd-pool-sync`
+    # joins on exactly the terms the `ccd-telemetry-keepalive` sentence above
+    # already states — id-shaped, a WRAPPER_ID_RE match, in the same bin dir,
+    # and the UNINSTALL-side twin of the `TOOLCHAIN_EXECUTABLES` entry fix
+    # round 1 added for it. INERT TODAY, measured: the file carries no marker,
+    # so `verifyMarker` answers `foreign` and the wrapper arm removes nothing.
+    # The day it gains one, `ccrc uninstall` would delete it as a WRAPPER and
+    # `_uninst_tree_bins` — which owns this name — would never get a say,
+    # which is verbatim what this case exists to prevent.
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep|ccd-pool-sync) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
