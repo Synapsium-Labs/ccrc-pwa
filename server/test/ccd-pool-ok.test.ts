@@ -7,17 +7,25 @@
 // one rule cannot drift apart without a red suite in at least one of them.
 //
 // TWO BLOCKS, TWO SUBJECTS, and the split is deliberate:
-//   * `_pool_ok` is the RULE. Its only use of the wrapper argument is to ask
-//     `_acct_pool`, so the table is driven with `_ccrc_pool` overridden to the
-//     row's own `accountPool` — which lets EVERY row run, including one naming
-//     a pool no fixture account carries, and keeps this block independent of
-//     what wave 1 chose to put in `POOLED_TEST_ROSTER`.
-//   * `_acct_pool` is the ROSTER READ. It is pinned separately against the
-//     REAL generated `accounts.sh`, which is the only thing that can prove the
-//     generator and this reader agree.
+//   * `_pool_ok` is the RULE. Since wave 1 Task 2 its only use of the account
+//     argument is to ask `_acct_pool_state`, so the row-driven loop below
+//     stubs THAT function to the row's own account word — which lets EVERY
+//     row run, including one naming a state no fixture account's declared tag
+//     carries, and keeps this block independent of what wave 1 chose to put
+//     in `POOLED_TEST_ROSTER`. The integration blocks further down
+//     (`_ws_least_loaded`, `cmd_ws_add`) exercise the real, sourced
+//     `_acct_pool_state` instead — `plantPoolEpoch` seeds the central
+//     projection it reads, mirroring `POOL_BY_ID` so the central document
+//     agrees with the declared roster `seedAccountsSh` already writes.
+//   * `_acct_pool` is the ROSTER READ (the DECLARED side, spec §5.6's lowest
+//     precedence — `_pool_ok` no longer consults it directly, but callers
+//     still use it to render a pool name in refusal text). It is pinned
+//     separately against the REAL generated `accounts.sh`, which is the only
+//     thing that can prove the generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, seedAccountsSh, WS_ADD, CCD, type CcdHarness } from './ccdWsHelpers.js';
-import { POOL_RULE_CASES, POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { POOL_RULE_CASES, POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
+import type { PoolRuleCase } from './fixtures/poolRule.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,8 +34,32 @@ let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-pool-ok-');
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  plantPoolEpoch();
 });
 afterEach(() => { h.cleanup(); });
+
+/** Plant a well-formed `$REG/pool-epoch` document — the central projection
+ *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the same accounts
+ *  `POOL_BY_ID` declares. Needed because `_pool_ok` (Task 2) now reads the
+ *  account side through this document, not through `accounts.sh`'s declared
+ *  `_ccrc_pool`: a fresh harness with only `seedAccountsSh` has NO pool-epoch
+ *  document at all, so every account would read `unreadable` — correct for a
+ *  control plane that has never synced (spec §5.8's cold-node fail-shut), but
+ *  not what the placement-wiring tests below are exercising. Any test that
+ *  wants the cold/absent-document behaviour instead removes this file or
+ *  overrides `_acct_pool_state` inline, which always wins over the sourced
+ *  one. Derived from `POOL_BY_ID` rather than a second hand-typed copy of the
+ *  same tags. */
+const plantPoolEpoch = (): void => {
+  const dir = path.join(h.home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
+    ...Object.entries(POOL_BY_ID)
+      .filter((e): e is [string, string] => e[1] !== undefined)
+      .map(([id, pool]) => `acct ${id} ${pool}`),
+    'end', ''];
+  fs.writeFileSync(path.join(dir, 'pool-epoch'), lines.join('\n'));
+};
 
 /** The bash word `_project_pool_state` would print for a wire state. The one
  *  place the two languages' spellings meet; it is HERE and not in shipped
@@ -51,13 +83,20 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
     }
   });
 
+  /** The bash word `_acct_pool_state` would print for a row's account side —
+   *  `accountState`, when the row opts into one of the three undecidable
+   *  states, otherwise derived from `accountPool` exactly as `stateWord`
+   *  derives the project word from `ProjectPoolWire`. Added by wave 1 Task 2,
+   *  replacing the old `_ccrc_pool` stub now that `_pool_ok` reads the
+   *  account's STATE rather than a bare name. */
+  const acctWord = (c: PoolRuleCase): string =>
+    c.accountState ?? (c.accountPool === null ? 'untagged' : `named ${c.accountPool}`);
+
   it.each(POOL_RULE_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    // `_ccrc_pool` overridden to this row's account pool: the generator's own
-    // contract is "empty stdout, rc 0, for an untagged or unknown id", so an
-    // untagged account is a function that prints nothing.
-    const stub = c.accountPool === null
-      ? '_ccrc_pool() { return 0; };'
-      : `_ccrc_pool() { echo ${JSON.stringify(c.accountPool)}; };`;
+    // `_acct_pool_state` overridden to this row's account state: it always
+    // answers rc 0 with one of the five words, never bare stdout the way the
+    // old `_ccrc_pool` generator did.
+    const stub = `_acct_pool_state() { echo ${JSON.stringify(acctWord(c))}; };`;
     const out = h.sh(
       `${stub} { _pool_ok anyaccount ${JSON.stringify(stateWord(c.project))}; } 2>&1; echo "rc=$?"`);
     // stderr is folded into stdout: a predicate that answered correctly while
@@ -73,6 +112,26 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
       const out = h.sh(`_ccrc_pool() { return 0; }; _pool_ok anyaccount ${word}; echo "rc=$?"`);
       expect(out, word).toBe('rc=2');
     }
+  });
+
+  it('never calls _acct_pool_state at all for an untagged project — the blast-radius short-circuit (spec §5.8)', () => {
+    // The mutant this kills: `ap=$(_acct_pool_state "$1")` moved ABOVE the
+    // project `case`. Every fixture row's assertion is on the RETURN CODE
+    // only, and for `acct-unreadable-project-untagged` the code stays `rc=0`
+    // either way — the project arm returns before `$ap` is ever read, so a
+    // reordered-but-still-unused assignment is invisible to an rc-only
+    // check. Only a CALL COUNT can see it, and a call count is the actual
+    // design property (§5.8): "an untagged project is unconstrained, so it
+    // must serve WITHOUT CONSULTING THE ACCOUNT SIDE AT ALL" — otherwise a
+    // control plane down longer than the lease stops placement everywhere,
+    // not only into the projects someone deliberately tagged.
+    const marker = path.join(h.home, 'acct-pool-state-calls');
+    const out = h.sh(
+      `_acct_pool_state() { echo called >> ${JSON.stringify(marker)}; echo unreadable; }; `
+      + '_pool_ok anyaccount untagged; echo "rc=$?"');
+    expect(out).toBe('rc=0');
+    expect(fs.existsSync(marker),
+      '_acct_pool_state must not be called at all when the project is untagged').toBe(false);
   });
 
   // NOT in POOL_RULE_CASES, and cannot be added to it: `POOL_NAME_RE` forbids
@@ -114,33 +173,45 @@ describe('_pool_ok over POOL_RULE_CASES — the rule, three exit codes', () => {
     // either `a` or `b`, so `pool-[ab]` unquoted matches `pool-a` too.
     ['pool-[ab]', 'named pool-[ab]'],
   ] as const)('the comparison is a LITERAL match, not a glob: %s must not become a wildcard', (_pp, word) => {
-    // Account pool stubbed non-empty on purpose: an untagged account
-    // short-circuits on `-z "$ap"` before the comparison is ever reached,
-    // which would prove nothing about quoting.
-    const out = h.sh(`_ccrc_pool() { echo pool-a; }; _pool_ok anyaccount ${JSON.stringify(word)}; echo "rc=$?"`);
+    // Account state stubbed non-empty AND tagged on purpose (wave 1 Task 2 —
+    // was `_ccrc_pool() { echo pool-a; }`, updated for the new capture): an
+    // untagged/undecidable account short-circuits before the comparison is
+    // ever reached, which would prove nothing about quoting.
+    const out = h.sh(
+      `_acct_pool_state() { echo 'named pool-a'; }; _pool_ok anyaccount ${JSON.stringify(word)}; echo "rc=$?"`);
     // A literal comparison of "pool-a" against any of these three tokens
     // disagrees — the correct verdict is MISMATCH (rc 1), never serve (rc 0).
     expect(out).toBe('rc=1');
   });
 
-  // Companion to `_acct_pool`'s "predates pools" case below, but pinned at
-  // the OTHER call site: `_pool_ok`'s own `ap=$(_acct_pool "$1")` is a SECOND
-  // place that captures `_acct_pool`'s output, and nothing here proved THAT
-  // capture is safe — every case above either stubs `_ccrc_pool` directly or
-  // calls `_acct_pool` on its own, so none of them exercise `_pool_ok`'s own
-  // line over an `accounts.sh` that predates pools. The mutant this kills:
-  // `ap=$(_acct_pool "$1")` -> `ap=$(_ccrc_pool "$1")`, which deletes the
-  // `declare -F` guard at exactly the call site `_acct_pool`'s own comment
-  // block argues for (the minutes of an agent deploy between the roster lane
-  // landing and the ccd lane landing) — every assertion in this file stayed
-  // green under that mutation because none of them route through it.
-  it('answers with no leaked stderr and no rc 127 at _pool_ok\'s OWN capture line, over an accounts.sh that predates pools', () => {
+  // Wave 1 Task 2 replaced this test's original subject: it used to pin
+  // `_pool_ok`'s capture line against `unset -f _ccrc_pool` (an accounts.sh
+  // that predates the DECLARED pool field), proving `ap=$(_acct_pool "$1")`
+  // had not silently become `ap=$(_ccrc_pool "$1")`. `_pool_ok` no longer
+  // calls `_acct_pool` at all — that whole mutant class is gone with the line
+  // it targeted — so this test now pins the NEW capture line instead:
+  // `ap=$(_acct_pool_state "$1")`, never a direct `_ccrc_pool`/`_acct_pool`
+  // read that would silently restore the old, fail-open "no visible tag ==
+  // untagged" behaviour the wave exists to close. Two functions stubbed to
+  // DISAGREE — `_acct_pool_state` tagged, `_acct_pool` untagged — so only the
+  // correct capture serves; the old capture would read `_acct_pool`'s empty
+  // stdout as untagged and serve regardless of the project's real tag.
+  it('captures the account side through _acct_pool_state, never _acct_pool directly', () => {
     const out = h.sh(
-      'unset -f _ccrc_pool; out=$( { _pool_ok claude "named pool-a"; } 2>&1 ); printf \'%s|%s\' "$out" "$?"');
-    // An account with no visible pool tag is untagged for this decision, and
-    // an untagged account serves any project — rc 0, and nothing on stdout
-    // or stderr says otherwise.
+      "_acct_pool_state() { echo 'named pool-a'; }; _acct_pool() { :; }; "
+      + 'out=$( { _pool_ok claude "named pool-a"; } 2>&1 ); printf \'%s|%s\' "$out" "$?"');
+    // The names agree under the STUBBED `_acct_pool_state` — rc 0, and
+    // nothing on stdout or stderr. Had `_pool_ok` still read `_acct_pool`
+    // (stubbed empty/untagged here), the untagged short-circuit would also
+    // answer 0, so the mismatch case below is what actually discriminates.
     expect(out).toBe('|0');
+    const mismatch = h.sh(
+      "_acct_pool_state() { echo 'named pool-b'; }; _acct_pool() { :; }; "
+      + '_pool_ok claude "named pool-a"; echo "rc=$?"');
+    // `_acct_pool_state` says pool-b, the project wants pool-a: a capture
+    // still reading `_acct_pool` (empty/untagged here) would short-circuit
+    // to serve (rc 0); the correct capture disagrees and answers MISMATCH.
+    expect(mismatch).toBe('rc=1');
   });
 });
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=00cd348b2b395ae3f5a48907ff9cf68502c2e3a3ec7006373a0c33230fcfd2fc
+# ccrc:generated 1 sha256=7f7674d8805635780b502a93f680363a100573a98ab1e0eac7eb70c00572016e
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2421,14 +2421,36 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # THE STATE IS PASSED IN, not read here: callers obtain it ONCE per decision
 # (`pps=$(_project_pool_state "$project")`) and pass the word, so a loop over
 # five candidates costs one `cat`, not five.
-_pool_ok() {   # wrapper pool-state -> 0 serve | 1 mismatch | 2 undecidable
-  local ap pp; ap=$(_acct_pool "$1")
+#
+# WAVE 1 TASK 2 — the account arm now reads `_acct_pool_state`, not
+# `_acct_pool`. The old `ap=$(_acct_pool "$1")` treated every account this
+# side could not see the same way it treated a genuinely untagged one — a
+# bare name or empty, with no way to tell "the roster says nothing" from "the
+# control plane's projection has never synced". `_acct_pool_state` answers
+# with STATE (spec §5.7): `unreadable`/`stale`/`malformed` now reach rc 2
+# (nobody decides) instead of silently folding into "unconstrained, serve".
+#
+# THE PROJECT SIDE DECIDES FIRST, and the order is the whole blast-radius
+# argument (spec §5.8). An untagged project is unconstrained, so it must
+# serve WITHOUT consulting the account side at all — otherwise a control
+# plane that has been down longer than the lease would stop placement into
+# every project on the box, instead of only the ones somebody deliberately
+# tagged. Moving this below the account read is the difference between an
+# outage nobody notices and a fleet-wide stop.
+_pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
+  local ap pp
   case "$2" in
     untagged)  return 0 ;;
     "named "*) pp=${2#named } ;;
     *)         return 2 ;;                     # unreadable | malformed: nobody decides
   esac
-  [[ -z "$ap" || "$ap" == "$pp" ]]
+  ap=$(_acct_pool_state "$1")
+  case "$ap" in
+    untagged)  return 0 ;;
+    "named "*) ap=${ap#named } ;;
+    *)         return 2 ;;                     # unreadable | stale | malformed: nobody decides
+  esac
+  [[ "$ap" == "$pp" ]]
 }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
@@ -8047,6 +8069,17 @@ EOF
   # ask for a live change; one that does not writes the record and lets the next
   # settle apply it.
   echo route-apply-v1
+  # account-pools — this ccd honours account-side pool membership: `_pool_ok`
+  # (above) reads `_acct_pool_state`'s five-word projection, not merely the
+  # declared roster name, so an account-side `unreadable`/`stale`/`malformed`
+  # now refuses into a tagged project instead of silently serving it. Spec
+  # §5.9 originally sourced this from "the verb's presence in `ccd caps`", but
+  # ruling R2 removed the verb the design assumed — there is no `ccd
+  # account-pools` to dispatch, only a decision `_pool_ok` already makes on
+  # every call. Same channel, same argument, as `pools-v1` above: a CAPABILITY
+  # token, not a dispatchable verb, so `PoolsEnforcement.accountPools` can
+  # answer `enforced` only against a box that actually took this deploy.
+  echo account-pools
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.

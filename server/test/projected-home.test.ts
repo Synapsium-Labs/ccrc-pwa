@@ -128,6 +128,29 @@ const seedPoolTag = (project: string, tag: string): void => {
   fs.writeFileSync(path.join(dir, project), tag);
 };
 
+/** Plant a well-formed `$REG/pool-epoch` document — the central projection
+ *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the case's own
+ *  `pools` map. Added by wave 1 Task 2: `_pool_ok` now reads the account
+ *  side through this document, not through `accounts.sh`'s declared
+ *  `_ccrc_pool`, so `bashPick`'s real, unstubbed `_ws_least_loaded` needs a
+ *  central projection that agrees with `rosterWithPools`'s declared tags —
+ *  the exact same `pools` map, so the two can never drift apart — or every
+ *  account reads `unreadable` (no document at all) and a tagged-project case
+ *  refuses as undecidable instead of exercising the pool filter it is
+ *  actually about. Absent `pools`, no document is written at all, matching
+ *  `seedSweep`'s own "absent means removed, not written empty" idiom. */
+const plantPoolEpoch = (pools: Record<string, string> | undefined): void => {
+  const dir = path.join(home, '.cc-sessions');
+  const f = path.join(dir, 'pool-epoch');
+  fs.rmSync(f, { force: true });
+  if (!pools) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
+    ...Object.entries(pools).map(([id, pool]) => `acct ${id} ${pool}`),
+    'end', ''];
+  fs.writeFileSync(f, lines.join('\n'));
+};
+
 /** The sweep's own report, `<HOME>/.cc-sessions/usage/sweep/latest.json` —
  *  the server's `readSharesMeasured` and (Task 4) ccd's bash reader both read
  *  it from there. Absent `sweep` means no file at all (removed, not written
@@ -155,6 +178,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       const roster = rosterWithPools(c.pools);
       seedRoster(home, roster);
       seedAccountsSh(home, roster);
+      plantPoolEpoch(c.pools);
       seed(c.files);
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);

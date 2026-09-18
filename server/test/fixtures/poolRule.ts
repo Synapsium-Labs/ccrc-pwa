@@ -24,7 +24,7 @@ import { DEFAULT_TEST_ROSTER } from '../helpers.js';
  *  rule picked the only account left". `gpt` and `claude-d` are absent from this
  *  map, so they stay untagged, which is the state every account on a live box is
  *  in on the day pools ship. */
-const POOL_BY_ID: Readonly<Record<string, string | undefined>> = {
+export const POOL_BY_ID: Readonly<Record<string, string | undefined>> = {
   claude: 'pool-a',
   'claude-a': 'pool-a',
   'claude-b': 'pool-b',
@@ -217,5 +217,41 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   {
     name: 'malformed-untagged-account', accountPool: null, project: { state: 'malformed' }, expect: 'undecidable',
     why: 'the same short-circuit as unreadable-untagged-account, for the other undecidable state',
+  },
+  // Added by wave 1 Task 2 — the ACCOUNT side's own undecidable states, now
+  // that `_pool_ok` reads `_acct_pool_state` instead of a bare name. The rows
+  // above exercise the PROJECT side's `unreadable`/`malformed`; these mirror
+  // it on the account side, plus the two short-circuit rows that prove the
+  // project-decides-first ordering (spec §5.8) still holds once the account
+  // side can ALSO answer undecidable.
+  {
+    name: 'acct-unreadable-project-tagged', accountPool: null, accountState: 'unreadable',
+    project: { state: 'tagged', name: 'pool-a' }, expect: 'undecidable',
+    why: 'a node that has never synced must refuse into a tagged project, never serve — the cold-pod fail-shut and the EKS default path',
+  },
+  {
+    name: 'acct-stale-project-tagged', accountPool: null, accountState: 'stale',
+    project: { state: 'tagged', name: 'pool-a' }, expect: 'undecidable',
+    why: 'past the lease nobody decides; a stale node must not serve a constraint it can no longer read',
+  },
+  {
+    name: 'acct-malformed-project-tagged', accountPool: null, accountState: 'malformed',
+    project: { state: 'tagged', name: 'pool-a' }, expect: 'undecidable',
+    why: 'a document off the grammar is not an empty one',
+  },
+  {
+    name: 'acct-unreadable-project-untagged', accountPool: null, accountState: 'unreadable',
+    project: { state: 'untagged' }, expect: 'serve',
+    why: 'THE SHORT-CIRCUIT: an untagged project is unconstrained, so a control-plane outage must not stop placement into it — this row is what bounds the blast radius to the constrained set',
+  },
+  {
+    name: 'acct-stale-project-untagged', accountPool: null, accountState: 'stale',
+    project: { state: 'untagged' }, expect: 'serve',
+    why: 'the same short-circuit for the stale arm — ordering, not a special case',
+  },
+  {
+    name: 'acct-unreadable-project-unreadable', accountPool: null, accountState: 'unreadable',
+    project: { state: 'unreadable' }, expect: 'undecidable',
+    why: 'both sides unreadable is still one verdict, and it is not a mismatch',
   },
 ];

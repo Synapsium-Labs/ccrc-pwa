@@ -14,7 +14,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -24,8 +24,30 @@ beforeEach(() => {
   // Re-seeded rather than hand-written: a fixture accounts.sh typed out here
   // would be a fourth copy of the roster.
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  plantPoolEpoch();
 });
 afterEach(() => { h.cleanup(); });
+
+/** Plant a well-formed `$REG/pool-epoch` document — the central projection
+ *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the same accounts
+ *  `POOL_BY_ID` declares. Added by wave 1 Task 2: `_pool_ok` now reads the
+ *  account side through this document rather than `accounts.sh`'s declared
+ *  `_ccrc_pool`, so this file's real, unstubbed `_auto_swap_check`/
+ *  `_swap_target` need a central projection that agrees with the declared
+ *  roster `seedAccountsSh` already writes, or every account reads
+ *  `unreadable` (no document at all) and every decision below becomes
+ *  undecidable rather than the pool verdict each case is actually testing.
+ *  Same helper as `ccd-pool-ok.test.ts`'s own `plantPoolEpoch`. */
+function plantPoolEpoch(): void {
+  const dir = path.join(h.home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
+    ...Object.entries(POOL_BY_ID)
+      .filter((e): e is [string, string] => e[1] !== undefined)
+      .map(([id, pool]) => `acct ${id} ${pool}`),
+    'end', ''];
+  fs.writeFileSync(path.join(dir, 'pool-epoch'), lines.join('\n'));
+}
 
 const ID = 'claude-demo';
 const PANE_PID = '4242';

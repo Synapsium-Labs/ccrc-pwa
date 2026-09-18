@@ -101,10 +101,32 @@ const POOLED = {
     ? { ...a, homeAble: true, pool: 'codex' }
     : { ...a, pool: 'main' })),
 };
+/** Plant a well-formed `$REG/pool-epoch` document — the central projection
+ *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging every account
+ *  `POOLED` declares a `pool` for. Added by wave 1 Task 2: `_pool_ok` now
+ *  reads the account side through this document, not through `accounts.sh`'s
+ *  declared `_ccrc_pool`, so a project tagged via `tagPool` needs a central
+ *  projection that agrees with `POOLED`'s declared tags, or every account
+ *  reads `unreadable` (no document at all) and placement refuses as
+ *  undecidable rather than exercising the class/rung logic these cases are
+ *  actually about. Derived from `POOLED` rather than a second hand-typed
+ *  copy of the same tags — same discipline `POOLED` itself states. */
+const plantPoolEpoch = (): void => {
+  const dir = path.join(h.home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
+    ...POOLED.accounts
+      .filter((a): a is typeof a & { pool: string } => typeof a.pool === 'string')
+      .map((a) => `acct ${a.id} ${a.pool}`),
+    'end', ''];
+  fs.writeFileSync(path.join(dir, 'pool-epoch'), lines.join('\n'));
+};
+
 /** A pool whose only member is the codex lane: `fable` is unservable there by
  *  BACKEND, before any figure is read, so the rung below is the only answer. */
 const gptOnlyPool = (seven: number): void => {
   seedAccountsSh(h.home, POOLED);
+  plantPoolEpoch();
   install('gpt');
   tagPool('demo', 'codex');
   writeLimits('gpt', 5, seven);
@@ -189,6 +211,7 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     // The pool's one lane has no sweep row, so `_class_gate` answers 2. The
     // verb must place, not refuse.
     seedAccountsSh(h.home, POOLED);
+    plantPoolEpoch();
     install('gpt');
     tagPool('demo', 'codex');
     writeLimits('gpt', 5, 10);

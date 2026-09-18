@@ -30,15 +30,41 @@ import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness }
   from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-crosspool-');
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  plantPoolEpoch();
 });
 afterEach(() => { h.cleanup(); });
+
+/** Plant a well-formed `$REG/pool-epoch` document — the central projection
+ *  `_acct_pool_state` reads (wave 1 Task 1/3) — tagging the same accounts
+ *  `POOL_BY_ID` declares. Added by wave 1 Task 2: `_pool_ok` now reads the
+ *  account side through this document, not through `accounts.sh`'s declared
+ *  `_ccrc_pool`, so every case in this file that exercises the cross-pool
+ *  machinery over a TAGGED account (every case here — this whole file is
+ *  about accounts moving between pools) needs a central projection that
+ *  agrees with `seedAccountsSh`'s declared roster, or every account reads
+ *  `unreadable` (no document at all — the cold-node fail-shut, spec §5.8)
+ *  and every decision below becomes undecidable rather than the mismatch or
+ *  serve verdict each case is actually testing. Same helper as
+ *  `ccd-pool-ok.test.ts`'s own `plantPoolEpoch`; kept local rather than
+ *  shared, matching how `POOLED_TEST_ROSTER`/`tagPool` are already
+ *  duplicated per file rather than factored into one shared harness helper. */
+function plantPoolEpoch(): void {
+  const dir = path.join(h.home, '.cc-sessions');
+  fs.mkdirSync(dir, { recursive: true });
+  const lines = ['epoch 1', 'issued 1', 'lease 9999999999',
+    ...Object.entries(POOL_BY_ID)
+      .filter((e): e is [string, string] => e[1] !== undefined)
+      .map(([id, pool]) => `acct ${id} ${pool}`),
+    'end', ''];
+  fs.writeFileSync(path.join(dir, 'pool-epoch'), lines.join('\n'));
+}
 
 const UUID = 'b7001948-2222-4bcc-b60b-0cfc0dc3d199';
 const ID = 'claude-demo';
