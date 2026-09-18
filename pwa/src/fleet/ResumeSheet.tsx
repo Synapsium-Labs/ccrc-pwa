@@ -19,7 +19,7 @@
 // operator has to read before retrying.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { isReclaimRefuseCode, type RunSummary } from '../../../shared/api';
+import { isReclaimRefuseCode, type ReclaimRefuseCode, type RunSummary } from '../../../shared/api';
 import { Sheet } from '../components/Sheet';
 import { ApiError, api, apiErrorText, kickoffErrorText } from '../lib/api';
 import './fleet.css';
@@ -31,8 +31,8 @@ import './fleet.css';
  *  every `RunRefuseCode`: copying a vocabulary this route can never speak is
  *  what `ABANDON_COPY`'s own docstring argues against, one file over. */
 export const RECLAIM_COPY: Record<
-  'unknown-run' | 'unknown-session' | 'no-claimant' | 'claimant-alive'
-  | 'heir-is-a-worker' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
+  ReclaimRefuseCode
+  | 'unknown-run' | 'unknown-session' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
   string
 > = {
   'unknown-run': 'that run is gone — the board will catch up',
@@ -47,7 +47,7 @@ export const RECLAIM_COPY: Record<
   // `detail`, unlike `claimant-alive`), so the sentence names the CONDITION
   // and `by` is appended the same way `claimant-alive`'s evidence is.
   'heir-is-a-worker': 'that session is a worker of another programme right now — a worker may not '
-    + 'inherit a programme (its coordinator is named below)',
+    + 'inherit a programme',
   'registry-unmeasurable': 'the registry could not be read, so this box cannot say who is alive',
   'not-configured': 'this box does not run coordination — there is no ledger to rewrite',
   'bad-request': 'that id is not one this box will accept',
