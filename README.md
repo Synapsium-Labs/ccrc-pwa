@@ -421,16 +421,16 @@ transcript, the phone proof — is step 11 of
 Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook step 12 (same file
 as above) is the two-box worked proof of everything in this section.
 
-**The pipeline.** Pushing a tag `v*` runs `.github/workflows/release.yml`, which is deliberately
-thin: it runs `deploy/build-release.sh` (the testable core — runnable locally, refuses a dirty
-tree and refuses an untagged HEAD without `--untagged`) and uploads what the script built to the
-tag's GitHub Release: `ccrc-<tag>.tar.gz` plus `SHA256SUMS`. The tarball is the matched set —
-prebuilt `server/dist`, `server/dist-pwa`, `agent/dist`, the three `package.json`+lock pairs,
-`shared/`, `ccd/`, the deploy units and helpers, `install.sh` — with a `MANIFEST` of per-file
-sha256 digests and a shipped `build.json` that always carries the tag as `version`, so a
-release-installed box reports its identity (`ccrc version` prints a `version vX.Y.Z` line;
-`/health` emits a sibling `version` field; `buildAgreement` still compares sha+dirty only — the
-sha is the truth, the tag is the label).
+**The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
+sibling: `deploy/release-main.sh` derives the next patch tag from the highest `vX.Y.Z`, pushes it,
+runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged HEAD) and
+publishes the tarball plus `SHA256SUMS` with `gh release create --verify-tag`, deleting the tag again
+if the publish never completes. A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead and
+the next merge derives past it. The tarball is the matched set — prebuilt dists, the three
+`package.json`+lock pairs, `shared/`, `ccd/`, the deploy units and helpers, `install.sh` — with a
+`MANIFEST` of per-file sha256 digests and a shipped `build.json` that carries the tag as `version`
+(`ccrc version` prints it; `/health` emits a sibling `version`; `buildAgreement` still compares
+sha+dirty only — the sha is the truth, the tag is the label). Design: `2026-09-18-release-rollout-design.md`.
 
 **Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: latest) downloads the
 tarball and `SHA256SUMS`, verifies `sha256sum -c` **before extracting a single file**, extracts to
@@ -445,21 +445,21 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
-**Update.** `ccrc update [--to vX.Y.Z]` — per box, explicit, never automatic, fleet-box-first
-across a two-box fleet (the server-box run WARNs loudly when `/api/fleet/health` says the fleet
-host is behind; it never refuses). Its spine, each step refusing loudly rather than degrading:
-fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, and `~/.ccrc/memory` — the
-sole live copy of every project's durable memory since `ccrc memory --apply` — complete before any
-install write); re-run the install spine from the verified staged tree (role-aware, atomic,
-seed-once files untouched); the supervisor sweep — `try-restart` each `claude-session@*` unit onto
-the new ccd, **only** behind its mandatory `KillMode=process` preflight (a failed preflight
-refuses the sweep, loudly, never the update; panes and tmux are never touched); then the from→to
-report off the re-measured `build.json`. Rolling back is `--to <the older tag>`: it reinstalls
-that artifact set and **prints** the coord.db restore commands from the newest pre-update backup
-rather than auto-restoring (migrations are forward-only; an older server reads a newer coord.db).
-`ccrc doctor`'s `build` check compares the *running* server's `/health` sha against the stamp, and
-its `fleet` check's skew remedies name `ccrc update`, fleet box first.
+**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force]` — per box, explicit, never
+automatic. `--check` prints where this box stands against the published release (a fixed-shape
+`check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already running
+the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's last
+write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
+loudly: fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
+`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any
+install write; re-run the install spine from the staged tree (role-aware, atomic, seed-once files
+untouched, every rostered home's skills converged); the supervisor sweep behind its mandatory
+`KillMode=process` preflight; then the from→to report. Rolling back is `--to <the older tag>`, which
+prints the coord.db restore commands rather than auto-restoring. **Across a two-box fleet, `ccrc
+rollout [--to] [--server-first] [--check] [--force]`** from a machine holding `~/.ccrc/deploy.env`
+does it in order — roles preflighted, version pinned once from SHA256SUMS, fleet box then server
+box, stop on the first failure, both boxes re-measured. `ccrc doctor`'s `build` check compares the
+running server against the stamp, `skills` every home against the shipped tree, `fleet` names `ccrc rollout`.
 
 **The maintenance verbs.** `ccrc backup` runs update's backup step standalone (same set, same
 directory shape, pruned to the newest `CCRC_BACKUP_KEEP` timestamped dirs, default 10 — hand-made
@@ -2996,11 +2996,11 @@ bash deploy/deploy.sh                # server: build PWA here (freshness-gated) 
 bash deploy/deploy.sh agent <host>   # ccrc-agent: rsync → ship ccd + notify.sh (backed up) + session-hook.sh (installs it) → host npm ci + build → restart unit
 ```
 
-`deploy/deploy.sh` is a convenience wrapper for pushing a working tree onto a box
-that is **already installed** — it is not the installer; `install.sh` / `ccrc
-install` is the path a new box takes. It has **no default target**: a deploy that
-guessed would ship your working tree to someone else's machine, so it refuses
-with exit 2 until it knows where it is going.
+`deploy/deploy.sh` is the FALLBACK — it pushes a working tree onto a box that is
+**already installed**, stamps no `version`, and ships skills on its agent arm
+only. The path is a release (`release-main.yml`) and `ccrc rollout`; see
+"Releases" above. It still has **no default target** and refuses with exit 2
+until it knows where it is going, for the reason it always did.
 
 Put the coordinates in `~/.ccrc/deploy.env` — the deploying machine's own file,
 outside every checkout, so it survives worktrees and can never be committed:
