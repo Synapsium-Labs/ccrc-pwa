@@ -204,8 +204,9 @@ and the PWA renders nothing new — one reader, no `FLEET_PROTO` bump.
 
 **CLI.**
 - `ccrc update --check [--to vX.Y.Z]`: runs `_upd_resolve` only. Its **first line is fixed-shape**, for `rollout`
-  to parse: `check: box=<version|unversioned> sha=<sha> target=<version> state=<current|behind|unversioned>`. The
-  human sentence follows: `this box: v0.0.7 (bd2bf57a) · latest: v0.0.9 — behind` (exit 1; the label is `target:`
+  to parse: `check: box=<version|unversioned> sha=<sha> target=<version> state=<current|behind|unversioned|incomplete>`
+  (`incomplete` = same version, but `~/.ccrc/installed` does not name the stamped sha — §5's record — so
+  `rollout` still updates that box). The human sentence follows: `this box: v0.0.7 (bd2bf57a) · latest: v0.0.9 — behind` (exit 1; the label is `target:`
   under `--to`), `— current` (exit 0), or `unversioned (sha) — a release install would be the first on this box`
   (exit 1). **Writes nothing; downloads only SHA256SUMS.** `rollout` runs it on both boxes and composes its plan
   from the first line.
@@ -224,7 +225,7 @@ and the PWA renders nothing new — one reader, no `FLEET_PROTO` bump.
 ### Pins
 
 Route test: `builds` present in remote mode, carrying `version` when the stamps do, absent in local mode.
-`--check`'s first line parses back to the four fields in all three states. PWA: the
+`--check`'s first line parses back to the four fields in all four states. PWA: the
 skewed arm renders both sides and the unversioned wording; `BuildLine`'s three renderings; one fetch per poll for
 banner + line. `--check`: exits 0/1/1, no tarball fetch, no write under HOME. Doctor `skills`: red on one edited byte
 in one home, green after the installer runs; skip on role `server`. The `fleet` remedy names `rollout`.
