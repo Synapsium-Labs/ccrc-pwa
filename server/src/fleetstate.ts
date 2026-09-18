@@ -78,7 +78,34 @@ export interface FleetState {
    *  not a fleet-wide fixture sweep that belongs to whichever task actually
    *  consumes this field; an omitted key here reads as `undefined` on access,
    *  which is the correct, honest answer for every one of those untouched
-   *  fixtures — they truly have no evidence about pool epochs. */
+   *  fixtures — they truly have no evidence about pool epochs.
+   *
+   *  WHAT THIS GIVES UP (review T8-R1, F6): `build`'s own comment above calls
+   *  being required "the whole mechanism" — turning a new construction site
+   *  that forgets this field into a COMPILE error. This field has no such
+   *  mechanism; the substitute is a RUNTIME one, `remote-connect.test.ts`'s
+   *  whole-object `toEqual` assertion in "reaches connected:true with
+   *  downSince:null after a good handshake" (`connectFleet — connection
+   *  lifecycle` describe block), which fails on any key `onReady` populates
+   *  that the expected literal there omits. That covers the one construction
+   *  site that actually matters — `FleetClient.state`, the object `onReady`
+   *  mutates — but it is a test that can be deleted or narrowed without a
+   *  compiler noticing, unlike a required field. Naming it here so a future
+   *  editor does not delete it without knowing it was carrying that load.
+   *
+   *  `server/src/index.ts`'s local-mode `fleetState` literal (not typed
+   *  against `FleetState` directly, so nothing there forces the question
+   *  either) OMITS this key too — unlike `rosterFp`/`build`, which it sets to
+   *  an explicit `null` "BY MEASUREMENT, not by omission" because in local
+   *  mode there is no second box, so comparing this box against itself would
+   *  be the one answer the banner must not show. `observedEpoch` is not a
+   *  cross-box COMPARISON — it is a fact about what epoch THIS node holds —
+   *  so that argument does not transfer, and nothing in local mode today
+   *  reads this box's own `~/.cc-sessions/pool-epoch` to populate it. The
+   *  omission there is honest (no evidence gathered), but it is an honest gap,
+   *  not a considered "not applicable" the way `rosterFp`/`build`'s explicit
+   *  `null` is — worth knowing before treating local mode's silence here as
+   *  a decision. */
   observedEpoch?: number | null;
 }
 

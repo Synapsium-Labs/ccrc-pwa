@@ -29,8 +29,45 @@ describe('readObservedEpoch — the reader', () => {
     const home = mkTmp('ccrc-observed-epoch-');
     const reg = path.join(home, '.cc-sessions');
     mkdirSync(reg, { recursive: true });
-    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\n', 'utf8');
+    // Terminated with `end` — review T8-R1, F1: the brief's own fixture for
+    // this test originally lacked it, which was the fixture's bug, not
+    // license for the reader. Every other fixture in this file already
+    // carries `end`; this is the one that gets it here.
+    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\nend\n', 'utf8');
     expect(readObservedEpoch(home)).toBe(43);
+  });
+
+  it('reports null for a document missing its end terminator — the number cannot be proven to come from a whole document', () => {
+    // Review T8-R1, F1/F3: `_acct_pool_state` (`ccd/ccd:2203-2225`) refuses
+    // ANY document whose last line is not exactly `end`, structurally,
+    // before it parses a single field — because a line-oriented reader has
+    // no other way to tell a torn final row from a complete one. This is a
+    // PROVENANCE check, not a usability one: an unterminated document may be
+    // a FRAGMENT of a previous one, so a number read off it is not proven to
+    // be the epoch this node currently holds. Direction of error is why this
+    // must be `null` and not, say, `stale`: reporting a number here
+    // UNDER-reports lag — Task 9's indicator goes silent exactly where a
+    // node is refusing tagged placement, and nobody goes looking for a
+    // silence. This is the exact document test 1 above used to write.
+    const home = mkTmp('ccrc-observed-epoch-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\n', 'utf8');
+    expect(readObservedEpoch(home)).toBe(null);
+  });
+
+  it('reports null for a document with a SECOND trailing newline after end — the last line is empty, not "end"', () => {
+    // `_acct_pool_state` tolerates ONE trailing newline (the writer's own
+    // convention) but refuses a second: content after the terminator, even a
+    // blank line, means the true last line is empty, not `end`. Proves the
+    // reader strips at most one trailing `\n` before taking the last line,
+    // matching `ccd/ccd:2218-2225`'s own algorithm exactly, rather than
+    // trimming all trailing whitespace (which would wrongly accept this).
+    const home = mkTmp('ccrc-observed-epoch-');
+    const reg = path.join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(path.join(reg, 'pool-epoch'), 'epoch 43\nissued 1\nlease 2\nend\n\n', 'utf8');
+    expect(readObservedEpoch(home)).toBe(null);
   });
 
   it('reports null — never undefined — when it has never synced', () => {

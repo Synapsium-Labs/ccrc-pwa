@@ -337,16 +337,35 @@ export class FleetClient {
     // both and is exactly the fold `readObservedEpoch`'s own contract (and
     // this task) forbids.
     //
+    // VALIDATED, not merely type-checked (review T8-R1, F4) — `build`'s own
+    // comment three lines below states the doctrine this reader follows too:
+    // "the peer may be older, newer, or broken", so a JSON *number* is not
+    // automatically a well-formed epoch. `Number.isSafeInteger(...) && … >= 0`
+    // rejects a negative value and a non-integer — `ccd-pool-sync`'s own
+    // writer rejects both before ever rendering a document
+    // (`ccd-pool-sync:163`, `:186`) — as well as `NaN`/`±Infinity`, though
+    // JSON itself cannot carry those (`JSON.stringify` turns them into `null`
+    // before this code ever sees them, so a real peer can only reach this
+    // branch with a string/boolean/array/object, or a finite non-integer or
+    // negative number).
+    //
     // Reset on every ready, same reason as `rosterFp`/`build`: a reconnect to
     // an agent that no longer reports the field (a downgrade) must not keep
     // answering with a number the box used to have.
     if (frame.observedEpoch === undefined) {
       this.state.observedEpoch = undefined;
-    } else if (frame.observedEpoch === null || typeof frame.observedEpoch === 'number') {
+    } else if (frame.observedEpoch === null) {
+      this.state.observedEpoch = null;
+    } else if (
+      typeof frame.observedEpoch === 'number'
+      && Number.isSafeInteger(frame.observedEpoch)
+      && frame.observedEpoch >= 0
+    ) {
       this.state.observedEpoch = frame.observedEpoch;
     } else {
-      // Off-contract value from a broken or adversarial peer (JSON permits
-      // e.g. a string or object here) — no evidence, not a fabricated one.
+      // Off-contract value from a broken or adversarial peer — wrong JS type
+      // entirely, or a number off the epoch grammar (negative, non-integer).
+      // No evidence, not a fabricated one.
       this.state.observedEpoch = undefined;
     }
     // THE SINGLE READER of `frame.build` — the fleet host's own stamp, which

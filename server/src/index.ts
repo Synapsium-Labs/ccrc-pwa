@@ -124,6 +124,18 @@ if (cfg.fleetMode === 'remote') {
     // compare it with itself and answer `'agreed'` — a green tick for a check
     // that never ran, and the one answer worse than saying nothing.
     build: null as BuildInfo | null,
+    // `observedEpoch` is OMITTED entirely (review T8-R1, F6), not set to an
+    // explicit `null` the way `rosterFp`/`build` are just above — and this is
+    // a DIFFERENT reason, not the same one restated. Those two are
+    // cross-box COMPARISONS with no second box to compare against in local
+    // mode, so `null` there is a considered "not applicable". `observedEpoch`
+    // is not a comparison — it is a fact about what pool epoch THIS box
+    // holds, which this box, running its own `ccd` locally, could in
+    // principle answer. Nothing here reads `~/.cc-sessions/pool-epoch` to
+    // populate it, so the omission is an honest gap (no evidence gathered),
+    // not a decided absence — `fleetstate.ts`'s own comment on this field
+    // says the same. `FleetState` declares the field OPTIONAL, so the
+    // omitted key reads as `undefined` on access either way.
   };
   void readLocalCcdCaps(cfg.ccdBin).then((verbs) => {
     if (verbs !== null) fleetState.ccdVerbs = verbs;

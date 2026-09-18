@@ -594,6 +594,13 @@ describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never
     ['a boolean', { observedEpoch: true }],
     ['an array', { observedEpoch: [43] }],
     ['an object', { observedEpoch: { epoch: 43 } }],
+    // Review T8-R1, F4: a JSON *number* is not automatically a well-formed
+    // one — `build`'s own comment three lines below states the doctrine this
+    // reader must also follow: "the peer may be older, newer, or broken."
+    // `ccd-pool-sync`'s own writer rejects both of these before ever
+    // rendering a document (`ccd-pool-sync:163`, `:186`).
+    ['a negative number', { observedEpoch: -1 }],
+    ['a non-integer number', { observedEpoch: 4.5 }],
   ])('%s off the wire contract is discarded as undefined, not fabricated into a number', async (_label, extra) => {
     fleet = await connect(extra);
     expect(fleet.state.observedEpoch).toBeUndefined();

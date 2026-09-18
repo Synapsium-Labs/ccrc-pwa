@@ -573,29 +573,69 @@ function readRosterFp(home: string): string | undefined {
   }
 }
 
+/** The numeric sub-grammar `_acct_pool_state`'s own `numRe` describes for a
+ *  bare field value (`ccd/ccd:2131`, shared by `epoch`/`issued`/`lease`) and
+ *  `ccd-pool-sync`'s own `NUM` writes to (`ccd/ccd-pool-sync:156`): zero, or a
+ *  non-zero digit followed by any digits — no leading zero, because the
+ *  control plane's `%d` can never produce one.
+ *
+ *  Exported, and spelled as a non-capturing group (the same shape as the
+ *  python spelling) rather than inlined into `EPOCH_LINE_RE` below, so
+ *  `pool-epoch-numeric-parity.test.ts` can hold all three spellings
+ *  byte-equal instead of trusting a comment that CLAIMS agreement — which is
+ *  exactly what the previous version of this file did (review T8-R1, F5): the
+ *  leading-zero fix tightened this reader to agree with bash's `numRe` on the
+ *  strength of prose, and nothing checked that the prose was still true. */
+export const OBSERVED_EPOCH_NUM = '(?:0|[1-9][0-9]*)';
+
+/** Matches a well-formed `epoch <n>` line ANYWHERE in the document, not only
+ *  the first line: `_acct_pool_state`'s own per-line parser is order-agnostic
+ *  (`ccd/ccd:2225` onward — a `case` over each line's key, not a positional
+ *  read), so this reader must not be stricter than the format actually is. */
+const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
+
 /**
  * The epoch of the pool-membership projection THIS node actually has —
  * `~/.cc-sessions/pool-epoch`, the leased projection `ccd-pool-sync` (Task 3)
  * writes and `_acct_pool_state` (`ccd/ccd`) reads for placement decisions.
  *
  * `null` means this node has never synced — no file, an unreadable one, or one
- * that does not match the grammar `_acct_pool_state` agrees on. That is NOT
- * the same as epoch 0 (the control plane has issued nothing yet, but this
- * node has a real, if trivial, projection) and NOT the same as the field
- * being absent from the `ready` frame (an older agent build that cannot even
- * ASK the question) — `AgentReady.observedEpoch` and `FleetState.observedEpoch`
- * both keep those three apart; `undefined` is what an ABSENT reader sees,
- * never what this function returns.
+ * that fails either check below. That is NOT the same as epoch 0 (the control
+ * plane has issued nothing yet, but this node has a real, if trivial,
+ * projection) and NOT the same as the field being absent from the `ready`
+ * frame (an older agent build that cannot even ASK the question) —
+ * `AgentReady.observedEpoch` and `FleetState.observedEpoch` both keep those
+ * three apart; `undefined` is what an ABSENT reader sees, never what this
+ * function returns.
  *
- * Reads only the first line's `epoch <n>` field, validated against the SAME
- * numeric grammar `_acct_pool_state` uses for it (`^(0|[1-9][0-9]*)$` — no
- * leading zero, matching what the control plane's `%d` can ever emit), so a
- * torn or hand-edited value this reader does not recognise answers `null`
- * rather than a wrong number. Deliberately NOT the rest of that function's
- * grammar (the `end` terminator, `issued`/`lease` staleness, duplicate-line
- * detection, per-account rows): those exist to decide whether a TAG may be
- * trusted for PLACEMENT, a question this field is not answering. This field
- * answers "what epoch does this node have", which is true of a stale
+ * TWO CHECKS — deliberately not the whole of `_acct_pool_state`'s grammar:
+ *
+ * 1. THE TERMINATOR (review T8-R1, F1 — a fixture of this function's OWN
+ *    first test originally lacked it, which was the fixture's bug, not
+ *    license for this reader). The document must end, after stripping AT
+ *    MOST one trailing newline, in a line that is exactly `end` — the same
+ *    structural check `_acct_pool_state` makes (`ccd/ccd:2203-2225`) before
+ *    it parses a single field, because a line-oriented reader has no other
+ *    way to tell a torn final row from a complete one. This is a PROVENANCE
+ *    check, not a usability one: "what epoch does this node have" cannot be
+ *    answered off a document that was never proven whole — an unterminated
+ *    document may be a FRAGMENT of a PREVIOUS one, and the epoch line in it
+ *    may not be the epoch this node currently holds at all. Direction of
+ *    error is why this is required for a torn (`malformed`) document and
+ *    would NOT be for a `stale` one: a well-formed document past its lease
+ *    genuinely holds epoch N (this reader does not evaluate `lease`, see
+ *    below), but a torn one proves nothing, and a number reported off it
+ *    UNDER-reports lag exactly where Task 9's indicator goes silent — the
+ *    worse failure, because nobody goes looking for a silence.
+ * 2. THE `epoch <n>` LINE'S OWN GRAMMAR (`EPOCH_LINE_RE`, `OBSERVED_EPOCH_NUM`
+ *    above) — matched anywhere in the document, not only the first line.
+ *
+ * Everything else in `_acct_pool_state`'s grammar — duplicate `epoch`/
+ * `issued`/`lease`/`acct` lines, a second `end`, an off-grammar `acct` row, a
+ * NUL byte, the 64 KiB cap, `issued`/`lease`'s own numeric validation,
+ * lease-staleness — is NOT re-implemented here. Those exist to decide whether
+ * a TAG may be trusted for PLACEMENT, a different question from the one this
+ * field answers: "what epoch does this node have", true of a stale
  * projection too — staleness stays `_acct_pool_state`'s own concern.
  *
  * Read fresh on every `ready`, synchronously, for the same reason
@@ -606,7 +646,15 @@ function readRosterFp(home: string): string | undefined {
 export function readObservedEpoch(home: string): number | null {
   try {
     const text = readFileSync(path.join(home, '.cc-sessions', 'pool-epoch'), 'utf8');
-    const m = /^epoch (0|[1-9][0-9]*)$/m.exec(text);
+    // The SAME strip-then-check algorithm `_acct_pool_state` uses
+    // (`ccd/ccd:2218-2225`): at most ONE trailing newline is stripped, so a
+    // SECOND one (content after the terminator, even a blank line) leaves the
+    // true last line empty, not `end`, and is refused.
+    const stripped = text.endsWith('\n') ? text.slice(0, -1) : text;
+    const lastNewline = stripped.lastIndexOf('\n');
+    const lastLine = lastNewline === -1 ? stripped : stripped.slice(lastNewline + 1);
+    if (lastLine !== 'end') return null;
+    const m = EPOCH_LINE_RE.exec(text);
     return m === null ? null : Number(m[1]);
   } catch {
     return null;
