@@ -11,7 +11,7 @@
 // null on every load and the offline snapshot has no field for it, so
 // `projectPoolOf` can never be asked about a tag that was true an hour ago.
 import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../../shared/api';
-import { poolRule } from '../../../shared/poolrule';
+import { poolRule, declaredAccountPool } from '../../../shared/poolrule';
 import { accountPool, joinLabels } from './accounts';
 
 /** Which side of the pool line one candidate falls on.
@@ -36,7 +36,7 @@ export function poolSide(
   projectPool: ProjectPoolWire | null,
 ): PoolSide {
   if (projectPool === null) return 'unknown';
-  const verdict = poolRule(accountPoolName, projectPool);
+  const verdict = poolRule(declaredAccountPool(accountPoolName), projectPool);
   if (verdict.ok) return 'eligible';
   return verdict.reason === 'pool-mismatch' ? 'crossing' : 'unknown';
 }

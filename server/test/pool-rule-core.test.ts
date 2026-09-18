@@ -10,7 +10,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ProjectPoolWire } from '../../shared/api.js';
-import { poolRule } from '../../shared/poolrule.js';
+import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
 import type { AccountPoolWire } from '../../shared/poolrule.js';
 import { POOL_RULE_CASES } from './fixtures/poolRule.js';
 import type { PoolRuleCase } from './fixtures/poolRule.js';
@@ -104,6 +104,22 @@ describe('poolRule over the shared truth table', () => {
     // serve.
     expect(poolRule({ state: 'unreadable' }, { state: 'untagged' }))
       .toEqual({ ok: true, why: 'untagged-project' });
+  });
+});
+
+describe('declaredAccountPool — the adapter the five roster-only call sites now share (T5-R1)', () => {
+  // `server/src/poolrule.ts` and `pwa/src/lib/pools.ts` predate this wave and
+  // still hold only a roster NAME, never a wire. This is the seam that turns
+  // that name into an `AccountPoolWire`, and it must preserve `poolRule`'s
+  // documented permissive fold: a roster miss is `untagged`, not `unreadable`.
+  it('declaredAccountPool(null) against a tagged project preserves the roster-miss fold', () => {
+    expect(poolRule(declaredAccountPool(null), { state: 'tagged', name: 'pool-a' }))
+      .toEqual({ ok: true, why: 'untagged-account' });
+  });
+
+  it('declaredAccountPool(name) against the same name still serves', () => {
+    expect(poolRule(declaredAccountPool('pool-a'), { state: 'tagged', name: 'pool-a' }))
+      .toEqual({ ok: true, why: 'same-pool' });
   });
 });
 

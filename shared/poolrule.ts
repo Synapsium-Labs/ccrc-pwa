@@ -118,3 +118,18 @@ export function poolRule(account: AccountPoolWire, projectPool: ProjectPoolWire)
   void unhandled;
   return { ok: false, reason: 'pool-undecidable', state: 'unrecognised' };
 }
+
+/** Adapt a DECLARED-only pool name to the wire.
+ *
+ *  The roster is the declared carrier and the LOWEST precedence (design §5.6);
+ *  a name it does not carry is `untagged`, which is what preserves `poolRule`'s
+ *  documented permissive fold for an account this side cannot see. A caller
+ *  holding a CENTRAL edge builds `{ state: 'tagged', pools, origin: 'central' }`
+ *  itself — this helper is for the callers that have only the roster, and it
+ *  exists so "a roster name is a declared tag" is stated once rather than at
+ *  five call sites. */
+export function declaredAccountPool(pool: string | null): AccountPoolWire {
+  return pool === null
+    ? { state: 'untagged', origin: 'declared' }
+    : { state: 'tagged', pools: [pool], origin: 'declared' };
+}

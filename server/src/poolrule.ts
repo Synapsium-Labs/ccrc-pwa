@@ -1,4 +1,4 @@
-import { poolRule } from '../../shared/poolrule.js';
+import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
 import type { PoolVerdict } from '../../shared/poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
@@ -46,8 +46,8 @@ export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roste
  */
 export function poolVerdict(roster: Roster, wrapper: string, pool: ProjectPoolWire): RosterVerdict {
   const account = roster.byId.get(wrapper);
-  if (account !== undefined) return poolRule(account.pool, pool);
-  const v = poolRule(null, pool);
+  if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
+  const v = poolRule(declaredAccountPool(null), pool);
   return v.ok ? { ok: true, why: 'account-not-in-roster' } : v;
 }
 
@@ -60,7 +60,7 @@ export function poolVerdict(roster: Roster, wrapper: string, pool: ProjectPoolWi
  * tell the two apart (`projectPlacement` in `limits.ts` does).
  */
 export function poolEligible(roster: Roster, pool: ProjectPoolWire): AccountDef[] {
-  return roster.homeAble.filter((a) => poolRule(a.pool, pool).ok);
+  return roster.homeAble.filter((a) => poolRule(declaredAccountPool(a.pool), pool).ok);
 }
 
 /**
@@ -73,7 +73,7 @@ export function poolEligible(roster: Roster, pool: ProjectPoolWire): AccountDef[
  * copy that drifts the day a fifth state is added.
  */
 export function poolUndecidable(pool: ProjectPoolWire): boolean {
-  return !poolRule(null, pool).ok;
+  return !poolRule(declaredAccountPool(null), pool).ok;
 }
 
 /**

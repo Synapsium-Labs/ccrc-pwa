@@ -138,10 +138,12 @@ describe('poolUndecidable and poolRostered', () => {
 
 // The purity scan, copied from `coord-caps-policy.test.ts`'s scan with ONE
 // deliberate difference, stated rather than smuggled: that file demands EVERY
-// import line be `import type`, and this module has exactly one value import —
-// `poolRule` from `shared/poolrule.js`, itself L0 and importing nothing. That
-// import is the whole point (the rule is spelled once), so the assertion below
-// pins it EXACTLY: one value import, and it must be that one.
+// import line be `import type`, and this module has exactly one value IMPORT
+// STATEMENT — `poolRule` and `declaredAccountPool` (wave 1 Task 5 fix round 1,
+// T5-R1), both from `shared/poolrule.js`, itself L0 and importing nothing.
+// That import is the whole point (the rule and its one adapter are spelled
+// once), so the assertion below pins it EXACTLY: one value import statement,
+// and it must be that one, naming only symbols from the L0 module.
 describe('poolrule.ts is the pure L1 module its own docstring says it is', () => {
   const SRC = readFileSync(
     path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'src', 'poolrule.ts'),
@@ -176,11 +178,11 @@ describe('poolrule.ts is the pure L1 module its own docstring says it is', () =>
       .not.toMatch(/CoordStore|\bstore\s*\.|FleetIO/);
   });
 
-  it('takes exactly ONE value import, and it is L0 poolRule', () => {
+  it('takes exactly ONE value import statement, and it is L0 poolrule.js', () => {
     const imports = [...code().matchAll(/^\s*import\b[^\n]*/gm)].map((m) => m[0]!.trim());
     expect(imports.length, 'no imports found — the scan is over nothing').toBeGreaterThan(0);
     const values = imports.filter((l) => !/^import\s+type\b/.test(l));
-    expect(values, 'poolrule.ts takes a value import that is not the L0 rule')
-      .toEqual(["import { poolRule } from '../../shared/poolrule.js';"]);
+    expect(values, 'poolrule.ts takes a value import that is not the L0 module')
+      .toEqual(["import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';"]);
   });
 });
