@@ -51,13 +51,21 @@ function plantBox(home: string): void {
   //   ccrc update --check …   -> a `check:` line built from version/sha/installed
   //   ccrc update --to …      -> exit update-exit; on 0, version := target
   //   ccrc version            -> "ccrc <sha> (release, built …)" + "version <v>"
-  //   curl … /health          -> {"ok":true,"version":"<v>"}
+  //   curl … /health          -> {"ok":true,"version":"<health-version or version>"}
+  // Two fixture switches beside those, both per-host files:
+  //   banner          -> ssh prints its own chatter on STDERR before the
+  //                      command's output, the way a real ssh prints
+  //                      "Warning: Permanently added …" or a login banner.
+  //   health-version  -> what `/health` reports, when that must DIFFER from
+  //                      what `ccrc version` reports (a server whose unit
+  //                      did not come back on the new build).
   plant('ssh', [
     '#!/bin/sh',
     'while [ $# -gt 0 ]; do case "$1" in -p|-i|-o) shift 2 ;; -*) shift ;; *) break ;; esac; done',
     'host="$1"; shift; cmd="$*"',
     'printf \'%s\\n\' "$host $cmd" >> "$HOME/ssh-argv"',
     'd="$HOME/hosts/$host"; [ -d "$d" ] || { echo "ssh: could not resolve hostname $host" >&2; exit 255; }',
+    '[ -f "$d/banner" ] && cat "$d/banner" >&2',
     'IFS= read -r ver < "$d/version"; IFS= read -r sha < "$d/sha"; IFS= read -r inst < "$d/installed"',
     'case "$cmd" in',
     '  *CCRC_ROLE*) [ -f "$d/role" ] && cat "$d/role"; exit 0 ;;',
@@ -76,7 +84,9 @@ function plantBox(home: string): void {
     `    if [ "$rc" -eq 0 ]; then set -- $cmd; echo "$4" > "$d/version"; echo "${SHA_NEW}" > "$d/sha"; fi`,
     '    exit "$rc" ;;',
     '  "ccrc version") echo "ccrc $sha (release, built 2026-09-18T00:00:00Z)"; [ -n "$ver" ] && echo "version $ver"; exit 0 ;;',
-    '  *"/health"*) printf \'{"ok":true,"build":{"sha":"%s"},"version":"%s"}\\n\' "$sha" "$ver"; exit 0 ;;',
+    '  *"/health"*)',
+    '    hv="$ver"; [ -f "$d/health-version" ] && IFS= read -r hv < "$d/health-version"',
+    '    printf \'{"ok":true,"build":{"sha":"%s"},"version":"%s"}\\n\' "$sha" "$hv"; exit 0 ;;',
     'esac',
     'echo "fixture ssh: unexpected command: $cmd" >&2; exit 90',
   ].join('\n'));
@@ -177,6 +187,11 @@ describe('ccrc rollout: refusals before any box is touched (exit 2, no ssh)', ()
     expect(r.stderr).toMatch(/unreachable over ssh \(exit 255\)/);
     expect(r.stderr).not.toMatch(/records CCRC_ROLE=/);
     expect(updates(home)).toEqual([]);
+    // …and it says WHY. `_rollout_role` used to send ssh's stderr to
+    // /dev/null, so the operator got an exit code and nothing else — the one
+    // piece of evidence that separates a wrong key from a wrong port from a
+    // host that is simply down. The refusal now quotes ssh's own last line.
+    expect(r.stderr).toMatch(/ssh said: ssh: could not resolve hostname user@fleet-host/);
   });
 
   it('an unknown argument and a malformed --to are usage errors', () => {
@@ -216,6 +231,44 @@ describe('ccrc rollout: refusals before any box is touched (exit 2, no ssh)', ()
     const r = run(home);
     expect(r.code, `stderr: ${r.stderr}`).toBe(2);
     expect(updates(home)).toEqual([]);
+  });
+
+  // R13. The check line is parsed out of STDOUT, and it is looked for
+  // ANYWHERE in it rather than demanded as line one. Step 3 used to capture
+  // `2>&1` and test the FIRST line, so ssh's own chatter — a host-key
+  // warning, a login banner, neither of them the remote ccrc's doing —
+  // refused the rollout and blamed the box for it.
+  it("ssh's own stderr chatter is relayed, not parsed: the rollout still reads the check line and proceeds", () => {
+    const home = twoBoxFleet('ccrc-rollout-banner-');
+    writeFileSync(join(home, 'hosts', FLEET, 'banner'),
+      "Warning: Permanently added 'user@fleet-host' (ED25519) to the list of known hosts.\n");
+    const r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0`]);
+    expect(r.stdout).toMatch(/^rollout: fleet: v1\.0\.0 \(oldsha00\) → v2\.0\.0 \[behind\]$/m);
+    // RELAYED, not swallowed: an operator has to SEE a host-key warning, and
+    // it arrives on stderr carrying the box's own label.
+    expect(r.stderr).toMatch(/^fleet: Warning: Permanently added 'user@fleet-host'/m);
+  });
+
+  // R13. `$ROLLOUT_VERSION` comes out of a DOWNLOADED SHA256SUMS and is
+  // interpolated into a command a remote shell parses. `--to`'s own value is
+  // shape-checked at parse time; the published name was not.
+  it('a published release name that is not vX.Y.Z-shaped refuses at exit 2 — it never reaches a remote shell', () => {
+    const home = twoBoxFleet('ccrc-rollout-badname-');
+    writeFileSync(join(home, 'releases', 'latest', 'download', 'SHA256SUMS'),
+      `${'0'.repeat(64)}  ccrc-v1.0.0;echo.tar.gz\n`);
+    const r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/the published release name is not vX\.Y\.Z-shaped \(got: v1\.0\.0;echo\)/);
+    expect(updates(home)).toEqual([]);
+    // The name reached NO remote command at all — not the update, not the
+    // check. (The role preflight's two ssh calls are step 1 and precede the
+    // version pin by design, so "no ssh at all" is not what this verb can
+    // promise; "no ssh carrying that name" is, and is the property that
+    // matters. D-3050.)
+    expect(sshCalls(home).filter((l) => l.includes(';echo'))).toEqual([]);
+    expect(sshCalls(home).filter((l) => l.includes('--check'))).toEqual([]);
   });
 });
 
@@ -309,6 +362,28 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     const r = run(home);
     expect(r.code, r.stderr).toBe(0);
     expect(updates(home)).toEqual([`${SERVER} ccrc update --to v2.0.0`]);
+    // …and `/health` is still re-measured on it. EVERY shape includes the
+    // server box — both two-box orders and this one — which is why step 6's
+    // `/health` block carries no guard at all. The guard it replaced asked
+    // two questions no input could answer `no` to.
+    expect(sshCalls(home).some((l) => l.startsWith(`${SERVER} curl`) && l.includes('127.0.0.1:7788/health'))).toBe(true);
+  });
+
+  // F6/R13: `ccrc version` agreeing on BOTH boxes is not the whole
+  // verification — the server's own `/health` is re-measured too, because
+  // the file on disk being right and the RUNNING unit being right are two
+  // facts, and a unit that failed to come back on the new build is exactly
+  // the case this arm exists for.
+  it('both boxes report the target but the server /health still answers the OLD version → exit 1, naming /health', () => {
+    const home = twoBoxFleet('ccrc-rollout-health-');
+    writeFileSync(join(home, 'hosts', SERVER, 'health-version'), 'v1.0.0\n');
+    const r = run(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    // `ccrc version` agreed on both — the disagreement is /health's alone.
+    expect(r.stderr).not.toMatch(/reports v1\.0\.0, not v2\.0\.0, after its update/);
+    expect(r.stderr).toMatch(/on \/health after its restart/);
+    expect(r.stderr).toMatch(/the server box reports v1\.0\.0, not v2\.0\.0/);
+    expect(r.stdout).toMatch(/— NOT agreed$/m);
   });
 
   it('verification disagreeing with the target is exit 1 and names the box', () => {

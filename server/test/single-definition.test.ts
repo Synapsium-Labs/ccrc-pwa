@@ -1437,6 +1437,54 @@ describe('one bash reader of ~/.ccrc/build.json', () => {
   });
 });
 
+// — The completed-install record's BASH side (release/rollout design §5) —
+describe('one bash spelling of ~/.ccrc/installed', () => {
+  // The SIBLING of the stamp rows above, and it wants the rule for the same
+  // reason with one more edge: this file is not merely read in two places,
+  // it is WRITTEN by the install spine's last step, REMOVED by uninstall and
+  // COMPARED by the update gate and `--check`. Four sites, one path. A second
+  // literal is how `cmd_uninstall` would come to remove a file `_upd_converged`
+  // still reads, leaving a box that answers "already installed" for ever —
+  // and unlike the stamp, nothing else on a box would notice: the record has
+  // no `jq`, no shape, no second reader in another language to disagree with.
+  //
+  // Text-scanned in the shape the two describes above use: prose may discuss
+  // the path anywhere, a LINE OF SHELL that names it may exist once.
+  it('exactly one holder file, and it is ccd/ccrc', () => {
+    // Narrower than the stamp's list ON PURPOSE. `deploy.sh` is NOT here and
+    // must not be: a deploy writes no completed-install record, which is
+    // precisely the distinction `ccrc version` reports as `install:
+    // incomplete` on a deploy.sh box, and `ccrc update --check` reports as
+    // `incomplete`/`unversioned`. A `deploy/deploy.sh` entry appearing in
+    // this list would mean that distinction had been erased.
+    expect(holdersOf('$HOME/.ccrc/installed')).toEqual(['ccd/ccrc']);
+  });
+
+  it('the ccrc CLI spells the path once, and every other site goes through BOX_INSTALLED_FILE', () => {
+    const src = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+    const code = src.split('\n').filter((l) => !l.trim().startsWith('#'));
+    expect(code.filter((l) => l.includes('.ccrc/installed'))).toEqual([
+      'BOX_INSTALLED_FILE="$HOME/.ccrc/installed"',
+    ]);
+    // The variable's own call sites, as one exact list — the idiom the stamp
+    // rows above use. This is what makes a NEW reader or writer of the record
+    // visible: it has to name the file somehow, and through the variable is
+    // the only spelling the assertion above leaves it. Re-derived from the
+    // file at HEAD, so a rename of the variable reds here too.
+    expect(code.filter((l) => l.includes('BOX_INSTALLED_FILE')).map((l) => l.trim())).toEqual([
+      'BOX_INSTALLED_FILE="$HOME/.ccrc/installed"',
+      'if [[ -f "$BOX_INSTALLED_FILE" ]]; then',
+      'IFS= read -r rec < "$BOX_INSTALLED_FILE" || rec=""',
+      'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
+      'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
+      '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
+      'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
+      'rm -f -- "$BOX_INSTALLED_FILE" \\',
+      '|| _ccrc_die "removing $BOX_INSTALLED_FILE failed"',
+    ]);
+  });
+});
+
 // — The model-class registry (spec §4.1, §4.2, §6.1, §6.4, §7) —
 describe('the model files, and who reads each one', () => {
   // FIVE paths — measured 2026-09-08 by counting this describe's own

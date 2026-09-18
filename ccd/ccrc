@@ -1668,12 +1668,23 @@ _models_refuse() {   # <error> <exit code> <detail…>
 # roster ids, for the same reason.
 _box_build_fields() {
   # The optional argument (stage 4, Task 6) points this SAME parser at a
-  # stamp that is not the box's own — `_inst_stamp`'s shipped-stamp arm
-  # validates a release artifact's `build.json` before installing it. One
-  # parser, two files, rather than a second jq filter that would come to
-  # disagree with this one about what a well-formed stamp is
-  # (single-definition.test.ts counts the `jq -r` parses in this file and
-  # fails on a second). No caller but that arm passes an argument.
+  # stamp that is not the box's own. One parser, many files, rather than a
+  # second jq filter that would come to disagree with this one about what a
+  # well-formed stamp is (single-definition.test.ts counts the `jq -r`
+  # parses in this file and fails on a second).
+  #
+  # TWO callers pass one, and each reads a RELEASE ARTIFACT'S OWN
+  # `build.json`, never the box's:
+  #   `_inst_stamp_shipped` — the stamp that came inside the artifact,
+  #     validated BEFORE it is installed over the box's own, so a
+  #     malformed one is refused rather than becoming what the box claims
+  #     to run.
+  #   `_upd_converged` — the STAGED tree's stamp (`$UPD_TREE/build.json`),
+  #     compared against the box's, because "already converged" is a
+  #     statement about the release about to be installed and the box's own
+  #     stamp cannot answer it. It saves and restores `BOX_BUILD` around
+  #     the call for exactly that reason: the second parse must not leave
+  #     the caller holding the staged tree's fields.
   local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
   [[ -e "$stamp" ]] || return 3
@@ -10974,6 +10985,16 @@ cmd_update() {
     usage >&2
     exit 2
   fi
+  # `--check` MEASURES and writes nothing; `--force` reinstalls a converged
+  # box. Together they name two different acts, and the check arm below
+  # returns before `--force` is ever read — so the pair used to mean
+  # "measure, and silently drop the flag you also typed". Refuse instead:
+  # an operator who typed both wanted one of them, and which one is not
+  # ours to guess.
+  if [ "$check" -eq 1 ] && [ "$force" -eq 1 ]; then
+    echo "$PROG: update: --check and --force are exclusive — --check measures and writes nothing, --force reinstalls a converged box; pick one" >&2
+    exit 2
+  fi
 
   if [ "$check" -eq 1 ]; then
     command -v curl >/dev/null 2>&1 || _ccrc_die "curl is required by 'ccrc update --check' but is not on PATH"
@@ -11469,12 +11490,40 @@ _rollout_need() {   # <value> <name> <what> <envfile>
 # always reads as rc 0 with empty output, and ONLY ssh's own transport
 # failure (unreachable host, bad key, refused port — 255 and friends)
 # reaches the caller as a non-zero return. A caller MUST check the return.
+#
+# ONE SPELLING OF THE ENV FILE (D-88, ruling R11). The remote path is this
+# box's own `$BOX_ENV_FILE` with the LOCAL `$HOME/` prefix stripped and the
+# REMOTE `$HOME` put back INSIDE the single-quoted command, so the remote
+# still expands its own home. A second literal here is exactly the drift
+# `BOX_ENV_FILE`'s own definition warns about, and it would be a second
+# spelling on a path this verb can only get wrong silently.
+#
+# AND SSH'S OWN LAST WORD IS KEPT. `2>/dev/null` threw away the only
+# evidence of WHY a box is unreachable (permission denied / connection
+# refused / name not resolved), leaving the caller's refusal to name an
+# exit code and nothing else. ssh's stderr goes to `$ROLLOUT_ERRF`, the
+# FILE `cmd_rollout` made before it called anything — NOT to a shell
+# variable: every caller reads this function's stdout through `$( )`, so
+# anything it assigned would die with that subshell. A file crosses it.
 _rollout_role() {   # <user@host> -> prints the recorded CCRC_ROLE (or nothing); returns ssh's own exit status
-  local out rc
-  out="$("${ROLLOUT_SSH[@]}" "$1" 'grep -m1 "^CCRC_ROLE=" "$HOME/.ccrc/ccrc.env" 2>/dev/null | cut -d= -f2-; exit 0' 2>/dev/null)"
+  local out rc rel
+  rel="${BOX_ENV_FILE#"$HOME/"}"
+  : >"$ROLLOUT_ERRF" 2>/dev/null || :
+  out="$("${ROLLOUT_SSH[@]}" "$1" 'grep -m1 "^CCRC_ROLE=" "$HOME/'"$rel"'" 2>/dev/null | cut -d= -f2-; exit 0' 2>>"$ROLLOUT_ERRF")"
   rc=$?
   printf '%s' "$out" | tr -d '[:space:]'
   return $rc
+}
+
+# The " — ssh said: <line>" tail for an unreachable-box refusal: ssh's last
+# non-blank word, or nothing at all when it was silent. One helper so both
+# callers say it the same way, and so "ssh said nothing" stays visibly
+# different from "ssh said something" rather than printing an empty quote.
+_rollout_role_why() {
+  local why=""
+  why="$(sed -e 's/[[:space:]]*$//' -e '/^$/d' "$ROLLOUT_ERRF" 2>/dev/null | tail -n1)"
+  [ -n "$why" ] && printf ' — ssh said: %s' "$why"
+  return 0
 }
 
 # ── cmd_rollout — one act, both boxes, in order (release/rollout design §4)
@@ -11518,13 +11567,20 @@ cmd_rollout() {
   _rollout_need "${CCRC_AGENT_BOX:-}" CCRC_AGENT_BOX "the fleet box, user@host — never defaulted from CCRC_BOX" "$envf"
   _rollout_need "${CCRC_SSH_KEY:-}" CCRC_SSH_KEY "the ssh identity file that reaches both boxes" "$envf"
   ROLLOUT_SSH=(ssh -p "${CCRC_SSH_PORT:-22}" -i "$CCRC_SSH_KEY" -o BatchMode=yes)
+  # ONE scratch file for every remote's STDERR, made before the first ssh
+  # call and removed however this verb ends. It is a file rather than a
+  # variable because `_rollout_role` is read through `$( )`, and a subshell
+  # cannot hand an assignment back to its parent.
+  ROLLOUT_ERRF="$(_plat_mktemp)" \
+    || _ccrc_die "rollout: could not create a temp file for the boxes' stderr (mktemp failed) — nothing was touched"
+  trap '[ -z "${ROLLOUT_ERRF:-}" ] || rm -f -- "$ROLLOUT_ERRF"' EXIT
 
   # Step 1 — preflight the roles, before touching either box.
   local single=0 frole="" srole="" rrc=0
   [ "$CCRC_AGENT_BOX" = "$CCRC_BOX" ] && single=1
   frole="$(_rollout_role "$CCRC_AGENT_BOX")"; rrc=$?
   if [ "$rrc" -ne 0 ]; then
-    echo "$PROG: rollout: the fleet box (CCRC_AGENT_BOX) is unreachable over ssh (exit $rrc) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
+    echo "$PROG: rollout: the fleet box (CCRC_AGENT_BOX) is unreachable over ssh (exit $rrc)$(_rollout_role_why) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
     exit 2
   fi
   if [ "$single" -eq 1 ]; then
@@ -11533,7 +11589,7 @@ cmd_rollout() {
   else
     srole="$(_rollout_role "$CCRC_BOX")"; rrc=$?
     if [ "$rrc" -ne 0 ]; then
-      echo "$PROG: rollout: the server box (CCRC_BOX) is unreachable over ssh (exit $rrc) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
+      echo "$PROG: rollout: the server box (CCRC_BOX) is unreachable over ssh (exit $rrc)$(_rollout_role_why) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
       exit 2
     fi
     [ "$frole" = fleet ] || {
@@ -11550,6 +11606,13 @@ cmd_rollout() {
   # staging dir in the subshell that ran it.
   ROLLOUT_VERSION="$( _upd_resolve "$to" >/dev/null && printf '%s' "$UPD_VERSION" )" \
     || { echo "$PROG: rollout: could not resolve the target release — read the line above; nothing was touched" >&2; exit 2; }
+  # The name came out of a DOWNLOADED SHA256SUMS, and every use of it below
+  # is interpolated into a command a remote shell parses (`ccrc update --to
+  # $ROLLOUT_VERSION`). `--to`'s own value is shape-checked at parse time;
+  # this is the same check for the value the release space supplied, which
+  # no operator typed. Refuse before any box is touched.
+  [[ "$ROLLOUT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || { echo "$PROG: rollout: the published release name is not vX.Y.Z-shaped (got: $ROLLOUT_VERSION) — refusing to hand it to a remote shell; nothing was touched" >&2; exit 2; }
   echo "rollout: target $ROLLOUT_VERSION"
 
   local -a boxes=() labels=()
@@ -11557,16 +11620,28 @@ cmd_rollout() {
   elif [ "$server_first" -eq 1 ]; then boxes=("$CCRC_BOX" "$CCRC_AGENT_BOX"); labels=(server fleet)
   else boxes=("$CCRC_AGENT_BOX" "$CCRC_BOX"); labels=(fleet server); fi
 
-  # Step 3 — measure, then decide. `--check`'s first line is fixed-shape.
-  local i out line state box sha allcurrent=1
+  # Step 3 — measure, then decide. `--check`'s check line is fixed-shape.
+  #
+  # STDOUT ONLY for parsing, and the remote's STDERR RELAYED rather than
+  # merged. `2>&1` plus "the check line is the FIRST line" made an ssh
+  # `Warning: Permanently added …` or a login banner — neither of them the
+  # remote ccrc's doing, and both entirely ordinary — read as "this box has
+  # no ccrc new enough to know --check", blaming the box for the transport.
+  # So: the remote's stderr goes to ours with this box's own label on it
+  # (an operator needs to SEE a host-key warning, not have it swallowed),
+  # and the check line is looked for ANYWHERE in stdout, first match wins.
+  # The refusal now fires only when no `check: ` line exists at all.
+  local i out first line state box sha allcurrent=1
   for i in "${!boxes[@]}"; do
-    out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>&1)" || :
-    line="${out%%$'\n'*}"
-    case "$line" in
-      "check: "*) ;;
-      *) echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${line:-nothing}) — is ccrc installed there, and new enough to know --check? nothing was touched" >&2
-         exit 2 ;;
-    esac
+    : >"$ROLLOUT_ERRF"
+    out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
+    [ -s "$ROLLOUT_ERRF" ] && sed "s/^/${labels[$i]}: /" "$ROLLOUT_ERRF" >&2
+    line="$(printf '%s\n' "$out" | grep -m1 '^check: ')" || line=""
+    if [ -z "$line" ]; then
+      first="${out%%$'\n'*}"
+      echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${first:-nothing}) — is ccrc installed there, and new enough to know --check? nothing was touched" >&2
+      exit 2
+    fi
     box="${line#*box=}"; box="${box%% *}"
     sha="${line#*sha=}"; sha="${sha%% *}"
     state="${line##*state=}"
@@ -11607,11 +11682,16 @@ cmd_rollout() {
     fi
     report="$report${report:+ · }${labels[$i]} ${v:-unversioned} (${sha:0:8})"
   done
-  if [ "$single" -eq 1 ] || [ "${labels[*]}" != "${labels[*]/server/}" ]; then
-    v="$("${ROLLOUT_SSH[@]}" "$CCRC_BOX" 'curl -fsS http://127.0.0.1:7788/health' 2>/dev/null | jq -r '.version // empty' 2>/dev/null)" || v=""
-    if [ "$v" != "$ROLLOUT_VERSION" ]; then
-      echo "$PROG: rollout: the server box reports ${v:-no version}, not $ROLLOUT_VERSION, on /health after its restart" >&2; bad=1
-    fi
+  # EVERY shape includes the server box — `boxes` is either both boxes in
+  # one order or the other, or the single box which IS `$CCRC_BOX` — so
+  # `/health` is always re-measured, on `$CCRC_BOX`. The guard this replaces
+  # asked two questions whose answer was always yes: the single case, and
+  # `"${labels[*]}" != "${labels[*]/server/}"`, which is true for any labels
+  # containing `server` and therefore for both two-box orders. A condition
+  # no input can falsify is not a guard; it only hides which boxes get here.
+  v="$("${ROLLOUT_SSH[@]}" "$CCRC_BOX" 'curl -fsS http://127.0.0.1:7788/health' 2>/dev/null | jq -r '.version // empty' 2>/dev/null)" || v=""
+  if [ "$v" != "$ROLLOUT_VERSION" ]; then
+    echo "$PROG: rollout: the server box reports ${v:-no version}, not $ROLLOUT_VERSION, on /health after its restart" >&2; bad=1
   fi
   if [ "$bad" -ne 0 ]; then
     echo "rollout: $report — NOT agreed"; return 1
