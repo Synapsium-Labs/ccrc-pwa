@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../../agent/src/server.js';
 import type { ConnectedFleet, FleetClient } from '../src/remote/client.js';
@@ -171,6 +171,52 @@ describe('remote FleetIO — file ops over the agent WS', () => {
       expect(await f.io.statMeasured(outside)).toEqual({ ok: false, reason: 'unreadable' });
     });
   });
+
+  describe('lstatMeasured', () => {
+    it('answers about the PATH end to end — a live symlink is `symlink` while stat still answers about the target', async () => {
+      const f = await connected();
+      const target = path.join(fixture!.home, '.cc-sessions', 'lm-target.txt');
+      const link = path.join(fixture!.home, '.cc-sessions', 'lm-link.txt');
+      writeFileSync(target, 'abcd');
+      symlinkSync(target, link);
+      expect(await f.io.lstatMeasured(link)).toEqual({ ok: true, kind: 'symlink' });
+      expect(await f.io.lstatMeasured(target)).toEqual({ ok: true, kind: 'regular' });
+      // Proving the two ops really do disagree over this wire, not just in the
+      // local adapter: `stat` follows and reports the target's four bytes.
+      expect(await f.io.statMeasured(link)).toMatchObject({ ok: true, size: 4 });
+    });
+
+    it('a directory is `other`, a missing path is "absent", a path outside the whitelist is "unmeasured"', async () => {
+      const f = await connected();
+      expect(await f.io.lstatMeasured(path.join(fixture!.home, '.cc-sessions'))).toEqual({ ok: true, kind: 'other' });
+      expect(await f.io.lstatMeasured(path.join(fixture!.home, '.cc-sessions', 'nope.txt')))
+        .toEqual({ ok: false, reason: 'absent' });
+      // A whitelist refusal is a REJECTED request, which this reader reports as
+      // `unmeasured` — the same stance `statMeasured` takes when it answers
+      // "unreadable" rather than "absent" for the same path, and for the same
+      // reason: a refusal is not evidence about the file.
+      const outside = path.join(fixture!.projectsRoot, '..', 'definitely-outside.txt');
+      expect(await f.io.lstatMeasured(outside)).toEqual({ ok: false, reason: 'unmeasured' });
+    });
+
+    /** THE ESCAPE THE WHITELIST EXISTS TO STOP, asked of the one op that
+     *  deliberately does NOT take `checkPath`'s canonical answer as its
+     *  subject. The decision is still made on the fully resolved path, so a
+     *  link out of the whitelist is refused before anything is lstat'd — and
+     *  the refusal must not leak the answer it refused, which is why it reads
+     *  as `unmeasured` and not as a kind. */
+    it('a symlink inside the registry pointing OUTSIDE the whitelist is refused, not typed', async () => {
+      const f = await connected();
+      const outside = path.join(fixture!.projectsRoot, '..', 'escape-target.txt');
+      writeFileSync(outside, 'secret');
+      const link = path.join(fixture!.home, '.cc-sessions', 'escape-link');
+      symlinkSync(outside, link);
+      expect(await f.io.lstatMeasured(link)).toEqual({ ok: false, reason: 'unmeasured' });
+      // And the content path is refused too, on the same decision — the op
+      // added here widened nothing.
+      expect(await f.io.readFileMeasured(link)).toEqual({ ok: false, reason: 'unreadable' });
+    });
+  });
 });
 
 describe('remote FleetIO — readFileMeasured against a stub FleetClient (no real agent)', () => {
@@ -248,6 +294,37 @@ describe('remote FleetIO — readFileMeasured against a stub FleetClient (no rea
   it('a rejected stat request (forbidden/disconnected/timeout) reads as "unreadable"', async () => {
     const io = createIo(rejectingClient(new Error('forbidden')));
     expect(await io.statMeasured('/whatever/file.txt')).toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  /** THE OLDER-AGENT ARM FOR `lstat`, and it is a different shape from every
+   *  other one on this wire. The ops above degrade by OMITTING a field, so
+   *  their reader has to read silence correctly. An agent that predates this op
+   *  cannot omit anything — it rejects the request outright — so the failure
+   *  arrives as a rejection, and the ONE thing that must never happen is that
+   *  it arrives as a kind. `regular` is the only answer a caller may condemn
+   *  on, so a rejection reading as `regular` would condemn accounts on a fleet
+   *  nobody asked. */
+  it('an agent too old for the `lstat` op (`not-implemented`) reads as "unmeasured", NEVER a kind', async () => {
+    const io = createIo(rejectingClient(new Error('not-implemented')));
+    expect(await io.lstatMeasured('/whatever/marker')).toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  it('a payload in no shape this reader knows is "unmeasured" — never the nearest kind', async () => {
+    const io = createIo(clientAnswering({ kind: 'file' }));       // plausible, and not our vocabulary
+    expect(await io.lstatMeasured('/whatever/marker')).toEqual({ ok: false, reason: 'unmeasured' });
+    const io2 = createIo(clientAnswering({ missing: true }));     // measured by nothing
+    expect(await io2.lstatMeasured('/whatever/marker')).toEqual({ ok: false, reason: 'unmeasured' });
+  });
+
+  it('a modern agent answering {missing:true, absent:true} reads as "absent" here too', async () => {
+    const io = createIo(clientAnswering({ missing: true, absent: true }));
+    expect(await io.lstatMeasured('/whatever/marker')).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('all three kinds survive the wire unchanged', async () => {
+    for (const kind of ['regular', 'symlink', 'other'] as const) {
+      expect(await createIo(clientAnswering({ kind })).lstatMeasured('/p')).toEqual({ ok: true, kind });
+    }
   });
 
   it('an OLDER AGENT — {dataB64: null} with no marker — reads as "unreadable", NEVER "absent"', async () => {

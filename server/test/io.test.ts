@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest';
-import { appendFileSync, chmodSync, mkdirSync, statSync, truncateSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, mkdirSync, statSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
@@ -168,6 +168,75 @@ describe('localIO.stat', () => {
     expect(s!.size).toBe(4);
     expect(typeof s!.mtimeMs).toBe('number');
     expect(await localIO.stat(path.join(path.dirname(file), 'nope'))).toBeNull();
+  });
+});
+
+/** `lstatMeasured` answers about the PATH; every other read on this interface
+ *  answers about what the path RESOLVES TO. The pair below is the whole
+ *  difference, on one fixture: `stat` follows the link and reports the target's
+ *  size, `lstat` reports that the path is a link and never looks past it. */
+describe('localIO.lstatMeasured', () => {
+  const linkTo = (targetBytes: string): { link: string; target: string } => {
+    const dir = mktempDir();
+    const target = path.join(dir, 'target.txt');
+    const link = path.join(dir, 'link.txt');
+    writeFileSync(target, targetBytes);
+    symlinkSync(target, link);
+    return { link, target };
+  };
+
+  it('a plain file is `regular`', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    expect(await localIO.lstatMeasured(file)).toEqual({ ok: true, kind: 'regular' });
+  });
+
+  it('a LIVE symlink is `symlink`, and statMeasured on the same path still answers about the TARGET', async () => {
+    const { link } = linkTo('abcd');
+    expect(await localIO.lstatMeasured(link)).toEqual({ ok: true, kind: 'symlink' });
+    // The contrast IS the reason this member exists: nothing already on this
+    // interface could have told the caller what `lstatMeasured` just did.
+    expect(await localIO.statMeasured(link)).toMatchObject({ ok: true, size: 4 });
+  });
+
+  it('a DANGLING symlink is still `symlink` — the link exists even though its target does not', async () => {
+    const dir = mktempDir();
+    const link = path.join(dir, 'dangling');
+    symlinkSync(path.join(dir, 'no-such-target'), link);
+    expect(await localIO.lstatMeasured(link)).toEqual({ ok: true, kind: 'symlink' });
+    // And this is the residual `agent/src/fileops.ts`'s `StatResult` docstring
+    // names: `stat` follows, the TARGET's ENOENT throws, and the path reads as
+    // absent though its name is right there in the directory.
+    expect(await localIO.statMeasured(link)).toEqual({ ok: false, reason: 'absent' });
+  });
+
+  it('a directory is `other` — never borrowing one of the two kinds that decide something', async () => {
+    const dir = mktempDir();
+    expect(await localIO.lstatMeasured(dir)).toEqual({ ok: true, kind: 'other' });
+  });
+
+  it('a missing path is {ok:false, reason:"absent"}, and a path THROUGH a file is "unreadable"', async () => {
+    const file = tmpFile();
+    writeFileSync(file, 'abcd');
+    expect(await localIO.lstatMeasured(path.join(path.dirname(file), 'nope')))
+      .toEqual({ ok: false, reason: 'absent' });
+    expect(await localIO.lstatMeasured(path.join(file, 'child')))
+      .toEqual({ ok: false, reason: 'unreadable' });
+  });
+
+  it('localIO NEVER answers `unmeasured` — that reason belongs to an io that cannot ask', async () => {
+    // The fourth reason exists for the remote arm against an agent too old to
+    // implement the op. This box can always ask, so a local `unmeasured` would
+    // mean the reason had leaked into a position it cannot occupy.
+    const dir = mktempDir();
+    const file = path.join(dir, 'f.txt');
+    writeFileSync(file, 'x');
+    const link = path.join(dir, 'l');
+    symlinkSync(file, link);
+    for (const p of [file, link, dir, path.join(dir, 'nope'), path.join(file, 'child')]) {
+      const r = await localIO.lstatMeasured(p);
+      if (!r.ok) expect(r.reason, p).not.toBe('unmeasured');
+    }
   });
 });
 

@@ -197,6 +197,7 @@ CCRC_DOCTOR_CHECKS=(
   fleet
   memory
   routing
+  models
 )
 
 # ── verdict helpers ───────────────────────────────────────────────────────
@@ -803,13 +804,34 @@ _dr_log_hint() {   # <unit> -> the command that shows its recent log
   fi
 }
 
+# THIS FILE RUNS TWO DIFFERENT COVERAGE DESIGNS FOR TIMERS — "is a recurring
+# job actually keeping its promise" — and this check is only one of them
+# (D-2193). The units in the `known` array below are measured DIRECTLY, by
+# asking systemd/launchd whether the unit is active; that array mixes actual
+# TIMERS with this box's long-lived daemons, which are not recurring jobs at
+# all and are simply polled for up/down like everything else in `known`. Two
+# more timers are covered on purpose by a DIFFERENT design that measures the
+# job's EFFECT instead of its activation state, and are deliberately absent
+# from `known`: `_check_graphify`'s census sub-check covers
+# `ccd-graph-sweep.timer` by reading the census artifact the timer PRODUCES
+# (`~/.ccrc/graph-sweep.json`), and `_check_name` covers `ccrc-ddns.timer` by
+# re-measuring the DNS record the timer maintains rather than the timer's own
+# state. `ccd-usage-sweep.timer` is, measured, in NEITHER design — this file
+# asks about it nowhere. The timer-fired oneshot `.service` siblings (one
+# per timer) are out of THIS design BY CONSTRUCTION rather than by omission:
+# a timer-fired oneshot is never `active` between runs, so polling one here
+# would be a false positive. That does not leave them uncovered — the EFFECT
+# design reaches a job through its OUTPUT, and the output is the service's,
+# not the timer's, so `ccd-graph-sweep.service` and `ccrc-ddns.service` are
+# exactly as covered as their timers: the service is what writes
+# `~/.ccrc/graph-sweep.json` and what sets the DNS record those two read.
 _check_services() {
   local dir="$CCRC_UNIT_DIR" u st why rc=0
   local -a ok=() installed=()
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -857,25 +879,30 @@ _check_services() {
     fi
     case "$u" in
       *.timer)
-        # ONE CLASS, TWO CONSEQUENCES. Both timers DEGRADE rather than down the
-        # box, so both warn — but the sentence an operator reads has to name
-        # what THIS one stopping costs, or they get the right remedy attached to
-        # somebody else's reason. `_dr_warn`'s detail is the only place that
-        # fact exists, so it is a case rather than one shared string.
+        # ONE CLASS, EACH WITH ITS OWN CONSEQUENCE. Every timer here DEGRADES
+        # rather than downs the box, so every one warns — but the sentence an
+        # operator reads has to name what THIS one stopping costs, or they get
+        # the right remedy attached to somebody else's reason. `_dr_warn`'s
+        # detail is the only place that fact exists, so it is a case rather
+        # than one shared string.
         #
         # The `*` arm is not decoration: `known` above is the list this file
-        # maintains, and the day a fifth unit joins it, a timer with no sentence
+        # maintains, and the day a seventh unit joins it, a timer with no sentence
         # of its own says something true and vague rather than something
         # confidently wrong about memory caps.
         case "$u" in
           ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
           ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
           ccd-telemetry-keepalive.timer) why="an idle account's ~/.cc-limits reading goes stale, so placement acts on a number nobody is refreshing" ;;
+          # Sentence is claude-OpenClawHetzner's own — the session that reported this gap
+          # (D-2190): "a dead timer means every lane's catalogue goes stale and nothing
+          # says so."
+          ccrc-models.timer) why="a dead timer means every lane's catalogue goes stale and nothing says so" ;;
           *) why="the job it fires is not running" ;;
         esac
-        # Unreachable on macOS today (`_inst_units` installs neither timer's
-        # plist there) — routed through the hint anyway, so the day that
-        # changes the remedy is already right.
+        # Unreachable on macOS today (`_inst_units` installs none of these
+        # timers' plists there) — routed through the hint anyway, so the day
+        # that changes the remedy is already right.
         _dr_warn services "$u is installed but ${st:-not active} — $why" \
           "$(_dr_enable_now_hint "$u")"
         [ "$rc" -eq 1 ] || rc=2 ;;
@@ -2718,11 +2745,17 @@ _check_accounts() {
   fi
 
   # ONE LINE PER FINDING, plus one COUNTS line, TAB-separated and read into FOUR
-  # variables. Every field the helper writes is non-empty by construction (a
-  # code, an id, a sentence, or a number), so CLAUDE.md's measured TSV hazard —
-  # TAB is an IFS whitespace character, so a run of them collapses and shifts
-  # every field after an empty one — cannot bite here; a finding's absent fourth
-  # field is TRAILING, which `read` leaves empty without shifting anything.
+  # variables. Three of the four fields the helper writes are non-empty by
+  # construction (a code, a sentence, a number) — the id is NOT: its producer,
+  # `opDoctor` (`deploy/account-op.mjs`), documents in capitals that IT DOES
+  # NOT VALIDATE THE ROSTER, with several lines arguing why it must not, so an
+  # id-less account's row carries an EMPTY id field (`Array.prototype.join`
+  # renders `undefined` as `''`). CLAUDE.md's measured TSV hazard (D-71) — TAB
+  # is an IFS whitespace character, so a run of them collapses and shifts
+  # every field after an empty one — IS LIVE for that field: `read` collapses
+  # the empty id into the message that follows it, and the message prints
+  # where the id should be. A finding's absent fourth field is still TRAILING,
+  # which `read` leaves empty without shifting anything.
   # `_dr_line` squashes embedded newlines out of both halves, so the findings
   # join onto ONE verdict line and the remedy stays the line after it.
   local -a findings=()
@@ -4521,4 +4554,369 @@ _check_routing() {
   fi
   [ "$rc" -eq 0 ] || return "$rc"
   _dr_pass routing "$n Anthropic lane(s): no settings.json overrides the routing record's spawn env"
+}
+
+# ── models: is each lane's model catalogue actually being refreshed? ──────
+# THE TWO FILES PER LANE, NOT ONE (census/C-contract.md §0, the premise this
+# check exists to get right): `<id>.classes.json` is the REGISTRY — operator-
+# owned, written by `ccrc models <id> init/set-*`, and it never carries
+# `fetchedAt`/`stale`/`lastError` at all. `<id>.json` is the CATALOGUE —
+# generated by `ccd/ccrc-models-probe`, and it is the ONLY place those three
+# fields live. The POPULATION this check measures is `[ -f
+# "$dir/$id.classes.json" ]` — bare file presence, not `hasRegistry` itself
+# (`deploy/models-op.mjs:573`) called directly. The two answer the same thing
+# for an ordinary registry (ENOENT is the only outcome `hasRegistry` treats as
+# false, matching a bare `[ -f ]`), but they are NOT the same predicate and the
+# loop below documents the two cases where they diverge (a directory at that
+# path; a structurally-excluded lane's stray file) — read those, not this
+# sentence, for the exact shape of the gap. The FRESHNESS DATA comes from each
+# population member's catalogue.
+#
+# THE PREDICATE, verbatim from the contract: fresh := stale == false AND
+# (now - fetchedAt) <= 3*3600. `fetchedAt` is UNIX SECONDS
+# (`ccd/ccrc-models-probe:397`, `int(time.time())`) — never the millisecond
+# stamps the server side uses elsewhere. Three hours because the timer
+# (`deploy/systemd/ccrc-models.{timer,service}`) carries `OnUnitActiveSec=
+# 60min`, `TimeoutStartSec=300` (5 min) AND `AccuracySec=5min` (systemd may
+# delay a run up to 5 min on its own) — worst honest case per cycle is
+# 60+5+5=70 min, so one missed run alone is ~140 min, still under the 180 min
+# floor with real margin to spare, not the exact-fit the interval+timeout sum
+# alone would suggest. The timer carries no `Persistent=true`, so a box
+# returning from a downtime longer than 3h does not catch up on boot — it
+# waits for `OnBootSec=3min` — and this check will WARN "the timer is not
+# reaching this lane" for those few minutes, a cause claim that is false in
+# that narrow window.
+#
+# `_mark_stale` (`ccd/ccrc-models-probe:409`) deliberately KEEPS the old
+# `fetchedAt` when it sets `stale:true` on a failed probe (D-2224) — an
+# mtime-based check would call a lane fresh for as long as the timer kept
+# failing at it. So the two unhealthy arms below are NOT mutually exclusive
+# in practice (a lane failing for hours is stale AND old), and `stale` is
+# what decides which sentence fires:
+#   - stale:false, fetchedAt older than 3h: nobody rewrote the file — the
+#     timer itself is not reaching this lane, and that is the SILENT case
+#     the `services` check's `known` unit list cannot see: an active
+#     `ccrc-models.timer` that fires and writes nothing looks identical, to
+#     a systemd active-state test, to one that never stopped.
+#   - stale:true: the timer ran and the provider refused it. Warned
+#     REGARDLESS of age — the env block built from this catalogue has
+#     already lost its window key the moment the probe failed, not three
+#     hours later.
+# Both WARN, never FAIL: the lane keeps serving from its last-known-good
+# catalogue either way, so nothing here is actually down.
+#
+# A registry with no catalogue at all is "never probed" (C2) — its own WARN,
+# not a freshness failure. An ORPHAN registry (an id in no roster row) is
+# Plan 2's item, not this one's: SKIP it, silently, exactly as `hasRegistry`'s
+# own population never counts a lane the roster does not name.
+#
+# STRUCTURAL TEMPLATE: `_check_credentials` above — the closest of the checks
+# that read the roster and loop per-id in bash (`_check_wrappers` and
+# `_check_accounts` also do both, so "only other" is false; `_check_credentials`
+# is still the right template because its roster-unreadable SKIP, its
+# id-grammar filter and its zero-eligible-ids SKIP are the exact shape this
+# check needs). Same three: a scan over an empty list passes everything, and
+# an empty population must not read as a confident PASS naming no lane (C5).
+_check_models() {
+  local roster="$HOME/.ccrc/accounts.json"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_skip models "no readable account roster at \$HOME/.ccrc/accounts.json — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_fail models "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read" \
+      "install Node first — see the 'node' check above"
+    return 1
+  fi
+  local ids rc
+  ids="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
+    catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    // Every roster row, not filtered by telemetry: the REGISTRY FILE is what
+    // defines this population — an Anthropic lane simply never has one.
+    const ok = /^[a-z][a-z0-9-]{0,31}$/;
+    process.stdout.write(j.accounts
+      .filter((a) => a && typeof a === "object" && ok.test(a.id))
+      .map((a) => a.id).join("\n"));
+  ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_skip models "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if [ -z "$ids" ]; then
+    _dr_skip models "no account on this box declares an id, so there is no model registry to look for"
+    return 3
+  fi
+  local dir="$HOME/.ccrc/models"
+  local id
+  local -a population=()
+  for id in $ids; do
+    # THE POPULATION FILE. An id with no `<id>.classes.json` is a lane nobody
+    # ran `ccrc models <id> init` on (or an Anthropic lane, which has none by
+    # design) — not this check's business. An id in no roster row never
+    # reaches this loop at all — that is C2's orphan, silently out of scope.
+    #
+    # This bare `[ -f ]` is NOT `hasRegistry` (`deploy/models-op.mjs:573`), and
+    # it diverges from it in both directions, on purpose per the brief's own
+    # C2 (file presence stays the population), but the divergence needs
+    # naming rather than a false claim of parity:
+    #   - a DIRECTORY at this path is `hasRegistry: true` (registryInvalid is
+    #     non-null; ENOENT is the only outcome that yields false) but `[ -f ]`
+    #     is false for it, so this check SKIPS a lane `refresh --all` would
+    #     still attempt.
+    #   - a lane `canCarryRegistry` structurally refuses — no `exec` object at
+    #     all, `exec.kind === 'upstream'`, or `telemetry === 'anthropic'` (all
+    #     three conjuncts of the shipped predicate, `deploy/models-op.mjs:185`)
+    #     — never reaches `hasRegistry` at all, but a stray `<id>.classes.json`
+    #     left on disk
+    #     for one still satisfies `[ -f ]` here, entering the population and
+    #     drawing a permanent WARN whose printed remedy (`ccrc models refresh
+    #     <id>`) exits non-zero for that lane.
+    [ -f "$dir/$id.classes.json" ] && population+=("$id")
+  done
+  if [ "${#population[@]}" -eq 0 ]; then
+    # THE EMPTY-POPULATION WORD (C5): not a PASS naming no lane.
+    _dr_skip models "no account on this box has a model registry (\$HOME/.ccrc/models/<id>.classes.json) — nothing to freshness-check"
+    return 3
+  fi
+  local now_s
+  if ! command -v date >/dev/null 2>&1 || ! now_s="$(date +%s 2>/dev/null)"; then
+    _dr_warn models "${#population[@]} lane(s) have a model registry, but this box's \`date\` cannot answer +%s, so no catalogue's age can be measured" \
+      "install a working GNU/BSD date — every other age-based check in this file needs it too"
+    return 2
+  fi
+  # ONE node CALL FOR EVERY POPULATION MEMBER, not one per id — the roster can
+  # carry dozens of lanes and each id would otherwise be its own subprocess.
+  # Reads only `<id>.json` (the CATALOGUE); the registry above was
+  # presence-only.
+  #
+  # C2 fix round 1 — a failed read of ANY ONE lane's catalogue used to be
+  # indistinguishable from an empty population, and both rendered as a
+  # confident `PASS models: 0 lanes,` for the WHOLE box (measured: a
+  # non-object catalogue on one lane swallowed a genuinely stale lane's WARN
+  # too). Two independent causes, both fixed here:
+  #   (a) a catalogue that parses as JSON but is not an object (`null`, an
+  #       array, a bare number) used to fall through to reading `.fetchedAt`
+  #       off it directly, which throws for `null` and kills this whole
+  #       batched `node -e` before it emits a line for ANY id, not just the
+  #       bad one. Guarded below with its own object check, same INVALID verdict
+  #       a parse failure gets.
+  #   (b) the capture had no exit-status check, unlike the roster read above
+  #       — any other non-zero exit (a crash this guard did not anticipate,
+  #       node itself missing mid-run, etc.) silently yielded an empty `$out`,
+  #       an empty loop, and the same false PASS. `rc2` below gives a failed
+  #       read of the WHOLE batch its own WARN, never a silent empty loop.
+  #
+  # THE FIELD DELIMITER IS 0x1F (ASCII unit separator), NOT A TAB — measured
+  # while wiring in the UNREADABLE/INVALID rows above: `IFS=$'\t' read` in
+  # bash collapses a RUN of consecutive tabs into a single field separator
+  # (tab is classified as "IFS whitespace" no matter what IFS itself is set
+  # to), so a row with two or three adjacent EMPTY fields — exactly what
+  # NOCATALOGUE/INVALID/UNREADABLE all emit, and what OK emits whenever
+  # `fetchedAt` is absent — silently loses fields and shifts every later
+  # column left. Measured: `id\tOK\t\t0\t` (empty fetchedAt, stale "0") read
+  # back as fa="0" stale="" instead of fa="" stale="0". 0x1F is never
+  # "whitespace" to `read`, so an empty field between two of it is preserved
+  # exactly, which is the one property this five-column protocol needs.
+  local -r US=$'\x1f'
+  local out rc2
+  out="$(CCRC_DOCTOR_MODELS_DIR="$dir" node -e '
+    const fs = require("fs");
+    const path = require("path");
+    const dir = process.env.CCRC_DOCTOR_MODELS_DIR;
+    const US = "\x1f";
+    const ids = fs.readFileSync(0, "utf8").split("\n").filter(Boolean);
+    for (const id of ids) {
+      const p = path.join(dir, id + ".json");
+      let raw;
+      // F2 (review run 69) -- D-2380s own class, reintroduced in this checks
+      // new code. readFileSync opens BY NAME with no regard for TYPE: a FIFO
+      // with no writer, a symlink to one, or an unbounded character device at
+      // <id>.json blocks INSIDE the read, so the catch below never runs and
+      // ONE poisoned catalogue hangs the whole operator-facing ccrc doctor --
+      // cmd_doctors driver wraps no deadline. Measured: mkfifo gpt.json then
+      // this read gave rc 124 under a bounded 5s deadline, with the catch
+      // never entered.
+      // The C3 reasoning under that catch cannot reach it: a FIFO is not an
+      // errno, it is a block. And the population gate 57 lines above does not
+      // cover it -- that -f test is on the per-lane REGISTRY file, while this
+      // read is of the CATALOGUE, a different path. So apply that gates
+      // own TYPE TEST here, spelled the way node spells the bash -f operator:
+      // statSync FOLLOWS symlinks and isFile() is true only for a regular
+      // file, so a symlink to a real catalogue still reads exactly as before.
+      // lstatSync runs FIRST so an ABSENT path is told apart from a DANGLING
+      // symlink, and only the genuinely absent one reads as "never probed" --
+      // C3s own distinction, applied to the shapes C3 could not see.
+      //
+      // NOTE FOR EDITORS: this program is a single-quoted bash string. An
+      // apostrophe anywhere in it closes that string; that is why the prose
+      // above has none.
+      try { fs.lstatSync(p); }
+      catch (e) {
+        if (e && e.code === "ENOENT") { process.stdout.write(id + US + "NOCATALOGUE" + US + US + US + "\n"); }
+        else { process.stdout.write(id + US + "UNREADABLE" + US + US + US + ((e && e.code) || "unknown") + "\n"); }
+        continue;
+      }
+      let st;
+      try { st = fs.statSync(p); }
+      catch (e) {
+        // PRESENT to lstat but not to stat: a DANGLING symlink, which answers
+        // ENOENT here and must never read as "never probed", or a symlink
+        // loop, which answers ELOOP.
+        process.stdout.write(id + US + "UNREADABLE" + US + US + US + ((e && e.code) || "unknown") + "\n");
+        continue;
+      }
+      if (!st.isFile()) {
+        process.stdout.write(id + US + "UNREADABLE" + US + US + US + "not-a-regular-file" + "\n");
+        continue;
+      }
+      try { raw = fs.readFileSync(p, "utf8"); }
+      catch (e) {
+        // C3: ENOENT alone means "never probed" — every other errno (a
+        // directory at that path, EACCES, ...) is a refusal the file system
+        // can see, and folding it into NOCATALOGUE would tell an operator
+        // "never probed" about a lane whose probe cannot even run.
+        if (e && e.code === "ENOENT") { process.stdout.write(id + US + "NOCATALOGUE" + US + US + US + "\n"); }
+        else { process.stdout.write(id + US + "UNREADABLE" + US + US + US + ((e && e.code) || "unknown") + "\n"); }
+        continue;
+      }
+      let j;
+      try { j = JSON.parse(raw); }
+      catch (e) { process.stdout.write(id + US + "INVALID" + US + US + US + "\n"); continue; }
+      // (a) above: valid JSON that is not an object (null, an array, a bare
+      // number/string) has no `.fetchedAt` to read — reading it off `null`
+      // throws and would otherwise kill every remaining id in this batch.
+      if (j === null || typeof j !== "object" || Array.isArray(j)) {
+        process.stdout.write(id + US + "INVALID" + US + US + US + "\n"); continue;
+      }
+      // C4: only an actual finite integer is safe for bash `$(( ))`
+      // arithmetic below — `typeof x === "number"` alone is also true of
+      // NaN, and a float or scientific-notation string would break that
+      // arithmetic too. Anything else is treated as absent; the bash side
+      // re-validates the string shape it receives regardless (belt+braces
+      // across the process boundary).
+      const fetchedAt = (typeof j.fetchedAt === "number" && Number.isInteger(j.fetchedAt))
+        ? String(j.fetchedAt) : "";
+      const stale = j.stale === true ? "1" : "0";
+      const lastError = typeof j.lastError === "string" ? j.lastError.replace(/[\t\n\x1f]/g, " ") : "";
+      process.stdout.write(id + US + "OK" + US + fetchedAt + US + stale + US + lastError + "\n");
+    }
+  ' <<<"$(printf '%s\n' "${population[@]}")" 2>/dev/null)"; rc2=$?
+  if [ "$rc2" -ne 0 ]; then
+    # (b) above: a failed read is not a PASS and not a SKIP — the empty
+    # population's SKIP a few lines up is about a POPULATION with nothing in
+    # it; this is a POPULATION this run could not measure.
+    # R3(a): the reader may have already printed a row or two before the
+    # non-zero exit — this branch never looks at $out either way, so "before
+    # reporting on any of them" would claim a fact this check did not check.
+    # Say what actually happens: any partial output is discarded, not trusted.
+    _dr_warn models "${#population[@]} lane(s) have a model registry, but the catalogue reader exited non-zero (rc=$rc2) — any rows it already printed are discarded rather than trusted, so this box's model freshness could not be measured this run" \
+      "re-run ccrc doctor; this check runs node with stderr sent to /dev/null, so if it keeps failing, read the node process's own error by running its command directly against \$HOME/.ccrc/models without that redirect"
+    return 2
+  fi
+  if [ -z "$out" ]; then
+    # R1 (review run 69) — the coordinator RULED this closed against its own
+    # panel, which refuted the finding 3/3 and was right about the shipped
+    # reader. The ground for closing it is this function's own text, not the
+    # reachability argument: the ROSTER read above is guarded on BOTH its exit
+    # status (`[ "$rc" -ne 0 ]`) and its emptiness (`[ -z "$ids" ]`); the
+    # CATALOGUE read had only the first. The `rc2` comment says that check
+    # exists because an empty `$out` gave "an empty loop, and the same false
+    # PASS" — and a ZERO-exit empty batch produces exactly that, so the guard
+    # did not cover the case its own comment names. A guard whose comment
+    # names a case it does not reach is a false guard, which is the class this
+    # whole wave is about.
+    #
+    # Reachability, measured and stated honestly: through the SHIPPED reader
+    # this is unreachable — a non-empty population always emits one row per
+    # id. It is reachable through any other `node` on PATH, which is how the
+    # suite reaches it (`stubNodeModelsExit <home> 0`).
+    _dr_warn models "${#population[@]} lane(s) have a model registry, but the catalogue reader exited zero and printed no rows at all — this box's model freshness could not be measured this run, and a PASS naming no lane would be a confident answer over a population nothing measured" \
+      "re-run ccrc doctor; if it persists, check which node is on PATH — this check runs node with stderr sent to /dev/null, so run its command directly against \$HOME/.ccrc/models without that redirect to see what the interpreter actually prints"
+    return 2
+  fi
+
+  local -a ok=() warn=()
+  local lid status fa stale lastError age age_min
+  while IFS="$US" read -r lid status fa stale lastError; do
+    [ -n "$lid" ] || continue
+    case "$status" in
+      NOCATALOGUE)
+        # C2 (population): never probed is its own WARN, not a freshness failure.
+        warn+=("$lid has no model catalogue yet (\$HOME/.ccrc/models/$lid.json does not exist) — the timer has never probed this lane; run: ccrc models refresh $lid")
+        ;;
+      UNREADABLE)
+        # C3: the file EXISTS and is not a catalogue this check could read —
+        # a refusal, never "never probed" (D-114's exact lesson: the two are
+        # different states and folding them hides a broken probe behind what
+        # reads as an empty screen).
+        warn+=("$lid's catalogue at \$HOME/.ccrc/models/$lid.json exists but could not be read ($lastError) — this is a broken path, not an unprobed lane; check its type/permissions, then: ccrc models refresh $lid")
+        ;;
+      INVALID)
+        warn+=("$lid's catalogue at \$HOME/.ccrc/models/$lid.json is not valid JSON; run: ccrc models refresh $lid")
+        ;;
+      OK)
+        # C4: validate the shape before the arithmetic below, not after — an
+        # empty OR non-integer `fa` (the node side already screens most of
+        # this, but the string crosses a process boundary and is re-checked
+        # here rather than trusted) gets its own verdict instead of an
+        # `$(( ))` that kills the whole check with no verdict line at all.
+        if [ -z "$fa" ] || ! [[ "$fa" =~ ^-?[0-9]+$ ]]; then
+          # R6: this arm also catches values that ARE numeric but not a
+          # usable whole-second timestamp (a float like 1789000000.5, or a
+          # value so large it is a millisecond/far-future stamp in disguise
+          # like 1e21) — "has no numeric fetchedAt" is false for those; say
+          # what is actually wrong.
+          warn+=("$lid's catalogue fetchedAt is not a usable whole-second timestamp, so its age cannot be measured; run: ccrc models refresh $lid")
+          continue
+        fi
+        age=$(( now_s - fa )); age_min=$(( age / 60 ))
+        if [ "$stale" = 1 ]; then
+          # ARM 2 (C4): the timer ran, the provider refused it. Warned
+          # REGARDLESS of age — quote lastError and the age.
+          warn+=("$lid's catalogue is stale ($age_min min old): ${lastError:-no lastError recorded} — check the $lid lane's credential/config, then: ccrc models refresh $lid")
+        elif [ "$age" -lt 0 ]; then
+          # C5: a future or millisecond-valued `fetchedAt` has no lower bound
+          # otherwise, so it would PASS forever — unmeasurable is not fresh,
+          # for the same reason the empty population gets its own SKIP rather
+          # than a confident answer over nothing.
+          warn+=("$lid's catalogue claims a fetchedAt $((-age)) s in the future — its age is unmeasurable, not fresh; run: ccrc models refresh $lid")
+        elif [ "$age" -gt 10800 ]; then
+          # ARM 1 (C4): stale:false but old — the silent case `services`'
+          # `known` unit list cannot see (see this function's header comment).
+          # C6: the `services` check measures ACTIVATION, not production — it
+          # is exactly what catches a STOPPED timer, and exactly what CANNOT
+          # catch one that is still active but has quietly stopped writing.
+          warn+=("$lid's catalogue is $age_min min old and not marked stale — the ccrc-models timer is not reaching this lane (an active timer that has quietly stopped writing is invisible to the 'services' check above, which measures whether the unit is active, not whether it is producing anything — that check catches a STOPPED timer, not this one); run: systemctl --user status ccrc-models.timer, then: ccrc models refresh $lid")
+        else
+          ok+=("$lid catalogue $age_min min old")
+        fi
+        ;;
+      *)
+        # R3(b): the reader only ever emits NOCATALOGUE/UNREADABLE/INVALID/OK
+        # today, but a `case` with no default arm silently DROPS a row whose
+        # status it does not know — and if every row drops, `warn` and `ok`
+        # both stay empty and this check falls through to the PASS branch
+        # below naming zero lanes over a population that is not empty, the
+        # exact string C2 exists to forbid. Give an unrecognized status its
+        # own verdict rather than silence.
+        warn+=("$lid's catalogue reported a status this check does not recognize (\"$status\") — treated as unmeasurable, not fresh; run: ccrc models refresh $lid")
+        ;;
+    esac
+  done <<<"$out"
+
+  if [ "${#warn[@]}" -gt 0 ]; then
+    _dr_warn models "$(_dr_join "${warn[@]}")" \
+      "systemctl --user status ccrc-models.timer ; ccrc models refresh <id> for one named lane"
+    return 2
+  fi
+  # THE PASS NAMES EVERY LANE AND ITS AGE (C5): the population is what this
+  # PASS is really asserting, so a box that answers PASS here cannot be a box
+  # whose loop ran over nothing.
+  local n="${#ok[@]}" plural=lane
+  [ "$n" -eq 1 ] || plural=lanes
+  _dr_pass models "$n $plural, $(_dr_join "${ok[@]}")"
 }

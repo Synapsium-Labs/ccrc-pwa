@@ -18,7 +18,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { CCD } from './ccdWsHelpers.js';
@@ -402,6 +402,201 @@ describe('the start limit is one policy, not two', () => {
     // supervisor takes every pane in its group with it.
     expect(unitFile).toMatch(/^KillMode=process$/m);
     expect(ccd).toContain('<key>AbandonProcessGroup</key><true/>');
+  });
+});
+
+// UNCONDITIONAL — runs on every box, including the Linux CI box that is the
+// only one that ever executes this suite. `CCD_OS` is computed ONCE, from
+// `$OSTYPE`, at the moment the platform block is sourced (ccd/ccd's own
+// comment above `_plat_mv_notdir`); an env var of that name handed to the
+// child process is overwritten before any function exists to read it, so it
+// does nothing. The only assignment that survives is one made AFTER the
+// source, in the SAME bash payload — exactly the rule
+// `ccd-account-auth.test.ts:794-796` states and `:806` uses
+// (`fn('CCD_OS=linux; _auth_script_argv …')`). That is how the Darwin arm of
+// `_plat_mv_notdir` (D-2187) gets driven here without a real Darwin
+// userland, rather than inside the `describe.skipIf(!IS_DARWIN)` block below,
+// which never executes on this box (D-2188).
+describe('_plat_mv_notdir\'s Darwin arm, forced from Linux (D-2187)', () => {
+  function darwinBlock(expr: string): string {
+    const script = `${platformBlock(ccd)}\nCCD_OS=darwin\n${expr}\n`;
+    return execFileSync('bash', ['-c', script], { encoding: 'utf8' }).trim();
+  }
+
+  it('answers 0 only if src is now AT a dest that was a symlink to a directory', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-9d3f');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'the call must report an exit code').toBe('0');
+      // The postcondition, not just the exit status: <src> must now be AT
+      // <dest>. Before the fix, GNU `mv -f` (no `-T`) follows the symlink and
+      // moves `src` INSIDE the linked directory, leaving `dest` the same
+      // symlink it always was — rc 0 with the postcondition false.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must no longer be the symlink it was — the contract is 0 iff src is now AT dest').toBe(false);
+      expect(lstatSync(dst).isFile(), 'dest must now be a regular file').toBe(true);
+      expect(readFileSync(dst, 'utf8')).toBe('payload-9d3f');
+      expect(readdirSync(real), 'nothing may have been moved inside the linked directory').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses a real directory destination and leaves it untouched', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-dir-'));
+    try {
+      const dst = path.join(d, 'dst');
+      mkdirSync(dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a real directory destination must be refused').toBe('1');
+      expect(lstatSync(dst).isDirectory()).toBe(true);
+      expect(readdirSync(dst), 'the destination directory must stay empty').toEqual([]);
+      expect(readdirSync(d)).toContain('src');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // R1 (fix round 2): the narrowed ccd-reg-set-atomic scan cannot prove the
+  // `rm` is CONTAINED in its guard — it only sees that the tokens exist
+  // somewhere in the body, and the pre-existing, untouched refusal guard
+  // supplies both of them unconditionally. These two cases are the
+  // behavioural replacement: neither dest shape below is a directory (the
+  // refusal guard never fires for them), so whether the `rm` actually ran —
+  // and whether it ran on a shape it was never meant to touch — is visible
+  // ONLY in whether the destination survives a `mv` that then fails.
+  it('refuses when src is missing and leaves a plain-file dest untouched, byte-for-byte', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-plainfile-'));
+    try {
+      const dst = path.join(d, 'dst');
+      writeFileSync(dst, 'original-bytes-7a2c');
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A plain file is neither `-L` nor `-d`, so the guarded `rm` must never
+      // fire here. An UNCONDITIONAL `rm` (the mutant the narrowed scan
+      // cannot see, because the untouched refusal guard supplies both
+      // `-L "$2"` and `-d "$2"` tokens elsewhere in the body) removes `dst`
+      // before the doomed `mv` runs, so this is the case that reds it.
+      expect(lstatSync(dst).isFile(), 'dest must still be a plain file').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'dest bytes must be exactly what they were').toBe('original-bytes-7a2c');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('refuses when src is missing and leaves a symlink-to-file dest resolvable', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-symfile-'));
+    try {
+      const real = path.join(d, 'real-file');
+      writeFileSync(real, 'target-bytes-4e1b');
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // A symlink-to-FILE is `-L` but not `-d`, so a guard narrowed to `-L`
+      // alone (dropping the `-d` half) fires here where the real guard would
+      // not — that is exactly the mutation this case reds.
+      expect(existsSync(dst), 'the name must still be resolvable — nothing may unlink it out from under a failed mv').toBe(true);
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the same symlink').toBe(true);
+      expect(readFileSync(dst, 'utf8'), 'the link target must be unchanged').toBe('target-bytes-4e1b');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // Final-round item 4 — the two disclosed prices this wave's own fix and
+  // header carry, pinned so neither can silently change in either direction.
+  // `chmod` is what makes the unlink FAIL below, and root defeats chmod.
+  it.skipIf(process.getuid?.() === 0)(
+    'when the guarded rm FAILS, the function does not answer 0 — the rm-fails price', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmfail-'));
+    const parent = path.join(d, 'parent');
+    try {
+      mkdirSync(parent);
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(parent, 'dst');
+      symlinkSync(real, dst);
+      // No write permission on the PARENT: unlink(2) needs it on the
+      // directory that holds the name, not on the symlink itself, so this
+      // makes `rm -f -- "$2"` fail without touching the symlink at all.
+      chmodSync(parent, 0o555);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmfail-6c2a');
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success — this is the fix for D-2187\'s recurrence').not.toBe('0');
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink — the rm never removed it').toBe(true);
+      expect(readdirSync(dst), 'nothing was moved into the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmfail-6c2a');
+    } finally {
+      chmodSync(parent, 0o755);
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  // F10 (review run 69): the case ABOVE is the only pin on MUST-FIX 1's
+  // `|| return 1`, and it is `skipIf(uid === 0)` — so on a root runner the
+  // thing this fix's own header calls "a mechanism rather than a comment" is
+  // held by nothing. A skipped case is not a pin. The conjunct is about a
+  // FAILING `rm`; chmod is merely one way to cause that, and it is the way
+  // root defeats. Shadowing the binary causes the same condition for every
+  // uid, so this case runs everywhere and the guarantee is never unheld.
+  it('when the guarded rm fails for a reason chmod cannot cause, the function still does not answer 0 — the rm-fails price, pinned at every uid', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-rmstub-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src');
+      writeFileSync(src, 'payload-rmstub-1f9e');
+      const stubDir = path.join(d, 'bin');
+      mkdirSync(stubDir);
+      writeFileSync(path.join(stubDir, 'rm'), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+      const rc = darwinBlock(
+        `export PATH='${stubDir}':"$PATH"\n_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a failing unlink must not report success, whoever is running').not.toBe('0');
+      // Without `|| return 1` the failing `rm` falls through to the unchanged
+      // `mv`, which moves `src` INSIDE the linked directory and answers 0 —
+      // D-2187's recurrence exactly. Both assertions below red on that mutant.
+      expect(lstatSync(dst).isSymbolicLink(), 'dest must still be the untouched symlink').toBe(true);
+      expect(readdirSync(real), 'nothing may be moved INTO the linked directory').toEqual([]);
+      expect(readFileSync(src, 'utf8'), 'src must be untouched — the mv this rm gates was never reached').toBe('payload-rmstub-1f9e');
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  });
+
+  it('when src is absent, a symlink-to-directory dest is left GONE — the destination-gone price, disclosed', () => {
+    const d = mkdtempSync(path.join(tmpdir(), 'ccrc-mv-darwin-gone-'));
+    try {
+      const real = path.join(d, 'real-dir');
+      mkdirSync(real);
+      const dst = path.join(d, 'dst');
+      symlinkSync(real, dst);
+      const src = path.join(d, 'src'); // deliberately never created
+      const rc = darwinBlock(`_plat_mv_notdir '${src}' '${dst}'; echo $?`);
+      expect(rc, 'a missing src must not report success').not.toBe('0');
+      // Unlike the symlink-to-FILE case above, which stays resolvable: the
+      // guarded `rm` fires for THIS shape (symlink-to-directory) whether or
+      // not `src` exists, so a missing `src` leaves `dest` gone rather than
+      // intact — the pre-fix code left the symlink alone here. Disclosed in
+      // the header above `_plat_mv_notdir`; pinned here so it cannot drift
+      // in either direction without this case moving.
+      expect(existsSync(dst), 'the destination is GONE — the guarded rm ran before the doomed mv').toBe(false);
+      expect(readdirSync(real), 'the linked directory itself is untouched').toEqual([]);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
   });
 });
 

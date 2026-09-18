@@ -77,7 +77,18 @@ const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : nu
  *  FILENAME alone here would make the server MORE CREDULOUS than bash —
  *  `touch $REG/<w>-authdead` would condemn the account here while
  *  `_account_ok`'s own reader still calls it healthy — and an adapter may not
- *  narrow OR WIDEN a distinction it received. */
+ *  narrow OR WIDEN a distinction it received.
+ *
+ *  CONTENT IS HALF THE MIRROR; THE PATH'S TYPE IS THE OTHER HALF, and it lives
+ *  in `readLimits` because only a reader holding the path can ask it. Both bash
+ *  bodies of this contract — `_authdead` in `ccd/ccd` and in
+ *  `ccd/ccd-telemetry-keepalive` — refuse a SYMLINKED marker outright
+ *  (`[[ -f "$f" && ! -L "$f" ]]`). Until this wave all three bodies followed
+ *  the link and were consistently wrong; closing the two bash ones alone would
+ *  have left this one condemning an account the fleet's own gate calls healthy,
+ *  which is the widening the paragraph above forbids, arrived at from the other
+ *  side. A class closed in one body of a three-body contract is closed
+ *  nowhere. */
 const authDeadMarkerOk = (raw: string): boolean => {
   const trimmed = raw.replace(/\n+$/, '');
   const sp = trimmed.indexOf(' ');
@@ -376,7 +387,25 @@ export async function readLimits(
     .map((n) => n.slice(0, -'-authdead'.length));
   const authDeadLanes = new Set(
     (await Promise.all(authDeadCandidates.map(async (wrapper) => {
-      const content = await io.readFile(path.join(cfg.registryDir, `${wrapper}-authdead`));
+      const markerPath = path.join(cfg.registryDir, `${wrapper}-authdead`);
+      // TYPE FIRST, THEN CONTENT — the same order, and the same two questions,
+      // as `[[ -f "$f" && ! -L "$f" ]]` followed by the read in both bash
+      // bodies. `regular` is the ONLY kind that may condemn: a `symlink` is
+      // what bash refuses, `other` is a directory or socket nothing should
+      // read, and every `ok: false` — absent, unreadable, or `unmeasured`
+      // from an agent too old to answer the question — is a lane this box
+      // cannot prove anything about. All of them fall through to healthy,
+      // which is the direction this file's own rescue argument requires: a
+      // condemned lane loses its place in the preferred fallback tier, so a
+      // wrong `true` costs an account that could have taken the work, while a
+      // wrong `false` costs only the scoring penalty it would have carried.
+      //
+      // The window between this call and the read below is the same one bash
+      // has between its test and its `cat`, and it is not closed here either:
+      // this is a mirror of that gate, not an improvement on it.
+      const kind = await io.lstatMeasured(markerPath);
+      if (!kind.ok || kind.kind !== 'regular') return null;
+      const content = await io.readFile(markerPath);
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );

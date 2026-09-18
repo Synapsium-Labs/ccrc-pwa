@@ -126,14 +126,92 @@ esac
 # `-T` treats a symlink-to-directory as the NAME and replaces it, where
 # `[ -d ]` follows the link and would refuse a rename GNU performs.
 #
+# A SYMLINK-TO-DIRECTORY DEST IS THE ONE SHAPE GNU'S `-T` REPLACES THAT BARE
+# `mv -f` DOES NOT (D-2187): measured on GNU coreutils 9.4, `mv -f -- src dest`
+# with `dest` a symlink to a directory returns 0 with `dest` still the same
+# symlink and `src` moved INSIDE the linked directory — the postcondition
+# (`0 iff src is now at dest`) is false while the exit code says otherwise.
+# Every other destination shape (symlink-to-file, dangling symlink, plain
+# file) already replaces correctly; only this one needs help, so the
+# `rm -f -- "$2"` below is scoped to exactly that shape — guarded on BOTH
+# `-L` and `-d`, never unconditional — not a general unlink-before-rename.
+#
 # NOT ATOMIC THE WAY `-T` IS, and written down rather than hidden: between the
 # test and the rename another process could create a directory at the
-# destination. Nothing in ccd can reach that window — every destination is
-# `$REG/<id>.<field>`, and this function is its only writer — so the race is
-# unreachable here rather than tolerated.
+# destination. Measured repo-wide (D-2189): this function has EIGHT
+# executable call sites across ccd and ccrc — the paragraph this replaces
+# claimed it was the destination's ONLY WRITER, which undercounted the call
+# sites themselves, not a cardinal it ever stated. The eight, each named WITH
+# ITS FILE since this comment is one shared text mirrored into both: (in
+# EACH file) `_svc_write_session_plist`, to a launchd plist under
+# `$HOME/Library/LaunchAgents` — outside `$REG` entirely; (`ccd/ccd` only)
+# `_reg_set` (to `$REG/<id>.<field>`, canonical), `_lc_err` (to
+# `$REG/.lifecycle/errors`, a subdirectory), `cmd_project_pool` (to
+# `$REG/pools/<project>`, a subdirectory) and `cmd_supervise` (to
+# `$REG/.<id>.starts`, dot-leading); (`ccd/ccrc` only) `_acct_mark_off` (to
+# `$REG/<id>-disabled`, a marker) and `_acct_rehome` (to `$REG/<id>.<field>`,
+# canonical). Only `_reg_set` and `_acct_rehome` write the canonical shape;
+# the other six write elsewhere under `$REG` or outside it entirely. The
+# race stays unreachable TODAY: every directory that sits
+# at one of the eight destinations exists BEFORE this function is ever
+# called (test fixtures included), so the refusal guard's `[ -d ]` arm sees
+# it and returns 1 — the race this paragraph is about is a directory
+# appearing INSIDE the window between the test and the rename, not one any
+# of the eight call sites creates. A measured fact about today's call sites,
+# not a guarantee about future ones.
+# THE INSTRUMENT FOR THE FIXTURE HALF, because a sentence about fixtures
+# that names no way to re-measure itself is the shape F14 ruled against and
+# F3 then caught again:
+#   git grep -nE "mkdirSync\(.*(REG\(\)|cc-sessions)" -- 'server/test/*.ts'
+# Every hit that lands on a `$REG/<id>.<field>` path rather than on `$REG`
+# itself is one to read — today `<id>.hold` (`ccd-hold`, `ccd-auto-swap-hold`)
+# and `<id>.<WEDGE>` (`ccd-lifecycle-purge`), all of them in per-test SETUP,
+# which is precisely the ordering claimed above. This does not bound future
+# fixtures; it is a command that ANSWERS, which is what the claim lacked.
+#
+# ONE MORE PRICE, undisclosed until now: the `rm` below runs BEFORE the `mv`,
+# so a call with `dest` a symlink-to-directory and `src` absent leaves the
+# destination GONE, where the pre-fix behavior left the symlink intact
+# (measured against both revisions). That price is conditional on the unlink
+# SUCCEEDING — `rm -f -- "$2" || return 1` below refuses rather than falling
+# into the `mv` on a failed unlink (D-2187's own recurrence, closed this
+# round: the unguarded fall-through moved `src` INSIDE the linked directory
+# and returned 0), so a failing `rm` leaves the symlink in place and answers
+# 1, never this price. Reachability from `_reg_set` is nil today through the
+# `ln -s` census (scoped to a literal `ln -s` call in the shipped files, not
+# to test fixtures) — but that census cannot see a `rename(2)`/`os.replace`
+# of an EXISTING symlink onto this path, only an `ln -s` invocation, which is
+# a narrower method than the sentence it was backing (this file's own
+# `_pr_py`, in ccd only, has such a path — see its `put()`). Narrowed to what
+# the census actually measured, not a proof that no symlink is ever created
+# here by any code path in either file. THE CONDITION, not a verdict with an
+# expiry date nothing re-measures: this price is real for any caller whose
+# destination's identity matters and whose `src` may be absent — check a
+# new call site against THAT, not against "reachability is nil today", which
+# was true of the eight above only until one of them changed shape. And no
+# symlink-to-DIRECTORY is created at any of the eight BY ANY `ln -s` IN THE
+# SHIPPED FILES — which is the whole of what the census measured, and is
+# strictly narrower than the "anywhere in the tree" this sentence claimed
+# until F14 (review run 69): the census's SCOPE IS THE SHIPPED FILES, and
+# that one reason is the whole of it. A SECOND reason stood here and was
+# FALSE (F3, review run 71) — it said fixtures create links with
+# `symlinkSync`, "which no `ln -s` scan can see". Measured:
+# `git grep -c -F 'ln -s' -- 'server/test/*.ts'` answers 30 across 13 files,
+# three of them in the file this wave itself created. It is deleted and NOT
+# replaced: one true reason is the whole warrant, and stacking a third is
+# how this paragraph acquired a false one twice.
+# NO CLAIM IS MADE ABOUT FIXTURES HERE, and not for
+# cost: an absence over them would rest on a census nothing in this tree
+# maintains, so it would go false the moment one is added. The plan records
+# what run 69 measured about them, and when. What was wrong was the WARRANT,
+# not the conclusion — the D-2189 shape inside the paragraph fixing D-2189.
+# Stated as measured, the price is real for the
+# one destination shape this `rm` covers, so it is disclosed here rather than
+# only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
     if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi
+    if [ -L "$2" ] && [ -d "$2" ]; then rm -f -- "$2" || return 1; fi
     mv -f -- "$1" "$2"
   else
     mv -fT -- "$1" "$2"

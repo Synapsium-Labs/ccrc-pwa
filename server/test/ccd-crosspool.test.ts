@@ -335,6 +335,38 @@ describe('`_reg_read` — the distinguishing read C1 is built on', () => {
     expect(rc(`_reg_read ${ID} dangling`)).toBe('2');
   });
 
+  it('a symlink to an EXISTING REGULAR FILE is rc 2 — never rc 0 with the target\'s bytes', () => {
+    // D-2989 (review 71 CRITICAL 1), AND THE SHAPE NO EXISTING CASE PLANTED.
+    // The dangling case above is GREEN without the guard, because `-f` is
+    // false for a broken link — which is exactly why it pinned nothing and
+    // why this escape survived two rounds of review. `-f` FOLLOWS a chain, so
+    // a link that RESOLVES answered rc 0 with a foreign file's bytes:
+    // indistinguishable from a real field read, from outside `$REG`.
+    seedRow();
+    const foreign = path.join(h.home, 'outside-the-registry');
+    fs.writeFileSync(foreign, 'SECRET-OUTSIDE-REG');
+    // `seedRow()` plants a REAL field here; the link replaces it, which is
+    // also the realistic shape — a field that existed and was swapped.
+    fs.rmSync(reg(`${ID}.wrapper`), { force: true });
+    fs.symlinkSync(foreign, reg(`${ID}.wrapper`));
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('2');
+    // `|| true` because the helper now exits non-zero here and `execFileSync`
+    // THROWS on that — without it this line fails for the right reason wearing
+    // the wrong costume, and would keep failing after a regression too.
+    expect(h.sh(`_reg_read ${ID} wrapper || true`), 'the target\'s bytes must never reach stdout')
+      .not.toContain('SECRET-OUTSIDE-REG');
+  });
+
+  it('CONTROL: a real regular file at the same path still answers its own bytes, rc 0', () => {
+    // The control the guard needs to prove it refuses a TYPE and not the
+    // field. Without it, "rc 2" above is equally consistent with a guard that
+    // broke every read.
+    seedRow();
+    fs.writeFileSync(reg(`${ID}.wrapper`), 'claude');
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('0');
+    expect(h.sh(`_reg_read ${ID} wrapper`)).toBe('claude');
+  });
+
   it.skipIf(process.getuid?.() === 0)(
     'an UNSEARCHABLE registry directory is rc 2 for every field — not rc 1', () => {
       // The arm with the widest blast radius, and the one no caller can reach
@@ -347,6 +379,37 @@ describe('`_reg_read` — the distinguishing read C1 is built on', () => {
       try { expect(rc(`_reg_read ${ID} wrapper`)).toBe('2'); }
       finally { fs.chmodSync(dir, 0o755); }
     });
+});
+
+describe('`_reg_get` — the same escape, in the fold-everything twin (D-2989)', () => {
+  const rc = (snippet: string): string => h.sh(`${snippet} >/dev/null; echo $?`);
+
+  it('a symlink to an EXISTING REGULAR FILE is rc 1 and prints nothing', () => {
+    // `_reg_get` folds ABSENT/UNREADABLE/EMPTY into one `""` deliberately, so
+    // it cannot report WHY — but it must not answer a FABRICATED value. `-f`
+    // followed the chain here too; the `! -L` conjunct is what stops it. rc 1
+    // is its existing not-a-field arm, not a new verdict.
+    seedRow();
+    const foreign = path.join(h.home, 'outside-the-registry-get');
+    fs.writeFileSync(foreign, 'SECRET-OUTSIDE-REG');
+    // `seedRow()` plants a REAL field here; the link replaces it, which is
+    // also the realistic shape — a field that existed and was swapped.
+    fs.rmSync(reg(`${ID}.home`), { force: true });
+    fs.symlinkSync(foreign, reg(`${ID}.home`));
+    expect(rc(`_reg_get ${ID} home`)).toBe('1');
+    // `|| true` because the helper now exits non-zero here and `execFileSync`
+    // THROWS on that — without it this line fails for the right reason wearing
+    // the wrong costume, and would keep failing after a regression too.
+    expect(h.sh(`_reg_get ${ID} home || true`), 'the target\'s bytes must never reach stdout')
+      .not.toContain('SECRET-OUTSIDE-REG');
+  });
+
+  it('CONTROL: a real regular file still answers its own bytes, rc 0', () => {
+    seedRow();
+    fs.writeFileSync(reg(`${ID}.home`), '/home/demo');
+    expect(rc(`_reg_get ${ID} home`)).toBe('0');
+    expect(h.sh(`_reg_get ${ID} home`)).toBe('/home/demo');
+  });
 });
 
 describe('C1 — the tick MEASURES its own inputs, so a transient failure never ends a crossing', () => {

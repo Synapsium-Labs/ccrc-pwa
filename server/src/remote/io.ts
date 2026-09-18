@@ -131,6 +131,34 @@ export function createIo(client: FleetClient): FleetIO {
       return r.ok ? { mtimeMs: r.mtimeMs, size: r.size } : null;
     },
 
+    /** The THIRD reader on this file's own rule, and the one where the older
+     *  peer's answer is not silence but a REFUSAL: an agent that predates the
+     *  `lstat` op rejects the request (`not-implemented`), so it lands in the
+     *  catch below as `unmeasured` rather than masquerading as a measured
+     *  kind. That is why the caller may act on `regular` at all — the one
+     *  answer that lets anything be condemned — and why `unmeasured` is a
+     *  reason of its own here rather than folded into `unreadable`: a remote
+     *  fleet whose agent is too old is not a fleet whose markers are
+     *  unreadable, and the two must not be one value.
+     *
+     *  `missing: true` without `absent: true` keeps its wire meaning exactly
+     *  as `statMeasured` reads it above: UNMEASURED, never proof. */
+    async lstatMeasured(path) {
+      try {
+        const res = await client.request({ t: 'req', op: 'lstat', path });
+        const r = res as { kind?: unknown; missing?: unknown; absent?: unknown };
+        if (r.kind === 'regular' || r.kind === 'symlink' || r.kind === 'other') {
+          return { ok: true, kind: r.kind };
+        }
+        if (r.absent === true) return { ok: false, reason: 'absent' };
+        // A `missing: true` with no `absent`, or a payload in no shape this
+        // reader knows: measured by nothing this side can trust.
+        return { ok: false, reason: 'unmeasured' };
+      } catch {
+        return { ok: false, reason: 'unmeasured' };
+      }
+    },
+
     async writeFileB64(path, dataB64) {
       await client.request({ t: 'req', op: 'writeB64', path, dataB64 });
     },

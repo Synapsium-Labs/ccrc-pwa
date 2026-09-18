@@ -1,5 +1,5 @@
 import { createReadStream } from 'node:fs';
-import { mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { ReadFailure } from '../../shared/agent-protocol.js';
 
@@ -191,6 +191,36 @@ export async function statMeasured(p: string): Promise<StatResult> {
   try {
     const s = await stat(p);
     return { ok: true, mtimeMs: s.mtimeMs, size: s.size };
+  } catch (e) {
+    return { ok: false, absent: failureFor(e) === 'absent' };
+  }
+}
+
+/** The PATH's OWN type — what `statMeasured` above structurally cannot answer,
+ *  because `stat` follows the link and reports the target. Three positive
+ *  answers rather than a boolean, so `other` (a directory, a socket, a fifo)
+ *  never has to borrow one of the two that decide something.
+ *
+ *  THIS IS NOT THE `lstat` LADDER `StatResult` DECLINES. That refusal is about
+ *  paying a second syscall on EVERY field read to separate a state no ccd verb
+ *  produces; it is an argument about the hot path, and it still holds — nothing
+ *  above this line calls this. A caller that asks only where the answer decides
+ *  something pays once, where it matters. `server/src/limits.ts`'s `authDead`
+ *  gate is that caller and, today, the only one.
+ *
+ *  `absent` keeps the same fail-shut meaning it has everywhere on this wire:
+ *  true ONLY on a proven ENOENT. `lstat` does not follow, so unlike `stat`
+ *  a DANGLING link answers `{ok: true, kind: 'symlink'}` here — the link
+ *  itself is a thing that exists — which is the residual `StatResult`'s own
+ *  docstring says it leaves open. */
+export type PathKindResult =
+  | { ok: true; kind: 'regular' | 'symlink' | 'other' }
+  | { ok: false; absent: boolean };
+
+export async function lstatMeasured(p: string): Promise<PathKindResult> {
+  try {
+    const s = await lstat(p);
+    return { ok: true, kind: s.isSymbolicLink() ? 'symlink' : s.isFile() ? 'regular' : 'other' };
   } catch (e) {
     return { ok: false, absent: failureFor(e) === 'absent' };
   }

@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, truncateSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { RunningAgent } from '../src/server.js';
 import { makeFixture, boot, TestClient, type Fixture } from './helpers.js';
@@ -210,6 +210,76 @@ describe('ccrc-agent file ops', () => {
     expect(typeof res1.mtimeMs).toBe('number');
     const res2 = await client!.req<Res>(nextId(), { op: 'stat', path: path.join(fixture!.home, '.cc-limits', 'nope') });
     expect(res2).toMatchObject({ ok: true, missing: true });
+  });
+
+  it('lstat answers about the PATH, not its target — the distinction `stat` structurally cannot carry', async () => {
+    await open();
+    const target = path.join(fixture!.home, '.cc-limits', 'target.json');
+    const link = path.join(fixture!.home, '.cc-limits', 'link.json');
+    writeFileSync(target, 'abcd');
+    symlinkSync(target, link);
+
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+      .toMatchObject({ ok: true, kind: 'symlink' });
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: target }))
+      .toMatchObject({ ok: true, kind: 'regular' });
+    // THE POINT OF THE OP, as one contrast on one fixture: `stat` follows and
+    // reports the target's four bytes for the very path `lstat` calls a link.
+    // Before this op existed, the server had no way to ask the question at all,
+    // which is why its `_authdead` gate condemned accounts both bash bodies
+    // call healthy.
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: link }))
+      .toMatchObject({ ok: true, size: 4 });
+  });
+
+  it('lstat is not defeated by `checkPath`\'s canonicalisation — the regression that shipped inert would say `regular` here', async () => {
+    // A guard on the implementation, not on the behaviour above: every other op
+    // operates on `checkPath`'s CANONICAL result, and lstat'ing that can only
+    // ever answer `regular` for a symlink, because canonicalisation already
+    // followed it. This case is what caught that, end to end, after the local
+    // adapter's own unit tests were green.
+    await open();
+    const target = path.join(fixture!.home, '.cc-sessions', 'canon-target');
+    const link = path.join(fixture!.home, '.cc-sessions', 'claude-a-authdead');
+    writeFileSync(target, '1757203200 auth-401');
+    symlinkSync(target, link);
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+      .toMatchObject({ ok: true, kind: 'symlink' });
+  });
+
+  it('lstat reports a DANGLING link as `symlink` — the link exists though its target does not', async () => {
+    await open();
+    const link = path.join(fixture!.home, '.cc-limits', 'dangling');
+    symlinkSync(path.join(fixture!.home, '.cc-limits', 'no-such-target'), link);
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: link }))
+      .toMatchObject({ ok: true, kind: 'symlink' });
+    // The residual `StatResult`'s docstring names, on the same fixture: `stat`
+    // follows, the TARGET's ENOENT throws, and a name still in its directory
+    // listing reads as proven-absent.
+    expect(await client!.req<Res>(nextId(), { op: 'stat', path: link }))
+      .toMatchObject({ ok: true, missing: true, absent: true });
+  });
+
+  it('lstat reports a directory as `other`, and a genuinely missing path as missing/absent', async () => {
+    await open();
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: path.join(fixture!.home, '.cc-limits') }))
+      .toMatchObject({ ok: true, kind: 'other' });
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: path.join(fixture!.home, '.cc-limits', 'nope') }))
+      .toMatchObject({ ok: true, missing: true, absent: true });
+  });
+
+  it('lstat rejects a path outside the whitelist, and a link OUT of the whitelist too', async () => {
+    await open();
+    expect(await client!.req<Res>(nextId(), { op: 'lstat', path: fixture!.outside }))
+      .toMatchObject({ ok: false, err: 'forbidden' });
+    // The escape the whitelist exists to stop. The decision is still made on
+    // the FULLY RESOLVED path, so answering about the literal last component
+    // widened nothing — and the refusal must not leak the kind it refused.
+    const escape = path.join(fixture!.home, '.cc-limits', 'escape-link');
+    symlinkSync(fixture!.outside, escape);
+    const res = await client!.req<Res>(nextId(), { op: 'lstat', path: escape });
+    expect(res).toMatchObject({ ok: false, err: 'forbidden' });
+    expect(res.kind).toBeUndefined();
   });
 
   it('stat rejects a path outside the whitelist', async () => {
