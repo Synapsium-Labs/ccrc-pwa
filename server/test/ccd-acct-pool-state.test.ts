@@ -57,6 +57,14 @@ describe('_acct_pool_state', () => {
     expect(state('acct-a')).toBe('malformed');
   });
 
+  it('answers `malformed` for a line whose key this reader does not recognise', () => {
+    // The `*)` wildcard arm, not `epoch`/`issued`/`lease`/`acct`/blank — a
+    // document shape this reader cannot parse must not be served as fact,
+    // exactly like an off-grammar pool name poisons the whole document.
+    plant('epoch 1\nissued 1\nlease 9\nbogus x\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
   it('answers `unreadable` when the file exists but cannot be read', () => {
     const f = plant('epoch 43\nissued 1000\nlease 9999999999\n');
     chmodSync(f, 0o000);
@@ -73,12 +81,15 @@ describe('_acct_pool_state', () => {
   // stay green. A test that cannot fail for the reason it names is worse
   // than no test; deleted rather than kept as decoration.
 
-  it('reads the file ONCE across repeated calls (the loop-cost rule)', () => {
+  it('reads the file ONCE — a second call answers from memory, not the disk', () => {
     plant('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n');
     const out = h.sh(
-      '_acct_pool_state acct-a >/dev/null; ' +
-      '_acct_pool_state acct-b >/dev/null; ' +
-      'echo "$_APS_LOADED"');
-    expect(out).toBe('1');
+      '_acct_pool_state acct-a; ' +
+      'rm -f "$HOME/.cc-sessions/pool-epoch"; ' +
+      '_acct_pool_state acct-a');
+    // Both answers are `named pool-a`: the second one CANNOT have come from the
+    // file, which no longer exists. Without the load guard the second answer is
+    // `unreadable`, which is the mutation this test exists to catch.
+    expect(out.split('\n').map((s) => s.trim())).toEqual(['named pool-a', 'named pool-a']);
   });
 });
