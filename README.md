@@ -1713,10 +1713,10 @@ opening someone else's programme".
 `{"ok":false,"refused":"claimant-is-a-worker","by":"<that worker's coordinator>"}`
 — fires at `POST /api/runs` when `claimedBy` is itself the worker of an open
 run, and `heir-is-a-worker` fires the same way at `POST /api/runs/:id/reclaim`
-for a successor. A dispatched worker may not open or inherit a programme: the
+for a successor. The worker of any open run may not open or inherit a programme: the
 board brackets ONE level, and a real chain would render its middle session
 detached from the coordinator above it. A finished worker is not a worker; a
-self-claimed run is admitted (spec 2026-09-16 §12).
+self-claimed run is admitted (the plan's ruling D-3012; spec 2026-09-16 §12 for the door itself).
 
 **The open response says where the ledger really is.** Beside the relative
 `ledgerPath` it has always returned, `POST /api/runs` answers `ledgerRepo` (the
@@ -1787,7 +1787,7 @@ held cell's `/runs` door all stay on the card the row is on. A row whose repo
 differs from its card's carries the repo slug inside its name; the session
 view shows the slug whenever it is known. The project's own card stays on the
 board with nothing on it and says `N workspaces under <project>` — text, never
-a link. When a coordinator is NOT on the card (archived, dead, or on another
+a link. When a coordinator is NOT on the card (archived, or on another
 card the placement could not reach), the row stays flat with the marker
 `<program> wave n/N`, `· home <project>` appended only when the measured home
 differs, and the marker says when the coordinator is measured gone. The home
@@ -2516,8 +2516,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7311-7313`), each with an operator sentence of its own at `:7351`,
-`:7359` and `:7372`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7355-7357`), each with an operator sentence of its own at `:7395`,
+`:7403` and `:7416`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

@@ -29,7 +29,14 @@ import './fleet.css';
  *  cell" discipline `ABANDON_COPY` and `RUN_WORD.unknown` already hold. Keyed
  *  on the conditions THIS route can reach (the door's own status map), not on
  *  every `RunRefuseCode`: copying a vocabulary this route can never speak is
- *  what `ABANDON_COPY`'s own docstring argues against, one file over. */
+ *  what `ABANDON_COPY`'s own docstring argues against, one file over.
+ *  AND THE DOOR'S HALF OF THAT KEY IS DERIVED, never re-spelled: the refusal
+ *  codes enter as `ReclaimRefuseCode` itself, so the day that union gains a
+ *  member this map lacks, the `Record` is a COMPILE ERROR here — never a
+ *  silent fall-through to `unknown`, which is what a hand-written list of the
+ *  three literals would degrade to. Only the arms this sheet adds ON TOP of
+ *  the door's vocabulary are spelled out beside it. That derivation is pinned
+ *  against a hand-written respelling by `server/test/resume-reclaim-l0.test.ts`. */
 export const RECLAIM_COPY: Record<
   ReclaimRefuseCode
   | 'unknown-run' | 'unknown-session' | 'registry-unmeasurable' | 'not-configured' | 'bad-request' | 'unknown',
