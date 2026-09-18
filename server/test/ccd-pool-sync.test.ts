@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, ghContainedEnv } from './ccdWsHelpers.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -41,10 +41,35 @@ function setServerUrl(url: string): void {
   writeFileSync(path.join(h.home, '.ccrc', 'agent.env'), `CCRC_SERVER_URL=${url}\n`, 'utf8');
 }
 const curlArgv = (): string => readFileSync(path.join(h.home, 'curl.argv'), 'utf8');
+/** CONTAINMENT, and it is `ccd-workspaces.test.ts`'s source scan that requires
+ *  it of every bash call site in a ccd test file — not a judgement per call
+ *  site about what the child "could" reach. `ghContainedEnv` PREPENDS its own
+ *  bin, so the `gh` poison cannot be displaced by the stub PATH built below;
+ *  `$HOME/bin` (the curl stub) stays second and still wins for `curl`, which
+ *  the poison directory does not hold. `ccd-account-auth.test.ts` is the
+ *  precedent — the other sibling executable, contained the same way at every
+ *  one of its call sites.
+ *
+ *  SPELLED AT EACH CALL SITE, NOT FACTORED INTO A LOCAL HELPER, and that is
+ *  not style: the scan reads SOURCE inside a twelve-line window back from the
+ *  spawn (`SCAN_LOOKBACK_LINES`), so containment reached through a helper
+ *  defined at the top of the file is invisible to it — measured, this file's
+ *  first attempt at the fix, which left the scan just as red. The window is
+ *  what makes the invariant checkable by a stranger, so the call site is where
+ *  the answer has to be readable.
+ *
+ *  ASKS FOR ALL THREE POISONS. `ccd-pool-sync` reaches no `systemctl` and no
+ *  `tmux` today, and the opts are still asked for rather than argued away: the
+ *  scan's whole claim is about EVERY call site, and a call site exempted by
+ *  today's reading of what its child happens to run is exactly the exemption
+ *  that stops being true the day the child grows a line. Cheap here — nothing
+ *  in this suite wants a functional service manager. */
 const run = (bin: string): { rc: number; out: string } => {
+  const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home, PATH: `${bin}:${process.env.PATH}` },
+    { systemd: true, tmux: true });
   try {
     const out = execFileSync('bash', [path.resolve('../ccd/ccd-pool-sync')], {
-      encoding: 'utf8', env: { ...process.env, HOME: h.home, PATH: `${bin}:${process.env.PATH}` },
+      encoding: 'utf8', env,
     });
     return { rc: 0, out };
   } catch (e: any) { return { rc: e.status ?? -1, out: String(e.stdout ?? '') }; }
@@ -329,7 +354,14 @@ describe('ccd-pool-sync', () => {
     const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":2,"accounts":{}}');
     run(bin);
     const reg = path.join(h.home, '.cc-sessions');
-    const strays = execFileSync('bash', ['-c', `ls -a ${reg} | grep -c 'pool-epoch\\.' || true`], { encoding: 'utf8' }).trim();
+    // Contained like the runner above, and spelled here for the same
+    // twelve-line-window reason — this call site inherited the PARENT's HOME
+    // and the parent's `gh` credentials before, for a listing that needs
+    // neither.
+    const env = ghContainedEnv(h.home, { ...process.env, HOME: h.home },
+      { systemd: true, tmux: true });
+    const strays = execFileSync('bash', ['-c', `ls -a ${reg} | grep -c 'pool-epoch\\.' || true`],
+      { encoding: 'utf8', env }).trim();
     expect(strays).toBe('0');
   });
 

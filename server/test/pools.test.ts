@@ -27,6 +27,33 @@ const rosterWith = (pool: string | null) => parseRoster({
 const word = (v: ReturnType<typeof poolVerdict>): PoolRuleCase['expect'] =>
   v.ok ? 'serve' : v.reason === 'pool-mismatch' ? 'mismatch' : 'undecidable';
 
+/**
+ * THE ROWS THIS DRIVER DOES NOT WALK, AND WHY THAT IS A DESIGN BOUNDARY RATHER
+ * THAN AN UNIMPLEMENTED FEATURE (ruling T2-R1).
+ *
+ * Spec §5.7, verbatim: "The server's own forecast does **not** consult the
+ * projection — it reads coord.db directly, so every 409/503 it issues is
+ * immediate and exact." `unreadable` / `stale` / `malformed` on the ACCOUNT
+ * side are states of ONE fleet-side file, `$HOME/.cc-sessions/pool-epoch`,
+ * which only a box that syncs it can be in and which the server never reads.
+ * So these are not verdicts the server gets wrong — they are conditions it is
+ * structurally blind to, and the blindness is the design.
+ *
+ * The type says the same thing: `poolVerdict` (`server/src/poolrule.ts:48`)
+ * builds its account side through `declaredAccountPool`, whose whole codomain
+ * is `tagged` | `untagged`. There is no roster this driver could hand it that
+ * makes it answer `undecidable` for an ACCOUNT, so walking these rows here
+ * would not be testing the server against the table — it would be asserting
+ * that the server implements a read it is specified not to perform.
+ *
+ * WHERE THEY ARE DRIVEN INSTEAD: `ccd-pool-ok.test.ts`, against `_pool_ok`,
+ * the side that reads `_acct_pool_state`; and `pool-rule-core.test.ts`,
+ * against L0's `poolRule`, whose `wireFor` builds the bare `{ state }` these
+ * rows need. Both walk the WHOLE table. So no row here is unpinned — each is
+ * pinned by the implementations that can observe its input.
+ */
+const SERVER_BLIND = (c: PoolRuleCase): boolean => c.accountState !== undefined;
+
 describe('poolVerdict answers the shared fixture table', () => {
   it('the table is not vacuous — a floor, and every class represented', () => {
     // ANTI-VACUITY FIRST: `it.each([])` reports green, which is the one failure
@@ -40,9 +67,46 @@ describe('poolVerdict answers the shared fixture table', () => {
     }
   });
 
-  it.each(POOL_RULE_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    expect(word(poolVerdict(rosterWith(c.accountPool), 'a', c.project))).toBe(c.expect);
+  it('the skip is bounded — non-empty, account-state-only, and it leaves a table behind', () => {
+    // A SKIPPED CASE IS NOT A PIN, so the skip itself gets pinned. Three
+    // claims, each closing a different way for this predicate to rot:
+    const skipped = POOL_RULE_CASES.filter(SERVER_BLIND);
+    const walked = POOL_RULE_CASES.filter((c) => !SERVER_BLIND(c));
+
+    // (1) A skip that matches nothing is a vacuous zero — it would report as a
+    // live boundary while the rows it claims to except had been renamed away.
+    expect(skipped.length,
+      'SERVER_BLIND matches no row: either the account-state rows are gone from the table, or the '
+      + 'predicate stopped naming them, and either way this boundary is now a comment about nothing')
+      .toBeGreaterThan(0);
+
+    // (2) EVERY skipped row carries `accountState`. True by construction TODAY
+    // — the predicate IS that test — and that is the point: it is a ratchet on
+    // the PREDICATE, not a measurement of the table. The day someone widens
+    // `SERVER_BLIND` to except a row for any other reason (a project state, a
+    // name, a verdict it finds inconvenient), this reds, and the widening has
+    // to be argued rather than absorbed into a skip the server's §5.7
+    // blindness does not cover.
+    // `expect.soft`, so claim (3) below is still MEASURED on a mutation that
+    // reds this one — a hard throw here would shadow it and leave (3) a row
+    // of the mutation table nothing ever exercised.
+    for (const c of skipped) {
+      expect.soft(c.accountState,
+        `${c.name} is skipped but carries no accountState — the skip has widened past §5.7's boundary`)
+        .toBeDefined();
+    }
+
+    // (3) And the skip must leave a table behind: `it.each([])` reports green,
+    // so a predicate that swallowed every row would turn the driver below into
+    // a suite that asserts nothing and says so nowhere.
+    expect(walked.length, 'SERVER_BLIND skipped the whole table — the driver below walks nothing')
+      .toBeGreaterThanOrEqual(10);
   });
+
+  it.each(POOL_RULE_CASES.filter((c) => !SERVER_BLIND(c)).map((c) => [c.name, c] as const))(
+    '%s', (_name, c) => {
+      expect(word(poolVerdict(rosterWith(c.accountPool), 'a', c.project))).toBe(c.expect);
+    });
 });
 
 describe('poolVerdict and the roster', () => {
