@@ -1308,10 +1308,11 @@ export function registerCoordRoutes(
     // Self-claim excluded exactly as `watch.ts`'s caller excludes it; an
     // ownerless open run (a reconstructed row, `claimedBy` NULL) answers null
     // and is ADMITTED — there is no `by` to name (D-3012). Scope is any open
-    // run, `planned` through `closing`, not only `dispatched`: a finished
-    // worker is not a worker, an idle one still is. HERE, synchronous and
-    // DB-only, ahead of the awaited registry read and of `openRun`, so a
-    // refusal leaves no `planned` orphan and places no hold — F1's reason.
+    // run, `planned` through `closing`, and `unknown`, not only `dispatched`:
+    // a finished worker is not a worker, an idle one still is. HERE,
+    // synchronous and DB-only, ahead of the awaited registry read and of
+    // `openRun`, so a refusal leaves no `planned` orphan and places no hold
+    // — F1's reason.
     const workerOf = coord.parentOfSession(claimedBy);
     if (workerOf !== null && workerOf !== claimedBy) {
       return reply.code(409).send({ ok: false, refused: 'claimant-is-a-worker', by: workerOf });

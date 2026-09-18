@@ -396,6 +396,35 @@ describe('POST /api/runs', () => {
     expect((await postOpen(app)).statusCode).toBe(200);
   });
 
+  it('refuses a REVIEW open too — the door sits below the review arm\'s own project/wave/waveOf ' +
+     'overrides, so nothing there exempts it (spec §12, fix round 1 finding 2)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-review-worker'] });
+    const w = await openApp(home, run); app = w.app;
+    // `CLAIMED_BY` is this work run's coordinator — get it to `awaiting-
+    // review` the same way `workAtReview` (the `kind:review` describe
+    // block, below) does: open, dispatch, advance twice.
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+
+    // Now bind `CLAIMED_BY` as a LIVE (planned, non-terminal) worker of a
+    // run belonging to a DIFFERENT coordinator — store-level, bypassing the
+    // route entirely (the brief's own second option for this setup).
+    const other = w.coord.openRun({ program: 'build5-other', title: 'Other programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    w.coord.bindSession(other.id, CLAIMED_BY);
+
+    // The review arm FORCES `claimedBy` to equal the reviewed run's own
+    // (400 otherwise) — that is already `CLAIMED_BY`, so this reaches the
+    // door with exactly the claimant it means to catch.
+    const res = await postOpen(app, { program: OPEN_BODY.program, title: 'Review wave 1',
+      kind: 'review', reviews: opened.id, claimedBy: CLAIMED_BY, homeProject: PROJECT });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: 'other-coordinator' });
+  });
+
   it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
     // F2. The body guard used to test `.trim()` and then store the RAW value;
     // `setProgramHome` is `WHERE homeProject IS NULL`, so the whitespace was
