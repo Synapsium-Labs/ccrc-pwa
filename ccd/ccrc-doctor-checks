@@ -188,6 +188,7 @@ CCRC_DOCTOR_CHECKS=(
   name
   disk
   wrappers
+  skills
   accounts
   credentials
   pools
@@ -2685,6 +2686,94 @@ _check_wrappers() {
   _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
 }
 
+# ── skills — every rostered home carries the SHIPPED skills ────────────────
+# Release/rollout design §6. Compares each home's installed
+# ccrc-coordinator/worker/reviewer against the TREE (`$BOX_TREE_DIR/ccd/
+# <name>-skill`), the thing the build stamp names — not against the
+# `.cc-sessions` placed copy: on 2026-09-17 both were stale while the tree
+# on the box was current, and eighteen reviewers read an old clause. Homes
+# come from `accounts.json` (`_check_credentials`' reader), so the check has
+# a subject wherever `wrappers` does. graphify's skill has its own check —
+# its source is the installed package, not this tree.
+_check_skills() {
+  local role=""
+  # -f BEFORE -r (D-3025): a directory answers `-r` true too, and
+  # `_box_env_value`'s `read … < "$file"` on a directory dies "Is a directory"
+  # then "line: unbound variable" under `set -u`, taking the whole doctor run
+  # down — the same guard order every other `BOX_ENV_FILE` reader in this file
+  # already uses.
+  [ -f "$BOX_ENV_FILE" ] && [ -r "$BOX_ENV_FILE" ] && role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$role" = server ]; then
+    _dr_skip skills "this box records CCRC_ROLE=server, so it hosts no sessions and no account's skills directory is its concern"
+    return 3
+  fi
+  local tree="$BOX_TREE_DIR/ccd" name
+  for name in coordinator-skill worker-skill reviewer-skill; do
+    if [ ! -d "$tree/$name" ]; then
+      _dr_fail skills "the shipped tree has no $tree/$name, so nothing on this box says what the installed skills should be" \
+        "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
+      return 1
+    fi
+  done
+  if ! command -v diff >/dev/null 2>&1; then
+    _dr_warn skills "diff is not on PATH, so the installed skills could not be compared with the shipped tree" \
+      "install diffutils"
+    return 2
+  fi
+  local roster="$HOME/.ccrc/accounts.json"
+  if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
+    _dr_skip skills "no readable account roster at \$HOME/.ccrc/accounts.json — the 'wrappers' check above owns that"
+    return 3
+  fi
+  if ! command -v node >/dev/null 2>&1; then
+    _dr_fail skills "node is not on PATH, so \$HOME/.ccrc/accounts.json cannot be read" "install Node first — see the 'node' check above"
+    return 1
+  fi
+  local rows rc
+  rows="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
+    catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    const ok = /^[a-z][a-z0-9-]{0,31}$/;
+    const dir = /^\.[A-Za-z0-9._-]{1,64}$/;
+    process.stdout.write(j.accounts
+      .filter((a) => a && typeof a === "object" && ok.test(a.id) && typeof a.configDirSuffix === "string" && dir.test(a.configDirSuffix))
+      .map((a) => a.id + "\t" + a.configDirSuffix).join("\n"));
+  ' 2>/dev/null)"; rc=$?
+  if [ "$rc" -ne 0 ]; then
+    _dr_skip skills "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
+    return 3
+  fi
+  local id suffix dir homes=0 installed
+  local -a stale=()
+  while IFS=$'\t' read -r id suffix; do
+    [ -n "$id" ] || continue
+    dir="$HOME/$suffix"
+    [ -d "$dir" ] || continue
+    homes=$((homes + 1))
+    for name in coordinator-skill worker-skill reviewer-skill; do
+      installed="ccrc-${name%-skill}"
+      if [ ! -d "$dir/skills/$installed" ]; then
+        stale+=("$id: $installed missing"); continue
+      fi
+      diff -r -q "$tree/$name" "$dir/skills/$installed" >/dev/null 2>&1 || stale+=("$id: $installed differs")
+    done
+  done <<< "$rows"
+  if [ "$homes" -eq 0 ]; then
+    _dr_skip skills "none of the roster's config directories exist on this box, so there is no installed skill to compare"
+    return 3
+  fi
+  if [ "${#stale[@]}" -eq 0 ]; then
+    _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer"
+    return 0
+  fi
+  _dr_fail skills "${#stale[@]} installed skill(s) differ from the shipped tree: $(_dr_join "${stale[@]}")" \
+    "run 'ccrc update' — or, when 'ccrc version' already names the intended build, re-run the installers on this box: bash \$HOME/.cc-sessions/install-coordinator-skill.sh; bash \$HOME/.cc-sessions/install-worker-skill.sh; bash \$HOME/.cc-sessions/install-reviewer-skill.sh"
+  return 1
+}
+
 # ── the accounts surface, by existence ────────────────────────────────────
 # TWO FACTS NOTHING ELSE ON THIS BOX MEASURES. `_check_wrappers` compares the
 # roster against ~/.local/bin; neither of these files is there.
@@ -4042,7 +4131,7 @@ _check_fleet() {
   local rc=0
   if [ "$build" = skewed ]; then
     _dr_fail fleet "the two boxes are running different builds (the server at $addr answers build: skewed — the shas differ, or one of them is dirty and is therefore not the commit it names)" \
-      "run 'ccrc update' on the lagging box — fleet box first, then the server box (stage 4, spec §8): the server reads what the fleet host's hook writes and the agent caches 'ccd caps' at boot, so the other order runs a server that reads fields the fleet host does not yet write. 'ccrc version' on each box names the sha it is running"
+      "run 'ccrc rollout' from the deploying machine (release/rollout design §4), or 'ccrc update' on the lagging box — fleet box first, then the server box: the server reads what the fleet host's hook writes and the agent caches 'ccd caps' at boot, so the other order runs a server that reads fields the fleet host does not yet write. 'ccrc version' on each box names the sha it is running"
     rc=1
   fi
   if [ "$roster" = divergent ]; then
