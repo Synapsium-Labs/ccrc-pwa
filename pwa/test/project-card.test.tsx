@@ -759,6 +759,64 @@ describe('route-owned pool handoff to session rows', () => {
   });
 });
 
+// Task 4 fix round 1 (review finding, Important): after the key flip a MOVED
+// row (`s.project !== group.project`) must be judged against ITS OWN
+// project's pool, never the card's — `~/.cc-sessions/pools/<project>` is
+// keyed by the session's own project, and a card's `placement`/`pool` is one
+// `/api/projects` read for `group.project` alone.
+describe('a moved row is judged against its OWN project\'s pool, never the card\'s (Task 4 fix round 1)', () => {
+  // The card (`demo`) is tagged pool-a — DIFFERENT from the moved row's own
+  // project (`beta`, tagged pool-b via `poolFor`), so a card-pool judgment and
+  // an own-project judgment disagree in both directions these two cases probe.
+  const cardPlacement: ProjectPlacementRead = {
+    kind: 'measured',
+    pool: { state: 'tagged', name: 'pool-a' },
+    placement: { kind: 'unmeasurable' },
+  };
+  const poolFor = (project: string): ProjectPoolWire | null =>
+    project === 'beta' ? { state: 'tagged', name: 'pool-b' } : null;
+  const moved = () => sess({
+    id: 'beta-still-cove', project: 'beta', boardProject: 'demo',
+    wrapper: 'claude2', home: 'claude2', workspace: 'still-cove',
+  });
+
+  it('no off-pool label when the moved row\'s account matches ITS OWN project\'s pool, though the card is tagged differently', () => {
+    // claude2 is in pool-b, the moved row's own project (beta) is pool-b:
+    // they agree. Judged against the CARD's pool-a instead, this would be a
+    // false off-pool warning — exactly the defect the finding named.
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
+                        poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('names the moved row\'s OWN project\'s pool when its account disagrees — never the card\'s pool', () => {
+    // claude2 is in pool-a, the moved row's own project (beta) is pool-b:
+    // they disagree, and the label must name pool-b (beta's own tag), not
+    // pool-a (the card's tag, which happens to equal the account's pool here
+    // — a judgment against the card would swallow the warning entirely).
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-a' : null }));
+    render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
+                        poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const account = screen.getByLabelText('running on team·alt (pool pool-a), project is pool pool-b');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+
+  it('CONTROL: a same-project row is still judged against the card\'s own pool, exactly as before', () => {
+    // group.project === s.project here (both 'demo'), so poolOf must return
+    // `pool` (the card's), never call `poolFor` at all.
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [sess({ wrapper: 'claude2', home: 'claude2' })] })}
+                        placement={cardPlacement} poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+});
+
 describe('the stranded cell', () => {
   it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
     const marker = { at: 1, reason: 'no account in pool pool-a can take it' };

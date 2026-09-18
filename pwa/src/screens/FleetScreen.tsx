@@ -31,7 +31,7 @@ import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectRow } from '../../../shared/api';
+import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
@@ -275,6 +275,18 @@ export function FleetScreen({
       ? { kind: 'measured', pool: row.pool, placement: row.placement }
       : { kind: 'legacy' };
   }, [projectRows]);
+
+  // Task 4 fix round 1: a card's own `placement`/`pool` names ONE project —
+  // its own. A row the key flip moved onto this card belongs to a DIFFERENT
+  // project by construction, so its off-pool judgment needs THAT project's
+  // tag, not this card's. Same absence discipline as `placementFor`: only a
+  // `measured` read yields a pool, everything else (`pending`/`failed`/
+  // `missing`/`legacy`) answers `null` — no account claim from an unmeasured
+  // or absent read.
+  const poolFor = useCallback((project: string): ProjectPoolWire | null => {
+    const read = placementFor(project);
+    return read.kind === 'measured' ? read.pool : null;
+  }, [placementFor]);
 
   // D-2721: the selection is a snapshot taken when the card was tapped, and the
   // route remeasures underneath an open sheet — a pools frame, a visible-page
@@ -715,6 +727,7 @@ export function FleetScreen({
                 onAddWorkspace={(p) => void addWorkspace(p)}
                 projected={projected}
                 placement={placementFor(g.project)}
+                poolFor={poolFor}
                 adding={adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}

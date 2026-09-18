@@ -175,6 +175,7 @@ export function ProjectCard({
   onPool,
   runs = [],
   abroad = [],
+  poolFor = () => null,
   nowMs = Date.now(),
 }: {
   group: FleetGroup;
@@ -243,6 +244,18 @@ export function ProjectCard({
    *  answer a question about other projects' runs. Defaults to `[]`, so every
    *  caller and every test that predates this renders exactly as it did. */
   abroad?: readonly RunSummary[];
+  /** A row's OWN project's pool (Task 4 fix round 1) — for a row the key flip
+   *  moved onto this card, `s.project` is by construction a DIFFERENT project
+   *  from `group.project`, so this card's own `placement`/`pool` (one
+   *  `/api/projects` read, for `group.project` alone) is the wrong shape to
+   *  judge it against: a false off-pool warning when the destination is
+   *  tagged differently from the row's real project, and a swallowed warning
+   *  when the destination is untagged while the row's own project is tagged.
+   *  Defaults to `() => null` — the same "unmeasured, no account claim"
+   *  degrade `placementFor` itself uses — so a card rendered before `FleetScreen`
+   *  passes this, or a test that predates the fix, keeps every row on the
+   *  card's own project (the common case) rendering exactly as before. */
+  poolFor?: (project: string) => ProjectPoolWire | null;
   /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
    *  This card is pure and controlled (fold state, roster and projection all
    *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
@@ -257,6 +270,14 @@ export function ProjectCard({
   const pool = placement.kind === 'measured' ? placement.pool : null;
   const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';
+
+  // Task 4 fix round 1: a row belonging to THIS card's own project keeps
+  // today's behaviour byte-for-byte (`pool`, from `group.project`'s own
+  // placement read). A row the key flip moved here belongs to a different
+  // project — its off-pool judgment has to ask `poolFor` about THAT project,
+  // never this card's.
+  const poolOf = (s: FleetSession): ProjectPoolWire | null =>
+    s.project === group.project ? pool : poolFor(s.project);
 
   // A legacy server's global projection is honest only while no readable tag
   // narrows the project. Pending/failed/missing reads make no account claim.
@@ -412,7 +433,7 @@ export function ProjectCard({
         selected={row.session.id === selectedId}
         onActions={onActions}
         roster={roster}
-        projectPool={pool}
+        projectPool={poolOf(row.session)}
         onOpenRun={openRunFor(row.session)}
       />
     ) : (
@@ -570,7 +591,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={pool} onOpenRun={openRunFor(s)} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} />
               ))}
             </div>
           )}
