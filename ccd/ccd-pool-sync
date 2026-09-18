@@ -195,6 +195,37 @@ try:
         # requires the ENTIRE string to lie inside it, closing that quirk (and
         # was verified against it directly, not assumed from the docs) without
         # changing what a clean id/pool name matches.
+        #
+        # TWO MUTATION SURVIVORS, disclosed and measured (fix round 2):
+        # `ID.fullmatch` -> `ID.match`, and the same swap on `NAME.fullmatch`
+        # below, both stay GREEN against every test in this suite as of round
+        # 1. Traced by hand and confirmed by running it: the one value shape
+        # `.match` lets through that `.fullmatch` refuses is "<valid-chars>
+        # plus exactly one trailing newline, nothing else" — and when that
+        # value is spliced into `"acct %s %s" % (k, p)` and the document is
+        # later split back into lines (the whole-document pass below), the
+        # embedded newline fragments that ONE list element into TWO lines,
+        # one of which is always an empty string (from the resulting `\n\n`)
+        # that matches no grammar alternative — so the whole-document pass
+        # independently refuses it either way. These two per-field checks and
+        # the whole-document pass are MUTUALLY REDUNDANT against every input
+        # shape this suite can currently produce for THAT narrow case.
+        # They are NOT redundant in general — see the next disclosure.
+        #
+        # REAL FINDING, not a survivor (fix round 2, coordinator-caught): a
+        # value shaped as "<valid-chars> <valid-chars>\n<valid-chars>" (an
+        # embedded newline with ORDINARY text, not merely a trailing one, on
+        # each side) can render as TWO WELL-FORMED `acct <id> <pool>` lines
+        # once split — e.g. `k = "acct-a pool-b\nacct evil-account"` with
+        # `pools: ["pool-a"]` renders `"acct acct-a pool-b\nacct evil-account
+        # pool-a"`, which splits into `"acct acct-a pool-b"` (harmless) and
+        # `"acct evil-account pool-a"` — a FORGED row for an account the
+        # control plane never named, and both halves indistinguishable from
+        # real rows to the whole-document pass, which only checks each split
+        # line'"'"'s OWN grammar and cannot see that it used to be one field.
+        # THIS is the case where `ID.fullmatch`/`NAME.fullmatch` are the
+        # SOLE defense — deleting either check ENTIRELY (not merely
+        # weakening it to `.match`) reds the corresponding test, measured.
         if not ID.fullmatch(k):
             raise ValueError("account id %r" % k)
         acct = accts[k]
@@ -205,6 +236,22 @@ try:
         if len(pools) > 1:
             raise ValueError("account %r carries %d pools, at most one is supported" % (k, len(pools)))
         for p in pools:
+            # MUTATION SURVIVOR, disclosed and measured, and unpinnable BY
+            # CONSTRUCTION against any input this script can ever receive
+            # (fix round 2): `isinstance(p, str)` can be deleted here with
+            # the suite green, including against a dedicated test supplying
+            # `"pools": [123]`. Reason: `json.load` can only ever produce
+            # str, int, float, bool, None, list or dict for `p` — never
+            # bytes — and `NAME.fullmatch(p)` on any of the non-str shapes
+            # raises `TypeError: expected string or bytes-like object`
+            # itself, which the outer `except Exception` catches exactly
+            # like the `ValueError` this line raises on purpose. So for
+            # EVERY value JSON can decode, `NAME.fullmatch(p)` alone already
+            # refuses a non-string `p` — `isinstance(p, str)` changes the
+            # exception TYPE and the diagnostic TEXT (a clean "pool 123"
+            # instead of a raw TypeError string), never the outcome (exit
+            # non-zero, nothing written). Kept for the diagnostic, not
+            # because it is load-bearing for safety.
             if not isinstance(p, str) or not NAME.fullmatch(p):
                 raise ValueError("pool %r" % (p,))
             lines.append("acct %s %s" % (k, p))
@@ -222,6 +269,20 @@ try:
         body_lines = body_lines[:-1]   # doc always ends in exactly one \n
     if not body_lines or body_lines[-1] != "end":
         raise ValueError("rendered document'"'"'s last line is not exactly \"end\"")
+    # MUTATION SURVIVOR, disclosed and measured, and unpinnable BY
+    # CONSTRUCTION for the reason that matters most (fix round 2): this
+    # `for` loop can be deleted entirely with the suite green — every
+    # negative/float/bool epoch-issued-lease case this suite exercises is
+    # already refused earlier by `whole_num()`, and every id/pool-grammar
+    # case is already refused earlier by `ID.fullmatch`/`NAME.fullmatch`.
+    # It is not dead code: it is a BACKSTOP against a field added to this
+    # renderer LATER without its own validation — a bug that, by
+    # definition, has no test yet, because nobody has written the bug. A
+    # test proving this loop catches the fields defined so far is a test proving the
+    # field-level checks are duplicated, not a test proving the backstop
+    # works; the backstop'"'"'s actual job is unpinnable by the same
+    # construction that makes it worth keeping. "Defence in depth" alone
+    # would not justify shipping an unpinned guard — this reason does.
     for ln in body_lines:
         if not LINE.fullmatch(ln):
             raise ValueError("rendered line is off-grammar: %r" % ln)

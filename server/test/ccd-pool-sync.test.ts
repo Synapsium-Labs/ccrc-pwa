@@ -118,7 +118,24 @@ describe('ccd-pool-sync', () => {
   // ways a value could corrupt the document's STRUCTURE rather than merely
   // fail its own character test — a distinction a future maintainer deciding
   // whether the check is still load-bearing cannot see from `Bad_Name` alone.
-  it('refuses when a pool value tries to inject a fabricated acct row via an embedded newline', () => {
+  //
+  // Fix round 2 (measured, not assumed): on the POOL side this payload
+  // happens to render as TWO WELL-FORMED `acct` lines, not one malformed
+  // one — `p = "pool-a\nacct evil-account pool-b"` against id `"acct-a"`
+  // renders `"acct acct-a pool-a\nacct evil-account pool-b"`, which the
+  // document join then splits into `"acct acct-a pool-a"` (real) and
+  // `"acct evil-account pool-b"` (forged), BOTH grammar-valid — so this is
+  // the case the whole-document per-line pass (T3-R1) structurally cannot
+  // see, and only `NAME.fullmatch(p)` refuses it. Confirmed directly:
+  // deleting `NAME.fullmatch` from the compound condition (keeping
+  // `isinstance(p, str)`) reds THIS test with no new test needed — the
+  // payload the coordinator specified for a "pool mirror" of the id-side
+  // two-well-formed-lines case turned out to be byte-identical to this
+  // pre-existing test's own body, so nothing new was added here; this
+  // comment and the mutation-table entry now say why it is load-bearing.
+  // (Contrast the id-side case below, which is a genuinely different
+  // shape — see its own comment for why a new test WAS needed there.)
+  it('refuses when a pool value tries to inject a fabricated acct row via an embedded newline (renders as two well-formed lines — the per-line pass cannot see this, only the NAME field check can)', () => {
     const bin = stubCurl('{"epoch":6,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":["pool-a\\nacct evil-account pool-b"]}}}');
     expect(run(bin).rc).not.toBe(0);
     expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
@@ -160,6 +177,36 @@ describe('ccd-pool-sync', () => {
     expect(run(bin).rc).not.toBe(0);
     expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
   });
+
+  // Fix round 2 (coordinator's own correction to a round-1 hypothesis, measured
+  // not assumed): a payload that renders as TWO WELL-FORMED lines is exactly
+  // what the whole-document per-line pass CANNOT see, because both halves pass
+  // `LINE.fullmatch` on their own. `k = "acct-a pool-b\nacct evil-account"`
+  // paired with `pools: ["pool-a"]` renders one `lines[]` element,
+  // `"acct acct-a pool-b\nacct evil-account pool-a"`, which the document join
+  // then splits (via its OWN embedded newline) into `"acct acct-a pool-b"` and
+  // `"acct evil-account pool-a"` — both syntactically perfect `acct <id> <pool>`
+  // rows, the second one a FORGED row for an account the control plane never
+  // named. Only the per-field `ID.fullmatch(k)` check catches this, by
+  // refusing the space+newline in `k` before it is ever rendered — the
+  // per-line pass never gets the chance to see the split. Measured directly
+  // (see the mutation table's rows for `ID.fullmatch` deleted entirely, not
+  // merely weakened to `.match`, which this case does NOT distinguish from
+  // `.fullmatch` — the interior SPACE fails the character class regardless of
+  // anchoring, so only removing the check outright reproduces the forgery).
+  it('refuses when an account id renders as two well-formed acct lines via an embedded newline (the per-line pass cannot see this — only the ID field check can)', () => {
+    const bin = stubCurl('{"epoch":6,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a pool-b\\nacct evil-account":{"pools":["pool-a"]}}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+  });
+
+  // The mirror on the pool side needs no new test: the coordinator's own
+  // literal payload for it (`p = "pool-a\nacct evil-account pool-b"` against
+  // a plain id) is byte-identical to the pre-existing
+  // 'refuses when a pool value tries to inject a fabricated acct row via an
+  // embedded newline' test above — see that test's now-updated comment and
+  // title for the same "renders as two well-formed lines" reasoning, and the
+  // mutation table for the `NAME.fullmatch` deletion that reds it directly.
 
   // T1-R3: the reader is line-oriented and cannot tell a complete final row
   // from a torn one — a document truncated right after its last `acct` line
@@ -297,6 +344,18 @@ describe('ccd-pool-sync', () => {
 
   it('refuses (writes nothing) when pools is an object rather than a list', () => {
     const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":{"pool-a":1}}}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+  });
+
+  // Fix round 2: closes the round-1-disclosed gap — a syntactically valid
+  // LIST carrying a non-string element, which `isinstance(pools, list)`
+  // alone does not catch (the list check only rejects a non-list `pools`;
+  // "pools":"p" and "pools":{...} both fail it before this element-level
+  // check is ever reached, which is why round 1 found no test isolating
+  // `isinstance(p, str)` on its own).
+  it('refuses (writes nothing) when pools is a valid list carrying a non-string element', () => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":[123]}}}');
     expect(run(bin).rc).not.toBe(0);
     expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
   });
