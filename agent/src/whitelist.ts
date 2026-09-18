@@ -252,6 +252,7 @@ export type ExecWhitelist = Record<ExecCommand, readonly (readonly string[])[]>;
 export const REQUIRED_VERB_FLAG = {
   'ws-reap': '--expect', 'ws-rename': '--session', 'coord-pause': '--state',
   'project-pool': '--project', 'route': '--session',
+  'win-size': '--session',
 } as const;
 type GatedVerb = keyof typeof REQUIRED_VERB_FLAG;
 
@@ -402,6 +403,69 @@ export const EXEC_WHITELIST = {
     // this grant two tokens wide instead of one, and REQUIRED_VERB_FLAG is what
     // makes losing it a boot refusal rather than a widening nobody notices.
     ['ws-rename',  '--session'],
+    // The terminal drawer's un-pin (wave 2, spec §6.1). `tmux set-option` is
+    // NOT granted and must never be: prefix matching leaves every token after
+    // a granted prefix unconstrained, so `['tmux','set-option']` would permit
+    // setting ANY option on ANY target of the shared server — and `set` is that
+    // command's own alias (`tmux list-commands` on tmux 3.4 prints `set-option
+    // (set)` and `set-window-option (setw)`), which is why
+    // `whitelist-subset.test.ts` pins the granted tmux verbs EXACTLY rather
+    // than refusing one spelling of one of them.
+    //
+    // WHAT THIS TABLE ENFORCES IS THE SPELLING AT `args[0]`, NOT THE
+    // CAPABILITY, and the sentence that stood here claimed the stronger thing.
+    // `isExecAllowed` compares a granted PREFIX and leaves every later token
+    // free, and tmux treats a bare `;` ARGV ELEMENT as its own command
+    // separator with no shell involved. Measured 2026-09-16:
+    // `isExecAllowed('tmux', ['has-session','-t','x',';','set-option','-g',
+    // 'window-size','manual'])` returns TRUE, and on a private `-L` socket
+    // that argv really runs both commands — `show-options -g window-size`
+    // went `latest` -> `manual`.
+    //
+    // WHAT KEEPS IT UNREACHABLE IS THE CALL CONVENTION, not this table. Every
+    // tmux argv in `server/src/exec.ts` is a literal token array, and each
+    // wire-supplied value lands as a SINGLE token (`target(id)`, and
+    // `sendLiteral`'s text in the one slot after `-l`), so nothing on the wire
+    // can contribute a `;` of its own: measured on the same socket, both
+    // `send-keys -t <s> -l ';'` and `send-keys -t <s> -l '; set-option -g
+    // window-size manual'` leave the global at `latest`, and a `;` inside a
+    // `resize-window -x` value is refused `width invalid`. Hardening
+    // `isExecAllowed` is OUT of this wave's scope by ruling — it is the single
+    // function gating the whole PWA→fleet path, and changing it after the
+    // reviews had run would ship an unreviewed change to it. Wrapping the
+    // one option this program needs in a ccd verb keeps the mutation two tokens
+    // wide and puts the validation on the box, where `cmd_win_size` re-states
+    // `shared/roster.ts`'s ID_RE as a bash class and enforces it BEFORE any
+    // target is built — and then anchors that target with tmux's exact-match
+    // `=`, because `-t` is an fnmatch PATTERN and a well-formed id that names
+    // no session would otherwise resolve to a DIFFERENT live one (D-2780).
+    //
+    // This is a FLEET-CONTROL verb, which is why it is outside CLAUDE.md's
+    // "zero new ccd verbs for coordination mutation" — that rule is about the
+    // coord surface (mail, runs, claims), and this touches none of it.
+    //
+    // ENROLLED in `REQUIRED_VERB_FLAG` above, for `coord-pause`'s reason and
+    // then some: `--session` is not a confirmation token, it is half the verb's
+    // whole argument surface, and the door it is reached from is as open as
+    // `coord-pause`'s with one more hazard on top. `GET /ws/pty/:id` (wave 3)
+    // carries no box token at all, as `coord-pause`'s route does not (D-282);
+    // and its `:id` is a PATH PARAM THAT HANDLER VALIDATES NOWHERE — measured
+    // over the whole handler body in `server/src/server.ts`, which destructures
+    // `req.params` and hands the id straight to `resizeWindow` and `spawnPty`,
+    // with no id-class test, no roster lookup and no 400 in it. So ccd's own
+    // `cmd_win_size` gate is the whole of what stands behind this grant, which
+    // is exactly why the grant stops at the flag. (An earlier draft of this
+    // sentence said the id "arrives off a JSON-parsed websocket frame": that is
+    // false — the only frame that handler parses carries `type`/`data`/`cols`/
+    // `rows` and no id — and it understated the hazard. Wave 3's own plan lists
+    // validating `:id` as work it will do, not as something already done.) A bare `['win-size']`
+    // would admit every positional form the verb might grow, and is invisible
+    // to layer 2 and to layer 3's reachability check in
+    // `whitelist-subset.test.ts` — `['win-size']` is a genuine prefix of the
+    // argv the server builds — which is why that file also carries an explicit
+    // `win-size is grantable ONLY with --session` case, and why the enrolment
+    // above exists: one of the two is in a different package from the other.
+    ['win-size',   '--session'],
   ],
 } as const satisfies ExecWhitelist;
 

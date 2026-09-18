@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { makeCcdHarness, CCD, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 import { RATE_LIMIT_ERROR } from '../../shared/api.js';
 
 let h: CcdHarness;
@@ -156,7 +156,7 @@ describe('_session_hard_blocked wires the transcript into the rescue arm (D-2363
    *  answers `$BOX_DRAFT`, and the swap decision is stubbed so the test is about the
    *  verdict, never the fixture roster's telemetry. */
   const STUBS = (pane: string, target = 'claude2'): string => `
-    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; case "\${1:-}" in
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
       capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;; esac; return 0; };
     _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
     _swap_target() { echo ${target}; }; _avail() { return 0; };
@@ -254,7 +254,7 @@ describe('the transcript verdict is cached per session (D-2444)', () => {
   const stub = (verdict: 0 | 1 | 2, pathReadable = true): string => `
     _transcript_path() { ${pathReadable ? 'echo "$HOME/transcript.jsonl"' : 'return 1'}; };
     _transcript_limit_banner() { echo transcript-read >> "$HOME/ccd-calls"; return ${verdict}; };
-    tmux() { case "\${1:-}" in capture-pane) printf '%s\\n' ${JSON.stringify(PROMPT)} ;; esac; };
+    tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) printf '%s\\n' ${JSON.stringify(PROMPT)} ;; esac; };
     _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
   const verdict = (extra = '', env: Record<string, string> = {}): string =>
     h.sh(`${extra} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "rc=$?"`, env);

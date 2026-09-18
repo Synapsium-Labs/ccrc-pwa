@@ -503,6 +503,25 @@ export const CCD_ARGV = {
                  ...pairs.flatMap((f) => ['--set', `${f}=${fields[f]}`]),
                  ...actorReasonFlags(dec)]);
   },
+
+  /** The terminal drawer's window pin/un-pin (wave 2, spec §6.1). `mode` is a
+   *  two-member union rather than a string: `cmd_win_size` asserts exactly four
+   *  tokens and `die`s on any other word, so the vocabulary is ccd's and the
+   *  mapping happens once, here, where no route can invent a third. The agent's
+   *  grant cannot help with that — it is `['win-size','--session']`, and every
+   *  token after a granted prefix is unconstrained — so this union IS the
+   *  server's half of the refusal (`whitelist-subset.test.ts` pins it with a
+   *  `@ts-expect-error` on the third word, which `typecheck-tests.test.ts`
+   *  compiles).
+   *
+   *  `id` reaches ccd UNVALIDATED by this builder on purpose: `cmd_win_size`
+   *  re-states `shared/roster.ts`'s ID_RE as a bash class and enforces it
+   *  BEFORE any tmux target is built, then anchors that target with tmux's
+   *  exact-match `=` because `-t` is an fnmatch pattern (D-2780) — that pair is
+   *  the authority. What this builder guarantees is only that the tokens reach
+   *  it in the shape the agent grants. */
+  winSize: (id: string, mode: 'smallest' | 'canonical') =>
+             argv(['win-size', '--session', id, '--mode', mode]),
 } as const;
 
 /**
@@ -601,6 +620,31 @@ export const ROUTE_ARGV_CAP = 'route-argv-v1';
  *  about it. The `toContain` line in `ccd-archive.test.ts` is what makes that
  *  equality measured. */
 export const ROUTE_APPLY_CAP = 'route-apply-v1';
+
+/** The `ccd caps` token for terminal-drawer wave 2, and it is evidence for BOTH
+ *  halves of that wave rather than for the verb alone: the `win-size` verb and
+ *  `_pane_measurable`'s stand-down at every typing site ship in ONE ccd inode,
+ *  so a box that echoes this token has both. That is a contract this wave keeps
+ *  rather than a property of the token: the stand-down is written (task 4)
+ *  before the ccd that echoes the token is deployed (task 6), so the only way to
+ *  meet the token without it is to deploy a ccd built from mid-wave.
+ *
+ *  Spelled ONCE in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's own
+ *  `echo win-size-v1` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, and that test's `toContain` assertion is what keeps
+ *  THIS one equal to them (`capsupported.test.ts` scans for the "once" half).
+ *
+ *  READ IT WITH `capSupported`, NEVER `verbSupported`, wherever wave 3 gates the
+ *  un-pin. `verbSupported` PERMITS on no evidence ("an absent list must never
+ *  grey out the fleet") — the right default for verbs that have always existed
+ *  and the wrong one for a verb that never did: it would send `ccd win-size` to
+ *  an agent that grants no such prefix, and, worse, would treat a box whose
+ *  readers have NOT learned to stand down as though they had. `capSupported`
+ *  refuses on no evidence, so an un-upgraded agent simply leaves the window
+ *  pinned: wave 1 behaviour, no fallback path, no second mechanism (spec §6.1).
+ *  This is a note on the token, not a wrapper function — the gate belongs at
+ *  wave 3's own seam, where its mutation test can red on it. */
+export const WIN_SIZE_CAP = 'win-size-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

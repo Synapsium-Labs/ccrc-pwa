@@ -28,6 +28,10 @@ const ACK_EFFORT = (level: string): string => `${IDLE_PANE}Set effort level to $
 
 const TMUX_STUB = `tmux() {
   echo "tmux $*" >> "$HOME/tmux-calls"
+  # 6.3: answer the pane-width query so _pane_measurable does not stand the
+  # applier down inside the test (D-2861's idiom, discriminated on the whole
+  # argument list so the pane_pid readers below are undisturbed).
+  case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
   case "$1" in
     capture-pane) cat "$HOME/pane.txt" ;;
     list-panes)   echo 4242 ;;
@@ -108,6 +112,7 @@ describe('_route_apply_check: the pending field waits for an idle pane and then 
 const RESUME_DIES = `sleep() { :; };
     tmux() {
       echo "tmux $*" >> "$HOME/ccd-calls"
+      case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
       case "$1" in
         new-session)  case "$*" in *--session-id*) : > "$HOME/pane-up" ;; esac ;;
         has-session)  [[ -e "$HOME/pane-up" ]] ;;

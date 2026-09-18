@@ -154,8 +154,24 @@ const PROBES: Record<string, Probe> = {
     // the control got PAST the slug binding: exactly one registry row, named
     // `<project>-<slug>` with a slug `_ws_slug_valid` would accept. The exit
     // status is NOT the witness — this fixture cannot finish a spawn, so both
-    // arms answer rc 3 with no output at all, which is byte-identical and says
-    // nothing about how far either got.
+    // arms answer the SAME non-zero code with no output at all, which is
+    // byte-identical and says nothing about how far either got.
+    //
+    // WHICH CODE, AND WHY IT IS NOT 6. Re-measured 2026-09-16 through this
+    // file's own harness and runCcd: rc 3, stdout+stderr empty. The paragraph
+    // that stood here said rc 6, "because the harness's contained `tmux`
+    // refuses every verb, so the width query is unanswerable and
+    // `_accept_first_run_prompts` stands down BEFORE the `has-session` probe
+    // that used to produce the 3". Both halves are false against this tree:
+    // the §6.3 guard sits AFTER the debounced `has-session` probe, not before
+    // it (`ccd/ccd`, and the "a session that NEVER CAME UP still earns 3"
+    // case in `ccd-reader-standdown.test.ts` is its mechanism), so a tmux that
+    // refuses `has-session` answers 3 and never queries the width at all.
+    // rc 6 requires a LIVE session with a NARROW pane, a pair this fixture
+    // cannot make. Either way the code reaches this file through
+    // `cmd_ws_add`'s failure enumeration, which is why neither arm prints a
+    // success line — and the equality above is what this probe measures, not
+    // the number.
     reached: () => {
       const rows = uuidRows();
       expect(rows, 'the control ws-add created no workspace — it refused before the slug bound')
