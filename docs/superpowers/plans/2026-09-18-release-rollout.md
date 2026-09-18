@@ -2177,8 +2177,8 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 | 5 | `--check` early return removed | `--check` issues no update | RED (1/12 failed) |
 | 5 | role read ignores ssh rc (`_rollout_role` call sites no longer branch on its return) → unreachable case | an unreachable fleet box is distinguished from a role-less one | RED (1/16 failed) |
 | 5 | tool probe reverted to `_ccrc_die` (exit 1) instead of the exit-2 refusal | no jq on PATH refuses at exit 2, before any ssh call | RED (1/16 failed) |
-| 6 | `builds:` line removed | both new skew cases | |
-| 6 | `builds` emitted in local mode | local-mode pin | |
+| 6 | `builds:` line removed | both new skew cases + two remote-mode `toEqual` literals | RED (4/45 failed) |
+| 6 | `builds` emitted in local mode | local-mode pin | RED (2/24 failed) |
 | 7 | skewed arm removed | three banner cases | |
 | 7 | `warn = false` | amber case | |
 | 7 | line rendered in local mode | nothing case | |

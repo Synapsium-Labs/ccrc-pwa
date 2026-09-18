@@ -145,6 +145,20 @@ describe('GET /api/fleet/health — the skew answer reaches the operator', () =>
     const health = await healthOf(testDeps());
     expect(health).toMatchObject({ mode: 'local', build: 'unknown' });
   });
+
+  it('carries BOTH stamps as `builds` beside the agreement — version included when a stamp has one (spec §6)', async () => {
+    const fleet: BuildInfo = { sha: 'abc1234', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' };
+    const own: BuildInfo = { ...OWN, version: 'v0.0.9', sha: 'def5678' };
+    const h = await healthOf(remoteDeps(fleet, own));
+    expect(h['build']).toBe('skewed');
+    expect(h['builds']).toEqual({ own, fleet });
+  });
+
+  it('`builds` is honest about absence: null per side, never a fabricated stamp', async () => {
+    const h = await healthOf(remoteDeps(null, OWN));
+    expect(h['build']).toBe('unknown');
+    expect(h['builds']).toEqual({ own: OWN, fleet: null });
+  });
 });
 
 /** Writes `~/.ccrc/build.json` exactly as `deploy/deploy.sh`'s `stamp_build`
