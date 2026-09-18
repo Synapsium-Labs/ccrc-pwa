@@ -1466,25 +1466,40 @@ Add beside the other server constants:
 export const POOL_LEASE_MS = Number(process.env.CCRC_POOL_LEASE_MS ?? 15 * 60 * 1000);
 ```
 
-- [ ] **Step 3: Wire the account arm into the live refusal path**
+- [ ] **Step 3: Extend the SERVER'S ADAPTER — not `server.ts` — with the central arm**
 
-`refusePool` (`server/src/server.ts:2058-2075`) is the server's real forecast and today has no account side (correction #3 — `poolRule` has no production caller at all). Give it one, reading from coord.db directly (never the projection, so every 409/503 the server issues is immediate and exact — spec §5.7):
+**This step was rewritten after correction #3 was retracted.** `refusePool` does not call `poolRule`; it reaches the rule through `server/src/poolrule.ts`, which is the server's L3 adapter over the L0 rule and already handles the not-in-roster relabel. Deciding inline in `server.ts` would put a policy decision in L4, against `refusePool`'s own docstring, and would open-code what `declaredAccountPool` already does.
+
+Extend `poolVerdict` (`server/src/poolrule.ts:48`) so the CENTRAL edge outranks the declared one:
 
 ```ts
-const acctWire: AccountPoolWire = (() => {
-  const pools = deps.coord?.accountPoolEdges().get(wrapper);
-  if (pools !== undefined && pools.length > 0) return { state: 'tagged', pools, origin: 'central' };
-  // PRECEDENCE: projected beats declared beats untagged (design §5.6). The
-  // roster field is RETAINED as the declared default — an old `ccd` against a
-  // new server must keep enforcing SOMETHING, or deploy skew is fail-OPEN.
-  const declared = deps.cfg.roster.find((a) => a.id === wrapper)?.pool ?? null;
-  return declared === null
-    ? { state: 'untagged', origin: 'central' }
-    : { state: 'tagged', pools: [declared], origin: 'declared' };
-})();
-const verdict = poolRule(acctWire, projectWire);
+export function poolVerdict(
+  roster: Roster,
+  wrapper: string,
+  pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
+): RosterVerdict {
+  // PRECEDENCE, in the one place that can enforce it: projected beats
+  // declared beats untagged (design §5.6). A central edge is authoritative —
+  // it came from `pool_edges`, which is the only writer — so it is consulted
+  // before the roster's retained default and the roster is not read at all
+  // when one exists.
+  const central = edges.get(wrapper);
+  if (central !== undefined && central.length > 0) {
+    return poolRule({ state: 'tagged', pools: central as readonly [string, ...string[]], origin: 'central' }, pool);
+  }
+  const account = roster.byId.get(wrapper);
+  if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
+  const v = poolRule(declaredAccountPool(null), pool);
+  return v.ok ? { ok: true, why: 'account-not-in-roster' } : v;
+}
 ```
-Map the verdict: `pool-mismatch` → **409** with the crossing offer; `pool-undecidable` → **503** (never a 409 — a crossing offered over a constraint nobody read is worse).
+
+**`edges` is REQUIRED, not optional, and that is deliberate.** An optional parameter would mean a caller that HAS edges and forgets to pass them silently falls through to the declared tag — a fail-open that compiles. Making it required turns every existing call site into a compile error that forces its author to answer "do I have the central edges here?". A caller that genuinely has none passes `new Map()` and says why in a comment. Update every call site accordingly; `poolEligible` and `poolUndecidable` need the same treatment where they front placement.
+
+**The server's forecast reads coord.db DIRECTLY, never the projection** (spec §5.7) — pass `deps.coord?.accountPoolEdges() ?? new Map()`, so every 409/503 the server issues is immediate and exact rather than as stale as the fleet's last pull.
+
+Map the verdict at the `refusePool` seam: `pool-mismatch` → **409** with the crossing offer; `pool-undecidable` → **503**, never a 409 (a crossing offered over a constraint nobody read is worse than an outage).
 
 - [ ] **Step 4: Run green, plus the guard censuses**
 
