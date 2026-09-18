@@ -133,6 +133,17 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'fleet.css .wordmark',
   'fleet.css .wordmark::before',
   'fleet.css .fleet-count',
+  // Task 9 (account-pool-membership wave 1): the epoch/observed lag
+  // indicator sits in .fleet-head-right beside .fleet-count, same parent,
+  // same color token (var(--ink-tertiary)), same header-level context that
+  // left .fleet-count itself grandfathered above rather than registered — the
+  // auditor's INHERITED_GROUNDS route grounds a rule against a component that
+  // paints its own background (.task-card, .sheet-panel); nothing at this
+  // header level does, so this follows .fleet-count's own precedent rather
+  // than inventing a new ground for a token pairing already proven safe
+  // elsewhere in this file (--ink-tertiary clears 4.5 on every plausible
+  // surface the app paints).
+  'fleet.css .pool-epoch-lag',
   'fleet.css .notice-x',
   'fleet.css .notice-x:active',
   'fleet.css .status-line--busy',

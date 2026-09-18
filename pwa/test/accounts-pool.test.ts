@@ -8,6 +8,8 @@
 // this package cannot import `server/test/fixtures`, so it pins the six shapes
 // that reach a phone.
 import { describe, it, expect } from 'vitest';
+import { readFileSync, readdirSync, statSync } from 'node:fs';
+import path from 'node:path';
 import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../shared/api';
 import { accountPool, homeAbleLabelList } from '../src/lib/accounts';
 import { poolLabelList, poolOptions, poolSide, projectPoolOf, splitByPool } from '../src/lib/pools';
@@ -235,5 +237,41 @@ describe('poolLabelList', () => {
       claude: 'pool-a', claude2: 'pool-b', 'claude-corp': 'pool-a', 'claude-dev0': 'pool-a',
     });
     expect(poolLabelList(emptyPoolRoster, tagged('pool-c'))).toBe('');
+  });
+});
+
+// Task 9 (wave 1, account-pool-membership): `accountPoolState` is the ONE
+// place that reads `RosterWire.pool` AND `RosterWire.resolvedPool` off a
+// looked-up entry — `accountPool` above is just a one-line derivation over it
+// (spec §5.9). Per ruling T9-R1 (2026-09-18), it does NOT fold a
+// central/declared precedence itself any more — only the server can, since
+// only the server holds the central `pool_edges` rows — so "the single
+// reader" now means: nowhere else in `pwa/src` reaches for either field
+// directly. A second copy of that read (someone reaching for
+// `entryFor(roster, wrapper)?.pool` — or the not-yet-shipped `resolvedPool`
+// — a second time, rather than importing `accountPoolState`) would let a
+// surface render an answer that disagrees with the one the server actually
+// measured — exactly the drift `single-definition.test.ts` exists to catch
+// on the server side. This is the same idiom, scoped to `pwa/src`, since this
+// package cannot import that server-only suite. Text-scan, deliberately
+// (that file's own docstring says why): it catches the copy that looks like
+// the original, not every possible evasion.
+describe('accountPoolState — the single reader (mutation guard)', () => {
+  it('is the only place in pwa/src that reads RosterWire.pool/resolvedPool off a looked-up entry', () => {
+    const root = path.join(import.meta.dirname, '..', 'src');
+    const files: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(dir)) {
+        const p = path.join(dir, entry);
+        if (statSync(p).isDirectory()) { walk(p); continue; }
+        if (/\.tsx?$/.test(p)) files.push(p);
+      }
+    };
+    walk(root);
+    const reads = (src: string): boolean => src.includes(')?.pool') || src.includes(')?.resolvedPool');
+    const holders = files
+      .filter((f) => reads(readFileSync(f, 'utf8')))
+      .map((f) => path.relative(root, f).split(path.sep).join('/'));
+    expect(holders).toEqual(['lib/accounts.ts']);
   });
 });

@@ -27,6 +27,7 @@
 // guessed hue.
 import type { RosterWire } from '../../../shared/api';
 import { POOL_NAME_RE, type Hue } from '../../../shared/roster';
+import type { AccountPoolWire } from '../../../shared/poolrule';
 
 /** This account's roster entry, or `undefined` for a wrapper the roster does
  *  not (yet) have — an unarrived poll, or a genuinely unrostered wrapper (a
@@ -52,24 +53,73 @@ export function accountHue(roster: readonly RosterWire[], wrapper: string): Hue 
   return entryFor(roster, wrapper)?.hue;
 }
 
+/** Ruling T9-R1 (2026-09-18, mid-Task-9): the PWA CANNOT fold the
+ *  central/declared/untagged precedence itself — the central `pool_edges`
+ *  rows live only in `~/.ccrc/coord.db`, and nothing puts them on this wire.
+ *  A client-side fold (this file's first cut at `accountPoolState`, which
+ *  took an `edges` map that no caller could ever actually populate) would
+ *  silently resolve to "declared, always" while the server enforces a
+ *  central tag it never told this app about — precisely the
+ *  `NewSessionSheet.tsx:186-188` hazard the ruling measured already live.
+ *
+ *  So the SERVER folds the precedence, and this app only reads the answer.
+ *  Task 7's fix round (T7-R2, landed while this task was mid-flight) added
+ *  `RosterWire.resolvedPool?: AccountPoolWire` to `shared/api.ts` — the
+ *  `{ state, pools, origin }` shape `shared/poolrule.ts` declares, precedence
+ *  already folded server-side by `resolvedAccountPool` (`server/src/poolrule.ts`).
+ *  This reads that field directly off the real, now-shipped type; no local
+ *  widening is needed. */
+
+/** This account's pool, as the FULL wire the rule understands — `tagged`
+ *  (with which pools and WHICH CARRIER decided) or `untagged` (also carrying
+ *  its carrier, so a reader can tell "nobody has tagged this yet" from
+ *  "the central edge was just cleared and the roster default took over").
+ *
+ *  THE ONLY READER of `RosterWire.pool`/`resolvedPool` in this app (spec
+ *  §5.3, §5.9). It does NOT fold the precedence (see T9-R1 above) — when the
+ *  server's `resolvedPool` is present, it is returned VERBATIM, whatever
+ *  `origin` the server measured; this function never second-guesses it or
+ *  recomputes an ordering the server already applied. When `resolvedPool` is
+ *  absent (a server built before Task 7's fix round, or one that dropped a
+ *  malformed value at its own validation layer), this falls back to the
+ *  declared-only read `accountPool` has always made, `origin: 'declared'`
+ *  because that is the only carrier this path can possibly be reading.
+ *
+ *  A malformed or off-grammar DECLARED value is folded to `untagged`, not to
+ *  a `malformed` state: the canonical server parser refuses off-grammar
+ *  values before they are ever written, but this client's own fetch is a
+ *  cast and the same-origin offline cache validates only roster shape, so a
+ *  malformed value can still arrive here despite trusted canonical output
+ *  never carrying one. `poolRule`'s permissive forecast is for an absent
+ *  account tag, not a tag this client cannot validate — the fold this
+ *  function has always made, preserved verbatim under the richer wire.
+ *
+ *  Every pool question the PWA asks — the swap split, the new-session split,
+ *  the option list in `PoolSheet`, the off-pool marker on a row, the
+ *  account-pool chip — must come from here (directly, or through
+ *  `accountPool` below) so no surface can invent a precedence answer the
+ *  server did not actually measure. */
+export function accountPoolState(roster: readonly RosterWire[], wrapper: string): AccountPoolWire {
+  const resolved = entryFor(roster, wrapper)?.resolvedPool;
+  if (resolved !== undefined) return resolved;
+  const p = entryFor(roster, wrapper)?.pool;
+  return typeof p === 'string' && POOL_NAME_RE.test(p)
+    ? { state: 'tagged', pools: [p], origin: 'declared' }
+    : { state: 'untagged', origin: 'declared' };
+}
+
 /** This account's POOL NAME, or `null` for an untagged account, an account
  *  this roster does not have, or a server built before pools existed (the key
  *  is simply absent on that wire, and absence-permits means untagged).
  *
- *  THE ONLY READER of `RosterWire.pool` in this app (spec §5.3). Every pool
- *  question the PWA asks — the swap split, the new-session split, the option
- *  list in `PoolSheet`, the off-pool marker on a row — goes through here, so
- *  "what pool is this account in" is answered in exactly one place and an
- *  older server's omission degrades once rather than five times.
- *
- *  The canonical server parser refuses off-grammar values, but its API client
- *  is a cast and the same-origin offline cache validates only roster shape. A
- *  malformed value can therefore arrive here despite trusted canonical output
- *  never carrying one. Treat it as untagged: `poolRule`'s permissive forecast
- *  is for an absent account tag, not a tag this client cannot validate. */
+ *  A one-line derivation over `accountPoolState` above, kept for the callers
+ *  that only ever wanted a name and have no use for `origin`: the swap
+ *  split, the new-session split, `PoolSheet`'s option list. `accountPoolState`
+ *  stays the ONE place `RosterWire.pool`/`resolvedPool` is read; this never
+ *  re-reads either on its own. */
 export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {
-  const p = entryFor(roster, wrapper)?.pool;
-  return typeof p === 'string' && POOL_NAME_RE.test(p) ? p : null;
+  const state = accountPoolState(roster, wrapper);
+  return state.state === 'tagged' ? state.pools[0] : null;
 }
 
 /** Token custom-property name for the account's chip colour, e.g. 'claude' →

@@ -97,12 +97,29 @@ export function FleetScreen({
   onNewSession,
   selectedId = null,
   showAccounts = true,
+  epoch,
+  observedEpoch,
 }: {
   store?: FleetStore; // injectable for tests
   onOpen?: (id: string) => void;
   onNewSession?: () => void;
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
+  /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
+   *  7). `undefined` when nothing has wired this build to that route yet —
+   *  wave 1 Task 9 is the rendering half only; no poller lands a real number
+   *  here. */
+  epoch?: number;
+  /** This build's own agent connection's last-reported observed epoch
+   *  (`AgentReady.observedEpoch`, `shared/agent-protocol.ts`). THREE answers,
+   *  not two: absent means "this build cannot tell you" (render nothing —
+   *  the reader has no evidence either way), `null` means "the node has
+   *  never synced" (a real, renderable fact), a number is what it actually
+   *  has. Never read as a health tick: a node whose projection is past its
+   *  lease still reports a number while `ccd` refuses every tagged
+   *  placement, so `observedEpoch === epoch` means only "not stale", never
+   *  "this node is placing". */
+  observedEpoch?: number | null;
 }): ReactNode {
   const useStore = store;
   const sessions = useStore((s) => s.sessions);
@@ -436,12 +453,27 @@ export function FleetScreen({
   const feed = useStore((s) => s.feed);
   const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
 
+  // The account-pool epoch/observed lag — a STALENESS signal, not a health
+  // one (see the prop docs above). Rendered ONLY when both numbers are known
+  // AND they actually differ: `epoch === undefined` or `observedEpoch ===
+  // undefined` both mean "nothing to compare", and an equal pair means "not
+  // stale", not "placing" — the one thing this text must never read as.
+  const poolLag =
+    epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
+      ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`
+      : null;
+
   return (
     <main className="fleet" data-conn={conn}>
       <header className="fleet-head">
         <span className="wordmark">ccrc</span>
         <div className="fleet-head-right">
           {sessions.length > 0 && <span className="fleet-count">{countLine}</span>}
+          {poolLag !== null && (
+            <span className="pool-epoch-lag" data-testid="pool-epoch-lag" title="account-pool projection lag">
+              {poolLag}
+            </span>
+          )}
           {/* THE DURABLE DOOR TO /accounts (D-161). The AccountsStrip tap
               target was the only one — its own comment says so — and its
               accessible name is "account usage — open accounts": a full-width

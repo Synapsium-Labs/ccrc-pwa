@@ -14,11 +14,13 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
+import { toast } from '../components/Toast';
 import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
+import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { authPostureChanged, raiseAuthLost, readAuthStatus } from '../lib/auth';
 import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../lib/passkey';
@@ -26,6 +28,14 @@ import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
+
+// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). This
+// screen's own `GET /api/accounts` poll (`useAccountsPoll` below) carries the
+// roster, and `RosterWire.resolvedPool` (Task 7's T7-R2 fix round) rides the
+// same response when the server has one to offer — see `lib/accounts.ts`'s
+// own docstring. Every row below renders whatever `accountPoolState` returns
+// without this screen having to know whether that came from a resolved
+// central tag or the declared fallback.
 
 interface AccountsPoll {
   accounts: AccountUsage[] | null;               // null: no poll has landed yet
@@ -124,6 +134,37 @@ export function AccountsScreen(): ReactNode {
   const nowSec = Math.floor(now / 1000);
 
   const order = rowOrder(roster, accounts ?? []);
+
+  // The account-pool editor — one sheet, retargeted per tap, on the exact
+  // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
+  // owned subject lives here, not inside the sheet.
+  const [poolSheetAccount, setPoolSheetAccount] = useState<string | null>(null);
+  const [poolSheetOpen, setPoolSheetOpen] = useState(false);
+
+  // `POST /api/pools/accounts/:id` (Task 7) does not echo the account's
+  // resulting tag — only the epoch the write produced — so this toasts off
+  // the REQUEST, not a remeasurement, and leans on `useAccountsPoll`'s own
+  // 20s interval to bring the row's next `accountPoolState` read in line
+  // with what the fleet host actually converges to (ccd-pool-sync's pull,
+  // `OnUnitActiveSec=60s` — the same lag the fleet head's epoch/observed
+  // indicator exists to make visible elsewhere).
+  const setAccountPool = (accountId: string, pools: string[]): void => {
+    void api.setAccountPools(accountId, pools).then(
+      (response) => {
+        if (response.warning === 'unknown-account') {
+          toast(
+            `Tagged ${accountId}${pools.length > 0 ? ` into pool ${pools[0]}` : ''}, but this box's roster `
+              + 'does not know that account yet.',
+            'error',
+          );
+        } else {
+          toast(pools.length > 0 ? `${accountId} is now in pool ${pools[0]}.` : `${accountId} is no longer in a pool.`);
+        }
+      },
+      (error: unknown) => toast(`Couldn't set the pool — ${apiErrorText(error)}`, 'error'),
+    );
+    setPoolSheetOpen(false);
+  };
 
   // ccd's own rule, restated ("next workspace lands here — least-loaded"),
   // including the Rider B case where nothing is placeable. `undefined`
@@ -225,6 +266,16 @@ export function AccountsScreen(): ReactNode {
           const onAccount = sessions.filter(
             (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
           );
+          // `accountPoolState`, not `accountPool` — this chip is the one
+          // surface in the app whose whole job is to say WHICH carrier
+          // decided (`data-origin`), so an operator who just cleared a
+          // central tag sees the declared default take over rather than a
+          // chip that looks unchanged.
+          const poolState = accountPoolState(roster, wrapper);
+          const poolLabelText = poolState.state === 'tagged' ? poolState.pools[0] : 'no pool';
+          const poolOrigin = poolState.state === 'tagged' || poolState.state === 'untagged'
+            ? poolState.origin
+            : undefined;
           return (
             <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
               <div className="accounts-row-head">
@@ -240,6 +291,21 @@ export function AccountsScreen(): ReactNode {
                     measured dead is shown for a sharper version of the same
                     reason: it is the one lane an operator has to go and fix. */}
                 {off && <span className="accounts-disabled-note">{offNote}</span>}
+                <button
+                  type="button"
+                  className="proj-card-pool acct-pool-chip"
+                  data-testid={`acct-pool-chip-${wrapper}`}
+                  data-pool={poolState.state}
+                  data-origin={poolOrigin}
+                  aria-label={
+                    poolState.state === 'tagged'
+                      ? `pool ${poolLabelText}, opens the account pool editor`
+                      : 'no pool, opens the account pool editor'
+                  }
+                  onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
+                >
+                  {poolLabelText}
+                </button>
               </div>
 
               <div className="acct-rows">
@@ -270,6 +336,15 @@ export function AccountsScreen(): ReactNode {
       </div>
 
       <AuthSection />
+
+      <AccountPoolSheet
+        account={poolSheetAccount}
+        roster={roster}
+        current={poolSheetAccount === null ? undefined : accountPoolState(roster, poolSheetAccount)}
+        open={poolSheetOpen}
+        onClose={() => setPoolSheetOpen(false)}
+        onSet={setAccountPool}
+      />
     </div>
   );
 }

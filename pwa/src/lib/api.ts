@@ -530,6 +530,26 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setProjectPool: (project: string, pool: string | null) =>
       postJson<{ ok: true; pool: ProjectPoolWire; warning?: 'unknown-pool' }>(
         `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
+    /** `POST /api/pools/accounts/:id` (Task 7) — tag an account into a pool,
+     *  or clear it with `pools: []`. Wave 1 is one pool per account, but the
+     *  wire already carries an array (the server's own `one-pool-per-account`
+     *  400 is the length gate, not this client).
+     *
+     *  Unlike `setProjectPool`, the reply does NOT echo the account's
+     *  resulting tag — only the MEASURED epoch this write produced
+     *  (`{ ok, epoch, raced?, warning? }`) — because the authority for an
+     *  account's pool is `~/.ccrc/coord.db`'s `pool_edges`, re-read by
+     *  `GET /api/pools/epoch`, not this route's own body. A caller that wants
+     *  the resulting tag re-polls `GET /api/accounts`, the same route
+     *  `AccountsScreen` already polls every 20s.
+     *
+     *  `warning: 'unknown-account'` is a WARNING and not a refusal, on
+     *  `setProjectPool`'s exact terms: this box's roster copy can lag the
+     *  fleet's, so an id no account here carries may still be about to gain
+     *  one. */
+    setAccountPools: (accountId: string, pools: string[]) =>
+      postJson<{ ok: true; epoch: number; raced?: true; warning?: 'unknown-account' }>(
+        `/api/pools/accounts/${encodeURIComponent(accountId)}`, { pools }),
     stop: (id: string) => post(`${sid(id)}/stop`),
     /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
      *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.

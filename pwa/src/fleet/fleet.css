@@ -38,6 +38,22 @@
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
+/* Task 9: the account-pool epoch/observed STALENESS indicator — never a
+   health tick (see `FleetScreen`'s own `observedEpoch` docs). Sized and
+   coloured like `.fleet-count` beside it, since both are quiet machine
+   readouts in the same row. It is CONDITIONALLY rendered — only while the
+   two numbers actually differ — which is deliberate given the width note a
+   few lines below this one: `.fleet-head-right`'s four steady-state items
+   already leave only ~38px of slack at 390px, so this is sized to fit inside
+   that margin for the common short case ("epoch 12 / observed 11") rather
+   than assumed to have room. A sustained large gap producing a long string
+   is the one case this has not been measured against in a real browser. */
+.pool-epoch-lag {
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
 .fleet-head-right {
   display: flex;
   align-items: center;
@@ -1742,6 +1758,20 @@ button.proj-card-pool::before {
 .proj-card-pool[data-pool='unrecognised'] {
   color: var(--status-attention-text);
 }
+
+/* The account-side pool chip (AccountsScreen's `.accounts-row-head`) shares
+   `.proj-card-pool`'s quiet mono register and tap target, but NOT its
+   untagged warning colour above: an untagged ACCOUNT is the default,
+   unconstrained state, not a fault the way an untagged PROJECT is the
+   worklist that rule exists for. `data-origin='declared'` is styled ever so
+   slightly quieter than `'central'` — the roster's retained default is a
+   fallback, not the authoritative tag `pool_edges` carries — so the chip
+   itself hints at the same fact `data-origin` states for anything that reads
+   the DOM (spec §5.9: "showing its origin when it is the declared default
+   rather than central"). */
+.acct-pool-chip[data-origin='declared'] {
+  font-style: italic;
+}
 /* The loud card-level count for sessions with nowhere in their pool to go. */
 .proj-card-stranded {
   flex: none;
@@ -1772,6 +1802,36 @@ button.proj-card-pool::before {
   cursor: pointer;
 }
 .pool-row[data-none] { color: var(--ink-secondary); }
+
+/* AccountPoolSheet's free-text row — the one pool-naming field in this app.
+   Sits below the roster-derived `.pool-list` options above, its own labelled
+   field rather than a bare placeholder-only input, on `pr-title-input`'s
+   exact terms (`session/chat.css`) so a typed pool name gets the same
+   tap-min height and edge treatment as every other single-line field. */
+.pool-new-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+}
+.pool-new-label {
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+.pool-new-input {
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-input);
+  color: var(--ink-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-sm);
+}
+.pool-new-create {
+  margin-top: var(--sp-2);
+}
 
 /* A crossing names its destination pool on the revealed account row. */
 .acct-pool {

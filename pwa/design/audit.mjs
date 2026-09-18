@@ -591,6 +591,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  'fleet.css .pool-new-label': {
+    under: ['var(--bg-sheet)'],
+    why: 'AccountPoolSheet\'s free-text field label (Task 9, account-pool-membership wave 1) sits directly in .sheet-panel, same as .pool-note/.route-field-label above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
