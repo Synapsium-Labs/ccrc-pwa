@@ -35,8 +35,15 @@ describe('connectFleet — connection lifecycle', () => {
     // equality on purpose — a field added to `FleetState` and never populated
     // by `onReady` fails here, which is the only check that does not depend on
     // someone remembering to assert the new field.
+    //
+    // `observedEpoch: null`, not omitted and not `undefined`: unlike
+    // `rosterFp`/`build`, a real agent NEVER omits this field — the fixture
+    // home has no `~/.cc-sessions/pool-epoch`, so `readObservedEpoch` answers
+    // "never synced" (`null`), sent on the wire explicitly, not "no evidence".
     await vi.waitFor(
-      () => expect(fleet!.state).toEqual({ connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null }),
+      () => expect(fleet!.state).toEqual({
+        connected: true, downSince: null, ccdVerbs: [], rosterFp: null, build: null, observedEpoch: null,
+      }),
       { timeout: 3000 });
   });
 
@@ -102,6 +109,17 @@ describe('connectFleet — connection lifecycle', () => {
     // nothing to close. Isolates the initializer from connection lifecycle.
     const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
     expect(client.state.ccdVerbs).toBeNull();
+  });
+
+  it('starts with observedEpoch:undefined before any handshake — never null', () => {
+    // The pre-handshake state is "no evidence at all", which is the ABSENT
+    // condition (`undefined`), not "this node has synced never" (`null`) — a
+    // fact only a real `ready` frame can assert. Getting this default wrong
+    // in either direction is exactly the fold the whole field exists to
+    // prevent: `null` here would read as a measured fact before any peer was
+    // ever asked.
+    const client = new FleetClient({ url: 'ws://127.0.0.1:1', token: 'unused' });
+    expect(client.state.observedEpoch).toBeUndefined();
   });
 });
 
@@ -514,5 +532,90 @@ describe('FleetClient.onReady — build is re-validated at the wire, never trust
     extra = { build: { ...STAMP, sha: '' } };
     fleet.client.ws?.close();
     await vi.waitFor(() => expect(fleet!.state.build).toBeNull(), { timeout: 3000 });
+  });
+});
+
+describe('FleetClient.onReady — observedEpoch keeps THREE answers apart, never two', () => {
+  // A real `ccrc-agent` never omits this field (`agent/test/observed-epoch.test.ts`
+  // pins that) — it always answers a number or `null`. Only a fake agent old
+  // enough to skip the field at all reaches the "absent" branch, exactly the
+  // way `rosterFp`/`build`'s fake-agent describe blocks above reach theirs.
+  let server: { port: number; close(): Promise<void> } | undefined;
+  let fleet: ConnectedFleet | undefined;
+
+  afterEach(async () => {
+    await fleet?.close();
+    fleet = undefined;
+    if (server) await server.close();
+    server = undefined;
+  });
+
+  const connect = async (extra: Record<string, unknown>): Promise<ConnectedFleet> => {
+    server = await fakeReadyAgent(extra);
+    const f = connectFleet({ url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000 });
+    await vi.waitFor(() => expect(f.state.connected).toBe(true), { timeout: 3000 });
+    return f;
+  };
+
+  it('records a reported number verbatim', async () => {
+    fleet = await connect({ observedEpoch: 43 });
+    expect(fleet.state.observedEpoch).toBe(43);
+  });
+
+  it('records epoch 0 as 0 — a real, measured epoch, not "no evidence"', async () => {
+    fleet = await connect({ observedEpoch: 0 });
+    expect(fleet.state.observedEpoch).toBe(0);
+  });
+
+  it('records an explicit null as null — "this node has synced never", a fact, not an absence', async () => {
+    fleet = await connect({ observedEpoch: null });
+    expect(fleet.state.observedEpoch).toBeNull();
+  });
+
+  // THE MUTATION THIS TASK NAMES: an absent field (an older agent) and an
+  // explicit `null` (a real "never synced" report) MUST read as two different
+  // values on `fleetState`. A reader using `== null` to test absence would
+  // pass every other test in this file (both branches assign a nullish-ish
+  // value) and fail only here, where the two conditions are asserted apart in
+  // the SAME test.
+  it('an absent field and an explicit null are NOT the same value', async () => {
+    const absent = await connect({});
+    expect(absent.state.observedEpoch).toBeUndefined();
+    await absent.close();
+
+    const neverSynced = await connect({ observedEpoch: null });
+    expect(neverSynced.state.observedEpoch).toBeNull();
+
+    expect(absent.state.observedEpoch).not.toBe(neverSynced.state.observedEpoch);
+  });
+
+  it.each([
+    ['a string', { observedEpoch: '43' }],
+    ['a boolean', { observedEpoch: true }],
+    ['an array', { observedEpoch: [43] }],
+    ['an object', { observedEpoch: { epoch: 43 } }],
+  ])('%s off the wire contract is discarded as undefined, not fabricated into a number', async (_label, extra) => {
+    fleet = await connect(extra);
+    expect(fleet.state.observedEpoch).toBeUndefined();
+  });
+
+  it('a peer that stops reporting on RECONNECT drops the epoch it had, not keeps it', async () => {
+    // Same reset-on-every-ready guard as `build`'s reconnect test above,
+    // proven on the branch a fresh connection cannot reach: a client whose
+    // `state.observedEpoch` already holds a real number, reconnecting to a
+    // peer that now omits the field entirely (a downgrade). A reader that
+    // kept the stale number would report a fleet host as caught up to an
+    // epoch it can no longer even claim.
+    let extra: Record<string, unknown> = { observedEpoch: 43 };
+    server = await fakeReadyAgent(() => extra);
+    fleet = connectFleet({
+      url: `ws://127.0.0.1:${server.port}`, token: TOKEN, heartbeatMs: 60_000,
+      reconnectMinMs: 30, reconnectMaxMs: 100,
+    });
+    await vi.waitFor(() => expect(fleet!.state.observedEpoch).toBe(43), { timeout: 3000 });
+
+    extra = {};
+    fleet.client.ws?.close();
+    await vi.waitFor(() => expect(fleet!.state.observedEpoch).toBeUndefined(), { timeout: 3000 });
   });
 });

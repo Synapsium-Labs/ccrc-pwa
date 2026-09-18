@@ -153,11 +153,22 @@ export function resolveProjectsRoot(
  *
  *  Written as a restatement first, and that was the defect: a hand-copied
  *  member list is a claim about another file with nothing enforcing it. This
- *  frame carries three synchronised fields now (`ccdVerbs`, `rosterFp`,
- *  `build`) and the next task adds to `AgentReady` again — a required field
- *  gained over there is now a compile error here until this send site answers
- *  it, instead of a field the agent silently never sends. */
-type ReadyFrame = Omit<AgentReady, 'ccdVerbs'> & { ccdVerbs: string[] };
+ *  frame carries four synchronised fields now (`ccdVerbs`, `rosterFp`,
+ *  `build`, `observedEpoch`) and the next task adds to `AgentReady` again — a
+ *  required field gained over there is now a compile error here until this
+ *  send site answers it, instead of a field the agent silently never sends.
+ *
+ *  `observedEpoch` is narrowed the same way `ccdVerbs` is, and for the same
+ *  reason: `readObservedEpoch` never throws uncaught and always answers a
+ *  `number | null` — THIS agent always has evidence (a real epoch, or `null`
+ *  for "never synced"). The wire declares it optional only so a READER can
+ *  tolerate an OLDER agent that predates the field entirely; this build is
+ *  never that agent, so its own frame type says so and the send site cannot
+ *  compile while silently omitting it. */
+type ReadyFrame = Omit<AgentReady, 'ccdVerbs' | 'observedEpoch'> & {
+  ccdVerbs: string[];
+  observedEpoch: number | null;
+};
 
 type OutMsg = ResOk | ResErr | TailData | TailReset | PtyData | PtyExit | Pong | ReadyFrame;
 
@@ -563,6 +574,46 @@ function readRosterFp(home: string): string | undefined {
 }
 
 /**
+ * The epoch of the pool-membership projection THIS node actually has —
+ * `~/.cc-sessions/pool-epoch`, the leased projection `ccd-pool-sync` (Task 3)
+ * writes and `_acct_pool_state` (`ccd/ccd`) reads for placement decisions.
+ *
+ * `null` means this node has never synced — no file, an unreadable one, or one
+ * that does not match the grammar `_acct_pool_state` agrees on. That is NOT
+ * the same as epoch 0 (the control plane has issued nothing yet, but this
+ * node has a real, if trivial, projection) and NOT the same as the field
+ * being absent from the `ready` frame (an older agent build that cannot even
+ * ASK the question) — `AgentReady.observedEpoch` and `FleetState.observedEpoch`
+ * both keep those three apart; `undefined` is what an ABSENT reader sees,
+ * never what this function returns.
+ *
+ * Reads only the first line's `epoch <n>` field, validated against the SAME
+ * numeric grammar `_acct_pool_state` uses for it (`^(0|[1-9][0-9]*)$` — no
+ * leading zero, matching what the control plane's `%d` can ever emit), so a
+ * torn or hand-edited value this reader does not recognise answers `null`
+ * rather than a wrong number. Deliberately NOT the rest of that function's
+ * grammar (the `end` terminator, `issued`/`lease` staleness, duplicate-line
+ * detection, per-account rows): those exist to decide whether a TAG may be
+ * trusted for PLACEMENT, a question this field is not answering. This field
+ * answers "what epoch does this node have", which is true of a stale
+ * projection too — staleness stays `_acct_pool_state`'s own concern.
+ *
+ * Read fresh on every `ready`, synchronously, for the same reason
+ * `readRosterFp`/`readBuildStamp` are: one small file read, at most once per
+ * WS connection, bought against a staleness question that would otherwise
+ * need its own cache-invalidation story.
+ */
+export function readObservedEpoch(home: string): number | null {
+  try {
+    const text = readFileSync(path.join(home, '.cc-sessions', 'pool-epoch'), 'utf8');
+    const m = /^epoch (0|[1-9][0-9]*)$/m.exec(text);
+    return m === null ? null : Number(m[1]);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * This box's own build stamp — `~/.ccrc/build.json` as `deploy/deploy.sh`'s
  * `stamp_build` installed it on the agent lane — or `undefined` when there
  * isn't a usable one to read.
@@ -683,11 +734,21 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
       // stamp — `AgentReady` declares both optional and the server's readers
       // treat absence as "no evidence", the same contract `ccdVerbs` has.
       //
-      // Assembled field by field rather than by the ternary this used to be:
-      // with two optional fields that ternary becomes four spellings of one
-      // frame, and a third field eight. The contract is unchanged — a key is
-      // written only when there is something to write.
-      const frame: ReadyFrame = { t: 'ready', v: 1, ccdVerbs: verbCache.verbs };
+      // `observedEpoch` is DIFFERENT and is never omitted by this build: it is
+      // in the initial literal, not assembled after like the two above,
+      // because `ReadyFrame` narrows it to required (same move as `ccdVerbs`)
+      // — `readObservedEpoch` always has an answer, a real epoch or `null` for
+      // "never synced", and only an agent build old enough to lack this
+      // field's code at all may omit it. This build is never that agent.
+      //
+      // `rosterFp`/`build` are still assembled field by field rather than by
+      // the ternary this used to be: with two optional fields that ternary
+      // becomes four spellings of one frame, and a third field eight. The
+      // contract is unchanged — a key is written only when there is
+      // something to write.
+      const frame: ReadyFrame = {
+        t: 'ready', v: 1, ccdVerbs: verbCache.verbs, observedEpoch: readObservedEpoch(opts.home),
+      };
       const rosterFp = readRosterFp(opts.home);
       if (rosterFp !== undefined) frame.rosterFp = rosterFp;
       const build = readBuildStamp(opts.home);

@@ -60,6 +60,26 @@ export interface FleetState {
    *  why `server/test/` (typechecked by `typecheck-tests.test.ts`, not by the
    *  build) is part of the enumeration rather than collateral damage. */
   build: BuildInfo | null;
+  /** The epoch of the pool projection the fleet host reported it actually has
+   *  (`AgentReady.observedEpoch`), or `undefined` when we have no evidence —
+   *  local mode, an older agent that predates the field, or a link that has
+   *  never gone ready. THREE conditions, not two, and unlike `rosterFp`/
+   *  `build` the absent case is NOT collapsed into `null`: `null` here means
+   *  the fleet host has synced never (a fact about the node), `undefined`
+   *  means this build cannot tell us (a fact about the wire) — folding them
+   *  would report a downgraded fleet host as "still catching up" instead of
+   *  "no longer answering".
+   *
+   *  OPTIONAL here, deliberately unlike `rosterFp`/`build`'s "REQUIRED, not
+   *  optional" stance above — measured before choosing: making this field
+   *  required breaks ~20 pre-existing `FleetState`/`Deps` fixtures across
+   *  server/test/ with no relation to pool membership (`typecheck-tests.test.ts`
+   *  catches every one). Task 8's own scope is the agent's ready handshake,
+   *  not a fleet-wide fixture sweep that belongs to whichever task actually
+   *  consumes this field; an omitted key here reads as `undefined` on access,
+   *  which is the correct, honest answer for every one of those untouched
+   *  fixtures — they truly have no evidence about pool epochs. */
+  observedEpoch?: number | null;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }
