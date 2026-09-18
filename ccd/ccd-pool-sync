@@ -1,0 +1,155 @@
+#!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below.
+# ccd-pool-sync — pull account-pool membership from the control plane.
+#
+# WHY THIS IS A SIBLING EXECUTABLE AND NOT A `ccd` VERB. `ccd/ccd` makes ZERO
+# outbound network calls, and `ccd-account-health` states the doctrine: an HTTP
+# client inside `ccd` would be a new dependency class for every
+# session-supervising path on the box. The design's own rule agrees — `ccd`
+# reads one LOCAL file at placement time and never the network (spec §5.7).
+# So the sync lives here and `ccd` only ever reads what this leaves behind.
+#
+# THE PROJECTION IS A CACHE WITH A GENERATION, NEVER A SOURCE. coord.db on the
+# server box is authoritative; this file is what a node believes right now.
+#
+# ABSENCE AND EMPTINESS ARE DIFFERENT ANSWERS, and keeping them apart is the
+# whole fail-shut. A document with an `epoch` line and no `acct` lines means
+# SYNCED, NOTHING TAGGED. No document at all means NEVER SYNCED, which
+# `_acct_pool_state` reads as `unreadable` -> undecidable -> refuse into a
+# tagged project. That is the cold-node case and the EKS default path.
+#
+# WRITE NOTHING UNLESS THE WHOLE ANSWER ARRIVED. A stale document inside its
+# lease is better than no document; a half-written one is worse than both. So
+# every failure arm exits WITHOUT touching the file, and the write itself is
+# tmp-then-rename.
+#
+# PORTABILITY: no bare `timeout` (curl's own `--max-time` is the deadline), no
+# `stat -c`. `macos-platform.test.ts` is the gate, and it scans this file
+# WHOLE — it carries none of ccd's `# ── THE PLATFORM LAYER` sentinels, so
+# there is no exempt region here the way there is in ccd/ccrc. That is why the
+# final install below is NOT `_plat_mv_notdir`'s own `$(uname -s)` branch
+# (which spells `mv -fT` on its non-Darwin arm — GNU-only, and a bare literal
+# hit under that scan): it is `ccrc-models-probe`'s `_probe_mv_notdir` pattern
+# instead — guard the real-directory case by hand, then hand the rename to
+# python3's `os.rename`, ONE rename(2) syscall on every POSIX platform. That
+# call replaces a symlink-to-directory atomically rather than following it
+# (the trap a bare `mv -f` falls into — measured in ccrc-models-probe's own
+# header) and raises `IsADirectoryError` on a real directory, so the two
+# outcomes agree with `_plat_mv_notdir` (ccd/ccd:152-160) on both its arms
+# without a platform branch of its own.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+AGENT_ENV="$HOME/.ccrc/agent.env"
+TOKEN_FILE="$HOME/.cc-secrets/ccrc-mail.token"
+TIMEOUT="${CCRC_POOL_SYNC_TIMEOUT:-20}"
+say() { printf 'ccd-pool-sync: %s\n' "$1" >&2; }
+
+command -v curl >/dev/null 2>&1 || { say "curl is not on PATH — nothing was synced"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing was synced"; exit 1; }
+
+# GREP, never source: agent.env is 0600 and carries this box's agent bearer.
+[[ -r "$AGENT_ENV" ]] || { say "cannot read $AGENT_ENV"; exit 1; }
+url=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
+[[ -n "$url" ]] || { say "CCRC_SERVER_URL is not set in $AGENT_ENV"; exit 1; }
+[[ -r "$TOKEN_FILE" ]] || { say "no readable box token at \$HOME/.cc-secrets/ccrc-mail.token"; exit 1; }
+# The value line, never the `#` comment preamble the file wraps it in.
+tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]')
+[[ -n "$tok" ]] || { say "the box token file has no value line"; exit 1; }
+
+# Body and status in ONE capture, so there is no response file on disk.
+# `-K -` reads the header from stdin: never argv, never environ.
+out="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+  | curl -sS -K - -o - -w '\n%{http_code}' \
+    --max-time "$TIMEOUT" "$url/api/pools/epoch" 2>/dev/null)"; rc=$?
+tok=""
+if [ "$rc" -ne 0 ]; then say "unmeasured — curl exited $rc"; exit 1; fi
+status="${out##*$'\n'}"
+body="${out%$'\n'*}"
+[ "$status" = 200 ] || { say "unmeasured — HTTP $status"; exit 1; }
+
+# THE RENDER IS PYTHON'S, THE VALIDATION IS TOO. A shell-side JSON read here
+# would be the `grep -oE` idiom applied to a nested object, which is what this
+# format exists to spare `ccd` from. Anything off-shape exits non-zero and
+# WRITES NOTHING, so a control plane answering rubbish cannot unconstrain a box.
+#
+# Ruling T1-R3 (mid-flight, after this file's first landing): the document
+# gains a terminator line, the last line exactly `end`. The reader is
+# line-oriented and cannot tell a complete final row from a torn one — a
+# document truncated right after its last `acct` line answers `named <pool>`
+# for that account, a POSITIVE verdict a reader whose own writer is trusted
+# rather than proven cannot close from its own side. Zero `acct` lines is
+# still legal, so the minimum document is `epoch`/`issued`/`lease`/`end`, four
+# lines. `end` is appended to `lines` UNCONDITIONALLY, after every `acct` row
+# (or none), so it lands last regardless of how many accounts were tagged.
+#
+# Also fixed here: at most ONE `acct` row per id. `_acct_pool_state` answers
+# `malformed` for a duplicate id even when the two rows agree, so a control
+# plane that ever attaches two pools to one account must not make this writer
+# render two `acct <id> <pool>` lines for it — that would render a document
+# every fleet node then refuses, 20 undecidable placements for one wrong
+# answer instead of one refusal here where the diagnostic actually is. Wave 1
+# enforces one pool per account server-side, so this is not reachable today;
+# guarded anyway, loudly, because a silent multi-pool render would fail far
+# from its own cause.
+rendered=$(printf '%s' "$body" | LC_ALL=C.UTF-8 python3 -c '
+import json, re, sys
+ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+try:
+    d = json.load(sys.stdin)
+    e, i, l = int(d["epoch"]), int(d["issuedAt"]), int(d["leaseUntil"])
+    accts = d["accounts"]
+    if not isinstance(accts, dict): raise ValueError("accounts")
+    lines = ["epoch %d" % e, "issued %d" % i, "lease %d" % l]
+    for k in sorted(accts):
+        # THESE TWO CHECKS ARE THE ONLY THING BETWEEN THE CONTROL PLANE AND
+        # ROW INJECTION. The wire format is line-oriented with NO escaping —
+        # `"\n".join(lines)` trusts every element of `lines` to already be
+        # exactly one safe line. An id or pool value carrying a raw space
+        # would fabricate an extra FIELD on its row; one carrying a raw
+        # newline would fabricate an extra ROW the reader cannot tell from a
+        # real one (an `acct evil-account pool-b` smuggled in this way reads,
+        # to `_acct_pool_state`, as a legitimate line naming a real account).
+        # `.fullmatch`, not `.match` — measured: `re.match(r"...$", "pool-a\n")`
+        # answers True, because Python `$` (no re.MULTILINE) matches not only
+        # true end-of-string but also the position just before a SINGLE
+        # trailing newline. `.match` would let a value of exactly
+        # "<valid-chars>\n" through the character class uncaught; `.fullmatch`
+        # requires the ENTIRE string to lie inside it, closing that quirk (and
+        # was verified against it directly, not assumed from the docs) without
+        # changing what a clean id/pool name matches.
+        if not ID.fullmatch(k):
+            raise ValueError("account id %r" % k)
+        pools = accts[k].get("pools", [])
+        if len(pools) > 1:
+            raise ValueError("account %r carries %d pools, at most one is supported" % (k, len(pools)))
+        for p in pools:
+            if not NAME.fullmatch(p): raise ValueError("pool %r" % p)
+            lines.append("acct %s %s" % (k, p))
+    lines.append("end")
+    sys.stdout.write("\n".join(lines) + "\n")
+except Exception as ex:
+    sys.stderr.write(str(ex)); sys.exit(1)
+') || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }
+
+mkdir -p -- "$REG" || { say "could not create $REG"; exit 1; }
+# Tmp then rename. A SIGKILL between the two leaks one dot-leading tmp, the
+# disclosed price `_reg_set` also discloses, and every reader skips
+# dot-leading entries. `2>/dev/null` BEFORE `>` so the OPEN's own failure is
+# caught too, not just printf's runtime write errors. `'%s\n'`, not `'%s'`:
+# `$( )` above already stripped `$rendered`'s own trailing newline, and
+# writing it back with `%s` alone would install a document one newline short
+# of `_acct_pool_state`'s own `while read -r line || [[ -n "$line" ]]` —
+# still parseable, but not byte-identical to what a hand-built fixture or a
+# byte-count check expects, so the newline is put back explicitly rather than
+# left to chance.
+tmp="$REG/.pool-epoch.$$.tmp"
+printf '%s\n' "$rendered" 2>/dev/null > "$tmp" \
+  || { rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1; }
+if [ ! -L "$REG/pool-epoch" ] && [ -d "$REG/pool-epoch" ]; then
+  rm -f -- "$tmp"; say "a directory sits at $REG/pool-epoch"; exit 1
+fi
+python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "$REG/pool-epoch" \
+  || { rm -f -- "$tmp"; say "could not install the projection"; exit 1; }
+exit 0
