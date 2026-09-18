@@ -8,7 +8,7 @@
 // poisoned, gh is the stub.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -65,8 +65,22 @@ function fixture(home: string, opts: { tags?: string[]; tagHead?: string } = {})
   if (opts.tagHead !== undefined) git(root, 'tag', opts.tagHead);
   const origin = join(home, 'origin.git');
   spawnSync('git', ['init', '-q', '--bare', origin], { env: { ...process.env, ...GIT_ENV } });
+  // An `update` hook records every ref pushed to origin — including a
+  // transient push that a later refusal unwinds — so "no push happened at
+  // all" is OBSERVABLE from outside the process (R4: `git tag`/`push`
+  // succeeding and then being cleaned up is not the same as never running).
+  // Hooks run with the pusher's environment, so HOME is the fixture home.
+  mkdirSync(join(origin, 'hooks'), { recursive: true });
+  writeFileSync(join(origin, 'hooks', 'update'), [
+    '#!/bin/sh',
+    'printf \'%s\\n\' "$1" >> "$HOME/origin-pushes"',
+    'exit 0',
+  ].join('\n'), { mode: 0o755 });
   git(root, 'remote', 'add', 'origin', origin);
   git(root, 'push', '-q', 'origin', 'main', '--tags');
+  // fixture()'s own setup push fires the hook too (main, and any pre-existing
+  // tags); clear that so `origin-pushes` reflects only what `run()` does.
+  rmSync(join(home, 'origin-pushes'), { force: true });
   return root;
 }
 
@@ -115,6 +129,9 @@ describe('release-main.sh: refusals before anything is written', () => {
     expect(originTags(home)).toEqual(['v0.0.1']);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    // No transient tag/push either — the refusal must fire before any push
+    // reaches origin at all, not merely before one that sticks (R4).
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
   });
 
   it('an unknown argument is a usage error, exit 2', () => {
@@ -136,6 +153,21 @@ describe('release-main.sh: refusals before anything is written', () => {
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
     expect(existsSync(join(home, 'npm-argv'))).toBe(false);
   });
+
+  it('refuses when origin already holds the derived tag — a tag-stale checkout (R5)', () => {
+    const home = mkTmp('ccrc-relmain-stale-');
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    // Origin already has v0.0.2 — created directly in the bare repo, NOT in
+    // the working tree, so the local checkout's tags stay behind origin's,
+    // exactly the "tag-stale checkout" this guard exists for.
+    const originSha = git(root, 'rev-parse', 'HEAD');
+    spawnSync('git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', originSha], { env: { ...process.env, ...GIT_ENV } });
+    const r = run(root, home, ['--out', join(home, 'out')]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/origin already holds v0\.0\.2/);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+  });
 });
 
 describe('release-main.sh: derive, push, build, publish', () => {
@@ -155,6 +187,8 @@ describe('release-main.sh: derive, push, build, publish', () => {
     expect(gh).toBe(`release create ${next} ${join(home, 'out')}/ccrc-${next}.tar.gz ${join(home, 'out')}/SHA256SUMS --verify-tag`);
     // The artifact really is build-release.sh's: the stamp names the tag.
     expect(existsSync(join(home, 'out', `ccrc-${next}.tar.gz`))).toBe(true);
+    // Exactly one push reaches origin — the tag, once (R4).
+    expect(readFileSync(join(home, 'origin-pushes'), 'utf8')).toBe(`refs/tags/${next}\n`);
   });
 
   it('pushes the tag to origin BEFORE publishing — gh --verify-tag needs it there', () => {

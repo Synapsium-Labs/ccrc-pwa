@@ -59,6 +59,17 @@ else
 fi
 echo "release-main.sh: highest release tag: ${HIGHEST:-none}; next: $NEXT"
 
+# ── Refuse a tag-stale checkout before touching anything destructive ─────
+# Without this probe: on a checkout whose local tags are behind origin,
+# `git tag "$NEXT"` succeeds locally (it never looks at origin), the push
+# is a silent no-op (origin already has that ref), and — worse — a failed
+# publish's cleanup then deletes a PRE-EXISTING tag that has a real release
+# behind it. `git fetch --tags origin` first is the fix; refuse rather than
+# guess.
+if git -C "$ROOT" ls-remote --exit-code --tags origin "refs/tags/$NEXT" >/dev/null 2>&1; then
+  die "origin already holds $NEXT — this checkout's tags are behind origin; fetch tags (git fetch --tags origin) and re-run. Nothing was tagged, pushed or deleted"
+fi
+
 # ── Tag and push, push BEFORE publish (gh --verify-tag checks the remote) ─
 git -C "$ROOT" tag "$NEXT" || die "git tag $NEXT failed"
 if ! git -C "$ROOT" push origin "refs/tags/$NEXT"; then
