@@ -7,8 +7,14 @@ import './fleet.css';
  *  the side is a clean, versioned release stamp. */
 function side(label: string, b: BuildInfo | null): ReactNode {
   if (b === null) return <span className="build-line-side build-line-side--warn">{label} —</span>;
-  const name = b.version ?? `unversioned (${b.sha.slice(0, 8)})`;
-  const warn = b.version === undefined || b.dirty;
+  // ONE predicate, read twice. The name used `??` (nullish: undefined AND
+  // null) while the amber flag tested `=== undefined` alone, so a stamp
+  // whose `version` arrived as null rendered "unversioned (…)" in calm
+  // black — the line saying one thing and its colour saying the other, over
+  // exactly the field this line exists to report.
+  const versioned = typeof b.version === 'string';
+  const name = versioned ? b.version : `unversioned (${b.sha.slice(0, 8)})`;
+  const warn = !versioned || b.dirty;
   return (
     <span className={`build-line-side${warn ? ' build-line-side--warn' : ''}`}>
       {label} {name}{b.dirty ? ' dirty' : ''}

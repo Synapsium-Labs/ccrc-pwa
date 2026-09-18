@@ -174,7 +174,12 @@ describe('release-main.sh: derive, push, build, publish', () => {
   it.each([
     [['v0.0.1'], 'v0.0.2'],
     [['v1.9.9', 'v1.9.10'], 'v1.9.11'],   // sort -V, not lexical: v1.9.10 > v1.9.9
-    [['v0.0.1', 'wip', 'backup/x'], 'v0.0.2'],   // non-release tags are ignored
+    // Non-release tags are ignored — and every one of these is a tag the
+    // `v*` glob on line 53 ALREADY lets through, so the only thing that can
+    // reject them is `grep -E "$SHAPE"`. The old row used `wip` and
+    // `backup/x`, which the glob excludes on its own: it would have stayed
+    // green with `$SHAPE` deleted, pinning nothing.
+    [['v0.0.1', 'vnext', 'v1.2', 'v1.2.3-rc1'], 'v0.0.2'],
     [[], 'v0.0.1'],
   ])('highest %j → next %s', (tags, next) => {
     const home = mkTmp('ccrc-relmain-derive-');
