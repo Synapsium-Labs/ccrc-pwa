@@ -2180,10 +2180,10 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 | 6 | `builds:` line removed | both new skew cases + two remote-mode `toEqual` literals | RED (4/45 failed) |
 | 6 | `builds` emitted in local mode | local-mode pin | RED (2/24 failed) |
 | 6 | `BuildInfo` import line removed from `shared/api.ts` | L0 import-count pin (`peers-claims-l0.test.ts`) | RED (1/19 failed) |
-| 7 | skewed arm removed | three banner cases | |
-| 7 | `warn = false` | amber case | |
-| 7 | line rendered in local mode | nothing case | |
-| 7 | `pollMs <= 0` guard removed | does-not-poll case | |
+| 7 | skewed arm removed | three banner cases | RED (3/18 failed) |
+| 7 | `warn = false` | amber case | RED (1/4 failed) |
+| 7 | line rendered in local mode | nothing case | RED (1/4 failed — crashes on `health.builds` being absent) |
+| 7 | `pollMs <= 0` guard removed | does-not-poll case | RED (1/18 failed) |
 | 8 | `diff -r -q` → existence | one edited byte | |
 | 8 | `homes -eq 0` skip removed | vacuous case | |
 | 8 | `skills` removed from the table | ORPHAN pin | |
