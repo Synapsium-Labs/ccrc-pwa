@@ -1173,6 +1173,29 @@ describe('the orphan worker says which programme it belongs to', () => {
     expect(marker).not.toBeNull();
     expect(marker!.textContent).toContain('home other');
   });
+
+  it('says the coordinator is GONE when the fleet measures it dead, and names the run board', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const deadCoord = sess({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('dead');
+    expect(marker.getAttribute('title')).toContain('reclaim');
+    expect(marker.tagName).toBe('DIV');                       // still a sibling, still not a control
+  });
+
+  it('claims nothing about a coordinator the frame has not measured', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('unknown');
+    expect(marker.getAttribute('title')).not.toContain('reclaim');
+  });
 });
 
 // ── cross-repo wave 2: the home card knows where its waves went ──────────────

@@ -111,6 +111,7 @@ export function FleetScreen({
   const dismissNotice = useStore((s) => s.dismissNotice);
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
+  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -793,6 +794,12 @@ export function FleetScreen({
                   (r) => runHomeProject(r) === g.project && r.project !== g.project
                     && runCard(r, cardOf) !== g.project)}
                 nowMs={nowMs}
+                /* Fleet-wide, unlike every other lookup this card is handed —
+                   an orphan's coordinator is by construction NOT among this
+                   card's own sessions (D-3009), so a card-scoped read would
+                   always answer `null` for the one row that asks. */
+                coordOf={(id) => sessions.find((s) => s.id === id) ?? null}
+                frameSeen={fleetFrameSeen}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for
                    a project, wrong for an archive fold that must start

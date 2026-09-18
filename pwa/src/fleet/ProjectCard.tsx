@@ -19,6 +19,7 @@ import { repoLabel } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
+import { coordPresence, type CoordPresence } from './coordWords';
 import { formatElapsed } from './formatReset';
 import type { FleetGroup, FleetPin } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
@@ -179,6 +180,8 @@ export function ProjectCard({
   poolFor = () => null,
   repoFor = () => undefined,
   nowMs = Date.now(),
+  coordOf = () => null,
+  frameSeen = false,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -272,6 +275,14 @@ export function ProjectCard({
    *  at render: honest, and it simply stops advancing until the next render —
    *  which is the correct degrade for a card nobody is ticking. */
   nowMs?: number;
+  /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
+   *  another card, in an archive fold, or nowhere this pass. Feeds
+   *  `coordPresence`, the same three-answer read the runs board uses (D-1129);
+   *  `null` there reads as `unknown`, never as dead. Default: nothing known. */
+  coordOf?: (id: string) => FleetSession | null;
+  /** `stores/fleet.ts`'s `fleetFrameSeen`: without it a coordinator absent from
+   *  a STALE array would read as gone (D-1138). Default false = unknown. */
+  frameSeen?: boolean;
 }): ReactNode {
   // A measured row carries pool and placement from one `/api/projects` read.
   // Only a legacy row's forecast falls back to the global projection; no row
@@ -417,7 +428,7 @@ export function ProjectCard({
   // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
   // left behind by one still reads as an orphan (and still says nothing about
   // home when that home is, measured, this card's own project).
-  const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
+  const orphanNote = (row: FleetRow): { text: string; title: string; presence: CoordPresence } | null => {
     if (row.kind !== 'session' || row.depth !== 0) return null;
     const run = runForSession(runs, row.session.id);
     if (run === null) return null;
@@ -426,11 +437,20 @@ export function ProjectCard({
     if (group.sessions.some((s) => s.id === parent)) return null;
     const crossing = crossingNote({ ...run, project: group.project });
     const label = `${run.program} ${waveLabel(run)}`;
+    // D-3009: the runs board's own three-answer read (`coordPresence`), off a
+    // FLEET-WIDE lookup — the coordinator may sit on another card, in an
+    // archive fold, or nowhere this pass — so the marker never claims more
+    // than the frame has actually measured.
+    const presence = coordPresence(parent, coordOf(parent), frameSeen);
+    const where = presence === 'dead'
+      ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
+      : `this worker's coordinator is not among this card's live sessions`;
     return crossing === null
-      ? { text: label, title: `this worker's coordinator is not among this card's live sessions` }
+      ? { text: label, title: where, presence }
       : {
           text: `${label} · home ${crossing.home}`,
-          title: `this worker's coordinator is not among this card's live sessions; the programme is homed in ${crossing.home}`,
+          title: `${where}; the programme is homed in ${crossing.home}`,
+          presence,
         };
   };
 
@@ -557,7 +577,7 @@ export function ProjectCard({
               <Fragment key={rowKey(row)}>
                 {rowBody(row)}
                 {note !== null && (
-                  <div className="proj-crossing" title={note.title}>
+                  <div className="proj-crossing" title={note.title} data-presence={note.presence}>
                     <span className="proj-crossing-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
                     {note.text}
                   </div>
