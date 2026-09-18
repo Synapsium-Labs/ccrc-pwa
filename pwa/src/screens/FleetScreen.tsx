@@ -17,7 +17,7 @@ import { NotificationBell } from '../fleet/NotificationBell';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { groupFleet } from '../fleet/groupFleet';
-import { ProjectCard, type ProjectPlacementRead } from '../fleet/ProjectCard';
+import { ProjectCard, poolOfPlacement, type ProjectPlacementRead } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
 import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
@@ -283,14 +283,13 @@ export function FleetScreen({
   // Task 4 fix round 1: a card's own `placement`/`pool` names ONE project —
   // its own. A row the key flip moved onto this card belongs to a DIFFERENT
   // project by construction, so its off-pool judgment needs THAT project's
-  // tag, not this card's. Same absence discipline as `placementFor`: only a
-  // `measured` read yields a pool, everything else (`pending`/`failed`/
+  // tag, not this card's. The absence discipline itself is `poolOfPlacement`'s
+  // and is spelled once beside `ProjectPlacementRead` (final fix round): only
+  // a `measured` read yields a pool, everything else (`pending`/`failed`/
   // `missing`/`legacy`) answers `null` — no account claim from an unmeasured
-  // or absent read.
-  const poolFor = useCallback((project: string): ProjectPoolWire | null => {
-    const read = placementFor(project);
-    return read.kind === 'measured' ? read.pool : null;
-  }, [placementFor]);
+  // or absent read. What THIS adds is the per-project lookup and the memo.
+  const poolFor = useCallback((project: string): ProjectPoolWire | null =>
+    poolOfPlacement(placementFor(project)), [placementFor]);
 
   // Task 6: a displaced row's repo label needs ITS OWN project's repo, which
   // is by construction a different project from the card it renders on — the

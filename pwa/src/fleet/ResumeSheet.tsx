@@ -53,8 +53,15 @@ export const RECLAIM_COPY: Record<
   // worker elsewhere — `heir-is-a-worker` carries `by` and nothing else (no
   // `detail`, unlike `claimant-alive`), so the sentence names the CONDITION
   // and `by` is appended the same way `claimant-alive`'s evidence is.
-  'heir-is-a-worker': 'that session is a worker of another programme right now — a worker may not '
-    + 'inherit a programme',
+  // "ANOTHER COORDINATOR'S OPEN RUN", never "another programme" (final fix
+  // round): the server measured a RUN and its claimant — `parentOfSession`
+  // reads the runs table, and nothing in that read is a programme — and since
+  // D-3028 the refused case is precisely somebody ELSE's open run, because an
+  // heir whose one coordinator is the claimant being replaced is now admitted.
+  // A sentence naming a programme would have the operator looking for the
+  // wrong thing on the board.
+  'heir-is-a-worker': 'that session is the worker of another coordinator\'s open run right now '
+    + '— a worker may not inherit a programme',
   'registry-unmeasurable': 'the registry could not be read, so this box cannot say who is alive',
   'not-configured': 'this box does not run coordination — there is no ledger to rewrite',
   'bad-request': 'that id is not one this box will accept',
@@ -105,6 +112,19 @@ function reclaimErrorText(err: unknown): string {
       const who = RECLAIM_COPY['heir-is-a-worker'];
       return by === null ? who : `${who} — ${by}`;
     }
+    // THE DOOR'S OWN VOCABULARY, REACHED GENERICALLY. `RECLAIM_COPY` keys on
+    // `ReclaimRefuseCode` itself, so every member of that union is guaranteed a
+    // sentence by the `Record` — and `isReclaimRefuseCode` above has already
+    // proved `code` is one. The day the union gains a fourth member, this line
+    // renders ITS sentence instead of "a reason this build does not recognise";
+    // without it the new member would reach the operator as the fallback even
+    // though its sentence exists two screens up, which is the same narrowing
+    // D-3026 fixed for `heir-is-a-worker` one member ago. The three branches
+    // above stay because they add EVIDENCE (`by`, `detail`) this line cannot;
+    // today they exhaust the union, so `code` is `never` here by construction —
+    // which is the point: the line is dead until the union grows, and alive the
+    // moment it does.
+    if (code !== null) return RECLAIM_COPY[code];
     return RECLAIM_COPY.unknown;
   }
   if (err.status === 502) {

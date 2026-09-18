@@ -2546,18 +2546,43 @@ describe('the programme tree on the fleet screen', () => {
     const marker = beta.querySelector('.proj-crossing')!;
     expect(marker.getAttribute('data-presence')).toBe('dead');
     expect(marker.getAttribute('title')).toContain('reclaim');
+    // …and in the TEXT, which is the half a phone can read (final fix round):
+    // the wiring case owns this too, because `data-presence` reaching the
+    // marker proves nothing about the sentence beside it.
+    expect(marker.textContent).toContain('coordinator gone');
   });
 
-  it('a pending spawn still reaches its coordinator\'s card — the null-session arm of runCard', () => {
+  it('a pending spawn reaches its COORDINATOR\'s card, not the wave\'s — the null-session arm of runCard', () => {
+    // TWO CARDS, because one card cannot tell the two rules apart (final fix
+    // round): the coordinator renders on `alpha` and the wave's own project is
+    // `beta`, so routing by `run.project` puts the phantom on beta as a depth-0
+    // orphan spawn and routing by the coordinator puts it inside alpha, nested
+    // under the row it belongs to. With `project: 'alpha'` — the old fixture —
+    // both rules answer alpha and the case is blind.
     const store = makeStore();
     render(<FleetScreen store={store} />);
     seed(store, {
       conn: 'open',
-      sessions: [session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' })],
-      runs: [runRow({ id: 41, project: 'alpha', state: 'planned', dispatchStartedAt: RUN_FROZEN - 1_000, sessionId: null, claimedBy: 'claude:coord' })],
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        // An unrelated row, only so `beta` HAS a card to be empty of phantoms:
+        // the card set is a union over sessions, and the wave's own project
+        // earns no card by being named on a run.
+        session({ id: 'claude:bystander', project: 'beta', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({ id: 41, project: 'beta', state: 'planned', dispatchStartedAt: RUN_FROZEN - 1_000, sessionId: null, claimedBy: 'claude:coord' })],
       runsFrameSeen: true,
     });
-    expect(document.querySelector('.proj-pending')).not.toBeNull();
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const alpha = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'alpha')!;
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
+    expect(beta).not.toBeUndefined();
+    const pending = alpha.querySelector('.proj-pending')!;
+    expect(pending).not.toBeNull();
+    // INSIDE alpha, and nested — the phantom sits under its coordinator, which
+    // is exactly where the worker will render once it binds.
+    expect(pending.closest('.proj-nest')).not.toBeNull();
+    expect(beta.querySelector('.proj-pending')).toBeNull();
   });
 
   it('gives a single-project programme no abroad line at all', () => {

@@ -65,6 +65,15 @@ export type ProjectPlacementRead =
   | { kind: 'legacy' }
   | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
 
+/** The pool a placement read names, or `null`. The SAME projection the fleet
+ *  screen's `poolFor` makes, spelled ONCE and exported rather than twice: only
+ *  a `measured` read carries a pool, and every other kind (`pending`,
+ *  `failed`, `missing`, `legacy`) answers `null` — ignorance, never an account
+ *  claim. Lives beside `ProjectPlacementRead` because it is that type's own
+ *  reader; the fleet screen memoises its per-project lookup ON TOP of it. */
+export const poolOfPlacement = (read: ProjectPlacementRead): ProjectPoolWire | null =>
+  read.kind === 'measured' ? read.pool : null;
+
 /** The project's measured route pool as one chip. A non-measured read yields
  *  no pool and therefore no chip. Unrecognised residue means this app is older
  *  than the fleet, not a tag that can be diagnosed as unreadable or malformed. */
@@ -287,7 +296,7 @@ export function ProjectCard({
   // A measured row carries pool and placement from one `/api/projects` read.
   // Only a legacy row's forecast falls back to the global projection; no row
   // reads a pool value from the independently paced websocket frame.
-  const pool = placement.kind === 'measured' ? placement.pool : null;
+  const pool = poolOfPlacement(placement);
   const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';
 
@@ -445,10 +454,17 @@ export function ProjectCard({
     const where = presence === 'dead'
       ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
       : `this worker's coordinator is not among this card's live sessions`;
+    // …AND IN THE TEXT, not only in `title`/`data-presence` (final fix round).
+    // Both of those are invisible on touch — there is no hover on a phone, and
+    // this board is mobile-first — so the one measured fact that changes what
+    // the operator should DO (reclaim it) reached only a laptop. `dead` alone:
+    // `unknown` and `alive` say nothing new, because `coordPresence` refusing
+    // to measure is not a claim that anything is gone (D-1138).
+    const gone = presence === 'dead' ? ' · coordinator gone' : '';
     return crossing === null
-      ? { text: label, title: where, presence }
+      ? { text: `${label}${gone}`, title: where, presence }
       : {
-          text: `${label} · home ${crossing.home}`,
+          text: `${label} · home ${crossing.home}${gone}`,
           title: `${where}; the programme is homed in ${crossing.home}`,
           presence,
         };
@@ -460,6 +476,12 @@ export function ProjectCard({
   // repo (a worktree-shaped project beside its parent), and a label there is
   // noise. Decided HERE, the one level that holds both the card's project and
   // the lookup; `SessionLine` composes it into the row's name and knows no card.
+  // THE RESIDUAL, NAMED RATHER THAN CLAIMED OVER: when either side's repo is
+  // unmeasured — this card's or the row's — `repoLabel` answers null and no
+  // label is composed, so two same-slug rows on one card keep IDENTICAL
+  // accessible names until the read lands. That is spec §6's own residual, and
+  // it is kept: a label spun out of an unmeasured read would be a claim, and
+  // waiting on a timeout would make the name depend on when it is asked.
   const cardRepo = repoLabel(repoFor(group.project));
   const repoOf = (s: FleetSession): string | null => {
     if (s.project === group.project) return null;

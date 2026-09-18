@@ -591,7 +591,7 @@ git commit -m "feat(board): cards come from the project list — durable, urgenc
 
 **Why one commit.** `groupFleet` keyed on `boardHome` alone moves the SESSION and leaves the RUN on the old card: `nestFleet` sees one end, draws no edge, `runForSession` answers null, and the row loses its orphan marker and its `/runs` door — spec §1's measured "pure regression". The key, the routing and the `abroad` subtraction land together, or not at all.
 
-**The predicate (critic's ruling, carried):** a run's card is the card its WORKER renders on — `boardHome` of the session named by `run.sessionId` — with two arms that fall back to `run.project`: `sessionId === null` (rule 5's pending spawn, which has no session BY DEFINITION and must still reach its coordinator's card via `runs`) and a bound `sessionId` that is absent from the fleet list this pass (reaped, unmeasured, an older snapshot). Without the fallback every pending phantom vanishes and a run whose worker was reaped renders on no card at all.
+**The predicate (critic's ruling, carried; the null arm re-ruled at the final fix round, D-3029):** a run's card is the card the session it is ABOUT renders on. A BOUND run asks its WORKER — `boardHome` of `run.sessionId`. A PENDING SPAWN has no worker and asks its COORDINATOR — `boardHome` of `run.claimedBy` — because that is where the worker is about to render, and routing it by `run.project` (this plan's original text) put a cross-repo wave's phantom on the WAVE's card until the worker bound and then moved it. `run.project` is the LAST answer, taken only when nothing routable exists: no session and no claimant (a reconstructed, ownerless row), or a session/claimant the fleet list does not carry this pass (reaped, unmeasured, an older snapshot). Without that last answer a run whose worker was reaped renders on no card at all.
 
 - [ ] **Step 1: `runCard` — red first**
 
@@ -629,23 +629,28 @@ Run: `cd pwa && ./node_modules/.bin/vitest run test/runCard.test.ts` — expecte
  * run left on `run.project`'s card is spec §1's pure regression (no edge, no
  * marker, no `/runs` door).
  *
- * TWO fallbacks to `run.project`, both load-bearing: a run with no session
- * yet (rule 5's pending spawn — there is nothing to look up) and a bound
- * session the fleet list does not carry this pass (reaped, unmeasured, an
- * older snapshot). Without them the phantom under a coordinator vanishes and
- * an orphaned run renders on no card at all.
+ * A BOUND run asks its WORKER; a PENDING SPAWN has no worker and asks its
+ * COORDINATOR (D-3029), which is where the bound worker is about to render.
+ * `run.project` is the LAST answer, never the first: no session and no
+ * claimant, or a session/claimant the fleet list does not carry this pass
+ * (reaped, unmeasured, an older snapshot). Without it an orphaned run renders
+ * on no card at all.
  *
  * `cardOf` is built ONCE per render by the caller from `boardHome` over the
  * whole session list — never inside a card, which sees only its own rows.
  */
 export function runCard(
-  run: { sessionId: string | null; project: string },
+  run: { sessionId: string | null; claimedBy: string | null; project: string },
   cardOf: ReadonlyMap<string, string>,
 ): string {
-  if (run.sessionId === null) return run.project;
+  if (run.sessionId === null) {
+    return run.claimedBy === null ? run.project : cardOf.get(run.claimedBy) ?? run.project;
+  }
   return cardOf.get(run.sessionId) ?? run.project;
 }
 ```
+
+(The shipped docstring is longer than this block — it argues the cross-repo failure the original arm produced. Read the file, not this excerpt.)
 
 Run the test — expected PASS.
 
@@ -878,7 +883,7 @@ Expected: PASS. The existing `'scopes each card to its OWN project's runs'` and 
 
 - [ ] **Step 8: Mutations, then ONE commit**
 
-(a) `runs={activeRuns.filter((r) => r.project === g.project)}` restored → the cross-repo case reds (no `.proj-nest` on alpha). (b) Drop `&& runCard(r, cardOf) !== g.project` → reds (alpha has `.proj-abroad`). (c) `runCard` returns `run.project` unconditionally → the first `runCard.test.ts` case reds. (d) Drop the `sessionId === null` arm → the pending-spawn case still passes?— `cardOf.get(null as never)` is undefined and `??` covers it, so this mutation is GREEN by structure: state that in the commit body rather than pretend the arm is pinned by return value; it is pinned by the third `runCard` case's premise, not its own. Restore all. Then:
+(a) `runs={activeRuns.filter((r) => r.project === g.project)}` restored → the cross-repo case reds (no `.proj-nest` on alpha). (b) Drop `&& runCard(r, cardOf) !== g.project` → reds (alpha has `.proj-abroad`). (c) `runCard` returns `run.project` unconditionally → the first `runCard.test.ts` case reds. (d) Drop the `sessionId === null` arm → GREEN by structure at the time of writing: `cardOf.get(null as never)` is undefined and `??` covered it, so the arm was pinned by another case's premise rather than by its own return value. **No longer true since D-3029:** the arm now returns the COORDINATOR's card, so reverting it to `run.project` reds `runCard.test.ts`'s pending case and `fleet-screen.test.tsx`'s two-card pending case (measured, 2 failed | 90 passed). Restore all. Then:
 
 ```bash
 git add pwa/src/fleet/groupFleet.ts pwa/src/fleet/runWords.ts pwa/src/screens/FleetScreen.tsx pwa/src/fleet/ProjectCard.tsx pwa/src/fleet/fleet.css pwa/test/runCard.test.ts pwa/test/groupFleet.test.ts pwa/test/fleet-screen.test.tsx pwa/test/project-card.test.tsx
@@ -1690,6 +1695,7 @@ Numbers here are ISSUED at the moment of the departure (`ccrc-api ledger allocat
 - **D-3024 — Task 10: `resume-reclaim-l0.test.ts` exact-equality pins updated for `heir-is-a-worker`.** `RECLAIM_REFUSE_CODES` and `resume-reclaim-l0.test.ts`'s `total` literal were both built to red the moment `ReclaimRefuseCode` gains a member — Task 10 is exactly that growth. Both pins (`:50`, `:58`) updated to include `'heir-is-a-worker'` in the same commit as the union/map edit that reddened them; the edit is the plan's own reds-by-design mechanism firing, not an improvisation on top of it.
 - **D-3026 — Task 10 fix round 1: `ResumeSheet` learns `heir-is-a-worker`.** What departed: Tasks 9–10 scoped the door slice server-only, so the only operator surface for the reclaim door (`pwa/src/fleet/ResumeSheet.tsx`) kept a hand-written `RECLAIM_COPY` union and a `reclaimErrorText` 409 branch that only knew `no-claimant`/`claimant-alive` — `heir-is-a-worker` fell through to `RECLAIM_COPY.unknown` and `by` never reached the operator, an L4 adapter narrowing a distinction it received. Why: shipping a refusal the console renders as "does not recognise" violates the ring rule even though the plan never scoped the console. What shipped instead: a `'heir-is-a-worker'` entry in `RECLAIM_COPY` and a 409 branch mirroring `claimant-alive`'s shape (a condition sentence, `by` appended the same way `detail` is), plus a `resume-sheet.test.tsx` case pinning that both the sentence and `by` render and the fallback never fires.
 - **D-3028 — the reclaim door ADMITS the dead claimant's own worker as heir.** What departed: Task 10's heir rung mirrored the open door's predicate exactly (`heirWorkerOf !== null && heirWorkerOf !== to`, D-3011/D-3012), and `parentOfSession(to)` answers the CLAIMANT of the heir's newest open run — which on a dead-coordinator programme is `from`, the very claimant being replaced. So the rung refused the programme's OWN live worker: the likeliest successor in the one scenario the reclaim door exists for. Why: a door whose whole purpose is rescuing a programme from a corpse must not refuse the session sitting beside it; the two doors ask the same read but not the same question — the open door has no `from`. What shipped: the predicate gains `&& heirWorkerOf !== from`, so an heir whose only coordinator IS the outgoing claimant is admitted. The run that results is SELF-CLAIMED, which the open door already admits (D-3012) and which `nestFleet` never brackets (`r.claimedBy !== r.sessionId`), so §12's one-level rationale is untouched and no chain can form out of it; a worker of somebody ELSE's open run is still refused, and rung 4 still refuses a `from` that measures alive. Pinned by a new `coord-reclaim.test.ts` case (RED when `&& heirWorkerOf !== from` is dropped, measured) beside the existing refusal case (RED when the rung is deleted, measured). The same exception is written into `shared/api.ts`'s `heir-is-a-worker` bullet, spec §12's reclaim sentence, README's door paragraph and `ResumeSheet`'s copy.
+- **D-3029 — a pending spawn routes by its COORDINATOR's card, not by the wave's project.** What departed: Task 4's ruled predicate gave `runCard`'s null-session arm a flat fallback to `run.project`, and the plan's own mutation note (d) recorded that arm as unpinnable by return value. Measured on a CROSS-REPO wave that is exactly this programme's subject, the arm is wrong: a coordinator on card A opening a wave in project B puts the phantom on card B at depth 0 as an orphan spawn, and the row then JUMPS to card A the moment the worker binds — a row moving between cards as a side effect of a dispatch completing, which is spec §1's own complaint one rung down. Why the fix is not a wider one: the phantom is ABOUT its coordinator (nothing else about it exists yet), so asking `cardOf` for `run.claimedBy` is the same question the bound arm asks about `run.sessionId`, not a new rule. What shipped: `run.sessionId === null ? (run.claimedBy === null ? run.project : cardOf.get(run.claimedBy) ?? run.project) : (cardOf.get(run.sessionId) ?? run.project)`, the parameter type widened by `claimedBy: string | null`, and `run.project` demoted to the LAST answer — taken only when nothing routable exists (an ownerless reconstructed row, or a claimant the fleet list does not carry this pass). The bound arm deliberately does NOT fall back to the coordinator: a bound run is about its worker, and an edge to a row the board cannot see is worse than a flat row. Pinned by three new/changed `runCard.test.ts` cases and by a `fleet-screen.test.tsx` case that is now TWO-CARD — one card cannot tell the two rules apart, which is why the old fixture (`project: 'alpha'`, coordinator on alpha) was blind to this. Reverting the null arm to `run.project` reds both (measured, 2 failed | 90 passed).
 
 ## Follow-ons, recorded and not built
 

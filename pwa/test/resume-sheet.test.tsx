@@ -218,7 +218,7 @@ describe('ResumeSheet — the reclaim refusals, each with its own sentence', () 
     reclaimFailing(new ApiError(409, {
       ok: false, refused: 'heir-is-a-worker', by: 'demo-other-coordinator',
     }));
-    const said = (await screen.findByText(/worker of another programme/i)).textContent ?? '';
+    const said = (await screen.findByText(/worker of another coordinator's open run/i)).textContent ?? '';
     expect(said).toContain('demo-other-coordinator');
     expect(screen.queryByText(/this build does not recognise/i)).toBeNull();
   });

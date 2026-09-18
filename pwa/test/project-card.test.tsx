@@ -1184,6 +1184,11 @@ describe('the orphan worker says which programme it belongs to', () => {
     const marker = container.querySelector('.proj-crossing')!;
     expect(marker.getAttribute('data-presence')).toBe('dead');
     expect(marker.getAttribute('title')).toContain('reclaim');
+    // IN THE TEXT as well (final fix round). `title` and `data-presence` are
+    // both invisible on touch, and this board is mobile-first, so the one
+    // measured fact that changes what the operator should do reached only a
+    // laptop.
+    expect(marker.textContent).toContain('coordinator gone');
     expect(marker.tagName).toBe('DIV');                       // still a sibling, still not a control
   });
 
@@ -1195,6 +1200,10 @@ describe('the orphan worker says which programme it belongs to', () => {
     const marker = container.querySelector('.proj-crossing')!;
     expect(marker.getAttribute('data-presence')).toBe('unknown');
     expect(marker.getAttribute('title')).not.toContain('reclaim');
+    // The CONTROL for the text half above: an unmeasured coordinator says
+    // nothing in the sentence either, so the words are not free decoration on
+    // every orphan marker.
+    expect(marker.textContent).not.toContain('coordinator gone');
   });
 
   it('reads dead as unknown while frameSeen is not passed — D-1138\'s half: a dead session alone is not enough', () => {
