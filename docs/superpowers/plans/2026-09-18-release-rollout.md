@@ -456,9 +456,9 @@ Expected: the five new cases and the two oss-metadata loops FAIL with ENOENT on 
 ```yaml
 # Every merge to main becomes a release (spec 2026-09-18 §3). Thin by design,
 # like release.yml: deploy/release-main.sh owns the derivation, the tag push,
-# the build (through build-release.sh) and the publish, and is tested locally
-# (server/test/release-main.test.ts). No logic lives here that the script
-# does not own; build-release.test.ts pins this file to that.
+# the build and the publish, and is tested locally (server/test/release-main
+# .test.ts). No logic lives here that the script does not own — pinned in
+# server/test/build-release.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
 # before the merge; main's post-merge matrix is a 45-minute re-check that the
@@ -482,16 +482,16 @@ jobs:
     # The job holds an open contents:write token while it runs. 30, like
     # release.yml — the one measured run took 41 s.
     timeout-minutes: 30
+    # Just enough for the tag push and the release the script creates;
+    # everything else stays read-only. ci.yml's stated stance is that a
+    # writing job asks for it in the diff — this is that ask.
     permissions:
-      # `git push` of the tag and `gh release create`; everything else stays
-      # read-only. ci.yml's stated stance is that a writing job asks in the
-      # diff — this is that ask.
       contents: write
     steps:
       - uses: actions/checkout@v4
         with:
-          # The next tag is derived from the highest existing one, and
-          # build-release.sh names the artifact by `git tag --points-at HEAD`:
+          # The next tag is derived from the highest existing one, and the
+          # release script names the artifact by `git tag --points-at HEAD`:
           # both need the tags present, not a shallow single-commit fetch.
           fetch-depth: 0
 
@@ -2192,3 +2192,4 @@ Fill one row per mutation listed in the tasks' Step 5s, measured, not predicted.
 - **D-3014** — Task 1's "dirty-tree refusal removed" mutation first measured GREEN, not RED, on the fixture as the brief specified it. With `release-main.sh`'s own `git status --porcelain` refusal deleted, the dirty-tree fixture case (`refuses a dirty tree`) still passed: the script proceeded far enough to tag and push `NEXT` to origin, then invoked `build-release.sh`, which carries the *identical* dirty-tree guard and dies with the same `refusing a dirty tree` message on stderr before touching `npm`. `release-main.sh`'s own `trap cleanup EXIT` then fired (because `PUBLISHED` never reached `true`) and deleted the tag it had just pushed — so `originTags(home)`, the absence of `npm-argv`, and the absence of `gh-argv` all landed exactly where the test expected, by coincidence rather than because `release-main.sh`'s own refusal fired. `build-release.sh`'s guard was shadowing `release-main.sh`'s one step later, and the fixture as first written could not see the difference.
   This was closed by a controller ruling (fix round 1): the fixture's `origin.git` gained an executable `hooks/update` that records every ref actually reaching origin to `$HOME/origin-pushes`, independent of whether that ref is later deleted by cleanup — so a *transient* push, tagged and then unwound, is now distinguishable from no push at all. The dirty-tree case now asserts `origin-pushes` does not exist (no push, transient or otherwise), and the happy-path derivation cases assert it contains exactly one line, the pushed tag. Re-measured with that stronger fixture: deleting the `git status --porcelain` refusal now goes **RED** (1/14 failed) — the dirty-tree case fails because a push *did* reach origin (and was then cleaned up), which the strengthened assertion now catches. The first draft's claim that this was unobservable from outside the process was wrong; a git hook, not the process's own exit state, makes it observable. See the mutation table above (Task 1, "dirty-tree refusal removed") for the corrected result. The number D-3014 is kept for this entry (an issued number is never orphaned) even though its text now records the shadowing's closure rather than an open gap.
 - **D-3015** — R5 (controller, fix round 1): added a destructive-path guard in `release-main.sh` — before `git tag "$NEXT"`, probe origin with `git ls-remote --exit-code --tags origin "refs/tags/$NEXT"` and refuse if it already exists. Without this, a tag-stale checkout (local tags behind origin's) lets `git tag` succeed locally, the subsequent push become a silent no-op, and — on a failed publish — the cleanup trap delete a PRE-EXISTING tag that has a real release behind it. This is new script behavior beyond the brief's original text, so it is its own deviation rather than folded into D-3014 (which is about the dirty-tree test's observability, not about tag staleness). Covered by a new test (`refuses when origin already holds the derived tag`) and mutation row 6 (`ls-remote origin-tag probe removed` → RED, 1/14 failed).
+- **D-3016** — Task 2 (fix round 1): the brief's own Step 3 YAML draft for `.github/workflows/release-main.yml` failed the pins its own Step 1 defines — the top-of-file comment named `build-release.sh` (matching `/build-release\.sh/` in the "owns no second build path" pin), the `permissions:` comment named `gh release create` (matching `/gh release/` in the "owns no second... publish path" pin), and an explanatory comment sat between `permissions:` and `contents: write` (breaking the `/^    permissions:\n      contents: write$/m` anchor). The implementer reworded those three comments only — no trigger, concurrency, permissions value, step, or env line changed — and shipped the corrected wording, but the plan's own Step 3 fence above (this file) still carried the original three constructs, so anyone re-executing or citing Task 2 from the plan would ship a file that reds three of the five new cases. Closed in fix round 1 by editing the Step 3 fence above to match the shipped, passing `.github/workflows/release-main.yml` byte-for-byte (verified via `diff`), and by minting this number. Not a spec departure (the spec does not dictate comment wording) — the departure is from the brief's literal draft text only.
