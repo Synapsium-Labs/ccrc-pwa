@@ -633,7 +633,7 @@ export const INHERITED_GROUNDS = {
   },
   'fleet.css .sess-repo': {
     under: ['var(--bg-surface)'],
-    why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it",
+    why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
   },
   'fleet.css .sess-spawn': {
     under: ['var(--bg-surface)'],

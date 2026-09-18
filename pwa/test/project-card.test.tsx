@@ -1302,6 +1302,18 @@ describe('the repo label appears only where the card stops implying it (spec §6
     render(<ProjectCard group={grp({ sessions: [sess(), moved] })} onOpen={() => {}} onActions={() => {}} />);   // no repoFor: an older server
     expect(document.querySelector('.sess-repo')).toBeNull();
   });
+  it('does NOT label when the CARD\'s own project is unmeasured — even though the moved row\'s repo is named', () => {
+    // The guard's OTHER side: `dark`'s row above proves an unmeasured ROW
+    // stays silent, but `own` was already null there regardless of
+    // `cardRepo`'s own nullness — a mutation dropping `cardRepo !== null`
+    // passed that case for free. This is the card own project being
+    // unmeasured while the DISPLACED row's repo is genuinely named, which
+    // only the `cardRepo !== null` half of the guard blocks (fix round 1,
+    // Important 1 — was a throwaway probe in the first round, now pinned).
+    const ownDark = sess({ id: 'dark-quiet-mesa', project: 'dark' });
+    render(<ProjectCard group={grp({ project: 'dark', sessions: [ownDark, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+  });
   it('two colliding slugs on one card are two distinct accessible names', () => {
     const own = sess({ id: 'demo-still-river', workspace: 'still-river' });
     render(<ProjectCard group={grp({ sessions: [own, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
