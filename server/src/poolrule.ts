@@ -37,8 +37,9 @@ export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roste
  * May `wrapper` serve a project whose tag reads `pool`?
  *
  * EVERY ANSWER COMES OUT OF `poolRule`, including the not-in-roster one: the
- * miss is handled by asking the rule with a `null` account pool and then
- * RELABELLING only its `ok` arm. That is what keeps the precedence intact —
+ * miss is handled by asking the rule with `declaredAccountPool(null)` — an
+ * untagged account, adapted — and then RELABELLING only its `ok` arm. That is
+ * what keeps the precedence intact —
  * an `unreadable`/`malformed` tag is undecidable for everyone, roster member
  * or not, so it must still answer `pool-undecidable` here (spec §5.2's "nobody
  * decides"). A `null` account pool can never produce `pool-mismatch`, so the
@@ -67,8 +68,9 @@ export function poolEligible(roster: Roster, pool: ProjectPoolWire): AccountDef[
  * Are we in the state where NOBODY decides — `unreadable` or `malformed`?
  *
  * DERIVED FROM THE RULE, not from a second list of state tokens: an untagged
- * account is the most permissive input there is, so `poolRule(null, pool)`
- * refuses exactly when the tag itself is undecidable. A hand-written
+ * account is the most permissive input there is, so
+ * `poolRule(declaredAccountPool(null), pool)` refuses exactly when the tag
+ * itself is undecidable. A hand-written
  * `state === 'unreadable' || state === 'malformed'` here would be the second
  * copy that drifts the day a fifth state is added.
  */

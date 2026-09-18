@@ -24,7 +24,7 @@ const wireFor = (c: PoolRuleCase): AccountPoolWire =>
     ? (c.accountPool === null
         ? { state: 'untagged', origin: 'central' }
         : { state: 'tagged', pools: [c.accountPool], origin: 'central' })
-    : { state: c.accountState } as AccountPoolWire;
+    : { state: c.accountState };
 
 const taggedAccount = (name: string): AccountPoolWire =>
   ({ state: 'tagged', pools: [name], origin: 'central' });
@@ -120,6 +120,16 @@ describe('declaredAccountPool — the adapter the five roster-only call sites no
   it('declaredAccountPool(name) against the same name still serves', () => {
     expect(poolRule(declaredAccountPool('pool-a'), { state: 'tagged', name: 'pool-a' }))
       .toEqual({ ok: true, why: 'same-pool' });
+  });
+
+  // M6 (fix round T5-R2): `origin` is produced here but was pinned by
+  // nothing — every assertion above is `toEqual` on a `PoolVerdict`, which
+  // never carries `origin`. Task 9 renders it as operator-facing copy
+  // (`data-origin`), so a silent flip from `'declared'` to `'central'` would
+  // become a visible lie with no red anywhere. These pin the WIRE itself.
+  it('declaredAccountPool tags the wire origin as declared, not central', () => {
+    expect(declaredAccountPool('pool-a')).toEqual({ state: 'tagged', pools: ['pool-a'], origin: 'declared' });
+    expect(declaredAccountPool(null)).toEqual({ state: 'untagged', origin: 'declared' });
   });
 });
 

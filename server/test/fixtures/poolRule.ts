@@ -132,8 +132,17 @@ export interface PoolRuleCase {
    *  on the ACCOUNT side, which `accountPool: string | null` has no vocabulary
    *  for. Every existing row leaves this `undefined` and MUST keep producing
    *  exactly the verdict it produces today; a row that opts in owes its own
-   *  `accountPool` no meaning (the driver ignores it in that case). */
-  accountState?: AccountPoolWire['state'];
+   *  `accountPool` no meaning (the driver ignores it in that case).
+   *
+   *  DELIBERATELY NARROWED to exclude `'tagged'`/`'untagged'` (fix round
+   *  T5-R2, M6): those two states carry `pools`/`origin`, which a bare
+   *  `{ state }` cannot supply, so the driver builds THOSE two straight from
+   *  `accountPool` instead. Widening this back to the full
+   *  `AccountPoolWire['state']` would silently reopen the runtime `TypeError`
+   *  a cast used to hide — `wireFor` builds `{ state }` with no cast, so a row
+   *  that opted into `'tagged'`/`'untagged'` here would fail to COMPILE rather
+   *  than construct a malformed wire at runtime. */
+  accountState?: Exclude<AccountPoolWire['state'], 'tagged' | 'untagged'>;
 }
 
 export const POOL_RULE_CASES: readonly PoolRuleCase[] = [

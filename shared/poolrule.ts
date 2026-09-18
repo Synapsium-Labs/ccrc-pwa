@@ -31,10 +31,13 @@
 //     pools disagreed without looking either of them up again.
 import type { ProjectPoolWire } from './api.js';
 
-/** Where an account's pool tag came from — the central roster today
- *  (`~/.ccrc/accounts.json`), or a per-project declaration later. Carried on
- *  the wire rather than inferred, so a reader never has to guess which of two
- *  sources a `tagged`/`untagged` answer measured. */
+/** Where an account's pool tag came from — `central` is the authoritative
+ *  `pool_edges` rows in `~/.ccrc/coord.db` (design §5.1's "the only writer of
+ *  membership"); `declared` is `accounts.json`'s `pool` field, the retained
+ *  LOWEST-precedence default (design §5.1, §5.6). Carried on the wire rather
+ *  than inferred, so a reader never has to guess which of the two sources a
+ *  `tagged`/`untagged` answer measured — the PWA renders it (design §5.9: "showing
+ *  its `origin` when it is the declared default rather than central"). */
 export type PoolOrigin = 'central' | 'declared';
 
 /**
@@ -47,7 +50,7 @@ export type PoolOrigin = 'central' | 'declared';
  * see" answers.
  */
 export type AccountPoolWire =
-  | { state: 'tagged'; pools: readonly string[]; origin: PoolOrigin }
+  | { state: 'tagged'; pools: readonly [string, ...string[]]; origin: PoolOrigin }
   | { state: 'untagged'; origin: PoolOrigin }
   | { state: 'malformed' }
   | { state: 'unreadable' }
@@ -106,12 +109,15 @@ export function poolRule(account: AccountPoolWire, projectPool: ProjectPoolWire)
       return { ok: false, reason: 'pool-undecidable', state: account.state };
     }
     if (account.state === 'untagged') return { ok: true, why: 'untagged-account' };
-    // Set membership, not equality — `pools` is length 0 or 1 today and the
-    // multi-pool wave drops an index without touching this line or the wire.
+    // Set membership, not equality — `pools` is length 1 today (never 0: the
+    // tuple type makes an empty array a compile error, fix round T5-R2) and
+    // the multi-pool wave drops an index without touching this line or the wire.
     if (account.pools.includes(projectPool.name)) return { ok: true, why: 'same-pool' };
     return {
       ok: false, reason: 'pool-mismatch',
-      accountPool: account.pools[0] ?? '', projectPool: projectPool.name,
+      // `pools` is a non-empty tuple (`[string, ...string[]]`), so `[0]` is
+      // TOTAL — no `?? ''` fabricating a pool name into an operator-facing 409.
+      accountPool: account.pools[0], projectPool: projectPool.name,
     };
   }
   const unhandled: never = projectPool;
