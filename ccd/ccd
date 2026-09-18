@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=45b265365966ead27748814a4a0916454290ad33ed8330fbb03928d29bfcb689
+# ccrc:generated 1 sha256=70d2aa6dd1c89805f3ef5d714173100aaec7f209aae9efc8b3fc2569fb3f6420
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2103,13 +2103,38 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # reads off disk regardless of what is in it.
   local LC_ALL=C
   # FIRST PREDICATE, deliberately — mirrors `_project_pool_state`'s own
-  # first line (:1675) and fixes fix round 1's I5: without this, indexing an
-  # unset `$1` printed `bad array subscript` to stderr and fell through to
-  # `untagged` regardless — and in a `$( )` capture that stderr leaks
-  # straight into the supervisor's own output.
-  [[ -n "${1-}" ]] || { echo untagged; return 0; }
+  # first line (:1675) in POSITION and fixes fix round 1's I5 (without this,
+  # indexing an unset `$1` printed `bad array subscript` to stderr and fell
+  # through regardless — and in a `$( )` capture that stderr leaks straight
+  # into the supervisor's own output) — but NOT in VERDICT (T1-R4, fix round
+  # 3). The sibling answers `untagged` here because a registry row with no
+  # `.project` field genuinely, positively carries no project — that is what
+  # the absence MEANS. An account this function cannot even NAME is a
+  # different thing entirely: UNMEASURABLE, not untagged. Measured against
+  # an EXPIRED document on disk: an absent id answered `untagged` while a
+  # real id on the very same document answered `stale` — the clearest
+  # violation there is of "no input yields a positive word without a
+  # document that says so." `unreadable` is the fail-SHUT direction (routes
+  # to undecidable -> refuse in every caller) and reuses the existing
+  # five-word vocabulary rather than inventing a sixth word for what is
+  # really a caller bug, not a fact about the document.
+  [[ -n "${1-}" ]] || { echo unreadable; return 0; }
   local id="$1" f="$REG/pool-epoch" line k v p epoch='' issued='' lease='' now body=''
   local found='' numRe='^(0|[1-9][0-9]*)$'
+  # SEEN, NOT EMPTY (fix round 3) — three separate booleans, one per numeric
+  # field, replacing the old "the variable is still empty" proxy for "not
+  # seen yet". That proxy had a hole: a line spelled `lease` alone, or
+  # `lease ` (key, separator, nothing) — a MALFORMED row, not a legal
+  # zero — sets `$lease` to the empty string, which reads IDENTICALLY to
+  # "never saw a lease line" to `[[ -z "$lease" ]]`. A second, real `lease
+  # <n>` line then passed the (broken) dup check and silently overwrote it:
+  # two defects in one hole — a duplicate that should refuse now silently
+  # wins, AND a malformed empty row that should refuse is silently
+  # discarded, the C1/C4 class one more field over. Measured: `lease
+  # \nlease 9999999999\n…` answered `named pool-a`. Bounded: it cannot
+  # resurrect an expired document, because a non-empty REAL value still
+  # trips its own dup guard the same way.
+  local epochSeen='' issuedSeen='' leaseSeen='' endSeen=''
   local -A seen=()
   # ABSENCE PROVEN AT EVERY LEVEL IT IS CLAIMED, exactly as
   # `_project_pool_state` does it one directory down.
@@ -2148,15 +2173,48 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # Unlike the OLD shape (`done < "$f" ... || unreadable`), this is not
   # merely UNCHECKED — `$?` from the read above IS the check — it is the
   # one ambiguity that checking it cannot resolve, named rather than hidden.
-  # M5 — SAYING THE WORD, not just the outcome, matching the sibling's own
-  # "TWO ARMS, TWO PARKS" discipline of naming which word each arm can
-  # produce: a document truncated mid-read (before the queried row, or
-  # before `epoch`/`issued`/`lease`) is parsed as whatever prefix survived,
-  # and for a queried id that prefix never mentions, the answer is
-  # `untagged` — the FAIL-OPEN word. This is the one place in this function
-  # a park, not a guard, can still produce it; every other `untagged` in
-  # this file is the deliberate, honest "document is complete and silent
-  # about this id" answer.
+  # NARROWED, THOUGH NOT CLOSED, BY THE TERMINATOR CHECK BELOW: a genuine
+  # I/O failure mid-read leaves `$body` holding whatever prefix survived,
+  # and that prefix is now refused UNLESS it happens to end in a complete
+  # `...\nend` — a coincidence, not a case this reader can rule out, but one
+  # a real I/O error landing exactly on a field boundary is vanishingly
+  # unlikely to produce.
+  #
+  # M5 / T1-R3 — THE PARK THIS FUNCTION USED TO HAVE, NOW A GUARD, NOT A
+  # DISCLOSURE. Round 1's I6 named ONE outcome a truncated read could
+  # produce (`untagged`, the queried id simply absent from whatever prefix
+  # survived) and missed the WORSE one round 2 measured: `acct acct-a
+  # pool-alp` with no trailing newline — a row torn mid-write — answered
+  # the POSITIVE `named pool-alp`, a pool the file never finished spelling,
+  # with PLACEMENT proceeding onto it. That is the sibling's OWN second,
+  # worse park (:1803-1812, "the answer is the POSITIVE `named <prefix>`
+  # … PLACEMENT PROCEEDS"), which is exactly why ITS discipline is "TWO
+  # ARMS, TWO PARKS — do not conflate them" — this function had conflated
+  # them into one named word.
+  #
+  # T1-R3 closes both STRUCTURALLY instead of naming a second park: the
+  # wire format now ends every document with a literal `end` line (Task
+  # 3's emitter writes it the same round this reader starts requiring it),
+  # and ANY document whose last line is not exactly `end` is refused before
+  # a single field is parsed. A line-oriented reader has no other way to
+  # tell a torn final row from a complete one. Zero `acct` lines is still
+  # legal, so the minimum well-formed document is four lines: epoch,
+  # issued, lease, end. STRUCTURAL, not per-field: checked once against the
+  # RAW bounded body, so a torn document — whether the tear lands mid-`acct`
+  # row (round 2's worse park) or mid `epoch`/`issued`/`lease` (round 1's
+  # named one) — is refused the same way, before the per-line parser below
+  # ever runs. The terminator counts toward the 64 KiB budget: it was
+  # already inside the bounded read above, not appended after it.
+  #
+  # ONE trailing newline is tolerated (the writer's own convention, matching
+  # every other line in this format) but not required — a `$body` ending in
+  # `...end` with no final `\n` is accepted for the same reason the
+  # per-line loop below already tolerates a final line with none. A SECOND
+  # trailing newline (content after the terminator, even if blank) is
+  # refused: the last LINE must be `end`, and an empty final line is not it.
+  local tail="$body"
+  [[ "$tail" == *$'\n' ]] && tail="${tail%$'\n'}"
+  [[ "${tail##*$'\n'}" == end ]] || { echo malformed; return 0; }
   while IFS= read -r line || [[ -n "$line" ]]; do
     # C1 — an indented line is a line this reader cannot KEY AT ALL, not a
     # blank one, and must not fall into the blank-line no-op. `k` is
@@ -2179,11 +2237,11 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
     case "$k" in
       epoch)  # M7 — a SECOND `epoch` line is the same self-contradiction
               # M3 catches for `acct` rows: nothing says which value is
-              # true. `-z "$epoch"` as the "not seen yet" test is safe even
-              # though a legal value can BE the string "0" — that is still
-              # non-empty as a string, so this only trips on an actual
-              # repeat, never on the first line.
-              [[ -z "$epoch" ]] || { echo malformed; return 0; }
+              # true. The dedicated `epochSeen` flag (not `-z "$epoch"`,
+              # fix round 3 — see the comment on the flags above) is set
+              # unconditionally, regardless of what `$v` turns out to be.
+              [[ -z "$epochSeen" ]] || { echo malformed; return 0; }
+              epochSeen=1
               epoch=$v ;;
       # R3's wire format carries an `issued` line (the projection's own
       # issuedAt) between `epoch` and `lease`; this reader has no use for it
@@ -2192,9 +2250,11 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
       # accepted — so a torn or hand-edited `issued` field poisons the
       # document exactly like a torn `epoch` does, rather than passing
       # silently because nothing downstream happened to read it.
-      issued) [[ -z "$issued" ]] || { echo malformed; return 0; }
+      issued) [[ -z "$issuedSeen" ]] || { echo malformed; return 0; }
+              issuedSeen=1
               issued=$v ;;
-      lease)  [[ -z "$lease" ]] || { echo malformed; return 0; }
+      lease)  [[ -z "$leaseSeen" ]] || { echo malformed; return 0; }
+              leaseSeen=1
               lease=$v ;;
       acct)   # I4 — a row missing its pool field (`acct acct-a`, or a bare
               # `acct` with nothing after it at all) leaves `v` as a SINGLE
@@ -2245,6 +2305,33 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
               [[ -z "${seen[$v]+x}" ]] || { echo malformed; return 0; }
               seen[$v]=1
               [[ "$v" == "$id" ]] && found=$p ;;
+      end)    # T1-R3 — the terminator, position AND cardinality both
+              # pinned (security-scanner addendum). The up-front structural
+              # check above already proved the RAW body's last line is
+              # exactly `end`, which rules out a torn final row, but NOT a
+              # SECOND `end` earlier in the document — `epoch…/end/acct
+              # acct-a pool-a/end` is two documents concatenated (or a torn
+              # write landing inside a previous one), and the structural
+              # check alone cannot see it: it only ever looks at the last
+              # line. `endSeen` is that count: a bare, otherwise-legal
+              # `end`-KEYED line is refused the second time it appears,
+              # wherever it is.
+              #
+              # NO SEPARATE `[[ "$v" == end ]]` CHECK — deliberately, not an
+              # oversight: it was added for `end 1` / `end ` (the
+              # terminator takes no argument) and proved fully redundant by
+              # exhaustive case split, the same shape as fix round 1's C1
+              # (`-n "$k"` dropped once `*)` already covered it). A line
+              # keying as `end` is EITHER the document's true last line —
+              # already caught above if its value is not exactly `end` —
+              # OR it is not, in which case a GENUINE bare `end` must still
+              # exist as the true last line for the structural check to
+              # have passed at all, and THAT is the line `endSeen` refuses
+              # as the second `end`-keyed line. There is no placement of an
+              # `end`-with-a-value row this reaches without one of those two
+              # guards already deciding it.
+              [[ -z "$endSeen" ]] || { echo malformed; return 0; }
+              endSeen=1 ;;
       *)      echo malformed; return 0 ;;
     esac
   done <<< "$body"

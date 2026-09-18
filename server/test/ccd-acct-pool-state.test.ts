@@ -20,22 +20,48 @@ let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('acct-pool-state'); });
 afterEach(() => { h.cleanup(); });
 
-/** Plant the projection with the given body; returns its path. */
-function plant(body: string): string {
+/** Plant the projection with the given body EXACTLY as given — no
+ *  terminator is added. Used only where a test needs precise control over
+ *  whether `end` is present, which is the T1-R3 terminator's own tests. */
+function plantRaw(body: string): string {
   const reg = path.join(h.home, '.cc-sessions');
   mkdirSync(reg, { recursive: true });
   const f = path.join(reg, 'pool-epoch');
   writeFileSync(f, body, 'utf8');
   return f;
 }
+
+/** Plant the projection with the given body PLUS its required terminator
+ *  (T1-R3, fix round 3) — every fixture in this file except the
+ *  terminator's own tests wants a well-formed document, and retyping
+ *  `\nend\n` at ~30 call sites would just be noise. */
+function plant(body: string): string {
+  return plantRaw(body.endsWith('\n') ? `${body}end\n` : `${body}\nend\n`);
+}
 const state = (id: string): string => h.sh(`_acct_pool_state ${id}`);
 
 /** Like `state()`, but also returns the REAL exit code — `h.sh` alone only
  *  sees stdout, so a defect that empties stdout AND breaks rc (fix round 2's
  *  C2 — a `bad array subscript` unwinding the whole function) is invisible
- *  to a word-only assertion. `echo "RC:$?"` runs whether or not
- *  `_acct_pool_state` itself produced any stdout — ccd has no `set -e`, so a
- *  failing statement inside it does not abort the surrounding `;` list. */
+ *  to a word-only assertion.
+ *
+ *  FIX ROUND 3 CORRECTION: this comment used to claim `echo "RC:$?"` runs
+ *  "whether or not `_acct_pool_state` produced any stdout — ccd has no
+ *  `set -e`, so a failing statement inside it does not abort the
+ *  surrounding `;` list." That is FALSE for the exact shape C2 measures,
+ *  and the false claim is exactly M1's own standard turned back on this
+ *  file. Measured directly: with the id-grammar guard deleted, a bad array
+ *  subscript INSIDE A SOURCED FILE — which `ccd/ccd` always is, via
+ *  `source "$CCD"` — is fatal to the WHOLE invoking shell, not merely to
+ *  the failing statement, `set -e` or not; neither `RC:` nor a trailing
+ *  `echo AFTER` ever runs, and `h.sh` (whose `execFileSync` throws on a
+ *  nonzero exit) throws instead of returning truncated output. A function
+ *  defined and called INLINE in the same `-c` string does not share this
+ *  behaviour — the same bad-subscript error there returns control to the
+ *  caller normally — so the failure mode is specific to sourcing, which is
+ *  exactly how the real caller (and this harness) always runs `ccd`. The
+ *  pin below still holds either way: it is `stateRc`'s own `throw`, not a
+ *  printed `RC:` line, that fails the assertion when this shape regresses. */
 function stateRc(id: string): { out: string; rc: number } {
   const raw = h.sh(`_acct_pool_state ${id}; echo "RC:$?"`);
   const lines = raw.split('\n');
@@ -166,14 +192,18 @@ describe('_acct_pool_state', () => {
   });
 
   // --- I5: an empty/absent id must not touch the filesystem or leak stderr ---
-  it('answers `untagged` for an absent id, with nothing on stderr', () => {
+  it('answers `unreadable` for an absent id, with nothing on stderr', () => {
     // No file planted at all: if the guard is missing, indexing an unset
-    // `$1` prints `bad array subscript` to stderr and falls through to
-    // `untagged` anyway — same stdout, but the stderr leaks into a `$( )`
-    // capture in the real caller. Capturing stderr here is what makes this
-    // test able to see that difference; a bare stdout check could not.
+    // `$1` prints `bad array subscript` to stderr and falls through
+    // regardless — the stderr leaks into a `$( )` capture in the real
+    // caller. Capturing stderr here is what makes this test able to see
+    // that difference; a bare stdout check could not.
+    //
+    // T1-R4 (fix round 3): the WORD changed from `untagged` to
+    // `unreadable` — see the T1-R4 test below for why, and for the
+    // measurement that distinguishes them on the same document.
     const out = h.sh('{ _acct_pool_state; } 2>&1');
-    expect(out).toBe('untagged');
+    expect(out).toBe('unreadable');
   });
 
   // --- M2: `issued` is validated numeric exactly like `epoch` ---
@@ -304,5 +334,119 @@ describe('_acct_pool_state', () => {
       expect(out).toBe('malformed');
       expect(rc).toBe(0);
     }
+  });
+
+  // ============================================================
+  // Fix round 3 (second re-review) — the M7 predicate hole, the document
+  // terminator (T1-R3, plus the security-scanner addendum), and T1-R4.
+  // ============================================================
+
+  // --- M7's guard used EMPTINESS as its "not seen yet" proxy, which has a
+  // hole: a malformed `lease` line with an EMPTY value reads as unseen ---
+  it('fix round 3: a malformed empty `lease` line no longer lets a later real one silently win', () => {
+    // Measured before this fix: `lease \nlease 9999999999\n…` answered
+    // `named pool-a`. `-z "$lease"` could not tell "never saw a lease
+    // line" from "saw one that was empty (malformed)" — the SECOND, valid
+    // line passed the (broken) dup check and silently overwrote the first.
+    // Two defects in one hole: a duplicate that should refuse instead won,
+    // and a malformed empty row that should refuse was silently discarded
+    // — C1/C4's class, one more field over.
+    plant('epoch 43\nissued 1000\nlease \nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- T1-R3: the document terminator, distinct claims kept as distinct tests ---
+  it('T1-R3: a document with NO `end` line at all is malformed', () => {
+    // Distinct from the torn-row test below on purpose — one guard proving
+    // two different claims means a regression cannot tell you which one
+    // broke.
+    plantRaw('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('T1-R3: a document torn mid-`acct`-row no longer fabricates `named <prefix>`', () => {
+    // The reviewer's own measured case: `acct acct-a pool-alp` with no
+    // trailing newline (and, by construction here, no terminator either)
+    // used to answer `named pool-alp` — a POSITIVE word naming a pool the
+    // file never finished spelling, with PLACEMENT proceeding onto it.
+    plantRaw('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-alp');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('T1-R3: the minimum well-formed document is four lines — zero `acct` rows, still legal', () => {
+    plantRaw('epoch 43\nissued 1000\nlease 9999999999\nend\n');
+    expect(state('acct-a')).toBe('untagged');
+  });
+
+  it('T1-R3: `end` with no trailing newline is still accepted, matching the per-line loop\'s own tolerance', () => {
+    plantRaw('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-a\nend');
+    expect(state('acct-a')).toBe('named pool-a');
+  });
+
+  it('T1-R3: content after `end`, even a trailing blank line, is refused', () => {
+    plantRaw('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-a\nend\n\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('T1-R3: a stray `end`-prefixed line before the true terminator poisons the document', () => {
+    plantRaw('epoch 43\nissued 1000\nend extra\nlease 9999999999\nacct acct-a pool-a\nend\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  // --- Security-scanner addendum: position AND cardinality, not just presence ---
+  it('addendum: `end` appearing mid-document, with a second `end` truly last, is two documents concatenated — refused', () => {
+    // Checking only "the last line is `end`" would accept this: it IS
+    // `end` on the last line. The document is still broken — a torn write
+    // landing inside a previous one, or two documents concatenated — and
+    // only a count, not a position check alone, can see it. `epoch`,
+    // `issued` and `lease` each appear exactly ONCE here, deliberately —
+    // so this fails ONLY via the new `endSeen` guard, not incidentally via
+    // M7's unrelated duplicate-field checks, which a document with two
+    // full concatenated headers would also trip.
+    plantRaw('epoch 43\nissued 1000\nlease 9999999999\nend\nacct acct-a pool-a\nend\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('addendum: `end` with a value (`end 1`) is refused — the terminator takes no argument', () => {
+    // Placed BEFORE the true terminator, deliberately: as the document's
+    // OWN last line, the up-front structural check alone would already
+    // refuse this (its last line is `end 1`, not `end`), which would pin
+    // that check instead of the per-line `[[ "$v" == end ]]` one. Mid-
+    // document, the structural check passes (the true last line genuinely
+    // is `end`), so only the per-line check can catch this shape.
+    plantRaw('epoch 43\nissued 1000\nend 1\nlease 9999999999\nacct acct-a pool-a\nend\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('addendum: `end` with a trailing space and nothing after it is refused', () => {
+    plantRaw('epoch 43\nissued 1000\nend \nlease 9999999999\nacct acct-a pool-a\nend\n');
+    expect(state('acct-a')).toBe('malformed');
+  });
+
+  it('addendum: a pool literally named `end` is unambiguous — parsed as a payload value, not the terminator', () => {
+    // `^[a-z][a-z0-9-]{0,31}$` legally admits `end`. The reader keys on the
+    // FIRST token of the line (`acct`, not `end`), so there is no
+    // confusion — confirmed, not assumed.
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct acct-a end\n');
+    expect(state('acct-a')).toBe('named end');
+  });
+
+  it('addendum: an account id literally named `end` is unambiguous — parsed as a payload value, not the terminator', () => {
+    plant('epoch 43\nissued 1000\nlease 9999999999\nacct end pool-a\n');
+    expect(state('end')).toBe('named pool-a');
+  });
+
+  // --- T1-R4: an empty/absent id is unmeasurable, not untagged ---
+  it('T1-R4: an absent id answers `unreadable`, distinguishable from a real id\'s `stale` on the SAME document', () => {
+    // Measured: against an EXPIRED document, a real id correctly answers
+    // `stale`; an ABSENT id used to answer `untagged` on the SAME
+    // document — a positive word with no document behind it at all. An
+    // account this function cannot even NAME is unmeasurable, not
+    // untagged; `unreadable` is the fail-shut direction and reuses the
+    // existing vocabulary rather than inventing a sixth word.
+    plant('epoch 43\nissued 1000\nlease 1001\nacct acct-a pool-a\n');
+    expect(state('acct-a')).toBe('stale');
+    const out = h.sh('{ _acct_pool_state; } 2>&1');
+    expect(out).toBe('unreadable');
   });
 });
