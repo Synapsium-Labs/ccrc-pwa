@@ -133,6 +133,14 @@ export type AdvanceResult =
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; error: 'unknown-run' };
 
+/** `setAccountPools`'s answer (T6-R4, fix round 1). Wave 1 allows at most one
+ *  pool per account — `pool_edges_one_per_account`'s own partial-unique
+ *  shape — and a caller that asks for more gets this NAMED refusal instead
+ *  of the raw `UNIQUE constraint failed` the store used to let escape. */
+export type SetAccountPoolsResult =
+  | { ok: true; epoch: number }
+  | { ok: false; error: 'multi-pool-not-supported'; pools: readonly string[] };
+
 /** The reclaim's three answers. `kind`, not `error`, because these are not
  *  `advance`'s arms and folding them into `AdvanceResult` would put two
  *  vocabularies behind one discriminant. `unknown-run` is spelled the way its
@@ -5255,9 +5263,24 @@ export class CoordStore {
   // NEVER REISSUED. See `pooledgelog.ts` for why a reissue is the one
   // outcome this whole design exists to prevent.
 
+  /** T6-R4 (fix round 1): a NAMED refusal rather than the raw `UNIQUE
+   *  constraint failed` `pool_edges_one_per_account` used to throw — that
+   *  raw throw happened AFTER `log.append` had already committed a journal
+   *  line for a membership the store went on to reject, and reached an
+   *  uncaught caller as a bare exception (a 500, once a route calls this).
+   *  Shaped like `AdvanceResult`/`OpenRunResult` above: a route checks `.ok`
+   *  and answers structured, not a 500. */
   setAccountPools(input: {
     accountId: string; pools: readonly string[]; addedBy: string | null; now?: number;
-  }, log: PoolEdgeLog): { ok: true; epoch: number } {
+  }, log: PoolEdgeLog): SetAccountPoolsResult {
+    // Wave 1 is one-pool-per-account (`pool_edges_one_per_account`, migration
+    // 13). Refused HERE — before `log.maxEpoch()`/`log.append()` ever run —
+    // so a refused write leaves no journal line asserting a membership the
+    // store never accepted, and never opens a transaction it would only roll
+    // back.
+    if (input.pools.length > 1) {
+      return { ok: false, error: 'multi-pool-not-supported', pools: input.pools };
+    }
     const now = input.now ?? Date.now();
     return tx(this.db, () => {
       const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
@@ -5298,10 +5321,22 @@ export class CoordStore {
       .get() as { epoch: number; issuedAt: number; digest: string };
   }
 
+  /** T6-R3 (fix round 1): derived FROM `accountPoolEdges()` rather than a
+   *  second copy of its SELECT/WHERE/ORDER BY/cast — two copies is an
+   *  ORDER BY that can drift out of step with nothing positioned to notice
+   *  (F3: nothing asserted this digest at all before this round).
+   *  `accountPoolEdges()`'s rows already arrive sorted by `subjectId, pool`,
+   *  and `Map` iterates in insertion order, so the concatenation below stays
+   *  exactly as sorted as the direct query was.
+   *
+   *  Purely content-derived: two epochs over identical membership collide on
+   *  the same digest. Intended — the digest fingerprints WHAT is tagged, not
+   *  WHEN — but stated here since nothing said it before this round. */
   private poolEdgeDigest(): string {
-    const rows = this.db.prepare(
-      "SELECT subjectId, pool FROM pool_edges WHERE subjectKind = 'account' ORDER BY subjectId, pool",
-    ).all() as { subjectId: string; pool: string }[];
-    return bodyDigest(rows.map((r) => `${r.subjectId} ${r.pool}`).join('\n'));
+    const lines: string[] = [];
+    for (const [subjectId, pools] of this.accountPoolEdges()) {
+      for (const pool of pools) lines.push(`${subjectId} ${pool}`);
+    }
+    return bodyDigest(lines.join('\n'));
   }
 }

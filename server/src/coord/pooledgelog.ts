@@ -39,12 +39,26 @@ export class PoolEdgeLog {
   }
 
   /**
-   * The file's half of MAX(file, db). A missing file is `null`; an UNREADABLE
-   * file THROWS — reading it as empty is exactly the reissue this file exists to
-   * prevent, so the write must fail loudly instead.
+   * The file's half of MAX(file, db). A missing file is `null` — nothing was
+   * ever tagged. An UNREADABLE file THROWS, and so, as of T6-R5 (fix round
+   * 1), does an EXISTING file that yields no epoch: zero-length (the ext4
+   * delayed-allocation crash shape — the file was created but no data landed
+   * before the crash) or content with no `"epoch":<digits>` anywhere in it.
+   * Reading any of those as "nothing allocated" is exactly the reissue this
+   * file exists to prevent — measured: write two epochs, zero-length the
+   * journal, restore `coord.db` from an older snapshot, and the OLD `return
+   * null` handed epoch 1 out again with no unreadable file anywhere in the
+   * sequence. ONLY `ENOENT` may answer `null`; every other "no epoch found"
+   * shape must fail as loudly as an unreadable file does.
    *
-   * THE SALVAGE ARM: a torn final append still counts when an `"epoch":<digits>`
-   * can be read out of the fragment. Over-counting is the safe direction.
+   * Regex-only, unlike `ledgerlog.ts`'s two-arm JSON-parse-then-regex reader:
+   * `maxAllocated` parses first because it must attribute each line to the
+   * right PROJECT, and only falls back to the regex for a line that fails to
+   * parse. This file has no per-subject filter to get right on a well-formed
+   * line — it wants the max epoch across every line, full stop — so a
+   * JSON.parse arm would buy nothing here that the regex doesn't already do.
+   * A torn final append still counts when an `"epoch":<digits>` can be read
+   * out of the fragment; over-counting is the safe direction.
    */
   maxEpoch(): number | null {
     let text: string;
@@ -61,6 +75,13 @@ export class PoolEdgeLog {
       if (m === null) continue;
       const n = Number(m[1]);
       if (max === null || n > max) max = n;
+    }
+    if (max === null) {
+      throw new Error(
+        `pool-edges journal exists at ${this.logPath} but yields no epoch — ` +
+        'zero-length or unparseable is not the same as absent; answering ' +
+        'null here would be the reissue this file exists to prevent',
+      );
     }
     return max;
   }
