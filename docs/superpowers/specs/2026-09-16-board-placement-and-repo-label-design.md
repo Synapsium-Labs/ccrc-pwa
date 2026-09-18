@@ -336,3 +336,59 @@ programme to a successor that must already exist, so a programme whose coordinat
 suitable heir has no door. It is deliberately excluded here because it is a coordination-lifecycle
 feature, not a board feature, and it has to decide which account and wrapper the new coordinator gets,
 what ledger and plan it reads, and whether it inherits the programme's claims. Its own spec.
+
+## 12. Addendum 2026-09-18 — the chain is refused at the door
+
+**What was reported.** The operator, 2026-09-18 09:42 UTC: a coordinator spawns a workspace, that
+workspace spawns another workspace it coordinates, and the child's child renders as an independent,
+floating workspace. Two remedies were offered: correct the board, or prevent a child from spawning
+workspaces of its own so that only the parent coordinator has that right.
+
+**What was measured, same morning, against the live server and the fleet box's lifecycle journal.**
+
+- Every run in history, closed included: **85 runs, 36 distinct workers, 9 distinct coordinators, and
+  zero sessions that were ever both.** No run's `claimedBy` has ever been another run's `sessionId`.
+  §7's "it has never occurred" still holds, now over 85 runs rather than 64.
+- Every workspace creation in the lifecycle journal: **75, of which 74 came through the agent** —
+  `dec.actor = run:<id> dispatch` for a dispatched worker, `surface: none` for the console's `+` — and
+  **one** was run from a session pane (2026-08-27, from the ccrc-pwa main checkout's own pane, actor
+  `orchestrator: PR #11 review fixes`). No dispatched worker has ever minted a workspace.
+- The rows that float are §1's mechanism 2. Reconstructed card by card from `state-cache.json` and the
+  active runs: `custom-tools-bright-hollow` (run 85, wave 20) and `data-internal-brisk-river` (run 84,
+  wave 19) sit at depth 0 on their own project cards wearing only the rule-3 orphan marker, while their
+  coordinator `intake-platform-keen-meadow` — itself a workspace the operator spawned from the console
+  on 2026-09-02 — brackets `intake-platform-quiet-prairie` (run 82) on the intake-platform card. Nine of
+  that programme's twenty waves have worked in `custom-tools` or `data-internal`; every one rendered
+  this way. Wave 1 of this design is merged (`2985b9d1`, PR #137) and **not deployed** (the server box
+  reports `53e6a438`); wave 2 was never written, so nothing renders yet.
+
+**The ruling this addendum records.** Both remedies, because each is only honest with the other:
+
+1. **Correct the board — wave 2, §6–§8 as written.** Under §4's resolver those two rows land on the
+   intake-platform card under `keen-meadow`, which is the picture the operator asked for.
+2. **Make §7's contract a mechanism.** `RowDepth = 0 | 1` is the operator's ruling and stays. But a
+   real run-to-run chain would render exactly the reported picture even after wave 2: `nestFleet`'s
+   rule 4 lifts the middle session to depth 0 with its own child beneath it and the top coordinator's
+   bracket to it is never drawn. The one-level bracket is therefore truthful only if the chain cannot
+   form. So `POST /api/runs` **refuses a `claimedBy` that is currently the `sessionId` of a
+   non-terminal run** — measured by the store's existing `parentOfSession`, the same read the ask lane
+   uses to find a worker's parent — with `409 {ok:false, refused:'claimant-is-a-worker', by:<that
+   worker's own coordinator>}`, placed with the other pre-open rungs so a refusal leaves no `planned`
+   orphan and places no hold. `POST /api/runs/:id/reclaim` refuses the same heir (`ReclaimOutcome`
+   kind `heir-is-a-worker`, `409`, `by:` its coordinator), because a reclaim decides a coordinator too.
+
+**What the guard deliberately does NOT refuse.** A session that was a worker of a programme whose runs
+are all terminal — `parentOfSession` answers `null` for it — may coordinate later; the operator reuses
+workspaces, and a finished worker is not a worker. A review run's `claimedBy` must already equal the
+reviewed run's coordinator, so the guard is reached there only through a claimant it has already
+admitted. Restricting coordination to main checkouts was considered and rejected: six of the nine
+coordinators in history are workspaces the operator spawned for the purpose.
+
+**What the guard cannot see, stated rather than implied.** A workspace minted by `ccd ws-add` from a
+worker's own pane, with no run, is invisible to both the board and this door — `CLAUDE.md`'s
+"attribution, not authentication". The lifecycle journal already measures the caller (`obs.cg` is
+`pane`/`supervisor` for a session, `agent` for the server), so a ccd-side refusal of `ws-add` from a
+held worker's pane is buildable; it is a named follow-on, not part of this wave, because it has
+happened zero times in 75 creations and it touches `ccd/` (agent-first deploy) for a door nobody has
+walked through. §7's bounded resolver stays as well: it tolerates a chain that predates the guard or
+bypasses it, and costs nothing.
