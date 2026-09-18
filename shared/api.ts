@@ -5945,6 +5945,34 @@ export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
   return typeof v === 'string' && (RUN_ROUTE_REFUSE_CODES as readonly string[]).includes(v);
 }
 
+/** Account-pool membership (design 2026-09-18 §5.2), task 6 fix round 2 — the
+ *  NINTH refusal vocabulary `mail-routes.test.ts`'s scanner checks together
+ *  and never merges into `RunRefuseCode` or any sibling, on the standing rule
+ *  every union above states: `CoordStore.setAccountPools` (`store.ts`) refuses
+ *  synchronously to its caller — nothing is recorded, nothing replays — so its
+ *  one member is neither a mail rejection nor a run refusal. Declared here,
+ *  not as a bare string literal in `server/src/coord/store.ts`, for the exact
+ *  reason `PROGRAM_KICKOFF_SUBJECT`'s docstring gives a few screens up: no
+ *  hyphenated literal under `server/src/coord` for that scanner to arbitrate.
+ *  A single-member `as const` array today because wave 1 has exactly one
+ *  refusal; the array (not a bare string type) is what lets a second member
+ *  join later without this becoming a second hand-written union.
+ *
+ *    multi-pool-not-supported — the caller asked to tag an account into more
+ *                                than one pool. Refused before `PoolEdgeLog`'s
+ *                                `maxEpoch()`/`append()` ever run, so a
+ *                                refused write leaves no journal line and
+ *                                opens no transaction. `pool_edges_one_per_
+ *                                account`'s own partial unique index is the
+ *                                same rule enforced a second way, in SQL,
+ *                                should a caller ever reach the store some
+ *                                other route than this method. */
+export const SET_ACCOUNT_POOLS_REFUSE_CODES = ['multi-pool-not-supported'] as const;
+export type SetAccountPoolsRefuseCode = (typeof SET_ACCOUNT_POOLS_REFUSE_CODES)[number];
+export function isSetAccountPoolsRefuseCode(v: unknown): v is SetAccountPoolsRefuseCode {
+  return typeof v === 'string' && (SET_ACCOUNT_POOLS_REFUSE_CODES as readonly string[]).includes(v);
+}
+
 /** How long a `planned` run may carry a `dispatchStartedAt` before the
  *  console calls the dispatch stalled. Deliberately >= the `ws-add` verb
  *  ceiling (`CCD_VERB_TIMEOUT_MS`, server-side) rather than a copy of it:

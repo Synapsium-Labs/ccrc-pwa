@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -761,8 +761,19 @@ describe('the rejection table is total, in both directions', () => {
         // four by name, so this fifth route gets its own vocabulary and its
         // own exported guard rather than silently widening one whose
         // docstring would then under-state its own membership.
-        || isRunRouteRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode or RunRouteRefuseCode`).toBe(true);
+        || isRunRouteRefuseCode(tok)
+        // ACCOUNT-POOL MEMBERSHIP, TASK 6 FIX ROUND 2 (C1) — the NINTH union,
+        // checked together and never merged, on the standing rule
+        // `enter-ignored` above states. `CoordStore.setAccountPools`
+        // (server/src/coord/store.ts) refuses synchronously to its caller —
+        // nothing is recorded, nothing replays — so its one member is
+        // neither a mail rejection nor a run refusal, the same family as
+        // `ClaimRefuseCode`/`AskRefuseCode` above. Admitted through its own
+        // exported guard rather than NOT_CODES, for the reason every union
+        // above gives: an allowlist entry accepts one spelling for ever, a
+        // guard accepts a member added later and still rejects a typo'd one.
+        || isSetAccountPoolsRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode or SetAccountPoolsRefuseCode`).toBe(true);
     }
   });
 });

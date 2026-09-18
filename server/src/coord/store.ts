@@ -49,6 +49,7 @@ import {
   type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
+  type SetAccountPoolsRefuseCode,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -133,13 +134,22 @@ export type AdvanceResult =
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; error: 'unknown-run' };
 
-/** `setAccountPools`'s answer (T6-R4, fix round 1). Wave 1 allows at most one
- *  pool per account — `pool_edges_one_per_account`'s own partial-unique
- *  shape — and a caller that asks for more gets this NAMED refusal instead
- *  of the raw `UNIQUE constraint failed` the store used to let escape. */
+/** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
+ *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
+ *  below). Wave 1 allows at most one pool per account —
+ *  `pool_edges_one_per_account`'s own partial-unique shape — and a caller
+ *  that asks for more gets this NAMED refusal instead of the raw `UNIQUE
+ *  constraint failed` the store used to let escape.
+ *
+ *  C2 (fix round 2): the type system will NOT stop a caller from discarding
+ *  this return value outright. Reading `.epoch` without narrowing `.ok` is a
+ *  compile error, but `store.setAccountPools(input, log);` with the result
+ *  unbound compiles clean and silent — a refusal then reads as a success at
+ *  the call site, because nothing ran. THE RESULT MUST BE BOUND AND ITS `.ok`
+ *  DISCRIMINATED before any effect is drawn from a call to this method. */
 export type SetAccountPoolsResult =
   | { ok: true; epoch: number }
-  | { ok: false; error: 'multi-pool-not-supported'; pools: readonly string[] };
+  | { ok: false; error: SetAccountPoolsRefuseCode; pools: readonly string[] };
 
 /** The reclaim's three answers. `kind`, not `error`, because these are not
  *  `advance`'s arms and folding them into `AdvanceResult` would put two
@@ -5269,7 +5279,13 @@ export class CoordStore {
    *  line for a membership the store went on to reject, and reached an
    *  uncaught caller as a bare exception (a 500, once a route calls this).
    *  Shaped like `AdvanceResult`/`OpenRunResult` above: a route checks `.ok`
-   *  and answers structured, not a 500. */
+   *  and answers structured, not a 500.
+   *
+   *  C2 (fix round 2, measured): the caller MUST bind the result and branch
+   *  on `.ok` before acting on it — discarding the call entirely compiles
+   *  clean and silent, and a refusal then reads as a success at the call
+   *  site, because the type system enforces the narrowing only if a caller
+   *  reads `.epoch` at all. */
   setAccountPools(input: {
     accountId: string; pools: readonly string[]; addedBy: string | null; now?: number;
   }, log: PoolEdgeLog): SetAccountPoolsResult {

@@ -11,13 +11,17 @@ import type { DatabaseSync } from 'node:sqlite';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { PoolEdgeLog, type PoolEdgeLogEntry } from '../src/coord/pooledgelog.js';
-import { mkdtempSync, readFileSync, writeFileSync, chmodSync, copyFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync, writeFileSync, chmodSync, copyFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { bodyDigest } from '../../shared/mark.mjs';
+import { mkTmp } from './tmpHelpers.js';
 
+// M2 (fix round 2): `mkTmp` (`tmpHelpers.ts`), not a raw `mkdtempSync` with no
+// matching `rmSync` — that shape leaked 140 dirs per run, 7,830 in /tmp on
+// this box, and mutation sweeps run this file 50-120 times. `fresh()` below
+// carried the same shape from the round-1 brief; fixed here too, one line.
 const fresh = () => {
-  const d = mkdtempSync(path.join(tmpdir(), 'pool-edges-'));
+  const d = mkTmp('pool-edges-');
   return { store: new CoordStore(openCoordDb(path.join(d, 'coord.db'))),
            log: new PoolEdgeLog(path.join(d, 'pool-edges.log')), dir: d };
 };
@@ -255,8 +259,8 @@ describe('maxEpoch: only ENOENT answers null (F6/T6-R5, fix round 1)', () => {
       .toThrow();
   });
 
-  it('reproduces the real reissue this guard closes: two epochs, a torn journal, a restored older coord.db — epoch 1 must NOT come back', () => {
-    const d = mkdtempSync(path.join(tmpdir(), 'pool-edges-'));
+  it('reproduces the real reissue this guard closes: two epochs, a torn journal, a restored older coord.db — epoch 2 must NOT come back', () => {
+    const d = mkTmp('pool-edges-');
     const dbPath = path.join(d, 'coord.db');
     const logPath = path.join(d, 'pool-edges.log');
     const snapPath = path.join(d, 'coord.db.snapshot');
@@ -265,24 +269,30 @@ describe('maxEpoch: only ENOENT answers null (F6/T6-R5, fix round 1)', () => {
     let store = new CoordStore(openCoordDb(dbPath));
     store.setAccountPools({ accountId: 'acct-a', pools: ['p1'], addedBy: 'op', now: 1 }, log);   // epoch 1
     store.db.close();                                  // checkpoints WAL into the main file
-    copyFileSync(dbPath, snapPath);                     // the "older snapshot": epoch 1 only
+    copyFileSync(dbPath, snapPath);                     // the "older snapshot": taken AFTER epoch 1 commits, so dbMax = 1 here
 
     store = new CoordStore(openCoordDb(dbPath));
     store.setAccountPools({ accountId: 'acct-a', pools: ['p2'], addedBy: 'op', now: 2 }, log);   // epoch 2
     store.db.close();
 
-    writeFileSync(logPath, '', 'utf8');                 // crash-torn journal: zero bytes
+    writeFileSync(logPath, '', 'utf8');                 // crash-torn journal: zero bytes, loses BOTH lines
     for (const suffix of ['-wal', '-shm']) {
       try { rmSync(dbPath + suffix); } catch { /* may not exist */ }
     }
-    copyFileSync(snapPath, dbPath);                     // restore the pre-epoch-2 snapshot
+    copyFileSync(snapPath, dbPath);                     // restore the epoch-1 snapshot — dbMax goes back to 1
 
     const restoredStore = new CoordStore(openCoordDb(dbPath));
     const restoredLog = new PoolEdgeLog(logPath);
-    // Before the fix: `maxEpoch()` on the zero-length file returned `null`,
-    // `dbMax` (back at 1 from the restored snapshot) handed out epoch 1
-    // again — a real reissue reachable with no unreadable file anywhere.
-    // After the fix this throws instead.
+    // Before the fix (M1, fix round 2 — corrected the number): `maxEpoch()`
+    // on the zero-length file returned `null`, so the next write took
+    // `dbMax + 1` = 1 + 1 = epoch 2 — the SAME epoch 2 that was already
+    // issued and journaled before the journal was zeroed, a real reissue
+    // reachable with no unreadable file anywhere in the sequence. (Not
+    // epoch 1: the snapshot was taken AFTER epoch 1 committed, so epoch 1
+    // itself never came back — measured by running this reproduction with
+    // the guard reverted, which returns `{ok:true,epoch:2}` for both the
+    // pre-crash write and the post-restore reissue.) After the fix this
+    // throws instead.
     expect(() => restoredStore.setAccountPools(
       { accountId: 'acct-b', pools: ['p3'], addedBy: 'op', now: 3 }, restoredLog))
       .toThrow();

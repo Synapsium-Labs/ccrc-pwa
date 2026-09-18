@@ -30,7 +30,19 @@ export interface PoolEdgeLogEntry {
 export class PoolEdgeLog {
   constructor(readonly logPath: string) {}
 
+  /** Refuses an EMPTY batch (out-of-scope note, fix round 2) rather than
+   *  silently no-op — `appendFileSync(path, '')` still CREATES a zero-length
+   *  file when none existed, and `maxEpoch()` now throws on exactly that
+   *  shape (F6/T6-R5). `setAccountPools` is the sole caller today and always
+   *  passes one entry, so this is unreachable in the current tree — but
+   *  `append` is public and a later caller wedging every subsequent read off
+   *  a call this file could not have anticipated is worse than a thrown
+   *  guard here, closest to the mistake. */
   append(entries: readonly PoolEdgeLogEntry[]): void {
+    if (entries.length === 0) {
+      throw new Error('PoolEdgeLog.append called with an empty batch — refused: this would ' +
+        'create (or leave unchanged) a file maxEpoch() cannot then distinguish from a torn write');
+    }
     mkdirSync(path.dirname(this.logPath), { recursive: true });
     const lines = entries.map((e) => JSON.stringify({
       epoch: e.epoch, accountId: e.accountId, pools: e.pools, addedBy: e.addedBy, at: e.at,
@@ -46,10 +58,23 @@ export class PoolEdgeLog {
    * before the crash) or content with no `"epoch":<digits>` anywhere in it.
    * Reading any of those as "nothing allocated" is exactly the reissue this
    * file exists to prevent — measured: write two epochs, zero-length the
-   * journal, restore `coord.db` from an older snapshot, and the OLD `return
-   * null` handed epoch 1 out again with no unreadable file anywhere in the
-   * sequence. ONLY `ENOENT` may answer `null`; every other "no epoch found"
+   * journal, restore `coord.db` from a snapshot taken between the two writes
+   * (so `dbMax` reads back as the FIRST epoch), and the OLD `return null`
+   * handed the SECOND epoch — already issued and journaled once — out again,
+   * with no unreadable file anywhere in the sequence (M1, fix round 2:
+   * corrected from "epoch 1" — the snapshot postdates epoch 1, so epoch 1
+   * itself never reissues; it is the epoch AFTER the snapshot that comes
+   * back). ONLY `ENOENT` may answer `null`; every other "no epoch found"
    * shape must fail as loudly as an unreadable file does.
+   *
+   * NO AUTOMATIC REPAIR: this throw wedges every subsequent pool write until
+   * an operator acts, by design — the alternative is the reissue above. The
+   * operator's move is to RECONSTRUCT the journal from `coord.db`'s own
+   * `pool_edges`/`pool_epoch` (which already hold the last-committed epoch
+   * and membership) rather than delete the file outright: deleting it drops
+   * straight to `dbMax` with no file-side floor at all, which is correct
+   * only if `coord.db` is also known current — the harder fact to establish
+   * during exactly the incident this throw fires in.
    *
    * Regex-only, unlike `ledgerlog.ts`'s two-arm JSON-parse-then-regex reader:
    * `maxAllocated` parses first because it must attribute each line to the

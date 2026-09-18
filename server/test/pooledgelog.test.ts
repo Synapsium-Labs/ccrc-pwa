@@ -58,4 +58,12 @@ describe('PoolEdgeLog', () => {
     appendFileSync(logPath, 'not json, no epoch key here\n');
     expect(() => new PoolEdgeLog(logPath).maxEpoch()).toThrow();
   });
+
+  it('append([]) is REFUSED — an empty batch would create a file maxEpoch() cannot tell from a torn write (out-of-scope note, fix round 2)', () => {
+    const logPath = path.join(mkTmp('ccrc-pooledgelog-'), 'pool-edges.log');
+    expect(() => new PoolEdgeLog(logPath).append([])).toThrow();
+    // Refused BEFORE the file is even touched: no zero-length file left behind.
+    expect(() => new PoolEdgeLog(logPath).maxEpoch()).not.toThrow();
+    expect(new PoolEdgeLog(logPath).maxEpoch()).toBeNull();
+  });
 });
