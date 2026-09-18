@@ -165,11 +165,28 @@ and reads 3008 after.
 
 #### Owed, and now authorised
 
-**The D-2661 darwin FIFO probe.** The operator authorised merging past it *and* asked for the test to
-be fixed in a follow-up. It is `server/test/platform-hazards.test.ts`'s `itDarwin('BSD: after the
-deadline fires, does the output FIFO reach EOF? — candidate (b)')`, a 15-second timing probe that has
-now reddened on unchanged trees on PR #116, on main's `probe-macos`, and here. It is its own item,
-against main, not a wave-3 entry.
+**The D-2661 darwin FIFO probe — PARKED FOR A macOS OWNER, and that is an operator ruling.** It is
+`server/test/platform-hazards.test.ts`'s `itDarwin('BSD: after the deadline fires, does the output
+FIFO reach EOF? — candidate (b)')`, a 15-second timing probe that has now reddened on unchanged trees
+on PR #116, on main's `probe-macos` and on PR #117. It is its own item against main, **never a wave-3
+entry**, and nothing in this programme waits on it: both macOS legs are non-required checks.
+
+**Why it is parked rather than owed.** The case is `itDarwin`-only, so it cannot be run or reproduced
+on the Linux fleet box. A fix written from here would be a hypothesis wearing a fix's clothes. The
+operator ruled it belongs to someone with a Mac.
+
+**What was done instead, so the park is not a shrug.** PR #149 adds diagnostics on the FAILURE BRANCH
+ONLY — the writer's `PGID`, the survivors in that group, and the FIFO's openers WITH their FDs, so a
+`1w` (a writer still holding it, which is the hazard) is distinguishable from `8r` (the probe's own
+read end). The assertion is unchanged: still `toBe('eof')`, no retry, no widened budget, because the
+test's own message rules that the remedy is to end the descendants rather than to wait longer. Three
+reds bought no diagnosis; the fourth will.
+
+**The owner condition is CONCRETE, because "someone, someday" is how a standing position rots.** The
+trigger is not a person becoming available — it is *the next macOS red carrying the new fields*. Read
+`HOLD`: a `1w` row naming a descendant outside `PGID` means the child escaped the process group, and
+the fix is in how `_auth_timeout` signals (`ccd/ccd-account-auth`, delegating to `timeout`/`gtimeout`
+with `-k <grace>`). A Linear ticket carries this; it is not tracked here.
 
 ### The merge landed, and the guard followed the phrase — RATIFIED (2026-09-17)
 
