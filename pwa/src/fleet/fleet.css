@@ -1772,6 +1772,27 @@ button.proj-card-pool::before {
 .acct-pool-chip[data-origin='declared'] {
   font-style: italic;
 }
+/* Review round 1, C1: this chip also carries `.proj-card-pool`, so its shared
+   `[data-pool='untagged']` rule above (`color: var(--status-attention-text)`,
+   written for an untagged PROJECT — the worklist, a fault) was winning here
+   too, painting every untagged account amber — the exact opposite of the
+   comment two rules up. Both selectors are one class + one attribute =
+   (0,2,0), a tie the cascade breaks by SOURCE ORDER, so being declared AFTER
+   the shared rule is what makes this win — `fleet-css.test.ts` pins both the
+   tie and the order so this cannot regress silently (jsdom applies no
+   stylesheet, so no render test can see a cascade defect like this one). */
+.acct-pool-chip[data-pool='untagged'] {
+  color: var(--ink-tertiary);
+}
+/* `stale` is account-only — `AccountPoolWire` has no project-side
+   counterpart (design §5.7) — so it is not a member of `.proj-card-pool`'s
+   shared `[data-pool=…]` list above and would otherwise fall through to the
+   base `--ink-tertiary`. `poolRule` treats `stale` exactly as undecidable as
+   `malformed`/`unreadable` (a 503, never a crossing offer), so it gets the
+   same attention treatment those already inherit from the shared rule. */
+.acct-pool-chip[data-pool='stale'] {
+  color: var(--status-attention-text);
+}
 /* The loud card-level count for sessions with nowhere in their pool to go. */
 .proj-card-stranded {
   flex: none;

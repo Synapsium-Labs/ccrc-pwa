@@ -79,6 +79,30 @@ describe('accountPoolState — the single reader (no client-side precedence fold
     );
     expect(w).toEqual({ state: 'untagged', origin: 'declared' });
   });
+
+  // Review round 1, I3: the grammar courtesy used to only guard the DECLARED
+  // arm — a resolved central/declared answer returned verbatim, untested,
+  // because it returned before POOL_NAME_RE was ever reached. Neither
+  // shared/poolrule.ts's declaredAccountPool nor server/src/poolrule.ts's
+  // resolvedAccountPool validates the grammar of the string they are handed,
+  // so an off-grammar name can arrive on `resolvedPool` exactly as it always
+  // could on the bare declared field — this proves the fold now applies
+  // there too, on the origin the server actually reported.
+  it('normalizes an off-grammar RESOLVED (central) value to untagged too — the fold applies to both arms now', () => {
+    const w = accountPoolState(
+      rosterWithResolved('acct-a', { state: 'tagged', pools: ['Pool A'], origin: 'central' }),
+      'acct-a',
+    );
+    expect(w).toEqual({ state: 'untagged', origin: 'central' });
+  });
+
+  it('normalizes an off-grammar RESOLVED (declared) value to untagged too', () => {
+    const w = accountPoolState(
+      rosterWithResolved('acct-a', { state: 'tagged', pools: ['Pool A'], origin: 'declared' }),
+      'acct-a',
+    );
+    expect(w).toEqual({ state: 'untagged', origin: 'declared' });
+  });
 });
 
 describe('AccountsScreen — the account pool chip', () => {
@@ -108,6 +132,21 @@ describe('AccountsScreen — the account pool chip', () => {
     expect(chip).toHaveAttribute('data-origin', 'declared');
   });
 
+  // Review round 1, Minor: a wrapper `rowOrder` adds from LIVE TELEMETRY
+  // alone (the roster has no entry for it) used to still get a chip claiming
+  // `origin: 'declared'` — a positive assertion about an account this
+  // roster cannot declare anything about. No chip at all is the honest
+  // degrade, on `accountLabel`'s own "never hide the row, never invent a
+  // fact" terms.
+  it('renders no pool chip at all for a wrapper the roster does not have', async () => {
+    stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({ wrapper: 'acct-unrostered' })]);
+    render(<AccountsScreen />);
+    await screen.findByText('acct-unrostered');
+    expect(screen.queryByTestId('acct-pool-chip-acct-unrostered')).toBeNull();
+    // The rostered account beside it is unaffected.
+    expect(screen.getByTestId('acct-pool-chip-acct-a')).toHaveTextContent('pool-roster');
+  });
+
   it('renders the CENTRAL origin now that the wire carries resolvedPool (Task 7 T7-R2)', async () => {
     stubAccounts(
       rosterWithResolved('acct-a', { state: 'tagged', pools: ['pool-central'], origin: 'central' }, 'pool-roster'),
@@ -117,6 +156,25 @@ describe('AccountsScreen — the account pool chip', () => {
     const chip = await screen.findByTestId('acct-pool-chip-acct-a');
     expect(chip).toHaveTextContent('pool-central');
     expect(chip).toHaveAttribute('data-origin', 'central');
+  });
+
+  // Review round 1, I4: `malformed`/`unreadable`/`stale` used to all render
+  // "no pool" — the exact inverse of what `poolRule` does with them (a 503,
+  // never a crossing offer). Not producible by today's server, so this is
+  // forward-looking coverage; it also proves `data-origin` is correctly
+  // ABSENT for these three (only `tagged`/`untagged` carry an `origin`).
+  it.each([
+    ['malformed', 'pool malformed'],
+    ['unreadable', 'pool unreadable'],
+    ['stale', 'pool stale'],
+  ] as const)('renders %s as its own word, never "no pool"', async (state, word) => {
+    stubAccounts(rosterWithResolved('acct-a', { state }), [acct({})]);
+    render(<AccountsScreen />);
+    const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+    expect(chip).toHaveTextContent(word);
+    expect(chip).not.toHaveTextContent('no pool');
+    expect(chip).not.toHaveAttribute('data-origin');
+    expect(chip).toHaveAttribute('data-pool', state);
   });
 });
 

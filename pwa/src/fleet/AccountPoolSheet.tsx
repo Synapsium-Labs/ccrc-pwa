@@ -47,14 +47,37 @@ export interface AccountPoolSheetProps {
   onSet: (accountId: string, pools: string[]) => void;
 }
 
+/** Review round 1, I4: this used to send `malformed`/`unreadable`/`stale`
+ *  all to "This app is older than the fleet; reload" — the wrong remedy for
+ *  every one (that sentence is for a genuinely UNRECOGNISED future state,
+ *  not any of these three named, current members of `AccountPoolWire`).
+ *  Exhaustive over the current five-member union, same reasoning as
+ *  `AccountsScreen`'s `acctPoolChip`: the `never` assignment in the default
+ *  arm is what makes a sixth member a compile error here. Not producible by
+ *  today's server (`resolvedAccountPool` only ever returns
+ *  `tagged`/`untagged`), so latent — but an adapter narrows a distinction it
+ *  received here just as much as a chip's `word` does. */
 const currentCopy = (account: string, current: AccountPoolWire | undefined): string => {
   if (current === undefined) return `This app has not measured ${account}'s pool yet.`;
-  if (current.state === 'tagged') {
-    const carrier = current.origin === 'central' ? '' : ' (the roster default — no central tag is set)';
-    return `${account} is in pool ${current.pools[0]}${carrier}.`;
+  switch (current.state) {
+    case 'tagged': {
+      const carrier = current.origin === 'central' ? '' : ' (the roster default — no central tag is set)';
+      return `${account} is in pool ${current.pools[0]}${carrier}.`;
+    }
+    case 'untagged':
+      return `${account} is in no pool — it may serve any project.`;
+    case 'malformed':
+      return `${account}'s pool tag is malformed and cannot be read as a name.`;
+    case 'unreadable':
+      return `${account}'s pool tag could not be read — check permissions on the fleet host.`;
+    case 'stale':
+      return `${account}'s pool projection is stale — the control-plane link may be down.`;
+    default: {
+      const unhandled: never = current;
+      void unhandled;
+      return `This app is older than the fleet; reload to understand ${account}'s pool.`;
+    }
   }
-  if (current.state === 'untagged') return `${account} is in no pool — it may serve any project.`;
-  return `This app is older than the fleet; reload to understand ${account}'s pool.`;
 };
 
 export function AccountPoolSheet({
@@ -77,6 +100,16 @@ export function AccountPoolSheet({
   const trimmed = name.trim();
   const validNew = POOL_NAME_RE.test(trimmed);
 
+  // Review round 1, I5: the ONLY prior caller of `create` was this button's
+  // own `onClick`, and a disabled `<button>` never dispatches a click at all
+  // (browser semantics jsdom reproduces) — so `if (!validNew) return;` had
+  // no path that could ever reach it with `validNew` false, and the test
+  // asserting "refuses a name off POOL_NAME_RE" was true for a reason that
+  // had nothing to do with this line (measured: deleting it left the whole
+  // suite green). Enter-to-submit on the text field is a real second caller,
+  // not suppressed by the button's `disabled` attribute, so it both closes a
+  // small UX gap (a labelled text field beside a button ordinarily submits
+  // on Enter) and gives the guard a path a test can actually exercise.
   const create = (): void => {
     if (!validNew) return;
     onSet(account, [trimmed]);
@@ -120,6 +153,7 @@ export function AccountPoolSheet({
           value={name}
           placeholder="pool-name"
           onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter') create(); }}
         />
         <button type="button" className="btn-primary pool-new-create" disabled={!validNew} onClick={create}>
           Create

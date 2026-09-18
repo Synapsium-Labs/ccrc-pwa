@@ -108,10 +108,76 @@ describe('AccountPoolSheet', () => {
     expect(onSet).toHaveBeenCalledWith('acct-a', []);
   });
 
+  // Review round 1, I5: the guard's only prior caller was a button jsdom
+  // (like a real browser) never dispatches a click on while `disabled`, so
+  // "refuses a name off POOL_NAME_RE" above proved the guard existed for a
+  // reason unrelated to the guard — measured by deleting the line and
+  // re-running: the whole suite stayed green. Enter-to-submit is a second,
+  // real caller the button's `disabled` attribute does not gate, so these
+  // two actually exercise `if (!validNew) return;` and its positive twin.
+  it('Enter on an off-grammar name does NOT submit — the guard has a real caller now', () => {
+    const onSet = vi.fn();
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        open
+        onClose={() => {}}
+        onSet={onSet}
+      />,
+    );
+    const input = screen.getByLabelText('New pool name');
+    fireEvent.change(input, { target: { value: 'Pool_A' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSet).not.toHaveBeenCalled();
+  });
+
+  it('Enter on a valid name submits, same as clicking Create', () => {
+    const onSet = vi.fn();
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        open
+        onClose={() => {}}
+        onSet={onSet}
+      />,
+    );
+    const input = screen.getByLabelText('New pool name');
+    fireEvent.change(input, { target: { value: 'pool-new' } });
+    fireEvent.keyDown(input, { key: 'Enter' });
+    expect(onSet).toHaveBeenCalledWith('acct-a', ['pool-new']);
+  });
+
   it('renders nothing while no account is selected', () => {
     const { container } = render(
       <AccountPoolSheet account={null} roster={[]} open onClose={() => {}} onSet={vi.fn()} />,
     );
     expect(container).toBeEmptyDOMElement();
+  });
+
+  // Review round 1, I4: `malformed`/`unreadable`/`stale` used to all collapse
+  // into "This app is older than the fleet; reload" — the wrong remedy for
+  // every one of them (that sentence is reserved for a genuinely
+  // UNRECOGNISED future state). Not producible by today's server, so this is
+  // forward-looking coverage for the `never`-guarded switch, on the same
+  // terms the AccountsScreen chip test below exercises.
+  it.each([
+    ['malformed', "acct-a's pool tag is malformed and cannot be read as a name."],
+    ['unreadable', "acct-a's pool tag could not be read — check permissions on the fleet host."],
+    ['stale', "acct-a's pool projection is stale — the control-plane link may be down."],
+  ] as const)('gives %s its own remedy, not the reload sentence', (state, expected) => {
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        current={{ state }}
+        open
+        onClose={() => {}}
+        onSet={vi.fn()}
+      />,
+    );
+    expect(screen.getByText(new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
+    expect(screen.queryByText(/older than the fleet/)).not.toBeInTheDocument();
   });
 });

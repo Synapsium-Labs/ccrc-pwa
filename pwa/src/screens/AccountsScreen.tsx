@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
+import type { AccountPoolWire } from '../../../shared/poolrule';
 import { toast } from '../components/Toast';
 import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
@@ -28,6 +29,64 @@ import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
+
+/** The chip's short text, accessible name and `data-pool`/`data-origin` for
+ *  EVERY `AccountPoolWire` state — review round 1, I4. `malformed`,
+ *  `unreadable` and `stale` are just as UNDECIDABLE to `poolRule` as each
+ *  other (a 503, never a crossing offer, design §5.7) — collapsing any of
+ *  them to "no pool" claims the opposite of what the server actually does
+ *  with them: unconstrained, may serve any project. Distinct words for
+ *  `stale` vs `unreadable` on purpose (design §5.7's own words: "one's
+ *  remedy is file permissions, the other's is the control-plane link").
+ *  Not producible by today's server (`resolvedAccountPool` only ever
+ *  returns `tagged`/`untagged` — server/src/poolrule.ts), so this is latent,
+ *  forward-looking coverage, not a reachable-today path.
+ *
+ *  Exhaustive over the current five-member union: the `never` assignment in
+ *  the default arm is what makes a sixth member (a future server) a compile
+ *  error here, rather than a silent "no pool" narrowing — `ProjectCard`'s own
+ *  `PoolChip` makes the identical argument for its `unrecognised` fallback,
+ *  the one condition TypeScript cannot see: a value that arrives at runtime
+ *  off the type this build was compiled against. */
+function acctPoolChip(state: AccountPoolWire): {
+  word: string; ariaLabel: string; dataPool: string; origin?: 'central' | 'declared';
+} {
+  switch (state.state) {
+    case 'tagged':
+      return {
+        word: state.pools[0], dataPool: 'tagged', origin: state.origin,
+        ariaLabel: `pool ${state.pools[0]}, opens the account pool editor`,
+      };
+    case 'untagged':
+      return {
+        word: 'no pool', dataPool: 'untagged', origin: state.origin,
+        ariaLabel: 'no pool, opens the account pool editor',
+      };
+    case 'malformed':
+      return {
+        word: 'pool malformed', dataPool: 'malformed',
+        ariaLabel: "this account's pool tag is malformed — nobody can decide whether it may serve a tagged project, opens the account pool editor",
+      };
+    case 'unreadable':
+      return {
+        word: 'pool unreadable', dataPool: 'unreadable',
+        ariaLabel: "this account's pool tag could not be read — check permissions on the fleet host, opens the account pool editor",
+      };
+    case 'stale':
+      return {
+        word: 'pool stale', dataPool: 'stale',
+        ariaLabel: "this account's pool projection is stale — the control-plane link may be down, opens the account pool editor",
+      };
+    default: {
+      const unhandled: never = state;
+      void unhandled;
+      return {
+        word: 'pool unrecognised', dataPool: 'unrecognised',
+        ariaLabel: 'app bundle is older than the fleet; reload to understand this account pool, opens the account pool editor',
+      };
+    }
+  }
+}
 
 // `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). This
 // screen's own `GET /api/accounts` poll (`useAccountsPoll` below) carries the
@@ -270,12 +329,22 @@ export function AccountsScreen(): ReactNode {
           // surface in the app whose whole job is to say WHICH carrier
           // decided (`data-origin`), so an operator who just cleared a
           // central tag sees the declared default take over rather than a
-          // chip that looks unchanged.
+          // chip that looks unchanged. `acctPoolChip` covers all five states,
+          // not just tagged/untagged (I4).
+          //
+          // Review round 1, Minor: `inRoster` gates the chip entirely for a
+          // wrapper `rowOrder` added from LIVE TELEMETRY the roster does not
+          // (yet) have an entry for (`rowOrder`'s own docstring). Without
+          // this, `accountPoolState` still answers `{state:'untagged',
+          // origin:'declared'}` for such a wrapper — a POSITIVE claim ("the
+          // roster declares this untagged") about an account this roster has
+          // no entry to declare anything about, which is a different, worse
+          // claim than the old code's silence. `accountLabel`'s raw-name
+          // fallback is a safe degrade for the SAME condition because it
+          // asserts nothing; an origin claim is not that.
+          const inRoster = roster.some((a) => a.id === wrapper);
           const poolState = accountPoolState(roster, wrapper);
-          const poolLabelText = poolState.state === 'tagged' ? poolState.pools[0] : 'no pool';
-          const poolOrigin = poolState.state === 'tagged' || poolState.state === 'untagged'
-            ? poolState.origin
-            : undefined;
+          const chip = acctPoolChip(poolState);
           return (
             <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
               <div className="accounts-row-head">
@@ -291,21 +360,19 @@ export function AccountsScreen(): ReactNode {
                     measured dead is shown for a sharper version of the same
                     reason: it is the one lane an operator has to go and fix. */}
                 {off && <span className="accounts-disabled-note">{offNote}</span>}
-                <button
-                  type="button"
-                  className="proj-card-pool acct-pool-chip"
-                  data-testid={`acct-pool-chip-${wrapper}`}
-                  data-pool={poolState.state}
-                  data-origin={poolOrigin}
-                  aria-label={
-                    poolState.state === 'tagged'
-                      ? `pool ${poolLabelText}, opens the account pool editor`
-                      : 'no pool, opens the account pool editor'
-                  }
-                  onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
-                >
-                  {poolLabelText}
-                </button>
+                {inRoster && (
+                  <button
+                    type="button"
+                    className="proj-card-pool acct-pool-chip"
+                    data-testid={`acct-pool-chip-${wrapper}`}
+                    data-pool={chip.dataPool}
+                    data-origin={chip.origin}
+                    aria-label={chip.ariaLabel}
+                    onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
+                  >
+                    {chip.word}
+                  </button>
+                )}
               </div>
 
               <div className="acct-rows">
