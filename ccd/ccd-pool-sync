@@ -52,6 +52,27 @@ command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing 
 [[ -r "$AGENT_ENV" ]] || { say "cannot read $AGENT_ENV"; exit 1; }
 url=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
 [[ -n "$url" ]] || { say "CCRC_SERVER_URL is not set in $AGENT_ENV"; exit 1; }
+# C1 (fix round 1): `ccrc install --role fleet` writes either spelling, and
+# the installer's own prompt (ccd/ccrc:9267) offers `ws://…` FIRST — so
+# without this, the box's own suggested value makes curl refuse the protocol
+# outright (measured: `curl: (1) Protocol "ws" not supported`) and every sync
+# after that is a silent no-op. Copied verbatim from `ccd/ccrc-api:206-207`
+# (`server_url()`), including the trailing-slash trim: a trailing `/` on
+# `$url` would build `.../api//api/pools/epoch`, a different route.
+url="${url/#ws:/http:}"; url="${url/#wss:/https:}"
+url="${url%/}"
+# Minor (fix round 1, my call): this is now the THIRD hand-copy of
+# ccrc-api's URL+token dance (ccd-account-health, ccrc-api itself, this
+# file), and C1 above is the concrete cost of that shape — a fix landing in
+# one copy and not the other two. Not extracting a shared helper in this
+# round: all three are standalone executables specifically so ccd itself
+# never grows a network dependency (this file's own header), so a shared
+# helper would need to be a FOURTH sourced-or-copied file with the same
+# "installed as a copy, cannot source a sibling" constraint ccd/ccrc already
+# carry for the platform block (macos-platform.test.ts pins that reasoning) —
+# real design work, not a fix-round patch, and touching two files this round
+# doesn't own is more blast radius than three findings warrant. Flagging for
+# a follow-up rather than doing it here.
 [[ -r "$TOKEN_FILE" ]] || { say "no readable box token at \$HOME/.cc-secrets/ccrc-mail.token"; exit 1; }
 # The value line, never the `#` comment preamble the file wraps it in.
 tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]')
@@ -63,7 +84,23 @@ out="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
   | curl -sS -K - -o - -w '\n%{http_code}' \
     --max-time "$TIMEOUT" "$url/api/pools/epoch" 2>/dev/null)"; rc=$?
 tok=""
-if [ "$rc" -ne 0 ]; then say "unmeasured — curl exited $rc"; exit 1; fi
+if [ "$rc" -ne 0 ]; then
+  # Minor (fix round 1, my call): curl's own stderr is discarded above
+  # (2>/dev/null, so nothing from the response body's transport ever mixes
+  # into a decision this script makes) — which is right, but it left an
+  # operator debugging a dead timer with only a bare exit code, and C1's
+  # whole failure mode WAS a curl exit code (1, unsupported protocol) naming
+  # nothing on its own. Map the common ones to a sentence; anything else
+  # still says the number rather than inventing a wrong guess.
+  case "$rc" in
+    1)  say "unmeasured — curl exited 1 (unsupported protocol — check CCRC_SERVER_URL's scheme in $AGENT_ENV)" ;;
+    6)  say "unmeasured — curl exited 6 (could not resolve host in \$url)" ;;
+    7)  say "unmeasured — curl exited 7 (could not connect)" ;;
+    28) say "unmeasured — curl exited 28 (timed out after ${TIMEOUT}s)" ;;
+    *)  say "unmeasured — curl exited $rc" ;;
+  esac
+  exit 1
+fi
 status="${out##*$'\n'}"
 body="${out%$'\n'*}"
 [ "$status" = 200 ] || { say "unmeasured — HTTP $status"; exit 1; }
@@ -92,13 +129,52 @@ body="${out%$'\n'*}"
 # enforces one pool per account server-side, so this is not reachable today;
 # guarded anyway, loudly, because a silent multi-pool render would fail far
 # from its own cause.
+# T3-R1 (fix round 1): RENDER FIRST, THEN VALIDATE THE WHOLE RENDERED
+# DOCUMENT AGAINST THE GRAMMAR, THEN STAGE — a second, independent pass over
+# the OUTPUT TEXT, not a trust that the per-field checks above already cover
+# it. Measured, pre-fix, three ways the per-field checks alone let through:
+# `epoch -1` rendered `epoch -1` (int() takes a negative; %d renders the
+# sign; the reader's `^(0|[1-9][0-9]*)$` refuses it AFTER a good in-lease
+# document was already destroyed to install it); 1200 accounts rendered an
+# 80438-byte file (over the reader's strict `-n 65536` cap, refused the same
+# destructive way); `"pools":"p"` (a bare string, not a list) iterated
+# CHARACTER BY CHARACTER in the `for p in pools` loop, rendering `acct
+# acct-a p` — a tag the control plane never stated, and the reader had no way
+# to tell from a real one. Three different shapes, one root cause: nothing
+# checked the ASSEMBLED text, only the fields going into it. The one thing a
+# per-field check structurally cannot do is see the byte-cap, so a
+# whole-document pass is the only check whose coverage does not depend on
+# remembering to add a case — this DOES restate the grammar in a second
+# language, deliberately: the reader is bash, this is python, there was never
+# going to be one copy, and the writer re-deriving its own reader's grammar
+# and checking the text it is about to install against it is the same
+# "measure, don't echo" discipline the rest of this system already uses.
 rendered=$(printf '%s' "$body" | LC_ALL=C.UTF-8 python3 -c '
 import json, re, sys
 ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+NUM = r"(?:0|[1-9][0-9]*)"
+# The reader'"'"'s FULL line grammar, restated: every rendered line must be
+# one of these five shapes, and the check below runs over the JOINED TEXT,
+# split back into lines, not over the `lines` list this script itself built
+# — the point is not trusting the builder, it is checking its output.
+LINE = re.compile(r"^(?:epoch %s|issued %s|lease %s|acct [A-Za-z0-9._-]{1,64} [a-z][a-z0-9-]{0,31}|end)$" % (NUM, NUM, NUM))
+
+def whole_num(name, v):
+    # Cheap input check for a better diagnostic than the whole-document pass
+    # below would give: `type(v) is int` (not `isinstance`) excludes BOTH a
+    # JSON float (int() truncates 43.5 to 43 silently, accepting a value the
+    # control plane never actually sent) and a JSON bool (isinstance(True,
+    # int) is True in Python; `type(True) is int` is not).
+    if type(v) is not int or v < 0:
+        raise ValueError("%s must be a non-negative integer, got %r" % (name, v))
+    return v
+
 try:
     d = json.load(sys.stdin)
-    e, i, l = int(d["epoch"]), int(d["issuedAt"]), int(d["leaseUntil"])
+    e = whole_num("epoch", d["epoch"])
+    i = whole_num("issuedAt", d["issuedAt"])
+    l = whole_num("leaseUntil", d["leaseUntil"])
     accts = d["accounts"]
     if not isinstance(accts, dict): raise ValueError("accounts")
     lines = ["epoch %d" % e, "issued %d" % i, "lease %d" % l]
@@ -121,14 +197,36 @@ try:
         # changing what a clean id/pool name matches.
         if not ID.fullmatch(k):
             raise ValueError("account id %r" % k)
-        pools = accts[k].get("pools", [])
+        acct = accts[k]
+        if not isinstance(acct, dict): raise ValueError("account %r must be an object" % k)
+        pools = acct.get("pools", [])
+        if not isinstance(pools, list):
+            raise ValueError("account %r pools must be a list, got %r" % (k, pools))
         if len(pools) > 1:
             raise ValueError("account %r carries %d pools, at most one is supported" % (k, len(pools)))
         for p in pools:
-            if not NAME.fullmatch(p): raise ValueError("pool %r" % p)
+            if not isinstance(p, str) or not NAME.fullmatch(p):
+                raise ValueError("pool %r" % (p,))
             lines.append("acct %s %s" % (k, p))
     lines.append("end")
-    sys.stdout.write("\n".join(lines) + "\n")
+    doc = "\n".join(lines) + "\n"
+
+    # THE WHOLE-DOCUMENT PASS. Runs over `doc` — the actual bytes about to be
+    # staged — not over `lines`, so a defect in how `lines` was assembled
+    # (not merely in what went into each element) is still caught here.
+    encoded = doc.encode("utf-8")
+    if len(encoded) >= 65536:
+        raise ValueError("rendered document is %d bytes, at or over the reader'"'"'s 65536-byte cap" % len(encoded))
+    body_lines = doc.split("\n")
+    if body_lines and body_lines[-1] == "":
+        body_lines = body_lines[:-1]   # doc always ends in exactly one \n
+    if not body_lines or body_lines[-1] != "end":
+        raise ValueError("rendered document'"'"'s last line is not exactly \"end\"")
+    for ln in body_lines:
+        if not LINE.fullmatch(ln):
+            raise ValueError("rendered line is off-grammar: %r" % ln)
+
+    sys.stdout.write(doc)
 except Exception as ex:
     sys.stderr.write(str(ex)); sys.exit(1)
 ') || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, ghContainedEnv } from './ccdWsHelpers.js';
+import { makeCcdHarness } from './ccdWsHelpers.js';
 import { readFileSync, writeFileSync, mkdirSync, existsSync, chmodSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
@@ -37,6 +37,10 @@ function seedConfig(): void {
   writeFileSync(path.join(h.home, '.cc-secrets', 'ccrc-mail.token'), 'tok-abc\n', 'utf8');
   mkdirSync(path.join(h.home, '.cc-sessions'), { recursive: true });
 }
+function setServerUrl(url: string): void {
+  writeFileSync(path.join(h.home, '.ccrc', 'agent.env'), `CCRC_SERVER_URL=${url}\n`, 'utf8');
+}
+const curlArgv = (): string => readFileSync(path.join(h.home, 'curl.argv'), 'utf8');
 const run = (bin: string): { rc: number; out: string } => {
   try {
     const out = execFileSync('bash', [path.resolve('../ccd/ccd-pool-sync')], {
@@ -157,50 +161,23 @@ describe('ccd-pool-sync', () => {
     expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
   });
 
-  // Task 1 round 3 (T1-R3): probe `_acct_pool_state` directly against a
-  // document shaped exactly like the pre-T1-R3 grammar (no `end` line) — the
-  // shape a truncation collapses to. Written to the CONTRACT ("your test
-  // should be written to the contract, not to today's reader"), not to the
-  // live file: `ccd/ccd` is another task's file, mid-edit, UNCOMMITTED, in
-  // this same shared worktree, and its working-tree content is not a stable
-  // oracle — measured flapping in BOTH directions within minutes while this
-  // task ran (reader answered `named pool-a` with `git diff ccd/ccd` empty;
-  // then refused once Task 1's terminator check appeared live; then answered
-  // `named pool-a` again moments later while `git diff ccd/ccd` showed Task 1
-  // mid-REWRITE of the same function, the check temporarily gone). A test
-  // that sources the LIVE path would be exactly as unstable, in whichever
-  // direction the other task's editor happens to be mid-save. A git commit
-  // is atomic; a working tree under concurrent edit is not — so this sources
-  // `git show HEAD:ccd/ccd`, the last STABLE, committed snapshot, instead of
-  // the live file at `../ccd/ccd`. When this comment was written that was
-  // 38dfc652 ("fix round 2"), which did not yet carry the terminator check,
-  // so this read as a deterministic, reproducible pending-dependency signal
-  // rather than a coin flip on another session's save timing — no `it.fails`
-  // needed; the same plain assertion would start passing on its own the
-  // moment Task 1 committed. UPDATE, same task, minutes later: Task 1
-  // committed round 3 as 3fe63055 ("real seen-flags, a document terminator,
-  // and unreadable for an absent id") and the working tree is clean again —
-  // this now passes for real, against the same HEAD every other test in this
-  // repo would see. Left as a plain assertion rather than reworded to drop
-  // the "pending" framing, since the comment's history is the evidence this
-  // pin actually tracks its dependency rather than merely asserting it does.
-  it('cross-check: HEAD\'s committed ccd/ccd refuses a document with no `end` terminator (pending Task 1 round 3\'s commit — see comment for why HEAD, not the live file)', () => {
+  // T1-R3: the reader is line-oriented and cannot tell a complete final row
+  // from a torn one — a document truncated right after its last `acct` line
+  // must not answer `named <pool>` for that account. (T3-R2: this briefly
+  // read `git show HEAD:ccd/ccd` instead of the live file while Task 1's
+  // concurrent edits to ccd/ccd were still flapping mid-round; reverted now
+  // that Task 1 is complete and the tree is quiet — in CI the checkout is
+  // always clean, so HEAD and the working tree agree anyway, and pointing
+  // at HEAD instead of the live file only ever changed anything on a dirty
+  // local tree, which is exactly when a real regression needs catching.)
+  it('cross-check: the shipped reader refuses a document with no `end` terminator', () => {
     const h2 = makeCcdHarness('pool-sync-reader-x');
     try {
       const reg = path.join(h2.home, '.cc-sessions');
       mkdirSync(reg, { recursive: true });
       writeFileSync(path.join(reg, 'pool-epoch'),
         'epoch 43\nissued 1000\nlease 9999999999\nacct acct-a pool-a\n', 'utf8');
-      // maxBuffer explicit: ccd/ccd is 13k+ lines and trips execFileSync's
-      // default (1 MiB) ENOBUFS — measured, not assumed.
-      const committedCcd = execFileSync('git', ['show', 'HEAD:ccd/ccd'],
-        { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
-      const snapshot = path.join(h2.home, 'ccd-head-snapshot');
-      writeFileSync(snapshot, committedCcd, 'utf8');
-      const out = execFileSync('bash', ['-c', `source "${snapshot}"; _acct_pool_state acct-a`], {
-        encoding: 'utf8', cwd: h2.home,
-        env: ghContainedEnv(h2.home, { ...process.env, HOME: h2.home }, { systemd: true, tmux: true }),
-      }).trim();
+      const out = h2.sh('_acct_pool_state acct-a');
       expect(out).not.toMatch(/^named /);
     } finally {
       h2.cleanup();
@@ -258,5 +235,93 @@ describe('ccd-pool-sync', () => {
     const reg = path.join(h.home, '.cc-sessions');
     const strays = execFileSync('bash', ['-c', `ls -a ${reg} | grep -c 'pool-epoch\\.' || true`], { encoding: 'utf8' }).trim();
     expect(strays).toBe('0');
+  });
+
+  // C1 (fix round 1, Critical): `ccrc install --role fleet` writes either
+  // `ws://`/`wss://` or `http://`/`https://`, and the installer's own prompt
+  // offers `ws://…` first — without the swap curl refuses the protocol
+  // outright and every sync after that is a silent no-op. One case per
+  // scheme, per the review: both must reach curl's argv as http(s).
+  it('normalizes ws:// to http:// before it ever reaches curl', () => {
+    setServerUrl('ws://example.invalid');
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(bin).rc).toBe(0);
+    expect(curlArgv()).toContain('http://example.invalid/api/pools/epoch');
+    expect(curlArgv()).not.toContain('ws://');
+  });
+
+  it('normalizes wss:// to https:// before it ever reaches curl', () => {
+    setServerUrl('wss://example.invalid');
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(bin).rc).toBe(0);
+    expect(curlArgv()).toContain('https://example.invalid/api/pools/epoch');
+    expect(curlArgv()).not.toContain('wss://');
+  });
+
+  it('trims a trailing slash so the route is /api/pools/epoch, not /api//pools/epoch', () => {
+    setServerUrl('https://example.invalid/');
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(bin).rc).toBe(0);
+    expect(curlArgv()).toContain('https://example.invalid/api/pools/epoch');
+    expect(curlArgv()).not.toContain('//api');
+  });
+
+  // T3-R1 (fix round 1, C2-C4 — one mechanism, not three patches): render
+  // first, THEN validate the whole rendered document against the grammar,
+  // before anything touches the filesystem. Each case below reproduces a
+  // measured pre-fix failure: a good in-lease document destroyed and
+  // replaced with one the reader calls `malformed`.
+  it('refuses (writes nothing) when epoch is negative', () => {
+    const before = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(before).rc).toBe(0);
+    const baseline = doc();
+    const bin = stubCurl('{"epoch":-1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(doc(), 'a rejected negative epoch must leave the prior document untouched').toBe(baseline);
+  });
+
+  it('refuses (writes nothing) when epoch is a float, rather than silently truncating it', () => {
+    const before = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(before).rc).toBe(0);
+    const baseline = doc();
+    const bin = stubCurl('{"epoch":43.5,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(doc()).toBe(baseline);
+  });
+
+  it('refuses (writes nothing) when pools is a string, rather than iterating its characters', () => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":"p"}}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+  });
+
+  it('refuses (writes nothing) when pools is an object rather than a list', () => {
+    const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":{"pool-a":1}}}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
+  });
+
+  // The byte-cap case: 1500 accounts with long-but-legal ids render a
+  // document at or over the reader's strict `-n 65536` bound. Built as JSON
+  // in Node (not hand-typed) so the size is a property of the loop, not a
+  // guess; a plain-file curl stub avoids embedding ~100 KB in a shell
+  // single-quoted literal.
+  it('refuses (writes nothing) when the rendered document would be at or over the reader\'s 65536-byte cap', () => {
+    const accounts: Record<string, { pools: string[] }> = {};
+    for (let n = 0; n < 1500; n++) {
+      const id = `acct-${String(n).padStart(4, '0')}-${'x'.repeat(40)}`;
+      accounts[id] = { pools: ['pool-a'] };
+    }
+    const body = JSON.stringify({ epoch: 1, issuedAt: 1, leaseUntil: 9999999999, accounts });
+    const bin = path.join(h.home, 'bin');
+    mkdirSync(bin, { recursive: true });
+    const bodyFile = path.join(h.home, 'oversized-body.json');
+    writeFileSync(bodyFile, body, 'utf8');
+    writeFileSync(path.join(bin, 'curl'),
+      `#!/usr/bin/env bash\nprintf '%s\\n' "$*" > "$HOME/curl.argv"\ncat > "$HOME/curl.stdin"\ncat "$HOME/oversized-body.json"\nprintf '\\n200'\n`,
+      'utf8');
+    chmodSync(path.join(bin, 'curl'), 0o755);
+    expect(run(bin).rc).not.toBe(0);
+    expect(existsSync(path.join(h.home, '.cc-sessions', 'pool-epoch'))).toBe(false);
   });
 });
