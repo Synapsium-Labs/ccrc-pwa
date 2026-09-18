@@ -929,7 +929,7 @@ with `local to="" check=0 force=0`. After the `--to` shape check and BEFORE the 
         box="${BOX_BUILD[4]}"; state="behind"
       fi
     fi
-    _upd_resolve "$to"
+    _upd_resolve "$to" >/dev/null  # RULING R1: keep `check: …` as the first stdout line for the parser
     if [ "$state" = behind ] && [ "$box" = "$UPD_VERSION" ]; then
       state="incomplete"
       if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then
