@@ -60,8 +60,14 @@ export const RECLAIM_COPY: Record<
   // heir whose one coordinator is the claimant being replaced is now admitted.
   // A sentence naming a programme would have the operator looking for the
   // wrong thing on the board.
+  // THE TRAILING CLAUSE IS CONDITIONAL, second fix round: a flat "a worker may
+  // not inherit a programme" is false since D-3028 — the dying coordinator's
+  // own worker inherits — and it was ALSO more than the door could prove while
+  // the read was newest-only. Both halves are now true of the shipped
+  // predicate: every open run naming the heir is read, and the refusal is
+  // exactly "some OTHER coordinator's open run still binds it".
   'heir-is-a-worker': 'that session is the worker of another coordinator\'s open run right now '
-    + '— a worker may not inherit a programme',
+    + '— a worker may not inherit a programme while another coordinator\'s run still binds it',
   'registry-unmeasurable': 'the registry could not be read, so this box cannot say who is alive',
   'not-configured': 'this box does not run coordination — there is no ledger to rewrite',
   'bad-request': 'that id is not one this box will accept',

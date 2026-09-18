@@ -15,6 +15,12 @@ describe('runCard — which card a run renders on (board-placement wave 2, Task 
     expect(runCard({ sessionId: null, claimedBy: 'c1', project: 'beta' }, cardOf)).toBe('alpha');
   });
   it('falls back to the run\'s own project for a pending spawn that names NOBODY — nothing routable exists', () => {
+    // GREEN BY STRUCTURE, said out loud: this case cannot red on the
+    // `run.claimedBy === null` guard, because deleting it leaves
+    // `cardOf.get(null)` — `undefined` — and `?? run.project` answers the same
+    // string. What pins the guard is the COMPILER (`ReadonlyMap<string,string>`
+    // refuses a `string | null` key), not this assertion.
+    //
     // A reconstructed, ownerless row (`claimedBy` NULL, store.ts's D-12 class):
     // no session and no claimant, so `run.project` is the only answer there is.
     expect(runCard({ sessionId: null, claimedBy: null, project: 'beta' }, cardOf)).toBe('beta');
