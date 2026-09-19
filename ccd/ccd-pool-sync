@@ -167,7 +167,14 @@ def whole_num(name, v):
     # control plane never actually sent) and a JSON bool (isinstance(True,
     # int) is True in Python; `type(True) is int` is not).
     if type(v) is not int or v < 0:
-        raise ValueError("%s must be a non-negative integer, got %r" % (name, v))
+        # M1 (fix wave E, item 3rd instance of this class): `v` is
+        # UNVALIDATED here — this branch fires PRECISELY BECAUSE it failed
+        # the check above — same shape as the account-id and pools sites
+        # above, and the same remedy: `trunc_repr` already exists in this
+        # file and already closed those two. Measured against the real
+        # extracted python block: a 1 MB `epoch`/`leaseUntil` used to write
+        # ~1,000,044/~1,000,049 bytes to stderr on every failing 60s tick.
+        raise ValueError("%s must be a non-negative integer, got %s" % (name, trunc_repr(v)))
     return v
 
 def trunc_repr(v, cap=200):
