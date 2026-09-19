@@ -2,7 +2,7 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { CCD_ARGV } from './ccdargv.js';
+import { ACCOUNT_POOLS_CAP, CCD_ARGV } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
 
@@ -318,6 +318,54 @@ export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnfor
 }
 
 /**
+ * Does the deployed ccd honour ACCOUNT pools? Same three-state shape and
+ * same polarity as `poolsEnforcement` just above, sourced from a different
+ * channel: `PROJECT_POOL_VERB`'s presence is evidence because the verb and
+ * every reader ship in one `ccd` inode (spec §5.11), but there is no `ccd
+ * account-pools` verb to dispatch (ruling R2 removed the one the design
+ * assumed) — only `ACCOUNT_POOLS_CAP`, a CAPABILITY token `cmd_caps` echoes
+ * (`ccd/ccd`), the same channel `POOLS_CAP`/`ACTOR_FLAGS_CAP` already ride
+ * (`ccdargv.ts`'s own docstring on `ACCOUNT_POOLS_CAP`). `null` is no
+ * evidence (`unknown`); only a measured absence reads `unavailable`.
+ */
+export function accountPoolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnforcement {
+  if (ccdVerbs === null) return 'unknown';
+  return ccdVerbs.includes(ACCOUNT_POOLS_CAP) ? 'enforced' : 'unavailable';
+}
+
+/**
+ * The account-pool epoch (`CoordStore.poolEpoch().epoch`), degraded exactly
+ * the way `readAccountPoolEdges()` (`server.ts`) degrades its own
+ * `coord.accountPoolEdges()` read (F1, pre-merge gate).
+ *
+ * `coord` ABSENT (no coordination db wired — local mode, or a test double)
+ * leaves `epoch` off the wire: nothing to read, so `?.` alone is the right
+ * guard for that arm. But `coord.poolEpoch()` can also THROW — a full disk,
+ * a locked or closed `node:sqlite` connection — and `?.` does not guard a
+ * throw, only an absent receiver. A bare `coord?.poolEpoch().epoch` call
+ * site therefore let a broken coord.db escape as an uncaught throw: past
+ * `FleetWatcher.tick()` (killing the whole poll, not just this one
+ * freshness field — `push-copy.test.ts`) and past the `GET /api/fleet`
+ * handler (500ing the whole response over a field nobody asked to place
+ * anything against). Both call sites route through this one function now,
+ * so the two cannot diverge on it again the way they did the first time —
+ * the epoch producer landed identically wired in both places, and neither
+ * was guarded against the throw, only the absence.
+ *
+ * Returns `undefined` on either failure — absence, which already means
+ * "cannot tell you" on this wire (`ProjectPoolsWire`'s own `epoch?` shape) —
+ * never a fabricated number and never a propagated throw.
+ */
+export function readPoolEpoch(coord: { poolEpoch(): { epoch: number } } | undefined): number | undefined {
+  if (!coord) return undefined;
+  try {
+    return coord.poolEpoch().epoch;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * The read, on the wire. The Map becomes a plain object; nothing narrows.
  *
  * `epoch`/`observedEpoch` (T9-R2) are the two callers' own facts, not
@@ -339,16 +387,29 @@ export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnfor
  * `undefined`-valued keys, or future code that inspects the object before it
  * is ever serialized) would see the key as present and silently collapse the
  * three-way to a two-way, with nothing red to catch it.
+ *
+ * `accountPools` (F2, pre-merge gate) rides the SAME omitted-when-undefined
+ * shape as `epoch`/`observedEpoch` above, for a different reason: it is not a
+ * staleness fact that can be genuinely absent for THIS build (a caller always
+ * has a `PoolsEnforcement` value to give it, `accountPoolsEnforcement`'s
+ * return type is never `undefined`), but the wire's own `accountPools?`
+ * field (`shared/api.ts`) is optional so an OLDER peer omitting it still
+ * parses. Its own optional trailing parameter here mirrors that, rather than
+ * inserting a new required positional argument ahead of `epoch`/
+ * `observedEpoch` and forcing every existing call site (this file's own
+ * tests included) to learn a value it was never testing.
  */
 export function poolsWire(
   read: ProjectPoolsRead,
   enforcement: PoolsEnforcement,
   epoch?: number,
   observedEpoch?: number | null,
+  accountPools?: PoolsEnforcement,
 ): ProjectPoolsWire {
   const staleness = {
     ...(epoch !== undefined ? { epoch } : {}),
     ...(observedEpoch !== undefined ? { observedEpoch } : {}),
+    ...(accountPools !== undefined ? { accountPools } : {}),
   };
   return read.listed
     ? { listed: true, byProject: Object.fromEntries(read.tags), enforcement, ...staleness }

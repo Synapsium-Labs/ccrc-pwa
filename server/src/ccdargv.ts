@@ -554,6 +554,26 @@ export const ACTOR_FLAGS_CAP = 'actor-flags-v1';
  *  their composed contract now that both stages are present. */
 export const POOLS_CAP = 'pools-v1';
 
+/** The `ccd caps` token that says this box honours ACCOUNT-side pool
+ *  membership — `_pool_ok` (`ccd/ccd`) now consults `_acct_pool_state`'s
+ *  five-word projection rather than merely the declared roster name, so an
+ *  account-side `unreadable`/`stale`/`malformed` refuses into a tagged
+ *  project instead of silently serving it. Spelled ONCE in `server/src`, for
+ *  `ACTOR_FLAGS_CAP`'s reason: a capability token copied into two files is
+ *  the drift shape `single-definition.test.ts` exists for. ccd's own `echo
+ *  account-pools` and `ccd-archive.test.ts`'s `KNOWN_CAPABILITY_TOKENS` are
+ *  the other two spellings, and that test's `toContain` assertion is what
+ *  keeps THIS one equal to them.
+ *
+ *  Spec §5.9 originally sourced `PoolsEnforcement`'s `accountPools` field
+ *  from "the verb's presence in `ccd caps`", but ruling R2 removed the verb
+ *  the design assumed — there is no `ccd account-pools` to dispatch, only a
+ *  decision `_pool_ok` already makes on every call. Same channel, same
+ *  argument, as `POOLS_CAP` above: a CAPABILITY token, not a dispatchable
+ *  verb, so `accountPoolsEnforcement` (`pools.ts`) can answer `enforced`
+ *  only against a box that actually took this deploy. */
+export const ACCOUNT_POOLS_CAP = 'account-pools';
+
 /** The `ccd caps` token that says this box implements `ccd route` and reads
  *  the routing record at settle (routing spec 2026-09-14 §5.3). Spelled ONCE
  *  in `server/src`, for `ACTOR_FLAGS_CAP`'s reason; ccd's `echo route-v1` and

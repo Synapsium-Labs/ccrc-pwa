@@ -106,9 +106,12 @@ export function FleetScreen({
   selectedId?: string | null; // the open session, highlighted in the desktop sidebar
   showAccounts?: boolean; // false on desktop — the accounts strip is a top bar there
   /** The server's current account-pool epoch (`GET /api/pools/epoch`, Task
-   *  7). `undefined` when nothing has wired this build to that route yet —
-   *  wave 1 Task 9 is the rendering half only; no poller lands a real number
-   *  here. */
+   *  7), off `useFleetStore`'s `pools.epoch` (`app.tsx`) — the same `pools`
+   *  frame the fleet WS/REST wire carries (`server/src/pools.ts`'s
+   *  `poolsWire`). Commit 18454187 (T9-R2) wired the real producer, so
+   *  `undefined` here now means what the field's own three-valued contract
+   *  says it means: this server has no coordination db wired (local mode),
+   *  never "nothing polls it yet". */
   epoch?: number;
   /** This build's own agent connection's last-reported observed epoch
    *  (`AgentReady.observedEpoch`, `shared/agent-protocol.ts`). THREE answers,

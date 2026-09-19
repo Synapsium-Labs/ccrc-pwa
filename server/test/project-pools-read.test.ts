@@ -14,9 +14,10 @@ import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { CCD_ARGV } from '../src/ccdargv.js';
 import {
-  POOLS_DIR_NAME, poolFor, poolsEnforcement, poolsWire, readProjectPools,
+  POOLS_DIR_NAME, accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readProjectPools,
   readProjectPoolsWithRoot,
 } from '../src/pools.js';
+import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
 import { absentReadIO, degradedReadIO } from './ioDoubles.js';
 import { seedRoster } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -611,6 +612,23 @@ describe('poolsEnforcement — the three-state shape lifecycleState uses', () =>
   });
 });
 
+// F2 (pre-merge gate): `accountPools` was declared on `ProjectPoolsWire`
+// (spec §5.9) with no producer anywhere in `server/src`. `accountPoolsEnforcement`
+// is that producer — same three-state shape as `poolsEnforcement` above, off a
+// different token: the `account-pools` CAPABILITY token Task 2 added to
+// `cmd_caps` (`ccd/ccd`), never a dispatchable verb (ruling R2 removed the one
+// the design assumed).
+describe('accountPoolsEnforcement — the same three-state shape, off the account-pools capability token', () => {
+  it('null caps is unknown, never unavailable', () => {
+    expect(accountPoolsEnforcement(null)).toBe('unknown');
+  });
+
+  it('the token present is enforced, the token absent is unavailable', () => {
+    expect(accountPoolsEnforcement([ACCOUNT_POOLS_CAP, 'swap'])).toBe('enforced');
+    expect(accountPoolsEnforcement(['swap', 'start'])).toBe('unavailable');
+  });
+});
+
 describe('poolsWire', () => {
   it('carries the map as a plain object when listed, and the enforcement either way', async () => {
     tag('demo', 'pool-a');
@@ -663,6 +681,28 @@ describe('poolsWire', () => {
     const observedOnly = poolsWire({ listed: false }, 'unknown', undefined, 4);
     expect(Object.hasOwn(observedOnly, 'epoch')).toBe(false);
     expect((observedOnly as { observedEpoch?: number | null }).observedEpoch).toBe(4);
+  });
+
+  // F2 (pre-merge gate): `accountPools` rides the same omitted-when-undefined
+  // shape as `epoch`/`observedEpoch` — absent when the caller passes nothing,
+  // never a fabricated 'unknown'.
+  it('omits accountPools when no argument is passed, and carries it through on both wire arms when given', () => {
+    const bare = poolsWire({ listed: false }, 'unknown');
+    expect(Object.hasOwn(bare, 'accountPools')).toBe(false);
+
+    expect(poolsWire({ listed: false }, 'unknown', undefined, undefined, 'enforced')).toEqual({
+      listed: false, enforcement: 'unknown', accountPools: 'enforced',
+    });
+    expect(poolsWire({ listed: true, tags: new Map() }, 'enforced', undefined, undefined, 'unavailable')).toEqual({
+      listed: true, byProject: {}, enforcement: 'enforced', accountPools: 'unavailable',
+    });
+  });
+
+  it('carries accountPools independently of epoch/observedEpoch — the three facts do not interfere', () => {
+    const wire = poolsWire({ listed: false }, 'unknown', 5, 5, 'enforced');
+    expect(wire).toEqual({
+      listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5, accountPools: 'enforced',
+    });
   });
 });
 

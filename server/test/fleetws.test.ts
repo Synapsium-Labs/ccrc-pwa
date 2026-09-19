@@ -12,6 +12,7 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
+import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
@@ -1017,6 +1018,7 @@ describe('fleet REST + WS', () => {
       expect(frame.type).toBe('pools');
       expect(frame.pools).toEqual({
         listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+        accountPools: 'unknown',
       });
       ws.close();
     });
@@ -1071,7 +1073,7 @@ describe('fleet REST + WS', () => {
       expect(coordFrame.type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
-      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown' });
+      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown', accountPools: 'unknown' });
       ws.close();
     });
 
@@ -1105,7 +1107,7 @@ describe('fleet REST + WS', () => {
         expect((await next()).type).toBe('coord');
         const frame = await next();
         expect(frame.type).toBe('pools');
-        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', epoch: 0 });
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', epoch: 0, accountPools: 'unknown' });
         ws.close();
       });
 
@@ -1117,7 +1119,7 @@ describe('fleet REST + WS', () => {
         expect((await next()).type).toBe('fleet');
         expect((await next()).type).toBe('coord');
         const frame = await next();
-        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: 12 });
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: 12, accountPools: 'unknown' });
         ws.close();
       });
 
@@ -1129,7 +1131,7 @@ describe('fleet REST + WS', () => {
         expect((await next()).type).toBe('fleet');
         expect((await next()).type).toBe('coord');
         const frame = await next();
-        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null });
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
         expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(true);
         ws.close();
       });
@@ -1144,7 +1146,7 @@ describe('fleet REST + WS', () => {
         expect((await next()).type).toBe('fleet');
         expect((await next()).type).toBe('coord');
         const frame = await next();
-        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown' });
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', accountPools: 'unknown' });
         expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(false);
         ws.close();
       });
@@ -1162,6 +1164,67 @@ describe('fleet REST + WS', () => {
         const body = res.json() as { pools: { epoch?: number; observedEpoch?: number | null } };
         expect(body.pools.epoch).toBe(0);
         expect(body.pools.observedEpoch).toBe(0);   // 0 is a real observed epoch, not absence
+      });
+
+      // F1 (pre-merge gate): `?.` on `deps.coord?.poolEpoch().epoch` only
+      // guards `coord` being ABSENT, not `poolEpoch()` THROWING — a broken or
+      // locked coord.db must degrade this READ the same way
+      // `readAccountPoolEdges()` degrades (epoch off the wire), never 500 the
+      // whole `/api/fleet` response over one stale-freshness field nobody
+      // asked to place anything against.
+      it('a broken coord.db leaves epoch off GET /api/fleet\'s pools wire instead of 500ing the whole response', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        coord.db.close();
+        const deps = { ...testDeps(home), coord };
+        const bus = new Bus();
+        app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { epoch?: number } };
+        expect(Object.hasOwn(body.pools, 'epoch')).toBe(false);
+      });
+    });
+
+    // F2 (pre-merge gate): `accountPools` was declared on `ProjectPoolsWire`
+    // (spec §5.9) with no producer anywhere in `server/src` — Task 10's gate
+    // found the wire field, but nothing read the `account-pools` capability
+    // token Task 2 added to `cmd_caps` to fill it. `accountPoolsEnforcement`
+    // (pools.ts) is that producer, wired into both `poolsWire` call sites the
+    // same way `poolsEnforcement`/`enforcement` already are.
+    describe('the accountPools field', () => {
+      it('reads enforced/unavailable off the account-pools capability token, on both GET /api/fleet and the WS pools frame', async () => {
+        const enforcedDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = new FleetWatcher(enforcedDeps, bus);
+        app = await buildServer(enforcedDeps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('enforced');
+
+        await watcher.tick();
+        expect(watcher.currentPools()?.accountPools).toBe('enforced');
+        await app.close();
+        app = undefined;
+
+        const unavailableDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: ['swap'], rosterFp: null, build: null },
+        };
+        app = await buildServer(unavailableDeps);
+        const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body2 = res2.json() as { pools: { accountPools?: string } };
+        expect(body2.pools.accountPools).toBe('unavailable');
+      });
+
+      it('is absent-reads-unknown when there is no ccdVerbs evidence at all', async () => {
+        app = await buildServer(testDeps(home));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('unknown');
       });
     });
   });

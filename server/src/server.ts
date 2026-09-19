@@ -14,7 +14,7 @@ import { readLimits, projectHome, projectPlacement } from './limits.js';
 import { readSharesMeasured } from './shares.js';
 import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
-  poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
+  accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readPoolEpoch, readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
@@ -1100,13 +1100,22 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       pools: poolsWire(
         poolsRead,
         poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
-        // T9-R2: the epoch/observedEpoch producer. `deps.coord` absent (no
-        // coordination db wired) leaves `epoch` off the wire entirely —
-        // short-circuited by `?.` before `poolEpoch()` ever runs.
+        // T9-R2: the epoch/observedEpoch producer. `readPoolEpoch` (pools.ts)
+        // leaves `epoch` off the wire entirely whether `deps.coord` is absent
+        // (no coordination db wired) OR `poolEpoch()` throws — degraded the
+        // same way `readAccountPoolEdges()` above degrades its own coord.db
+        // read (F1, pre-merge gate: a bare `?.` only short-circuited the
+        // absent case, so a broken coord.db used to 500 this whole route
+        // instead of just leaving this one freshness field off the wire).
         // `deps.fleetState?.observedEpoch` forwards FleetState's own
         // three-valued answer unchanged (absent/null/number).
-        deps.coord?.poolEpoch().epoch,
+        readPoolEpoch(deps.coord),
         deps.fleetState?.observedEpoch,
+        // F2 (pre-merge gate): `accountPools`, the same three-state shape as
+        // `enforcement` above, derived off the same `ccdVerbs` list — the
+        // `account-pools` capability token Task 2 added to `cmd_caps`, read
+        // the way `poolsEnforcement` already reads the project-pool verb.
+        accountPoolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
       ),
     };
   });

@@ -169,7 +169,7 @@ describe('GET /api/fleet — degraded mode', () => {
     // its meaning. `listed: false` is the truthful answer for a fixture whose
     // registry root does not list: nobody decides, and that is not `untagged`.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: false, enforcement: 'unknown', accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -223,7 +223,7 @@ describe('GET /api/fleet — degraded mode', () => {
     // its meaning. `listed: false` is the truthful answer for a fixture whose
     // registry root does not list: nobody decides, and that is not `untagged`.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: false, enforcement: 'unknown', accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -385,6 +385,7 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
     expect(res.json().pools).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+      accountPools: 'unknown',
     });
     await app.close();
   });

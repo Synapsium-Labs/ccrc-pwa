@@ -2,7 +2,7 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
-import { poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
+import { accountPoolsEnforcement, poolsEnforcement, poolsWire, readPoolEpoch, readProjectPools } from './pools.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -1245,15 +1245,25 @@ export class FleetWatcher {
       this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)),
     );
     // T9-R2: the epoch/observedEpoch producer, the SAME two reads `/api/fleet`
-    // (server.ts) makes for its own `poolsWire` call — `deps.coord` absent
-    // leaves `epoch` off the wire (short-circuited before `poolEpoch()` runs),
-    // and `deps.fleetState?.observedEpoch` forwards FleetState's own
-    // three-valued answer (absent/null/number) unchanged.
+    // (server.ts) makes for its own `poolsWire` call — `readPoolEpoch`
+    // (`pools.ts`) leaves `epoch` off the wire whether `deps.coord` is
+    // absent OR `poolEpoch()` throws (F1, pre-merge gate: a bare `?.` only
+    // guarded the absent case, so a broken coord.db used to throw straight
+    // through this tick instead of degrading it — see that function's own
+    // docstring), and `deps.fleetState?.observedEpoch` forwards FleetState's
+    // own three-valued answer (absent/null/number) unchanged.
+    //
+    // F2 (pre-merge gate): `accountPools`, the same three-state shape as
+    // `enforcement` two lines below, derived off the SAME `ccdVerbs` list —
+    // `accountPoolsEnforcement` reads the `account-pools` capability token
+    // Task 2 added to `cmd_caps`, the way `poolsEnforcement` already reads
+    // the project-pool verb.
     const wire = poolsWire(
       read,
       poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null),
-      this.deps.coord?.poolEpoch().epoch,
+      readPoolEpoch(this.deps.coord),
       this.deps.fleetState?.observedEpoch,
+      accountPoolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null),
     );
     const json = JSON.stringify(wire);
     if (json === this.lastPoolsJson) return;
