@@ -132,6 +132,7 @@ const fakeTermFactory = () => {
       onWheel: (cb) => {
         wheelHandlers.push(cb);
       },
+      onKey: () => {},
       fit: () => ({ ...grid }),
       focus: () => {},
       dispose,

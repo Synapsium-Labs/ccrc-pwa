@@ -498,7 +498,7 @@ describe('ReconnectingSocket against a closed gate', () => {
 describe('TerminalDrawer against a closed gate', () => {
   const fakeTerm = (): { makeTerm: (host: HTMLElement) => DrawerTerm } => ({
     makeTerm: () => ({
-      write: () => {}, onData: () => {}, onWheel: () => {},
+      write: () => {}, onData: () => {}, onWheel: () => {}, onKey: () => {},
       fit: () => ({ cols: 48, rows: 20 }), focus: () => {}, dispose: () => {},
     }),
   });

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import path from 'node:path';
+import { CLIP_EXT_ALT } from '../../shared/api.js';
 import type { StagedClip } from '../../shared/api.js';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
@@ -13,20 +14,69 @@ export function isSafeSessionId(id: string): boolean {
 }
 
 /** One clip filename: no directory part, no dots to climb with. Exported so the
- *  prompt and clip routes validate against the same shape the writer produces. */
-export const CLIP_NAME_RE = /^clip-[A-Za-z0-9._-]+\.(?:png|jpe?g|webp)$/;
+ *  prompt and clip routes validate against the same shape the writer produces.
+ *  The extension half is DERIVED from `CLIP_EXTS` rather than spelled again —
+ *  a name this refuses is a name the clip route cannot serve, so the two lists
+ *  drifting apart would strand a staged file behind a 400. */
+export const CLIP_NAME_RE = new RegExp(`^clip-[A-Za-z0-9._-]+\\.(?:${CLIP_EXT_ALT})$`);
 
-/** `clip-<YYYYmmdd-HHMMSS>-<rand>.<ext>`. The random suffix is not decoration:
- *  the old one-second stamp let two clips filed in the same second overwrite
- *  each other. The extension is the REAL one — `ccd clip` called everything
- *  .png, so a downscaled JPEG lied about its format. */
-export function clipName(ext: string, now: number, rand: string): string {
+/**
+ * Content-Type for the clip route, keyed by the (real) extension `clipName`
+ * wrote. It lives beside the writer, not in the route, so that `clip.test.ts`
+ * can hold it against `CLIP_EXTS` — an admitted extension with no entry here
+ * would be served as `application/octet-stream`, which is a silent download
+ * prompt instead of the document the user tapped.
+ *
+ * Nothing here is a script type, and nothing ever should be: these are bytes a
+ * client uploaded, served back from the app's OWN origin. `text/html` or
+ * `image/svg+xml` in this table would make the clip route a same-origin script
+ * host. The route also sends `nosniff`, so a browser cannot promote one of
+ * these to HTML on its own.
+ */
+export const CLIP_MIME: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
+  md: 'text/markdown', txt: 'text/plain', log: 'text/plain',
+  csv: 'text/csv', tsv: 'text/tab-separated-values', json: 'application/json',
+  yaml: 'text/yaml', yml: 'text/yaml', rtf: 'application/rtf', pdf: 'application/pdf',
+};
+
+/**
+ * The part of an uploaded file's OWN name worth carrying into the clip name.
+ *
+ * Images never needed this — you can see which one you attached. A document
+ * cannot be seen: four of them are four indistinguishable lines in the prompt,
+ * and the name is the only thing that says which is the spec and which is the
+ * log. So the stem rides along, sanitised to exactly what `CLIP_NAME_RE`
+ * admits (`[A-Za-z0-9._-]`), stripped of leading dots and dashes so it cannot
+ * open a name with one, and capped — a 300-character filename is a real thing
+ * a phone will hand over, and the stamp and random suffix still have to fit.
+ *
+ * Returns '' when nothing survives, which is the ORIGINAL name shape and still
+ * valid: the stem is an aid to the reader, never part of the contract.
+ */
+export function clipStem(filename: string): string {
+  const base = filename.slice(filename.lastIndexOf('/') + 1).replace(/\.[^.]*$/, '');
+  return base
+    .replace(/[^A-Za-z0-9._-]+/g, '-')
+    .replace(/^[.\-]+/, '')
+    .slice(0, 40)
+    .replace(/[.\-]+$/, '');
+}
+
+/** `clip-<YYYYmmdd-HHMMSS>-<rand>[-<stem>].<ext>`. The random suffix is not
+ *  decoration: the old one-second stamp let two clips filed in the same second
+ *  overwrite each other. The extension is the REAL one — `ccd clip` called
+ *  everything .png, so a downscaled JPEG lied about its format. `stem` is the
+ *  uploader's own name, already sanitised by `clipStem`, and defaults to ''
+ *  (the original shape) — it is APPENDED after `rand` so the collision-proof
+ *  part of the name can never be pushed out by a long one. */
+export function clipName(ext: string, now: number, rand: string, stem = ''): string {
   const d = new Date(now);
   const p = (n: number, w = 2) => String(n).padStart(w, '0');
   const stamp =
     `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
     `-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`;
-  return `clip-${stamp}-${rand}.${ext}`;
+  return `clip-${stamp}-${rand}${stem === '' ? '' : `-${stem}`}.${ext}`;
 }
 
 /**
@@ -64,8 +114,9 @@ export async function stageUpload(
   ext: string,
   now: number = Date.now(),
   rand: string = randomBytes(4).toString('hex'),
+  stem = '',
 ): Promise<StagedClip> {
-  const name = clipName(ext, now, rand);
+  const name = clipName(ext, now, rand, stem);
   const full = clipPath(cfg.clipsDir, id, name);
   await io.writeFileB64(full, data.toString('base64'));
   return { path: full, name, bytes: data.byteLength };
