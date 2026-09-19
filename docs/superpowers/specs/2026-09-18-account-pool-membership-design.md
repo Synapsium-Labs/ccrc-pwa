@@ -56,7 +56,8 @@ available before the reply leaves."* Same comment fixes the guard stance to copy
 control."*
 
 ### 3.3 The agent already reads the roster projection
-`agent/src/server.ts:512` does `bodyDigest(readFileSync(path.join(home, '.ccrc', 'accounts.sh')))`
+`agent/src/server.ts`'s `readRosterFp` (`:568`, not `:512` as first cited) does
+`bodyDigest(readFileSync(path.join(home, '.ccrc', 'accounts.sh')))`
 — its own internal read, not a client-driven frame. `accounts.json` carries credential *paths*,
 never keys. So the server could be shown that roster; today it is shown only a hash of it.
 
@@ -84,7 +85,9 @@ projection crosses this line and is rejected on that basis alone.
 `EXEC_COMMANDS = ['tmux','ccd']` (`agent/src/whitelist.ts:134`) is closed; `FORBIDDEN_COMMANDS`
 does not list `ccrc`, but the file's own comment makes granting deliberately expensive.
 `REQUIRED_VERB_FLAG` (`:252-255`) has **five** entries today — `ws-reap`, `ws-rename`,
-`coord-pause`, `project-pool`, `route` — so a gated `account-pool` is the **sixth**.
+`coord-pause`, `project-pool`, `route` — so a gated `account-pool` is the **sixth**. **Correction:**
+ruling R1/R2 (§11) means this wave never spends that slot — the sync is a sibling executable and the
+write path execs nothing, so `REQUIRED_VERB_FLAG` stays at five.
 
 ### 3.8 The live fleet is greenfield for this feature
 17 accounts (14 `generated`, 2 `external`, 1 `upstream`), **zero carrying a pool**, and no
@@ -144,7 +147,7 @@ the convergence signal that scales past two boxes.
 | coord.db (`pool_edges`, `pool_epoch`) | **Authoritative.** The only writer of membership. |
 | `~/.ccrc/pool-edges.log` | Flat-file ground truth (D8), so a lost coord.db reconstructs. |
 | Server | Writes the origin; forecasts and refuses from the DB directly; never places. |
-| `$REG/pool-epoch.json` | A **leased projection**. A cache with a generation, never a source. |
+| `$REG/pool-epoch` | A **leased projection**. A cache with a generation, never a source. |
 | `ccd` | Placement authority, unchanged. Reads one local file; never the network at placement time. |
 | `accounts.json`'s `pool` | **Declared default**, retained. Lowest precedence. See §5.6. |
 
@@ -164,11 +167,13 @@ CREATE TABLE pool_edges (
 CREATE UNIQUE INDEX pool_edges_one_per_account
   ON pool_edges(subjectId) WHERE subjectKind = 'account';
 
-CREATE TABLE pool_epoch (            -- single row
+CREATE TABLE pool_epoch (            -- single row, `coordinator_state`'s own idiom (ruling R4)
+  id       INTEGER PRIMARY KEY CHECK (id = 1),
   epoch    INTEGER NOT NULL,
   issuedAt INTEGER NOT NULL,
   digest   TEXT NOT NULL
 );
+INSERT INTO pool_epoch (id, epoch, issuedAt, digest) VALUES (1, 0, 0, '');
 ```
 
 **Row per edge, not a column** (operator ruling 2). `subjectKind` exists from day one even though
@@ -190,27 +195,43 @@ direction: a lost coord.db that could not reconstruct would answer "untagged", a
 unconstrained — **the fail-open direction, which is the one outcome this whole design exists to
 prevent.**
 
-### 5.4 The projection — `$REG/pool-epoch.json`
+### 5.4 The projection — `$REG/pool-epoch`
 
-One document, always emitted even when empty, written only by `ccd pool-sync` through `mktemp` +
-`mv -fT`. It lands in `$REG` and not `~/.ccrc` for the reason in §3.1: `$REG` is the only place the
-server can read back, and the agent's write allowlist stays `.cc-clips` only — **the projection is
-written by ccd on the box, never by an agent write frame.**
+**Corrections (rulings R1/R3, §11).** One document, always emitted even when empty, written by the
+**sibling executable** `ccd-pool-sync` — never a `ccd` verb: `ccd/ccd` makes zero outbound network
+calls by doctrine, and the sync joins `ccd-account-health`/`ccd-telemetry-keepalive` as a curl-using
+sibling instead. It lands via a hand-built dot-leading tmp file, not `mktemp`, then a portable
+rename: `mv -fT` is GNU-only and absent on Darwin, so the real idiom is `_plat_mv_notdir`'s doctrine
+(here inlined, since the sibling does not source `ccd`). It lands in `$REG` and not `~/.ccrc` for the
+reason in §3.1: `$REG` is the only place the server can read back, and the agent's write allowlist
+stays `.cc-clips` only — **the projection is written by `ccd-pool-sync` on the box, never by an agent
+write frame.**
 
-```jsonc
-{ "epoch": 43, "issuedAt": 1758..., "leaseUntil": 1758...,
-  "accounts": { "acct-a": { "pools": ["pool-a"], "origin": "central" } } }
+**Line-oriented text, terminated, not JSON** (ruling R3) — `ccd` has no JSON parser and
+`_acct_pool_state` is called once per candidate account, so this format mirrors
+`_project_pool_state`'s own precedent rather than costing a parse per call:
+
+```
+epoch 43
+issued 1758000000
+lease 1758000900
+acct acct-a pool-a
+end
 ```
 
-`pools` is an array of length 0 or 1 today; the rule is already written as set membership, so
-multi-pool later needs no wire change. `origin` says which carrier decided, per entry, on the wire
-— not in a release note.
+`acct` lines may be zero (a document with only `epoch`/`issued`/`lease`/`end` is legal and means
+*synced, nothing tagged*). At most one `acct <id> <pool>` line per id today; multi-pool later adds
+more lines for the same id, not a wire shape change. **The document carries the RESOLVED pool per
+account — central if present, else the declared `accounts.json` default — never central edges
+alone.** Emitting central edges only would drop a declared-only account from the document entirely,
+which `ccd` reads as `untagged` and serves: the fail-open this design exists to close, arriving
+through the new path instead of the old one it was written to shut (§5.6 rule 2).
 
-**Absence is not untagged.** `"accounts": {}` means *synced, nothing tagged*. **No document** means
-*this node has never synced* and reads `unreadable`. That is why the control plane always emits the
-document even when empty — the same argument that makes `_ccrc_pool` emit an empty `case`. Folding
-those two would silently lift every constraint on a node that has never synced, which is the cold-
-pod case and therefore the EKS default.
+**Absence is not untagged.** No `acct` line for an id means *synced, nothing tagged*. **No document
+at all** means *this node has never synced* and reads `unreadable`. That is why the control plane
+always emits the document even when empty — the same argument that makes `_ccrc_pool` emit an empty
+`case`. Folding those two would silently lift every constraint on a node that has never synced, which
+is the cold-pod case and therefore the EKS default.
 
 ### 5.5 The write path
 
@@ -224,19 +245,19 @@ PWA (session cookie)
   -> L1 decides the edge set
   -> L3 CoordStore.tx(): append journal line FIRST, write pool_edges + bump pool_epoch SECOND
   -> reply { ok, epoch }  (+ warning when no project carries that name — warning, never refusal)
-  -> nudge (optimisation only): deps.runCcd(CCD_ARGV.poolSync())
 ```
 
-`EXEC_COMMANDS` stays `['tmux','ccd']`. **No `ccrc` grant, no widening of the agent write
-allowlist, no security ruling required.** One new whitelisted `ccd` verb; `EXEC_WHITELIST.ccd`
-gains `['pool-sync']` and, for the gated form, `REQUIRED_VERB_FLAG` gains its sixth entry (§3.7).
-
-The nudge is explicitly an optimisation and is the only part §3.4 condemns. Convergence is owned by
-the **pull**, so deleting the nudge on EKS changes latency and nothing else.
+**Correction (ruling R2) — no nudge, dropped entirely, not merely deferred to EKS.** §3.4 already
+condemned it as the wrong shape; measurement went further and removed it now. The route execs
+nothing: `EXEC_COMMANDS` stays `['tmux','ccd']` unchanged, `EXEC_WHITELIST.ccd` gains no verb, and
+`REQUIRED_VERB_FLAG` stays at five (§3.7). Convergence is owned wholly by `ccd-pool-sync.timer`'s
+pull (§5.4); the reply above is immediate and exact regardless (the server forecasts from coord.db
+directly, §5.7), and only the fleet's own enforcement lags ≤`OnUnitActiveSec`. An EKS migration
+changes nothing about this path at all, not merely its latency.
 
 ### 5.6 Precedence — three rules, and one deliberate departure from the panel's winner
 
-1. **Projected beats declared.** `$REG/pool-epoch.json` (origin `central`) outranks
+1. **Projected beats declared.** `$REG/pool-epoch` (origin `central`) outranks
    `accounts.json`'s `pool`, which outranks untagged.
 
 2. **The roster field is RETAINED as the declared default.** The winning candidate proposed making
@@ -254,9 +275,9 @@ the **pull**, so deleting the nudge on EKS changes latency and nothing else.
 3. **The wire says which carrier decided,** per entry, via `origin`. This is what stops the UI
    lying the first time an operator clears a central tag and the roster's declared value takes over.
    `accountPool()` in `pwa/src/lib/accounts.ts` is already the single reader every surface goes
-   through — measured: 9 call sites across `NewSessionSheet.tsx`, `SessionLine.tsx`,
-   `SwapSheet.tsx` and the two lib files — so the precedence is folded in exactly once and no
-   surface can render a value the API would refuse.
+   through — measured (corrected): **8** call sites across `NewSessionSheet.tsx`, `SessionLine.tsx`,
+   `SwapSheet.tsx` and **one** lib file (`pools.ts`) — so the precedence is folded in exactly once
+   and no surface can render a value the API would refuse.
 
 The roster field is **deprecated in documentation, not in code.** Retiring it is a later wave with
 its own skew analysis.
@@ -401,21 +422,26 @@ exhaustive, the ones that are easy to omit:
 | The route measures, never echoes | Route reply reflects a re-read, not the request body |
 | Journal before commit | Kill between append and commit → recovery takes MAX, epoch skipped not reused |
 | `EXEC_COMMANDS` unchanged | `whitelist-subset.test.ts`; a `ccrc` grant is a compile error and a boot refusal |
-| Agent write allowlist unchanged | `checkPath('<REG>/pool-epoch.json','write') === null` stays pinned |
+| Agent write allowlist unchanged | `checkPath('<REG>/pool-epoch','write') === null` stays pinned |
 | One reader for the precedence | `accountPool()` remains the single PWA reader; a second reader reds |
 | Bash/TS rule parity | `POOL_RULE_CASES` gains a row per new state pair; text-extraction parity test |
 
-Deviation numbers are **not allocated in this document.** The implementation plan allocates its
-block from `POST /api/ledger/deviations` at plan time, per project convention.
+Deviation numbers are **not allocated in this document.** **Correction:** not at plan time either —
+the implementation plan allocates its block from `POST /api/ledger/deviations` **after the
+whole-wave review**, and defines every departure in that same act, because you cannot define a
+departure you have not yet found (CLAUDE.md's ledger discipline; the two most recent shipped plans
+both do this).
 
 ---
 
 ## 10. Wire discipline
 
-`FLEET_PROTO` is **not** bumped. Every field added here is additive and absence-permitting:
-`AccountPoolWire`, `pools: string[]`, `origin`, `accountPools` on `PoolsEnforcement`,
-`observedEpoch` on the `ready` handshake. An older peer omitting any of them reads as it does today
-through a single reader per field.
+**Correction: two wires, not one.** `FLEET_PROTO` (PWA↔server, `shared/api.ts`) is **not** bumped:
+`AccountPoolWire`, `pools: string[]`, `origin` and `accountPools` on `PoolsEnforcement` are additive
+and absence-permitting on it. `observedEpoch` on the `ready` handshake is a **different** wire —
+`shared/agent-protocol.ts` (agent↔server) — and `FLEET_PROTO` does not cover it at all; it gets the
+same additive treatment on its own terms. An older peer omitting any field on either wire reads as it
+does today, through a single reader per field.
 
 ---
 
@@ -426,14 +452,17 @@ first epoch. The wave is large — the cost lens scored this architecture 4/10 o
 the operator has ruled the UI ships inside it. The mitigation is ordering, not scope reduction, and
 it works only because §3.8 makes every new refusal a no-op on the live fleet at ship time.
 
-1. **Fleet (ships first, against a control plane that does not yet answer):** `ccd pool-sync`,
-   `_acct_pool_state`, `_pool_ok`'s account arm, the verb in `ccd caps`, `ccd-pool-sync.timer`.
-   Every account reads `unreadable` → undecidable → refusals only into tagged projects, of which
-   there are none.
-2. **Shared:** `AccountPoolWire`, `poolRule` re-signature, `POOL_RULE_CASES` rows, bash parity.
+1. **Fleet (ships first, against a control plane that does not yet answer):** `ccd-pool-sync` — a
+   **sibling executable, not a `ccd` verb** (ruling R1) — `_acct_pool_state`, `_pool_ok`'s account
+   arm, the `account-pools` capability token in `ccd caps`, `ccd-pool-sync.timer`. Every account
+   reads `unreadable` → undecidable → refusals only into tagged projects, of which there are none.
+2. **Shared:** `AccountPoolWire`, `poolRule` re-signature (**five** existing production callers carry
+   it — `server/src/poolrule.ts`, `pwa/src/lib/pools.ts` — not a zero-call-site rename), `POOL_RULE_CASES`
+   rows, bash parity.
 3. **Server:** migration (slot re-measured), `PoolEdgeLog`, `GET /api/pools/epoch` (dual-credential
    — session for the PWA, box token for `ccrc-api`, the `GET /api/feed` shape),
-   `POST /api/pools/accounts/:id`, the `CcdArgv` nudge, `accountPools`, `observedEpoch`.
+   `POST /api/pools/accounts/:id` (execs nothing — ruling R2 drops the nudge), `accountPools`,
+   `observedEpoch`.
 4. **PWA:** the account pool chip, its editor sheet, `epoch/observed` in the fleet head.
 5. **Docs:** `CLAUDE.md`'s pool invariants, the freshness dependency named in §8, the roster field
    marked deprecated-not-removed.

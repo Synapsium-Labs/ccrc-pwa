@@ -69,6 +69,7 @@ const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
 const AUTH_GATE_TEST = read('server/test/auth-gate.test.ts');
+const CCD_SRC = read('ccd/ccd');
 
 /** The two mechanisms that count as "this handler consulted the box token" —
  *  the same pair `coord-pause-route.test.ts` and `auth-gate.test.ts` already
@@ -564,5 +565,88 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const door of UNGATED_DOORS) {
       expect(bullet, `the bullet no longer names the ungated ${door}`).toContain(door);
     }
+  });
+});
+
+// Task 10 (account-pool-membership wave 1): the account side's freshness
+// dependency, named in CLAUDE.md's Account-pools bullet per spec §8 ("named,
+// not discovered") and pinned here against `_acct_pool_state`'s own body —
+// copying this file's `passage()` mechanism onto a different corpus, per the
+// task brief, rather than growing `pools-prose.test.ts`'s already-large
+// CLAUDE.md describe block with a mechanism it did not need until now.
+//
+// BOTH DIRECTIONS, for the reason this file's own header gives for
+// `EXEMPT_BUT_AUTHENTICATED` and `SESSION_ONLY_ALL` above: a prose pin that
+// only checks presence agrees with itself while both lie. Under-claim: every
+// word `_acct_pool_state` can actually answer must be named in the bullet.
+// Over-claim: every pool-freshness state word the bullet names must be one
+// `_acct_pool_state` can actually answer — checked against that reader's own
+// REAL vocabulary, derived fresh each run, not a second hand-kept list next
+// to the first.
+describe("CLAUDE.md: the account-pool freshness dependency is named, not discovered (task 10)", () => {
+  /** `_acct_pool_state`'s own body, comment-stripped, then every `echo`
+   *  target it can reach — the same extraction `pools-prose.test.ts`'s
+   *  `readerWords()` runs over `_project_pool_state`, copied here for the
+   *  account-side sibling because that helper is unexported and file-local. */
+  const ACCT_STATE_WORDS = (): string[] => {
+    const body = passage('ccd, _acct_pool_state', CCD_SRC,
+      '_acct_pool_state() {', '\n# THE RULE, spelled once in this language');
+    const code = body.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    const words = [...new Set([...code.matchAll(/\becho\s+"?([a-z]+)/g)].map((m) => m[1]!))];
+    expect(words.length, 'the account-side reader vocabulary collapsed — this derivation is over nothing')
+      .toBeGreaterThan(3);
+    return words;
+  };
+
+  const bullet = (): string =>
+    passage('CLAUDE.md, the account-pools bullet', CLAUDE_MD,
+      '- **Account pools', '\n## Coordination (Build 7) invariants').replace(/\s+/g, ' ');
+
+  it('_acct_pool_state answers the five-word vocabulary the checks below assume (a ratchet, not a follower)', () => {
+    // If ccd grows or drops a word, THIS reds first, naming the drift, rather
+    // than the under/over-claim checks below silently widening or narrowing
+    // what they accept.
+    expect(ACCT_STATE_WORDS().sort()).toEqual(['malformed', 'named', 'stale', 'unreadable', 'untagged']);
+  });
+
+  it('names every word _acct_pool_state can emit (under-claim direction)', () => {
+    const b = bullet();
+    for (const w of ACCT_STATE_WORDS()) {
+      expect(b, `the bullet under-claims: _acct_pool_state can answer "${w}" and the bullet never says so`)
+        .toMatch(new RegExp(`\\b${w}\\b`));
+    }
+  });
+
+  it('names no pool-freshness state word _acct_pool_state cannot emit (over-claim direction)', () => {
+    // The candidate list is a FIXED snapshot of the known pool-freshness
+    // vocabulary (today identical to `ACCT_STATE_WORDS()`'s own answer,
+    // deliberately not read FROM that derivation) — so a future edit that
+    // narrows what `_acct_pool_state` can answer, while the bullet keeps
+    // claiming the word it lost, reds here instead of the check quietly
+    // comparing a live derivation against itself.
+    const CANDIDATE_STATE_WORDS = ['malformed', 'named', 'stale', 'unreadable', 'untagged'];
+    const legal = new Set(ACCT_STATE_WORDS());
+    const b = bullet();
+    for (const w of CANDIDATE_STATE_WORDS) {
+      if (new RegExp(`\\b${w}\\b`).test(b)) {
+        expect(legal.has(w),
+          `the bullet states pool-freshness state word "${w}", which _acct_pool_state cannot emit`)
+          .toBe(true);
+      }
+    }
+  });
+
+  it('names the freshness dependency itself, not merely its vocabulary', () => {
+    const b = bullet();
+    expect(b, 'the "freshness dependency" sentence is missing — spec §8 requires it named, not discovered')
+      .toMatch(/freshness dependency/);
+    expect(b, 'the bullet no longer says the absent-file meanings differ between the two readers')
+      .toMatch(/have not synced/);
+    expect(b, 'the bullet no longer says the server does not nudge convergence')
+      .toMatch(/never nudges/);
+    expect(b, 'the bullet no longer names the timer that pulls the projection')
+      .toContain('ccd-pool-sync.timer');
+    expect(b, 'the bullet no longer names the resolved-pool document')
+      .toContain('/api/pools/epoch');
   });
 });
