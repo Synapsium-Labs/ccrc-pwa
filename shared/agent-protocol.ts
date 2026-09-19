@@ -130,7 +130,7 @@ export const OBSERVED_EPOCH_NUM = '(?:0|[1-9][0-9]*)';
 const EPOCH_LINE_RE = new RegExp(`^epoch (${OBSERVED_EPOCH_NUM})$`, 'm');
 
 /** Matches ANY line KEYED `epoch` — the same first-token test
- *  `_acct_pool_state` makes (`k=${line%% *}`, `ccd/ccd:2243`), regardless of
+ *  `_acct_pool_state` makes (`k=${line%% *}`, `ccd/ccd:2287`), regardless of
  *  whether the rest of the line is a well-formed value. Used only to COUNT
  *  such lines (review T8-R2, I2, Ruling): bash refuses a document carrying
  *  two, and the reason (`ccd/ccd:2246-2252`, "nothing says which value is
