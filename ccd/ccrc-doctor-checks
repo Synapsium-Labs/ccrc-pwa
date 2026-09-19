@@ -3334,7 +3334,13 @@ _check_pool-sync() {
     # different call for a different, personal-file purpose. `_inst_atomic`
     # also short-circuits to a bare `chmod` when the bytes already match
     # (`cmp -s`), so an idempotent re-run of an unchanged unit does NOT reset
-    # this mtime either — it only moves on a real (re)install.
+    # this mtime either — it only moves on a real (re)install. That `cmp -s`
+    # short-circuit is `ccd/ccrc`'s own, though: `deploy/deploy.sh:785`'s
+    # `_unit_atomic` — CLAUDE.md's AGENT-FIRST rule makes it the COMMON path
+    # for this unit, not `ccd/ccrc`'s — carries no `cmp -s` at all and
+    # re-copies `ccd-pool-sync.timer` unconditionally (`deploy/deploy.sh:798`)
+    # on every `deploy.sh agent <host>`, so on that path this mtime resets on
+    # every deploy, not only a real (re)install.
     #
     # GRACE = two of the timer's own periods, not an invented constant: one
     # tick for `OnBootSec=45s`/`AccuracySec=10s` slack plus one more so a
