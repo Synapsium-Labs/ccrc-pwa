@@ -95,7 +95,11 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
   anyway). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
-  left alone — `--force` reinstalls there too. **What is
+  left alone — `--force` reinstalls there too. **The first move onto the channel is by hand, once per box (D-3106):**
+  `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
+  box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
+  install role `both`). Record the role, then `ssh <box> ccrc update --to vX.Y.Z`, fleet box first; from then on it is
+  `rollout`. **What is
   running where:** `ccrc version` (with its `install:` line), `ccrc update --check`, `/health`'s `version`, the PWA's
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:

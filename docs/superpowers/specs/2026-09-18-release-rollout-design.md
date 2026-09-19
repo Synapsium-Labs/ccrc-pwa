@@ -245,10 +245,15 @@ in one home, green after the installer runs; skip on role `server`. The `fleet` 
 box-side `npm ci --omit=dev`, the spine's file work, the stamp, the marker, and skills landing in fixture homes —
 everything except the real unit restart and sweep, which are the operations `deploy.sh` performs daily. A
 fresh-install pass (`install.sh --release` into a fixture) rides the same rehearsal: the contributor case.
+*(Run 2026-09-19 against `v0.0.2`: every phase failed — the tarball carried no `server/scripts/` and the server package's
+`postinstall` names one; D-3105. The next patch carries the fix, and the rehearsal is re-run against it.)*
 
 **The live one.** `ccrc rollout --check` first (both boxes print `unversioned (sha)`), then `ccrc rollout`, fleet
 first, in a quiet window. Box one fails → box two untouched, box one's backup at `~/ccrc-backups/<ts>/`, and
 `deploy.sh` is the known fallback — the strongest reason it is not retired in this phase.
+*(Not on this fleet's FIRST move, measured 2026-09-19 — D-3106: the boxes' `ccrc` predates `--check` and the server box
+records no `CCRC_ROLE`, so the first move is a per-box `ccrc update --to` after recording the role, fleet box first, and
+`rollout --check` is the verification that follows.)*
 
 **Acceptance — measured.** `rollout --check` names one version on both boxes; `/api/fleet/health` answers
 `build: agreed` with both `builds` versioned; doctor `skills` PASSes on the fleet box; the PWA `BuildLine` shows both

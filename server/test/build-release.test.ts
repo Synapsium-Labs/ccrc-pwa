@@ -81,7 +81,12 @@ const FIXTURE_FILES: Record<string, string> = {
   'shared/package.json': '{ "type": "module" }\n',
   'deploy/ccrc.service': '[Unit]\nDescription=fixture ccrc.service\n',
   'deploy/verify-service.sh': '#!/usr/bin/env bash\necho fixture verify\n',
-  'server/package.json': '{ "name": "ccrc-server-fixture" }\n',
+  // The real server package's install-time hook, in miniature: `npm ci` on the
+  // box runs it, so the file it names must ride the tarball (D-3105 — v0.0.2
+  // shipped the hook without the file, and every box's install died after the
+  // new tree was placed).
+  'server/package.json': '{ "name": "ccrc-server-fixture", "scripts": { "postinstall": "node scripts/fix-node-pty-helper.mjs" } }\n',
+  'server/scripts/fix-node-pty-helper.mjs': '// fixture postinstall — exits 0\n',
   'server/package-lock.json': '{ "name": "ccrc-server-fixture", "lockfileVersion": 3 }\n',
   'agent/package.json': '{ "name": "ccrc-agent-fixture" }\n',
   'agent/package-lock.json': '{ "name": "ccrc-agent-fixture", "lockfileVersion": 3 }\n',
@@ -91,9 +96,9 @@ const FIXTURE_FILES: Record<string, string> = {
 
 /** `<home>/repo` — one commit holding `FIXTURE_FILES` plus the real script,
  *  optionally tagged. Returns the repo root. */
-function fixtureRepo(home: string, opts: { tag?: string } = {}): string {
+function fixtureRepo(home: string, opts: { tag?: string; files?: Record<string, string> } = {}): string {
   const root = join(home, 'repo');
-  for (const [rel, body] of Object.entries(FIXTURE_FILES)) {
+  for (const [rel, body] of Object.entries({ ...FIXTURE_FILES, ...(opts.files ?? {}) })) {
     const dest = join(root, rel);
     mkdirSync(path.dirname(dest), { recursive: true });
     writeFileSync(dest, body, { mode: rel.endsWith('.sh') || rel === 'ccd/ccrc' ? 0o755 : 0o644 });
@@ -196,6 +201,7 @@ const EXPECTED_ENTRIES = [
   'server/dist-pwa/index.html',
   'agent/dist/agent/src/index.js',
   'server/package.json', 'server/package-lock.json',
+  'server/scripts/fix-node-pty-helper.mjs',
   'agent/package.json', 'agent/package-lock.json',
   'pwa/package.json', 'pwa/package-lock.json',
   'shared/api.ts', 'shared/package.json',
@@ -354,6 +360,64 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
 // from unreviewed pushes), the single build path (the script, never a second
 // `npm run build` lane that could drift from it), and the upload (both
 // artifacts — tarball AND SHA256SUMS — via the glob over the script's --out).
+describe('build-release.sh: install-time hooks ship with their scripts (D-3105)', () => {
+  // `npm ci --omit=dev` on the box (ccd/ccrc's install spine) runs every
+  // install-time hook the packed package.json declares. v0.0.2, measured in the
+  // spec §7 rehearsal: server's `postinstall` named scripts/fix-node-pty-helper.mjs,
+  // the tarball carried no server/scripts/, and the staged install died on
+  // every box and every contributor HOME — AFTER the new tree was placed.
+  it('a tracked <pkg>/scripts/ rides the tarball beside its package.json', () => {
+    const home = mkTmp('build-release-hook-scripts-');
+    const root = fixtureRepo(home, { tag: 'v1.2.3' });
+    const out = join(home, 'out');
+    const r = runRelease(root, home, ['--out', out]);
+    expect(r.code, r.stderr).toBe(0);
+    const listing = tarListing(join(out, 'ccrc-v1.2.3.tar.gz'));
+    expect(listing, 'the postinstall hook names it, so npm ci on the box needs it')
+      .toContain('server/scripts/fix-node-pty-helper.mjs');
+  });
+
+  it('a hook naming a file the release set does not hold is a refusal here — package, hook and path named; no artifact', () => {
+    const home = mkTmp('build-release-hook-unshipped-');
+    const root = fixtureRepo(home, {
+      tag: 'v1.2.3',
+      files: { 'agent/package.json': '{ "name": "ccrc-agent-fixture", "scripts": { "postinstall": "node tools/absent.mjs" } }\n' },
+    });
+    const r = runRelease(root, home, ['--out', join(home, 'out')]);
+    expect(r.code, `stdout:\n${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(
+      /^build-release\.sh: agent\/package\.json's postinstall runs 'node tools\/absent\.mjs', but agent\/tools\/absent\.mjs is not in the release set/m);
+    expect(existsSync(join(home, 'out')), 'an artifact was written despite the refusal').toBe(false);
+  });
+
+  // The fixture proves the script's rule; this proves the REAL packages obey it
+  // today, so the refusal fires in a PR's CI rather than in release-main.yml
+  // after the merge. Every hook token that looks like a path must live under
+  // <pkg>/scripts/ (the one directory the script packs) and be tracked (the
+  // script ships tracked content only).
+  it('the real server/agent/pwa install-time hooks name only tracked files under <pkg>/scripts/', () => {
+    const HOOKS = ['preinstall', 'install', 'postinstall', 'prepare', 'prepublish'];
+    let seen = 0;
+    for (const pkg of ['server', 'agent', 'pwa']) {
+      const scripts = (JSON.parse(readFileSync(join(REPO, pkg, 'package.json'), 'utf8')).scripts ?? {}) as Record<string, string>;
+      for (const hook of HOOKS) {
+        const cmd = scripts[hook];
+        if (!cmd) continue;
+        for (const tok of cmd.split(/\s+/)) {
+          if (tok.startsWith('-') || !tok.includes('/')) continue;
+          seen += 1;
+          expect(tok, `${pkg}/package.json's ${hook} runs '${cmd}' — ${tok} is outside ${pkg}/scripts/, the one directory build-release.sh packs`)
+            .toMatch(/^scripts\//);
+          const tracked = spawnSync('git', ['-C', REPO, 'ls-files', '--error-unmatch', join(pkg, tok)], { encoding: 'utf8' });
+          expect(tracked.status, `${pkg}/${tok} is not tracked — git archive would not ship it`).toBe(0);
+        }
+      }
+    }
+    // Not vacuous: the server package's postinstall is the case this exists for.
+    expect(seen).toBeGreaterThan(0);
+  });
+});
+
 describe('release.yml: the thin workflow, pinned to the script', () => {
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
