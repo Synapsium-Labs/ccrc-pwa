@@ -1,7 +1,7 @@
 // The pool-epoch numeric grammar — "zero, or a non-zero digit followed by any
 // digits, never a leading zero" (the control plane's `%d` can never produce
 // one) — is spelled in THREE languages, none of which can import another:
-// bash's `numRe` (`ccd/ccd:2131`, validates `epoch`/`issued`/`lease` for
+// bash's `numRe` (`ccd/ccd:2157`, validates `epoch`/`issued`/`lease` for
 // `_acct_pool_state` — `ccd/ccd` sources nothing from this repository),
 // python's `NUM` (`ccd/ccd-pool-sync:156`, the writer's own pre-render check),
 // and TypeScript's `OBSERVED_EPOCH_NUM` (`agent/src/server.ts`, the

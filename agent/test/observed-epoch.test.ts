@@ -52,7 +52,7 @@ describe('readObservedEpoch — the reader', () => {
   });
 
   it('reports null for a document missing its end terminator — the number cannot be proven to come from a whole document', () => {
-    // Review T8-R1, F1/F3: `_acct_pool_state` (`ccd/ccd:2203-2225`) refuses
+    // Review T8-R1, F1/F3: `_acct_pool_state` (`ccd/ccd:2248-2270`) refuses
     // ANY document whose last line is not exactly `end`, structurally,
     // before it parses a single field — because a line-oriented reader has
     // no other way to tell a torn final row from a complete one. This is a
@@ -73,7 +73,7 @@ describe('readObservedEpoch — the reader', () => {
     // convention) but refuses a second: content after the terminator, even a
     // blank line, means the true last line is empty, not `end`. Proves the
     // reader strips at most one trailing `\n` before taking the last line,
-    // matching `ccd/ccd:2218-2225`'s own algorithm exactly, rather than
+    // matching `ccd/ccd:2263-2270`'s own algorithm exactly, rather than
     // trimming all trailing whitespace (which would wrongly accept this).
     const home = mkTmp('ccrc-observed-epoch-');
     plantRaw(home, 'epoch 43\nissued 1\nlease 2\nend\n\n');
@@ -116,7 +116,7 @@ describe('readObservedEpoch — the reader', () => {
   });
 
   it('reports null for a document with a duplicate epoch line — nothing says which value is true', () => {
-    // Ruling T8-R2, I2. `ccd/ccd:2246-2252`'s own reason for refusing a
+    // Ruling T8-R2, I2. `ccd/ccd:2291-2297`'s own reason for refusing a
     // second `epoch` line is a statement about the epoch ITSELF — "nothing
     // says which value is true" — not one of the placement-trust questions
     // this reader otherwise defers to `_acct_pool_state` (a duplicate
