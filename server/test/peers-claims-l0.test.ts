@@ -154,10 +154,13 @@ describe('the mail table carries the two peer-lane codes (landed with wave 0)', 
 });
 
 describe('L0 stays import-free: the PWA bundles this file', () => {
-  it('shared/api.ts has exactly one import line, and it is a type', () => {
+  it('shared/api.ts has exactly two import lines, and both are types (D-3021)', () => {
     const lines = readFileSync(apiPath, 'utf8').split('\n');
     const imports = lines.filter((l) => /^import\s/.test(l));
-    expect(imports).toEqual(["import type { Hue } from './roster.js';"]);
+    expect(imports).toEqual([
+      "import type { Hue } from './roster.js';",
+      "import type { BuildInfo } from './buildinfo.js';",
+    ]);
   });
 });
 

@@ -22,7 +22,7 @@
 // below carries the correction and the reason.
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'node:child_process';
-import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync } from 'node:fs';
+import { writeFileSync, mkdirSync, readFileSync, existsSync, symlinkSync, rmSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -178,7 +178,7 @@ describe('ccrc: dispatch and usage', () => {
     // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
@@ -450,6 +450,24 @@ describe('ccrc: version', () => {
     const untagged = runCcrc(home, ['version']);
     expect(untagged).not.toMatch(/^version /m);
     expect(untagged).toContain('abc123');
+  });
+
+  it('reports install: complete iff ~/.ccrc/installed names the stamped sha', () => {
+    const home = mkTmp('ccrc-cli-version-installed-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const stamp = (sha: string): void => writeFileSync(join(home, '.ccrc', 'build.json'),
+      JSON.stringify({ sha, ref: 'main', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.2' }));
+    stamp('abc123');
+    // No record at all: deploy.sh never writes one.
+    expect(runCcrc(home, ['version'])).toMatch(/^install: incomplete — stamp abc123, no completed-install record/m);
+    writeFileSync(join(home, '.ccrc', 'installed'), 'abc123\n');
+    expect(runCcrc(home, ['version'])).toMatch(/^install: complete$/m);
+    // A record from an OLDER completed install under a newer stamp.
+    stamp('def456');
+    expect(runCcrc(home, ['version'])).toMatch(/^install: incomplete — stamp def456, completed-install record names abc123$/m);
+    // Unstamped boxes say nothing about installs (the stamp line already says unstamped).
+    rmSync(join(home, '.ccrc', 'build.json'));
+    expect(runCcrc(home, ['version'])).not.toMatch(/install:/);
   });
 
   it('a present-but-invalid version is an unreadable stamp — same whole-or-nothing rule as the TS parser', () => {

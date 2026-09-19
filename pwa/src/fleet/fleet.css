@@ -307,6 +307,20 @@
   font-size: var(--text-xs);
 }
 
+/* BuildLine — the foot-of-screen one-liner (release/rollout design §6).
+ * Quiet by default; a side that is unversioned, dirty or unknown borrows
+ * the warn banner's attention-text token so a deploy.sh box LOOKS
+ * second-class without a banner that fires when nothing is wrong. */
+.build-line {
+  padding: 6px 16px;
+  font-size: 12px;
+  color: var(--ink-tertiary);
+  text-align: center;
+}
+.build-line-side--warn {
+  color: var(--status-attention-text);
+}
+
 /* ------------------------------------------------------------------ *
  *  Substrate banner — one fault, one banner (spec §4): every RUNNING  *
  *  row reports a substrate fault, so it is said once up here and the  *

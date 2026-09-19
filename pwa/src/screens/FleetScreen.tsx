@@ -11,6 +11,8 @@ import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
+import { BuildLine } from '../fleet/BuildLine';
+import { useFleetHealth } from '../fleet/useFleetHealth';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
 import { NotificationBell } from '../fleet/NotificationBell';
@@ -403,6 +405,9 @@ export function FleetScreen({
   // Fold state persists across navigation (foldState.ts) — useState here would
   // re-expand every project on the way back from a session.
   const [folded, toggleFold] = useFolded();
+  // One poll of /api/fleet/health feeds both the banner and BuildLine below
+  // (spec §6) — the screen owns it so the two never issue their own requests.
+  const fleetHealth = useFleetHealth();
   // One sheet for the whole screen, fed by whichever line was tapped. Only
   // the id is the source of truth (Finding 5 of the whole-branch review):
   // `actionsSession` is refreshed from the live `sessions` list below rather
@@ -511,7 +516,7 @@ export function FleetScreen({
         </div>
       </header>
 
-      <FleetHostBanner />
+      <FleetHostBanner health={fleetHealth} />
 
       {/* The substrate fault, said once (spec §4) — derived from the SAME
           injected store the rows render from, so the banner and the chips can
@@ -869,6 +874,8 @@ export function FleetScreen({
         onClose={() => setReapId(null)}
         onReaped={() => setReapId(null)}
       />
+
+      <BuildLine health={fleetHealth} />
     </main>
   );
 }

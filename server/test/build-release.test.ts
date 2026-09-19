@@ -387,6 +387,42 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
   });
 });
 
+describe('release-main.yml: the thin main-push workflow, pinned to its script (spec §3)', () => {
+  const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
+  const wf = (): string => readFileSync(WORKFLOW, 'utf8');
+
+  it('triggers on main pushes and on NOTHING else', () => {
+    const src = wf();
+    expect(src).toMatch(/^on:\n  push:\n    branches: \[main\]$/m);
+    for (const trigger of ['tags:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
+      expect(src, `release-main.yml must not also trigger on ${trigger}`).not.toContain(trigger);
+    }
+  });
+
+  it('serialises: one concurrency group, never cancelling an in-flight release', () => {
+    const src = wf();
+    expect(src).toMatch(/^concurrency:\n  group: release-main\n  cancel-in-progress: false$/m);
+  });
+
+  it('asks for contents: write and nothing else', () => {
+    const src = wf();
+    expect(src).toMatch(/^    permissions:\n      contents: write$/m);
+    expect(src).not.toMatch(/(id-token|packages|pull-requests|actions):/);
+  });
+
+  it('checks out at full depth — the tags it derives from must be present', () => {
+    expect(wf()).toMatch(/fetch-depth: 0/);
+  });
+
+  it('invokes release-main.sh and owns no second build or publish path', () => {
+    const src = wf();
+    expect(src).toContain('bash deploy/release-main.sh --out release-out');
+    expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
+    expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
+    expect(src).toContain('GH_TOKEN: ${{ github.token }}');
+  });
+});
+
 describe('build-release.sh: source pins', () => {
   // A casual edit that drops one of these flags makes every artifact's bytes
   // depend on who built it and when — silently, since nothing else fails.

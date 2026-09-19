@@ -1,12 +1,14 @@
 // Shared API types — single source of truth between ccrc-server and the PWA.
 //
-// The one import in this file, and the only kind it may ever have: a TYPE from
-// a sibling in `shared/`, which erases at build time. `shared/` is L0 (the
-// architecture doc) — it bundles into the PWA, so it imports no runtime module
-// and nothing from `node:*`. `Hue` belongs to the roster's own file because
-// `parseRoster` is what validates and auto-assigns it; `RosterWire` below only
-// carries it.
+// The only kind of import this file may ever have: a TYPE from a sibling in
+// `shared/`, which erases at build time. `shared/` is L0 (the architecture
+// doc) — it bundles into the PWA, so it imports no runtime module and nothing
+// from `node:*`. `Hue` belongs to the roster's own file because `parseRoster`
+// is what validates and auto-assigns it; `RosterWire` below only carries it.
+// `BuildInfo` belongs to `buildinfo.ts` for the parallel reason: that file's
+// own parser is what validates a stamp, and this file only carries the shape.
 import type { Hue } from './roster.js';
+import type { BuildInfo } from './buildinfo.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -3137,6 +3139,16 @@ export interface FleetHealth {
    * server's response omits it, and absent reads as `'unknown'`.
    */
   build?: BuildAgreement;
+  /**
+   * The EVIDENCE beside the decision (release/rollout design §6): what THIS
+   * box's stamp says and what the fleet host's stamp said on its last
+   * `ready`, each `null` when that side has no readable stamp. `build`
+   * above still decides — a reader renders `skewed`/`agreed`/`unknown`
+   * from it and uses these only to SAY which versions are involved
+   * (`version` is optional per `BuildInfo`; a deploy.sh stamp has none).
+   * Remote mode only, optional so an older server's response still parses.
+   */
+  builds?: { own: BuildInfo | null; fleet: BuildInfo | null };
   /**
    * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
    * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).
