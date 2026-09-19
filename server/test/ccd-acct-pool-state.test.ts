@@ -12,7 +12,8 @@
 // organised to match that review, each one commented with the finding it
 // pins.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, plantPoolSyncTimer, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, plantPoolSyncTimer, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
+import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 
@@ -91,6 +92,26 @@ describe('_acct_pool_state', () => {
     // `h`'s roster (`DEFAULT_TEST_ROSTER`) declares no pool for `acct-a`, so
     // the honest declared answer is `untagged`, not a fabricated name.
     expect(state('acct-a')).toBe('untagged');
+  });
+
+  // H1 (scoped re-review, fix wave E) — the case above is equally satisfied
+  // by a fallback that reads NOTHING, because `DEFAULT_TEST_ROSTER` declares
+  // no pool for `acct-a`: `untagged` from "the declared tag, which is empty"
+  // and `untagged` from "read nothing at all" print the same word. This case
+  // reseeds a NON-fleet harness with `POOLED_TEST_ROSTER` — which DOES
+  // declare a pool for `claude` — so the fallback has something to find, and
+  // then pins the CONSEQUENCE through `_pool_ok`, not just the word: a
+  // declared-`pool-a` account must still be refused from a `pool-b` project
+  // on a box that has never synced. Measured: replacing the fallback branch
+  // body (`ccd/ccd` ~:2190-2192) with `echo untagged` keeps `_acct_pool_state`
+  // answering `untagged` here — silently discarding the declared tag — and
+  // flips `_pool_ok`'s rc from 1 (refuse) to 0 (serve), the fail-OPEN this
+  // case exists to close.
+  it('falls back to the DECLARED tag on a non-fleet box, and _pool_ok still refuses a mismatched pool on that fallback', () => {
+    seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+    // POOLED_TEST_ROSTER (server/test/fixtures/poolRule.ts): claude -> pool-a.
+    expect(state('claude')).toBe('named pool-a');
+    expect(h.sh('_pool_ok claude "named pool-b"; echo "rc=$?"')).toBe('rc=1');
   });
 
   it('answers `unreadable` when the file does not exist ON A FLEET BOX — absence is NOT untagged there', () => {
