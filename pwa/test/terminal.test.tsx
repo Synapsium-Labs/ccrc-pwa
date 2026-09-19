@@ -59,6 +59,7 @@ const fakeTermFactory = (cols = 48, rows = 20) => {
         dataCb = cb;
       },
       onWheel: () => {},
+      onKey: () => {},
       fit: () => ({ ...grid }),
       focus: () => {},
       dispose,

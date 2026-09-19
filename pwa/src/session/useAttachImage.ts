@@ -41,7 +41,10 @@ export const ATTACH_ACCEPT = ['image/*', ...CLIP_DOC_EXTS.map((e) => `.${e}`)].j
 /** What a refusal offers instead. Named rather than enumerated: spelling the
  *  ten document extensions into a toast would bury the one word — "text" — that
  *  actually tells someone holding a .docx what to do about it. */
-const ATTACH_REFUSAL = 'images, text, PDF and RTF only';
+/** The one sentence a refusal is said in. Exported because the terminal
+ *  drawer refuses on the same rule and must not invent a second wording —
+ *  a reader who meets both doors meets one product. */
+export const ATTACH_REFUSAL = 'images, text, PDF and RTF only';
 
 /**
  * Worth handing to `add()`. Drag-and-drop and paste both use it, so a dropped
@@ -83,6 +86,34 @@ export async function downscaleImage(file: File | Blob): Promise<Blob> {
   } finally {
     bitmap.close();
   }
+}
+
+/**
+ * What actually goes up for an IMAGE: a small PNG whole, everything else
+ * downscaled. Lifted out of the tray's own upload because the terminal drawer
+ * stages into the same clips directory — two callers reading one rule instead
+ * of each carrying its own answer to "is this one worth re-encoding".
+ *
+ * A `File`, not `File | Blob`, and the difference is the build. The only
+ * argument this ever passes is a `File` — widening the PARAMETER buys nothing
+ * and under `strictFunctionTypes` costs the one thing that matters:
+ * `useStagedImages`'s own `(file: File) => …` stops being assignable to it,
+ * `tsc --noEmit` fails, and `npm run build` never reaches vite. The real
+ * `downscaleImage` still takes `File | Blob` and is assignable here precisely
+ * because a wider parameter always is.
+ *
+ * IMAGES ONLY. Both callers check `isImageClip` before they arrive: running
+ * this over a PDF either throws or, worse, succeeds and uploads a picture of
+ * nothing.
+ */
+export async function uploadPayload(
+  file: File,
+  downscale: (f: File) => Promise<Blob> = downscaleImage,
+): Promise<File> {
+  if (file.type === 'image/png' && file.size < SMALL_PNG_MAX) return file;
+  const blob = await downscale(file);
+  const ext = blob.type === 'image/png' ? 'png' : 'jpg';
+  return new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
 }
 
 /**
@@ -172,13 +203,7 @@ export function useStagedImages(
         patch(key, { state: 'staged', path: staged.path, error: undefined });
         return;
       }
-      const keepOriginal = file.type === 'image/png' && file.size < SMALL_PNG_MAX;
-      let payload = file;
-      if (!keepOriginal) {
-        const blob = await downscale(file);
-        const ext = blob.type === 'image/png' ? 'png' : 'jpg';
-        payload = new File([blob], `${file.name.replace(/\.[^.]*$/, '')}.${ext}`, { type: blob.type });
-      }
+      const payload = await uploadPayload(file, downscale);
       // Measure the PAYLOAD on both branches — the caption answers "did the
       // downscale ruin my screenshot", and keepOriginal never decodes otherwise.
       const bitmap = await createImageBitmap(payload);
