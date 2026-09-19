@@ -339,6 +339,119 @@ describe('POST /api/runs', () => {
     expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
   });
 
+  it('refuses a claimedBy that is currently a WORKER of an open run — before anything is opened (spec §12)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run, calls } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // wave 1 binds demo-existing as CLAIMED_BY's worker; the run is `planned` — non-terminal.
+    expect((await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' })).statusCode).toBe(200);
+    const runsBefore = okRuns(w.coord.runs()).length;
+    const holdsBefore = calls.filter((c) => c[0] === 'ws-hold').length;
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'A worker coordinating',
+      claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: CLAIMED_BY });
+    expect(okRuns(w.coord.runs()).length, 'a refused open left a planned orphan behind').toBe(runsBefore);
+    expect(calls.filter((c) => c[0] === 'ws-hold')).toHaveLength(holdsBefore);
+  });
+
+  it('admits that same session once its run is TERMINAL — a finished worker is not a worker', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-existing' });
+    tx(w.coord.db, () => { w.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(first.json().id); });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Later', claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('admits a SELF-claimed run\'s session — it is its own worker, not somebody\'s', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-self');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app, { ...OPEN_BODY, claimedBy: 'demo-self', sessionId: 'demo-self' })).statusCode).toBe(200);
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Self', claimedBy: 'demo-self' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('admits the session of an OWNERLESS open run — there is no `by` to name (D-3012)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-orphaned');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    const first = await postOpen(app, { ...OPEN_BODY, sessionId: 'demo-orphaned' });
+    // A reconstructed row's shape: `claimedBy` NULL stays NULL (D-12).
+    tx(w.coord.db, () => { w.coord.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(first.json().id); });
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5', title: 'Orphan', claimedBy: 'demo-orphaned' });
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('refuses a session SELF-CLAIMED on its newest run while still somebody\'s worker on an OLDER open one ' +
+     '(second fix round: the door reads every open claimant, not the newest)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    seed(home, 'demo-existing');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    // Both rows store-level, because neither can be built through the route:
+    // the OLDER one is the binding this door is about, and an open of the
+    // NEWER self-claimed one would itself be refused by this very rung.
+    const older = w.coord.openRun({ program: 'build5-other', title: 'Other programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    w.coord.bindSession(older.id, 'demo-existing');
+    const newer = w.coord.openRun({ program: 'build5-self', title: 'Its own programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'demo-existing' }) as { id: number };
+    w.coord.bindSession(newer.id, 'demo-existing');
+    expect(older.id).toBeLessThan(newer.id);
+    // THE FIXTURE'S POINT, measured rather than argued: the newest-only read
+    // this door used to make answers the session's OWN id here, which the
+    // self-claim admission then waves through — `demo-existing` is still
+    // `other-coordinator`'s worker on the older open run the whole time.
+    expect(w.coord.parentOfSession('demo-existing')).toBe('demo-existing');
+    const res = await postOpen(app, { ...OPEN_BODY, program: 'build5-third', title: 'A worker coordinating',
+      claimedBy: 'demo-existing' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: 'other-coordinator' });
+  });
+
+  it('CONTROL: a claimant that was never any run\'s worker opens as it always did', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home);
+    const w = await openApp(home, run); app = w.app;
+    expect((await postOpen(app)).statusCode).toBe(200);
+  });
+
+  it('refuses a REVIEW open too — the door sits below the review arm\'s own project/wave/waveOf ' +
+     'overrides, so nothing there exempts it (spec §12, fix round 1 finding 2)', async () => {
+    const home = mkTmp('ccrc-runs-');
+    const { run } = makeRunner(home, { wsAddCreates: ['demo-review-worker'] });
+    const w = await openApp(home, run); app = w.app;
+    // `CLAIMED_BY` is this work run's coordinator — get it to `awaiting-
+    // review` the same way `workAtReview` (the `kind:review` describe
+    // block, below) does: open, dispatch, advance twice.
+    const opened = (await postOpen(app)).json() as { id: number };
+    await postDispatch(app, opened.id);
+    expect(w.coord.advance(opened.id, 'working', 'test').ok).toBe(true);
+    expect(w.coord.advance(opened.id, 'awaiting-review', 'test').ok).toBe(true);
+
+    // Now bind `CLAIMED_BY` as a LIVE (planned, non-terminal) worker of a
+    // run belonging to a DIFFERENT coordinator — store-level, bypassing the
+    // route entirely (the brief's own second option for this setup).
+    const other = w.coord.openRun({ program: 'build5-other', title: 'Other programme',
+      project: PROJECT, wave: 1, waveOf: 1, claimedBy: 'other-coordinator' }) as { id: number };
+    w.coord.bindSession(other.id, CLAIMED_BY);
+
+    // The review arm FORCES `claimedBy` to equal the reviewed run's own
+    // (400 otherwise) — that is already `CLAIMED_BY`, so this reaches the
+    // door with exactly the claimant it means to catch.
+    const res = await postOpen(app, { program: OPEN_BODY.program, title: 'Review wave 1',
+      kind: 'review', reviews: opened.id, claimedBy: CLAIMED_BY, homeProject: PROJECT });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'claimant-is-a-worker', by: 'other-coordinator' });
+  });
+
   it('stores a TRIMMED home — an open sending "demo\\n" homes the programme at "demo", and a later "demo" agrees', async () => {
     // F2. The body guard used to test `.trim()` and then store the RAW value;
     // `setProgramHome` is `WHERE homeProject IS NULL`, so the whitespace was

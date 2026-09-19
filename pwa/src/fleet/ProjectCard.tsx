@@ -14,12 +14,14 @@
 // without touching localStorage.
 import { Fragment } from 'react';
 import type { ReactNode } from 'react';
-import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary } from '../../../shared/api';
+import type { FleetSession, ProjectedHome, ProjectPlacement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RosterWire, RunSummary } from '../../../shared/api';
+import { repoLabel } from '../../../shared/api';
 import { accountColorVar, accountLabel } from '../lib/accounts';
 import { poolLabelList } from '../lib/pools';
 import { navigate } from '../lib/router';
+import { coordPresence, type CoordPresence } from './coordWords';
 import { formatElapsed } from './formatReset';
-import type { FleetGroup } from './groupFleet';
+import type { FleetGroup, FleetPin } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, crossingNote, dispatchWindow, runForSession, waveLabel } from './runWords';
 import { SessionLine } from './SessionLine';
@@ -62,6 +64,15 @@ export type ProjectPlacementRead =
   | { kind: 'missing' }
   | { kind: 'legacy' }
   | { kind: 'measured'; pool: ProjectPoolWire; placement: ProjectPlacement };
+
+/** The pool a placement read names, or `null`. The SAME projection the fleet
+ *  screen's `poolFor` makes, spelled ONCE and exported rather than twice: only
+ *  a `measured` read carries a pool, and every other kind (`pending`,
+ *  `failed`, `missing`, `legacy`) answers `null` — ignorance, never an account
+ *  claim. Lives beside `ProjectPlacementRead` because it is that type's own
+ *  reader; the fleet screen memoises its per-project lookup ON TOP of it. */
+export const poolOfPlacement = (read: ProjectPlacementRead): ProjectPoolWire | null =>
+  read.kind === 'measured' ? read.pool : null;
 
 /** The project's measured route pool as one chip. A non-measured read yields
  *  no pool and therefore no chip. Unrecognised residue means this app is older
@@ -138,6 +149,26 @@ function PendingSpawn({ run, nowMs }: { run: RunSummary; nowMs: number }): React
   );
 }
 
+/** The header's pin chip. Nothing at all on an empty card: `mixed` is a claim
+ *  about disagreement, and zero sessions do not disagree (D-3010). */
+function PinChip({ pin, roster }: { pin: FleetPin; roster: readonly RosterWire[] }): ReactNode {
+  if (pin.state === 'empty') return null;
+  if (pin.state === 'mixed') {
+    return (
+      <span className="proj-card-pin" data-mixed aria-label="pinned accounts differ">mixed</span>
+    );
+  }
+  return (
+    <span
+      className="proj-card-pin"
+      aria-label={`pinned to ${accountLabel(roster, pin.home)}`}
+      style={{ color: `var(${accountColorVar(roster, pin.home)})` }}
+    >
+      {accountLabel(roster, pin.home)}
+    </span>
+  );
+}
+
 export function ProjectCard({
   group,
   onOpen,
@@ -155,7 +186,11 @@ export function ProjectCard({
   onPool,
   runs = [],
   abroad = [],
+  poolFor = () => null,
+  repoFor = () => undefined,
   nowMs = Date.now(),
+  coordOf = () => null,
+  frameSeen = false,
 }: {
   group: FleetGroup;
   onOpen: (id: string) => void;
@@ -223,6 +258,25 @@ export function ProjectCard({
    *  answer a question about other projects' runs. Defaults to `[]`, so every
    *  caller and every test that predates this renders exactly as it did. */
   abroad?: readonly RunSummary[];
+  /** A row's OWN project's pool (Task 4 fix round 1) — for a row the key flip
+   *  moved onto this card, `s.project` is by construction a DIFFERENT project
+   *  from `group.project`, so this card's own `placement`/`pool` (one
+   *  `/api/projects` read, for `group.project` alone) is the wrong shape to
+   *  judge it against: a false off-pool warning when the destination is
+   *  tagged differently from the row's real project, and a swallowed warning
+   *  when the destination is untagged while the row's own project is tagged.
+   *  Defaults to `() => null` — the same "unmeasured, no account claim"
+   *  degrade `placementFor` itself uses — so a card rendered before `FleetScreen`
+   *  passes this, or a test that predates the fix, keeps every row on the
+   *  card's own project (the common case) rendering exactly as before. */
+  poolFor?: (project: string) => ProjectPoolWire | null;
+  /** The repository a project's main checkout was last measured to be, by
+   *  name — `FleetScreen`'s lookup over the same `/api/projects` rows that
+   *  feed `placement`, absent-key-aware (an older server yields `undefined`).
+   *  A displaced row needs ITS OWN project's repo, which is by construction a
+   *  different project from this card's, so a one-project `placement` read is
+   *  the wrong shape and this is a lookup. Defaults to "nothing measured". */
+  repoFor?: (project: string) => ProjectRepoWire | undefined;
   /** The shared tick, in MILLISECONDS, for the pending child's elapsed clock.
    *  This card is pure and controlled (fold state, roster and projection all
    *  arrive the same way), so the CADENCE belongs to `FleetScreen`, which runs
@@ -230,13 +284,29 @@ export function ProjectCard({
    *  at render: honest, and it simply stops advancing until the next render —
    *  which is the correct degrade for a card nobody is ticking. */
   nowMs?: number;
+  /** The coordinator session by id, looked up FLEET-WIDE — it may sit on
+   *  another card, in an archive fold, or nowhere this pass. Feeds
+   *  `coordPresence`, the same three-answer read the runs board uses (D-1129);
+   *  `null` there reads as `unknown`, never as dead. Default: nothing known. */
+  coordOf?: (id: string) => FleetSession | null;
+  /** `stores/fleet.ts`'s `fleetFrameSeen`: without it a coordinator absent from
+   *  a STALE array would read as gone (D-1138). Default false = unknown. */
+  frameSeen?: boolean;
 }): ReactNode {
   // A measured row carries pool and placement from one `/api/projects` read.
   // Only a legacy row's forecast falls back to the global projection; no row
   // reads a pool value from the independently paced websocket frame.
-  const pool = placement.kind === 'measured' ? placement.pool : null;
+  const pool = poolOfPlacement(placement);
   const poolName = pool !== null && pool.state === 'tagged' ? pool.name : null;
   const poolDim = pools?.enforcement === 'unavailable';
+
+  // Task 4 fix round 1: a row belonging to THIS card's own project keeps
+  // today's behaviour byte-for-byte (`pool`, from `group.project`'s own
+  // placement read). A row the key flip moved here belongs to a different
+  // project — its off-pool judgment has to ask `poolFor` about THAT project,
+  // never this card's.
+  const poolOf = (s: FleetSession): ProjectPoolWire | null =>
+    s.project === group.project ? pool : poolFor(s.project);
 
   // A legacy server's global projection is honest only while no readable tag
   // narrows the project. Pending/failed/missing reads make no account claim.
@@ -327,10 +397,12 @@ export function ProjectCard({
   // run itself and are always available. The HOME clause is Task 5's own
   // decision — `crossingNote`, not a second copy of its predicate (D-2575) —
   // asked against THIS CARD's project, `group.project`, not `run.project`
-  // (D-2576): the two agree today only because `FleetScreen` filters `runs` by
-  // project before handing them down, an invariant enforced in a different
-  // file and not one this component may lean on now that Task 7 adds an
-  // `abroad` list whose whole point is a run naming a DIFFERENT project.
+  // (D-2576, re-read for wave 2): `group.project` is now the card this row
+  // was PLACED on, which for a moved worker is its COORDINATOR's project. The
+  // question the home clause asks is therefore "is this programme homed
+  // somewhere other than the card the reader is looking at", which is still
+  // the right question for a sentence printed on that card; `run.project`
+  // would ask about a card the row is not on.
   // `crossingNote` answers `null` for two distinct reasons — home unknown (the
   // legacy generation, or an older server) or home genuinely IS this card's
   // project (measured sameness) — and both read the same way here: nothing to
@@ -365,7 +437,7 @@ export function ProjectCard({
   // `Archived (N)` fold), just not among this card's LIVE rows, so a worker
   // left behind by one still reads as an orphan (and still says nothing about
   // home when that home is, measured, this card's own project).
-  const orphanNote = (row: FleetRow): { text: string; title: string } | null => {
+  const orphanNote = (row: FleetRow): { text: string; title: string; presence: CoordPresence } | null => {
     if (row.kind !== 'session' || row.depth !== 0) return null;
     const run = runForSession(runs, row.session.id);
     if (run === null) return null;
@@ -374,12 +446,47 @@ export function ProjectCard({
     if (group.sessions.some((s) => s.id === parent)) return null;
     const crossing = crossingNote({ ...run, project: group.project });
     const label = `${run.program} ${waveLabel(run)}`;
+    // D-3009: the runs board's own three-answer read (`coordPresence`), off a
+    // FLEET-WIDE lookup — the coordinator may sit on another card, in an
+    // archive fold, or nowhere this pass — so the marker never claims more
+    // than the frame has actually measured.
+    const presence = coordPresence(parent, coordOf(parent), frameSeen);
+    const where = presence === 'dead'
+      ? `coordinator ${parent} is gone — reclaim this programme from the run board (the held cell opens it)`
+      : `this worker's coordinator is not among this card's live sessions`;
+    // …AND IN THE TEXT, not only in `title`/`data-presence` (final fix round).
+    // Both of those are invisible on touch — there is no hover on a phone, and
+    // this board is mobile-first — so the one measured fact that changes what
+    // the operator should DO (reclaim it) reached only a laptop. `dead` alone:
+    // `unknown` and `alive` say nothing new, because `coordPresence` refusing
+    // to measure is not a claim that anything is gone (D-1138).
+    const gone = presence === 'dead' ? ' · coordinator gone' : '';
     return crossing === null
-      ? { text: label, title: `this worker's coordinator is not among this card's live sessions` }
+      ? { text: `${label}${gone}`, title: where, presence }
       : {
-          text: `${label} · home ${crossing.home}`,
-          title: `this worker's coordinator is not among this card's live sessions; the programme is homed in ${crossing.home}`,
+          text: `${label} · home ${crossing.home}${gone}`,
+          title: `${where}; the programme is homed in ${crossing.home}`,
+          presence,
         };
+  };
+
+  // Spec §6: the repo label appears where the card stops implying it — on a
+  // row whose repo DIFFERS from this card's, both measured, and nowhere else.
+  // At the REPO grain, not the project name: two projects can resolve to one
+  // repo (a worktree-shaped project beside its parent), and a label there is
+  // noise. Decided HERE, the one level that holds both the card's project and
+  // the lookup; `SessionLine` composes it into the row's name and knows no card.
+  // THE RESIDUAL, NAMED RATHER THAN CLAIMED OVER: when either side's repo is
+  // unmeasured — this card's or the row's — `repoLabel` answers null and no
+  // label is composed, so two same-slug rows on one card keep IDENTICAL
+  // accessible names until the read lands. That is spec §6's own residual, and
+  // it is kept: a label spun out of an unmeasured read would be a claim, and
+  // waiting on a timeout would make the name depend on when it is asked.
+  const cardRepo = repoLabel(repoFor(group.project));
+  const repoOf = (s: FleetSession): string | null => {
+    if (s.project === group.project) return null;
+    const own = repoLabel(repoFor(s.project));
+    return own !== null && cardRepo !== null && own !== cardRepo ? own : null;
   };
 
   const rowBody = (row: FleetRow): ReactNode =>
@@ -390,8 +497,9 @@ export function ProjectCard({
         selected={row.session.id === selectedId}
         onActions={onActions}
         roster={roster}
-        projectPool={pool}
+        projectPool={poolOf(row.session)}
         onOpenRun={openRunFor(row.session)}
+        repo={repoOf(row.session)}
       />
     ) : (
       <PendingSpawn run={row.run} nowMs={nowMs} />
@@ -424,14 +532,7 @@ export function ProjectCard({
               line. `mixed` when the sessions disagree: a header asserting one
               account while two lines show two different ones would be a lie,
               and divergent pins across one project is worth noticing. */}
-          <span
-            className="proj-card-pin"
-            data-mixed={group.pin === null || undefined}
-            aria-label={group.pin === null ? 'pinned accounts differ' : `pinned to ${accountLabel(roster, group.pin)}`}
-            style={group.pin === null ? undefined : { color: `var(${accountColorVar(roster, group.pin)})` }}
-          >
-            {group.pin === null ? 'mixed' : accountLabel(roster, group.pin)}
-          </span>
+          <PinChip pin={group.pin} roster={roster} />
           {/* A fold must not hide a session stranded with no valid destination. */}
           {group.stranded > 0 && (
             <span className="proj-card-stranded">{group.stranded} stranded</span>
@@ -498,7 +599,7 @@ export function ProjectCard({
               <Fragment key={rowKey(row)}>
                 {rowBody(row)}
                 {note !== null && (
-                  <div className="proj-crossing" title={note.title}>
+                  <div className="proj-crossing" title={note.title} data-presence={note.presence}>
                     <span className="proj-crossing-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
                     {note.text}
                   </div>
@@ -517,6 +618,19 @@ export function ProjectCard({
                 <span key={r.id} className="proj-abroad-line">
                   <span className="proj-abroad-glyph" aria-hidden="true">{CROSSING_GLYPH}</span>
                   {`${r.program} ${waveLabel(r)} in ${r.project}`}
+                </span>
+              ))}
+            </div>
+          )}
+          {group.elsewhere.length > 0 && (
+            /* Spec §6: an emptied card says where its work went, as PLAIN TEXT —
+               never a link. A tappable route here would be the second access
+               path R2 excludes, the same reason the abroad line above is a bare
+               span with no onClick. */
+            <div className="proj-elsewhere">
+              {group.elsewhere.map((e) => (
+                <span key={e.project} className="proj-elsewhere-line">
+                  {`${e.count} ${e.count === 1 ? 'workspace' : 'workspaces'} under ${e.project}`}
                 </span>
               ))}
             </div>
@@ -542,7 +656,7 @@ export function ProjectCard({
           {archivedOpen && (
             <div className="proj-archived-body">
               {group.archived.map((s) => (
-                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={pool} onOpenRun={openRunFor(s)} />
+                <SessionLine key={s.id} session={s} onOpen={onOpen} selected={s.id === selectedId} onActions={onActions} roster={roster} projectPool={poolOf(s)} onOpenRun={openRunFor(s)} repo={repoOf(s)} />
               ))}
             </div>
           )}

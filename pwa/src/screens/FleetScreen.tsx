@@ -17,10 +17,10 @@ import { NotificationBell } from '../fleet/NotificationBell';
 import { PasskeyNotice } from '../fleet/PasskeyNotice';
 import { HotFilesStrip } from '../fleet/HotFilesStrip';
 import { groupFleet } from '../fleet/groupFleet';
-import { ProjectCard, type ProjectPlacementRead } from '../fleet/ProjectCard';
+import { ProjectCard, poolOfPlacement, type ProjectPlacementRead } from '../fleet/ProjectCard';
 import { SessionActionsSheet } from '../fleet/SessionActionsSheet';
 import { BUCKET_ORDER } from '../fleet/sortFleet';
-import { anyDispatchPending, isRunClosed, runHomeProject } from '../fleet/runWords';
+import { anyDispatchPending, isRunClosed, runCard, runHomeProject } from '../fleet/runWords';
 import { useNow } from '../lib/useNow';
 import { useFolded } from '../fleet/foldState';
 import { useProjectedHome } from '../fleet/useProjectedHome';
@@ -31,7 +31,7 @@ import { ReapSheet } from '../session/ReapSheet';
 import { archivedSizeText, archivedSummary } from './ArchiveScreen';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { CLASSES, type ModelClass } from '../../../shared/models';
-import type { FleetSession, ProjectPoolsWire, ProjectRow } from '../../../shared/api';
+import { boardHome, type FleetSession, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire, type ProjectRow } from '../../../shared/api';
 import '../fleet/fleet.css';
 
 const poolsFingerprint = (pools: ProjectPoolsWire): string => JSON.stringify(
@@ -111,6 +111,7 @@ export function FleetScreen({
   const dismissNotice = useStore((s) => s.dismissNotice);
   const roster = useStore((s) => s.roster);
   const pools = useStore((s) => s.pools);
+  const fleetFrameSeen = useStore((s) => s.fleetFrameSeen);
 
   useEffect(() => {
     // The fleet stream is the app's heartbeat: connect() is idempotent and
@@ -232,7 +233,10 @@ export function FleetScreen({
     try {
       const cls = classFilterRef.current;
       const response = await api.projects(cls === '' ? undefined : cls);
-      if (request === projectRequest.current) setProjectRows({ kind: 'ready', rows: response.projects });
+      if (request === projectRequest.current) {
+        setProjectRows({ kind: 'ready', rows: response.projects });
+        useStore.getState().setProjects(response.projects);
+      }
     } catch {
       if (request === projectRequest.current) {
         setProjectRows((rows) => rows.kind === 'ready' ? rows : { kind: 'failed' });
@@ -274,6 +278,28 @@ export function FleetScreen({
       && Object.hasOwn(row, 'placement') && row.placement !== undefined
       ? { kind: 'measured', pool: row.pool, placement: row.placement }
       : { kind: 'legacy' };
+  }, [projectRows]);
+
+  // Task 4 fix round 1: a card's own `placement`/`pool` names ONE project —
+  // its own. A row the key flip moved onto this card belongs to a DIFFERENT
+  // project by construction, so its off-pool judgment needs THAT project's
+  // tag, not this card's. The absence discipline itself is `poolOfPlacement`'s
+  // and is spelled once beside `ProjectPlacementRead` (final fix round): only
+  // a `measured` read yields a pool, everything else (`pending`/`failed`/
+  // `missing`/`legacy`) answers `null` — no account claim from an unmeasured
+  // or absent read. What THIS adds is the per-project lookup and the memo.
+  const poolFor = useCallback((project: string): ProjectPoolWire | null =>
+    poolOfPlacement(placementFor(project)), [placementFor]);
+
+  // Task 6: a displaced row's repo label needs ITS OWN project's repo, which
+  // is by construction a different project from the card it renders on — the
+  // same shape `poolFor` above threads for the same reason.
+  const repoFor = useCallback((project: string): ProjectRepoWire | undefined => {
+    if (projectRows.kind !== 'ready') return undefined;
+    const row = projectRows.rows.find((candidate) => candidate.name === project);
+    // `Object.hasOwn`: the key ABSENT is an older server and must read as
+    // "nothing measured", never as `{state:'unmeasured'}` (ProjectRow's doc).
+    return row !== undefined && Object.hasOwn(row, 'repo') ? row.repo : undefined;
   }, [projectRows]);
 
   // D-2721: the selection is a snapshot taken when the card was tapped, and the
@@ -435,6 +461,19 @@ export function FleetScreen({
   // is already subscribed on this screen, so this costs one filter.
   const feed = useStore((s) => s.feed);
   const unreadMail = feed.filter((ev) => isUnseenAt(FEED_ACK_KEY, ev.at, acks)).length;
+
+  // R5 (D-3010): the card set is seeded from the known-project list once it
+  // lands. Before it lands — `legacy`, `pending`, `failed` — the cards are
+  // session-derived exactly as before, and the set only ever GROWS when the
+  // read arrives: a card cannot be destroyed by a read this device has not
+  // made yet. Not hydrated and not persisted, for `pools`' own reason.
+  const knownProjects = projectRows.kind === 'ready' ? projectRows.rows.map((r) => r.name) : [];
+
+  // Task 4: which card each run belongs on — the card its WORKER renders on.
+  // Built ONCE here from the whole session list, because a card sees only
+  // its own rows and cannot answer it (`runCard`'s docstring has the two
+  // fallbacks and why each is load-bearing).
+  const cardOf = new Map(sessions.map((s) => [s.id, boardHome(s)] as const));
 
   return (
     <main className="fleet" data-conn={conn}>
@@ -693,7 +732,7 @@ export function FleetScreen({
           <div className="sr-only" role="status">{ackNote}</div>
 
           <div className="fleet-list">
-            {groupFleet(sessions, acks).map((g) => (
+            {groupFleet(sessions, knownProjects, acks).map((g) => (
               <ProjectCard
                 key={g.project}
                 group={g}
@@ -702,6 +741,8 @@ export function FleetScreen({
                 onAddWorkspace={(p) => void addWorkspace(p)}
                 projected={projected}
                 placement={placementFor(g.project)}
+                poolFor={poolFor}
+                repoFor={repoFor}
                 adding={adding.has(g.project)}
                 collapsed={folded.has(g.project)}
                 onToggle={toggleFold}
@@ -712,15 +753,11 @@ export function FleetScreen({
                   setPoolSelection(poolSelectionFor(p, placementFor(p), poolWrite.current));
                   setPoolOpen(true);
                 }}
-                /* Task 4: THIS card's own runs. Scoped here rather than inside
-                   the card because "which card does a run belong on" is a
-                   question about the run's `project`, and a card handed one
-                   session list cannot answer it — an all-archived project's
-                   list is empty and still has a spawn to show. A run whose
-                   coordinator lives on another project therefore reaches only
-                   the worker's card, where `nestFleet`'s rule 3 leaves it
-                   unbracketed: a `└─` never crosses two cards. */
-                runs={activeRuns.filter((r) => r.project === g.project)}
+                /* Task 4 (wave 2): THIS card's runs are the runs whose WORKER
+                   renders here — `runCard`, never `r.project`. A run kept on
+                   its worker's OWN project's card after the row moved would be
+                   spec §1's pure regression: one end on each card, no edge. */
+                runs={activeRuns.filter((r) => runCard(r, cardOf) === g.project)}
                 /* The SECOND list (spec §3 F4): the runs this project is the
                    HOME of, working somewhere else. NOT the exact complement of
                    the filter above (D-2582): a run homed on a third project
@@ -748,10 +785,20 @@ export function FleetScreen({
                    whose project is neither necessarily the run's work nor its
                    home. Named here so the next reader neither deletes it as a
                    duplicate of that decision nor forks it into a second copy
-                   of it. */
+                   of it. Since wave 2 it also SUBTRACTS a run whose worker now
+                   renders on this very card — that run is a bracketed row
+                   here, and a second line for it would state the same wave
+                   twice (spec §6). */
                 abroad={activeRuns.filter(
-                  (r) => runHomeProject(r) === g.project && r.project !== g.project)}
+                  (r) => runHomeProject(r) === g.project && r.project !== g.project
+                    && runCard(r, cardOf) !== g.project)}
                 nowMs={nowMs}
+                /* Fleet-wide, unlike every other lookup this card is handed —
+                   an orphan's coordinator is by construction NOT among this
+                   card's own sessions (D-3009), so a card-scoped read would
+                   always answer `null` for the one row that asks. */
+                coordOf={(id) => sessions.find((s) => s.id === id) ?? null}
+                frameSeen={fleetFrameSeen}
                 /* INVERTED against the project fold on purpose: foldState
                    stores what is COLLAPSED, so absence means open — right for
                    a project, wrong for an archive fold that must start

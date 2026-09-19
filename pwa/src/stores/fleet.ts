@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -141,6 +141,15 @@ export interface FleetState {
    *  when the value actually changes (`watch.ts`'s byte-equality guard), so
    *  holding the last value between emits is what makes it correct to read. */
   pools: ProjectPoolsWire | null;
+  /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
+   *  lifted here so the session view can label a repo (R3) without a second
+   *  agent round trip per project on every mount. `null` = no read yet on
+   *  this store instance. DELIBERATELY NOT HYDRATED and not written by
+   *  `saveFleetSnapshot`, for `pools`' own reason: a stale repo slug is a
+   *  claim about a checkout this device cannot stand behind. `FleetSnapshot`
+   *  has no field for it (D-3013). */
+  projects: readonly ProjectRow[] | null;
+  setProjects(rows: readonly ProjectRow[]): void;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -271,6 +280,7 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       // NOT `snapshot?.pools` — there is no such field, and there must not be
       // one. See the field's own docstring.
       pools: null,
+      projects: null,
       roster: snapshot?.roster ?? [],
 
       connect() {
@@ -448,6 +458,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       dismissNotice(id) {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
+      },
+
+      setProjects(rows) {
+        set({ projects: rows });
       },
 
       mergeFeed(events, dropped) {

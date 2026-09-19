@@ -20,7 +20,7 @@ import path from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
-import { openCoordDb } from '../src/coord/db.js';
+import { openCoordDb, tx } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
@@ -222,7 +222,15 @@ describe('POST /api/runs/:id/route — the trail follows the SESSION across runs
     // session id must come from somewhere real to be routable — and it is
     // ALSO the run A `claimedBy` name below, i.e. run A's COORDINATOR, never
     // its worker.
-    const { sid: coordSid } = await dispatchedRun(w.app, 'trail-w4a');
+    const { id: runOwnId, sid: coordSid } = await dispatchedRun(w.app, 'trail-w4a');
+    // The door (spec §12, D-3012): `coordSid` is still a LIVE worker of its
+    // own run at this point, so opening run A with `claimedBy: coordSid`
+    // below would be refused (`claimant-is-a-worker`). Terminalize `runOwn`
+    // so `coordSid` reads as a FINISHED worker — `parentOfSession` then
+    // answers null and the open below succeeds, while the subject this case
+    // tests (attribution to a session that is only run A's coordinator, and
+    // was once a worker of a DIFFERENT, now-closed run) survives untouched.
+    tx(w.coord.db, () => { w.coord.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(runOwnId); });
     // A DIFFERENT `program` than `OPEN_BODY`'s default (`build4`): the
     // one-coordinator-per-program guard refuses a second open naming a
     // different `claimedBy` on the SAME program, and this run's

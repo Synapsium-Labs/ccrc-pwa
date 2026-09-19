@@ -1709,6 +1709,27 @@ Two codes rather than one because the caller does different things with them:
 the first says "you reused the wrong workspace", the second says "you are
 opening someone else's programme".
 
+**A third refusal guards the tree's depth.** `claimant-is-a-worker` — **409**,
+`{"ok":false,"refused":"claimant-is-a-worker","by":"<that worker's coordinator>"}`
+— fires at `POST /api/runs` when `claimedBy` is itself the worker of an open
+run, and `heir-is-a-worker` fires the same way at `POST /api/runs/:id/reclaim`
+for a successor. A session that is another coordinator's worker on any open run
+may not open or inherit a programme: the board brackets ONE level, and a real
+chain would render its middle session detached from the coordinator above it.
+EVERY open run naming that session is read, not just the newest one — a session
+can be the worker of several at once, because the coordinator protocol opens
+wave N+1 before closing wave N. Three admissions, not two. A finished worker is
+not a worker; a self-claimed run is admitted (the plan's ruling D-3012; spec
+2026-09-16 §12 for the door itself); and at the RECLAIM door only, an heir every
+one of whose open runs is claimed by the claimant being replaced may inherit —
+the programme's own live worker is the likeliest successor to a dead coordinator,
+and the run it takes over is self-claimed, which the board never brackets, so the
+one level stays honest. An heir a THIRD coordinator's open run still binds is
+refused however new the dying coordinator's own binding is, and a claimant that
+measures alive is still refused ahead of any of this. A session so refused is
+released by closing or abandoning the run that binds it (`POST
+/api/runs/:id/abandon` is one of the ungated operator doors).
+
 **The open response says where the ledger really is.** Beside the relative
 `ledgerPath` it has always returned, `POST /api/runs` answers `ledgerRepo` (the
 home project) and `ledgerAbsPath` (that project's checkout plus
@@ -1768,13 +1789,23 @@ header.
 (`run-project`), and a row whose project differs from its programme's home gains
 a crossing marker — a glyph *and* the word, because nothing on the board is read
 out by colour alone, and while a programme's `homeProject` is null the marker
-never shows. On the fleet board a worker stays on its own project's card — a
-card is a project's sessions, and a session's workspace lives in one repo — and
-when its coordinator is not among that card's live sessions (a rule-3 orphan)
-its row reads `<program> wave n/N`, with `· home <project>` appended only when
-the measured home differs from the card's own project. The home project's own
-card gains an `abroad` line, one sentence per wave working elsewhere
-("`<program>` wave 2/3 in `<other project>`").
+never shows. On the fleet board a coordinated workspace renders on its COORDINATOR's card,
+bracketed under it, whatever repo it works in (spec 2026-09-16, restoring the
+Aug-11 rule the Sep-08 spec had silently reversed): the placement is a server
+decision (`FleetSession.boardProject`, keyed on the newest run naming the
+session and walked to the root coordinator, held while the workspace is
+held), and the run follows the row so the bracket, the orphan marker and the
+held cell's `/runs` door all stay on the card the row is on. A row whose repo
+differs from its card's carries the repo slug inside its name; the session
+view shows the slug whenever it is known. The project's own card stays on the
+board with nothing on it and says `N workspaces under <project>` — text, never
+a link. When a coordinator is NOT on the card (archived, or on another
+card the placement could not reach), the row stays flat with the marker
+`<program> wave n/N`, `· home <project>` appended only when the measured home
+differs, and the marker says when the coordinator is measured gone. The home
+project's card gains an `abroad` line, one sentence per wave working
+elsewhere ("`<program>` wave 2/3 in `<other project>`"), minus any wave whose
+worker already renders on that card.
 
 **What a crossing costs.** Caps stay global: one row, whole box, no per-project
 and no per-programme cap. Running-worker concurrency counts dispatched runs in
@@ -2497,8 +2528,8 @@ working set, `SessionStart(compact)` serves the card once beside the graph card 
 `PostCompact` measures the summary and commits the journal line. No compaction MEASUREMENT reaches the server, the wire or
 the PWA: there is no compaction field on `FleetSession`, no chip, and no hookstate cache. The one thing that
 does cross is ccd's purge refusal vocabulary — `purge-refused`, `purge-incomplete` and
-`purge-mechanism-absent` (`shared/api.ts:7311-7313`), each with an operator sentence of its own at `:7351`,
-`:7359` and `:7372`, which the session History tab renders through `lcRefusalWord`
+`purge-mechanism-absent` (`shared/api.ts:7366-7368`), each with an operator sentence of its own at `:7406`,
+`:7414` and `:7427`, which the session History tab renders through `lcRefusalWord`
 (`pwa/src/session/HistoryTab.tsx:17`, rendered at `pwa/src/session/HistoryTab.tsx:61`). The journal is the whole deliverable, and reading it is a later
 plan's job.
 

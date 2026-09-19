@@ -388,6 +388,41 @@ describe('SessionScreen account accent (data-acct)', () => {
   });
 });
 
+// Task 7 (board-placement wave 2): the repo label reaches the header THROUGH
+// the fleet store's `projects` field, not a prop SessionScreen invents on its
+// own — this exercises the store round trip `renderHeader` above cannot.
+describe('SessionScreen repo label (board-placement wave 2, Task 7, R3)', () => {
+  const makeStores = () => {
+    const store = createSessionStore('claude:OpenClawHetzner', {
+      makeSocket: fakeSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({ sessions: [fleetSession({ status: 'idle' })], conn: 'open' });
+    });
+    return { store, fleet };
+  };
+
+  it('renders the repo the store carries for this session\'s project', () => {
+    const { store, fleet } = makeStores();
+    act(() => {
+      fleet.getState().setProjects([
+        { name: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', repo: { state: 'named', slug: 'Synapsium-Labs/OpenClawHetzner' } },
+      ]);
+    });
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    expect(screen.getByText('Synapsium-Labs/OpenClawHetzner')).toBeInTheDocument();
+    expect(document.querySelector('.chip--repo')).not.toBeNull();
+  });
+
+  it('renders no repo chip when the store has never read `/api/projects` (D-3013)', () => {
+    const { store, fleet } = makeStores();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    expect(document.querySelector('.chip--repo')).toBeNull();
+  });
+});
+
 describe('SessionScreen reap wiring (Task 17)', () => {
   it('wires onReapWorkspace to the real ReapSheet, not a no-op', async () => {
     // The line above this test (Task 16's own "Clean up (Task 16) both
@@ -788,6 +823,18 @@ describe('archived chip', () => {
         ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
     }) })} />);
     expect(screen.queryByText(/^archived/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the repo label in the session view (board-placement wave 2, Task 7, R3)', () => {
+  it('renders the repo unconditionally when it is known', () => {
+    renderHeader({ repo: 'Synapsium-Labs/custom-tools' });
+    expect(screen.getByText('Synapsium-Labs/custom-tools')).toBeInTheDocument();
+    expect(document.querySelector('.chip--repo')).not.toBeNull();
+  });
+  it('renders nothing when it is not — an older server, or a deep link before any fleet read (D-3013)', () => {
+    renderHeader({});
+    expect(document.querySelector('.chip--repo')).toBeNull();
   });
 });
 
