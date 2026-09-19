@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9a7c07ed83b7a9f1cca28f638f0cafd2c21a04027e7df6f4cda60abcc9ac1008
+# ccrc:generated 1 sha256=db1ad23f015556ac8d26fb0d6d3d0f972c6d3ed09ddcd6a806b959ece8ec0f8f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -18966,6 +18966,48 @@ _pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any re
   '
 }
 
+_pane_external_import_gate() {   # pane text -> 0 iff Claude Code's external-CLAUDE.md-import dialog is UP (D-3108)
+  # THE DIALOG, measured off the shipped bundle (Claude Code 2.1.278) rather
+  # than remembered: title `Allow external CLAUDE.md file imports?`, body "This
+  # project's CLAUDE.md imports files outside the current working directory.
+  # Never allow this for third-party repositories.", and two options —
+  # `Yes, allow external imports` / `No, disable external imports` — rendered
+  # with `cancelFirst: true, focus: "cancel"`, so THE CURSOR STARTS ON NO.
+  #
+  # WHY IT IS AN ACCOUNT-SWITCH PROBLEM, AND WHERE THE STATE LIVES. The answer
+  # is recorded as `hasClaudeMdExternalIncludesApproved` (with
+  # `hasClaudeMdExternalIncludesWarningShown` beside it) on the PROJECT entry
+  # inside `$CLAUDE_CONFIG_DIR/.claude.json` — one file per lane. `cmd_swap`
+  # carries the transcript, the sidecars and `tasks/<uuid>`; it does not carry
+  # this, and it must not: that file is Claude Code's, not ccrc's, and the
+  # standing ruling is that a ccrc integration lives in artifacts ccrc owns
+  # outright. So the destination lane has never approved this project, the
+  # dialog is raised on the landing, and the session sits on it until a human
+  # arrives. Measured on this fleet 2026-09-19: the lanes whose config dir
+  # carries a user `CLAUDE.md` with an `@` import hold 0 approvals across 11-14
+  # projects each, while two lanes that answered it long ago hold 56.
+  #
+  # THE SENTENCE ALONE NEVER FIRES, and that is the whole reason this is a
+  # function rather than a `grep` in the loop. The two 2.1.198 gates already
+  # pair their title with the `Enter to confirm` footer so the same words inside
+  # a RESTORED TRANSCRIPT cannot synthesize a keystroke — and this title is
+  # worse than theirs, because a session working on `ccd` has this very
+  # paragraph on screen. So the gate is the LIVE SELECTOR: the title, AND a
+  # cursor line sitting on one of the dialog's OWN two options. Prose cannot
+  # produce that pair; only the dialog can.
+  #
+  # The cursor is read exactly as `_answer_two_option_dialog` reads it — the
+  # LAST `❯` line, falling back to a bare `>` at line start for a terminal that
+  # renders the glyph differently — because the two must agree about which line
+  # is the cursor or this predicate would admit a dialog that helper then
+  # answers blind.
+  local pane="$1" cursor
+  grep -q "Allow external CLAUDE.md file imports" <<<"$pane" || return 1
+  cursor=$(printf '%s\n' "$pane" | LC_ALL=C grep -F $'\xe2\x9d\xaf' | tail -1)
+  [[ -z "$cursor" ]] && cursor=$(printf '%s\n' "$pane" | grep -E '^[[:space:]]*>' | tail -1)
+  [[ "$cursor" == *"allow external imports"* || "$cursor" == *"disable external imports"* ]]
+}
+
 # Auth screens must never receive synthesized keystrokes: on a numbered login
 # menu a stray Enter selects whatever the cursor is on.
 _pane_login_screen() {
@@ -19092,6 +19134,33 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # `_tmux` built it from.
     [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    # THE EXTERNAL-IMPORT GATE, AND IT IS ASKED ABOVE THE READY MARKERS (D-3107).
+    # Every other gate below is a full-screen startup dialog that hides the
+    # footer, so the marker check cannot reach them; this one is raised while
+    # `CLAUDE.md` is being loaded and a pane can carry it WITH chrome the marker
+    # regex matches. Below the markers it would be unreachable exactly when it
+    # fires, and the settle would report a ready TUI over a modal nobody
+    # answered — the shape this fix exists to remove, with the settle's own
+    # verdict now lying about it too.
+    #
+    # ANSWERED `YES`, DELIBERATELY, and the dialog's own warning is the reason
+    # this is safe rather than in spite of it: it says "Never allow this for
+    # third-party repositories", and every pane this function touches is a
+    # workspace `ccd` itself created from the operator's own repo. The posture
+    # is also already the fleet's — `skipDangerousModePermissionPrompt` is set
+    # in every lane's settings.json, and the two arms below auto-accept the
+    # trust-folder and Bypass-Permissions dialogs, both strictly more dangerous
+    # than this one. NO KILL-SWITCH, for the same reason those two have none:
+    # one shape for one class of gate.
+    #
+    # `_answer_two_option_dialog` reads WHICH LINE CARRIES THE CURSOR rather
+    # than trusting an ordinal, which matters more here than anywhere else in
+    # this loop: this dialog ships `cancelFirst: true, focus: "cancel"`, so a
+    # bare Enter is `No, disable external imports` — the operator's own imports
+    # silently switched off for that project, on that lane, permanently.
+    if _pane_external_import_gate "$pane"; then
+      _answer_two_option_dialog "$pane" "$t" "allow external imports"; sleep 2; continue
+    fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
     # without it supervise sits here for the full window and never reaches its watch loop.

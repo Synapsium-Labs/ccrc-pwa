@@ -1,4 +1,4 @@
-# Three supervise-tick defects — the manual-swap pin, the current-wording limit banner, and the no-turn compaction guard
+# Four spawn/supervise-tick defects — the manual-swap pin, the current-wording limit banner, the no-turn compaction guard, and the external-import gate
 
 **Goal:** Close three defects the operator reported on 2026-09-19, all of them in `ccd`'s five-second
 supervise tick, all of them measured on the live fleet before anything was changed:
@@ -14,8 +14,12 @@ supervise tick, all of them measured on the live fleet before anything was chang
    percentage and asks nothing about whether the conversation changed, so a session whose
    post-compaction floor sits at or above its threshold re-compacts every `COMPACT_COOLDOWN` for
    ever — summarising a summary and throwing away real context each time.
+4. **An account switch hands the operator a modal.** Claude Code raises `Allow external CLAUDE.md file
+   imports?` on a lane that has not approved this project, with the cursor on *No*. The approval is
+   per-config-dir state, so every swap into a lane the project has not been approved on raises it
+   again and the session waits for a human.
 
-**Architecture:** `ccd/ccd` only. Three independent slices on one branch, no new verbs, no wire change,
+**Architecture:** `ccd/ccd` only. Four independent slices on one branch, no new verbs, no wire change,
 no server or PWA change. Slice 1 adds a registry marker (`$REG/<id>.swappin`) and two predicates
 around it. Slice 2 adds one pane predicate with a single caller and threads the verdict's provenance
 through a well-known variable instead of re-asking a classifier. Slice 3 adds one transcript reader
@@ -77,6 +81,7 @@ percentage is the signature: nothing had changed, and compacting changed nothing
 | `server/test/ccd-limit-banner.test.ts` | modify | The banner family and the provenance word: 20 cases, 5 measured mutation rows. |
 | `server/test/ccd-auto-compact.test.ts` | modify | The no-turn guard and the turn reader: 17 cases, 6 measured mutation rows. |
 | `server/test/ccd-arith-containment.test.ts` | modify | One `SITES` row and two payload cases for `_compact_no_turns`' two operands. |
+| `server/test/ccd-login-screen.test.ts` | modify | The external-import gate and the settle's answer: 12 cases, 5 measured mutation rows. |
 
 **The three rulings that shaped the code, stated because none of them is visible in a diff:**
 
@@ -174,6 +179,36 @@ decision this branch made and its shipped source cites.
   because `lastcompact` is stamped the instant before the send-keys and a turn in the same second is
   indistinguishable from the compaction's own at one-second resolution; equal reads as "nothing since"
   and the next tick re-measures.
+- **D-3107 — the settle answers the external-CLAUDE.md-import gate, ABOVE the ready markers.** What
+  departed: `_accept_first_run_prompts` answered four startup dialogs and not this one, so an account
+  switch into a lane that has not approved the project left the session sitting on a modal until a
+  human arrived. Where the state lives, measured: `hasClaudeMdExternalIncludesApproved` (with
+  `hasClaudeMdExternalIncludesWarningShown`) on the PROJECT entry inside
+  `$CLAUDE_CONFIG_DIR/.claude.json` — one file per lane. `cmd_swap` carries the transcript, the
+  sidecars and `tasks/<uuid>` and does NOT carry this; it must not, because that file is Claude
+  Code's and a ccrc integration lives in artifacts ccrc owns outright (the 2026-09-02 ruling). On
+  this fleet, 2026-09-19: the lanes whose config dir carries a user `CLAUDE.md` with an `@` import
+  hold ZERO approvals across 11-14 projects each, while two lanes that answered it long ago hold 56.
+  Why ABOVE the ready markers, where no other arm sits: every gate below them is a full-screen dialog
+  that hides the footer, but this one is raised while `CLAUDE.md` is loading and a pane can carry it
+  together with chrome the marker regex matches — below them it would be unreachable exactly when it
+  fires, and the settle would report a ready TUI over an unanswered modal. What shipped: one arm,
+  answered YES through `_answer_two_option_dialog`. The dialog ships `cancelFirst: true,
+  focus: "cancel"`, so a bare Enter would answer *No, disable external imports* — the operator's own
+  imports switched off for that project on that lane, silently and permanently.
+- **D-3108 — `_pane_external_import_gate`: the LIVE selector, never the sentence.** What departed:
+  the two 2.1.198 gates pair their title with the `Enter to confirm` footer so a RESTORED TRANSCRIPT
+  cannot synthesize a keystroke, and a bare title match here would be worse than theirs — a session
+  working on `ccd` has the paragraph documenting this dialog on screen. What shipped: a predicate
+  that requires the title AND a cursor line sitting on one of the dialog's OWN two options, reading
+  the cursor exactly as `_answer_two_option_dialog` reads it (last `❯`, falling back to a bare `>` at
+  line start) so the two cannot disagree about which line is the cursor.
+- **D-3109 — answering YES is the operator's standing posture, and the dialog's own warning is why it
+  is safe.** The warning says "Never allow this for third-party repositories"; every pane this
+  function touches is a workspace `ccd` itself created from the operator's own repo.
+  `skipDangerousModePermissionPrompt` is already set in every lane's settings.json, and the two arms
+  below auto-accept the trust-folder and Bypass-Permissions dialogs, both strictly more dangerous.
+  No kill-switch, for the same reason those two have none: one shape for one class of gate.
 - **D-3104 — `COMPACT_TURN_TAIL_LINES`, its own window.** What departed: reusing `REDRIVE_TAIL_LINES`
   would have been one fewer constant. Why not: 60 lines is sized for a stall two turns deep, and this
   scan must reach back PAST a compaction's own four rows on a tail thick with attachment and system
