@@ -130,10 +130,18 @@ export function resolvePoolLeaseMs(
   env: NodeJS.ProcessEnv,
 ): { value: number; warning: string | null } {
   const num = Number(env.CCRC_POOL_LEASE_MS);
-  if (Number.isFinite(num) && num > 0) return { value: num, warning: null };
+  // >= 1000, NOT > 0 (item 9): every reader compares in whole SECONDS
+  // (`Math.floor(POOL_LEASE_MS / 1000)`, below, and `ccd/ccd`'s own
+  // `now=$(date +%s)`), so a sub-second value passed "positive finite" and
+  // then floored to `0` — `leaseUntil = now`, a lease that is stale the
+  // instant it is issued. Fail-SHUT, so never a live hazard, but a validator
+  // that accepts a value its own emitter cannot express is a bug on its own
+  // terms; refuse it here instead of letting the floor discover it silently.
+  if (Number.isFinite(num) && num >= 1000) return { value: num, warning: null };
   const warning = env.CCRC_POOL_LEASE_MS !== undefined && env.CCRC_POOL_LEASE_MS !== ''
     ? `ccrc-server: CCRC_POOL_LEASE_MS=${JSON.stringify(env.CCRC_POOL_LEASE_MS.slice(0, 40))} is not a ` +
-      `positive number; falling back to the ${DEFAULT_POOL_LEASE_MS}ms default.`
+      `whole number of milliseconds >= 1000 (a value below one second floors to a lease that is already ` +
+      `expired); falling back to the ${DEFAULT_POOL_LEASE_MS}ms default.`
     : null;
   return { value: DEFAULT_POOL_LEASE_MS, warning };
 }
@@ -2728,6 +2736,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const resolved = resolvedAccountPool(id, deps.cfg.roster.byId.get(id), edges);
       if (resolved.state === 'tagged') accounts[id] = { pools: [...resolved.pools] };
     }
+    // ABSOLUTE, ISSUED FROM THIS BOX'S CLOCK (item 10): `leaseUntil` is a
+    // UNIX-seconds timestamp, not a duration, and it travels the wire as one.
+    // `ccd/ccd`'s `_acct_pool_state` compares it against ITS OWN `date +%s`
+    // on the fleet box — nothing resynchronises the two clocks in between —
+    // so any clock skew between this server box and the fleet box shifts the
+    // whole staleness dial directly: a fleet box running fast reads `stale`
+    // early, one running slow serves a projection past this box's own idea
+    // of the lease. NTP-typical skew is noise against the 15-minute default,
+    // but a badly drifted box is a silent input to §5.8's dial that nothing
+    // here measures or reports.
     const nowS = Math.floor(Date.now() / 1000);
     return {
       epoch,

@@ -545,6 +545,19 @@ describe('resolvePoolLeaseMs (review round 1, Minor 8)', () => {
     expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '0' }).warning).not.toBeNull();
     expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '-1000' }).warning).not.toBeNull();
   });
+
+  it('a sub-second positive value is refused too (item 9) — the floor to whole seconds would zero it', () => {
+    // `Math.floor(POOL_LEASE_MS / 1000)` (server.ts, the route that consumes
+    // this value) floors anything under 1000ms to `0`, making
+    // `leaseUntil = now` — a lease that is stale the instant it is issued.
+    // `999` used to pass "positive finite" and reach that floor silently.
+    const r = resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '999' });
+    expect(r.value).toBe(15 * 60 * 1000); // the module's own default
+    expect(r.warning).not.toBeNull();
+    expect(r.warning).toContain('999');
+    // 1000 itself is the floor, and is accepted: `Math.floor(1000/1000)` is `1`.
+    expect(resolvePoolLeaseMs({ CCRC_POOL_LEASE_MS: '1000' })).toEqual({ value: 1000, warning: null });
+  });
 });
 
 describe('refusePool guards a throwing coord.db (review round 1, Minor 9)', () => {
