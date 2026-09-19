@@ -31,6 +31,7 @@ import type { ProjectPoolWire } from '../../shared/api.js';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { itLinux } from './platformFixtures.js';
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-pool-ok-');
@@ -427,7 +428,18 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
     expect(h.reg('demo-quiet-mesa', 'home')).toBe('claude-b');
   });
 
-  it('names the PROJECTION and its own remedy when the ACCOUNT side is undecidable, not the project tag', () => {
+  // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
+  // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
+  // its only runner is a systemd timer, and `ccrc` says so in its own install
+  // summary ("no ccd-pool-sync — their timers are systemd-only",
+  // `ccd/ccrc:9733`). So `_pool_sync_installed` is correctly FALSE on darwin,
+  // the box has no control plane BY CONFIGURATION, and the declared-tag
+  // fallback is the right answer there rather than a degraded one. Planting a
+  // plist to force this arm would fabricate a state production cannot reach
+  // and would test a branch that is dead on that platform. Measured: these
+  // four ran on the macOS CI leg and read `untagged`, which is the CORRECT
+  // darwin answer to a question this test was not asking.
+  itLinux('names the PROJECTION and its own remedy when the ACCOUNT side is undecidable, not the project tag', () => {
     // I1/I2, fix round 1. On a cold node — a box whose control plane has
     // never synced, which is the EKS default path — the project tag is
     // perfectly readable and every account is undecidable. What the refusal

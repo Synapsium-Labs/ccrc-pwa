@@ -18,6 +18,7 @@ import { CCD, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
+import { itLinux } from './platformFixtures.js';
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-auto-swap-pool-');
@@ -248,7 +249,18 @@ describe('_strand_why names the candidates the decision was actually about', () 
       .toBe(`tag:malformed ${h.home}/.cc-sessions/pools/demo`);
   });
 
-  it('obeys that same rule for the ACCOUNT side — one projection token, not one per candidate', () => {
+  // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
+  // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
+  // its only runner is a systemd timer, and `ccrc` says so in its own install
+  // summary ("no ccd-pool-sync — their timers are systemd-only",
+  // `ccd/ccrc:9733`). So `_pool_sync_installed` is correctly FALSE on darwin,
+  // the box has no control plane BY CONFIGURATION, and the declared-tag
+  // fallback is the right answer there rather than a degraded one. Planting a
+  // plist to force this arm would fabricate a state production cannot reach
+  // and would test a branch that is dead on that platform. Measured: these
+  // four ran on the macOS CI leg and read `untagged`, which is the CORRECT
+  // darwin answer to a question this test was not asking.
+  itLinux('obeys that same rule for the ACCOUNT side — one projection token, not one per candidate', () => {
     // I2, fix round 1. The rule above was written about the project TAG, and
     // this loop was violating it the moment `_pool_ok`'s account arm gained
     // undecidable states of its own: `! [the rule]` takes rc 2 as true, so a
