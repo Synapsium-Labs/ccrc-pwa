@@ -133,11 +133,27 @@ export function accountPoolState(roster: readonly RosterWire[], wrapper: string)
 
 /** This account's POOL NAME, or `null` for an untagged account, an account
  *  this roster does not have, or a server built before pools existed (the key
- *  is simply absent on that wire, and absence-permits means untagged).
+ *  is simply absent on that wire, and absence-permits means untagged) — FOUR
+ *  reasons, and this function names only two of them.
  *
- *  A one-line derivation over `accountPoolState` above, kept for the callers
- *  that only ever wanted a name and have no use for `origin`: the swap
- *  split, the new-session split, `PoolSheet`'s option list. `accountPoolState`
+ *  OVERLOADED, DISCLOSED RATHER THAN FIXED HERE (item 6, I4, wave-1 fix
+ *  round A): `null` also covers an `unreadable`, `malformed` or `stale`
+ *  account — `accountPoolState`'s other three states — collapsing "nobody
+ *  tagged this" with "nobody could tell" into one permissive answer. Latent
+ *  only because `resolvedAccountPool` (`server/src/poolrule.ts`) cannot yet
+ *  produce those three states for a real fleet; real the day it does. Every
+ *  ELIGIBILITY decision (anything that feeds `poolSide`/`splitByPool`,
+ *  `lib/pools.ts`) now reads `accountPoolState` directly instead of this
+ *  function, specifically so that fold cannot reach a placement choice — see
+ *  `poolSide`'s own docstring. What is still EXPOSED to this narrowed value:
+ *  every caller that only ever wanted a NAME to display and never a
+ *  decision to make — `NewSessionSheet`/`SwapSheet`'s `poolChip` text,
+ *  `SessionLine`'s account-pool label, `poolOptions`' distinct-name list —
+ *  each of which already renders nothing for a bare `null`, so the display
+ *  degrades honestly even though the REASON is not shown.
+ *
+ *  A one-line derivation over `accountPoolState` above, kept for exactly
+ *  those callers, which have no use for `origin` either. `accountPoolState`
  *  stays the ONE place `RosterWire.pool`/`resolvedPool` is read; this never
  *  re-reads either on its own. */
 export function accountPool(roster: readonly RosterWire[], wrapper: string): string | null {

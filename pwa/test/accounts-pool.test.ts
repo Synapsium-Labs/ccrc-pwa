@@ -13,6 +13,7 @@ import path from 'node:path';
 import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../shared/api';
 import { accountPool, homeAbleLabelList } from '../src/lib/accounts';
 import { poolLabelList, poolOptions, poolSide, projectPoolOf, splitByPool } from '../src/lib/pools';
+import { declaredAccountPool, type AccountPoolWire } from '../../shared/poolrule';
 import { TEST_ROSTER } from './rosterFixture';
 
 /** `TEST_ROSTER` with pools hung on it by id — never a second hand-typed
@@ -64,36 +65,52 @@ describe('accountPool — the ONE reader of RosterWire.pool', () => {
 
 describe('poolSide — the rule, composed and never restated', () => {
   it('serves when the project is untagged', () => {
-    expect(poolSide('pool-a', { state: 'untagged' })).toBe('eligible');
+    expect(poolSide(declaredAccountPool('pool-a'), { state: 'untagged' })).toBe('eligible');
   });
 
   it('serves when the account is untagged', () => {
-    expect(poolSide(null, tagged('pool-a'))).toBe('eligible');
+    expect(poolSide(declaredAccountPool(null), tagged('pool-a'))).toBe('eligible');
   });
 
   it('serves when the two names agree', () => {
-    expect(poolSide('pool-a', tagged('pool-a'))).toBe('eligible');
+    expect(poolSide(declaredAccountPool('pool-a'), tagged('pool-a'))).toBe('eligible');
   });
 
   it('crosses when the two names differ', () => {
-    expect(poolSide('pool-b', tagged('pool-a'))).toBe('crossing');
+    expect(poolSide(declaredAccountPool('pool-b'), tagged('pool-a'))).toBe('crossing');
   });
 
-  it('is unknown on an unreadable or malformed tag, for a TAGGED account too', () => {
+  it('is unknown on an unreadable or malformed PROJECT tag, for a TAGGED account too', () => {
     // Undecidable is decided FIRST — nobody decides, not even for an account
     // whose own pool is known. Folding either state into `crossing` would hide
     // a row on a tag nobody could read; folding it into `eligible` would claim
     // a rule the fleet never stated.
-    expect(poolSide('pool-b', { state: 'unreadable' })).toBe('unknown');
-    expect(poolSide('pool-b', { state: 'malformed' })).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), { state: 'unreadable' })).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), { state: 'malformed' })).toBe('unknown');
   });
 
   it('is unknown when there is no project pool at all', () => {
-    expect(poolSide('pool-b', null)).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), null)).toBe('unknown');
   });
 
   it('is unknown for a future project-pool state', () => {
-    expect(poolSide('pool-b', archived)).toBe('unknown');
+    expect(poolSide(declaredAccountPool('pool-b'), archived)).toBe('unknown');
+  });
+
+  // Item 6 (I4, wave-1 fix round A): `poolSide` now takes the account's full
+  // `AccountPoolWire`, so its OWN undecidable states — not producible by
+  // today's server, but real the wire's own union — must read `unknown`
+  // against a perfectly readable, TAGGED project too, the exact mirror of
+  // the project-side case above. Before this round these three states could
+  // only reach `poolSide` already narrowed to `null` by `accountPool`, which
+  // reads identically to a genuinely untagged account and answers
+  // `eligible` — the overloaded null this item exists to close.
+  it.each([
+    ['unreadable', { state: 'unreadable' } as AccountPoolWire],
+    ['malformed', { state: 'malformed' } as AccountPoolWire],
+    ['stale', { state: 'stale' } as AccountPoolWire],
+  ] as const)('is unknown on an %s ACCOUNT tag, never eligible, against a tagged project', (_label, account) => {
+    expect(poolSide(account, tagged('pool-a'))).toBe('unknown');
   });
 });
 

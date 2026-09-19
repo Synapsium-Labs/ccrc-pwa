@@ -11,8 +11,8 @@
 // null on every load and the offline snapshot has no field for it, so
 // `projectPoolOf` can never be asked about a tag that was true an hour ago.
 import type { ProjectPoolWire, ProjectPoolsWire, RosterWire } from '../../../shared/api';
-import { poolRule, declaredAccountPool } from '../../../shared/poolrule';
-import { accountPool, joinLabels } from './accounts';
+import { poolRule, declaredAccountPool, type AccountPoolWire } from '../../../shared/poolrule';
+import { accountPool, accountPoolState, joinLabels } from './accounts';
 
 /** Which side of the pool line one candidate falls on.
  *
@@ -26,17 +26,33 @@ export type PoolSide = 'eligible' | 'crossing' | 'unknown';
 
 /** `poolRule`, asked the screen's question.
  *
+ *  Item 6 (I4, wave-1 fix round A): takes the account's full `AccountPoolWire`
+ *  now, not a narrowed `string | null` — a caller that only has a NAME (a
+ *  wire the server cannot yet send, `unreadable`/`malformed`/`stale`, folds
+ *  through `declaredAccountPool` at ITS OWN call site, same as it always
+ *  could) must build one with `declaredAccountPool`/`accountPoolState`
+ *  itself. Before this round `poolSide` took the name and rebuilt a wire
+ *  with `declaredAccountPool`, which can only ever answer `tagged`/`untagged`
+ *  — so an account this build measured `unreadable`/`malformed`/`stale`
+ *  arrived here already narrowed to `null` by `accountPool` (`lib/accounts.ts`)
+ *  and came back out `untagged` -> `eligible`, the exact overloaded-null
+ *  fold an earlier round already closed for `acctPoolChip`/`currentCopy`
+ *  (`AccountsScreen.tsx`/`AccountPoolSheet.tsx`) and not, until now, for the
+ *  eligibility split every screen below actually PLACES from. Latent only
+ *  because `resolvedAccountPool` (`server/src/poolrule.ts`) cannot yet
+ *  produce those three states — real the day it does.
+ *
  *  `projectPool === null` — no `pools` frame has arrived, or the server
  *  predates the field — is the one condition the rule itself has no vocabulary
  *  for, so it is answered here and nowhere else. Every OTHER undecidable
- *  condition (`unreadable`, `malformed`) is the rule's own `pool-undecidable`,
- *  read off the verdict rather than re-listed. */
+ *  condition, on EITHER side (`unreadable`, `malformed`, `stale`), is the
+ *  rule's own `pool-undecidable`, read off the verdict rather than re-listed. */
 export function poolSide(
-  accountPoolName: string | null,
+  account: AccountPoolWire,
   projectPool: ProjectPoolWire | null,
 ): PoolSide {
   if (projectPool === null) return 'unknown';
-  const verdict = poolRule(declaredAccountPool(accountPoolName), projectPool);
+  const verdict = poolRule(account, projectPool);
   if (verdict.ok) return 'eligible';
   return verdict.reason === 'pool-mismatch' ? 'crossing' : 'unknown';
 }
@@ -55,13 +71,13 @@ export function splitByPool(
   // undecidable states before it ever looks at the account, so this never
   // re-lists `unreadable`/`malformed` here and cannot fall out of step with
   // the states wave 1 declares.
-  if (poolSide(null, projectPool) === 'unknown') {
+  if (poolSide(declaredAccountPool(null), projectPool) === 'unknown') {
     return { eligible: [...wrappers], crossing: [], unknown: true };
   }
   const eligible: string[] = [];
   const crossing: string[] = [];
   for (const w of wrappers) {
-    if (poolSide(accountPool(roster, w), projectPool) === 'crossing') crossing.push(w);
+    if (poolSide(accountPoolState(roster, w), projectPool) === 'crossing') crossing.push(w);
     else eligible.push(w);
   }
   return { eligible, crossing, unknown: false };
@@ -122,7 +138,7 @@ export function poolLabelList(
 ): string {
   return joinLabels(
     roster
-      .filter((a) => a.homeAble && poolSide(accountPool(roster, a.id), projectPool) !== 'crossing')
+      .filter((a) => a.homeAble && poolSide(accountPoolState(roster, a.id), projectPool) !== 'crossing')
       .map((a) => a.label),
   );
 }
