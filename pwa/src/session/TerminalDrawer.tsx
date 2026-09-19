@@ -22,6 +22,8 @@ import { api, ApiError } from '../lib/api';
 import { checkAuth, onAuthRegained } from '../lib/auth';
 import { useKeyboardInset } from '../lib/keyboard';
 import { wsUrl } from '../lib/ws';
+import { PINNED_WINDOW_COLS } from '../../../shared/api';
+import { BASE_CONSOLE_FONT_PX, consoleFit } from './consoleFit';
 import './chat.css';
 
 /** The slice of xterm the drawer drives — injectable so tests can script it. */
@@ -33,6 +35,10 @@ export interface DrawerTerm {
   onWheel(cb: (ev: WheelEvent) => boolean): void;
   /** Fit the grid to the host element; returns the measured cols/rows. */
   fit(): { cols: number; rows: number };
+  /** Render at this type size (CSS px) and re-fit; returns the new grid. The
+   *  drawer shrinks the type so the whole pinned tmux window lands on the
+   *  glass — see `consoleFit`. */
+  setFontSize(px: number): { cols: number; rows: number };
   focus(): void;
   dispose(): void;
 }
@@ -160,7 +166,13 @@ export function historyFailureSentence(error: string, detail?: string): string {
     : error;
 }
 
-export type MakeHistoryTerm = (host: HTMLElement, lines: number, pane?: HistoryPane) => HistoryTerm;
+/** `fontSize` is the size the LIVE pane settled on after its fit. The two
+ *  terminals sit one over the other and a reader moves between them with one
+ *  key, so a history rendered at a different size reads as the console having
+ *  changed rather than the layer having. Optional and last, so a test that
+ *  scripts this factory keeps working without knowing about it. */
+export type MakeHistoryTerm =
+  (host: HTMLElement, lines: number, pane?: HistoryPane, fontSize?: number) => HistoryTerm;
 
 /** A token's resolved value at attach time — xterm paints to canvas and
  *  cannot read CSS custom properties itself. `undefined` (token missing)
@@ -178,7 +190,7 @@ const tokenValue = (name: string): string | undefined => {
  *  back would look like leaving the session. */
 const glass = () => ({
   fontFamily: tokenValue('--font-mono') ?? 'monospace',
-  fontSize: 14,
+  fontSize: BASE_CONSOLE_FONT_PX,
   theme: {
     background: tokenValue('--bg-well'),
     foreground: tokenValue('--ink-on-well'),
@@ -287,6 +299,10 @@ const defaultMakeTerm: MakeTerm = (host) => {
     },
     onWheel: (cb) => term.attachCustomWheelEventHandler(cb),
     fit: fitter(term, fit),
+    setFontSize: (px) => {
+      term.options.fontSize = px;
+      return fitter(term, fit)();
+    },
     focus: () => term.focus(),
     dispose: () => term.dispose(),
   };
@@ -295,9 +311,10 @@ const defaultMakeTerm: MakeTerm = (host) => {
 /** The history terminal: the same glass, no cursor, no keyboard, and a real
  *  scrollback — this one is in the NORMAL buffer, so the wheel scrolls it and a
  *  touch-drag scrolls it, exactly as a console does. */
-export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane) => {
+export const defaultMakeHistoryTerm: MakeHistoryTerm = (host, lines, pane, fontSize) => {
   const term = new Terminal({
     ...glass(),
+    ...(fontSize === undefined ? {} : { fontSize }),
     cursorBlink: false,
     disableStdin: true,
     // ZERO, EXPLICITLY, because a measurement leans on it: the call site below
@@ -508,6 +525,16 @@ export function TerminalDrawer({
   const sockRef = useRef<WebSocket | null>(null);
   const termRef = useRef<DrawerTerm | null>(null);
   const gridRef = useRef({ cols: 80, rows: 24 });
+  /** The type size the glass is rendering at right now. Held rather than read
+   *  back off the terminal because the fit reasons FROM it — the columns a box
+   *  shows and the size they are drawn at are one measurement, and asking the
+   *  terminal for the size after it has been told a new one answers the new
+   *  one, which is not what the next fit needs. */
+  const fontRef = useRef(BASE_CONSOLE_FONT_PX);
+  /** True while the pinned window is wider than the glass can show even at the
+   *  floor — the state in which tmux pans the pane, and the reader deserves to
+   *  be told why their lines begin off-screen. */
+  const [clipped, setClipped] = useState(false);
   const refitRef = useRef<(() => void) | null>(null);
   const histRef = useRef<Hist>({ at: 'live' });
   /** WHICH READ, not merely "a read is running". `reading` is a state and two
@@ -596,6 +623,61 @@ export function TerminalDrawer({
     );
   };
 
+  /**
+   * THE GLASS MEETS THE WINDOW, because the window cannot meet the glass.
+   *
+   * A tmux client smaller than its window is a VIEWPORT, which tmux pans to
+   * follow the cursor — so on any glass narrower than `PINNED_WINDOW_COLS` a
+   * line's beginning slides off to the left while its owner is typing. The
+   * window is pinned and may not be narrowed to suit: tmux reflows stored lines
+   * on a width change, destructively at this fleet's `history-limit` (the
+   * measurement is in `PINNED_WINDOW_COLS`' own docstring). So the type shrinks
+   * until the whole window is on screen, and below the legibility floor the
+   * host widens and `.term-screen` scrolls instead.
+   *
+   * The arithmetic is `consoleFit`'s, and lives there so it can be measured
+   * without a DOM. What is here is only the application of it.
+   */
+  const fitToWindow = (t: DrawerTerm): { cols: number; rows: number } => {
+    // CLEARED FIRST, ALWAYS. A width left over from a previous scrolling fit
+    // would be the box this one measures, so the fit would read its own last
+    // answer as the room available and never leave the scroll.
+    // A HOST WITH NO LAYOUT IS UNMEASURED, NOT NARROW. The sheet portals its
+    // content and animates in, so the first fit can land on an element with no
+    // width at all — and xterm answers that with the grid it was constructed
+    // with, not with a measurement. Read as columns, that number asks for the
+    // floor and a surface metres wide; the later fit recovers, but the reader
+    // has already seen the smear. Nothing to measure means nothing to change.
+    if (host === null || host.clientWidth <= 0) return t.fit();
+    // MEASURED AT THE BASE SIZE, EVERY TIME, and this is not tidiness — it is
+    // the difference between a fit and a spiral.
+    //
+    // Setting a terminal's font size does not immediately re-measure its cell:
+    // xterm recomputes character dimensions on its own schedule, so a `fit()`
+    // called straight afterwards can still answer with the OLD cell and report
+    // the OLD column count. Compute the next size from THAT and the shrink
+    // compounds — measured on the live console: 14px fitted to 10.5, the next
+    // pass read 166 columns again and asked for 7.9, and the floor caught it at
+    // 8px. The glass was legible for one frame and a smear thereafter.
+    //
+    // Re-anchoring on the base removes the state the spiral fed on. Every fit
+    // asks the same question — "how many columns does this box show at 14px?" —
+    // so the answer depends on the box alone and running it twice changes
+    // nothing. It costs one extra layout per fit, which happens on open and on
+    // resize, not per frame.
+    const measured = t.setFontSize(BASE_CONSOLE_FONT_PX);
+    fontRef.current = BASE_CONSOLE_FONT_PX;
+    const want = consoleFit(measured.cols, BASE_CONSOLE_FONT_PX, PINNED_WINDOW_COLS);
+    if (want === null) return measured;   // unmeasurable — keep the grid we have
+    let grid = measured;
+    if (want.fontSize !== fontRef.current) {
+      fontRef.current = want.fontSize;
+      grid = t.setFontSize(want.fontSize);
+    }
+    setClipped(want.clipped);
+    return grid;
+  };
+
   // Frames are inert until the socket reports open — quick keys pressed
   // during attach are dropped, never queued blind into a dead pipe.
   const sendFrame = (
@@ -627,7 +709,7 @@ export function TerminalDrawer({
 
     const term = (makeTerm ?? defaultMakeTerm)(host);
     termRef.current = term;
-    gridRef.current = term.fit(); // fit-on-open → measured grid rides the URL
+    gridRef.current = fitToWindow(term); // fit-on-open → measured grid rides the URL
 
     const make = makeSocket ?? ((u: string) => new WebSocket(u));
     const { cols, rows } = gridRef.current;
@@ -800,7 +882,7 @@ export function TerminalDrawer({
     const refit = (): void => {
       const t = termRef.current;
       if (!t) return;
-      const next = t.fit();
+      const next = fitToWindow(t);
       if (next.cols === gridRef.current.cols && next.rows === gridRef.current.rows) return;
       gridRef.current = next;
       sendFrame({ type: 'resize', cols: next.cols, rows: next.rows });
@@ -847,7 +929,9 @@ export function TerminalDrawer({
   // coming back to it lands on the pane's newest line, not on a stale screen.
   useEffect(() => {
     if (hist.at !== 'history' || histHost === null) return undefined;
-    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(histHost, hist.lines, hist.pane);
+    const term = (makeHistoryTerm ?? defaultMakeHistoryTerm)(
+      histHost, hist.lines, hist.pane, fontRef.current,
+    );
     // THE LATCH, AND THE READER'S OWN GESTURE IS WHY IT EXISTS. xterm's
     // `write(data, done)` parses ASYNCHRONOUSLY, so `done` can land after this
     // effect has been torn down and has called `dispose()` — and `scrollLines`
@@ -1167,6 +1251,18 @@ export function TerminalDrawer({
     return () => cancelAnimationFrame(raf);
   }, [kbInset, open]);
 
+  /** What the drawer's one status strip should say, or null for nothing to say.
+   *  Each arm narrows `hist` on its own, which is what lets the `empty` arm
+   *  reach `why` and `detail`. The clip goes LAST because it is a standing
+   *  condition rather than an event: the others are things happening now, and a
+   *  window too wide for the glass is simply how this drawer is until the
+   *  window it sits in gets wider. */
+  const stripWord: string | null =
+    hist.at === 'reading' ? 'reading history…'
+      : hist.at === 'empty' ? `no history · ${historyFailureSentence(hist.why, hist.detail)}`
+        : clipped ? `${PINNED_WINDOW_COLS} columns — wider than this window shows`
+          : null;
+
   return (
     <Sheet open={open} onClose={onClose} full title="Terminal" eyebrow={`terminal · ${id}`}>
       <div className="term" style={kbInset > 0 ? { paddingBottom: kbInset } : undefined}>
@@ -1185,13 +1281,9 @@ export function TerminalDrawer({
               the `live` button beside it was a second door for the job the key
               bar's toggle now does both ways. Only the two states a reader
               cannot read off the glass still speak. */}
-          {(hist.at === 'reading' || hist.at === 'empty') && (
+          {stripWord !== null && (
             <div className="term-histbar" role="status" aria-label="History">
-              <span className="term-histbar-word">
-                {hist.at === 'reading'
-                  ? 'reading history…'
-                  : `no history · ${historyFailureSentence(hist.why, hist.detail)}`}
-              </span>
+              <span className="term-histbar-word">{stripWord}</span>
             </div>
           )}
           {conn !== 'open' && (
