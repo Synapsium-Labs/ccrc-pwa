@@ -756,26 +756,28 @@ export function sendPrompt(
       // just typed. Ordinary text (the branch below) has no such collision
       // risk and keeps the battle-tested whole-pane check.
       let echoed = needle === '';
-      // Did any poll actually contain an input box? Separate from `echoed`
-      // because the two have opposite remedies: a box that echoed nothing gets
-      // cleared, a box that was never in the capture must not be touched.
-      let sawBox = false;
-      // And did any poll come back with a PANE? The ordinary arm below has kept
-      // this distinction since it shipped, for the reason a passing test states
-      // out loud: when every capture fails the session is GONE, and the answer
-      // is `not-alive` — not a statement about a box. Here the clear's own
-      // `dead` outcome used to carry that, and it still does; this flag only
-      // stops the unreadable-box refusal from pre-empting it.
-      let sawPane = false;
+      // THE FRESHEST MEASUREMENT, absent included, and NOT "did any poll ever
+      // see a box". Three answers have to reach the refusals below and one
+      // boolean cannot carry them: `null` = every capture failed (the session
+      // is gone), `{box:'absent'}` = a capture came back with no input box in
+      // it, `{box:'present'}` = a reading of the box itself.
+      //
+      // WHY THE LAST POLL DECIDES AND "EVER" DOES NOT (review finding, measured
+      // against this arm): our own typing is what pushes an over-tall box out of
+      // the capture window, so the ordinary sequence is a FIRST poll that still
+      // sees the box — mid-render, before our text lands, which is the very race
+      // this loop polls for — and later polls that see none. An ever-saw-a-box
+      // flag is disarmed by that first poll, and on THIS arm the fall-through
+      // fires the blind floor below into a box nothing can read: the operator's
+      // own hundreds of rows, shredded by a clear that cannot see them.
+      let lastBox: BoxRead | null = null;
       for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
-        sawPane = true;
-        const read = draftOfMeasured(ansi);
-        if (read.box === 'absent') continue;
-        sawBox = true;
-        if (read.draft.startsWith(needle)) echoed = true;
+        lastBox = draftOfMeasured(ansi);
+        if (lastBox.box === 'absent') continue;
+        if (lastBox.draft.startsWith(needle)) echoed = true;
       }
       if (!echoed) {
         after ??= await d.tmux.capture(id);
@@ -785,7 +787,10 @@ export function sendPrompt(
         // read may hold an operator's own hundreds of rows. Firing into it would
         // shred exactly the draft this file's refuse-never-destroy ruling exists
         // to protect. Say the box is unreadable and touch nothing.
-        if (sawPane && !sawBox) return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
+        // A `null` reading is NOT this case: every capture failed, the session
+        // is gone, and the clear below reports `dead` — which is what turns it
+        // into `not-alive`. Only a pane that came back WITHOUT a box lands here.
+        if (lastBox !== null && lastBox.box === 'absent') return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
         // A failed send must not stand a bare clip path in the live box — but
         // C-u can fail just like the replaceDraft clear above can, so clearBox
         // re-reads and reports what's left rather than assuming it worked.
@@ -809,6 +814,15 @@ export function sendPrompt(
         // to a clean clear, so reporting it that way told the caller "cleared"
         // when the truth is "unknown, and the session is gone".
         if (cleared.state === 'dead') return { ok: false, error: 'not-alive' };
+        // THE THIRD CLEAR SITE, and the last place the new distinction was
+        // still narrowed back. The box was readable on the last echo poll — the
+        // refusal above proves it — and left the window WHILE the clear was
+        // running, which the blind floor can do all by itself by growing what
+        // it was meant to shrink. Reporting that as `verify-failed` claims
+        // something about a box ("it never echoed") that nothing can see, and
+        // drops the one sentence that names the remedy. `menu` keeps its own
+        // spread below for the reason its comment gives; this is not that.
+        if (cleared.state === 'unreadable') return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
         return {
           ok: false,
           error: 'verify-failed',
@@ -837,24 +851,19 @@ export function sendPrompt(
       // ONE capture per poll, as before: the ansi read REPLACES the plain one
       // rather than joining it, so the success path's budget is unchanged.
       let echoed = needle === '';
-      let lastAnsi = '';
-      // See the attachment arm's twin: "no box in any capture" is a third
-      // answer, and it is the one this build measured in the wild.
-      let sawBox = false;
-      // Did ANY poll come back with a pane? `lastAnsi` cannot answer that: it
-      // is '' both for "twelve dead captures" and for "a live pane whose box
-      // read empty", and those need opposite answers. See the refusal below.
-      let sawPane = false;
+      // The same three answers as the attachment arm's twin, in one value — see
+      // its comment for why the LAST poll decides. This also retires the old
+      // `let lastAnsi = ''`, which was '' both for "twelve dead captures" and
+      // for "a live pane whose box read empty" and so could not be read back
+      // safely at all; the measured reading carries that distinction itself.
+      let lastBox: BoxRead | null = null;
       for (let i = 0; i < ECHO_TRIES && !echoed; i++) {
         await sleep(ECHO_POLL_MS);
         const ansi = await d.tmux.captureAnsi(id);
         if (ansi === null) continue;
-        lastAnsi = ansi;
-        sawPane = true;
-        const read = draftOfMeasured(ansi);
-        if (read.box === 'absent') continue;
-        sawBox = true;
-        if (read.draft.startsWith(needle)) echoed = true;
+        lastBox = draftOfMeasured(ansi);
+        if (lastBox.box === 'absent') continue;
+        if (lastBox.draft.startsWith(needle)) echoed = true;
       }
       if (!echoed) {
         // EVERY capture failed: the session is gone, and none of what the arm
@@ -863,7 +872,7 @@ export function sendPrompt(
         // made a dead pane byte-identical to a live one that never rendered.
         // The attachment path's own clear reports `dead` for exactly this and
         // returns `not-alive`; this is the same question and the same answer.
-        if (!sawPane) return { ok: false, error: 'not-alive' };
+        if (lastBox === null) return { ok: false, error: 'not-alive' };
         // THE TEXT STAYS IN THE BOX — no clearBox, no C-u (operator ruling:
         // refuse, never destroy). That was already true; what was missing was
         // saying so. Hand back the box row, FOR DISPLAY, exactly as the
@@ -887,8 +896,8 @@ export function sendPrompt(
         // sends the operator looking in the wrong place. The text is in the box
         // and untouched either way; only the name changes, and the name is what
         // tells them to go clear an over-tall draft.
-        if (!sawBox) return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
-        const lastDraft = draftOf(lastAnsi);
+        if (lastBox.box === 'absent') return { ok: false, error: 'box-unreadable', pane: (after ?? '').slice(-PANE_TAIL) };
+        const lastDraft = lastBox.draft;
         // THE FOURTH SHAPE, and the one the flag's own docstring called
         // unreachable. Claude Code collapses a large typed burst into
         // `[Pasted text #N]` — the box then holds our WHOLE message and shows a
