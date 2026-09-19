@@ -89,13 +89,20 @@ export function resolvedAccountPool(
  * to answer "do I have the central edges here?" A caller that genuinely has
  * none passes `new Map()` and says why in a comment at the call site.
  *
- * NOT WRITTEN AS `poolRule(resolvedAccountPool(...), pool)`, deliberately: a
- * central edge decides the verdict DIRECTLY, without ever consulting
- * `roster.byId` — so a wrapper this box's roster does not have still gets a
- * real mismatch/match answer (never the `account-not-in-roster` relabel) when
- * a central row exists for it. `resolvedAccountPool` requires an already-known
- * `AccountDef` for exactly this reason: it answers "what pool is THIS
- * (roster-known) account in", not "does this wrapper exist".
+ * NOT WRITTEN AS `poolRule(resolvedAccountPool(wrapper, account, edges), pool)`
+ * — precedence is spelled TWICE across this file (see `GET /api/pools/epoch`'s
+ * own correction, `server.ts`, review round 4 P2), kept equal by test
+ * coverage rather than by construction. THE REASON THIS DOCSTRING GAVE FOR
+ * THAT (review round 4, P3 — the old reason, struck): it said
+ * `resolvedAccountPool` "requires an already-known `AccountDef`", which
+ * stopped being true the round `resolvedAccountPool` widened to `account:
+ * AccountDef | undefined`. The obstruction is gone — `resolvedAccountPool
+ * (wrapper, roster.byId.get(wrapper), edges)` would now answer the SAME wire
+ * value this function's own central branch computes inline, including for a
+ * wrapper the roster does not have (both fall through to
+ * `declaredAccountPool(null)`, i.e. untagged). Unifying the two is now a
+ * CHOICE, not a forced duplication — left as one for the task that owns this
+ * file's next behavioural change, not decided in a prose-only round.
  */
 export function poolVerdict(
   roster: Roster, wrapper: string, pool: ProjectPoolWire,
@@ -140,8 +147,15 @@ export function poolVerdict(
  * forecast eligible for a project `POST /api/sessions` would then refuse.
  * `test/projected-home.test.ts`'s fixture-driven parity harness against
  * `_ws_least_loaded` is the one caller that still passes `NO_EDGES`
- * deliberately — it tests the declared-only rule against bash's own
- * declared-only positional, not this precedence.
+ * deliberately. NOT because bash's positional is declared-only — it is not:
+ * `_ws_least_loaded` reads the CENTRAL projection (`_pool_ok` ->
+ * `_acct_pool_state` -> `$REG/pool-epoch`), via a file that harness plants
+ * itself. The reason is spec §5.7: this server's own forecast, wired with
+ * real edges, reads coord.db DIRECTLY and never consults a projection file
+ * — so there is no shipped central carrier on the TypeScript side for that
+ * harness to feed, only a declared one. That harness's cases agree with
+ * bash because the SAME fixture data is written into both sides' carriers,
+ * not because either side reads the other's.
  */
 export function poolEligible(
   roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,

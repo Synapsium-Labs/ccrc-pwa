@@ -481,9 +481,15 @@ describe('W1 — a declared-only account appears in the document, and a central 
         { id: 'acct-a', label: 'acct-a', configDirSuffix: '.acct-a',
           exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
           pool: 'pool-a' },
-        // Declared UNTAGGED, but centrally `pool-c` — central must still win.
+        // Declared `pool-d`, but centrally `pool-c` — central must still win.
+        // Review round 4, P4: this used to declare NO pool at all, so there
+        // was nothing for central to beat and the claim did not bind
+        // (measured: flipping `resolvedAccountPool` to declared-first left
+        // this test green). Giving it a DIFFERING declared pool means that
+        // flip now answers `pool-d` here, not `pool-c`, and reds.
         { id: 'acct-b', label: 'acct-b', configDirSuffix: '.acct-b',
-          exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic' },
+          exec: { kind: 'generated' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+          pool: 'pool-d' },
       ],
     };
     seedRoster(home, roster);

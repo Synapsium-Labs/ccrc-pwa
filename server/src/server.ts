@@ -2133,14 +2133,24 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   /**
    * `accountPoolEdges()`, degraded to declared-only on a throw — the shape
    * `GET /api/accounts` and `GET /api/projects` both want (review round 3,
-   * M3). THE TWO DISTINCT DEGRADE BEHAVIOURS in this file are now exactly
-   * two, not three: this ONE helper for the two READS-for-display, and
-   * `refusePool` below keeps its OWN inline version, which additionally
+   * M3). This collapses the SILENT-degrade behaviour to one definition
+   * instead of two duplicated try/catch blocks, and `refusePool` below
+   * keeps its OWN inline version deliberately, which additionally
    * `console.warn`s and REFUSES (503) rather than degrading — because that
    * call is a placement DECISION and an operator needs a trace when coord.db
    * is unreadable, while a display read (the PWA polls `GET /api/accounts`
-   * every 20s) would turn a warn into noise nobody could act on. Divergence
-   * is deliberate; duplication of the SILENT half is not.
+   * every 20s) would turn a warn into noise nobody could act on.
+   *
+   * NOT A COMPLETE CENSUS (review round 4, P4 — corrected): a round-3
+   * version of this comment claimed "the two distinct degrade behaviours in
+   * this file are now exactly two, not three." False — `GET /api/pools/epoch`
+   * calls `deps.coord.accountPoolEdges()` bare and uncaught (this file,
+   * below), a THIRD behaviour: fail-SHUT, a throw there 500s the request
+   * rather than degrading or warning-then-refusing. Unchanged by this round
+   * and not a new hazard — `ccd-pool-sync` on the fleet side treats a
+   * non-200 response as "unmeasured", logs it, and writes nothing, so a
+   * 500 there is no worse for the fleet than any other transient failure —
+   * but the sentence this replaces read as a complete inventory and was not.
    */
   const readAccountPoolEdges = (): ReadonlyMap<string, readonly string[]> => {
     try {
@@ -2597,6 +2607,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    * `_acct_pool_state`'s reader need no edit and neither of those closed
    * tasks reopens.
    *
+   * WHAT THIS CHANGES ABOUT `epoch` (review round 4, P5 — recorded, not a
+   * defect): before W1, `accounts` derived SOLELY from `pool_edges`, every
+   * mutation of which bumps `poolEpoch()` — so `epoch` changing was a
+   * reliable proxy for "this document's content changed". `accounts` now
+   * ALSO derives from `deps.cfg.roster` (read at boot from `accounts.json`,
+   * which carries no epoch of its own), so a DECLARED-pool edit changes this
+   * response while `epoch` stands still — a live document can now read
+   * `epoch 0` with a real `acct` row, which was structurally impossible
+   * before this round. Nothing downstream breaks: `ccd-pool-sync` pulls on
+   * a timer regardless of whether `epoch` moved, and `_acct_pool_state`
+   * parses only the `epoch`/`issued`/`lease` lines plus whichever `acct`
+   * rows are present, never diffing against a remembered epoch. But the
+   * PWA's `epoch N / observed M` staleness indicator (design §5.9) no
+   * longer implies "the fleet's document matches this response" — it now
+   * means "the fleet has pulled since the last CENTRAL change", and says
+   * nothing about a declared-only edit made since. That indicator was
+   * already ruled a staleness signal rather than a health one; this makes
+   * it weaker still, and a future reader of it should know that before
+   * trusting it further than "the timer is still running".
+   *
    * AUTHENTICATE BEFORE `not-configured` (review round 1, I3+I4 — fixed;
    * this route is EXEMPT-BUT-AUTHENTICATED in `auth/gate.ts`, so its own check
    * is the ONLY door on an armed box, and answering `501` to an anonymous
@@ -2641,13 +2671,29 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const ids = new Set<string>([...deps.cfg.roster.accounts.map((a) => a.id), ...edges.keys()]);
     const accounts: Record<string, { pools: string[] }> = {};
     for (const id of ids) {
-      // ONE PLACE COMPUTES PRECEDENCE: the same `resolvedAccountPool` the
-      // ranking forecast (`GET /api/projects`, `GET /api/accounts`) and the
-      // refusal pre-check (`refusePool`) use, so this document's central/
-      // declared choice can never drift from what those two decide. Omits
-      // exactly the accounts `resolvedAccountPool` calls `untagged` — no
-      // central row AND no declared `pool` — which is the one case this
-      // document has always left out.
+      // `resolvedAccountPool` — the SAME function the ranking forecast
+      // (`GET /api/projects`, `GET /api/accounts`) uses — decides this
+      // document's central/declared choice. Omits exactly the accounts
+      // `resolvedAccountPool` calls `untagged` — no central row AND no
+      // declared `pool` — which is the one case this document has always
+      // left out.
+      //
+      // CORRECTED (review round 4, P2): this comment used to claim
+      // `refusePool` also calls `resolvedAccountPool`, "so this document's
+      // central/declared choice can never drift from what those two
+      // decide." False — `refusePool` calls `poolVerdict`, which re-spells
+      // the precedence INLINE rather than composing `resolvedAccountPool`
+      // (`poolrule.ts:96-102`'s own docstring gives the reason: a central
+      // edge must decide even for a wrapper this box's roster does not
+      // carry, which `resolvedAccountPool` cannot answer without an
+      // `AccountDef`-shaped id lookup `poolVerdict` does not want to do
+      // twice). So precedence is spelled TWICE, not once — this document
+      // and `GET /api/projects`/`GET /api/accounts` through
+      // `resolvedAccountPool`, `refusePool` through `poolVerdict` — kept
+      // equal by TEST COVERAGE (a flip in either spelling reds 3 tests
+      // across `pools.test.ts`/`pool-accounts-route.test.ts`), not by
+      // construction. There is no compiler-enforced guarantee here that the
+      // two can never drift.
       const resolved = resolvedAccountPool(id, deps.cfg.roster.byId.get(id), edges);
       if (resolved.state === 'tagged') accounts[id] = { pools: [...resolved.pools] };
     }

@@ -168,36 +168,48 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // dimension is the first thing in this fixture that changes the ROSTER
       // itself.
       //
-      // THE TWO SIDES DELIBERATELY READ DIFFERENT CARRIERS HERE, and the
-      // premise used to say otherwise — "so the comparison below is of two
-      // RULES and not of two rosters" (corrected, wave 1 Task 2 fix round 1,
-      // I4). Since `_pool_ok` gained its account arm the bash side reads the
-      // central PROJECTION (`pool-epoch`) while this harness calls
-      // `projectHome` with `NO_EDGES`, i.e. the DECLARED roster ONLY — so it
-      // feeds `c.pools` to BOTH sides' DECLARED carrier and the fixture is
-      // what forces them to agree on that one dimension. That makes this a
-      // comparison of two rules ONLY on the declared-pool case: it is
-      // deliberately blind to a roster/projection SKEW, which is a real
-      // condition and belongs to neither side's rule. The bash half of that
-      // skew is pinned in `ccd-pool-ok.test.ts` (`_ws_least_loaded` honours
-      // the projection over the declared roster) and in
-      // `ccd-crosspool.test.ts`.
+      // THE TWO SIDES READ DIFFERENT CARRIERS HERE, and the premise used to
+      // say otherwise — "so the comparison below is of two RULES and not of
+      // two rosters" (corrected, wave 1 Task 2 fix round 1, I4). Since
+      // `_pool_ok` gained its account arm, bash's `_ws_least_loaded` reads
+      // the CENTRAL PROJECTION (`_pool_ok` -> `_acct_pool_state` ->
+      // `$REG/pool-epoch`, `ccd/ccd:6426`/`:2104` — MEASURED: deleting this
+      // file's own `plantPoolEpoch(home, c.pools)` two lines below reds 2
+      // cases, so bash demonstrably reads what that line plants, not the
+      // roster) while this harness calls `projectHome` with `NO_EDGES`, i.e.
+      // the DECLARED roster ONLY. The two sides therefore read DIFFERENT
+      // carriers, and agree only because the fixture writes the SAME
+      // `c.pools` into BOTH — `rosterWithPools(c.pools)` into the declared
+      // side, `plantPoolEpoch(home, c.pools)` into the central one — so a
+      // value the fixture chose to duplicate across carriers cannot itself
+      // demonstrate carrier agreement. That is deliberately blind to a
+      // roster/projection SKEW, which is a real condition and belongs to
+      // neither side's rule. The bash half of that skew is pinned in
+      // `ccd-pool-ok.test.ts` (`_ws_least_loaded` honours the projection
+      // over the declared roster) and in `ccd-crosspool.test.ts`.
       //
-      // CORRECTED (review round 3, M1): this paragraph used to say the
-      // TypeScript side "has no carrier to read yet" for the central
-      // projection — false since ruling T7-R3, which gave `projectHome` a
-      // real `edges` parameter and wired live central reads through
-      // `server.ts`. The reason this harness still passes `NO_EDGES` is NOT
-      // a gap; it is that the spec makes DECLARED and CENTRAL two carriers
-      // by design (§5.6), and this harness's whole point is parity against
-      // bash's own DECLARED-only positional (`_ws_least_loaded` with no
-      // central read) — mixing central edges in here would test a THIRD
-      // question this fixture table was never built to answer. The central
-      // carrier is pinned instead in `pools.test.ts` (`poolVerdict`/
-      // `poolEligible`) and `pool-accounts-route.test.ts`'s W1/T7-R3 closure
-      // tests, which run the real central-edge path end to end. Do not read
-      // a green run here as evidence the two carriers agree in the field —
-      // it is evidence they agree on the declared dimension, by construction.
+      // CORRECTED AGAIN (review round 4, P1): round 3's "M1" fix replaced one
+      // false premise ("the TypeScript half has no carrier to read yet",
+      // stale since ruling T7-R3) with another — it claimed this harness is
+      // parity against bash's "DECLARED-only positional... with no central
+      // read", which measurement above disproves: bash's positional DOES
+      // read the central projection, every time. The real reason `NO_EDGES`
+      // stays is spec §5.7: the server's own forecast, wired with real
+      // edges, reads coord.db DIRECTLY and never consults a projection file
+      // at all — so there is no shipped path this harness could feed a
+      // central value through even if it wanted to; `plantPoolEpoch`
+      // populates the FLEET's own carrier (`$REG/pool-epoch`, what `ccd`
+      // reads), which has no TypeScript-side counterpart to compare against.
+      // Only 2 of these 57 cases are even pool-sensitive at all — the other
+      // 55 pass an untagged project, where `poolRule` short-circuits before
+      // either side's account carrier is read — so this fixture table's
+      // silence on carrier agreement costs little: the central path is
+      // pinned for real in `pools.test.ts` (`poolVerdict`/`poolEligible`)
+      // and `pool-accounts-route.test.ts`'s W1/T7-R3 closure tests, which
+      // run it end to end. Do not read a green run here as evidence the two
+      // carriers agree in the field — it is evidence the fixture's declared
+      // and central copies of `c.pools` agree with each other, by
+      // construction.
       const roster = rosterWithPools(c.pools);
       seedRoster(home, roster);
       seedAccountsSh(home, roster);
