@@ -7,7 +7,7 @@ import {
   rungRank, TranscriptResolver, type TranscriptResolution,
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { menuPainted, parseDialog } from './pane/dialog.js';
 import { alignAsk, readPendingAsk } from './transcript/ask.js';
 import { readTasks } from './tasks/read.js';
 import { readHookState } from './hookstate.js';
@@ -275,16 +275,26 @@ export class SessionStream {
   private async checkDialog(file: string | null): Promise<void> {
     if (this.stopped) return;
     const pane = await this.deps.tmux.capture(this.id);
-    // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-    // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-    // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-    // 'busy' here and this call site would suppress the parse forever. hasMenu
-    // is deliberately independent of the busy check for exactly that reason
-    // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-    // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-    // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-    // captureAnsi().
-    let dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+    // menuPainted, not hasMenu and not paneState() === 'menu'. Two separate
+    // reasons, and they point in opposite directions.
+    //
+    // Not paneState: it tests BUSY_RE across the WHOLE pane, and an RC-off pane
+    // renders the busy marker WHILE a dialog is painted below it (fleet.ts's
+    // liveStatus doc) — so it would answer 'busy' here and this call site would
+    // suppress the parse forever. Both predicates below are deliberately
+    // independent of the busy check for exactly that reason.
+    //
+    // Not hasMenu: that one is the WRITERS' question, and it is permissive on
+    // purpose — the footer sentence alone stops send.ts from typing. Asked
+    // here, where the answer becomes a modal in front of a human, the same
+    // permissiveness raises an un-answerable picker out of any pane that merely
+    // quotes the sentence, re-raised every tick with no way to dismiss it.
+    // `menuPainted` adds the one thing prose never has and every captured menu
+    // does: the cursor on a numbered row (pane/dialog.ts's own docstring).
+    //
+    // SGR strip mirrors send.ts's idiom, though tmux.capture() (-p, no -e)
+    // carries no escape codes to strip today, unlike captureAnsi().
+    let dialog = pane !== null && menuPainted(pane.replace(SGR, '')) ? parseDialog(pane) : null;
     // Read the transcript only while this menu is still unexplained. Once its ask
     // is latched, re-reading costs a 256 KB tail every 2 s and can buy nothing:
     // nextDialogFrame would suppress the frame anyway. Menus that never latch are

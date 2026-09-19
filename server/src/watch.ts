@@ -3,7 +3,7 @@ import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
 import { poolsEnforcement, poolsWire, readProjectPools } from './pools.js';
-import { hasMenu, parseDialog } from './pane/dialog.js';
+import { menuPainted, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
 import { readTasks, taskProgress } from './tasks/read.js';
@@ -3553,16 +3553,17 @@ export class FleetWatcher {
           if (prev && prev.ctxPct !== undefined) this.statuslines.set(r.id, { ...prev, ctxPct: undefined });
         }
       }
-      // hasMenu, not paneState() === 'menu': paneState tests BUSY_RE across the
-      // WHOLE pane, and an RC-off pane renders the busy marker WHILE a dialog is
-      // painted below it (fleet.ts's liveStatus doc) — so paneState would answer
-      // 'busy' here and this sweep would suppress the parse forever. hasMenu is
-      // deliberately independent of the busy check for exactly that reason
-      // (pane/dialog.ts:42-54); it's the same idiom send.ts:320 uses to decide
-      // whether a menu owns the keyboard. SGR strip mirrors that idiom, though
-      // tmux.capture() (-p, no -e) carries no escape codes to strip today, unlike
-      // captureAnsi().
-      const dialog = pane !== null && hasMenu(pane.replace(SGR, '')) ? parseDialog(pane) : null;
+      // menuPainted, not hasMenu and not paneState() === 'menu' — the same two
+      // reasons `sessionws.ts`'s checkDialog states at length, and they matter
+      // more here: this sweep also composes the PUSH NOTIFICATION, so a false
+      // positive doesn't just paint a picker, it wakes the operator's phone for
+      // a question nobody asked. paneState would answer 'busy' on an RC-off
+      // pane that has a dialog painted below the busy marker; hasMenu, the
+      // writers' permissive question, answers 'menu' to any pane that merely
+      // quotes the footer sentence. SGR strip mirrors send.ts's idiom, though
+      // tmux.capture() (-p, no -e) carries no escape codes to strip today,
+      // unlike captureAnsi().
+      const dialog = pane !== null && menuPainted(pane.replace(SGR, '')) ? parseDialog(pane) : null;
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);
