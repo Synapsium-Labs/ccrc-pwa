@@ -1146,13 +1146,18 @@ import path from 'node:path';
 /**
  * The flat-file ground truth under `pool_edges` (D8, the `ledger_alloc` shape):
  * every epoch is appended HERE first and committed to coord.db second, and
- * recovery takes MAX(file, db) — so an epoch is SKIPPED, NEVER REISSUED.
+ * recovery takes MAX(file, db) — so an epoch is SKIPPED, NEVER REISSUED. This
+ * is genuinely load-bearing today: it is the entire reason a lost/rebuilt
+ * coord.db cannot make a node accept an older pool document as a newer one.
  *
- * WHY THIS FILE EXISTS AT ALL, in one sentence: a lost coord.db that could not
- * reconstruct would answer "untagged" for every account, and untagged is
- * unconstrained — the fail-OPEN direction, and the one outcome the whole design
- * exists to prevent. Gaps cost nothing; a reissued epoch would let a node accept
- * an older document as newer.
+ * WHAT THIS FILE DOES **NOT** DO (corrected item 2, wave-1 fix round A — this
+ * comment originally claimed a lost coord.db "reconstructs" from this
+ * journal; nothing in this tree replays it). `maxEpoch()` below is the ONLY
+ * reader and it extracts nothing but the maximum `epoch` NUMBER — never the
+ * `accountId`/`pools`/`addedBy` fields each line also carries. A lost
+ * coord.db loses its CENTRAL `pool_edges` rows for real; re-establishing them
+ * is a by-hand operator task today (reading these NDJSON lines) or a future
+ * automatic replay — carried, not built, see the spec's §7.
  *
  * `~/.ccrc/pool-edges.log` on the SERVER box — beside `coord.db`, same stance as
  * `defaultLedgerLogPath`: local-box housekeeping, never proxied through FleetIO.

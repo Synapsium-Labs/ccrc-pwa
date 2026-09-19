@@ -145,7 +145,7 @@ the convergence signal that scales past two boxes.
 | Actor | Role |
 |---|---|
 | coord.db (`pool_edges`, `pool_epoch`) | **Authoritative.** The only writer of membership. |
-| `~/.ccrc/pool-edges.log` | Flat-file ground truth (D8), so a lost coord.db reconstructs. |
+| `~/.ccrc/pool-edges.log` | Flat-file ground truth (D8) for epoch MONOTONICITY — recovery takes `MAX(journal, db)`, so a crash never reissues an epoch. **Corrected (item 2, wave-1 fix round A):** no code anywhere in this tree replays this journal to reconstruct `pool_edges`/`pool_epoch` after a lost coord.db; `maxEpoch()` (`server/src/coord/pooledgelog.ts`) is the only reader and it extracts nothing but the epoch number. See §7's carried item. |
 | Server | Writes the origin; forecasts and refuses from the DB directly; never places. |
 | `$REG/pool-epoch` | A **leased projection**. A cache with a generation, never a source. |
 | `ccd` | Placement authority, unchanged. Reads one local file; never the network at placement time. |
@@ -187,13 +187,26 @@ column changes the rule in three languages at once.
 
 `~/.ccrc/pool-edges.log`, NDJSON, on `server/src/coord/ledgerlog.ts`'s existing shape: the line is
 appended **inside the tx and before the commit**, synchronously (`DatabaseSync` has no async, and
-the no-async-wrapper invariant on `CoordStore` stands). Recovery replays the journal and takes
-`MAX(journal, db)`, so a crash between the two skips an epoch and never reissues one.
+the no-async-wrapper invariant on `CoordStore` stands). Recovery reads the journal's own maximum
+`epoch` number and takes `MAX(journal, db)`, so a crash between the two skips an epoch and never
+reissues one — `maxEpoch()` (`server/src/coord/pooledgelog.ts`) is the whole of what "recovery"
+means for this file today.
 
-This is what makes the table authoritative without a doctrine exception. It also fixes the failure
-direction: a lost coord.db that could not reconstruct would answer "untagged", and untagged is
-unconstrained — **the fail-open direction, which is the one outcome this whole design exists to
-prevent.**
+**Corrected (item 2, wave-1 fix round A):** this section previously said recovery "replays the
+journal" and that a lost coord.db "reconstructs" from it. Neither is true of the code in this tree.
+`maxEpoch()` extracts only the epoch NUMBER — never the `accountId`/`pools`/`addedBy` fields each
+line also carries — and nothing anywhere replays those fields back into `pool_edges`/`pool_epoch`.
+A coord.db lost today genuinely loses every CENTRAL edge: `pool_edges` comes back empty (or the
+table does not exist until the next migration run), so every account's resolution
+(`resolvedAccountPool`/`poolVerdict`, §5.6) falls through the precedence chain to its DECLARED
+`accounts.json` default, and only an account with no declared pool of its own actually lands on
+`untagged` — the fail-open case the original wording described as if it applied to every account.
+Re-establishing the CENTRAL rows (the tag an operator set through this feature, as opposed to the
+declared fallback that predates it) is what's missing: that happens by hand or through a future
+automatic replay (§7's carried item), not automatically today. What the journal DOES give, today, for free: the epoch NUMBER survives a lost coord.db, so
+whichever path re-establishes membership — hand or replay — cannot hand out an epoch already
+committed once, which is what keeps a stale document from being accepted as newer. That is a real,
+load-bearing guarantee; only the CLAIM that it extends to membership reconstruction was false.
 
 ### 5.4 The projection — `$REG/pool-epoch`
 
@@ -373,6 +386,17 @@ Out of scope (operator ruling 3), recorded so the shape can be checked against i
 
 ## 7. What this gives up — stated, not buried
 
+- **CARRIED ITEM (item 2, wave-1 fix round A, superseding this section's earlier silence on the
+  point — §5.1/§5.3 corrected the false claim that this already worked): `~/.ccrc/pool-edges.log`
+  has no automatic REPLAY.** `maxEpoch()` (`server/src/coord/pooledgelog.ts`) reads only the
+  journal's maximum epoch NUMBER; nothing rebuilds `pool_edges`' CENTRAL rows from the
+  `accountId`/`pools`/`addedBy` fields each journal line also carries. A coord.db lost today is
+  recovered by hand — an operator reads the NDJSON lines and re-issues each account's tag through
+  the normal write path — or the fleet runs on declared-roster defaults until that happens (§5.3).
+  Automatic replay is real future work, not a decided absence: it is a feature with its own failure
+  modes (a torn final line, a replay racing a concurrent write, what "current" means for an edge an
+  operator changed AFTER the snapshot the journal reflects) and its own tests, out of scope for wave
+  1 and not decided here.
 - **Per-box autonomy.** An operator can no longer express an account pool by editing the box in
   front of them and having it take effect. One writer is the point, and it is a real loss.
 - **Availability for the constrained set.** A control-plane outage longer than the lease stops new

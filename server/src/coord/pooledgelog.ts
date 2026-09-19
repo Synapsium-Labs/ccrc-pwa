@@ -5,13 +5,29 @@ import path from 'node:path';
 /**
  * The flat-file ground truth under `pool_edges` (D8, the `ledger_alloc` shape):
  * every epoch is appended HERE first and committed to coord.db second, and
- * recovery takes MAX(file, db) — so an epoch is SKIPPED, NEVER REISSUED.
+ * recovery takes MAX(file, db) — so an epoch is SKIPPED, NEVER REISSUED. This
+ * is genuinely load-bearing today: it is the entire reason a lost/rebuilt
+ * coord.db cannot make a node accept an older pool document as a newer one.
  *
- * WHY THIS FILE EXISTS AT ALL, in one sentence: a lost coord.db that could not
- * reconstruct would answer "untagged" for every account, and untagged is
- * unconstrained — the fail-OPEN direction, and the one outcome the whole design
- * exists to prevent. Gaps cost nothing; a reissued epoch would let a node accept
- * an older document as newer.
+ * WHAT THIS FILE DOES **NOT** DO (corrected item 2, wave-1 fix round A — this
+ * comment, spec §5.1/§5.3 and the plan's matching step all previously claimed
+ * a lost coord.db "reconstructs" from this journal, or that recovery
+ * "replays" it; none of that is true of the code in this tree).
+ * {@link PoolEdgeLog.maxEpoch} below is the ONLY reader anywhere in
+ * `server/src`, and it extracts nothing but the maximum `epoch` NUMBER —
+ * never the `accountId`/`pools`/`addedBy` fields each line also carries, and
+ * nothing anywhere replays those fields back into `pool_edges`/`pool_epoch`.
+ * A coord.db lost today genuinely loses every CENTRAL edge — `pool_edges`
+ * comes back empty, so every account's resolution falls through to its
+ * DECLARED `accounts.json` default (only an account with no declared pool of
+ * its own lands on the fail-open `untagged`) — and re-establishing the
+ * CENTRAL rows is a by-hand operator task (reading these NDJSON lines) or a
+ * future automatic replay, carried as an open item rather than built here
+ * (`docs/superpowers/specs/2026-09-18-account-pool-membership-design.md` §7).
+ * What survives automatically, and is the real reason this file exists: the
+ * epoch NUMBER, so whichever path re-establishes membership cannot hand out
+ * an epoch already committed once — the reissue this file's first paragraph
+ * describes.
  *
  * `~/.ccrc/pool-edges.log` on the SERVER box — beside `coord.db`, same stance as
  * `defaultLedgerLogPath`: local-box housekeeping, never proxied through FleetIO.
