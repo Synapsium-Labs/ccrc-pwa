@@ -2161,10 +2161,38 @@ describe('ccrc doctor: pool-sync', () => {
     expect(runDoctor(home).code).toBe(0);
   });
 
-  itLinux('FAILs — never synced — when the timer is installed but $REG/pool-epoch has never been written', () => {
+  itLinux('WARNs — not yet synced — when the timer was installed within its grace window and $REG/pool-epoch has not been written yet', () => {
+    // Final fix round, item 16 (fix-wave-C): `_check_pool-sync`'s
+    // never-synced arm used to FAIL unconditionally, which made a correct
+    // fresh `ccrc install --role fleet` end at exit 1 on every box — the
+    // timer converges on its own (60s) and a box that just landed the unit
+    // has not had one tick yet. `writeUnitFile` writes the fixture unit with
+    // `writeFileSync`, whose mtime is "now" by construction, so this test
+    // reaches the discriminator's fresh-install path with no extra staging.
+    const home = healthy('ccrc-doctor-pool-sync-not-yet-synced-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pool-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('pool-sync-not-yet-synced');
+    expect(lines[i]).toContain('has not been written yet');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    // The disclosed-but-not-fatal half of the pair this item requires: a
+    // fresh install must still reach exit 0.
+    expect(r.code).toBe(0);
+  });
+
+  itLinux('FAILs — never synced — when the timer was installed past its grace window and $REG/pool-epoch has never been written', () => {
     const home = healthy('ccrc-doctor-pool-sync-never-synced-');
     writeUnitFile(home, 'ccd-pool-sync.timer');
     writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    // Past the check's 120s grace window (two of the timer's own 60s
+    // periods) — this is the "had its chance and still never synced" case
+    // the pair requires, not the fresh-install case above.
+    const past = new Date(Date.now() - 10 * 60 * 1000);
+    utimesSync(join(unitDirOf(home), unitFileOf('ccd-pool-sync.timer')), past, past);
     const r = runDoctor(home);
     const lines = r.stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('FAIL pool-sync: '));

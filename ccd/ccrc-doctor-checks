@@ -3301,7 +3301,8 @@ _check_pools() {
 # correct there, not a gap doctor should raise.
 _check_pool-sync() {
   local f="$HOME/.cc-sessions/pool-epoch"
-  if [ ! -f "$CCRC_UNIT_DIR/$(_dr_unit_file ccd-pool-sync.timer)" ]; then
+  local unit_path="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-pool-sync.timer)"
+  if [ ! -f "$unit_path" ]; then
     _dr_skip pool-sync "ccd-pool-sync.timer is not installed on this box — no control plane by configuration (--role both/--role server, the single-box default); this box places from the declared \$HOME/.ccrc/accounts.json tag instead, which is correct here"
     return 3
   fi
@@ -3312,6 +3313,55 @@ _check_pool-sync() {
   # and EVERY tagged project on this box refuses placement, silently, until
   # now.
   if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+    # Final fix round, item 16. FAILing this UNCONDITIONALLY made a correct
+    # `ccrc install --role fleet` end at exit 1 on every box, always: the
+    # timer converges on its own (`OnUnitActiveSec=60s`,
+    # deploy/systemd/ccd-pool-sync.timer) and a box that just landed the unit
+    # has not had one tick yet. Measured: server/test/ccrc-install.test.ts,
+    # 3 failures, all in the fleet-role describe, all from this arm. The
+    # FAIL text itself is false on the box that trips it — "placement into
+    # every tagged project... refuses" — a fresh box tags nothing yet.
+    #
+    # DISCRIMINATOR (preference 1 of the brief): the installed timer FILE's
+    # own mtime, evidence the sync has had its chance rather than an
+    # invented sentinel. Verified sound before relying on it: `_inst_units`
+    # (ccd/ccrc) lands this unit through `_inst_atomic`, whose copy is a
+    # plain `cp` — never `cp -p` — followed by `mv -f` onto the final name.
+    # A bare `cp` does NOT preserve the source's mtime; the destination gets
+    # the wall-clock instant the copy ran. So this file's mtime is genuinely
+    # install (or re-install) time, never a timestamp carried in from the
+    # shipped tree — unlike `_inst_keep_aside`'s `cp -p`, which is a
+    # different call for a different, personal-file purpose. `_inst_atomic`
+    # also short-circuits to a bare `chmod` when the bytes already match
+    # (`cmp -s`), so an idempotent re-run of an unchanged unit does NOT reset
+    # this mtime either — it only moves on a real (re)install.
+    #
+    # GRACE = two of the timer's own periods, not an invented constant: one
+    # tick for `OnBootSec=45s`/`AccuracySec=10s` slack plus one more so a
+    # doctor run landing mid-cycle is not itself the reason this goes red
+    # (both from deploy/systemd/ccd-pool-sync.timer).
+    #
+    # COST, stated as the brief requires: an unrelated `ccrc install` that
+    # ships new BYTES for this one unit (not a fresh install) also resets
+    # this mtime, so a box that has genuinely never synced in days goes back
+    # to WARN for up to 120s after any such reinstall, before this arm can
+    # FAIL again on the next doctor run. Narrow and self-healing — never a
+    # permanent mask — and strictly better than the permanent false-FAIL
+    # this replaces on every fresh install.
+    #
+    # A `_plat_mtime` that cannot answer (stat missing, file raced away)
+    # falls straight through to the FAIL below — the safe direction: no
+    # evidence of a chance means no benefit of the doubt.
+    local pool_sync_grace=$((2 * 60)) unit_mtime unit_age
+    unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
+    if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
+      unit_age=$(($(date +%s) - unit_mtime))
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$pool_sync_grace" ]; then
+        _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+          "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
+        return 2
+      fi
+    fi
     _dr_fail pool-sync "pool-sync-never-synced: ccd-pool-sync.timer is installed (this is a fleet box) but $f has never been written — placement into every tagged project on this box refuses" \
       "read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service)) — a missing or rotated \$HOME/.cc-secrets/ccrc-mail.token and a non-200 from the control plane are the two measured causes; \`systemctl --user start ccd-pool-sync.service\` forces an immediate retry once fixed"
     return 1
