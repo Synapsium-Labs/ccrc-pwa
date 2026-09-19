@@ -542,7 +542,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-six with notify', () => {
+  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-six with notify and pools/epoch', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it

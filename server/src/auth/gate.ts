@@ -728,7 +728,7 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * same-site loads of the SPA shell for no gain.
  *
  * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the twenty-four box-token machine
- * lanes plus `/api/notify` — twenty-six in all — are `curl` inside a Claude Code session (no `Origin`
+ * lanes plus `/api/notify` and `/api/pools/epoch` — twenty-six in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same
