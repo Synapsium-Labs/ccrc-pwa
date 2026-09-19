@@ -44,7 +44,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv, ghPoisonAt, seedAccountsSh } from './ccdWsHelpers.js';
+import { ghContainedEnv, ghPoisonAt, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
 import { plantAuthHelper, plantAuthModule, fixtureSecretLine } from './authFixtures.js';
 // One home for the scratch-slug vocabulary (D-2375) — see scratchSlugs.ts
 // for the rule, and for why the /var/tmp control needs both spellings.
@@ -1200,16 +1200,28 @@ const lineFor = (out: string, name: string): string | undefined =>
 const anyVerdictFor = (out: string, name: string): string | undefined =>
   out.split('\n').find((l) => new RegExp(`^(PASS|WARN|FAIL|SKIP) ${name}: `).test(l));
 
-/** How many checks a HEALTHY fixture skips. ONE on Linux, TWO on macOS —
+/** How many checks a HEALTHY fixture skips. TWO on Linux, THREE on macOS —
  *  `models` SKIPs on every platform (`healthy()` plants only the upstream
  *  Anthropic account, which never has a model registry by design, so the
- *  population is empty everywhere), and macOS adds a second, `scopes`:
- *  cgroup throttling is a Linux mechanism, so a Darwin box has no such fault
- *  to find. Both answer SKIP rather than PASS deliberately — a PASS there
- *  would be a verdict nobody measured, which is the forgery class this repo
- *  bans by name. The same shape as the standing `linger` WARN the summary
- *  test below already accounts for. */
-const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 1;
+ *  population is empty everywhere), macOS adds a second, `scopes`: cgroup
+ *  throttling is a Linux mechanism, so a Darwin box has no such fault to
+ *  find. Both answer SKIP rather than PASS deliberately — a PASS there would
+ *  be a verdict nobody measured, which is the forgery class this repo bans
+ *  by name. The same shape as the standing `linger` WARN the summary test
+ *  below already accounts for.
+ *
+ *  RAISED BY ONE (item 4, wave-1 fix round A): `pool-sync` SKIPs on every
+ *  platform too — `healthy()` never installs `ccd-pool-sync.timer` (only
+ *  `describe('ccrc doctor: services knows about the pool-sync timer')`'s own
+ *  fixtures do, via `writeUnitFile`), so a box this suite calls "healthy" has
+ *  no control plane by configuration, exactly item 5's own fix says a
+ *  single-box default should read. Measured the same way the `graphify-path`
+ *  paragraph above measured ITS addition: deleting this `+ 1` reds every
+ *  `(N skipped)` summary pin, both `expect(skipped).toBe(HEALTHY_SKIPS)`
+ *  assertions and `expect(verdicts).toBe(total - HEALTHY_SKIPS)` — the run's
+ *  rc stays 0 and no line says a check failed, because SKIP prints no
+ *  verdict at all; only the counts move. */
+const HEALTHY_SKIPS = (process.platform === 'darwin' ? 1 : 0) + 2;
 
 // ── the table itself ──────────────────────────────────────────────────────
 
@@ -2092,6 +2104,12 @@ describe('ccrc doctor: services knows about the pool-sync timer', () => {
     const home = healthy('ccrc-doctor-services-pool-sync-timer-');
     writeUnitFile(home, 'ccd-pool-sync.timer');
     writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'inactive\n');
+    // Item 4 (I2, wave-1 fix round A): `pool-sync` (the ARTIFACT check) is a
+    // SEPARATE finding from `services` (the ACTIVATION check) this describe
+    // block is about — a fresh projection keeps that check PASSing so this
+    // test still isolates exactly the one thing it breaks, matching
+    // `healthy()`'s own "breaks exactly ONE thing" contract.
+    plantPoolEpoch(home, {});
     const lines = runDoctor(home).stdout.split('\n');
     const i = lines.findIndex((l) => l.startsWith('WARN services: '));
     expect(i, lines.join('\n')).toBeGreaterThan(-1);
@@ -2120,6 +2138,84 @@ describe('ccrc doctor: services knows about the pool-sync timer', () => {
     const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
     expect(line).toMatch(/^PASS services: /);
     expect(line).not.toContain('ccd-pool-sync');
+  });
+});
+
+// ── pool-sync: the EFFECT check, item 4 (I2, wave-1 fix round A) ──────────
+// `services` (above) measures the TIMER's own activation state, which stays
+// `active` while its oneshot fails every run — this describe block is the
+// ARTIFACT check that catches that: `$HOME/.cc-sessions/pool-epoch` and its
+// own lease, never the timer's reported state. `healthy()` installs no
+// `ccd-pool-sync.timer` at all (see `HEALTHY_SKIPS`'s own docstring), so
+// every test below plants the unit itself where the scenario needs a FLEET
+// box, and the "no control plane by configuration" SKIP is the one
+// `healthy()` already proves on its own.
+describe('ccrc doctor: pool-sync', () => {
+  it('SKIPs — no control plane by configuration — on a box with no ccd-pool-sync.timer installed at all', () => {
+    const home = healthy('ccrc-doctor-pool-sync-no-unit-');
+    const line = lineFor(runDoctor(home).stdout, 'pool-sync');
+    expect(line).toBeUndefined();   // lineFor is PASS/WARN/FAIL only
+    const any = anyVerdictFor(runDoctor(home).stdout, 'pool-sync') ?? '';
+    expect(any).toMatch(/^SKIP pool-sync: /);
+    expect(any).toContain('no control plane by configuration');
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('FAILs — never synced — when the timer is installed but $REG/pool-epoch has never been written', () => {
+    const home = healthy('ccrc-doctor-pool-sync-never-synced-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pool-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('pool-sync-never-synced');
+    expect(lines[i]).toContain('has never been written');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('FAILs — stale — when the projection is past its lease, even though services still reports the timer active', () => {
+    const home = healthy('ccrc-doctor-pool-sync-stale-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    plantPoolEpoch(home, {}, { lease: 1 });   // 1970 — long past its lease
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL pool-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('pool-sync-stale');
+    expect(lines[i]).toContain('past its lease');
+    // `services` still says the timer is fine — this is the exact false-PASS
+    // gap item 4 exists to close, on the SAME box, in the SAME run.
+    expect(lineFor(r.stdout, 'services')).toMatch(/^PASS services: /);
+    expect(r.code).toBe(1);
+  });
+
+  itLinux('WARNs — malformed — when the timer is installed but the projection does not parse', () => {
+    const home = healthy('ccrc-doctor-pool-sync-malformed-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+    writeFileSync(join(home, '.cc-sessions', 'pool-epoch'), 'not a projection at all\n');
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN pool-sync: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('pool-sync-malformed');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: \S/);
+    expect(r.code).toBe(0);   // WARN, not FAIL
+  });
+
+  itLinux('PASSes when the timer is installed and the projection is fresh', () => {
+    const home = healthy('ccrc-doctor-pool-sync-fresh-');
+    writeUnitFile(home, 'ccd-pool-sync.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-pool-sync.timer'), 'active\n');
+    plantPoolEpoch(home, {});
+    const line = lineFor(runDoctor(home).stdout, 'pool-sync') ?? '';
+    expect(line).toMatch(/^PASS pool-sync: /);
+    expect(line).toContain('within its lease');
+    expect(runDoctor(home).code).toBe(0);
   });
 });
 
