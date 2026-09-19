@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1425cd61fe6f59ad52e1987a898a0e530c130bb9ffcbfafc1da8eb1cdd0c2989
+# ccrc:generated 1 sha256=db1ad23f015556ac8d26fb0d6d3d0f972c6d3ed09ddcd6a806b959ece8ec0f8f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1249,6 +1249,16 @@ COMPACT_THRESHOLD=50            # own context % at/above which an idle session a
                                 # (routing spec §5.1; slice 6, Task 5) — the DEFAULT, not the only one
 COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also bounds the post-swap window)
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
+COMPACT_TURN_TAIL_LINES=200     # D-3104 — physical transcript lines `_transcript_last_turn_ts` reads for the
+                                # no-turn guard. Its OWN window, not `REDRIVE_TAIL_LINES`: a
+                                # `/compact` writes FOUR rows of its own (the `isCompactSummary`
+                                # row plus the three local-command rows) and the redrive
+                                # detector's 60 lines are sized for a stall two turns deep, not
+                                # for "reach back PAST a compaction to the last real turn" on a
+                                # transcript whose tail is thick with attachment and system rows.
+                                # Too small and the scan answers "no real turn in the window",
+                                # which this guard FAILS OPEN on — the pre-D-3103 behaviour, never
+                                # a false refusal.
 COMPACT_LANDING_WALL=80         # D-2014 — the ctx % at/above which the post-swap suppression stops
                                 # earning its veto.
                                 #
@@ -2875,8 +2885,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 154
-# invocations across 130 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 155
+# invocations across 131 non-comment lines.
 #
 # THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
 # archive fields, so the next reader is not hunting a refactor for the +2.
@@ -2917,7 +2927,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # `.project` reads), 135 at the #70 merge (`1714038a`, main's compactor sites —
 # round 3 came FIRST and the merge pushed it back up, which the round-5 ordering
 # reversed), 133 at round 4 (`c3e69b41`), 132 at round 5 (`47824849`), 133 at
-# the #73 merge (`f065c8bb`). Every earlier move left a stale cardinal
+# the #73 merge (`f065c8bb`), 155 at `ws/autoswitcher-and-compaction-issues`
+# (D-3103's `lastcompact` read in `_compact_no_turns`). Every earlier move left a stale cardinal
 # somewhere in this block. Four of them stood in the paragraphs directly above,
 # where a reader hits them first, and they read as the live figure. "Re-measure
 # it" was a REQUEST; `ccd-reg-get-census.test.ts` reads this sentence's own two
@@ -16606,6 +16617,19 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
   local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
+  # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
+  # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
+  # write ` via=transcript`, which was sound only while this function had exactly
+  # two rungs and one of them WAS that call. With `_pane_limit_banner` between
+  # them a re-asked classifier answers "not the pane" for a verdict the pane in
+  # fact produced, and the log would say `via=transcript` about a banner that was
+  # on screen. So the verdict carries its own provenance: `pane`, `banner` or
+  # `transcript`, set on each success and cleared on every path that answers no.
+  # A global rather than a second stdout token because this function is a
+  # PREDICATE — `KS_WHY`/`KS_DETAIL` and `PROBE_VERDICT` are the same shape, for
+  # the same reason — and because a `$( )` call site would lose a well-known
+  # variable to the subshell.
+  HARD_BLOCK_VIA=""
   # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
   # Both paths into this function are already below `_auto_swap_check`'s own
   # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
@@ -16617,7 +16641,15 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
   # like to a boolean caller.
   _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
-  _pane_hard_blocked "$pane" && return 0
+  _pane_hard_blocked "$pane" && { HARD_BLOCK_VIA=pane; return 0; }
+  # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
+  # arm below the transcript deliberately: a banner Claude Code is rendering on
+  # screen right now is the same condition `_pane_hard_blocked` answers, merely
+  # spelled the way this year's build spells it. Putting it here means it shares
+  # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
+  # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
+  # both still reports the older, more specific detector.
+  _pane_limit_banner "$pane" && { HARD_BLOCK_VIA=banner; return 0; }
   grep -q "esc to interrupt" <<<"$pane" && return 1
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
@@ -16633,7 +16665,12 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
   [[ "$verdict" -eq 1 ]] || return 1
-  ! _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)"
+  # SPELLED OUT rather than left as the function's trailing exit status, because
+  # the provenance has to be stamped on the success side only: `! cmd` as a tail
+  # says the same thing about the rc and gives nowhere to write the word.
+  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)" && return 1
+  HARD_BLOCK_VIA=transcript
+  return 0
 }
 
 _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
@@ -16682,6 +16719,56 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
   # screen appears during an intentional login, not a failure — evacuating out from under an
   # operator mid-login would be wrong (see _pane_login_screen, which owns that screen instead).
   grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?|Invalid API key|Please run /login" <<<"$1"
+}
+
+_pane_limit_banner() {   # pane text -> success iff the pane carries Claude Code's CURRENT limit banner (D-3100).
+  # THE WORDING MOVED AND THE DETECTOR DID NOT. `_pane_hard_blocked`'s alternation
+  # was written against the banners of its day and matches none of the three
+  # commonest ones this fleet actually renders. Measured 2026-09-19 against the
+  # `isApiErrorMessage` rows on disk across every wrapper HOME — these are the
+  # live texts, not remembered ones:
+  #
+  #   "You've hit your session limit · resets 9:10pm (UTC)"        -> NO MATCH
+  #   "You've hit your weekly limit · resets Sep 21, 7am (UTC)"    -> NO MATCH
+  #   "You've hit your limit · resets Sep 17, 9pm (UTC)"           -> NO MATCH
+  #   "You've hit your monthly spend limit · raise it at claude.ai/..." -> matches,
+  #       and only through `monthly spend limit`/`hit your .*spend`
+  #
+  # So the pane arm has been blind to the session, weekly and bare limits, and
+  # every rescue from one of those shapes has had to come from D-2363's
+  # transcript fallback instead — which is exactly what the fleet log shows: the
+  # one rescue of this shape on 2026-09-19 is logged
+  # `auto-rescue <row>: <lane> (blocked) -> gpt [home=…] via=transcript`, i.e. by
+  # the fallback, on a pane that had been showing the answer. That fallback is cached for
+  # `TRANSCRIPT_ARM_INTERVAL`, needs the banner to still be the NEWEST real row,
+  # and stands down entirely over a human's draft — three ways to miss a session
+  # the pane was showing the answer on the whole time.
+  #
+  # A SEPARATE FUNCTION, AND THAT IS D-2364 BEING KEPT RATHER THAN REVERSED.
+  # D-2364 ruled that `_pane_hard_blocked` is NOT widened, because `_spawn_settle`
+  # turns that same regex into rc 5 ("blocked on the new account") on every
+  # landing, and whether Claude Code re-renders the previous assistant message on
+  # a `--resume` landing was unmeasured. That ruling still holds and that function
+  # is untouched: `_spawn_settle` and `_redrive_after_spawn` keep exactly the
+  # vocabulary they had. This predicate has ONE caller —
+  # `_session_hard_blocked` — whose two callers are the rescue arm and the strand
+  # half, and the rescue arm sits below `SWAP_COOLDOWN`, which a landing has just
+  # stamped, so a re-render cannot reach a relocation through it.
+  #
+  # THE SEPARATOR IS PART OF THE PATTERN, and it is what keeps this from being a
+  # prose detector. Every banner in the family is `You've hit your <what> limit ·
+  # <what to do>`; requiring the `·` means an assistant SAYING the words in a
+  # sentence does not swap its own session out. A wording change that drops the
+  # separator fails CLOSED — no keystroke, no relocation, today's behaviour — which
+  # is `_pane_limit_stale`'s own rule and the lesson of 2026-09-08's trust dialog.
+  #
+  # WHAT IT DOES NOT PROTECT is a draft in the input box: this is a pane rung, so
+  # it shares `_pane_hard_blocked`'s shipped contract that a VISIBLE banner swaps,
+  # draft or not. That is deliberate rather than overlooked — one condition must
+  # not have two behaviours depending on which of two equally-visible banners the
+  # build happens to render — and it is the transcript arm, not this one, that
+  # owes a human's unsent sentence its stand-down.
+  grep -qiE "hit your ([a-z0-9]+ )*limit ·" <<<"$1"
 }
 
 # ONE MAPPING FROM THE UNDECIDABLE FIELD TO THE OPERATOR'S SENTENCE (#69 review
@@ -16739,6 +16826,83 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
+}
+
+# ── THE MANUAL-SWAP PIN (D-3097) ─────────────────────────────────────────────
+#
+# THE DEFECT, MEASURED. `ccd swap` moves `wrapper` and never touches `home`, and
+# the affinity arm's whole job is "return home the instant home has room again".
+# So every manual swap is REVERSED by the first tick past `SWAP_COOLDOWN`, and
+# the operator watches their own choice evaporate 15 minutes later. From this
+# fleet's `$REG/swap.log`, 2026-09-19, one session and one afternoon:
+#
+#   14:30:22 swap      <row>: <home-lane> -> gpt   (the operator)
+#   15:25:47 auto-home <row>: gpt -> <home-lane>   (the tick)
+#   15:36:54 swap      <row>: <home-lane> -> gpt   (the operator, again)
+#   15:51:56 auto-home <row>: gpt -> <home-lane>   (15m 02s later — one tick
+#                                                   past SWAP_COOLDOWN)
+#   16:28:53 swap      <row>: <home-lane> -> gpt   (the operator, a third time)
+#   17:01:11 auto-home <row>: gpt -> <home-lane>
+#
+# `ccd prefer` is the verb that moves `home`, and it is SHELL-ONLY — no
+# exec-whitelist entry, no `CCD_ARGV` builder, so no PWA tap can reach it (its
+# own header says so). An operator on a phone therefore had no way at all to make
+# a swap stick.
+#
+# A PIN, NOT A RE-HOME (operator ruling, 2026-09-19). Rewriting `.home` to the
+# target would also make the session RETURN to that account after every future
+# rescue, and would destroy the home it had with no way back. The pin is the
+# conservative half of that: `$REG/<id>.swappin` names the account an operator
+# chose BY HAND, the affinity arm stands down while the row is still sitting on
+# it, and `home` is untouched — so the moment anything else moves the row (a
+# limit rescue, a pool retag, another swap) the pin stops naming the current
+# account and ordinary affinity resumes from wherever the row now is.
+#
+# THE RESCUE ARM IS NOT GATED BY IT, and that is the whole reason the pin is
+# checked where it is rather than at the top of the tick. A hard-blocked session
+# must still be evacuated: a pin is a preference about a HEALTHY session's
+# placement, never a reason to leave a limited one wedged. `_auto_swap_check`'s
+# own header makes the same split for the hold file, which sits on the next line.
+#
+# NO EPOCH, SO NO EXPIRY AND NO ARITHMETIC. The file holds one account name. A
+# pin does not time out, because "the operator picked this account" does not
+# become less true after an hour; it ends when the row is no longer on that
+# account, which is a MEASUREMENT (`_swap_pin_tick`) rather than a clock.
+_swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099)
+  # `_strand_mark`/`_compact_note`'s rule, applied to a marker that names an
+  # ACCOUNT rather than a reason: a pin still on disk after the row has moved
+  # off the pinned account is a claim about the present that is no longer true,
+  # and the next reader would have to re-derive that for itself.
+  #
+  # AN UNREADABLE PIN IS NOT DELETED. `_crosspool_tick`'s lesson, booked in
+  # `_auto_swap_check`'s own comments: deleting a deliberate operator marker on
+  # a read that FAILED is a destructive act on a false reason. Absent is not
+  # unreadable; only a pin this tick could read and that names another account
+  # is removed.
+  local id="$1" w="$2" pin rc
+  [[ -e "$REG/$id.swappin" ]] || return 0
+  pin=$(_reg_read "$id" swappin); rc=$?
+  [[ "$rc" -eq 0 ]] || return 0
+  [[ "$pin" == "$w" ]] && return 0
+  rm -f -- "$REG/$id.swappin"
+  rm -f -- "$REG/$id.swappinnote"
+  echo "$(date '+%F %T') pin-ended $id: pinned to $pin, now on $w" >> "$REG/swap.log"
+  return 0
+}
+
+_swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for THIS account (D-3097)
+  # DOUBT READS AS PINNED, which is the opposite fail direction from most of this
+  # file and is taken from the line this predicate sits beside: the hold file is
+  # read with `-e` not `-f` precisely so that "an unreadable hold defers too".
+  # Both answers are about the same question — may this tick relocate a healthy
+  # session for cosmetic reasons — and the cost of standing down wrongly is one
+  # session left where it already was, against an operator's deliberate choice
+  # being undone by a file nobody could read.
+  local pin rc
+  [[ -e "$REG/$1.swappin" ]] || return 1
+  pin=$(_reg_read "$1" swappin); rc=$?
+  [[ "$rc" -eq 0 ]] || return 0
+  [[ "$pin" == "$2" ]]
 }
 
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
@@ -16819,6 +16983,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # middle, is what defeated the debounce; the tick now takes ONE verdict once
   # every read has answered, and this one only records the answer.
   if [[ "$hrc" -eq 2 ]]; then home=""; else hrc=0; fi
+  # THE PIN IS RECONCILED HERE (D-3099), at the first line where this row's
+  # account has been MEASURED and before any gate below can return: a pin that
+  # no longer names `$wrapper` is ended immediately rather than at whichever
+  # later tick happens to reach the affinity arm, so `pin-ended` lands beside
+  # the `auto-rescue` that caused it instead of fifteen minutes after it.
+  _swap_pin_tick "$id" "$wrapper"
   # ── POOLS (§5.5.4) ───────────────────────────────────────────────────────
   # THIS READ happens once, here, and BEFORE the cooldown gates below — that
   # is not the same claim as "once per tick": `_project_pool_state` runs
@@ -17227,7 +17397,13 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _is_valid_wrapper "$wrapper" && ! _is_anthropic_backend "$wrapper" \
       && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
     _reg_set "$id" lastswap "$now"
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$(_pane_hard_blocked "$pane" || printf ' via=transcript')" >> "$REG/swap.log"
+    # `via=` NAMES THE DETECTOR THAT ACTUALLY FIRED (D-3101) — read off the
+    # verdict rather than recomputed from a classifier that cannot see all three
+    # rungs. `pane` stays silent, so every line this fleet's log already carries
+    # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
+    # new word, and an operator seeing it knows the pane said so in this year's
+    # wording rather than the transcript having been scanned for it.
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")" >> "$REG/swap.log"
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -17243,6 +17419,25 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # exactly what stops a human noticing quickly. Cosmetic relocation yes,
   # rescue no. The rescue arm above is untouched and must stay untouched.
   #
+  # THE MANUAL-SWAP PIN, IMMEDIATELY ABOVE THE HOLD (D-3097, D-3098). Same
+  # placement argument, one sentence longer: everything below this line is the
+  # cosmetic half, and a pin says an operator has already answered the question
+  # this half exists to ask. The rescue arm above is untouched — a pinned session
+  # that hits a limit is still evacuated, and `_swap_pin_tick` ends the pin on the
+  # next tick because the row is no longer on the pinned account.
+  #
+  # SAID, NOT SILENT, and floored (D-3098). This runs every 5 seconds per session
+  # and `$REG/swap.log` is a file a human reads, so it borrows `_route_note_floored`
+  # — one line per session per `ROUTE_NOTE_FLOOR`, the anchor in the row's own
+  # `swappinnote` field, which `_swap_pin_tick` clears with the pin so the NEXT
+  # pin gets to speak straight away rather than inheriting this one's floor.
+  # Without a line here the operator sees a session that simply never returns
+  # home and nothing anywhere says why.
+  if _swap_pinned "$id" "$wrapper"; then
+    _route_note_floored "$id" swappinnote \
+      || echo "$(date '+%F %T') pin-hold $id: pinned to $wrapper by hand; the return-home/ceiling arm stands down (a limit still evacuates)" >> "$REG/swap.log"
+    return 0
+  fi
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
   [[ -e "$REG/$id.hold" ]] && return 0
@@ -17955,6 +18150,20 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
     && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
   _idle_for_keystroke "$id" "$pane" "ctx ${pct}%" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  # D-3103 — NOTHING HAS HAPPENED SINCE THE LAST COMPACTION. The last gate, and it
+  # is last on purpose: `_compact_no_turns` resolves a transcript path and scans
+  # its tail through python, which the final D-2444 review measured at an order of
+  # magnitude more than the pane classifier, so it is paid only by a session that
+  # has passed EVERY cheaper test and is one line away from having `/compact`
+  # typed into it. A below-threshold, mid-turn or busy session never reaches it.
+  #
+  # ITS OWN REASON, NOT `post-swap`'s. Both refuse an over-threshold session, and
+  # an operator handles them differently: `post-swap` says "wait, the landing has
+  # probably already compacted this", and this one says "this session has not
+  # spoken since the last time we compacted it, so there is nothing new to
+  # summarise and the compaction would only summarise a summary". The detail
+  # carries the measured age of the newest real turn.
+  _compact_no_turns "$id" && { _compact_note "$id" no-turns-since-compact "ctx ${pct}%; $COMPACT_TURN_DETAIL"; return 0; }
   # `wrapper` is read again here rather than carried out of the predicate: it is the log line
   # below that wants it, and a predicate that answered a second value through a global would be
   # a wider contract than "is this pane typeable" for one string.
@@ -18757,6 +18966,48 @@ _pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any re
   '
 }
 
+_pane_external_import_gate() {   # pane text -> 0 iff Claude Code's external-CLAUDE.md-import dialog is UP (D-3108)
+  # THE DIALOG, measured off the shipped bundle (Claude Code 2.1.278) rather
+  # than remembered: title `Allow external CLAUDE.md file imports?`, body "This
+  # project's CLAUDE.md imports files outside the current working directory.
+  # Never allow this for third-party repositories.", and two options —
+  # `Yes, allow external imports` / `No, disable external imports` — rendered
+  # with `cancelFirst: true, focus: "cancel"`, so THE CURSOR STARTS ON NO.
+  #
+  # WHY IT IS AN ACCOUNT-SWITCH PROBLEM, AND WHERE THE STATE LIVES. The answer
+  # is recorded as `hasClaudeMdExternalIncludesApproved` (with
+  # `hasClaudeMdExternalIncludesWarningShown` beside it) on the PROJECT entry
+  # inside `$CLAUDE_CONFIG_DIR/.claude.json` — one file per lane. `cmd_swap`
+  # carries the transcript, the sidecars and `tasks/<uuid>`; it does not carry
+  # this, and it must not: that file is Claude Code's, not ccrc's, and the
+  # standing ruling is that a ccrc integration lives in artifacts ccrc owns
+  # outright. So the destination lane has never approved this project, the
+  # dialog is raised on the landing, and the session sits on it until a human
+  # arrives. Measured on this fleet 2026-09-19: the lanes whose config dir
+  # carries a user `CLAUDE.md` with an `@` import hold 0 approvals across 11-14
+  # projects each, while two lanes that answered it long ago hold 56.
+  #
+  # THE SENTENCE ALONE NEVER FIRES, and that is the whole reason this is a
+  # function rather than a `grep` in the loop. The two 2.1.198 gates already
+  # pair their title with the `Enter to confirm` footer so the same words inside
+  # a RESTORED TRANSCRIPT cannot synthesize a keystroke — and this title is
+  # worse than theirs, because a session working on `ccd` has this very
+  # paragraph on screen. So the gate is the LIVE SELECTOR: the title, AND a
+  # cursor line sitting on one of the dialog's OWN two options. Prose cannot
+  # produce that pair; only the dialog can.
+  #
+  # The cursor is read exactly as `_answer_two_option_dialog` reads it — the
+  # LAST `❯` line, falling back to a bare `>` at line start for a terminal that
+  # renders the glyph differently — because the two must agree about which line
+  # is the cursor or this predicate would admit a dialog that helper then
+  # answers blind.
+  local pane="$1" cursor
+  grep -q "Allow external CLAUDE.md file imports" <<<"$pane" || return 1
+  cursor=$(printf '%s\n' "$pane" | LC_ALL=C grep -F $'\xe2\x9d\xaf' | tail -1)
+  [[ -z "$cursor" ]] && cursor=$(printf '%s\n' "$pane" | grep -E '^[[:space:]]*>' | tail -1)
+  [[ "$cursor" == *"allow external imports"* || "$cursor" == *"disable external imports"* ]]
+}
+
 # Auth screens must never receive synthesized keystrokes: on a numbered login
 # menu a stray Enter selects whatever the cursor is on.
 _pane_login_screen() {
@@ -18883,6 +19134,33 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # `_tmux` built it from.
     [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    # THE EXTERNAL-IMPORT GATE, AND IT IS ASKED ABOVE THE READY MARKERS (D-3107).
+    # Every other gate below is a full-screen startup dialog that hides the
+    # footer, so the marker check cannot reach them; this one is raised while
+    # `CLAUDE.md` is being loaded and a pane can carry it WITH chrome the marker
+    # regex matches. Below the markers it would be unreachable exactly when it
+    # fires, and the settle would report a ready TUI over a modal nobody
+    # answered — the shape this fix exists to remove, with the settle's own
+    # verdict now lying about it too.
+    #
+    # ANSWERED `YES`, DELIBERATELY, and the dialog's own warning is the reason
+    # this is safe rather than in spite of it: it says "Never allow this for
+    # third-party repositories", and every pane this function touches is a
+    # workspace `ccd` itself created from the operator's own repo. The posture
+    # is also already the fleet's — `skipDangerousModePermissionPrompt` is set
+    # in every lane's settings.json, and the two arms below auto-accept the
+    # trust-folder and Bypass-Permissions dialogs, both strictly more dangerous
+    # than this one. NO KILL-SWITCH, for the same reason those two have none:
+    # one shape for one class of gate.
+    #
+    # `_answer_two_option_dialog` reads WHICH LINE CARRIES THE CURSOR rather
+    # than trusting an ordinal, which matters more here than anywhere else in
+    # this loop: this dialog ships `cancelFirst: true, focus: "cancel"`, so a
+    # bare Enter is `No, disable external imports` — the operator's own imports
+    # silently switched off for that project, on that lane, permanently.
+    if _pane_external_import_gate "$pane"; then
+      _answer_two_option_dialog "$pane" "$t" "allow external imports"; sleep 2; continue
+    fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
     # without it supervise sits here for the full window and never reaches its watch loop.
@@ -19799,6 +20077,133 @@ print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
   rc=$?
   [[ "$rc" -le 1 ]] && return "$rc"
   return 2
+}
+
+_transcript_last_turn_ts() {   # transcript-path -> 0 + the newest REAL turn's epoch seconds | 1 no real turn in the window | 2 unreadable (D-3102)
+  # WHAT A TURN IS, HERE. `_transcript_limit_banner`'s chatter rule, plus the two
+  # rows a COMPACTION writes that its rule does not name — because that rule was
+  # written for "did the session move on after a banner", where a compaction
+  # cannot have intervened, and this one is asked EXACTLY ACROSS a compaction.
+  # Measured on a live transcript (2026-09-18 02:30 -> 02:34): one `ccd`
+  # `/compact` appends FOUR `type:"user"` rows and nothing else —
+  #
+  #   1. the summary itself, `isCompactSummary:true` ("This session is being
+  #      continued from a previous conversation…"), timestamped at the moment the
+  #      summary LANDED, ~4 minutes AFTER ccd typed the keys;
+  #   2. `isMeta:true`, content `<local-command-caveat>…`;
+  #   3. content `<command-name>/compact</command-name>…`;
+  #   4. content `<local-command-stdout>[Compacted…`.
+  #
+  # Rows 2-4 are already the three chatter prefixes. Row 1 is not, and it is the
+  # one that matters: it carries a timestamp LATER than `lastcompact`, so a
+  # reader that counted it would see "a turn happened since the compaction" on
+  # every single compacted session and the guard above would never fire once.
+  # `isCompactSummary` is the field that names it, and `isMeta` is dropped with
+  # it — an injected context row is not a turn a human or the model took.
+  #
+  # NEWEST WINS AND NOTHING RESETS. Unlike the banner reader, which asks "is the
+  # banner still the LAST word" and therefore clears its candidate on any later
+  # real row, this one asks only "when did anything real last happen", so a real
+  # row simply replaces the answer. There is no state to lose.
+  #
+  # `-f && -r`, never `-r` alone — D-2347's class, the same one the banner reader
+  # carries: `-r` is true for a FIFO and for an unbounded character device, and
+  # `tail` on either blocks for ever inside the 5-second tick (D-2370).
+  #
+  # THE TIMESTAMP IS PARSED, NOT TRUSTED. Claude Code writes RFC3339 in UTC with
+  # a literal `Z`; anything this cannot read is skipped as if the row carried no
+  # timestamp at all, so a malformed row can only make the answer OLDER (fail
+  # open at the caller), never newer.
+  local f="$1" rows rc
+  [[ -f "$f" && -r "$f" ]] || return 2
+  rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
+import calendar, json, sys, time
+
+newest = None
+for raw in sys.stdin:
+    try:
+        row = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        continue
+    if not isinstance(row, dict):
+        continue
+    if row.get("type") not in ("user", "assistant"):
+        continue
+    if row.get("isCompactSummary") is True or row.get("isMeta") is True:
+        continue
+    message = row.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if row.get("type") == "user" and isinstance(content, str) and content.startswith(
+        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
+    ):
+        continue
+    stamp = row.get("timestamp")
+    if not isinstance(stamp, str) or len(stamp) < 19:
+        continue
+    try:
+        epoch = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        continue
+    if newest is None or epoch > newest:
+        newest = epoch
+
+if newest is None:
+    raise SystemExit(1)
+print(newest)
+' 2>/dev/null
+  rc=$?
+  [[ "$rc" -le 1 ]] && return "$rc"
+  return 2
+}
+
+COMPACT_TURN_DETAIL=""
+_compact_no_turns() {   # id -> 0 iff the transcript PROVES no real turn since `lastcompact` (D-3103)
+  # THE DEFECT, MEASURED BEFORE IT WAS NAMED. `_auto_compact_check` decided on
+  # two numbers — the `lastcompact` cooldown and `ctx%` against the threshold —
+  # and neither of them is a fact about whether the CONVERSATION changed. A
+  # session whose post-compaction floor sits at or above its own threshold
+  # therefore re-compacts every `COMPACT_COOLDOWN` for ever, summarising a
+  # summary it has already summarised. On this fleet's `$REG/swap.log`,
+  # 2026-09-19: of 622 `auto-compact` lines, 163 came within 40 minutes of the
+  # previous compaction OF THE SAME SESSION, and all 163 read the IDENTICAL
+  # `ctx%` as the line before them — ONE workspace alone took 25 consecutive
+  # compactions at exactly 1800-second spacing, every one reading `ctx 51%`, from
+  # 20:39 on 2026-09-10 to 08:40 the next morning. An identical percentage is the
+  # signature: nothing had changed, and compacting changed nothing.
+  #
+  # FAIL OPEN, AND THAT IS THE WHOLE SHAPE OF THIS GUARD. It answers 0 only on a
+  # POSITIVE measurement that nothing happened; every other condition — no
+  # `lastcompact` to be unchanged since, a transcript this box cannot name or
+  # read, a tail window holding no real turn, python absent — answers 1 and the
+  # compactor behaves exactly as it did before D-3103. A new guard that silences
+  # the compactor on an unreadable transcript would trade a wasteful compaction
+  # for a session that never compacts at all, which is the #67 R1 shape
+  # `_auto_swap_check`'s own header forbids: a fix for one defect must not open a
+  # live one beside it.
+  #
+  # THE EPOCH COMPARISON IS `-le`, NOT `-lt`. `lastcompact` is stamped the
+  # instant BEFORE the send-keys, and a turn that began in the same second is a
+  # turn this guard has no business refusing — but it is also indistinguishable
+  # from the compaction's own second at one-second resolution, and the two
+  # readings differ by a single wasted tick in one direction and a lost
+  # compaction in the other. Equal reads as "nothing since"; the next tick
+  # re-measures.
+  COMPACT_TURN_DETAIL=""
+  local id="$1" last f ts
+  last=$(_reg_get "$id" lastcompact)
+  [[ -n "$last" ]] || return 1
+  f=$(_transcript_path "$id") || return 1
+  ts=$(_transcript_last_turn_ts "$f") || return 1
+  # THE DIGIT TESTS ARE FIRST AND INSIDE THE SAME `[[ ]]` as the arithmetic —
+  # D-299's shape, and BOTH operands need one: `last` is a registry field (torn
+  # or hand-edited is the threat model) and `ts` is this box's own python
+  # stdout, which is a pipeline that can answer anything at all if it is ever
+  # replaced. `ccd-arith-containment.test.ts`'s SITES table pins this line.
+  [[ "$last" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && "$ts" -le "$last" ]] || return 1
+  COMPACT_TURN_DETAIL="newest turn $((last - ts))s before the last compaction"
+  return 0
 }
 
 _redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
@@ -22161,6 +22566,20 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   fi
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
+  # THE PIN, WRITTEN BY THE OPERATOR PATH ONLY (D-3097). `CCD_SWAP_AUTO=1` is
+  # `_dispatch_swap`'s own discriminator — the one thing that tells the tick's
+  # automatic rescue from a human, a `swap-self` or a PWA tap — and it is already
+  # read once in this function, at the cross-pool refusal above. An automatic
+  # move must not mint a pin (the tick would then refuse to bring the session
+  # home, which is the opposite of what a rescue means) and it CLEARS one,
+  # immediately, because the row has just left the account the pin named. The
+  # tick's `_swap_pin_tick` would reach the same conclusion on its next pass;
+  # doing it here means the two surfaces never disagree even for one tick.
+  if [[ "${CCD_SWAP_AUTO:-}" == 1 ]]; then
+    [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
+  else
+    _reg_set "$id" swappin "$target"
+  fi
   # `cmd_ensure` runs in this same process at ccd:12815, but only when
   # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
   # line WHEN IT FIRES. Two acts, two events, two tx-free records: the same
@@ -22269,6 +22688,12 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
     && die "pool-mismatch: $(_pool_mismatch_why "$w" "$pstate" "$project" "$pps") — to cross on purpose: ccd prefer --cross-pool $id $w"
   old=$(_home_for "$id")
   _reg_set "$id" home "$w"
+  # AN EXPLICIT HOME SUPERSEDES A PIN (D-3099). The pin exists because `swap`
+  # could not say "and keep it there"; `prefer` says exactly that, in the field
+  # the affinity arm actually reads, so leaving a pin standing beside it would
+  # give one session two answers to the same question — and the pin's would win,
+  # silently suppressing the return-home the operator just asked for.
+  [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
   local lc_cross=()
   [[ "$prc" -eq 1 && -n "$cross" ]] \
     && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }
