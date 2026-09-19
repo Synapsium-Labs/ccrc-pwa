@@ -375,6 +375,29 @@ describe('one sessionLabel', () => {
   });
 });
 
+describe('one boardHome (board-placement wave 2, Task 1)', () => {
+  // `boardProject ?? project` is the wire's ONE fallback (`shared/api.ts`,
+  // `FleetSession.boardProject`'s docstring). A second spelling in any
+  // consumer is the two-readers drift this suite exists to forbid.
+  const CHAIN = /boardProject\s*\?\?/;
+
+  it('is spelled in exactly one file, and that file is shared/api.ts', () => {
+    const holders = ALL.filter((f) => CHAIN.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+});
+
+describe('one repoLabel (board-placement wave 2, Task 1)', () => {
+  // The three-state `ProjectRepoWire` switch. The card row and the session
+  // view both render it; a second `state === 'named'` is a second renderer.
+  const SWITCH = /\.state === 'named'/;
+
+  it('is asked in exactly one file, and that file is shared/api.ts', () => {
+    const holders = ALL.filter((f) => SWITCH.test(readFileSync(f, 'utf8'))).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+});
+
 describe('Build 7 nouns', () => {
   it('defines RunState exactly once, in shared/', () => {
     const hits = ALL.filter((f) => /^\s*export type RunState\b/m.test(readFileSync(f, 'utf8')));

@@ -264,6 +264,43 @@ export function runForSession(
   return current;
 }
 
+/**
+ * Which card a run's rows belong on: the card the session it is ABOUT renders
+ * on. Wave 2 of board placement moves a coordinated workspace to its
+ * coordinator's card, and `nestFleet` can only draw the edge when the run
+ * reaches THAT card — a run left on `run.project`'s card is spec §1's pure
+ * regression (no edge, no marker, no `/runs` door).
+ *
+ * A BOUND run asks its WORKER: `boardHome` of `run.sessionId`, which is where
+ * that row now renders.
+ *
+ * A PENDING SPAWN HAS NO WORKER, AND ASKS ITS COORDINATOR (D-3029).
+ * It used to take `run.project`, which is right only while the wave works in
+ * the coordinator's own repo: on a cross-repo wave the phantom landed on the
+ * WAVE's card as a depth-0 orphan spawn, then jumped to the coordinator's card
+ * the moment the worker bound — a row moving between cards as a side effect of
+ * a dispatch completing. The phantom now follows its coordinator, which is
+ * exactly where the bound worker is about to render, so nothing moves.
+ *
+ * `run.project` is the LAST answer, never the first: taken only when there is
+ * nothing routable — no session and no claimant (a reconstructed, ownerless
+ * row), or a session/claimant the fleet list does not carry this pass (reaped,
+ * unmeasured, an older snapshot). Without it an orphaned run would render on
+ * no card at all.
+ *
+ * `cardOf` is built ONCE per render by the caller from `boardHome` over the
+ * whole session list — never inside a card, which sees only its own rows.
+ */
+export function runCard(
+  run: { sessionId: string | null; claimedBy: string | null; project: string },
+  cardOf: ReadonlyMap<string, string>,
+): string {
+  if (run.sessionId === null) {
+    return run.claimedBy === null ? run.project : cardOf.get(run.claimedBy) ?? run.project;
+  }
+  return cardOf.get(run.sessionId) ?? run.project;
+}
+
 /** What the board says about a wave that RESUMED its session rather than
  *  spawning one (Task 5). Two shapes, never one, because they are two
  *  different facts about the same run:

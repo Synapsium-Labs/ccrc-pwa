@@ -190,6 +190,7 @@ button.metachip:active {
   color: var(--ink-tertiary);
   background: var(--bg-raised);
 }
+.chip--repo { font-family: var(--font-mono); }
 /* Keycaps — the machine's keys surfacing in the chrome (DIRECTION: the
    interrupt is "a keycap, not an icon"). Raised caps with a heavier bottom
    edge, mono legends, 44px targets; pressing compresses like a key. `esc`

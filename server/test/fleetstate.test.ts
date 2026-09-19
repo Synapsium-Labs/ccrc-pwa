@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from '../src/fleetstate.js';
-import { reviveFleetSession, substrateFault, type FleetSession } from '../../shared/api.js';
+import { reviveFleetSession, substrateFault, boardHome, repoLabel, type FleetSession } from '../../shared/api.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const tmpDir = (): string => mkTmp('ccrc-cache-');
@@ -772,5 +772,30 @@ describe('reviveFleetSession carries boardProject (board-placement wave 1, Task 
     const raw = JSON.parse(JSON.stringify(session('demo-c'))) as Record<string, unknown>;
     raw.boardProject = 'intake-platform';
     expect(reviveFleetSession(raw)!.boardProject).toBe('intake-platform');
+  });
+});
+
+describe('boardHome — the ONE reader of FleetSession.boardProject (board-placement wave 2, Task 1)', () => {
+  it('reads the placement when the server decided one', () => {
+    expect(boardHome({ project: 'custom-tools', boardProject: 'intake-platform' })).toBe('intake-platform');
+  });
+  it('falls back to the project on null — an older server, an older snapshot, or a failed read (D-2875)', () => {
+    expect(boardHome({ project: 'custom-tools', boardProject: null })).toBe('custom-tools');
+  });
+  it('falls back on an ABSENT key — the live frame is cast, not revived', () => {
+    // No `boardProject` key at all, the runtime shape of a row from a server
+    // that predates the field. `??` reads it as null; `=== null` would not.
+    expect(boardHome({ project: 'custom-tools' })).toBe('custom-tools');
+  });
+});
+
+describe('repoLabel — the ONE renderer decision for ProjectRepoWire (Task 1)', () => {
+  it('is the slug on `named`', () => {
+    expect(repoLabel({ state: 'named', slug: 'Synapsium-Labs/ccrc-pwa' })).toBe('Synapsium-Labs/ccrc-pwa');
+  });
+  it('is null on `absent`, on `unmeasured`, and on an absent key — three conditions, one render, stated', () => {
+    expect(repoLabel({ state: 'absent' })).toBeNull();
+    expect(repoLabel({ state: 'unmeasured' })).toBeNull();
+    expect(repoLabel(undefined)).toBeNull();
   });
 });

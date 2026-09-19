@@ -53,6 +53,11 @@ const DIALOG_PANE = `${IDLE_PANE}Change effort level?\n❯ 1. Yes, switch to hig
  *  submits `/effort` comes first and must not land the acknowledgement early. */
 const TMUX_STUB = `tmux() {
   echo "tmux $*" >> "$HOME/tmux-calls"
+  # §6.3: answer the pane-width query (D-2861's idiom, discriminated on the whole
+  # argument list so the \`#{pane_pid}\` readers below are undisturbed). Without it
+  # \`_pane_measurable\` stands the applier down INSIDE the test and every keystroke
+  # assertion here reads as an empty list.
+  case "$*" in *pane_active*) echo "1 200"; return 0 ;; esac
   case "$1" in
     capture-pane) cat "$HOME/pane.txt" ;;
     list-panes)   echo 4242 ;;
@@ -127,6 +132,7 @@ const runCcd = (...args: string[]): { code: number; stdout: string; stderr: stri
   fs.writeFileSync(path.join(bin, 'tmux'),
     '#!/bin/bash\n'
     + 'echo "tmux $*" >> "$HOME/tmux-calls"\n'
+    + 'case "$*" in *pane_active*) echo "1 200"; exit 0 ;; esac\n'
     + 'case "$1" in\n'
     + '  capture-pane) cat "$HOME/pane.txt" ;;\n'
     + '  list-panes)   echo 4242 ;;\n'

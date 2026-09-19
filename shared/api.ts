@@ -367,19 +367,15 @@ export interface FleetSession {
    *  with both. What is NOT folded is "placed elsewhere" vs "placed home",
    *  which a reader gets from `boardProject !== project` and needs no field.
    *
-   *  A THIRD condition exists and does NOT reach this field as `null`, which is
-   *  a gap in what the wire can say rather than a third meaning for it: when
-   *  the server's placement read fails — `coordPlacementStamps` refusing, or
-   *  `node:sqlite` throwing on a closed connection or a lock race — every row
-   *  degrades to a NON-NULL `boardProject` equal to its own `project`
-   *  (`readCoordPlacements`, `server/src/fleet.ts`). A reader therefore cannot
-   *  tell "this server measured, and this row belongs at home" from "this
-   *  server could not measure at all". It renders identically today and is
-   *  recorded as wave 2's ~4 lines (D-2875): emit `null` on a failed read,
-   *  which is the vocabulary this field already has for exactly that. Stated
-   *  here because this docstring IS the wire contract, and a contract that
-   *  enumerates two producers while a third exists is false whatever the
-   *  renderer happens to do with it (D-2923). */
+   *  THREE conditions reach `null`, and they collapse deliberately: an older
+   *  peer, a snapshot revived from a build predating the field, and — since
+   *  wave 2 (D-2875) — a server whose placement read failed this tick
+   *  (`coordPlacementStamps` refusing, or `node:sqlite` throwing on a closed
+   *  connection or a lock race; `readCoordPlacements`, `server/src/fleet.ts`).
+   *  The single reader (`boardHome`, below) does the identical thing with all
+   *  three, and no reader may branch on `=== null` to tell them apart — that
+   *  distinction is not on the wire. What IS distinct: "nothing stamped" is
+   *  NOT a failure and answers the session's own project, a measurement. */
   boardProject: string | null;
   /**
    * The routing record ccd owns for this session (routing slice 6, Task 4;
@@ -2889,6 +2885,39 @@ export function reviveFleetSession(raw: unknown): FleetSession | null {
   }
 }
 
+/**
+ * WHICH CARD a session's row renders on — the ONE reader of
+ * `FleetSession.boardProject`, and the only place `boardProject ?? project`
+ * is spelled (`server/test/single-definition.test.ts` scans for a second).
+ *
+ * `??`, never `=== null`: the live `fleet` frame is CAST on arrival
+ * (`pwa/src/stores/fleet.ts`'s `asFleetMsg`), so a row from a server that
+ * predates the field has NO KEY at runtime, and an older snapshot revives it
+ * as `null`. Both, and a failed server-side read (D-2875, wave 2), fall back to
+ * the session's own project — the identical thing, which is why the field's
+ * docstring lets the three collapse. NO reader may branch on
+ * `boardProject === null` to tell them apart; that distinction is not on the
+ * wire and the fold is deliberate.
+ */
+export function boardHome(s: { project: string; boardProject?: string | null }): string {
+  return s.boardProject ?? s.project;
+}
+
+/**
+ * The repo label a renderer may show for a `ProjectRow.repo` cell — the ONE
+ * place `state === 'named'` is asked of `ProjectRepoWire`, so the card row and
+ * the session view cannot drift onto two different readings of the three
+ * states. The slug on `named`; `null` for `absent`, `unmeasured` AND an absent
+ * key (an older server). Three conditions, one render, and that fold is
+ * deliberate: the label is the only affordance behind this field, and none of
+ * the three is something the label can say. `absent` still means only "no
+ * usable origin AT THE PATH THE SWEEP LOOKED AT" (the type's own leading
+ * sentence, D-2923) — this function renders nothing for it and claims nothing.
+ */
+export function repoLabel(repo: ProjectRepoWire | undefined): string | null {
+  return repo !== undefined && repo.state === 'named' ? repo.slug : null;
+}
+
 /** A persisted `sessions` array in today's shape, or null — one unrevivable
  *  session rejects the file, which both readers already handle as "no data". */
 export function reviveFleetSessions(raw: unknown): FleetSession[] | null {
@@ -5153,14 +5182,25 @@ export function routeFieldsOrNull(r: RouteFields): RouteFields | null {
  * PRODUCER side is `mail-routes.test.ts`'s kebab-token scanner, and it
  * cannot see a single-word code by construction (it matches only hyphenated
  * tokens) — `paused`, a member of this very union, is invisible to it.
- * Eighteen codes exist below today; the next new one would be the
- * nineteenth, not the ninth.
+ * Nineteen codes exist below today; the next new one would be the
+ * twentieth, not the ninth.
  *
  * `hold-oversize` is the complete session-card reason refusing before a run
  * or fleet act can create a hold the hook cannot display. `hold-invalid` is
  * the separate grammar/domain refusal: the serialized slug or an included
  * wave, denominator, or run id cannot be accepted by the hook. Both differ
  * from `oversize`, which names mail bytes and is shared with mail ingress.
+ *
+ * `claimant-is-a-worker` (spec 2026-09-16 §12) refuses `POST /api/runs` when
+ * ANY non-terminal run names `claimedBy` as its `sessionId` and is claimed by
+ * somebody else — EVERY open claimant of that session is read, never only the
+ * newest, because one session can be the worker of several open runs at once
+ * (the coordinator protocol opens wave N+1 before closing wave N). A
+ * dispatched worker may not coordinate, because the board draws ONE level of
+ * bracket and a real chain would render its middle session detached (the
+ * operator's own report). `by` names the newest such coordinator. A
+ * self-claimed run and an ownerless open run are both admitted (D-3012); a
+ * finished worker is not a worker.
  *
  * `project-mismatch` is cross-repo programmes' first guard (design
  * 2026-09-08 §3 F1). A programme's waves may run in any project, but a
@@ -5210,7 +5250,8 @@ export type RunRefuseCode =
   | 'claimed-by-another' | 'paused' | 'mail-disabled' | 'cap-concurrency' | 'cap-daily'
   | 'ambiguous-dispatch' | 'worker-busy' | 'hookstate-unmeasurable' | 'not-dispatched'
   | 'prhistory-unreadable' | 'bad-transition' | 'unknown-item' | 'item-terminal'
-  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight';
+  | 'project-mismatch' | 'home-mismatch' | 'hold-oversize' | 'hold-invalid' | 'review-in-flight'
+  | 'claimant-is-a-worker';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -5218,7 +5259,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'hookstate-unmeasurable': true, 'not-dispatched': true,
   'prhistory-unreadable': true, 'bad-transition': true, 'unknown-item': true, 'item-terminal': true,
   'project-mismatch': true, 'home-mismatch': true, 'hold-oversize': true, 'hold-invalid': true,
-  'review-in-flight': true,
+  'review-in-flight': true, 'claimant-is-a-worker': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -5336,9 +5377,23 @@ export function isClaimRefuseCode(v: unknown): v is ClaimRefuseCode {
  *                     a fourth code nobody would branch on
  *    no-claimant    — the run names nobody. Distinct from `unknown-run` (there is no
  *                     such run) and from `unknown-session` (the NEW claimant has no
- *                     registry row): three different things to fix, never one code */
-export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant';
-const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> = { 'claimant-alive': true, 'no-claimant': true };
+ *                     registry row): three different things to fix, never one code
+ *    heir-is-a-worker — the NEW claimant is the worker of somebody ELSE's open
+ *                     run (spec §12): a worker may not inherit a programme
+ *                     any more than open one. 409, `by` names that coordinator,
+ *                     the newest of them. EVERY open run naming the heir is
+ *                     read, never only the newest, which is what makes the
+ *                     admission exact: the reclaim goes through only when every
+ *                     one of those runs is claimed by the coordinator being
+ *                     REPLACED, or by the heir itself. A finished worker is not
+ *                     a worker; a self-claimed run is admitted (D-3012); and at
+ *                     the RECLAIM door only, so is an heir whose coordinators
+ *                     are all the claimant being replaced — a programme's own
+ *                     worker may inherit it (D-3028), while an heir a THIRD
+ *                     coordinator's open run still binds may not */
+export type ReclaimRefuseCode = 'claimant-alive' | 'no-claimant' | 'heir-is-a-worker';
+const RECLAIM_REFUSE_CODE_MAP: Record<ReclaimRefuseCode, true> =
+  { 'claimant-alive': true, 'no-claimant': true, 'heir-is-a-worker': true };
 export const RECLAIM_REFUSE_CODES: readonly ReclaimRefuseCode[] =
   Object.keys(RECLAIM_REFUSE_CODE_MAP) as ReclaimRefuseCode[];
 /** `hasOwnProperty`, not `in` and not `MAP[v]`: `'toString' in RECLAIM_REFUSE_CODE_MAP`
@@ -7949,3 +8004,48 @@ export type PaneProbe =
 export type PaneHistoryReply =
   | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
   | { ok: false; error: 'gone' | 'unmeasured' | 'bad-session-id'; detail?: string };
+
+/**
+ * The narrowest pane width at which the fleet's phrase-matching readers may be
+ * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down — a narrow
+ * pane is UNMEASURED, not idle.
+ *
+ * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only consumer: run
+ * `grep -rn 'READER_MIN_COLS' server/src pwa/src agent/src shared/*.ts` and the
+ * only hits inside those four trees are this declaration and this sentence's
+ * own quotation of the command — no other file in server/src, pwa/src or
+ * agent/src references the constant. In particular the server's mail
+ * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
+ * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
+ * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —
+ * a phrase match (`AUTO_CONTINUE_RE`) with no width measurement anywhere on that
+ * path. The failure direction is the dangerous one: on a pane below this width
+ * Claude Code's own limit-recovery line WRAPS, the phrase is no longer on one
+ * row, `autoContinueArmed` answers false, the hold does NOT fire, and the server
+ * types into a pane whose auto-continue was armed — cancelling it. An earlier
+ * version of this docstring said "and the mail lane holds"; nothing shipped ever
+ * made that true. Teaching that lane this floor is a deliberate later widening,
+ * not something to infer from this constant's existence.
+ *
+ * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
+ * line at the terminal width before tmux ever stores the row. This tree cannot
+ * measure which wrap call Claude Code's bundled Ink major actually makes, so
+ * the derivation runs `wrap-ansi@9` (the exact major matters — see below)
+ * TWICE over Claude Code's known status-line carriers at every width in
+ * 40–220, once as `{ hard: false }` and once as `{ trim: false, hard: true }`
+ * (Ink `<Text>`'s documented default for `wrap="wrap"`), and asks at which
+ * widths a phrase is still on ONE line. Measured 2026-09-14: both option sets
+ * agree on every carrier, so the floor below does not depend on which one
+ * Claude Code's Ink uses. The widest carrier
+ * (`✳ Procrastinating… (2h 14m 52s · ↑ 128.4k tokens · esc to interrupt)`)
+ * needs 69 columns under both, and the widest `· <segment>` in the sample is
+ * 37 — so 120 carries room for one whole extra segment (69 + 37 = 106) and
+ * still leaves a 171-column desktop client measurable while every phone is
+ * below it. The major version is load-bearing: under `wrap-ansi@10` the same
+ * carriers measure 68 and 55 instead of 69 and 56 (ambiguous-width handling of
+ * `✳` moved), so a derivation that does not pin the major is not reproducible.
+ *
+ * `ccd/ccd` carries the same number as a bash global, because bash cannot
+ * import this file; `server/test/reader-min-cols.test.ts` holds the two equal.
+ */
+export const READER_MIN_COLS = 120;

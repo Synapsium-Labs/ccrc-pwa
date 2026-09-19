@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-redrive-'); });
@@ -9,7 +9,7 @@ afterEach(() => { h.cleanup(); });
 
 /** tmux, RECORDING: `capture-pane` answers `$PANE_TEXT`, everything else is logged. */
 const STUBS = `sleep() { :; };
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
   _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
 const sendKeys = (): string[] => h.calls().filter((l) => l.includes('send-keys'));
@@ -165,7 +165,7 @@ describe('_redrive_after_spawn', () => {
     // (one second earlier) cannot see.
     writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
     const RACE_STUBS = `sleep() { :; };
-      tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
         case "\${1:-}" in capture-pane)
           n=$(cat "$HOME/pane-calls" 2>/dev/null || echo 0); echo $((n+1)) > "$HOME/pane-calls";
           if [[ "$n" -ge 20 ]]; then printf '%s\\n' 'thinking… esc to interrupt'; else printf '%s\\n' "\${PANE_TEXT:-}"; fi ;;
@@ -173,6 +173,31 @@ describe('_redrive_after_spawn', () => {
       _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
     h.sh(`${RACE_STUBS} _redrive_after_spawn ${ID} cc-test`, { PANE_TEXT: READY });
     expect(sendKeys()).toEqual([]);
+  });
+  // S1/S14 (review round 3, D-2864's own headline finding): the top-of-function
+  // guard above is not the only `_pane_measurable` call in this function — a
+  // second one sits right after the wait loop, re-measuring because
+  // REDRIVE_WAIT_S seconds of real `sleep 1`s can have passed since the first
+  // measurement. Nothing anywhere asserted that second guard exists: deleting
+  // it, or inverting its sense, left every suite that touches this file green.
+  // This case uses this file's own RACE_STUBS counter idiom, applied to
+  // `list-panes` instead of `capture-pane`: WIDE on the FIRST width query (the
+  // top-of-function guard) and NARROW on the SECOND (the post-wait re-measure)
+  // — so the pane only goes narrow DURING the wait, the one condition the
+  // second guard exists to catch and the top-of-function guard cannot see.
+  it('goes narrow during the wait: the post-loop re-measure stands the redrive down (S1/S14)', () => {
+    writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);
+    const LISTPANES_RACE_STUBS = `sleep() { :; };
+      tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+        case "\$*" in *pane_active*)
+          n=$(cat "$HOME/listpanes-calls" 2>/dev/null || echo 0); echo $((n+1)) > "$HOME/listpanes-calls";
+          if [[ "$n" -eq 0 ]]; then printf '%s\\n' '1 200'; else printf '%s\\n' '1 10'; fi; return 0 ;;
+        esac;
+        case "\${1:-}" in capture-pane) printf '%s\\n' "\${PANE_TEXT:-}" ;; esac; return 0; };
+      _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };`;
+    h.sh(`${LISTPANES_RACE_STUBS} _redrive_after_spawn ${ID} cc-test`, { PANE_TEXT: READY });
+    expect(sendKeys()).toEqual([]);
+    expect(swapLog()).toMatch(/redrive-skip myid: pane went under \d+ columns during the redrive wait/);
   });
   it('types nothing over a draft in the box, and says so', () => {
     writeTranscript([L.banner(), L.metaPrompt(), L.synthetic()]);

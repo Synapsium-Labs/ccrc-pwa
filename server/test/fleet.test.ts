@@ -1401,6 +1401,45 @@ describe('board placement on the wire (Task 3, fix round 1 coverage)', () => {
     );
     expect(fleet.find((x) => x.id === 'ct-worker2')!.boardProject).toBe('intake-platform');
   });
+
+  it('a REFUSED placement read emits null on every row — never a non-null that reads as "placed at home" (D-2875)', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker5', 'claude', { hold: 'program:agent-evals wave:1/1' });
+    const coord = mkCoord();
+    vi.spyOn(coord, 'coordPlacementStamps').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'closed for the test' });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker5')!.boardProject).toBeNull();
+  });
+
+  it('a THROWING placement read emits null too, and the tick still resolves', async () => {
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker6', 'claude');
+    const coord = mkCoord();
+    vi.spyOn(coord, 'coordPlacementStamps').mockImplementation(() => { throw new Error('lock race'); });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, coord,
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker6')!.boardProject).toBeNull();
+  });
+
+  it('CONTROL: a readable store with nothing stamped still answers the OWN project, not null', async () => {
+    // "Nothing stamped" is a measurement; "could not read" is not. The two
+    // must not fold — this is the case the null must NOT reach.
+    const home = mkTmp('ccrc-');
+    seedRoster(home);
+    seedSession(home, 'demo-worker7', 'claude', { project: 'demo-worker7-project' });
+    const fleet = await assembleFleet(
+      localIO, loadConfig({ CCRC_HOME: home }), dead, NOW_S,
+      undefined, undefined, undefined, undefined, undefined, undefined, mkCoord(),
+    );
+    expect(fleet.find((x) => x.id === 'demo-worker7')!.boardProject).toBe('demo-worker7-project');
+  });
 });
 
 describe('hookAskSummary', () => {

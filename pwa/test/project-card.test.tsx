@@ -2,7 +2,7 @@
 import { afterEach, describe, it, expect, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, RunSummary } from '../../shared/api';
+import type { FleetSession, PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire, ProjectRepoWire, RunSummary } from '../../shared/api';
 import type { ProjectPlacementRead } from '../src/fleet/ProjectCard';
 import { SPAWN_STALL_MS } from '../../shared/api';
 import { groupFleet, type FleetGroup } from '../src/fleet/groupFleet';
@@ -25,8 +25,8 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
 });
 
 const grp = (over: Partial<FleetGroup> = {}): FleetGroup => ({
-  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: 'claude',
-  stranded: 0, archived: [], ...over,
+  project: 'demo', sessions: [sess()], attention: false, busy: 0, unseen: 0, pin: { state: 'shared', home: 'claude' },
+  stranded: 0, archived: [], elsewhere: [], ...over,
 });
 
 describe('uniform shape', () => {
@@ -50,6 +50,13 @@ describe('uniform shape', () => {
     const g = grp({ sessions: [sess(), sess({ id: 'b', workspace: 'still-cove' })] });
     render(<ProjectCard group={g} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('2')).toBeInTheDocument();
+  });
+
+  it('renders NO pin chip on an empty card — nothing is pinned and nothing disagrees', () => {
+    const { container } = render(
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-card-pin')).toBeNull();
+    expect(screen.getByText('demo')).toBeInTheDocument();
   });
 });
 
@@ -118,17 +125,17 @@ describe('the + button', () => {
 
 describe('pinned account', () => {
   it('shows the account the project is pinned to', () => {
-    render(<ProjectCard group={grp({ pin: 'claude-corp' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude-corp' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByText('team·b')).toBeInTheDocument();
   });
 
   it('says "mixed" when the sessions disagree rather than picking one', () => {
-    render(<ProjectCard group={grp({ pin: null })} onOpen={() => {}} onActions={() => {}} />);
+    render(<ProjectCard group={grp({ pin: { state: 'mixed' } })} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.getByText('mixed')).toBeInTheDocument();
   });
 
   it('names the pin for assistive tech — a bare label reads as decoration', () => {
-    render(<ProjectCard group={grp({ pin: 'claude' })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
+    render(<ProjectCard group={grp({ pin: { state: 'shared', home: 'claude' } })} onOpen={() => {}} onActions={() => {}} roster={TEST_ROSTER} />);
     expect(screen.getByLabelText('pinned to team·max')).toBeInTheDocument();
   });
 });
@@ -224,7 +231,7 @@ describe('status owns the perimeter only for attention', () => {
     // gone now — `bucket` is the one field both `group.busy` and the row's
     // own word read — so this is structurally impossible rather than merely
     // untested; the assertions below are the same ones that caught it.
-    const [g] = groupFleet([sess({ bucket: 'attention' })]);
+    const [g] = groupFleet([sess({ bucket: 'attention' })], []);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('working')).toBeNull();
@@ -239,7 +246,7 @@ describe('status owns the perimeter only for attention', () => {
     const [g] = groupFleet([
       sess({ bucket: 'attention' }),
       sess({ id: 'demo-still-cove', workspace: 'still-cove', bucket: 'working' }),
-    ]);
+    ], []);
     const { rerender } = render(
       <ProjectCard collapsed group={g!} onOpen={() => {}} onActions={() => {}} />);
     expect(screen.queryByText('2 working')).toBeNull();
@@ -752,12 +759,70 @@ describe('route-owned pool handoff to session rows', () => {
   });
 });
 
+// Task 4 fix round 1 (review finding, Important): after the key flip a MOVED
+// row (`s.project !== group.project`) must be judged against ITS OWN
+// project's pool, never the card's — `~/.cc-sessions/pools/<project>` is
+// keyed by the session's own project, and a card's `placement`/`pool` is one
+// `/api/projects` read for `group.project` alone.
+describe('a moved row is judged against its OWN project\'s pool, never the card\'s (Task 4 fix round 1)', () => {
+  // The card (`demo`) is tagged pool-a — DIFFERENT from the moved row's own
+  // project (`beta`, tagged pool-b via `poolFor`), so a card-pool judgment and
+  // an own-project judgment disagree in both directions these two cases probe.
+  const cardPlacement: ProjectPlacementRead = {
+    kind: 'measured',
+    pool: { state: 'tagged', name: 'pool-a' },
+    placement: { kind: 'unmeasurable' },
+  };
+  const poolFor = (project: string): ProjectPoolWire | null =>
+    project === 'beta' ? { state: 'tagged', name: 'pool-b' } : null;
+  const moved = () => sess({
+    id: 'beta-still-cove', project: 'beta', boardProject: 'demo',
+    wrapper: 'claude2', home: 'claude2', workspace: 'still-cove',
+  });
+
+  it('no off-pool label when the moved row\'s account matches ITS OWN project\'s pool, though the card is tagged differently', () => {
+    // claude2 is in pool-b, the moved row's own project (beta) is pool-b:
+    // they agree. Judged against the CARD's pool-a instead, this would be a
+    // false off-pool warning — exactly the defect the finding named.
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
+                        poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('names the moved row\'s OWN project\'s pool when its account disagrees — never the card\'s pool', () => {
+    // claude2 is in pool-a, the moved row's own project (beta) is pool-b:
+    // they disagree, and the label must name pool-b (beta's own tag), not
+    // pool-a (the card's tag, which happens to equal the account's pool here
+    // — a judgment against the card would swallow the warning entirely).
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-a' : null }));
+    render(<ProjectCard group={grp({ sessions: [moved()] })} placement={cardPlacement}
+                        poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const account = screen.getByLabelText('running on team·alt (pool pool-a), project is pool pool-b');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+
+  it('CONTROL: a same-project row is still judged against the card\'s own pool, exactly as before', () => {
+    // group.project === s.project here (both 'demo'), so poolOf must return
+    // `pool` (the card's), never call `poolFor` at all.
+    const roster = TEST_ROSTER.map((a) => ({ ...a, pool: a.id === 'claude2' ? 'pool-b' : null }));
+    render(<ProjectCard group={grp({ sessions: [sess({ wrapper: 'claude2', home: 'claude2' })] })}
+                        placement={cardPlacement} poolFor={poolFor} roster={roster}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const account = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(account).toHaveAttribute('data-offpool', 'true');
+  });
+});
+
 describe('the stranded cell', () => {
   it('does not surface a stranded aggregate for a sole dead marker-bearing row', () => {
     const marker = { at: 1, reason: 'no account in pool pool-a can take it' };
     const [group] = groupFleet([
       sess({ status: 'dead', bucket: 'dead', stranded: marker }),
-    ]);
+    ], []);
     render(<ProjectCard group={group!} onOpen={() => {}} onActions={() => {}} />);
 
     expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
@@ -1108,6 +1173,55 @@ describe('the orphan worker says which programme it belongs to', () => {
     expect(marker).not.toBeNull();
     expect(marker!.textContent).toContain('home other');
   });
+
+  it('says the coordinator is GONE when the fleet measures it dead, and names the run board', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const deadCoord = sess({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN} frameSeen
+                   coordOf={(id) => (id === 'off-card-coordinator' ? deadCoord : null)}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('dead');
+    expect(marker.getAttribute('title')).toContain('reclaim');
+    // IN THE TEXT as well (final fix round). `title` and `data-presence` are
+    // both invisible on touch, and this board is mobile-first, so the one
+    // measured fact that changes what the operator should do reached only a
+    // laptop.
+    expect(marker.textContent).toContain('coordinator gone');
+    expect(marker.tagName).toBe('DIV');                       // still a sibling, still not a control
+  });
+
+  it('claims nothing about a coordinator the frame has not measured', () => {
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('unknown');
+    expect(marker.getAttribute('title')).not.toContain('reclaim');
+    // The CONTROL for the text half above: an unmeasured coordinator says
+    // nothing in the sentence either, so the words are not free decoration on
+    // every orphan marker.
+    expect(marker.textContent).not.toContain('coordinator gone');
+  });
+
+  it('reads dead as unknown while frameSeen is not passed — D-1138\'s half: a dead session alone is not enough', () => {
+    // `coordOf` alone is not the whole guard: without `frameSeen` the DEFAULT
+    // (false) governs, and `coordPresence` treats an unseen frame as
+    // "nothing measured" regardless of what the looked-up session says —
+    // otherwise a coordinator merely absent from a STALE fleet array would
+    // read as gone.
+    const g = grp({ sessions: [sess(), sess({ id: 'demo-still-cove', workspace: 'still-cove' })] });
+    const deadCoord = sess({ id: 'off-card-coordinator', project: 'elsewhere', status: 'dead', bucket: 'dead', lifecycle: 'orphan' });
+    const { container } = render(
+      <ProjectCard group={g} runs={[orphanRun]} nowMs={FROZEN}
+                   coordOf={() => deadCoord}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const marker = container.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('unknown');
+    expect(marker.getAttribute('title')).not.toContain('reclaim');
+  });
 });
 
 // ── cross-repo wave 2: the home card knows where its waves went ──────────────
@@ -1195,5 +1309,64 @@ describe('the home card lists the waves running abroad', () => {
       <ProjectCard group={grp({ sessions: [sess(), worker] })} runs={[]} abroad={[settledAway]} nowMs={FROZEN}
                    onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelector('.proj-nest')).toBeNull();
+  });
+
+  it('renders the elsewhere lines as text with no control, and nothing when nothing moved', () => {
+    const { container, rerender } = render(
+      <ProjectCard group={grp({ sessions: [], pin: { state: 'empty' }, elsewhere: [{ project: 'intake', count: 2 }] })}
+                   onOpen={() => {}} onActions={() => {}} />);
+    const line = container.querySelector('.proj-elsewhere-line')!;
+    expect(line.textContent).toBe('2 workspaces under intake');
+    expect(container.querySelectorAll('.proj-elsewhere button, .proj-elsewhere a')).toHaveLength(0);
+    rerender(<ProjectCard group={grp()} onOpen={() => {}} onActions={() => {}} />);
+    expect(container.querySelector('.proj-elsewhere')).toBeNull();
+  });
+});
+
+describe('the repo label appears only where the card stops implying it (spec §6, Task 6)', () => {
+  const repos: Record<string, ProjectRepoWire> = {
+    demo: { state: 'named', slug: 'o/demo' },
+    'custom-tools': { state: 'named', slug: 'o/custom-tools' },
+    twin: { state: 'named', slug: 'o/demo' },          // a second project on the SAME repo
+    dark: { state: 'unmeasured' },
+  };
+  const repoFor = (p: string): ProjectRepoWire | undefined => repos[p];
+  const moved = sess({ id: 'custom-tools-still-river', project: 'custom-tools', workspace: 'still-river', boardProject: 'demo' });
+
+  it('labels a row whose OWN project\'s repo differs from the card\'s', () => {
+    render(<ProjectCard group={grp({ sessions: [sess(), moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
+    expect(document.querySelectorAll('.sess-repo')).toHaveLength(1);
+  });
+  it('does NOT label a moved row whose repo equals the card\'s — the name differs, the repo does not', () => {
+    const twinRow = sess({ id: 'twin-still-river', project: 'twin', workspace: 'still-river', boardProject: 'demo' });
+    render(<ProjectCard group={grp({ sessions: [sess(), twinRow] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+  });
+  it('does NOT label when either side is unmeasured or absent — no claim over a timeout', () => {
+    const darkRow = sess({ id: 'dark-still-river', project: 'dark', workspace: 'still-river', boardProject: 'demo' });
+    render(<ProjectCard group={grp({ sessions: [sess(), darkRow] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+    cleanup();
+    render(<ProjectCard group={grp({ sessions: [sess(), moved] })} onOpen={() => {}} onActions={() => {}} />);   // no repoFor: an older server
+    expect(document.querySelector('.sess-repo')).toBeNull();
+  });
+  it('does NOT label when the CARD\'s own project is unmeasured — even though the moved row\'s repo is named', () => {
+    // The guard's OTHER side: `dark`'s row above proves an unmeasured ROW
+    // stays silent, but `own` was already null there regardless of
+    // `cardRepo`'s own nullness — a mutation dropping `cardRepo !== null`
+    // passed that case for free. This is the card own project being
+    // unmeasured while the DISPLACED row's repo is genuinely named, which
+    // only the `cardRepo !== null` half of the guard blocks (fix round 1,
+    // Important 1 — was a throwaway probe in the first round, now pinned).
+    const ownDark = sess({ id: 'dark-quiet-mesa', project: 'dark' });
+    render(<ProjectCard group={grp({ project: 'dark', sessions: [ownDark, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+  });
+  it('two colliding slugs on one card are two distinct accessible names', () => {
+    const own = sess({ id: 'demo-still-river', workspace: 'still-river' });
+    render(<ProjectCard group={grp({ sessions: [own, moved] })} repoFor={repoFor} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: 'still-river' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /still-river.*o\/custom-tools/ })).toBeInTheDocument();
   });
 });

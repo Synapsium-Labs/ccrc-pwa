@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8aa0c8b641553762c1381a839fbe2c65185e59ec56d73f891b75aecfecdf938e
+# ccrc:generated 1 sha256=8ad00a676f3b8338eb713a10044ffaabb3462fdf116affe02f00a75923512893
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1212,6 +1212,31 @@ RESUME_REDRIVE_MAX_AGE_MS=""
 REDRIVE_WAIT_S=20               # D-2231 — seconds _redrive_after_spawn gives Claude Code's own re-drive before typing one
 REDRIVE_TAIL_LINES=60           # physical transcript lines the stall detector reads (`tail -n`); the state machine additionally IGNORES attachment/system/local-command rows inside that window, but they still consume lines of it
 STALE_PRESS_COOLDOWN=120        # D-2361 — seconds between Enter presses on Claude Code's "usage limit has reset · press enter to continue" line
+# The narrowest pane width at which THIS FILE'S phrase-matching readers may be
+# trusted (spec §6.3). Below it `_pane_measurable` answers 1 and every site that
+# would type stands down: below this floor a carrier phrase cannot be RELIED ON
+# to sit on one line, and a wrapped phrase reads as SILENCE to grep, which is
+# the 2026-09-08 five-session incident's shape. (NOT "a narrow pane wraps `esc
+# to interrupt` between words", which this line said until 2026-09-16 and which
+# is false at every width from 70 to 119: the floor is the WIDEST carrier's own
+# width plus a margin, derived below, never any one phrase's length.)
+#
+# DERIVED with `wrap-ansi@9` over Claude Code's known status-line carriers at
+# widths 40-220, run TWICE — once as hard:false and once as trim:false,
+# hard:true (Ink <Text>'s documented default for wrap="wrap", which this tree
+# cannot itself confirm Claude Code's bundled Ink major calls) — because both
+# option sets agree on every carrier, so the floor below does not depend on
+# which one Claude Code's Ink actually uses. Under both, the widest carrier
+# needs 69 columns and the widest "· <segment>" is 37, so 120 leaves room for
+# one more segment and still keeps a 171-column desktop measurable. The major
+# version is load-bearing: wrap-ansi@10 measures 68 and 55 instead of 69 and
+# 56 on the same carriers (ambiguous-width handling of the leading `✳` glyph
+# moved), so a comment naming bare "wrap-ansi" is not reproducible.
+#
+# THE SECOND COPY of `shared/api.ts`'s READER_MIN_COLS, by construction — bash
+# cannot import TypeScript. `server/test/reader-min-cols.test.ts` holds them
+# equal; change one and change the other in the same commit.
+READER_MIN_COLS=120
 STALE_RESUME_GRACE=30            # D-2443 — seconds after a fresh $REG/<id>.stalepress stamp during which _session_hard_blocked's transcript arm stands down, so the same-tick rescue (_auto_swap_check, _tick_strand_undecidable) cannot swap out the continuation the stale-press Enter just submitted before Claude Code has appended the resumed turn's row
 TRANSCRIPT_ARM_INTERVAL=30       # D-2444 — seconds a session's positive or negative transcript verdict is reused; the final review measured an uncached arm at ~36 ms, ~14x the pane classifier and mostly in _transcript_path, so this bounds the full scan to once per interval while each positive still rechecks the draft
 # Proactive auto-/compact: when an IDLE session's context passes ITS threshold, send /compact
@@ -2372,8 +2397,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 153
-# invocations across 129 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 154
+# invocations across 130 non-comment lines.
 #
 # THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
 # archive fields, so the next reader is not hunting a refactor for the +2.
@@ -3121,13 +3146,20 @@ _reg_purge() {   # id -> rm -f every "$REG/$id.<field>" registry file for id
   # #70 added `compactnote` and `compactskip` while this round rewrote the
   # paragraph around them, so both sides were right and the cardinal belonged
   # to neither. 34 + 2 = 36, re-measured on the merged file rather than added
-  # up — the same discipline this paragraph is about.
-  # The 36: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
+  # up — the same discipline this paragraph is about. The drawer wave then added
+  # `stalenarrownote` and `swapnarrownote` (`_pane_narrow_note`'s per-site log
+  # floors): 38, by that same addition — NOT a fresh census of every
+  # per-session field, which this list still is not. `ROUTE_FIELDS` (`class`,
+  # `effort`, `subagent`, `workflow`, `compact`, `degraded`, `inert`) and
+  # `$REG/<id>.stalepress`/`.tscan` are all real per-session fields this list
+  # omits; the gap is pre-existing, not new, and this paragraph's count tracks
+  # only the additions named above against the last stated total.
+  # The 38: `archived`, `archivedreason`, `archivemanifest`, `base`, `branch`,
   # `compactnote`, `compactskip`, `crosspool`, `hold`, `home`, `hookstate`, `lastcompact`, `lastswap`,
   # `pool`, `prcheckedat`, `prhistory`, `prnumber`, `prphase`, `project`, `rc`,
-  # `reaping`, `setup`, `spawn`, `started`, `stopped`, `stranded`,
+  # `reaping`, `setup`, `spawn`, `stalenarrownote`, `started`, `stopped`, `stranded`,
   # `strandnotify`, `substrate`, `supervised`, `svcfailed`, `swapblocked`,
-  # `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
+  # `swapnarrownote`, `tickstuck`, `uuid`, `workdir`, `workspace`, `wrapper`. Note that `pool` here is the per-session
   # CANDIDATE LIST `_pool_for` reads, NOT an account pool name — two meanings
   # of one word in one file, disclosed rather than renamed. That is a WIDER
   # set than `_reg_set`/`_reg_get`: the inventory
@@ -6635,7 +6667,35 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   _reg_claim "$id"
   _ws_supervise "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 JOINS 3/4/5 HERE, and it is the SAME SENTENCE this `if` already carries
+  # — "the session exists, is claimed, is supervised, and did not confirm its
+  # TUI". rc 6 says the startup gates STOOD DOWN: the session was there —
+  # `_accept_first_run_prompts` measures the width only BELOW its liveness
+  # probe, so a session that never came up still earns 3 — but its pane measured
+  # under READER_MIN_COLS, so no gate was read and no live marker was confirmed.
+  # That is not "the spawn failed", and OUTSIDE the set it is the exact hazard the block
+  # above `_spawn_start` measures: a code no caller tests, printing a SUCCESS
+  # line over a spawn nothing confirmed.
+  #
+  # THE EVIDENCE SENTENCE THAT STOOD HERE DESCRIBED THE PRE-FIX TREE, and it
+  # contradicted the ordering paragraph directly above it. It said that in a
+  # fixture whose tmux refuses every verb `ccd ws-add` answers rc 6. It does
+  # not, and cannot, now that rc 6 sits BELOW the liveness probe. Re-measured
+  # 2026-09-16, by sourcing this file into a fixture HOME and calling
+  # `_accept_first_run_prompts cc-demo 0` under `tmux() { return 1; }`: the
+  # answer is rc 3 — the `has-session` debounce refuses before the width is
+  # ever queried. `ccdargv-dec-parity.test.ts`'s own ws-add probe answers 3 for
+  # the same reason (measured through that file's harness, same date). rc 6
+  # needs a LIVE `has-session` AND a narrow pane together, which only a steered
+  # fixture produces (`ccd-reader-standdown.test.ts`'s rc-6 describe).
+  #
+  # THE ENROLMENT IS STILL NECESSARY, and it is argued from the code rather
+  # than from that fixture: `_accept_first_run_prompts` can return 6, this `if`
+  # is the only thing between a non-zero settle and the `workspace <id> …`
+  # success line below, and a 6 outside the set would print it.
+  # `_spawn_settle`'s own `6)` arm names the remedy; this rung is what keeps
+  # the verb from claiming otherwise.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: ws-add spawn failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -7614,6 +7674,7 @@ ws-rename
 ws-restore
 ws-rm
 version
+win-size
 ls
 EOF
   # `stop-surface` is a CAPABILITY token, not a dispatchable verb — `ccd
@@ -7734,6 +7795,16 @@ EOF
   # ask for a live change; one that does not writes the record and lets the next
   # settle apply it.
   echo route-apply-v1
+  # The capability token for wave 2 of the terminal-drawer program, and it is
+  # the proof of BOTH halves of that wave rather than of the verb alone: the
+  # `win-size` verb and `_pane_measurable`'s stand-down at every typing site
+  # ship in ONE ccd inode, so a server that sees this token knows the readers on
+  # this box already yield to a narrow pane. The server gates the un-pin on
+  # `capSupported(state,'win-size-v1')` — null → REFUSE — never `verbSupported`,
+  # whose null → PERMIT default is right for verbs that have always existed and
+  # wrong for one that never did. An un-upgraded agent simply leaves the window
+  # pinned: wave 1 behaviour, no fallback path, no second mechanism.
+  echo win-size-v1
 }
 
 cmd_version() {   # what THIS box runs, per the deploy's own stamp — never a guess.
@@ -8078,6 +8149,138 @@ cmd_coord_pause() {   # ccd coord-pause --state on|off — raise or lower the
       rm -f -- "$marker" || die "could not clear the pause marker — the fleet is STILL paused"
     fi
     echo "running"
+  fi
+}
+
+cmd_win_size() {   # ccd win-size --session <id> --mode smallest|canonical — pin or un-pin ONE session's window.
+  # THE FLEET-CONTROL VERB the terminal drawer un-pins through (spec §6.1). Two
+  # modes and nothing else:
+  #   • smallest  — `set-option window-size smallest` UN-LATCHES `manual` (F3);
+  #     tmux then sizes the window to the NARROWEST attached client (F5):
+  #     deterministic, keystroke-stable, and self-healing when that client
+  #     leaves. NEVER `latest` — F4 measured a keystroke-driven reflow flip at
+  #     +6 MB tmux RSS per flip, never returned, shedding 50 history lines per
+  #     flip from about the seventeenth. THAT IS THIS VERB'S RULE, NOT THIS
+  #     FILE'S, and the two read as one without this clause: `_spawn_start`
+  #     sets `window-size latest` on every session it creates (the only other
+  #     `window-size` write in this file — measured), and the server's
+  #     `resize-window` pin then overrides it. What is refused here is reaching
+  #     back for `latest` when UN-pinning a window that was pinned.
+  #   • canonical — `resize-window -x 220 -y 50` restores the 220x50 grid
+  #     `_spawn_start` creates with (`_tmux_new_session … -x 220 -y 50`) and
+  #     latches `window-size manual` (F3), which IS the pinned state §3 wants.
+  #     THAT LATCH IS THE SERVER'S PIN, NOT SPAWN'S STATE, and this comment said
+  #     otherwise until fix round 1: `_spawn_start` follows its 220x50 create
+  #     with `set-option … window-size latest`, so what this arm restores is the
+  #     state `exec.ts`'s `resize-window` leaves, not the state a fresh session
+  #     is in. The 220x50 half was always true; the `manual` half was not.
+  #     The server does NOT depend on this arm: its own pin is the already-granted
+  #     `tmux resize-window`, which works against an agent of any age. Its callers
+  #     are an operator typing the verb on the box and the agent's `win-size`
+  #     grant — NOT ccd itself, which is what this line claimed until fix round 2.
+  #     Measured 2026-09-16: `grep -n 'cmd_win_size' ccd/ccd` finds three lines —
+  #     this definition, the dispatcher's own `win-size)` arm, and this
+  #     sentence's own quotation of the command — and no fourth. No ccd
+  #     function calls it.
+  #
+  # EXACT-MATCH TARGETS (`=`), NEVER A BARE `cc-<id>`, AND NEVER GLOBAL. Two
+  # separate hazards, and the first one convicted the first version of this verb
+  # (D-2780). Both measured on tmux 3.4 over a PRIVATE `-L` socket carrying
+  # `cc-demo-quiet-basin` and `cc-other-session`:
+  #   • `-t` IS AN fnmatch PATTERN resolved to a unique match, not a session
+  #     name. `has-session -t cc-demo` -> rc 0; `set-option -t cc-demo
+  #     window-size smallest` -> rc 0 and `cc-demo-quiet-basin` takes it;
+  #     `resize-window -t cc-demo -x 200 -y 40` -> rc 0 and that real session
+  #     becomes 200x40; `-t 'cc-oth*'` -> rc 0 and `cc-other-session` takes it.
+  #     THE SHAPE, AND DELIBERATELY NO NAMES: live session ids on this fleet
+  #     share long prefixes and differ only in a final syllable, so an id that
+  #     names NO session is routinely a unique PREFIX of one that is live —
+  #     which is the whole hazard. (An earlier draft gave a concrete pair here
+  #     as a live-box measurement. It was fabricated and wrapper-shaped, not
+  #     session-shaped, and this file ships publicly: this illustration carries
+  #     no session or account name, because a public-bound file should not
+  #     embed the fleet's roster — not a claim that no shipped source ever
+  #     does (`_gpt_enabled() { _account_ok gpt; }` names one, measured).) So
+  #     the liveness refusal below CANNOT FIRE for a well-formed id that is a
+  #     unique prefix of a live session, and the verb would mutate a window
+  #     nobody named. The id class does not help: the hazard is built from the
+  #     characters it already admits.
+  #   • `set-option` with no `-t` AT ALL mutates ONE WINDOW NOBODY NAMED —
+  #     whichever session tmux calls current. The claim that stood here was that
+  #     it "writes the SERVER-WIDE default and re-sizes every live session at
+  #     once"; both halves are false. Re-measured 2026-09-16, tmux 3.4, private
+  #     `-L` socket, three detached sessions: `tmux set-option window-size
+  #     smallest` → rc 0; `show-options -g window-size` STILL reads `latest`, so
+  #     the server default is NOT written; the two other sessions keep
+  #     `window-size latest`; and NO session is resized. Exactly one window took
+  #     the option. That is the same class the `=` anchor above closes — a
+  #     mutation of a target nobody named — which is reason enough to always
+  #     pass `-t`, and it is the reason this verb states rather than the one it
+  #     used to.
+  # `=` is tmux's exact-match prefix and closes the first: `=cc-demo` -> rc 1
+  # `can't find session`, `=cc-demo-quiet-basin` -> rc 0, `=cc-oth*:` -> rc 1
+  # `no such window`.
+  #
+  # THE TRAILING `:` IS LOAD-BEARING, NOT COSMETIC. The sentence this replaces
+  # said `resize-window` "accepts both forms" and that the colon was spelled
+  # "anyway", for tidiness. That was measured against an EXACT name, where both
+  # spellings are indeed safe — and it is exactly the case D-2780 is not about.
+  # Re-measured 2026-09-16 against a PREFIX, tmux 3.4, private `-L` socket
+  # holding ONLY `cc-demo-quiet-basin`:
+  #
+  #     target                      has-session  set-option         resize-window
+  #     `=cc-demo`   (prefix)       rc 1         rc 1 no such win   rc 0  <- RESIZED cc-demo-quiet-basin
+  #     `=cc-demo:`  (prefix)       rc 1         rc 1 no such win   rc 1 can't find session
+  #     `=cc-demo-quiet-basin`      rc 0         rc 1 no such win   rc 0
+  #     `=cc-demo-quiet-basin:`     rc 0         rc 0               rc 0
+  #
+  # For a WINDOW target, `=` only binds when the colon is present. Drop the
+  # colon from the `resize-window` arm below and D-2780 is LIVE AGAIN: a
+  # validated id that is a unique prefix of a live session resizes THAT session,
+  # at rc 0, silently. `set-option` needs the colon against an exact name too
+  # (row 3), so the colon is not optional on either mutating arm — it is the
+  # anchor, not its spelling. `has-session` takes a SESSION target and gets
+  # `=$t` with no colon; it is the one command for which `=` alone binds.
+  #
+  # `aggressive-resize` is deliberately left alone — measured a no-op for a
+  # one-window session, which every cc-* session is.
+  [[ $# -eq 4 && $1 == --session && $3 == --mode ]] \
+    || die "usage: ccd win-size --session <id> --mode smallest|canonical"
+  local id="$2" mode="$4" t
+  # BEFORE ANY TARGET IS BUILT FROM IT. `cc-$id` is handed to tmux, which hands
+  # the target on to its own parser; `shared/roster.ts`'s ID_RE is where every
+  # rostered id comes from, and it is the class `cmd_account_pane` validates
+  # against for this same reason. NOT the looser `^[A-Za-z0-9._-]+$` most
+  # workspace verbs use: this one is reached from a route the PWA hits.
+  #
+  # WHAT IT EXCLUDES IS A TMUX TARGET ALPHABET, not just a shell one, and no
+  # part of this verb passes through a shell. Measured on the same private
+  # socket: `*` and `?` are fnmatch (`-t 'cc-oth*'` and `-t 'cc-oth?r-session'`
+  # both rc 0), `:` is session:window (`-t cc-other-session:0` rc 0), `.` is
+  # window.pane, and `=`/`$`/`@`/`%` are the exact-match and session/window/pane
+  # id sigils (`-t '$0'` rc 0). An allow-list refuses them wherever they appear,
+  # which is stronger than the positions each is actually special in.
+  [[ "$id" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || die "bad id: $id"
+  # The vocabulary check runs BEFORE tmux is touched at all, so an unknown mode
+  # runs nothing — and it is its OWN sentence, not the usage line: the caller
+  # got the shape right and the word wrong.
+  case "$mode" in
+    smallest|canonical) ;;
+    *) die "bad mode: $mode (want smallest|canonical)" ;;
+  esac
+  t=$(_tmux "$id")
+  tmux has-session -t "=$t" 2>/dev/null || die "no such session: $t"
+  # `set -uo pipefail` with NO `-e`: an unguarded failure would fall straight
+  # through to the echo and report a size change that did not happen. Wave 3's
+  # `sizer.unpin` keys on this exit code to tell 'ok' from 'failed'.
+  if [[ "$mode" == smallest ]]; then
+    tmux set-option -t "=$t:" window-size smallest \
+      || die "could not un-pin $t — the window is STILL at its pinned size"
+    echo "smallest"
+  else
+    tmux resize-window -t "=$t:" -x 220 -y 50 \
+      || die "could not pin $t — the window is NOT at the canonical grid"
+    echo "canonical"
   fi
 }
 
@@ -9455,7 +9658,8 @@ cmd_ws_restore() {   # ccd ws-restore --session <id> — undo an archive entirel
       dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
     return "$rc"; }
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 too — argued at `cmd_ws_add`'s copy of this `if`.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     _lc_fail restore "$id" "" spawn-failed \
       "the archive stamps were removed but $id did not settle (spawn rc $rc)" \
       dec.surface "$lc_surface" dec.actor "$lc_actor" dec.reason "$lc_reason"
@@ -15702,12 +15906,101 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
   return 0
 }
 
-_pane_auto_continue_armed() {   # pane text -> success iff Claude Code is waiting out a limit on its own (D-2229).
+_pane_measurable() {   # id -> rc 0 when cc-<id>'s ACTIVE pane is at least READER_MIN_COLS wide, else 1.
+  # THE STAND-DOWN GATE (spec §6.3). Every site below that decides to TYPE on
+  # the strength of a phrase match calls this first. WHAT THE WIDTH BUYS, said
+  # as the constant says it and no wider: READER_MIN_COLS is the width the
+  # CARRIERS THEMSELVES NEED (the widest measures 69 columns under both
+  # wrap-ansi@9 option sets) plus a margin — see `READER_MIN_COLS` above, which
+  # is careful NOT to assert what Claude Code's bundled Ink does. Below the
+  # floor a carrier cannot be RELIED ON to sit on one line — not "cannot sit on
+  # one line", which is false from 70 to 119 — and once one IS broken, `grep`
+  # cannot match across a newline it is never presented (F11) — so a busy pane reads as
+  # SILENCE and the reader fires into a running turn. That is the shape of the
+  # 2026-09-08 five-session incident.
+  #
+  # THE ACTIVE ROW, NOT ROW 0 (F7). `list-panes -t <session>` lists every pane
+  # of the current window while `capture-pane -t <session>` reads the ACTIVE
+  # one, so measuring row 0 on a split window measures a pane the readers never
+  # look at — worse than no guard, because it claims to have measured.
+  #
+  # ONE rc FOR FOUR CONDITIONS, DELIBERATELY, and it is not an overloaded null:
+  # every caller makes exactly ONE decision from this answer — stand down, or
+  # proceed — and "narrow", "tmux would not answer", "no active row" and "the
+  # width is not a number" are the same answer to that question. An unmeasured
+  # pane is not idle.
+  #
+  # THE DISTINCTION THAT IS PRESERVED is the one callers act on differently:
+  # `_pane_auto_continue_armed`, defined below in this same file, INVERTS — it
+  # HOLDS rather than releases, answering ARMED on an unmeasurable pane, because
+  # a cancelled continuation cannot be un-cancelled. One rc, two directions,
+  # chosen by the caller and never collapsed here. (A line-count locator stood
+  # here once. It survived five commits, broke at the sixth when a new function
+  # was inserted between the two, moved again after that, and was caught only by
+  # review — naming the function instead of a distance is what keeps this claim
+  # from rotting the same way again.)
+  local rows w
+  rows=$(tmux list-panes -t "$(_tmux "$1")" -F '#{pane_active} #{pane_width}' 2>/dev/null) || return 1
+  w=$(awk '$1 == 1 { print $2; exit }' <<<"$rows")
+  # Regex before the arithmetic test: `$w` is bytes off tmux's stdout.
+  [[ "$w" =~ ^[0-9]+$ ]] || return 1
+  (( w >= READER_MIN_COLS ))
+}
+
+_pane_narrow_note() {   # id site — say ONCE per COMPACT_NOTE_FLOOR that a tick stood down BLIND.
+  # WHY A NOTE AT ALL, AND WHY THESE TWO SITES. §6.3's stand-down was silent at
+  # exactly the two places where silence costs the most. `_auto_swap_check`'s
+  # guard is the FIRST statement after its locals, so on a narrow pane the whole
+  # tick returns: no rescue of a limit-blocked session — and no strand mark
+  # either, because `_tick_strand_undecidable`'s only call sites are BELOW that
+  # guard. A session that wedged while a drawer was open was therefore neither
+  # rescued nor flagged, with nothing written anywhere; and `ccd win-size --mode
+  # smallest` is precisely what creates that pane. `_auto_stale_check`'s guard
+  # is the same silence one rung earlier. Every OTHER §6.3 stand-down already
+  # speaks — `_compact_note … pane-narrow`, `_accept_first_run_prompts`' rc 6 and
+  # `_spawn_settle`'s sentence for it, `_inject_spawn_effort`'s stderr, and
+  # `_redrive_after_spawn`'s own `$REG/swap.log` line, whose shape this copies.
+  #
+  # FLOORED, AND THE FLOOR IS NOT OPTIONAL. This runs on the 5s supervise tick,
+  # per session. Unfloored that is 12 lines a minute per session and ~240 across
+  # the fleet into `$REG/swap.log` — an append-only file a human reads. That is
+  # D-2013's own measurement and the reason COMPACT_NOTE_FLOOR exists, so the
+  # floor is REUSED rather than re-chosen: same file, same tick, same budget of
+  # one line per session per window.
+  #
+  # ONE ANCHOR PER SITE, NOT ONE SHARED ANCHOR. `_auto_stale_check` runs BEFORE
+  # `_auto_swap_check` on the same tick, so a shared anchor would let the stale
+  # lane's line silence the swap lane's for the whole window — and the swap lane
+  # is the consequential one. The field is a bare epoch, `_compact_note`'s
+  # `compactnote` half and nothing else: WHEN WE LAST SAID IT OUT LOUD. There is
+  # no marker half, because there is only ever one reason.
+  local id="$1" site="$2" now said
+  now=$(date +%s)
+  # THE DIGIT VALIDATION IS FIRST inside the same `[[ ]]`, so `&&` short-circuits
+  # before the arithmetic ever sees a torn or hand-edited field — D-299's class,
+  # the shape `_compact_note` and `_strand_mark` both use.
+  #
+  # `said`, NOT `nts`, AND THE NAME IS LOAD-BEARING. With `nts` this line is
+  # BYTE-IDENTICAL to `_compact_note`'s floor — same constant, same variable —
+  # and `ccd-arith-containment.test.ts`'s structural sweep identifies a site by
+  # the fragments on its line, so two identical lines make that file's
+  # `toHaveLength(1)` red on a row that is not the one that changed. Measured
+  # when this function first landed. A distinct operand name is what lets the
+  # sweep enumerate this as its OWN site, which it now does.
+  said=$(_reg_get "$id" "${site}narrownote")
+  [[ "$said" =~ ^[0-9]+$ && $((now - said)) -lt "$COMPACT_NOTE_FLOOR" ]] && return 0
+  _reg_set "$id" "${site}narrownote" "$now"
+  echo "$(date '+%F %T') $site-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"
+  return 0
+}
+
+_pane_auto_continue_armed() {   # pane text [id] -> success iff Claude Code is waiting out a limit on its own (D-2229).
   # "Usage limit reached · continuing automatically at HH:MM · esc or type to cancel" (and its
   # "shortly"/"when it resets" variants) is Claude Code's OWN recovery, an in-memory timer that
   # ANY keystroke cancels. The rescue arm deliberately ignores it (a swap that re-drives beats
   # waiting, ruling R1); the three sites that TYPE into a pane — the compactor, the /effort
   # injection, and the fallback re-drive — must not.
+  [[ -n "${2:-}" ]] && ! _pane_measurable "$2" && return 0   # unmeasurable -> ARMED: a cancelled continuation cannot be un-cancelled (§6.3)
   grep -qiE "continuing automatically|continuing shortly" <<<"$1"
 }
 
@@ -15750,6 +16043,17 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
   local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
+  # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
+  # Both paths into this function are already below `_auto_swap_check`'s own
+  # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
+  # sites are inside `_auto_swap_check` too. So on a narrow pane the tick has
+  # returned before this line is reached, and the cost lands on WIDE panes — the
+  # steady state — as a second `list-panes` + `awk` pair per session per tick.
+  # Kept anyway: this is a guard site in its own right, and a future caller that
+  # does not come through that tick must not inherit a verdict off an unmeasured
+  # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
+  # like to a boolean caller.
+  _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
   _pane_hard_blocked "$pane" && return 0
   grep -q "esc to interrupt" <<<"$pane" && return 1
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
@@ -15790,6 +16094,7 @@ _auto_stale_check() {   # id — D-2360: press Enter for Claude Code when its ow
   # every five seconds (D-2361).
   local id="$1" t pane now last
   t=$(_tmux "$id")
+  _pane_measurable "$id" || { _pane_narrow_note "$id" stale; return 0; }   # unmeasurable -> no Enter (§6.3): a wrapped "esc to interrupt" reads as idle
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   [[ -n "$pane" ]] || return 0
   _pane_limit_stale "$pane" || return 0
@@ -15879,6 +16184,15 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   #   lost) swaps immediately; any other move waits for a clean turn boundary.
   local id="$1" wrapper home now last pane target hard_blocked="" blocked bts
   local project pps prc prjrc crossed="" ctrc wrc hrc strc stuck="" new aff_verb=auto-home
+  # §6.3: a relocation is a restart that re-drives, and the only thing standing
+  # between it and a running turn is the `esc to interrupt` match further down.
+  #
+  # AND IT LEAVES A TRACE, because this guard is the first statement after the
+  # locals: everything this tick does — the rescue AND `_tick_strand_undecidable`,
+  # whose only call sites are below — is skipped here, so without the note a
+  # wedged session on a narrow pane is neither rescued nor marked, and nothing
+  # anywhere says why. `_pane_narrow_note` carries the floor; see its header.
+  _pane_measurable "$id" || { _pane_narrow_note "$id" swap; return 0; }
   # A TICK THAT CANNOT MEASURE THIS ROW'S CURRENT ACCOUNT DECIDES NOTHING
   # (C1, D-1992). `_reg_get` folds ABSENT, UNREADABLE and EMPTY into one `""`,
   # and EVERY decision below consumes this value: `_pool_ok "$wrapper"`, the
@@ -16903,6 +17217,17 @@ _idle_for_keystroke() {   # id pane ctxnote — 0 iff this session is at a clean
   # two callers, and neither has to know the other's vocabulary.
   local id="$1" pane="$2" ctxnote="${3:-}" now wrapper spid sf st sua t
   KS_WHY=""; KS_DETAIL=""
+  # §6.3 STAND-DOWN, AND THE MERGE IS WHAT PUT IT HERE. Wave 2 guarded every function
+  # that decided to TYPE on the strength of a phrase match; at that point the `esc to
+  # interrupt` grep below lived in `_auto_compact_check` and its guard sat there. Routing
+  # slice 4 EXTRACTED this function, so the phrase read moved into shared code with three
+  # callers — `_auto_compact_check`, `cmd_route`'s `--apply` arm and `_route_apply_check`'s
+  # tick — and only the first of them carries wave 2's guard. Without this line the other
+  # two type on a wrapped phrase read as idle on a narrow pane, which is the exact defect
+  # §6.3 exists to refuse, reached through code wave 2 never saw. The guard belongs in the
+  # body that carries the phrase, which is also what `ccd-reader-standdown.test.ts`'s
+  # POPULATION census requires: a phrase-carrying function guards itself.
+  _pane_measurable "$id" || { KS_WHY=pane-narrow; KS_DETAIL="pane is under ${READER_MIN_COLS} cols; a wrapped phrase reads as idle (§6.3)"; return 1; }
   now=$(date +%s)
   # Clean idle turn boundary — same discipline as the swap soft-path (never mid-turn/subagent).
   echo "$pane" | grep -q "esc to interrupt" && { KS_WHY=mid-turn; KS_DETAIL="$ctxnote"; return 1; }
@@ -16980,12 +17305,18 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # grown past ITS threshold (the record's `compact` field, else COMPACT_THRESHOLD) so it stays lean. Non-destructive: the SessionStart(compact) hook
   # restores git/plan/handoff context (Anthropic + gpt lanes). Kill-switch: AUTOCOMPACT_DISABLE_FILE.
   #
-  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. The two gates above the pane read
-  # (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
+  # D-2013 — WHICH REFUSALS ARE NOTED, AND WHICH ARE NOT. Two of the three gates above the pane
+  # read (kill-switch, lastcompact cooldown) say nothing, and so does the below-threshold return:
   # those are the ORDINARY states of a healthy fleet and noting them would drown the interesting
   # cases. Everything from the pane read down IS noted, because each one is either "we cannot see
   # this session at all" or "this session is over its threshold and we are declining anyway" —
   # the two shapes that were silent, and the second is the one that matters.
+  #
+  # THE THIRD GATE ABOVE THE READ DOES SPEAK, and it is the exception that proves the rule:
+  # `pane-narrow` (§6.3, `_pane_measurable`) is not an ordinary state of a healthy fleet. It says
+  # this function is BLIND to the session for as long as the pane stays under READER_MIN_COLS —
+  # "we cannot see this session at all", the first of the two shapes above, reached one rung
+  # earlier than the read that used to be the first place it could be said.
   [[ -f "$AUTOCOMPACT_DISABLE_FILE" ]] && return 0
   local id="$1" now last lastswap fromswap=0 pane pct thr wrapper t
   now=$(date +%s)
@@ -17008,6 +17339,13 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   # and `post-swap` — because those are the compactor's own arithmetic and not a keystroke
   # question at all, and because keeping them between the two calls is what makes a
   # below-threshold mid-turn pane record nothing, exactly as before.
+  # §6.3 STAND-DOWN, DELIBERATELY IN THIS CALLER AND NOT IN `_pane_for_keystroke`. The merge that
+  # brought routing slice 4 extracted the pane acquisition into that shared helper, which now has
+  # three callers — this one, `cmd_route`'s `--apply` arm and `_route_apply_check`'s tick. Pushing
+  # the width guard down into it would stand those two down as well. They ARE keystroke sites and
+  # §6.3 plausibly wants them, but wave 2 never touched them and no review has seen it, so the
+  # guard stays where wave 2 put it and the extension is named for wave 3 rather than taken here.
+  _pane_measurable "$id" || { _compact_note "$id" pane-narrow "pane is under ${READER_MIN_COLS} cols; a wrapped phrase reads as idle (§6.3)"; return 0; }
   _pane_for_keystroke "$id" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
   pane="$KS_PANE"
   # `no-ctx-segment` is the THIRD condition of the pane read and it stayed behind with the
@@ -17956,6 +18294,31 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
       sleep 1
       tmux has-session -t "$t" 2>/dev/null || return 3
     fi
+    # §6.3 — THE WIDTH STAND-DOWN, AND IT SITS BELOW THE LIVENESS PROBE ON
+    # PURPOSE. `tmux list-panes -t cc-nope` exits 1, so the width query cannot
+    # tell "too narrow to read" from "never came up": ahead of the probe it
+    # answered 6 for a session that does not exist, and rc 6's sentence tells
+    # the operator to CLOSE A DRAWER while rc 3's tells them the truth and names
+    # the recovery (`clear $REG/<id>.started first`). Two conditions an operator
+    # handles differently, collapsed onto one code and one wrong sentence — the
+    # Global Constraint's own "no overloaded null at a seam". Below the probe,
+    # a dead session still earns 3 and only a LIVE, unreadable pane earns 6.
+    #
+    # NO has-session PROBE OF ITS OWN, deliberately: the block above is already
+    # the authority on liveness, and `ccd-spawn-verdict.test.ts` pins the count
+    # at exactly TWO reads per verdict (one, plus the debounce) — a third here
+    # would weaken the pin that kills the single-read mutant.
+    #
+    # MEASURED ONCE, on the first pass. The loop runs up to SPAWN_GATE_TRIES
+    # times on a healthy slow resume, and re-measuring each pass would fork a
+    # `list-panes` per iteration with no new decision behind it; the pane's
+    # width is a property of the client, not of how far the TUI has come up.
+    #
+    # rc 6 is NEW and its own code — 3/4/5 are load-bearing at four call sites
+    # plus `_supervised_start` and must not be renumbered. `${1#cc-}` because
+    # this function knows the tmux NAME and `_pane_measurable` takes the id
+    # `_tmux` built it from.
+    [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
@@ -18157,7 +18520,7 @@ _tmux_new_session() {   # argv for `tmux new-session` -> runs it, PLACING the se
 #   inside a command substitution kills ONLY the subshell, so the fatal
 #   "incomplete registry for '<id>'" arrived at the caller as rc 1. And rc 1 is
 #   in NO caller's failure set: `cmd_ws_add`, `cmd_start` and `cmd_ensure` all
-#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]` (`3 || 4` at the time
+#   ask `[[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]` (`3 || 4` at the time
 #   this was measured; rc 1 is outside the set either way). Every one of them printed its
 #   SUCCESS line and returned 0 over a spawn that never happened — M6's silent
 #   success, one layer below where the wave had just finished closing it.
@@ -18683,6 +19046,7 @@ _spawn_settle() {   # id fromswap — the BLOCKING half: gate loop, fact, warnin
     3) echo "ccd: $id: the tmux session vanished during startup — nothing is running. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     4) echo "ccd: $id: startup window expired with no live TUI marker. A retry will --resume this uuid; if the session never came up, clear $REG/$id.started first." >&2 ;;
     5) echo "ccd: $id: hard-blocked at startup (limit/spend banner, or lost auth) on $wrapper — waiting will not fix it; swap the account or attach and run /login." >&2 ;;
+    6) echo "ccd: $id: pane is under ${READER_MIN_COLS} columns, so the startup gates stood down — close the terminal drawer on this session and retry." >&2 ;;
   esac
   # /effort ultracode is a Claude-model effort tier; skip it on any lane that is not home-able
   # (those are the external backends — gpt/Codex today — which don't take it, so the
@@ -18763,12 +19127,16 @@ _inject_spawn_effort() {   # tmuxname — apply the settle-time effort, once the
   # reject note) — its return value is never typed, so nothing unrecognised
   # reaches a keystroke because nothing recognised does either.
   local t="$1" id="${1#cc-}" level
+  _pane_measurable "$id" || { echo "ccd: pane is under ${READER_MIN_COLS} columns, skipped /effort $SPAWN_EFFORT (§6.3)" >&2; return 0; }
   if [[ -e "$REG/$id.effort" ]]; then
     _route_effort_for "$id" "$(_route_get "$id" class)" >/dev/null
     return 0
   fi
   level="$SPAWN_EFFORT"
   [[ -n "$level" ]] || return 0
+  # NO id, for the reason argued at `_auto_compact_check`'s copy: the guard
+  # seven lines above already measured this pane, so passing it here could only
+  # relabel an unmeasurable pane as an armed auto-continue.
   if _pane_auto_continue_armed "$(tmux capture-pane -t "$t" -p 2>/dev/null)"; then
     echo "ccd: auto-continue armed, skipped /effort $level (D-2229)" >&2; return 0
   fi
@@ -18893,9 +19261,11 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   #
   # PANE WINDOW IS `tail -8`, EVERYWHERE BELOW BUT `_pane_box_draft` (D-2264).
   # Every other established consumer of `esc to interrupt`/`_pane_auto_continue_armed`/
-  # `_pane_hard_blocked` narrows first — `_auto_swap_check` (ccd:15626) and `_auto_compact_check`
-  # (ccd:15840) both `| tail -8` — and ccd:15826-15835 already documents why: a full ~50-row
-  # capture lets `grep -q "esc to interrupt"` match a STALE banner further up the scrollback, and
+  # `_pane_hard_blocked` narrows first — `_auto_swap_check` and `_auto_compact_check` both
+  # `| tail -8` their own capture — and `_auto_compact_check`'s own header (the "That is not
+  # cosmetic" paragraph, just above its `pane=$(tmux capture-pane …)` line) already documents
+  # why: a full ~50-row capture lets `grep -q "esc to interrupt"` match a STALE banner further
+  # up the scrollback, and
   # `_pane_hard_blocked`'s `limit reached|API Error: 429|rate limit` alternation is exactly what a
   # `--resume` replay of the interrupted turn's own API-error row renders as. That row can sit
   # outside the last 8 lines while still being well inside a full capture, so widening this
@@ -18903,6 +19273,7 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   # on precisely the sessions this fallback exists to rescue. `_pane_box_has_content` alone keeps
   # the full `-e` capture: it scopes itself from the LAST `❯` to the closing box rule.
   local id="$1" t="$2" fromswap="${3:-0}" f i rc pane
+  _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane is under ${READER_MIN_COLS} columns (§6.3)" >> "$REG/swap.log"; return 0; }
   f=$(_transcript_path "$id") || return 0
   for ((i = 0; i < REDRIVE_WAIT_S; i++)); do
     _transcript_stalled_pair "$f"; rc=$?
@@ -18918,7 +19289,21 @@ _redrive_after_spawn() {   # id tmuxname fromswap — D-2231: type the resume pr
   _transcript_stalled_pair "$f"; rc=$?; [[ "$rc" -eq 0 ]] || { _redrive_standdown_log "$id" "$fromswap" "$rc" "$f"; return 0; }
   pane=$(tmux capture-pane -t "$t" -p 2>/dev/null | tail -8)
   echo "$pane" | grep -q "esc to interrupt" && return 0
-  _pane_auto_continue_armed "$pane" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
+  # A FRESH MEASURE, NOT A REDUNDANT ONE, and this is the site where that is true:
+  # REDRIVE_WAIT_S seconds of real `sleep 1`s sit between the top-of-function guard and
+  # here, so the pane can have gone narrow in the meantime. (A comment in
+  # `_auto_compact_check` used to make the contrast and name this site; routing slice 4
+  # moved the call it was about into `_pane_for_keystroke`, where its premise is untrue
+  # for that helper's other two callers, so it was dropped rather than relocated. The
+  # argument survives here, where it is still about this function's own wait loop.) But its NEGATIVE answer is not "auto-continue armed" —
+  # that would be `_pane_auto_continue_armed`'s own inverted answer to the SAME
+  # unmeasurable pane, naming a cause (Claude Code's own recovery timer) this line never
+  # detected. Logged as its own sentence — distinct wording from this same
+  # function's TOP-OF-FUNCTION guard above the wait loop, so swap.log can tell
+  # "never wide enough to redrive at all" from "went narrow during the
+  # REDRIVE_WAIT_S wait" instead of collapsing both to one line.
+  _pane_measurable "$id" || { echo "$(date '+%F %T') redrive-skip $id: pane went under ${READER_MIN_COLS} columns during the redrive wait (§6.3)" >> "$REG/swap.log"; return 0; }
+  _pane_auto_continue_armed "$pane" "$id" && { echo "$(date '+%F %T') redrive-skip $id: auto-continue armed" >> "$REG/swap.log"; return 0; }
   _pane_hard_blocked "$pane" && { echo "$(date '+%F %T') redrive-skip $id: hard-blocked pane" >> "$REG/swap.log"; return 0; }
   _pane_box_has_content "$(tmux capture-pane -t "$t" -p -e 2>/dev/null)" \
     && { echo "$(date '+%F %T') redrive-skip $id: input box not empty" >> "$REG/swap.log"; return 0; }
@@ -19468,7 +19853,8 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `orphan`, which is the honest answer, not `never-started`.
   _reg_claim "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 too — argued at `cmd_ws_add`'s copy of this `if`.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: start failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -19617,7 +20003,8 @@ cmd_ensure() {   # id — idempotent; used by systemd. arg is the id directly.
   _spawn_start "$id" "$mode" || return $?
   _reg_claim "$id"
   _spawn_settle "$id" "$SPAWN_FROMSWAP"; rc=$?
-  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 ]]; then
+  # rc 6 too — argued at `cmd_ws_add`'s copy of this `if`.
+  if [[ "$rc" -eq 3 || "$rc" -eq 4 || "$rc" -eq 5 || "$rc" -eq 6 ]]; then
     echo "ccd: ensure failed for $id (spawn rc $rc) — see $REG/$id.spawn" >&2
     return "$rc"
   fi
@@ -21672,12 +22059,13 @@ case "${1:-}" in
   ws-hold)    shift; cmd_ws_hold "$@" ;;
   ws-release) shift; cmd_ws_release "$@" ;;
   coord-pause) shift; cmd_coord_pause "$@" ;;
+  win-size)  shift; cmd_win_size "$@" ;;
   account-pane) shift; cmd_account_pane "$@" ;;
   project-pool) shift; cmd_project_pool "$@" ;;
   route)     shift; cmd_route "$@" ;;
   pr-open)   shift; cmd_pr_open "$@" ;;
   pr-state)  shift; cmd_pr_state "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|swap|swap-self|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|ws-reap|ws-hold|ws-release|coord-pause|win-size|account-pane|project-pool|route|pr-open|pr-state|version} <args>" >&2; exit 1 ;;
 esac
 fi

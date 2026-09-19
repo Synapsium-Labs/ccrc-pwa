@@ -1460,3 +1460,16 @@ describe('the off-pool marker', () => {
     expect(acct).toHaveAttribute('data-offpool', 'true');
   });
 });
+
+describe('the repo label (board-placement wave 2, Task 6)', () => {
+  it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
+    render(<SessionLine session={s()} repo="Synapsium-Labs/custom-tools" onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/custom-tools/ })).toBeInTheDocument();
+    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/custom-tools');
+  });
+  it('renders nothing when the card already implies the repo', () => {
+    render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+    expect(screen.getByRole('button', { name: 'quiet-mesa' })).toBeInTheDocument();
+  });
+});
