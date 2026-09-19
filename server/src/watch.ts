@@ -2,7 +2,10 @@ import type { Deps } from './server.js';
 import type { Bus } from './bus.js';
 import { assembleFleet, lifecycleInputFor, registrySecondsToMs } from './fleet.js';
 import { measuredIdentity, readRegistry, readRegistryMeasured } from './registry.js';
-import { accountPoolsEnforcement, poolsEnforcement, poolsWire, readPoolEpoch, readProjectPools } from './pools.js';
+import {
+  accountPoolsEnforcement, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
+  readProjectPools,
+} from './pools.js';
 import { hasMenu, parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, loadSnapshot, saveSnapshot } from './fleetstate.js';
@@ -1228,30 +1231,39 @@ export class FleetWatcher {
    *  tags changed again. `tick()`'s re-entrancy guard provides that ordering.
    *
    *  This POOL LEG has one caller-owned budget: half this watcher instance's
-   *  interval, shared by one `pools/` readdir and concurrent measured reads for
-   *  every non-dot entry. It prevents pool-marker cost from multiplying the
-   *  remote client's 15-second default by project population (D-2465/D-2478).
-   *  It does NOT restore a two-second whole-tick cadence: the serial
-   *  `readRegistryMeasured` above runs first and can still cost roughly one
-   *  default timeout per session (D-2479). Closing that older reader is outside
-   *  this wave.
+   *  interval, shared by one `pools/` readdir, concurrent measured reads for
+   *  every non-dot entry, AND (item 1, wave-1 fix round A) the sibling
+   *  `$REG/pool-epoch` read `readObservedEpochFromRegistry` performs — run
+   *  concurrently with the marker sweep via `Promise.all` on the SAME budget,
+   *  not serially after it, so this tick still costs no extra round trip. It
+   *  prevents pool-marker cost from multiplying the remote client's
+   *  15-second default by project population (D-2465/D-2478). It does NOT
+   *  restore a two-second whole-tick cadence: the serial `readRegistryMeasured`
+   *  above runs first and can still cost roughly one default timeout per
+   *  session (D-2479). Closing that older reader is outside this wave.
    *
    *  Both FleetIO implementations fold read failures into measured return
    *  values, so no catch is needed here. `project-pools-read.test.ts` pins cost,
    *  overlap and deadline behavior; `fleetws.test.ts` pins this cadence-derived
    *  budget at the consumer. */
   private async emitPools(names: readonly string[] | null): Promise<void> {
-    const read = await readProjectPools(
-      this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)),
-    );
+    const budgetMs = Math.max(1, Math.floor(this.intervalMs / 2));
+    const [read, observedEpoch] = await Promise.all([
+      readProjectPools(this.deps.io, this.deps.cfg, names, budgetMs),
+      readObservedEpochFromRegistry(this.deps.io, this.deps.cfg, budgetMs),
+    ]);
     // T9-R2: the epoch/observedEpoch producer, the SAME two reads `/api/fleet`
     // (server.ts) makes for its own `poolsWire` call — `readPoolEpoch`
     // (`pools.ts`) leaves `epoch` off the wire whether `deps.coord` is
     // absent OR `poolEpoch()` throws (F1, pre-merge gate: a bare `?.` only
     // guarded the absent case, so a broken coord.db used to throw straight
     // through this tick instead of degrading it — see that function's own
-    // docstring), and `deps.fleetState?.observedEpoch` forwards FleetState's
-    // own three-valued answer (absent/null/number) unchanged.
+    // docstring). `observedEpoch` (item 1, wave-1 fix round A) is now THIS
+    // TICK's own `$REG/pool-epoch` measurement, not a forward of
+    // `deps.fleetState`'s handshake-sampled value — that value was sampled
+    // once per WS connection and never refreshed for a link that can live
+    // for days; see `readObservedEpochFromRegistry`'s own docstring for the
+    // three-valued contract this replaces it with.
     //
     // F2 (pre-merge gate): `accountPools`, the same three-state shape as
     // `enforcement` two lines below, derived off the SAME `ccdVerbs` list —
@@ -1262,7 +1274,7 @@ export class FleetWatcher {
       read,
       poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null),
       readPoolEpoch(this.deps.coord),
-      this.deps.fleetState?.observedEpoch,
+      observedEpoch,
       accountPoolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null),
     );
     const json = JSON.stringify(wire);

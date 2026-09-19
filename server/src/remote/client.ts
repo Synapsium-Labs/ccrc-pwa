@@ -326,8 +326,21 @@ export class FleetClient {
     // digest of the roster it used to have.
     this.state.rosterFp = typeof frame.rosterFp === 'string' && frame.rosterFp.length > 0
       ? frame.rosterFp : null;
-    // THE SINGLE READER of `frame.observedEpoch` — the fleet host's own
-    // account of which pool-membership epoch it actually has. THREE
+    // THE SINGLE READER of `frame.observedEpoch` — still literally true
+    // (nothing else touches this wire FRAME field) after item 1 (wave-1 fix
+    // round A), but no longer the whole story: this handler populates
+    // `FleetState.observedEpoch` from the HANDSHAKE, and that value is NOT
+    // this server's account of "which pool-membership epoch the fleet host
+    // actually has" any more — it was sampled once when the WS connected and
+    // never refreshes for a link that can live for days. `pools.ts`'s
+    // `readObservedEpochFromRegistry` measures `$REG/pool-epoch` fresh on
+    // every watcher tick / every `GET /api/fleet` request and is what feeds
+    // the `pools` wire's `observedEpoch` now; `FleetState.observedEpoch` as
+    // set below has no reader of its own today (additive-only forbids the
+    // agent from dropping the field, so this parse stays, but nothing
+    // downstream of `FleetClient.state` currently consumes this member —
+    // grep before assuming otherwise, since that is exactly the kind of claim
+    // this wave measured wrong more than once). THREE
     // conditions, and unlike `rosterFp`/`build` just below, absence is NOT
     // collapsed into the "no evidence" value the other two use (`null`):
     // `null` here is itself a MEANING this agent build sends on purpose — "I

@@ -17,6 +17,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
+import { plantPoolEpoch } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
@@ -1016,9 +1017,12 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
+      // No `$REG/pool-epoch` planted here — the observedEpoch reader (item 1)
+      // runs independently of the tag sweep above and honestly proves this
+      // node has never synced.
       expect(frame.pools).toEqual({
         listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
-        accountPools: 'unknown',
+        observedEpoch: null, accountPools: 'unknown',
       });
       ws.close();
     });
@@ -1073,7 +1077,10 @@ describe('fleet REST + WS', () => {
       expect(coordFrame.type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
-      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown', accountPools: 'unknown' });
+      // `flaky` only degrades `readdir` (the tag sweep's own root listing);
+      // `readObservedEpochFromRegistry` reads `$REG/pool-epoch` directly via
+      // `readFileMeasured`, unaffected, and honestly proves absence here too.
+      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
       ws.close();
     });
 
@@ -1089,15 +1096,25 @@ describe('fleet REST + WS', () => {
       ws.close();
     });
 
-    // T9-R2: the epoch/observedEpoch producer. `epoch` comes off
-    // `deps.coord.poolEpoch()` (CoordStore); `observedEpoch` comes off
-    // `deps.fleetState.observedEpoch` (Task 8's agent-ready handshake).
-    // No coord and no fleetState at all is the DEFAULT `connect()` here —
+    // T9-R2, updated by item 1 (wave-1 fix round A): the epoch/observedEpoch
+    // producer. `epoch` comes off `deps.coord.poolEpoch()` (CoordStore);
+    // `observedEpoch` used to come off `deps.fleetState.observedEpoch` (Task
+    // 8's agent-ready handshake, sampled once and never refreshed) and now
+    // comes off a fresh MEASURED read of `$REG/pool-epoch`
+    // (`readObservedEpochFromRegistry`, `server/src/pools.ts`) — real bytes
+    // through the real `localIO`, planted with `plantPoolEpoch`
+    // (`ccdWsHelpers.ts`), the same grammar `ccd-pool-sync` writes.
+    // `fleetState.observedEpoch` is no longer read by this frame at all; the
+    // fixtures below stop setting it.
+    //
+    // No coord and no planted file at all is the DEFAULT `connect()` here —
     // covered already by the "old client still shrugs" case above, which pins
-    // the frame's keys to exactly `['pools', 'type']` (i.e. no `epoch` key
-    // reaches the wire when nothing produced one).
+    // the frame's keys to exactly `['pools', 'type']`... except it no longer
+    // can, now that an unplanted file measures as a real `observedEpoch:
+    // null` ("this node has never synced") rather than absence. That case is
+    // pinned directly below instead.
     describe('the epoch/observedEpoch staleness fields', () => {
-      it('carries the coordinator\'s epoch once a coord store is wired, even the seeded 0', async () => {
+      it('carries the coordinator\'s epoch once a coord store is wired, even the seeded 0 — and observedEpoch:null when nothing has ever synced', async () => {
         const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
         expect(coord.poolEpoch().epoch).toBe(0);   // the migration-seeded default — a real, falsy value
         const { ws, next } = await connect({ coord });
@@ -1107,14 +1124,18 @@ describe('fleet REST + WS', () => {
         expect((await next()).type).toBe('coord');
         const frame = await next();
         expect(frame.type).toBe('pools');
-        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', epoch: 0, accountPools: 'unknown' });
+        // No `$REG/pool-epoch` was planted in this test's home, so the new
+        // reader proves a real ENOENT and answers `null` ("never synced") —
+        // not absence, and not the `epoch: 0` next to it collapsing with it.
+        expect(frame.pools).toEqual({
+          listed: true, byProject: {}, enforcement: 'unknown', epoch: 0, observedEpoch: null, accountPools: 'unknown',
+        });
         ws.close();
       });
 
-      it('carries observedEpoch straight from FleetState, distinguishing a number from never-synced null', async () => {
-        const { ws, next } = await connect({
-          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: 12 },
-        });
+      it('carries observedEpoch measured off a real $REG/pool-epoch document, distinguishing a number from never-synced null', async () => {
+        plantPoolEpoch(home, {}, { epoch: 12 });
+        const { ws, next } = await connect();
         expect((await next()).type).toBe('hello');
         expect((await next()).type).toBe('fleet');
         expect((await next()).type).toBe('coord');
@@ -1123,10 +1144,11 @@ describe('fleet REST + WS', () => {
         ws.close();
       });
 
-      it('carries observedEpoch:null (never synced) rather than dropping it or fabricating a number', async () => {
-        const { ws, next } = await connect({
-          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: null },
-        });
+      it('carries observedEpoch:null (never synced) when $REG/pool-epoch is absent, rather than dropping it or fabricating a number', async () => {
+        // No `plantPoolEpoch` call: the home fixture's `.cc-sessions/pool-epoch`
+        // genuinely does not exist, the same real ENOENT `_acct_pool_state`
+        // itself would measure on a cold node.
+        const { ws, next } = await connect();
         expect((await next()).type).toBe('hello');
         expect((await next()).type).toBe('fleet');
         expect((await next()).type).toBe('coord');
@@ -1136,12 +1158,12 @@ describe('fleet REST + WS', () => {
         ws.close();
       });
 
-      it('omits observedEpoch entirely when FleetState carries no evidence — absence, not a fabricated null', async () => {
-        // `observedEpoch: undefined` is FleetState's OWN "no evidence" answer
-        // (fleetstate.ts's docstring) — distinct from the `null` case above.
-        const { ws, next } = await connect({
-          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: undefined },
-        });
+      it('omits observedEpoch entirely when the registry root itself is unreadable — no evidence, not a fabricated null', async () => {
+        // Unlike a proven-absent FILE (the case above, `null`), a file this
+        // box cannot READ is a MEASUREMENT failure — this box does not know
+        // whether the fleet host has synced, which must not collapse into
+        // "it never has" (no overloaded null at a seam).
+        const { ws, next } = await connect({ io: degradedReadIO((p) => p.endsWith('pool-epoch')) });
         expect((await next()).type).toBe('hello');
         expect((await next()).type).toBe('fleet');
         expect((await next()).type).toBe('coord');
@@ -1152,11 +1174,9 @@ describe('fleet REST + WS', () => {
       });
 
       it('GET /api/fleet carries the same epoch/observedEpoch the WS pools frame does', async () => {
+        plantPoolEpoch(home, {}, { epoch: 0 });
         const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
-        const deps = {
-          ...testDeps(home), coord,
-          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: 0 },
-        };
+        const deps = { ...testDeps(home), coord };
         const bus = new Bus();
         app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
         const res = await app.inject({ method: 'GET', url: '/api/fleet' });

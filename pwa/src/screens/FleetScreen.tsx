@@ -113,15 +113,29 @@ export function FleetScreen({
    *  says it means: this server has no coordination db wired (local mode),
    *  never "nothing polls it yet". */
   epoch?: number;
-  /** This build's own agent connection's last-reported observed epoch
-   *  (`AgentReady.observedEpoch`, `shared/agent-protocol.ts`). THREE answers,
-   *  not two: absent means "this build cannot tell you" (render nothing —
-   *  the reader has no evidence either way), `null` means "the node has
-   *  never synced" (a real, renderable fact), a number is what it actually
-   *  has. Never read as a health tick: a node whose projection is past its
-   *  lease still reports a number while `ccd` refuses every tagged
-   *  placement, so `observedEpoch === epoch` means only "not stale", never
-   *  "this node is placing". */
+  /** The fleet host's own observed pool-projection epoch, off the SAME
+   *  `pools` frame's `observedEpoch` field. Through commit 18454187 (T9-R2)
+   *  this was the agent's handshake report (`AgentReady.observedEpoch`)
+   *  forwarded unchanged; since item 1 (wave-1 fix round A) it is the
+   *  SERVER's own fresh measurement of `$REG/pool-epoch`
+   *  (`server/src/pools.ts`'s `readObservedEpochFromRegistry`, on every
+   *  watcher tick / `GET /api/fleet` request) — the handshake value was
+   *  sampled once per WS connection and never refreshed for a link that can
+   *  live for days, so it read "in sync" forever after one real sync. This
+   *  prop's own SHAPE is unchanged (the wire field's name and three-value
+   *  contract did not move), only what feeds it. THREE answers, not two:
+   *  absent means "this server cannot tell you" (render nothing — the reader
+   *  has no evidence either way), `null` means "the node has never synced"
+   *  (a real, renderable fact), a number is what it actually has. Never read
+   *  as a health tick: a node whose projection is past its lease still
+   *  reports a number while `ccd` refuses every tagged placement, so
+   *  `observedEpoch === epoch` means only "not stale", never "this node is
+   *  placing" — and, separately (disclosed, not fixed, here): `epoch` counts
+   *  CENTRAL writes only, while the pool document an operator sees also
+   *  derives from the declared roster since T7-R4, so a declared-only pool
+   *  change can alter that document while `epoch` — and therefore this
+   *  comparison — stands still. `observedEpoch === epoch` has only ever meant
+   *  "not stale"; it still never means "agrees". */
   observedEpoch?: number | null;
 }): ReactNode {
   const useStore = store;
@@ -461,6 +475,11 @@ export function FleetScreen({
   // AND they actually differ: `epoch === undefined` or `observedEpoch ===
   // undefined` both mean "nothing to compare", and an equal pair means "not
   // stale", not "placing" — the one thing this text must never read as.
+  // Before item 1 (wave-1 fix round A) `observedEpoch` was frozen at
+  // handshake, so a node that synced once and then stopped kept comparing
+  // equal here forever — a false "in sync". `observedEpoch` now refreshes on
+  // the server's own watcher tick, so an equal pair here is a genuinely
+  // current fact, not a stale first impression.
   const poolLag =
     epoch !== undefined && observedEpoch !== undefined && observedEpoch !== epoch
       ? `epoch ${epoch} / observed ${observedEpoch === null ? 'never synced' : observedEpoch}`

@@ -4,6 +4,7 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import { ACCOUNT_POOLS_CAP, CCD_ARGV } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
+import { parseObservedEpochDoc } from '../../shared/agent-protocol.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
 
 /**
@@ -355,6 +356,13 @@ export function accountPoolsEnforcement(ccdVerbs: readonly string[] | null): Poo
  * Returns `undefined` on either failure — absence, which already means
  * "cannot tell you" on this wire (`ProjectPoolsWire`'s own `epoch?` shape) —
  * never a fabricated number and never a propagated throw.
+ *
+ * DISCLOSED, NOT FIXED (item 1, wave-1 fix round A — wave-2 design's to
+ * own): this counts only CENTRAL `pool_edges` writes, but since T7-R4 the
+ * pool document an operator sees also derives from the declared roster,
+ * which carries no epoch of its own — so a declared-only pool change can
+ * alter that document while this number, and `epoch === observedEpoch`,
+ * both stand still.
  */
 export function readPoolEpoch(coord: { poolEpoch(): { epoch: number } } | undefined): number | undefined {
   if (!coord) return undefined;
@@ -366,12 +374,70 @@ export function readPoolEpoch(coord: { poolEpoch(): { epoch: number } } | undefi
 }
 
 /**
+ * THIS node's own observed epoch, measured fresh off `$REG/pool-epoch` —
+ * `$REG/pools/`'s sibling in the same registry root, read the SAME way
+ * (`FleetIO.readFileMeasured`, on a caller-owned budget) that
+ * `readProjectPoolsWithinDeadline` above reads every project marker (item 1,
+ * wave-1 fix round A).
+ *
+ * Replaces `deps.fleetState?.observedEpoch` as the `pools` wire's
+ * `observedEpoch` producer at both call sites (`watch.ts`'s `emitPools` tick
+ * and `server.ts`'s `GET /api/fleet` route) — that field was sampled ONCE at
+ * WS handshake and never refreshed for a connection's whole multi-day life
+ * (see `AgentReady.observedEpoch`'s doc, `shared/agent-protocol.ts`, for the
+ * full defect). This function has no such staleness: it is called on every
+ * tick / every request, exactly like the pool-tag marker reads beside it.
+ *
+ * THREE-VALUED, and the two failure arms are NOT interchangeable (no
+ * overloaded null at a seam):
+ *   - `read.reason === 'absent'` (a proven ENOENT) is this node's own PROOF
+ *     it has never synced — the identical fact `readObservedEpoch`
+ *     (`agent/src/server.ts`) reports as `null` for the same missing file,
+ *     read locally instead of through this box's own FleetIO. Reported here
+ *     as `null` too, so a local-mode box (whose FleetIO IS the local
+ *     filesystem) agrees with what the agent would say about itself.
+ *   - `read.reason === 'unreadable'`, a `deadline.race` timeout (`null` from
+ *     the race, not from the read), or no usable budget at all is a
+ *     MEASUREMENT failure — this box could not learn whether the fleet host
+ *     has synced, which is a fact about THIS READ, not about the fleet
+ *     host's sync state. Reported as `undefined` — "no evidence" — the same
+ *     value an agent build too old to send the field produces. Folding this
+ *     into `null` would misreport a transient remote hiccup as "this node
+ *     has never synced"; folding `absent` into `undefined` would bury a
+ *     genuine never-synced node behind "we'll know next tick".
+ *
+ * The byte-to-number PARSE, once bytes are in hand, is not re-implemented
+ * here: {@link parseObservedEpochDoc} (`shared/agent-protocol.ts`) is the one
+ * grammar reader, shared with the agent's own handshake parser, so a
+ * malformed or torn document reads the same `null` regardless of which side
+ * read it.
+ */
+export async function readObservedEpochFromRegistry(
+  io: FleetIO, cfg: CcrcConfig, budgetMs: number,
+): Promise<number | null | undefined> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  if (deadline === null) return undefined;
+  try {
+    const read = await deadline.race(
+      io.readFileMeasured(path.join(cfg.registryDir, 'pool-epoch'), deadline.budgetMs, deadline.signal),
+    );
+    if (read === null || deadline.expired()) return undefined;
+    if (!read.ok) return read.reason === 'absent' ? null : undefined;
+    return parseObservedEpochDoc(read.content);
+  } finally {
+    deadline.close();
+  }
+}
+
+/**
  * The read, on the wire. The Map becomes a plain object; nothing narrows.
  *
  * `epoch`/`observedEpoch` (T9-R2) are the two callers' own facts, not
  * anything this function measures — `epoch` from `deps.coord?.poolEpoch()`,
- * `observedEpoch` from `deps.fleetState?.observedEpoch` — passed in so this
- * module stays free of a `CoordStore`/`FleetState` import for two scalars.
+ * `observedEpoch` from {@link readObservedEpochFromRegistry} (item 1, wave-1
+ * fix round A — was `deps.fleetState?.observedEpoch` until this round; see
+ * that function's own docstring for why) — passed in so this module stays
+ * free of a `CoordStore`/`FleetState` import for two scalars.
  * Both parameters are OMITTED from the returned object, not merely set to
  * `undefined`, whenever the caller passed no value: `Object.hasOwn` must
  * answer `false` for an absent fact, the same test a JSON round-trip would

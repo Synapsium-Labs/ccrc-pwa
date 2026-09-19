@@ -14,7 +14,8 @@ import { readLimits, projectHome, projectPlacement } from './limits.js';
 import { readSharesMeasured } from './shares.js';
 import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
-  accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readPoolEpoch, readProjectPools, readProjectPoolsWithRoot,
+  accountPoolsEnforcement, poolFor, poolsEnforcement, poolsWire, readObservedEpochFromRegistry, readPoolEpoch,
+  readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
 import { poolRostered, poolVerdict, resolvedAccountPool } from './poolrule.js';
 import { ACCOUNT_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
@@ -1089,12 +1090,21 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // measured answer, off its own root listing. The request supplies its own
     // aggregate ten-second budget rather than inheriting watcher policy; the
     // race also bounds localIO, which ignores per-operation timeouts (D-2484).
-    const poolsRead = await readProjectPools(
-      deps.io,
-      deps.cfg,
-      (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
-      PROJECT_POOLS_REQUEST_BUDGET_MS,
-    );
+    //
+    // `observedEpoch` (item 1, wave-1 fix round A) rides the SAME budget,
+    // read concurrently via `Promise.all` rather than serially after
+    // `poolsRead` — one more `readFileMeasured` alongside the marker sweep,
+    // not a second round trip. See `readObservedEpochFromRegistry`'s own
+    // docstring for why this replaced `deps.fleetState?.observedEpoch` here.
+    const [poolsRead, observedEpoch] = await Promise.all([
+      readProjectPools(
+        deps.io,
+        deps.cfg,
+        (timeoutMs, signal) => deps.io.readdir(deps.cfg.registryDir, timeoutMs, signal),
+        PROJECT_POOLS_REQUEST_BUDGET_MS,
+      ),
+      readObservedEpochFromRegistry(deps.io, deps.cfg, PROJECT_POOLS_REQUEST_BUDGET_MS),
+    ]);
     return {
       sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage()),
       pools: poolsWire(
@@ -1107,10 +1117,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // read (F1, pre-merge gate: a bare `?.` only short-circuited the
         // absent case, so a broken coord.db used to 500 this whole route
         // instead of just leaving this one freshness field off the wire).
-        // `deps.fleetState?.observedEpoch` forwards FleetState's own
-        // three-valued answer unchanged (absent/null/number).
+        // `observedEpoch` above is now THIS REQUEST's own `$REG/pool-epoch`
+        // measurement, not a forward of `deps.fleetState`'s handshake-sampled
+        // value — that value was sampled once per WS connection and never
+        // refreshed for a link that can live for days.
         readPoolEpoch(deps.coord),
-        deps.fleetState?.observedEpoch,
+        observedEpoch,
         // F2 (pre-merge gate): `accountPools`, the same three-state shape as
         // `enforcement` above, derived off the same `ccdVerbs` list — the
         // `account-pools` capability token Task 2 added to `cmd_caps`, read

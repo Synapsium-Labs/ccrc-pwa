@@ -70,6 +70,13 @@ export interface FleetState {
    *  would report a downgraded fleet host as "still catching up" instead of
    *  "no longer answering".
    *
+   *  NO LONGER THE `pools` WIRE'S SOURCE (item 1, wave-1 fix round A): this
+   *  member is still populated by `remote/client.ts`'s `onReady` on every
+   *  handshake, but a handshake-cadence sample cannot stand in for a 60s
+   *  fact, so `server/src/pools.ts`'s `readObservedEpochFromRegistry` — a
+   *  fresh `$REG/pool-epoch` read on every watcher tick / request — feeds the
+   *  wire instead. This field has no consumer of its own today.
+   *
    *  OPTIONAL here, deliberately unlike `rosterFp`/`build`'s "REQUIRED, not
    *  optional" stance above — measured before choosing: making this field
    *  required breaks ~20 pre-existing `FleetState`/`Deps` fixtures across
