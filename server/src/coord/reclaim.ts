@@ -2,7 +2,7 @@ import type { CcrcConfig } from '../config.js';
 import type { SessionVerdict } from '../exec.js';
 import { lifecycleInputFor } from '../fleet.js';
 import type { FleetIO } from '../io.js';
-import { readSessionRecord } from '../registry.js';
+import { fieldMeasured, readSessionRecord } from '../registry.js';
 import type { CoordStore } from './store.js';
 import { lifecycleIsDead, sessionLifecycle } from '../../../shared/api.js';
 
@@ -225,10 +225,19 @@ export async function measureClaimant(
 export type ReclaimOutcome =
   | { ok: true; program: string; runIds: number[]; from: string; to: string }
   | { ok: false; kind: 'unknown-run' }
+  /** D-2545. The run row exists and its integers are unrepresentable — NOT
+   *  `unknown-run`, whose whole meaning is that the row is not there, and not
+   *  `registry-unmeasurable`, which names the registry rather than this
+   *  store. A reclaim is the operator's act on a program whose coordinator is
+   *  dead; telling them the run does not exist would send them looking for a
+   *  program instead of for a database. */
+  | { ok: false; kind: 'run-unreadable'; detail: string }
   | { ok: false; kind: 'no-claimant' }
   | { ok: false; kind: 'unknown-session' }              // the NEW claimant has no registry row
   | { ok: false; kind: 'registry-unmeasurable'; detail: string }
-  | { ok: false; kind: 'claimant-alive'; detail: string; by: string };
+  | { ok: false; kind: 'claimant-alive'; detail: string; by: string }
+  // the NEW claimant is a live worker of another run (spec §12)
+  | { ok: false; kind: 'heir-is-a-worker'; by: string };
 
 /**
  * Hand a program's coordination to `to`, after PROVING the session holding it is
@@ -245,12 +254,19 @@ export type ReclaimOutcome =
  *      ladder on purpose: handing a program to an id that does not exist strands
  *      it exactly as thoroughly as leaving it on a corpse, and one listing rules
  *      it out;
+ *    • the HEIR RUNG, deliberately UNNUMBERED so rungs 4 and 5 keep the
+ *      numbers this file's comments and its suite already cite: `to` is not
+ *      the worker of somebody ELSE's open run — else `heir-is-a-worker`
+ *      carrying `by`. It sits HERE and only inside `to !== from` (D-3011):
+ *      after the existence read it would otherwise repeat, before the tmux
+ *      measurement because it is synchronous and cheaper. Its three
+ *      admissions are argued at the guard itself;
  *   4. the CURRENT claimant is dead      — else `claimant-alive` carrying the
  *      evidence sentence, or `registry-unmeasurable`;
  *   5. the commit, as ONE transaction the store owns.
  *
- * D-1136 — `to === from` SHORT-CIRCUITS PAST 4 BUT NOT PAST 3, and where it sits
- * is the decision rather than the arm itself. It must not be a refusal: an
+ * D-1136 — `to === from` SHORT-CIRCUITS PAST THE HEIR RUNG AND 4, BUT NOT PAST
+ * 3, and where it sits is the decision rather than the arm itself. It must not be a refusal: an
  * operator re-typing the id the board already shows is asking for nothing, and a
  * refusal there teaches them the door is broken. Run at the ALIVENESS rung, as
  * here, it still pays for the destination's own registry read — so a typo that
@@ -280,7 +296,9 @@ export async function reclaimRun(
   deps: ReclaimDeps, runId: number, to: string,
 ): Promise<ReclaimOutcome> {
   const now = Date.now();
-  const run = deps.coord.run(runId);
+  const read = deps.coord.run(runId);
+  if (!read.ok) return { ok: false, kind: 'run-unreadable', detail: read.detail };
+  const run = read.run;
   if (run === null) return { ok: false, kind: 'unknown-run' };
   const from = run.claimedBy;
   if (from === null) return { ok: false, kind: 'no-claimant' };
@@ -293,6 +311,47 @@ export async function reclaimRun(
     return { ok: false, kind: 'unknown-session' };
   }
   if (to !== from) {
+    // §12 / D-3011: a worker of SOMEBODY ELSE's open run may not inherit a
+    // programme. INSIDE this branch, so an operator re-typing the id the board
+    // already shows stays the no-op D-1136 made it; AFTER rung 3 (the heir's
+    // row exists) and BEFORE rung 4 (the tmux measurement it would otherwise
+    // pay for). Same read as `POST /api/runs`' rung (Task 9).
+    //
+    // THE ADMISSION, SAID AS THE PREDICATE SAYS IT: this reclaim goes through
+    // only when EVERY open run that names the heir as worker is claimed by the
+    // coordinator being replaced — or by the heir itself. One run claimed by a
+    // THIRD coordinator refuses, whichever run is newest.
+    //
+    // That is what makes "no chain can form out of it" TRUE rather than
+    // likely, and it is why the read is `openClaimantsOf` and not
+    // `parentOfSession` (second fix round, D-3054). `parentOfSession` is `LIMIT 1`: it
+    // answers about the heir's NEWEST open run and says nothing about the
+    // others, so an heir that is X's live worker on run 100 and the dying
+    // coordinator's on run 105 was ADMITTED — still bound to X, which is
+    // exactly the chain §12 exists to prevent. `runs_by_session` is non-unique
+    // and the coordinator protocol opens wave N+1 before closing wave N, so
+    // "several open runs on one session" is protocol, not corruption.
+    //
+    // THREE admissions, not two, and the third is this door's own (D-3028).
+    // `[]` — a session no open run names, a finished worker — is not a worker
+    // at all and never reaches the refusal. `to` itself is a self-claimed run,
+    // which the open door admits for the same reason (D-3012). And `from` is
+    // the claimant being replaced: refusing that heir would refuse the most
+    // likely successor in the one scenario this door exists for — the
+    // programme's own live worker, sitting in the pane beside the corpse. What
+    // that admission produces is a SELF-CLAIMED run, which `nestFleet` never
+    // brackets (`r.claimedBy !== r.sessionId`, nestFleet.ts:132), so §12's
+    // one-level rationale is untouched. An ownerless open run (`claimedBy`
+    // NULL) is not in the list at all — D-3012's admission, made by the read.
+    // Rung 4 below still refuses a `from` that measures alive, so none of this
+    // can be used to take a programme off a living coordinator.
+    //
+    // `by` is the FIRST offender, and the list is newest-first, so the operator
+    // is sent to the most recent binding rather than the oldest.
+    const heirWorkerOf = deps.coord.openClaimantsOf(to).find((c) => c !== to && c !== from);
+    if (heirWorkerOf !== undefined) {
+      return { ok: false, kind: 'heir-is-a-worker', by: heirWorkerOf };
+    }
     const claimant = await measureClaimant(deps, from, now);
     if (claimant.state === 'unmeasurable') {
       return { ok: false, kind: 'registry-unmeasurable', detail: claimant.why };
@@ -301,10 +360,22 @@ export async function reclaimRun(
       return { ok: false, kind: 'claimant-alive', detail: claimant.why, by: from };
     }
   }
-  const committed = deps.coord.reclaimProgram(runId, to, now);
+  // D-2922. The heir's project, MEASURED — never `incoming.record.project`,
+  // whose `project ?? id` collapsing default (`registry.ts`'s `buildRecord`)
+  // would reach the stamp as if it were a measurement, and never
+  // `sessionProject(to)`, which reads the runs table and so answers only for a
+  // session that has been a WORKER. Exactly the read `POST /api/runs` makes for
+  // the open-time stamp, at the other moment a coordinator is decided.
+  //
+  // An unreadable field, an absent field and a present but EMPTY field all
+  // leave the stamp NULL: absence permits, a guess never heals, and a null
+  // stamp places the row at home rather than on a card nobody proved.
+  const heirProject = await fieldMeasured(deps.io, deps.cfg.registryDir, to, 'project');
+  const coordProject = heirProject.ok && heirProject.content !== '' ? heirProject.content : null;
+  const committed = deps.coord.reclaimProgram(runId, to, now, coordProject);
   // Re-measured INSIDE the transaction, so these are not the answers rungs 1-2
-  // already gave — they are what is still true at commit time, after two awaited
-  // registry reads have given the event loop somewhere to run.
+  // already gave — they are what is still true at commit time, after the awaited
+  // registry reads above have given the event loop somewhere to run.
   if (!committed.ok) return committed;
   return { ok: true, program: committed.program, runIds: committed.runIds,
     from: committed.from, to };

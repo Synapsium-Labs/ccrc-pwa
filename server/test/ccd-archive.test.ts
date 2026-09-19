@@ -9,7 +9,7 @@ import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { makeCcdHarness, ghContainedEnv, harnessBin, CCD, WS_ADD, type CcdHarness } from './ccdWsHelpers.js';
 import { mungePath } from '../src/munge.js';
-import { ACTOR_FLAGS_CAP, POOLS_CAP } from '../src/ccdargv.js';
+import { ACTOR_FLAGS_CAP, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, WIN_SIZE_CAP } from '../src/ccdargv.js';
 
 /** sha256 of the empty string — what a failed read used to be indistinguishable
  *  from, and what a genuinely empty ignored set still legitimately hashes to. */
@@ -151,7 +151,7 @@ describe('ccd caps', () => {
   // still fail loudly on anything ELSE that drifts: a THIRD capability token
   // added without updating this list is exactly as much a silent hole as an
   // undispatched verb would be.
-  const KNOWN_CAPABILITY_TOKENS = ['account-v1', 'actor-flags-v1', 'lifecycle-v1', 'pools-v1', 'stop-surface'];
+  const KNOWN_CAPABILITY_TOKENS = ['account-v1', 'actor-flags-v1', 'lifecycle-v1', 'pools-v1', 'route-apply-v1', 'route-argv-v1', 'route-v1', 'stop-surface', 'win-size-v1'];
 
   it('advertises exactly the verbs the dispatcher implements, plus the known capability tokens', () => {
     // The THIRD spelling of this token, closing the parity gap `ccdargv.ts`'s
@@ -163,6 +163,14 @@ describe('ccd caps', () => {
     // discipline governs L0–L5 SOURCE, not a test importing its own target.
     expect(KNOWN_CAPABILITY_TOKENS).toContain(ACTOR_FLAGS_CAP);
     expect(KNOWN_CAPABILITY_TOKENS).toContain(POOLS_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_ARGV_CAP);
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(ROUTE_APPLY_CAP);
+    // Terminal drawer wave 2's token. Task 2 added the STRING to the list
+    // above; this line is what holds it equal to the constant wave 3 reads —
+    // without it `win-size-v1` would be the one known token whose three
+    // spellings are free to drift, which is the drift this block exists for.
+    expect(KNOWN_CAPABILITY_TOKENS).toContain(WIN_SIZE_CAP);
     // The deployed ~/.local/bin/ccd is a COPY, not a symlink to the repo, so a
     // verb can pass the agent whitelist and still not exist on the box. This
     // list is what the agent reports; a list that drifts from the dispatcher
@@ -1293,6 +1301,42 @@ describe('ws-restore', () => {
     // and the supervision land BEFORE the blocking settle (F8).
     expect(h.calls()).toContain('spawn_start demo-quiet-basin resume');
     expect(h.calls()).toContain('supervise demo-quiet-basin');
+  });
+
+  it('an archived row with NO generation GAINS one on restore — the third respawn path, and the only one that never minted', () => {
+    workspace('demo', 'quiet-basin');
+    // Plant the pre-D-2605 row rather than describe it: `cmd_ws_add` mints a
+    // generation, so the fixture has to take it away to BE the row the fleet
+    // actually carried — 31 of 34 live rows on 2026-09-17.
+    fs.rmSync(path.join(h.home, '.cc-sessions', 'demo-quiet-basin.generation'));
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    expect(h.reg('demo-quiet-basin', 'generation'), 'archiving mints nothing').toBeNull();
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    // `cmd_ensure` and `cmd_start` each mint before spawning; this verb reaches
+    // `_spawn_start` directly, so without a mint of its own the restored pane
+    // carries no CCRC_SESSION_GENERATION and `_hook_generation_ok` fails closed
+    // for that pane's whole life — inert, and until D-2993 silently so.
+    // Two assertions, not one: `.toMatch` on a null throws a TypeError, which
+    // reds for the right reason with the wrong message. The absence IS the
+    // defect, so it gets its own line and says so.
+    const gen = h.reg('demo-quiet-basin', 'generation');
+    expect(gen, 'restore mints the generation it found missing').not.toBeNull();
+    expect(gen ?? '', 'and mints a UUID, not a placeholder')
+      .toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
+  });
+
+  it('and a restore whose row ALREADY carries one leaves it byte-identical — the mint is absence-only', () => {
+    workspace('demo', 'quiet-basin');
+    const before = h.reg('demo-quiet-basin', 'generation');
+    expect(before, 'ws-add minted one').toMatch(/^[0-9a-f-]{36}$/);
+    h.sh(`${ARCH} cmd_ws_archive --session demo-quiet-basin`);
+    h.sh(`${ARCH} cmd_ws_restore --session demo-quiet-basin`);
+    // Re-minting would be the worse defect: the hook compares the ROW's bytes to
+    // the value its pane was spawned with, so a fresh value on every restore
+    // would silently disown every pane that outlived it. THIS ROW IS THE CONTROL
+    // — it stays green across the fix, which is what makes the red one above
+    // mean "mints on absence" rather than "writes the file unconditionally".
+    expect(h.reg('demo-quiet-basin', 'generation'), 'never re-minted').toBe(before);
   });
 
   it('leaves the started flag set even when the entry never had one', () => {

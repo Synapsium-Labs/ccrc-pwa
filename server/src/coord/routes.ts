@@ -3,13 +3,17 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { Deps } from '../server.js';
 import type { Bus } from '../bus.js';
 import type { FleetWatcher } from '../watch.js';
-import { UNMEASURED_ASK_AT, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
+import {
+  UNMEASURED_ASK_AT, fieldMeasured, freshAskAt, measuredIdentity, readRegistry, readRegistryMeasured,
+} from '../registry.js';
 import { answerAsk, type AskDeps } from '../inject/ask.js';
 import { assembleFleet } from '../fleet.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { claimMailHint } from './claims.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import { escalate, demote, classRungEffortReset, EFFORT_LADDER, type Demotion, type RungCurrent, type RungTarget } from '../../../shared/routing-ladder.js';
+import { CLASSES, type ModelClass } from '../../../shared/models.js';
 import { decideCaps } from './caps.js';
 import { tx } from './db.js';
 import { LEDGER_ALLOC_MAX } from './ledger.js';
@@ -20,7 +24,7 @@ import { renderEnvelope } from './envelope.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './token.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
 import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { dispatchRun, type DispatchOutcome, type DispatchRunDeps } from './dispatch.js';
+import { dispatchRun, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { closeRun, type CloseOutcome, type CloseRunDeps } from './close.js';
 import { reclaimRun, type ReclaimDeps } from './reclaim.js';
 import { settleItems, type SettleItemsOutcome } from './items.js';
@@ -28,12 +32,32 @@ import { queueSystemMail } from './rundefs.js';
 import {
   CLAIM_INTENT_MAX_BYTES, CLAIM_PATHS_MAX, CLAIM_PATH_MAX_BYTES, isAskState,
   isPositiveDecimalSafeInteger, isRunState, isSendableMailKind,
+  parseCanonicalPositiveSafeInteger,
   LEDGER_STALE_MS, LEDGER_TITLE_MAX_BYTES, ledgerPath, shapeProgramSlug,
   MAIL_ARTIFACTS_MAX, MAIL_ARTIFACT_PATH_MAX_BYTES, MAIL_BODY_MAX_BYTES,
-  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, RUN_TRANSITIONS,
+  MAIL_SUBJECT_MAX_BYTES, PEER_ETIQUETTE, PEER_MAIL_HOURLY, PEER_MAIL_MAX_OUTSTANDING, transitionsFor, IDLE_RUN_STATES,
+  FAILURE_KINDS, ROUTE_CONTROL_CHAR_RE, isSessionIdShape, parseRouteEventDetail, parseRouteFields, routeEventDetail, RUN_STATES, TERMINAL_RUN_STATES,
   type AskState, type ClaimConflict, type CoordCapsView, type LifecycleQueryResult, type MailRejectCode,
   type PeerDeliverable, type PeerSummary, type RunState, type RunSummary,
+  type FailureKind, type RouteField, type RunRouteBody, type RouteMode,
 } from '../../../shared/api.js';
+
+/**
+ * `POST /api/runs/:id/route`'s routable run states (review finding #6,
+ * controller ruling S5-R4): every `RunState` NOT in `TERMINAL_RUN_STATES`
+ * (`shared/api.ts`) — DERIVED, not a hand-typed three-state list, so
+ * `run-closed` means "terminal" and nothing else. This makes `unknown` (an
+ * ACTIVE state that holds a dispatch slot — `shared/api.ts`'s
+ * `ACTIVE_RUN_STATES`) routable: a row in `unknown` proceeds past this gate
+ * and refuses later on its true reason (typically `no-session`, since a
+ * newer-build row this build cannot name is unlikely to carry a session id
+ * this build understands either). Module level, not re-allocated per
+ * request, and visible to `run-states.test.ts`'s partition census the way an
+ * inline `const` inside the handler never was.
+ */
+const ROUTABLE_RUN_STATES: readonly RunState[] = RUN_STATES.filter(
+  (s) => !(TERMINAL_RUN_STATES as readonly string[]).includes(s),
+);
 
 /**
  * One coordinator-wide async mutex, serialising the WRITE routes' bodies
@@ -131,7 +155,12 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
     case 'bad-transition':
       return reply.code(409).send({ ok: false, error: 'bad-transition', from: r.from, to: r.to });
-    case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
+    // `detail` spread, not `detail: r.detail`: an L4 adapter may not narrow a
+    // distinction it received (`route: <why>[ <field>]`, present only for the
+    // malformed-route refusal), so its PRESENCE rides the wire exactly as
+    // this member carries it — never `''` standing in for "nothing to say".
+    case 'bad-request':
+      return reply.code(400).send({ ok: false, error: 'bad-request', ...(r.detail === undefined ? {} : { detail: r.detail }) });
     // `detail` rides along unconditionally — it is a distinction this adapter
     // RECEIVED (which of the two sizes, and by how much), and the sender cannot
     // recompute it: the brief they hold is not the body the cap measured. The
@@ -215,6 +244,9 @@ function sendSettleItemsOutcome(reply: FastifyReply, r: SettleItemsOutcome) {
   if (r.ok) return reply.code(200).send({ ok: true, id: r.id, items: r.items });
   switch (r.kind) {
     case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    // D-2545. 503, never the 404 above: the run exists.
+    case 'run-unreadable':
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
     case 'bad-request': return reply.code(400).send({ ok: false, error: 'bad-request' });
     case 'refused':
       return reply.code(r.code === 'unknown-item' ? 404 : 409)
@@ -249,20 +281,28 @@ function sendClaimEndOutcome(reply: FastifyReply, r: ClaimEndResult) {
 }
 
 /**
- * THE LEGACY GENERATION, as one constant (design §3 F2). `true` while an absent
- * `homeProject` on `POST /api/runs` is ACCEPTED and RECORDED; `false` once every
- * live coordinator has redeployed and the field is required.
+ * THE LEGACY GENERATION, as one constant (design §3 F2), and the switch that
+ * ends it. `true` ACCEPTED an absent `homeProject` on `POST /api/runs` and
+ * recorded a `legacy-home-project` run event, leaving the programme row's home
+ * NULL; `false` refuses the open `400 bad-request` with
+ * `detail: 'homeProject is required'` (D-2349, D-2744).
  *
- * The flip is its own PR (design §9 wave 3) and its criterion is MEASURED, not
- * judged: zero `legacy-home-project` rows in `run_events` over seven consecutive
- * days. The idiom is the box token's own — accepted-and-warned as `'legacy'` for
- * one generation (`coord/token.ts`, `server.ts`), then removed.
+ * FLIPPED TO `false` on operator ruling D-2867, the spec's seven-day criterion
+ * waived: 8 of the 15 opens since the 2026-09-14 deploy omitted the field, the
+ * last at 2026-09-15T07:38:57Z — the trail is in
+ * `docs/superpowers/programs/home-project-flip.md`'s `## Measurements`. Both
+ * branches of `homeProjectVerdict` stay in the tree and both stay tested
+ * (`home-project.test.ts`) — this is a value change, never a deletion. The
+ * ROUTE's `legacy` arm below is now unreachable, since the only
+ * `legacyAccepted` the route ever passes is this constant; it stays as the
+ * record of what `true` did.
  *
  * Read ONCE, at the single call site below, and passed as an argument to
- * `homeProjectVerdict` rather than read inside it — which is what makes the
- * OTHER branch testable before it ships. `home-project.test.ts` drives both.
+ * `homeProjectVerdict` rather than read inside it — which is what keeps the
+ * OTHER branch testable after the flip as it was before it.
+ * `home-project.test.ts` drives both.
  */
-export const HOME_PROJECT_LEGACY_ACCEPTED = true;
+export const HOME_PROJECT_LEGACY_ACCEPTED = false;
 
 /** What the open route must DO about the body's `homeProject` and the
  *  programme's stored one. SIX answers, none folded into another: `write` and
@@ -752,7 +792,21 @@ export function registerCoordRoutes(
     // 8: runId, when given, must name a run that exists. One lookup, reused
     // below for the envelope's program/wave — a second `coord.run(runId)`
     // after this would be the same read twice for no reason.
-    const run = runId !== null ? coord.run(runId) : null;
+    const runRead = runId !== null ? coord.run(runId) : null;
+    // D-2545. UNREADABLE IS NOT ABSENT, and this is the one place on this route
+    // where the difference changes what the sender should do: `unknown-run`
+    // says "you named a run that does not exist — fix the id", while this says
+    // "the run is there and this box cannot read it — do not retry blindly".
+    //
+    // NOT through `refuse()`, deliberately: that helper RECORDS a rejection row
+    // in the very database that just failed a read, and its `code` parameter is
+    // a `MailRejectCode` — admitting a read failure to that vocabulary would
+    // put a word on the mail wire for a condition no mail was ever rejected
+    // for. A plain 503, recorded nowhere, in the `not-configured` family.
+    if (runRead !== null && !runRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: runRead.detail });
+    }
+    const run = runRead === null ? null : runRead.run;
     if (runId !== null && run === null) {
       return refuse(reply, 404, 'unknown-run', { fromId, fromUuid, toId, kind, subject, runId },
         `no run ${runId}`);
@@ -922,8 +976,8 @@ export function registerCoordRoutes(
     }
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) {
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) {
       return refuse(reply, 400, 'bad-kind', { fromId, fromUuid }, 'bad delivery id');
     }
 
@@ -1060,8 +1114,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const row = coord.deliveryEnvelope(id);
     if (!row) return reply.code(404).send({ ok: false, error: 'not-found' });
@@ -1121,13 +1175,24 @@ export function registerCoordRoutes(
 
     return coordMutex.run(async () => {
     const body = (req.body ?? {}) as Record<string, unknown>;
-    const { program, title, project, wave, waveOf, claimedBy, sessionId, homeProject } = body;
+    const { program, title, claimedBy, sessionId, homeProject, kind, reviews } = body;
+    // Design 2026-09-14 §5.1 / D-2799. `kind` absent is 'work' — every caller
+    // that predates review runs. Checked BEFORE the shape guard below: that
+    // guard's own project/wave relaxation reads `kind !== 'review'` and would
+    // otherwise fold an invalid `kind` into "this is a work-shaped body" and
+    // answer the generic bare `bad-request` (no field named) rather than this
+    // one's own detail.
+    if (!(kind === undefined || kind === 'work' || kind === 'review')) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'kind must be work or review' });
+    }
     if (typeof program !== 'string' ||
         typeof title !== 'string' || title.trim() === '' ||
-        typeof project !== 'string' || project.trim() === '' ||
+        (kind !== 'review' && (typeof body.project !== 'string' || body.project.trim() === '')) ||
+        (body.project !== undefined && typeof body.project !== 'string') ||
         typeof claimedBy !== 'string' || claimedBy.trim() === '' ||
-        !isPositiveDecimalSafeInteger(wave) ||
-        !(waveOf === undefined || waveOf === null || isPositiveDecimalSafeInteger(waveOf)) ||
+        (kind !== 'review' && !isPositiveDecimalSafeInteger(body.wave)) ||
+        (body.wave !== undefined && !isPositiveDecimalSafeInteger(body.wave)) ||
+        !(body.waveOf === undefined || body.waveOf === null || isPositiveDecimalSafeInteger(body.waveOf)) ||
         !(sessionId === undefined || (typeof sessionId === 'string' && sessionId.trim() !== '')) ||
         // Present-and-not-a-string is a malformed body. The VALUE is shaped
         // below, by `shapeHomeProject`, ONCE — trimmed, and refused unless it
@@ -1137,14 +1202,51 @@ export function registerCoordRoutes(
         !(homeProject === undefined || typeof homeProject === 'string')) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // `kind`'s own vocabulary was already proven above, before this guard.
+    // Each further refusal below names its field so the caller can tell
+    // "malformed JSON" from "you sent the wrong thing".
+    const runKind: 'work' | 'review' = kind === 'review' ? 'review' : 'work';
+    if (runKind === 'work' && reviews !== undefined) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews is only accepted with kind review' });
+    }
+    if (runKind === 'review' && !isPositiveDecimalSafeInteger(reviews)) {
+      return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews must name the work run under review (a positive run id)' });
+    }
     // A programme names one ledger file, so separators, dot components, and
     // display-label punctuation are refused before the value reaches storage or
-    // `ledgerPath`. Every programme consumer below reads this one shaped value.
+    // `ledgerPath`. Every programme consumer below reads this one shaped value —
+    // MOVED above the review arm (Task 5 review I2): `program` compared raw
+    // against the reviewed run's own (already-shaped, since every open shapes
+    // it) `program` let a whitespace-padded slug pass a work open and fail an
+    // otherwise-identical review open of the same programme.
     const programShape = shapeProgramSlug(program);
     if (!programShape.ok) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: programShape.detail });
     }
     const programSlug = programShape.slug;
+
+    // A review run's project, wave and waveOf are the REVIEWED run's — read off
+    // its row, never off this body, which may only agree (D-2799). The body's
+    // own shape guard above already accepted `project`/`wave` as it always
+    // did; here the review arm overrides them with the measured values.
+    let project = body.project as string, wave = body.wave as number, waveOfBody = body.waveOf;
+    if (runKind === 'review') {
+      if (sessionId !== undefined) {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' });
+      }
+      const target = coord.run(reviews as number);
+      if (!target.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: target.detail });
+      if (target.run === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'reviews names no run' });
+      const t = target.run;
+      if (t.kind !== 'work') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a work run, not one of kind ${t.kind}` });
+      if (t.state !== 'awaiting-review') return reply.code(400).send({ ok: false, error: 'bad-request', detail: `reviews must name a run at awaiting-review, not ${t.state}` });
+      if (t.program !== programSlug) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `program must be the reviewed run's (${t.program})` });
+      if (t.claimedBy !== claimedBy) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'claimedBy must be the reviewed run\'s coordinator' });
+      if (body.project !== undefined && body.project !== t.project) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `project must be the reviewed run's (${t.project})` });
+      if (body.wave !== undefined && body.wave !== t.wave) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `wave must be the reviewed run's (${t.wave})` });
+      if (body.waveOf !== undefined && body.waveOf !== null && body.waveOf !== t.waveOf) return reply.code(400).send({ ok: false, error: 'bad-request', detail: `waveOf must be the reviewed run's (${t.waveOf})` });
+      project = t.project; wave = t.wave; waveOfBody = t.waveOf;
+    }
 
     // THE ONE HOME SHAPING. Every consumer below — the verdict, `openRun`,
     // `setProgramHome` (through the verdict's own `home`), the response —
@@ -1155,7 +1257,7 @@ export function registerCoordRoutes(
       if (!shaped.ok) return reply.code(400).send({ ok: false, error: 'bad-request', detail: shaped.detail });
       home = shaped.home;
     }
-    const waveOfVal = (waveOf ?? null) as number | null;
+    const waveOfVal = (waveOfBody ?? null) as number | null;
 
     // F1 (design 2026-09-08 §3 F1) — a session's workspace is a worktree in ONE
     // repository, and reusing it for a wave in another is the one crossing this
@@ -1190,14 +1292,60 @@ export function registerCoordRoutes(
     }
     if (homeVerdict.kind === 'required') {
       // Its OWN sentence (D-2349), not the body-shape guard's bare
-      // `bad-request` 36 lines up: two conditions whose remedies differ —
-      // "your JSON is
-      // malformed" versus "this build requires a home" — must not reach the
-      // caller as one value. Dormant while `HOME_PROJECT_LEGACY_ACCEPTED` is
-      // true; the day wave 3 flips the constant, this is the one refusal the
-      // flip exists to produce. Pinned by `home-project.test.ts`'s scan.
+      // `bad-request` above: "your JSON is malformed" and "this build
+      // requires a home" have different remedies and must not reach the
+      // caller as one value. LIVE since 2026-09-16 (D-2867): every
+      // otherwise well-formed open with no `homeProject` gets this — a
+      // malformed body still gets the shape guard's answer first, a session
+      // bound elsewhere `409 project-mismatch`. Pinned by
+      // `home-project.test.ts`'s scan and `home-project-required.test.ts`.
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
+
+    // §12 (spec 2026-09-16, addendum 2026-09-18) — a dispatched worker may not
+    // coordinate. The question is about ANY open run that names `claimedBy` as
+    // its worker and is claimed by SOMEBODY ELSE, so the read is
+    // `openClaimantsOf` — every coordinator this session currently works for —
+    // and not `parentOfSession`, which is `LIMIT 1` and answers only about the
+    // NEWEST such run (second fix round, D-3054). A session self-claimed on its newest
+    // run while still somebody's worker on an older open one used to walk
+    // straight through here; `runs_by_session` is non-unique and the
+    // coordinator protocol opens wave N+1 before closing wave N, so that state
+    // is protocol, not corruption.
+    //
+    // A SELF-CLAIMED RUN IS NOT SOMEBODY ELSE, and an ownerless open run (a
+    // reconstructed row, `claimedBy` NULL) is not an entry in the list at all —
+    // both ADMITTED, D-3012, because `by` is what this refusal is for and
+    // neither has one to name. Scope is any open run, `planned` through
+    // `closing`, and `unknown`, not only `dispatched`: a finished worker is not
+    // a worker (`[]`), an idle one still is. `by` names the FIRST offender the
+    // list carries, which is the newest, so the operator is sent to the most
+    // recent binding rather than the oldest.
+    //
+    // HERE, synchronous and DB-only, ahead of the awaited registry read and of
+    // `openRun`, so a refusal leaves no `planned` orphan and places no hold
+    // — F1's reason.
+    const workerOf = coord.openClaimantsOf(claimedBy).find((c) => c !== claimedBy);
+    if (workerOf !== undefined) {
+      return reply.code(409).send({ ok: false, refused: 'claimant-is-a-worker', by: workerOf });
+    }
+
+    // The coordinator's project, from the REGISTRY — never `sessionProject`,
+    // which reads the runs table and so answers only for a session that has
+    // been a worker. Measured over all 64 runs in history: no session has ever
+    // been both, so `sessionProject(claimedBy)` is null for every coordinator.
+    //
+    // MEASURED, through `fieldMeasured` — never `SessionRecord.project`,
+    // whose `project ?? id` collapsing default (`registry.ts`'s
+    // `buildRecord`) would otherwise reach this permanent stamp as if it
+    // were a measurement (D-2342, the same reason `dispatch.ts`'s
+    // `project-mismatch` rung reads `.project` this way instead of through a
+    // built record). An unreadable field, an absent field, and a present but
+    // EMPTY field all leave the stamp off — `undefined`, never a guess —
+    // because the stamp is written once and never backfilled: absence
+    // permits, but a wrong value never heals.
+    const projectRead = await fieldMeasured(deps.io, deps.cfg.registryDir, claimedBy, 'project');
+    const coordProject = projectRead.ok && projectRead.content !== '' ? projectRead.content : undefined;
 
     // `openRun` refuses a second coordinator (spec:291-292) rather than
     // arbitrating — the run is NOT opened, nothing else below runs. It is
@@ -1205,7 +1353,9 @@ export function registerCoordRoutes(
     // claimedBy) against an existing `planned` row (fix, review findings
     // 19/32) — see its own docstring.
     const opened = coord.openRun({ program: programSlug, title, project, wave, waveOf: waveOfVal, claimedBy,
-      ...(home !== undefined ? { homeProject: home } : {}) });
+      kind: runKind, reviews: runKind === 'review' ? (reviews as number) : null,
+      ...(home !== undefined ? { homeProject: home } : {}),
+      ...(coordProject !== undefined ? { coordProject } : {}) });
     if ('kind' in opened) {
       return reply.code(opened.kind === 'hold-oversize' ? 413 : 400).send({
         ok: false,
@@ -1218,11 +1368,12 @@ export function registerCoordRoutes(
       return reply.code(409).send({ ok: false, refused: opened.refused, by: opened.by });
     }
 
-    // The backfill and the legacy acceptance are RECORDED, not merely done:
-    // wave 3's flip is dated by `run_events` showing zero `legacy-home-project`
-    // rows over seven consecutive days, and a fact nothing wrote down cannot
-    // date anything. `recordRunEvent` writes `fromState === toState`, so the
-    // notify lane skips it and no push impersonates a transition.
+    // The backfill is RECORDED, not merely done — and the legacy acceptance
+    // was too, while the constant was `true`, which is what let the flip be
+    // dated from `run_events` at all (it was ruled early instead, D-2867; the
+    // trail is in `docs/superpowers/programs/home-project-flip.md`).
+    // `recordRunEvent` writes `fromState === toState`, so the notify lane
+    // skips it and no push impersonates a transition.
     if (homeVerdict.kind === 'backfill') {
       tx(coord.db, () => {
         coord.setProgramHome(programSlug, homeVerdict.home);
@@ -1314,10 +1465,10 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown };
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, tmux: deps.tmux, queue: deps.queue,
       // The one place a wrapper becomes a directory, called from L4 where the
@@ -1326,7 +1477,7 @@ export function registerCoordRoutes(
       // `./coord/db.js` and a value import would drag the store's module graph
       // into a policy module (D-1015).
       configDir: (wrapper: string) => configDirFor(deps.cfg, wrapper) };
-    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items));
+    const outcome = await coordMutex.run(() => dispatchRun(dispatchDeps, id, body.brief, body.items, body.route));
     return sendDispatchOutcome(reply, outcome);
   });
 
@@ -1345,8 +1496,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1378,8 +1529,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const closeDeps: CloseRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState };
@@ -1424,8 +1575,8 @@ export function registerCoordRoutes(
     if (!deps.coord) return notConfigured(reply);
     const coord = deps.coord;
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // Read BEFORE the mutex, not inside it: a malformed body is decided by this
     // request alone, and queueing it behind a live dispatch would make the
     // answer depend on the fleet's weather. It also keeps `auth-gate`'s sweep
@@ -1450,6 +1601,10 @@ export function registerCoordRoutes(
     }
     switch (r.kind) {
       case 'unknown-run': return reply.code(404).send({ ok: false, error: 'unknown-run' });
+      // D-2545. 503, never the 404 above: the run exists and this box cannot
+      // read it — the ungated release valve must say which.
+      case 'run-unreadable':
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: r.detail });
       case 'unknown-session': return reply.code(404).send({ ok: false, error: 'unknown-session' });
       case 'no-claimant': return reply.code(409).send({ ok: false, refused: 'no-claimant' });
       // 502, the coord-route family's status for this condition
@@ -1465,6 +1620,8 @@ export function registerCoordRoutes(
       // operator with a refusal and no next move.
       case 'claimant-alive':
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      case 'heir-is-a-worker':
+        return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });
@@ -1501,6 +1658,7 @@ export function registerCoordRoutes(
    * both as "the ordinary case, not a failure") re-measures NOTHING, the
    * same D-49 reasoning close's own abandon path already uses: retreating to
    * `working` asserts no new claim of doneness for the server to check.
+   * It does take the CAP check when it comes from an idle state (design 2026-09-14 §7.2) — retreating asserts no doneness, but it does re-occupy a fleet slot.
    */
   app.post('/api/runs/:id/advance', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
@@ -1508,8 +1666,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const body = (req.body ?? {}) as
       { to?: unknown;
@@ -1532,13 +1690,51 @@ export function registerCoordRoutes(
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
-    const run = coord.run(id);
+    const read = coord.run(id);
+    // D-2545, and the `unknown-run` line below is why it matters: 404 tells
+    // the coordinator this run does not exist, which is a lie about a row
+    // sitting in the table with an integer this process cannot represent.
+    // 503, in the `not-configured` family — a fact about this box, not about
+    // the request. Before any `verifyDone` re-measurement or any advance.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    const run = read.run;
     if (!run) return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
-    if (!(RUN_TRANSITIONS[run.state] as readonly RunState[]).includes(to)) {
+    if (!(transitionsFor(run.kind)[run.state] as readonly RunState[]).includes(to)) {
       return reply.code(409).send({ ok: false, reject: { code: 'bad-transition', from: run.state, to } });
     }
     if (run.sessionId === null) {
       return reply.code(409).send({ ok: false, reject: { code: 'not-dispatched' } });
+    }
+
+    // Design 2026-09-14 §9 invariant 3 — the pair never disagrees. A work run
+    // under review cannot be moved back to `working` until its review run is
+    // terminal: the coordinator closes R (done, or failed if it died) BEFORE
+    // sending W back, so a report and the tip it describes stay one pair.
+    // Checked ahead of the cap: a definite refusal before a contingent one.
+    if (to === 'working' && run.kind === 'work') {
+      const inflight = coord.reviewInFlightFor(id);
+      if (inflight !== null) {
+        return reply.code(409).send({ ok: false, reject: { code: 'review-in-flight', reviewRunId: inflight } });
+      }
+    }
+
+    // Spec 2026-09-14 §7.2 pin 2. Task 1 took the idle states out of
+    // `capsUsage().running`, so the one legal edge back INTO an active state
+    // — `awaiting-review`/`merging` -> `working`, a review sending work back
+    // or a lost merge race — must take the cap check dispatch takes, or the
+    // exclusion is a bypass. `dispatched -> working` is not checked: that run
+    // is already counted. The numbers come from `capsMeasured` (D-2805), the
+    // one reader both routes share; this file's own `.capsUsage(` stays the
+    // caps view's alone, as `coord-caps-route.test.ts` pins.
+    if (to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(run.state)) {
+      const { overConcurrency } = capsMeasured(coord);
+      if (overConcurrency !== null) {
+        // Fields spelled, not spread, to match dispatch.ts's frame; capsMeasured owns the arithmetic.
+        return reply.code(409).send({ ok: false, reject: { code: 'cap-concurrency',
+          limit: overConcurrency.limit, running: overConcurrency.running } });
+      }
     }
 
     // Forward motion toward a review claim re-measures; retreating to
@@ -1559,7 +1755,389 @@ export function registerCoordRoutes(
 
     const adv = coord.advance(id, to, 'coordinator');
     if (!adv.ok) return reply.code(409).send({ ok: false, reject: adv });
-    return reply.code(200).send({ ok: true, run: toRunSummary(coord.run(id)!) });
+    // Re-read after the advance for the fresh row. `!` is gone with the type
+    // (D-2545): an advance that succeeded and then read back absent or
+    // unreadable is a real condition, and answering it honestly is cheaper
+    // than a non-null assertion that would throw a bare 500 here.
+    const after = coord.run(id);
+    if (!after.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: after.detail });
+    }
+    if (after.run === null) {
+      return reply.code(404).send({ ok: false, reject: { code: 'unknown-run' } });
+    }
+    return reply.code(200).send({ ok: true, run: toRunSummary(after.run) });
+    });
+  });
+
+  /**
+   * `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3, slice 5, Task 2)
+   * — the coordinator's door onto the escalation/demotion ladders
+   * (`shared/routing-ladder.ts`'s `escalate`/`demote`). Clause 1 of the
+   * global constraints: the coordinator NEVER runs `ccd route` itself; this
+   * is the one place a `route` argv is built on a run's behalf, and it never
+   * passes `--apply`. Box-token gated — this route sits in the census
+   * `CLAUDE.md`'s "the bulk of the box-token surface" sentence covers
+   * (`requireMailToken` below, the same gate `dispatch`/`close`/`advance`
+   * carry), never the session-only set.
+   *
+   * This door only ever routes a MAIN session — the run's own worker
+   * (`run.sessionId`) or its coordinator (`run.claimedBy`) — never a
+   * subagent; `scope` is therefore always `'main'`. A subagent's own class
+   * ceiling (`SUBAGENT_CLASS_CEILING`) is a fact the worker/coordinator skill
+   * reasons about when it asks for a `field`/`value` write on `subagent`
+   * itself — this door does not read that field back, so a manual write
+   * records `from: '?'`.
+   *
+   * `kind`/`demote` walk the ladder: read the target session's served class
+   * (`degraded ?? class` — a degraded lane serves the DEGRADED class, and the
+   * ladder must compute from what is actually running, not what the record
+   * still intends) and effort off the registry, derive `priorSameKind` and
+   * `lastDemotion` from the target SESSION's own event trail — every run it
+   * touches, worker or coordinator (`coord.runsTouching`, routing slice 6,
+   * Task 1; that bookkeeping is this door's, not the ladder's), and answer
+   * whatever `escalate()`/`demote()` answers. `field`+`value` is the
+   * coordinator's own judgement —
+   * no registry read, no ladder call, `value` is SHAPE-checked by
+   * `parseRouteFields` (fix round 1, finding #3 — the same guard the picker's
+   * sibling route reuses) and then reaches ccd unvalidated on VOCABULARY
+   * (ccd's `_route_valid` is that authority).
+   *
+   * The run-event/response `mode` is DERIVED from `RungTarget.mode` (S5-R1) —
+   * `RouteMode` is that type plus `'manual'` — never a second, hand-typed
+   * verb string. A ccd refusal (`fleetFailed`) records NO run event, so a
+   * retried call sees the record exactly as it was before the refused write.
+   */
+  app.post('/api/runs/:id/route', async (req, reply) => {
+    if (!deps.coord) return notConfigured(reply);
+    if (!requireMailToken(req, reply, 'POST /api/runs/:id/route')) return;
+    const coord = deps.coord;
+
+    const { id: idParam } = req.params as { id: string };
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'id must be a positive safe integer' });
+
+    const badRequest = (detail: string) => reply.code(400).send({ ok: false, error: 'bad-request', detail });
+
+    const body = (req.body ?? {}) as Partial<RunRouteBody>;
+    if (body.target !== 'worker' && body.target !== 'coordinator') {
+      return badRequest('target must be "worker" or "coordinator"');
+    }
+    if (typeof body.why !== 'string') return badRequest('why must be a string');
+    const whyBytes = new TextEncoder().encode(body.why).length;
+    if (whyBytes < 1 || whyBytes > 400 || ROUTE_CONTROL_CHAR_RE.test(body.why)) {
+      return badRequest('why must be 1..400 bytes with no control characters');
+    }
+    const why = body.why;
+
+    const hasKind = body.kind !== undefined;
+    const hasDemote = body.demote !== undefined;
+    const hasManual = body.field !== undefined || body.value !== undefined;
+    if ([hasKind, hasDemote, hasManual].filter(Boolean).length !== 1) {
+      return badRequest('exactly one of kind, demote, or field+value is required');
+    }
+
+    let kind: FailureKind | undefined;
+    let demoteField: 'class' | 'effort' | undefined;
+    let manualField: RouteField | undefined;
+    let manualValue: string | undefined;
+    if (hasKind) {
+      if (typeof body.kind !== 'string' || !(FAILURE_KINDS as readonly string[]).includes(body.kind)) {
+        return badRequest(`kind must be one of ${FAILURE_KINDS.join('/')}`);
+      }
+      kind = body.kind;
+    } else if (hasDemote) {
+      if (body.demote !== 'class' && body.demote !== 'effort') {
+        return badRequest('demote must be "class" or "effort"');
+      }
+      demoteField = body.demote;
+    } else {
+      // The same `{field, value}` SHAPE guard the sibling `POST
+      // /api/sessions/:id/route` (server.ts:1722) already reuses `parseRouteFields`
+      // for — known field, non-empty, no control characters, <= 32 bytes
+      // (`ROUTE_VALUE_MAX_BYTES`). ccd's own `_route_valid` carries no
+      // control-character or length arm at all (`ROUTE_CONTROL_CHAR_RE`'s own
+      // docstring), so this door is the only barrier on shape; a manual
+      // `value` that skipped it would reach `CCD_ARGV.route` unbounded and
+      // could poison the `route:<mode>:<field>:<from>-><to>:<kind>[:<session>]`
+      // event string this door later parses back off its own history.
+      const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
+      if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
+        return badRequest(!parsed.ok ? `field/value invalid: ${parsed.why}` : 'field and value are required');
+      }
+      const [field, value] = Object.entries(parsed.route)[0] as [RouteField, string];
+      manualField = field;
+      manualValue = value;
+    }
+
+    return coordMutex.run(async () => {
+      const read = coord.run(id);
+      if (!read.ok) return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+      const run = read.run;
+      if (!run) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+
+      if (!ROUTABLE_RUN_STATES.includes(run.state)) {
+        return reply.code(409).send({ ok: false, error: 'run-closed', detail: `run is ${run.state}` });
+      }
+
+      const sid = body.target === 'worker' ? run.sessionId : run.claimedBy;
+      if (sid === null || sid === '') {
+        return reply.code(409).send({ ok: false, error: 'no-session' });
+      }
+      // Fix round 1, finding #2: `sid` comes off `run.sessionId`/
+      // `run.claimedBy` (`POST /api/runs` shape-checks `claimedBy`/
+      // `sessionId` only for "non-empty string", no charset guard), but
+      // `routeEventDetail` below embeds `sid` unescaped as the sixth segment
+      // of a `:`-delimited grammar that `ROUTE_EVENT_DETAIL_RE`'s own group
+      // accepts only `[A-Za-z0-9._-]+` for. Refuse the bad shape HERE, before
+      // ever building an argv or writing an event this door's own reader
+      // would later refuse to parse back — `no-session` (nothing to route
+      // to) and `bad-session` (something to route to, but not a name this
+      // door can safely write) are two different conditions and must not
+      // collapse to one refusal.
+      if (!isSessionIdShape(sid)) {
+        return reply.code(409).send({ ok: false, error: 'bad-session' });
+      }
+
+      if (!capSupported(deps.fleetState, ROUTE_CAP)) {
+        return reply.code(501).send({ ok: false, error: 'unsupported' });
+      }
+
+      let field: RouteField;
+      let from: string;
+      let to: string;
+      let mode: RouteMode;
+      // THE COMPANION EFFORT A CLASS RUNG RESETS, or `null` when this call
+      // writes one field (final review, finding #1). Spec §3: "A class rung
+      // resets effort to the new class's matrix row, never carries the old
+      // level across" — so a ladder move on `class` is TWO pairs, and
+      // `classRungEffortReset` is the one place that says which value.
+      // `null` on an effort rung (nothing to reset) and on a MANUAL write,
+      // which this door forwards exactly as the coordinator typed it — the
+      // coordinator's own judgement is not a rung, and a manual
+      // `class=haiku` that ccd refuses is ccd's answer to give, not this
+      // door's to silently amend.
+      let effortReset: string | null = null;
+
+      if (manualField !== undefined) {
+        field = manualField;
+        from = '?';
+        to = manualValue!;
+        mode = 'manual';
+      } else {
+        const classRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'class');
+        if (!classRead.ok) {
+          return classRead.reason === 'absent'
+            ? reply.code(409).send({ ok: false, error: 'no-record', field: 'class' })
+            : reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'class' });
+        }
+        // S5-R18: `.class` present with `.effort` ABSENT is `effort: 'auto'`
+        // — the record's own vocabulary for "no override, the model's
+        // default" (ccd composes no `--effort` for it) — never `no-record`;
+        // that refusal is reserved for an absent `.class` (checked above).
+        // `.effort` present-but-UNREADABLE is still transient, not absence.
+        const effortRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'effort');
+        if (!effortRead.ok && effortRead.reason === 'unreadable') {
+          return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'effort' });
+        }
+        const effortContent = effortRead.ok ? effortRead.content : 'auto';
+        const degradedRead = await fieldMeasured(deps.io, deps.cfg.registryDir, sid, 'degraded');
+        if (!degradedRead.ok && degradedRead.reason === 'unreadable') {
+          return reply.code(503).send({ ok: false, error: 'registry-unreadable', file: 'degraded' });
+        }
+
+        // Fix round 1, finding #1: a PRESENT, READABLE registry field is not
+        // automatically a LEGAL rung. `classIndex`/`effortIndex`
+        // (`shared/routing-ladder.ts`) resolve rungs by `indexOf`, so an
+        // out-of-vocabulary value yields -1 and `CLASSES[-1+1]`/
+        // `EFFORT_LADDER[-1+1]` silently reads the FLOOR rather than
+        // refusing — reachable with a LEGAL ccd value, not just corruption:
+        // `ccd/ccd`'s `ROUTE_CLASSES` includes `default` ("no override"),
+        // which passes `_route_valid` and is stored verbatim, and a torn or
+        // never-written field trims to `''` (`fieldMeasured`'s own
+        // whitespace-collapse). Both are refused here as `unrouteable-record`
+        // — a condition distinct from `no-record` (the record EXISTS, it is
+        // only unroutable) — before either value is cast into the ladder's
+        // domain types. Ruling S5-R19: this is a DIFFERENT question than the
+        // doctor's live-session census asks ("has a record" — a `.class`
+        // field, `default` included) — this door asks "is on a rung of the
+        // ladder", so the detail below says the value is a record, not a
+        // rung, rather than repeating the census's own words.
+        if (!(CLASSES as readonly string[]).includes(classRead.content)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'class', detail: `${JSON.stringify(classRead.content)} is not a rung of the ladder (a record, not a rung)` });
+        }
+        const EFFORT_VALUES: readonly string[] = [...EFFORT_LADDER, 'auto', 'ultracode'];
+        if (!EFFORT_VALUES.includes(effortContent)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'effort', detail: `${JSON.stringify(effortContent)} is not a rung of the ladder (a record, not a rung)` });
+        }
+        // An ABSENT `.degraded` means no degrade (brief's own contract,
+        // handled above by `!degradedRead.ok`). A PRESENT but blank one — the
+        // same torn/never-written shape as `class`/`effort` above — is
+        // treated the same way, not as a garbage class: empty content is the
+        // established "cleared" reading `fieldMeasured`'s own docstring gives
+        // `.branch`/`.hold`/`.substrate`, so it degrades to "no override"
+        // rather than to the empty string the unvalidated cast used to leave
+        // it as. Anything else present must be a real class or the record is
+        // unrouteable.
+        if (degradedRead.ok && degradedRead.content !== '' && !(CLASSES as readonly string[]).includes(degradedRead.content)) {
+          return reply.code(409).send({ ok: false, error: 'unrouteable-record', field: 'degraded', detail: `${JSON.stringify(degradedRead.content)} is not a rung of the ladder (a record, not a rung)` });
+        }
+        const rawClass = classRead.content as ModelClass;
+        const degraded = degradedRead.ok && degradedRead.content !== '' ? (degradedRead.content as ModelClass) : null;
+        const servedClass = degraded ?? rawClass;
+        const current: RungCurrent = {
+          class: servedClass,
+          effort: effortContent as RungCurrent['effort'],
+        };
+
+        // S5-R2: `lastDemotion` is bookkeeping this door owns (not the
+        // ladder's), derived from the SESSION's event trail — the last
+        // `route:demote:` detail not yet followed by a
+        // `route:reverse-demotion:` detail. Walked in order, so a later
+        // reverse-demotion or a later demote always wins over an earlier
+        // one. (Routing slice 6, Task 1, D-2957 closed: the walk is the
+        // session's, across every run it touches — see below.)
+        //
+        // Fix round 2, finding #8, ruling S5-R5: a manual write on the
+        // DEMOTED field also clears `lastDemotion` — the coordinator's own
+        // judgement superseded the demotion, so the next escalation must not
+        // "reverse" a rung the record no longer carries. A manual write on
+        // some OTHER field leaves a standing demotion alone (it never
+        // touched that field). Without this, `demote effort high->medium`
+        // then `manual field:effort value:max` then a failure would answer
+        // `reverse-demotion medium->high` and walk the session DOWN from
+        // `max` using a `from` that was never current.
+        // S5-R6: the parse itself is `parseRouteEventDetail` (`shared/api.ts`)
+        // now, not an inline regex — this door and `CoordStore.runSignals`
+        // read the SAME vocabulary (`ROUTE_MODES`/`FAILURE_KINDS`), so a mode
+        // or kind added to one can never silently go unrecognised by the
+        // other.
+        //
+        // THE SCOPE IS THE SESSION, ACROSS EVERY RUN IT TOUCHES (routing
+        // slice 6, Task 1 — D-2957, the run-scoped rule final review left
+        // here, is CLOSED by this walk). The rung the ladder's history is
+        // about belongs to the SESSION, not to one run row, so this reads
+        // the union of `runEvents(r.id)` over `coord.runsTouching(sid)` —
+        // every run where `sid` is the worker OR the coordinator, any
+        // state — ordered by `at` then run id so two events landed in the
+        // same millisecond still replay in the order their rows were
+        // written.
+        //
+        // A SIX-SEGMENT event (`routeEventDetail` writes one on every call
+        // from here on) names its own session, so it counts iff
+        // `evSession === sid` — the one comparison that lets a run route
+        // both its worker and its coordinator without attributing one's
+        // history to the other. A FIVE-SEGMENT event (every one this door
+        // wrote before slice 6) names none, so it is attributed to the
+        // run's own `sessionId` — the worker — because that is the only
+        // role a pre-slice-6 write could ever have targeted; a
+        // coordinator-targeted five-segment event sitting on that same run
+        // is indistinguishable from a worker-targeted one and is IGNORED
+        // here rather than guessed at.
+        const touching = coord.runsTouching(sid);
+        const trail = touching
+          .flatMap((r) => coord.runEvents(r.id).map((e) => ({ ...e, runId: r.id, runSessionId: r.sessionId })))
+          .sort((a, b) => (a.at - b.at) || (a.runId - b.runId));
+        let lastDemotion: Demotion | null = null;
+        let priorSameKind = 0;
+        for (const e of trail) {
+          if (e.detail === null) continue;
+          const parsed = parseRouteEventDetail(e.detail);
+          if (parsed === null) continue;
+          const { mode: evMode, field: evField, from: evFrom, to: evTo, kind: evKind, session: evSession } = parsed;
+          const belongsToSid = evSession !== null ? evSession === sid : e.runSessionId === sid;
+          if (!belongsToSid) continue;
+          if (evMode === 'demote') {
+            lastDemotion = { field: evField as 'class' | 'effort', from: evFrom, to: evTo };
+          } else if (evMode === 'reverse-demotion') {
+            lastDemotion = null;
+          } else if (evMode === 'manual' && lastDemotion !== null && evField === lastDemotion.field) {
+            lastDemotion = null;
+          }
+          if (hasKind && evMode === 'escalate' && evKind === kind) {
+            priorSameKind++;
+          }
+        }
+
+        let target: RungTarget | { kind: 'floor'; why: string } = hasKind
+          ? escalate(kind!, current, 'main', priorSameKind, lastDemotion)
+          : demote(current, demoteField!);
+
+        // Ruling S5-R17 (final review, finding #3): `lastDemotion.to` is
+        // BOOKKEEPING — the rung the door last recorded the session landing
+        // on — while `current` above is what was just MEASURED off the live
+        // registry. A reversal's own `from` is `lastDemotion.to` (the
+        // ladder's own doc comment), so if the two disagree, something wrote
+        // the field out of band since (the PWA picker's `POST
+        // /api/sessions/:id/route`, or ccd itself — neither writes a run
+        // event this door's trail could see) and the demotion this reversal
+        // would walk back is no longer the session's actual history: treat
+        // `lastDemotion` as cleared and let the plain ladder apply to what is
+        // really on the record. The reversal's `from` is therefore always
+        // the measured value, never the stale bookkeeping.
+        if (hasKind && target.kind === 'move' && target.mode === 'reverse-demotion') {
+          const liveValue = target.field === 'class' ? current.class : current.effort;
+          if (target.from !== liveValue) {
+            target = escalate(kind!, current, 'main', priorSameKind, null);
+          }
+        }
+
+        if (target.kind !== 'move') {
+          return reply.code(409).send({ ok: false, error: target.kind, detail: target.why });
+        }
+
+        // A degraded session's own record may already intend the class the
+        // ladder just computed (the served class, not the intended one, is
+        // what escalated) — re-writing it is not a move, it is re-intending
+        // what the record already says. Only class escalations can collide
+        // this way: a demotion always lands BELOW the served class, and the
+        // served class is never above the raw one.
+        if (degraded !== null && target.field === 'class' && target.to === rawClass) {
+          return reply.code(409).send({
+            ok: false, error: 'ceiling',
+            detail: `the record already intends ${rawClass}; the lane serves ${servedClass} (degraded)`,
+          });
+        }
+
+        field = target.field;
+        from = target.from;
+        to = target.to;
+        mode = target.mode;
+        effortReset = target.field === 'class' ? classRungEffortReset(target.to) : null;
+      }
+
+      const dec = sweepDec(deps.fleetState, `run:${id} coordinator`);
+      const reason = `${mode}${kind ? ' ' + kind : ''}: ${why}`;
+      const flags = dec === null ? null : { ...dec, reason };
+      // ONE ARGV FOR THE PAIR, NEVER TWO CALLS (`CCD_ARGV.routeSet`'s own
+      // docstring / ruling S4-R5). `cmd_route` validates every `--set` pair
+      // and then the class/effort PAIR — "refused whether it arrives in one
+      // call or across two" — before its write loop touches the registry, so
+      // one argv is all-or-nothing while two calls would commit
+      // `class=haiku` and then die on the pair check. That pair is not
+      // hypothetical here: `demote: class` off sonnet lands on haiku, whose
+      // reset is `auto` precisely because ccd refuses haiku beside a level.
+      // A single-field `route` argv for a class rung would therefore write
+      // the wrong effort silently on every other class rung and refuse
+      // outright on that one.
+      const argv = effortReset === null
+        ? CCD_ARGV.route(sid, field, to, flags)
+        : CCD_ARGV.routeSet(sid, { class: to, effort: effortReset }, flags);
+      const res = await deps.runCcd(argv);
+      if (!res.ok) {
+        return reply.code(502).send({ ok: false, error: 'fleetFailed', stderr: res.stderr });
+      }
+
+      // ONE run event, naming the RUNG — the companion effort reset is part
+      // of that one class rung, not a second decision, and the `route:` event
+      // grammar (`routeEventDetail`, `shared/api.ts`) carries one field by
+      // construction. The reset is visible in the journal (ccd writes one
+      // `route` row per `--set` pair), in the `--reason` text the ladder
+      // composed ("… effort reset to <value>"), and on the response below.
+      coord.recordRunEvent(id, 'coordinator', routeEventDetail({ mode, field, from, to, kind: kind ?? 'manual', session: sid }));
+      return reply.code(200).send({
+        ok: true, applied: { session: sid, mode, field, from, to, kind: kind ?? null, effortReset },
+      });
     });
   });
 
@@ -1589,8 +2167,8 @@ export function registerCoordRoutes(
     const coord = deps.coord;
 
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     const outcome = await coordMutex.run(async () => settleItems({ coord }, id, req.body));
     return sendSettleItemsOutcome(reply, outcome);
@@ -1791,7 +2369,8 @@ export function registerCoordRoutes(
 
   /**
    * `GET /api/runs?closed=1` — cold start, and the archive of finished runs
-   * (spec:225-227). Strips `prLineage` on the way out (`toRunSummary`).
+   * (spec:225-227). Strips `prLineage` and `coordProject` on the way out
+   * (`toRunSummary`).
    *
    * EXEMPT FROM THE SESSION GATE, AND AUTHENTICATED HERE INSTEAD — the
    * `GET /api/auth/status` pattern, for a reason no task-level review could
@@ -1861,9 +2440,49 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const q = req.query as { closed?: string };
-    const runs = deps.coord.runs({ includeClosed: q.closed === '1' });
-    const summaries: RunSummary[] = runs.map(toRunSummary);
+    const read = deps.coord.runs({ includeClosed: q.closed === '1' });
+    // D-2545, ALL-OR-FAILURE at the board's own door. One unreadable row fails
+    // the WHOLE read rather than quietly shipping the others: a board silently
+    // missing the run an operator is looking for is worse than a board that
+    // says it could not be read. 503 and an honest error, never a partial list
+    // and never an empty one.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'runs-unreadable', detail: read.detail });
+    }
+    const summaries: RunSummary[] = read.runs.map(toRunSummary);
     return { runs: summaries };
+  });
+
+  /** Routing spec 2026-09-14 §6 — the run's speed and quality signals. READ,
+   *  gated exactly as `GET /api/runs` above: a session cookie OR the box token
+   *  when auth is armed, because the coordinator skill reads it cookieless
+   *  from the fleet host. Nothing is written here: the refused-close count it
+   *  reports is `closeRun`'s own `recordRejection` row. */
+  app.get('/api/runs/:id/signals', async (req, reply) => {
+    if (deps.cfg.authEnabled) {
+      const session = sessionAuth(req);
+      if (session.reason !== 'session') {
+        const token = checkMailToken(deps.mailToken ?? null, req.headers[MAIL_TOKEN_HEADER]);
+        if (token !== 'ok') {
+          return reply.code(401).send({
+            ok: false, error: 'unauthenticated', verdict: session.verdict,
+            detail: 'GET /api/runs/:id/signals takes a session cookie OR the box token ' +
+              `(${MAIL_TOKEN_HEADER}); the coordinator skill reads it cookieless from the fleet host`,
+          });
+        }
+      }
+    }
+    if (!deps.coord) return notConfigured(reply);
+    const { id: idParam } = req.params as { id: string };
+    // The shared parser, not `Number(idParam)`: `routes.ts`'s id census
+    // (`routes.test.ts`) requires every `:id` seam in this file to read its id
+    // the one canonical way — ` 1`, `01`, `1e0`, `0x1` and anything past
+    // MAX_SAFE_INTEGER are refused rather than coerced into a row id.
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const signals = deps.coord.runSignals(id);
+    if (signals === null) return reply.code(404).send({ ok: false, error: 'unknown-run' });
+    return { ok: true, signals };
   });
 
   /**
@@ -1906,13 +2525,21 @@ export function registerCoordRoutes(
     }
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     // An unknown run and a run with no declared ledger are DIFFERENT answers a
     // caller acts on differently: the first means the id is wrong, the second
     // means this wave declared none (the board renders `—`, not `0/0`). They
     // must not both come back as an empty array.
-    if (deps.coord.run(id) === null) {
+    const read = deps.coord.run(id);
+    // D-2545. The comment directly above says an unknown run and a run with no
+    // declared ledger are different answers a caller acts on differently; an
+    // UNREADABLE run is a third, and folding it into the 404 would tell the
+    // caller its id was wrong.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+    }
+    if (read.run === null) {
       return reply.code(404).send({ ok: false, error: 'unknown-run' });
     }
     return { ok: true, items: deps.coord.workItems(id) };
@@ -2114,7 +2741,7 @@ export function registerCoordRoutes(
     const recs = await readRegistry(deps.io, deps.cfg);
     const recById = new Map(recs.map((r) => [r.id, r]));
     const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord);
+      undefined, undefined, undefined, undefined, undefined, undefined, recs, deps.coord, undefined);
 
     let project: string;
     let selfId: string | null = null;
@@ -2265,8 +2892,16 @@ export function registerCoordRoutes(
 
     if (!(await requireAttribution(reply, byId, byUuid, 'byUuid'))) return;
 
-    if (runId !== null && coord.run(runId) === null) {
-      return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+    if (runId !== null) {
+      const read = coord.run(runId);
+      // D-2545: the row is there and unreadable — not absent. 503, so the
+      // claimant does not go looking for a typo in an id that is correct.
+      if (!read.ok) {
+        return reply.code(503).send({ ok: false, error: 'run-unreadable', detail: read.detail });
+      }
+      if (read.run === null) {
+        return reply.code(404).send({ ok: false, error: 'unknown-run', detail: `no run ${runId}` });
+      }
     }
 
     const r = coord.claimAttempt({ project: project.trim(), paths, sessionId: byId,
@@ -2296,7 +2931,7 @@ export function registerCoordRoutes(
         // rule (no:<reason> -> null, never a silent send) has one spelling.
         const names = await deps.io.readdir(deps.cfg.registryDir);
         const sessions = await assembleFleet(deps.io, deps.cfg, deps.tmux,
-          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord);
+          undefined, undefined, undefined, undefined, undefined, undefined, undefined, deps.coord, undefined);
         const deliverableOf = (id: string): PeerDeliverable => {
           const row = sessions.find((s) => s.id === id);
           if (row) {
@@ -2349,8 +2984,8 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
     if (!(await requireAttribution(reply, body.byId, body.byUuid, 'byUuid'))) return;
     // Ownership, decided on the LIVE table before the store ends anything: a
@@ -2394,8 +3029,8 @@ export function registerCoordRoutes(
   app.post('/api/claims/:id/break', async (req, reply) => {
     if (!deps.coord) return notConfigured(reply);
     const { id: idParam } = req.params as { id: string };
-    const id = Number(idParam);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const id = parseCanonicalPositiveSafeInteger(idParam);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
     return sendClaimEndOutcome(reply, deps.coord.claimBreak(id, 'operator', Date.now()));
   });
 
@@ -2686,13 +3321,19 @@ export function registerCoordRoutes(
     // session, exactly as the mail ingress and the claims lanes do.
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
-    // The same `Number.isInteger` shape guard every other `:id` route in
-    // this file uses (dispatch/close/advance/claims/ledger above) — a
-    // non-numeric id must 400 before it ever reaches `node:sqlite`, not
-    // throw a 500 out of a bound `NaN`.
-    const id = Number((req.params as { id: string }).id);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const ask = coord.askById(id);
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const askRead = coord.askById(id);
+    // D-2545. `unknown-ask` sends the parent to `wave-lifecycle.md`'s remedy
+    // for a row that is gone; this row is not gone, it is unreadable, and the
+    // two need different sentences for the same reason `child-unmeasurable`
+    // was split out of `ask-moved` below. 503, a fact about this box.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
     if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
@@ -2854,12 +3495,16 @@ export function registerCoordRoutes(
     // session, exactly as `/answer` and the mail ingress do.
     if (!(await requireAttribution(reply, fromId, fromUuid, 'fromUuid'))) return;
 
-    // The same `Number.isInteger` shape guard every other `:id` route in
-    // this file uses — a non-numeric id must 400 before it ever reaches
-    // `node:sqlite`, not throw a 500 out of a bound `NaN`.
-    const id = Number((req.params as { id: string }).id);
-    if (!Number.isInteger(id)) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const ask = coord.askById(id);
+    // Resource ids accept one positive-safe decimal spelling, before any
+    // sqlite read can collapse a different textual name onto this ask.
+    const id = parseCanonicalPositiveSafeInteger((req.params as { id: string }).id);
+    if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
+    const askRead = coord.askById(id);
+    // D-2545, `/answer`'s arm exactly — see its comment.
+    if (!askRead.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: askRead.detail });
+    }
+    const ask = askRead.ask;
     if (ask === null) return reply.code(404).send({ ok: false, error: 'unknown-ask' });
     if (ask.parentId !== fromId) {
       return reply.code(403).send({ ok: false, error: 'not-parent',
@@ -2990,6 +3635,12 @@ export function registerCoordRoutes(
       if (!(await requireAttribution(reply, parent, q.fromUuid, 'fromUuid'))) return;
     }
 
-    return reply.code(200).send({ ok: true, asks: coord.asksForParent(parent, state) });
+    const read = coord.asksForParent(parent, state);
+    // D-2545, ALL-OR-FAILURE: the parent's entire evidentiary surface is this
+    // list, so a partial one is worse than none — it looks complete.
+    if (!read.ok) {
+      return reply.code(503).send({ ok: false, error: 'ask-unreadable', detail: read.detail });
+    }
+    return reply.code(200).send({ ok: true, asks: read.asks });
   });
 }

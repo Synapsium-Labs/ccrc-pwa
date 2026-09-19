@@ -135,7 +135,13 @@ const PATH_CORPUS: CorpusFile[] = trackedPaths.map((p) => ({ file: p, lines: [p]
  *  would happen. CI therefore carries `fetch-depth: 0`, and deleting it makes
  *  this suite red instead of making it vacuous. */
 function resolveBase(cwd: string): string | null {
-  const candidates = [process.env.CCRC_HISTORY_BASE, 'origin/main', 'main']
+  // D-2732, and `deviation-refs.test.ts` says it copied this function from here,
+  // so both drop the third candidate together. Local `main` on the fleet host is
+  // a fossil another worktree parks — measured 356 commits behind `origin/main` —
+  // and a transient `packed-refs` rewrite from any of ~10 sibling worktrees is
+  // enough to make `origin/main` fail to resolve and hand this scan the fossil
+  // silently. The null-base refusal below is the honest answer.
+  const candidates = [process.env.CCRC_HISTORY_BASE, 'origin/main']
     .filter((r): r is string => Boolean(r));
   for (const ref of candidates) {
     try {
@@ -506,7 +512,7 @@ describe('the corpus this walks', () => {
 describe('the published history, not just the tip', () => {
   it('resolved a base to measure against — a missing one is RED, never vacuous', () => {
     expect(HISTORY_BASE,
-      'no $CCRC_HISTORY_BASE, origin/main or main resolved: a shallow checkout cannot guard history, and this refuses to report a range nobody measured')
+      'no $CCRC_HISTORY_BASE or origin/main resolved (D-2732 removed the local-main fallback, which was a fossil): a shallow checkout cannot guard history, and this refuses to report a range nobody measured')
       .not.toBeNull();
   });
 

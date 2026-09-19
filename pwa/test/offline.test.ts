@@ -23,7 +23,7 @@ const session = (id: string): FleetSession => ({
   limits: { five: 10, seven: 40 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   version: '2.1.0', hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
 });
 
 /** Scripted WebSocket stand-in (same shape the store tests use). */
@@ -78,6 +78,23 @@ describe('fleet snapshot (lib/offline)', () => {
     expect(loadFleetSnapshot()).toBeNull();
     window.localStorage.setItem('ccrc.fleet-snapshot.v1', '{"savedAt":"no","sessions":{}}');
     expect(loadFleetSnapshot()).toBeNull();
+  });
+
+  // ── cross-repo wave 2: what the snapshot does NOT hold ───────────────────────
+  //
+  // The wave brief asked for the snapshot revive to tolerate a missing `runId`
+  // and a missing `homeProject`. It holds NEITHER field, because it holds neither
+  // runs nor feed records — only `savedAt`, `sessions` and `roster`
+  // (`FleetSnapshot`, offline.ts). So the tolerance is vacuous by construction,
+  // and this pin is what keeps that TRUE rather than remembered: the day someone
+  // persists runs or the feed here, this reds and the reviver is written with it.
+  // The real tolerant readers for those two fields live where the data actually
+  // crosses a version boundary: `reviveNotifyEvent` (wave 1) for `runId`, and
+  // `runHomeProject` (`pwa/src/fleet/runWords.ts`) for `homeProject`.
+  it('persists sessions and roster only — no runs, no feed records', () => {
+    saveFleetSnapshot([session('claude:demo')], TEST_ROSTER);
+    const raw = JSON.parse(window.localStorage.getItem('ccrc.fleet-snapshot.v1')!) as Record<string, unknown>;
+    expect(Object.keys(raw).sort()).toEqual(['roster', 'savedAt', 'sessions']);
   });
 });
 
@@ -263,6 +280,36 @@ describe('fleet store hydration + persistence', () => {
     // offline snapshot.
     expect(loadFleetSnapshot()?.sessions.map((s) => s.id)).toEqual(['claude2:mekwarlive']);
     store.getState().disconnect();
+  });
+
+  // Task 7 (board-placement wave 2): `projects` is the LAST successful
+  // `/api/projects` read, lifted into the store so the session view can
+  // label a repo without a second agent round trip. It is deliberately NOT
+  // part of the persisted snapshot — same reason as `pools`.
+  //
+  // Fix round 1, finding 1: `loadFleetSnapshot` REBUILDS its return literal
+  // (`{ savedAt, sessions, roster }`, offline.ts's own `loadFleetSnapshot`)
+  // on every read, so a `"projects"` key can never survive a round trip
+  // through it — asserting over `loadFleetSnapshot()`'s OUTPUT can never red,
+  // whatever was actually stored. This pins the RAW stored string after a
+  // REAL save instead.
+  it('projects start null and are NOT part of the persisted snapshot (Task 7)', () => {
+    const store = createFleetStore({ makeSocket: () => ({ onopen: null, onmessage: null, onclose: null, onerror: null, close() {} }) as unknown as WebSocket });
+    expect(store.getState().projects).toBeNull();
+    store.getState().setProjects([{ name: 'demo', workdir: '/w/demo', repo: { state: 'named', slug: 'o/demo' } }]);
+    expect(store.getState().projects?.[0]?.name).toBe('demo');
+
+    // `saveFleetSnapshot` returns early on an empty sessions list (Task 2) —
+    // seed one non-degraded session so the save actually writes.
+    store.setState({ sessions: [session('claude:OpenClawHetzner')] });
+    saveFleetSnapshot(store.getState().sessions, store.getState().roster);
+
+    // `KEY` (offline.ts, `'ccrc.fleet-snapshot.v1'`) is module-private, not
+    // exported — the literal is the only way to read the raw stored string.
+    const raw = window.localStorage.getItem('ccrc.fleet-snapshot.v1');
+    expect(raw).not.toBeNull();
+    expect(raw).toContain('"sessions"'); // control: proves a save actually happened
+    expect(raw).not.toContain('"projects"');
   });
 });
 

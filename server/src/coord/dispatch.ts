@@ -7,7 +7,7 @@ import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
-import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -19,10 +19,12 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 import {
-  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, spawnVerdict,
-  type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
+  MAIL_BODY_MAX_BYTES, SPAWN_NOT_RECORDED, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, armEventDetail, parseRouteFields,
+  routeFieldsOrNull, routeParseDetail, spawnVerdict, transitionsFor,
+  type CoordCaps, type CoordCapsUsage, type RouteFields, type RunKind, type RunRefuseCode,
+  type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
-import { readWorkerSkillState } from '../skillstate.js';
+import { readSkillState, skillDirFor } from '../skillstate.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -39,6 +41,17 @@ import { readWorkerSkillState } from '../skillstate.js';
 // `name:`, so a rename cannot leave every worker being sent after a ghost.
 export const WORKER_KICKOFF_PREFIX =
   "Run the ccrc-worker skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+// The reviewer's half of the same pair (design 2026-09-14 §8): one sentence,
+// one skill name, bound to `ccd/reviewer-skill/SKILL.md`'s frontmatter by
+// `reviewer-skill.test.ts` exactly as the worker's is.
+export const REVIEWER_KICKOFF_PREFIX =
+  "Run the ccrc-reviewer skill — it is your standing protocol; read it before acting on anything below.\n\n";
+
+/** Which standing protocol a brief of this kind invokes. `unknown` never
+ *  reaches here — dispatch refuses it at the transition precondition. */
+export const kickoffPrefixFor = (kind: RunKind): string =>
+  kind === 'review' ? REVIEWER_KICKOFF_PREFIX : WORKER_KICKOFF_PREFIX;
 
 /**
  * L1 decision function (architecture doc increment 4 — "deciding split from
@@ -105,7 +118,11 @@ export type DispatchOutcome =
       skillState: SkillState }
   | { ok: false; kind: 'unknown-run' }
   | { ok: false; kind: 'bad-transition'; from: RunState; to: RunState }
-  | { ok: false; kind: 'bad-request' }
+  /** `detail` is PRESENT only for the malformed-`route` refusal (routing spec
+   *  §5.3, slice 4: `route: <why>[ <field>]`) — every other `bad-request` on
+   *  this union carries none, so the field distinguishes by presence rather
+   *  than an empty string standing in for "nothing to say". */
+  | { ok: false; kind: 'bad-request'; detail?: string }
   /** `detail` is the operator's own arithmetic, and it exists because the cap
    *  no longer measures the thing the sender is holding: the mail is
    *  `WORKER_KICKOFF_PREFIX + brief`, so a brief AT the cap refuses and
@@ -164,11 +181,44 @@ export type DispatchOutcome =
  * the route used to (D-46: the transition guard runs BEFORE the body is even
  * looked at).
  */
+
+/**
+ * THE CAP, MEASURED ONCE AND DECIDED ONCE (design 2026-09-14 §7.2 pin 2; D-2805).
+ * Two routes refuse on the concurrency cap — `dispatchRun` below and
+ * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
+ * state — and both take their numbers from this one read, so the refusal's
+ * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * taking the pair as arguments because `coord-caps-route.test.ts` pins that
+ * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
+ * needs the numbers for a refusal asks here and never reads them itself.
+ * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
+ * a cap that refuses without saying what it is is indistinguishable from a bug).
+ */
+export function capsMeasured(coord: CoordStore): {
+  caps: CoordCaps; usage: CoordCapsUsage;
+  overConcurrency: { limit: number; running: number } | null;
+} {
+  const caps = coord.caps();
+  const usage = coord.capsUsage();
+  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
+    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
+    : null;
+  return { caps, usage, overConcurrency };
+}
+
 export async function dispatchRun(
-  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown,
+  deps: DispatchRunDeps, id: number, brief: unknown, items: unknown, route: unknown = undefined,
 ): Promise<DispatchOutcome> {
   const coord = deps.coord;
-  const run = coord.run(id);
+  const read = coord.run(id);
+  // D-2545, `closeRun`'s own arm exactly (see its comment): the row exists and
+  // its integers are unrepresentable — refused in words, ahead of any fleet
+  // act, never thrown. `POST /api/runs/:id/dispatch` is as uncaught as the
+  // close route, so a throw here was a bare 500 with no `DispatchOutcome`
+  // shape. `hold-invalid` for the same reason, and the same `detail` rule:
+  // the column, never the value.
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
   if (!run) return { ok: false, kind: 'unknown-run' };
   // Precondition (D-46; a genuine CLAIM, not a stale read, because the
   // caller runs this whole function behind `CoordMutex` — see that class's
@@ -178,7 +228,11 @@ export async function dispatchRun(
   // this only answers the question early enough that `ccd ensure`/`/clear`/
   // `ws-add`/`ws-hold` never fire for a transition that was always going to
   // be refused.
-  if (run.state !== 'planned') {
+  // Read by KIND through `transitionsFor` (design 2026-09-14 §5.2): identical
+  // for both real kinds — only `planned` carries a `dispatched` edge in
+  // either table — and it refuses a `kind:'unknown'` row (D-2795) here,
+  // BEFORE `ccd ensure`/`ws-add`/`ws-hold` fire.
+  if (!transitionsFor(run.kind)[run.state].includes('dispatched')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'dispatched' };
   }
 
@@ -188,7 +242,8 @@ export async function dispatchRun(
   // THE MAIL, composed once: the standing protocol by name, then the wave's
   // own brief. Composed HERE, before the cap below, because the cap must
   // measure what is actually queued — see that check's own comment.
-  const body = WORKER_KICKOFF_PREFIX + brief;
+  const prefix = kickoffPrefixFor(run.kind);
+  const body = prefix + brief;
   // Fix, review finding 2: the SAME byte cap `POST /api/mail` enforces on
   // its own `body`, applied to the mail this dispatch will queue —
   // `queueSystemMail` below is a SECOND producer of `mail`/`mail_deliveries`
@@ -208,8 +263,8 @@ export async function dispatchRun(
   // 8 KiB means, by exactly the length of a constant in this file.
   if (Buffer.byteLength(body, 'utf8') > MAIL_BODY_MAX_BYTES) {
     return { ok: false, kind: 'oversize', limit: MAIL_BODY_MAX_BYTES,
-      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + worker kickoff prefix ` +
-        `${Buffer.byteLength(WORKER_KICKOFF_PREFIX, 'utf8')} bytes exceeds the ` +
+      detail: `brief ${Buffer.byteLength(brief, 'utf8')} bytes + kickoff prefix ` +
+        `${Buffer.byteLength(prefix, 'utf8')} bytes exceeds the ` +
         `${MAIL_BODY_MAX_BYTES}-byte mail body cap` };
   }
 
@@ -239,6 +294,42 @@ export async function dispatchRun(
   }
   const itemTitles: readonly string[] = (items as string[] | undefined) ?? [];
 
+  // Routing spec 2026-09-14 §5.3 (slice 4, Task 3). Validated HERE, beside
+  // `brief`/`items`'s own shape checks and BEFORE the hold/pause/cap reads
+  // below — the same D-46 ordering rule they follow: a malformed body is the
+  // cheapest refusal there is, so it must land before anything is counted,
+  // spawned or held.
+  //
+  // `undefined` (the parameter's own default, so an OMITTED fifth argument
+  // and an explicit `route: undefined` read identically) is NOT "no routing":
+  // it means the caller never asked, and `routeFields` stays `null` through
+  // every branch below — the argv this run sends is byte-for-byte what it was
+  // before this parameter existed. An empty `{}` DOES reach `parseRouteFields`
+  // (it is a real, distinct value — a caller who parsed a route body and it
+  // named no fields) but its parse can only ever yield zero keys, which
+  // collapses to the identical `null` below: there is nothing to flag and
+  // nothing to omit an event about.
+  //
+  // A REVIEW run's dispatch takes `route` exactly as a work run's does (merge
+  // of 2026-09-16, review runs meets routing): a reviewer SESSION is routed
+  // like any other session. What is exempt from routing is the held-out PANEL
+  // the review brief names (`references/review-panel.md`, coordinator clause
+  // 14), whose model and effort are literal in its own script — not the
+  // session that runs it. So no branch on `run.kind` belongs here.
+  let routeFields: RouteFields | null = null;
+  if (route !== undefined) {
+    const parsed = parseRouteFields(route);
+    if (!parsed.ok) {
+      // `routeParseDetail`/`routeFieldsOrNull` (`shared/api.ts`, fix round 2
+      // finding #2): the refusal GRAMMAR and the empty-object collapse were
+      // written out verbatim here and in `server.ts`'s `parseOperatorRoute`.
+      // What legitimately differs between the two sites — a typed
+      // `DispatchOutcome` here, a 400/501 reply there — stays here.
+      return { ok: false, kind: 'bad-request', detail: routeParseDetail(parsed) };
+    }
+    routeFields = routeFieldsOrNull(parsed.route);
+  }
+
   // The complete hold is known from the persisted run. Validate it after the
   // cheaper untrusted-body checks retain their existing precedence, but before
   // pause/cap reads and, critically, before a fresh dispatch can spawn a
@@ -266,11 +357,11 @@ export async function dispatchRun(
 
   // 2: caps. The refusal carries the numbers — a cap that refuses without
   // saying what it is is indistinguishable from a bug.
-  const caps = coord.caps();
-  const usage = coord.capsUsage();
-  if (usage.running >= caps.maxConcurrentWorkers) {
+  const { caps, usage, overConcurrency } = capsMeasured(coord);
+  if (overConcurrency !== null) {
+    // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return { ok: false, kind: 'refused', code: 'cap-concurrency',
-      limit: caps.maxConcurrentWorkers, running: usage.running };
+      limit: overConcurrency.limit, running: overConcurrency.running };
   }
   if (usage.dispatchedIn24h >= caps.maxSessionsPerDay) {
     return { ok: false, kind: 'refused', code: 'cap-daily',
@@ -353,7 +444,20 @@ export async function dispatchRun(
     // operator's own add. `null` — an older ccd, no `actor-flags-v1` — composes
     // the bare argv that shipped before, token for token; the residual that
     // makes THIS change AGENT-FIRST is stated on `wsAddWorker`'s docstring.
-    const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec);
+    //
+    // ROUTING (routing spec §5.3, slice 4, Task 3): gated on `ROUTE_ARGV_CAP`,
+    // the ARGV-PARSING capability — a DIFFERENT token from the `ROUTE_CAP`
+    // the wave N≥2 arm below gates the `ccd route` VERB on, because the two
+    // are different parse paths on the box and can ship one without the
+    // other. `routeFields === null` (the caller never asked, or asked for
+    // nothing) sends the identical bare argv regardless of the cap, so an
+    // absent token never fires the omission event for a wave that carried no
+    // routing to omit.
+    if (routeFields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-argv-cap');
+    }
+    const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec,
+      capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null);
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
@@ -457,6 +561,23 @@ export async function dispatchRun(
     // Fix, review finding 7: persist the spawn onto the run row RIGHT AWAY —
     // before the hold, which can still fail two steps below.
     coord.setSession(id, sessionId);
+    // routing spec §6 "Arms": the `arm:` record, ONLY when routing was
+    // actually seeded onto the argv above (`routeFields !== null` AND the
+    // cap that gates it supported — the identical pair the omission event a
+    // few lines up gates on). Gated on the dispatch actually BINDING a
+    // session, never on `res.ok` (fix round 1, finding #1): `res.ok` is not
+    // "the fleet act succeeded" (§1.5) — the adoption path above reaches
+    // here with `res.ok === false` and a real, bound session (`cmd_ws_add`
+    // writes the worktree and every registry row before it can be killed),
+    // so gating on `res.ok` lost the arm on every adopted spawn that carried
+    // one. And every path that refuses before this line (registry-unmeasurable,
+    // ambiguous-dispatch, fleetFailed with no adoption) returns before this
+    // statement is ever reached, so a refused attempt — retried later, maybe
+    // with different routing — records no arm here at all, leaving the
+    // first-wins reader (`runRoutingEvents`) nothing false to latch onto.
+    if (routeFields !== null && capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      coord.recordRunEvent(id, 'coordinator', armEventDetail(routeFields));
+    }
   } else {
     // Wave N>=2: resume the SAME workspace (deviation D-1 — no ccd verb can
     // spawn fresh into an existing one), then discard the resumed context
@@ -658,6 +779,55 @@ export async function dispatchRun(
   const holdRes = await deps.runCcd(holdArgv);
   if (!holdRes.ok) return { ok: false, kind: 'fleetFailed', stderr: holdRes.stderr };
 
+  // Routing spec 2026-09-14 §5.3 (slice 4, Task 3): wave N≥2 writes the
+  // record through the VERB, never the argv above — no ccd verb can spawn
+  // fresh into an already-existing workspace (D-1), so a routing change
+  // reaches a resumed worker only by calling `ccd route` on its session.
+  // `resumed` scopes this to the resume arm only: a fresh wave-1 spawn
+  // already carried its routing on the `ws-add` argv above and reaches this
+  // point with `resumed === false`, and `routeFields === null` (nothing was
+  // asked) skips both the call and the omission event below — there is
+  // nothing to write and nothing to have omitted.
+  //
+  // ONE ARGV, EVERY PAIR (fix round 2, finding #3 / controller ruling S4-R5).
+  // This was a loop of one `CCD_ARGV.route` call per field, and that forfeited
+  // the guarantee `cmd_route` is built to give: the verb validates every
+  // `--set` pair — shape, field membership, `_route_valid`'s vocabulary, and
+  // the class/effort pair check — BEFORE its write loop touches the registry,
+  // so a refusal leaves the record untouched. Across N calls that is simply
+  // not true: `{class:'haiku', effort:'high'}` wrote `class=haiku` on call 1
+  // and died on the pair check on call 2, leaving a half-applied record and a
+  // `fleetFailed` return that says nothing about which half landed. One
+  // `CCD_ARGV.routeSet` argv restores it — either every pair is written or
+  // none is, and the pairs ride in `ROUTE_WRITABLE_FIELDS` order regardless of
+  // the body's own key order.
+  //
+  // AFTER the hold, BEFORE the `/clear`: the hold is this dispatch's own
+  // claim on the workspace and does not depend on what gets routed, while
+  // the `/clear` is the point past which a refusal here would discard a
+  // context nothing has yet told the worker is fresh — writing first is what
+  // keeps a refused route from stranding a cleared, brief-less pane. A
+  // refusal returns `fleetFailed` immediately: the run stays `planned`, the
+  // `/clear` never fires, and the record is exactly what it was before this
+  // dispatch — nothing for this function to unwind.
+  if (resumed && routeFields !== null) {
+    if (!capSupported(deps.fleetState, ROUTE_CAP)) {
+      coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-v1-cap');
+    } else {
+      // `routeFields !== null` is exactly `routeFieldsOrNull`'s own guarantee
+      // that at least one field is set, which is `routeSet`'s precondition —
+      // the throw it carries is unreachable from this call site by
+      // construction, not by luck.
+      const routeRes = await deps.runCcd(
+        CCD_ARGV.routeSet(sessionId, routeFields, sweepDec(deps.fleetState, `run:${id} dispatch`)));
+      if (!routeRes.ok) return { ok: false, kind: 'fleetFailed', stderr: routeRes.stderr };
+      // routing spec §6 "Arms": the `arm:` record, the wave-N sibling of the
+      // wave-1 arm's own — recorded only once the `route` verb itself
+      // succeeded, never on the refusal above.
+      coord.recordRunEvent(id, 'coordinator', armEventDetail(routeFields));
+    }
+  }
+
   // R7 continued: the injected `/clear` itself, now placed AFTER the hold
   // above rather than before it — the only piece that moved. `resumed` is
   // exactly the condition the old `else` arm's own presence used to encode
@@ -740,8 +910,13 @@ export async function dispatchRun(
   // it written only for absent/unmeasurable, the ABSENCE of a row would mean
   // either `present` or "an older build with no preflight" — a second
   // overloaded null, one layer down from the one this field deletes.
-  const skillState = await readWorkerSkillState(
-    deps.io, wrapper === null ? undefined : deps.configDir(wrapper));
+  // Which skill directory: BY KIND. The cast is sound because the transition
+  // precondition above (`:190`, Task 4) already refused a `kind:'unknown'`
+  // row before this function ever reaches an irreversible act — `unknown`
+  // never lands here, so the narrower union is not a lie.
+  const skillState = await readSkillState(
+    deps.io, wrapper === null ? undefined : deps.configDir(wrapper),
+    skillDirFor(run.kind as 'work' | 'review'));
   coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never

@@ -21,7 +21,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   id: 3, program: 'build4-transcript-surface', programTitle: 'Build 4: transcript surface',
   wave: 3, waveOf: 4, project: 'ccrc-pwa', homeProject: null,
   sessionId: 'ccrc-pwa-clear-cove', workspace: 'clear-cove', branch: 'ws/clear-cove',
-  state: 'working', claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
+  state: 'working', kind: 'work', reviews: null,
+  claimedBy: 'ccrc-pwa-coordinator', resumed: false, clearedAt: null,
   openedAt: Date.now() - 1_000_000, dispatchStartedAt: null,
   dispatchedAt: Date.now() - 900_000, closedAt: null,
   handoffCommit: null, items: { done: 3, total: 7 }, unreadMail: 0,
@@ -40,7 +41,7 @@ const sess = (over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'working', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true,
-  spawnState: null, ask: null, ...over,
+  spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
 });
 
 describe('coordPresence — three answers, because the client cannot measure what the server measures', () => {
@@ -206,6 +207,20 @@ describe('ResumeSheet — the reclaim refusals, each with its own sentence', () 
     const said = (await screen.findByText(/is not dead/i)).textContent ?? '';
     expect(said).toContain('ccrc-pwa-coordinator');
     expect(said).toContain('the supervisor is restarting it');
+  });
+
+  // Fix round 1, finding 3: the door slice (Task 10) was scoped server-only,
+  // so `heir-is-a-worker` used to fall through to `RECLAIM_COPY.unknown` and
+  // `by` never reached the operator — an L4 adapter narrowing a distinction
+  // it received. This case is the refutation: the new sentence renders AND
+  // `by` renders, and the "does not recognise" fallback never fires.
+  it('409 heir-is-a-worker — names the condition AND the heir\'s own coordinator, never the fallback', async () => {
+    reclaimFailing(new ApiError(409, {
+      ok: false, refused: 'heir-is-a-worker', by: 'demo-other-coordinator',
+    }));
+    const said = (await screen.findByText(/worker of another coordinator's open run/i)).textContent ?? '';
+    expect(said).toContain('demo-other-coordinator');
+    expect(screen.queryByText(/this build does not recognise/i)).toBeNull();
   });
 
   it('502 registry-unmeasurable — the box could not look, and says the box could not look', async () => {

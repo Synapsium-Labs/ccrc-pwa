@@ -5,7 +5,9 @@
 // loaded, posts the target through a QuickConfirm), the stop flow (QuickConfirm
 // fires api.stop only on confirm), and the header overflow menu ("Change
 // model" sends the /model command; the resulting picker rides the normal
-// dialog stream).
+// dialog stream). The overflow menu's "Change model"/"Change effort" now
+// write the routing record through `api.route` (routing spec §5.3, slice 4,
+// Task 5) rather than sending a slash command.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { AccountUsage, FleetSession } from '../../shared/api';
@@ -54,7 +56,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   limits: { five: 62, seven: 71 },
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
   version: null,
   ...patch,
 });
@@ -717,7 +719,11 @@ describe('SessionScreen overflow menu', () => {
     return { store, fleet };
   };
 
-  it('"Change model" opens the chooser; picking a model sends /model <alias>', () => {
+  // Routing spec 2026-09-14 §5.3, slice 4, Task 5: a picker tap no longer
+  // sends a slash command — it writes the routing record through
+  // `api.route` and ccd types it into the pane.
+  it('"Change model" opens the chooser; picking a model writes the routing record', () => {
+    const route = vi.spyOn(api, 'route').mockResolvedValue(undefined);
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined);
     renderScreen();
 
@@ -725,17 +731,20 @@ describe('SessionScreen overflow menu', () => {
     fireEvent.click(screen.getByRole('button', { name: /Change model/ }));
     // The chooser is open now — tap a model row.
     fireEvent.click(screen.getByRole('button', { name: /Opus 5/ }));
-    expect(prompt).toHaveBeenCalledWith('claude:OpenClawHetzner', '/model opus');
+    expect(route).toHaveBeenCalledWith('claude:OpenClawHetzner', 'class', 'opus');
+    expect(prompt).not.toHaveBeenCalled();
   });
 
-  it('"Change effort" opens the chooser; picking a level sends /effort <level>', () => {
+  it('"Change effort" opens the chooser; picking a level writes the routing record', () => {
+    const route = vi.spyOn(api, 'route').mockResolvedValue(undefined);
     const prompt = vi.spyOn(api, 'prompt').mockResolvedValue(undefined);
     renderScreen();
 
     fireEvent.click(screen.getByRole('button', { name: 'More' }));
     fireEvent.click(screen.getByRole('button', { name: /Change effort/ }));
     fireEvent.click(screen.getByRole('button', { name: /^Ultracode/ }));
-    expect(prompt).toHaveBeenCalledWith('claude:OpenClawHetzner', '/effort ultracode');
+    expect(route).toHaveBeenCalledWith('claude:OpenClawHetzner', 'effort', 'ultracode');
+    expect(prompt).not.toHaveBeenCalled();
   });
 
   it('"Move to another account" opens the swap sheet for this session', () => {

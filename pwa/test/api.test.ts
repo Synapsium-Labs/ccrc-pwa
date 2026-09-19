@@ -9,6 +9,10 @@ const jsonResponse = (status: number, body: unknown): Response =>
     headers: { 'content-type': 'application/json' },
   });
 
+const asError = (status: number, body: unknown): unknown => {
+  try { throw new ApiError(status, body); } catch (e) { return e; }
+};
+
 describe('api client', () => {
   // Task 8: DELETE /api/sessions/:id/workspace is gone, and so is this method.
   // A mutation sweep found that restoring workspaceRemove (and the `del`
@@ -707,10 +711,6 @@ describe('createSession (Task 13)', () => {
 // disjoint today (`unsupported` vs `unsupported-type`) and this is what keeps
 // it true.
 describe('apiErrorText and the code translators that compose with it', () => {
-  const asError = (status: number, body: unknown): unknown => {
-    try { throw new ApiError(status, body); } catch (e) { return e; }
-  };
-
   it('routes a 501 unsupported to the sentence, not the slug', () => {
     expect(apiErrorText(asError(501, { ok: false, error: 'unsupported' })))
       .toBe(UNSUPPORTED_VERB_TEXT);
@@ -794,5 +794,249 @@ describe('send-failure copy', () => {
     // echoed back, versus echoed and then not taken), and collapsing them
     // would tell the operator the wrong story about which one happened.
     expect(sendErrorText('verify-failed')).not.toBe(sendErrorText('enter-ignored'));
+  });
+
+  // ONE CODE, TWO OUTCOMES — the paste-chip collapse. The server now sets
+  // `submittable` on a `verify-failed` whose box row is `[Pasted text #N]`,
+  // which means the OPPOSITE of the table's entry: the session did take the
+  // text and rendered it as a chip. Leaving the old sentence there would put
+  // "never echoed it back" directly above a button that sends it.
+  it('a submittable verify-failed gets its own sentence, and it does not deny the echo', () => {
+    const collapsed = sendErrorText('verify-failed', true);
+    expect(collapsed).not.toBe(sendErrorText('verify-failed'));
+    expect(collapsed).not.toMatch(/never/);
+    expect(collapsed).toMatch(/chip/);
+    // The register is its neighbours': it starts by granting that the typing
+    // worked, exactly as both existing sentences do.
+    expect(collapsed.startsWith('Typed it')).toBe(true);
+  });
+
+  it('and every OTHER code ignores the flag — it discriminates one arm, not all of them', () => {
+    for (const code of ['enter-ignored', 'dialog-open', 'not-alive', 'draft-clear-failed']) {
+      expect(sendErrorText(code, true), code).toBe(sendErrorText(code));
+    }
+    // Absent and false are the same answer: an older server sends neither.
+    expect(sendErrorText('verify-failed', false)).toBe(sendErrorText('verify-failed'));
+    expect(sendErrorText('verify-failed', undefined)).toBe(sendErrorText('verify-failed'));
+  });
+});
+
+// Account pools, wave 4. The three writes and the three refusals.
+//
+// The ordinary-call assertions pin the compatibility property an older server
+// can observe: the same parsed keys and values, with no stray `crossPool` key.
+// Swap also owns its literal request construction here, so its two ordinary
+// cases pin the URL and complete RequestInit like `archive(id, {force:true})`.
+describe('account pools', () => {
+  const okPool = (pool: unknown, extra: Record<string, unknown> = {}): Response =>
+    jsonResponse(200, { ok: true, pool, ...extra });
+
+  it('setProjectPool posts the name and returns an unreadable MEASUREMENT instead of echoing intent', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'unreadable' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const r = await api.setProjectPool('demo', 'pool-a');
+
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/demo/pool');
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ pool: 'pool-a' });
+    expect(r.pool).toEqual({ state: 'unreadable' });
+    expect(r.warning).toBeUndefined();
+  });
+
+  it('setProjectPool sends an explicit null to CLEAR, and carries the unknown-pool warning', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'untagged' }, { warning: 'unknown-pool' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    const r = await api.setProjectPool('demo', null);
+
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ pool: null });
+    expect(r.warning).toBe('unknown-pool');
+  });
+
+  it('setProjectPool percent-encodes the project segment', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(okPool({ state: 'untagged' }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.setProjectPool('a b', null);
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects/a%20b/pool');
+  });
+
+  it('swap(id, w) posts the complete ordinary swap request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2');
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }),
+      },
+    ]);
+  });
+
+  it('swap(id, w, {crossPool:false}) is the same complete ordinary request', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2', { crossPool: false });
+    expect(fetchImpl.mock.calls[0]).toEqual([
+      '/api/sessions/s1/swap',
+      {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ wrapper: 'claude2' }),
+      },
+    ]);
+  });
+
+  it('swap(id, w, {crossPool:true}) declares the crossing on the wire', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+    await api.swap('s1', 'claude2', { crossPool: true });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ wrapper: 'claude2', crossPool: true });
+  });
+
+  it('createSession omits crossPool entirely unless it is true', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: false });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
+    expect(JSON.parse((fetchImpl.mock.calls[2] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', crossPool: true });
+  });
+
+  // Fix round 2, finding #3 (routing slice 4, Task 6): `api.projects(cls)` and
+  // `createSession`'s `route` strip shipped with no test of their own — this
+  // pair mutates the same emptiness rule the `crossPool` case above pins.
+  it('projects(cls) appends ?class= only when given (routing slice 4, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockImplementation(async () => jsonResponse(200, { roots: [], projects: [] }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.projects();
+    expect((fetchImpl.mock.calls[0] as [string, RequestInit])[0]).toBe('/api/projects');
+
+    await api.projects('fable');
+    expect((fetchImpl.mock.calls[1] as [string, RequestInit])[0]).toBe('/api/projects?class=fable');
+  });
+
+  it('createSession omits route entirely unless at least one field is set (routing slice 4, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: {} });
+    expect(JSON.parse((fetchImpl.mock.calls[0] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo' });
+
+    await api.createSession({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: { class: 'opus' } });
+    expect(JSON.parse((fetchImpl.mock.calls[1] as [string, RequestInit])[1].body as string))
+      .toEqual({ wrapper: 'claude', project: 'demo', workdir: '/w/demo', route: { class: 'opus' } });
+  });
+
+  // Fix round 1, finding #1 (routing slice 5, Task 6): `workspaceAdd`'s
+  // `route` wrapper shipped pinned only through the fleet-class-chooser
+  // screen test — this pair pins the api-layer decision directly, the same
+  // shape as the `crossPool`/`route` cases above it.
+  it('workspaceAdd(project) posts with no body and no content-type (routing slice 5, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p');
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p/workspaces');
+    expect('body' in init).toBe(false);
+    expect(new Headers(init.headers).get('content-type')).toBeNull();
+  });
+
+  it('workspaceAdd(project, route) posts { route } exactly (routing slice 5, Task 6)', async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { ok: true }));
+    const api = createApi(fetchImpl as unknown as typeof fetch);
+
+    await api.workspaceAdd('p', { class: 'fable' });
+    const [url, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(url).toBe('/api/projects/p/workspaces');
+    expect(JSON.parse(init.body as string)).toEqual({ route: { class: 'fable' } });
+  });
+
+  it('names both pools in a measured mismatch without promising a control', () => {
+    const mismatch = apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: 'pool-b',
+      projectPool: 'pool-a',
+    }));
+    expect(mismatch).toMatch(/pool-b/);
+    expect(mismatch).toMatch(/pool-a/);
+    expect(mismatch).not.toMatch(/show other pools|pick an account/i);
+  });
+
+  it('uses the unchanged generic mismatch sentence when either pool name is absent', () => {
+    const generic = 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.';
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      projectPool: 'pool-a',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: 'pool-b',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: { name: 'pool-b' },
+      projectPool: 'pool-a',
+    }))).toBe(generic);
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'pool-mismatch',
+      accountPool: 'pool-b',
+      projectPool: { name: 'pool-a' },
+    }))).toBe(generic);
+  });
+
+  it('does not interpolate pool fields for a different unmapped code', () => {
+    expect(apiErrorText(asError(409, {
+      ok: false,
+      error: 'some-other-code',
+      accountPool: 'pool-b',
+      projectPool: 'pool-a',
+    }))).toBe('some-other-code');
+  });
+
+  it('distinguishes an unreadable pool tag from a malformed one, and translates bad names', () => {
+    expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'unreadable' })))
+      .toMatch(/could not be read/i);
+    expect(apiErrorText(asError(503, { error: 'pool-unreadable', state: 'malformed' })))
+      .toMatch(/invalid pool name/i);
+    expect(apiErrorText(asError(400, { error: 'bad-pool-name' })))
+      .toMatch(/lowercase/i);
+  });
+
+  it('still prefers ccd\'s own stderr over a pool sentence — a 502 says more than a code could', () => {
+    expect(apiErrorText(asError(502, { ok: false, stderr: 'pool-mismatch: nothing was touched' })))
+      .toBe('pool-mismatch: nothing was touched');
+  });
+
+  it('does not shadow any code the UPLOAD, KICKOFF or SEND translators own', () => {
+    // The three new keys join a map two other translators consume the OUTPUT
+    // of as a KEY. None of them owns these codes today; this asserts it in the
+    // direction that breaks if one ever does.
+    for (const code of ['pool-mismatch', 'pool-unreadable', 'bad-pool-name']) {
+      expect(uploadErrorText(code), code).toBe(code);
+      expect(kickoffErrorText(code), code).toBe(code);
+      expect(sendErrorText(code), code).toBe(code);
+    }
   });
 });

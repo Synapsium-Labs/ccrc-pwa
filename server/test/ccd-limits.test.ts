@@ -55,10 +55,10 @@ const json = (o: Record<string, number>): string => JSON.stringify(o);
  *  `_swap_target`) have exactly one spelling for "nobody measured this", which
  *  is "". Its two other direct readers take it raw: `_avail` (ccd:14470), which
  *  refuses only a KNOWN half at the ceiling because eligibility needs a lower
- *  bound where rank needs a full measurement, and `_gpt_status` (ccd:1802),
+ *  bound where rank needs a full measurement, and `_codex_lane_status` (ccd:1802),
  *  which folds "" to 0 with `: "${five:=0}"`.
  *
- *  THAT FOLD IS REACHED, and the three `_gpt_status` cases below reach it: on
+ *  THAT FOLD IS REACHED, and the three `_codex_lane_status` cases below reach it: on
  *  gpt's real `{"five": null, "seven": 99, …}` the five is "", `_avail gpt`
  *  says no, and the branch the fold lives in runs. It is nonetheless correct
  *  TODAY, for a narrower reason than "unreachable": gpt's `five` is null
@@ -111,10 +111,10 @@ describe('_limit_field rollover', () => {
   });
 });
 
-describe('_gpt_status on a python-written gpt.json', () => {
+describe('_codex_lane_status on a python-written gpt.json', () => {
   // ~/.cc-limits/gpt.json is written by infra/handoff/ccgpt-usage (python
   // json.dump), whose default separators put a space after every colon. Every
-  // other reader in ccd tolerates that; _gpt_status must too, or `ccd ls`
+  // other reader in ccd tolerates that; _codex_lane_status must too, or `ccd ls`
   // silently drops the cooldown countdown it exists to print.
   const excludeGpt = (spacing: string): void => {
     fs.writeFileSync(path.join(home, '.local', 'bin', 'gpt'), '#!/bin/sh\n', { mode: 0o755 });
@@ -126,16 +126,16 @@ describe('_gpt_status on a python-written gpt.json', () => {
 
   it('reports the remaining cooldown when json.dump spaced the colons', () => {
     excludeGpt(' ');
-    expect(sh('_gpt_status')).toBe('429-excluded (~269m of 5h cooldown left)');
+    expect(sh('_codex_lane_status gpt')).toBe('429-excluded (~269m of 5h cooldown left)');
   });
 
   it('still reports it for compact printf-written json', () => {
     excludeGpt('');
-    expect(sh('_gpt_status')).toBe('429-excluded (~269m of 5h cooldown left)');
+    expect(sh('_codex_lane_status gpt')).toBe('429-excluded (~269m of 5h cooldown left)');
   });
 });
 
-describe('_gpt_status must not call a Codex weekly cap a 5h cooldown', () => {
+describe('_codex_lane_status must not call a Codex weekly cap a 5h cooldown', () => {
   // The 429 exclusion ccd writes itself survives at most 20 minutes: the
   // ccgpt-usage timer overwrites gpt.json with a usage sample on every poll.
   // That sample is the shape on disk essentially always, and every word of the
@@ -153,41 +153,41 @@ describe('_gpt_status must not call a Codex weekly cap a 5h cooldown', () => {
   it('reports the weekly figure and its reset, not a cooldown', () => {
     const t = now();
     usageSample({ five: null, seven: 99, ts: t - 300, fiveResetAt: null, sevenResetAt: t + 397440 });
-    expect(sh('_gpt_status')).toBe('Codex weekly cap reached (99%, resets in 5d)');
+    expect(sh('_codex_lane_status gpt')).toBe('Codex weekly cap reached (99%, resets in 5d)');
   });
 
   it('never counts down past zero when the usage timer has stalled', () => {
     // 6h-old poll: the old arithmetic printed "~-60m of 5h cooldown left".
     const t = now();
     usageSample({ five: null, seven: 99, ts: t - 21600, fiveResetAt: null, sevenResetAt: t + 7200 });
-    expect(sh('_gpt_status')).toBe('Codex weekly cap reached (99%, resets in 2h)');
+    expect(sh('_codex_lane_status gpt')).toBe('Codex weekly cap reached (99%, resets in 2h)');
   });
 
   it('names the 5h window when the backend really reported one', () => {
     const t = now();
     usageSample({ five: 100, seven: 40, ts: t - 120, fiveResetAt: t + 5400, sevenResetAt: t + 200000 });
-    expect(sh('_gpt_status')).toBe('Codex 5h cap reached (100%, resets in 90m)');
+    expect(sh('_codex_lane_status gpt')).toBe('Codex 5h cap reached (100%, resets in 90m)');
   });
 
   it('omits the reset when the API gave none for the binding window', () => {
     const t = now();
     usageSample({ five: null, seven: 100, ts: t - 120, fiveResetAt: null, sevenResetAt: null });
-    expect(sh('_gpt_status')).toBe('Codex weekly cap reached (100%)');
+    expect(sh('_codex_lane_status gpt')).toBe('Codex weekly cap reached (100%)');
   });
 
   it('still says available when the usage sample is under the ceiling', () => {
     const t = now();
     usageSample({ five: null, seven: 12, ts: t - 120, fiveResetAt: null, sevenResetAt: t + 200000 });
-    expect(sh('_gpt_status')).toBe('enabled, available');
+    expect(sh('_codex_lane_status gpt')).toBe('enabled, available');
   });
 });
 
-describe('_gpt_status disabled branch goes through _lane_enabled, not a second read of the marker path', () => {
-  // Before this fix, _gpt_status checked `[[ -f "$GPT_DISABLE_FILE" ]]`
+describe('_codex_lane_status disabled branch goes through _lane_enabled, not a second read of the marker path', () => {
+  // Before this fix, _codex_lane_status checked `[[ -f "$GPT_DISABLE_FILE" ]]`
   // directly while _gpt_enabled/_account_ok went through _lane_enabled — two
   // readers of one boolean, spelled two different ways, free to drift. These
   // tests override _lane_enabled itself (a plain shell function redefinition,
-  // resolved at call time) and check that _gpt_status follows THAT, not the
+  // resolved at call time) and check that _codex_lane_status follows THAT, not the
   // marker file on disk — a direct `-f` check would ignore the override
   // entirely and fail both assertions below.
   const installGpt = (): void => {
@@ -197,19 +197,19 @@ describe('_gpt_status disabled branch goes through _lane_enabled, not a second r
 
   it('reports DISABLED when _lane_enabled says so, even with no marker file on disk', () => {
     installGpt();
-    expect(sh('_lane_enabled() { return 1; }; _gpt_status')).toContain('DISABLED');
+    expect(sh('_lane_enabled() { return 1; }; _codex_lane_status gpt')).toContain('DISABLED');
   });
 
   it('does not report DISABLED when _lane_enabled says enabled, even with the marker file present', () => {
     installGpt();
     fs.writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
-    expect(sh('_lane_enabled() { return 0; }; _gpt_status')).not.toContain('DISABLED');
+    expect(sh('_lane_enabled() { return 0; }; _codex_lane_status gpt')).not.toContain('DISABLED');
   });
 
   it('names the real marker path in the message (GPT_DISABLE_FILE survives as the display path)', () => {
     installGpt();
     fs.writeFileSync(path.join(home, '.cc-sessions', 'gpt-disabled'), '');
-    expect(sh('_gpt_status')).toBe(`DISABLED (kill-switch; rm ${home}/.cc-sessions/gpt-disabled to re-enable)`);
+    expect(sh('_codex_lane_status gpt')).toBe(`DISABLED (kill-switch; rm ${home}/.cc-sessions/gpt-disabled to re-enable)`);
   });
 });
 

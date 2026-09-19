@@ -17,6 +17,7 @@ import type { PushPayload } from '../src/push.js';
 import { PRESENCE_REFRESH_MS, PRESENCE_TTL_MS } from '../../shared/api.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { okRuns } from './coordReadHelpers.js';
 
 const dir = async () => mkdtemp(path.join(tmpdir(), 'push-copy-'));
 
@@ -319,7 +320,7 @@ describe('a degraded row must never fire the busy→idle "✓ Finished" push (bl
   // suppression set agreed with the assembled row by luck of the fixture.
   // `tick()` used to take TWO independent whole-fleet reads — its own, at the
   // top, which `unmeasuredIds` is computed from, and `assembleFleet`'s own,
-  // 23 [registry-read-census:fields] reads per session later — and the gate
+  // 30 [registry-read-census:fields] reads per session later — and the gate
   // only ever suppressed rows the FIRST one could not measure. A drop landing
   // in the SECOND
   // window (the "ordinary shape in remote mode" the ladder exists for) left

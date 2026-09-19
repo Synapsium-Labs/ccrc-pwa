@@ -19,6 +19,8 @@ import { localIO, type FleetIO } from '../src/io.js';
 import type { SessionVerdict } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { unreadableField } from './ioDoubles.js';
+import { okRun } from './coordReadHelpers.js';
 
 const NOW = 1_000_000_000_000;            // epoch MILLISECONDS, the units the ladder takes
 const SEC = Math.floor(NOW / 1000);       // …and what ccd's `date +%s` actually writes to $REG
@@ -230,6 +232,18 @@ describe('measureClaimant — three answers, and the inputs that collapse into e
   });
 });
 
+/** `seedRow` minus the `project` file — the shape whose `SessionRecord.project`
+ *  collapses to the session id (`buildRecord`'s `project ?? id`), and whose
+ *  `fieldMeasured` answers a proven absence. */
+const seedRowNoProject = (home: string, id: string): void => {
+  const reg = path.join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  for (const [k, v] of Object.entries({
+    wrapper: 'claude', workdir: `/w/${id}`, uuid: `u-${id}`, started: '1',
+    workspace: id, branch: `ws/${id}`, base: 'origin/main',
+  })) writeFileSync(path.join(reg, `${id}.${k}`), v);
+};
+
 const seedRun = (s: CoordStore, claimedBy: string, wave = 1): number => {
   const r = s.openRun({ program: PROGRAM, title: 'F5 demo', project: 'demo',
     wave, waveOf: 2, claimedBy });
@@ -243,9 +257,9 @@ const seedRun = (s: CoordStore, claimedBy: string, wave = 1): number => {
 const watchCommit = (s: CoordStore): { calls: number } => {
   const seen = { calls: 0 };
   const real = s.reclaimProgram.bind(s);
-  s.reclaimProgram = ((runId: number, to: string, at: number) => {
+  s.reclaimProgram = ((runId: number, to: string, at: number, coordProject: string | null) => {
     seen.calls += 1;
-    return real(runId, to, at);
+    return real(runId, to, at, coordProject);
   }) as CoordStore['reclaimProgram'];
   return seen;
 };
@@ -298,7 +312,98 @@ describe('reclaimRun — the order is the guard', () => {
     const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
     expect(r).toEqual({ ok: false, kind: 'unknown-session' });
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('heir-is-a-worker when the INCOMING coordinator is a live worker of another run — and NOTHING is written (spec §12, D-3011)', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    // LIVE is somebody else's worker on an OPEN run.
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+    expect(w.calls).toBe(0);                      // `watchCommit` counts `reclaimProgram` calls
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('the DEAD claimant\'s OWN worker IS admitted as heir — the programme inherits itself', async () => {
+    // The scenario the whole door exists for, and the one the first spelling of
+    // the rung refused: a coordinator dies, its live worker is the session in
+    // the pane beside the corpse, and `parentOfSession(LIVE)` answers `DEAD` —
+    // the very id being replaced. `heirWorkerOf !== from` is what admits it.
+    // What lands is a SELF-CLAIMED run (LIVE claims a run it is also the
+    // sessionId of), which the open door already admits (D-3012) and which
+    // `nestFleet` never brackets (`r.claimedBy !== r.sessionId`), so no chain
+    // can form out of this and §12's one-level rationale is untouched.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);              // wave 1, the row being reclaimed
+    const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the SAME programme
+    s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    expect(s.parentOfSession(LIVE)).toBe(DEAD);   // the fixture reaches the arm
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toMatchObject({ ok: true, program: PROGRAM, from: DEAD, to: LIVE });
+    // EVERY row of the programme moved, not just the one named — `reclaimProgram`
+    // selects on `claimedBy != ?`, so the wave the heir works is rewritten too.
+    expect(okRun(s.run(id))!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(wave2))!.claimedBy).toBe(LIVE);
+  });
+
+  it('a DOUBLY-BOUND heir is refused — the dying coordinator\'s worker on the newest run is still somebody ELSE\'s on an older one', async () => {
+    // The second fix round's case, and the one the newest-only read could not
+    // see. `parentOfSession(LIVE)` answers about ONE run — the newest — so an
+    // heir whose newest binding is to `from` walked through the rung while an
+    // OLDER open run still bound it to a third coordinator: precisely the
+    // chain §12 exists to prevent, admitted by the door built to prevent it.
+    // `openClaimantsOf` asks about every open run instead, and the admission
+    // becomes what D-3028's sentence always claimed: every open run naming the
+    // heir is claimed by the coordinator being replaced, or by the heir itself.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);              // wave 1, the row being reclaimed
+    // OLDER than the wave-2 row below, and claimed by a THIRD party.
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the programme being reclaimed…
+    s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker too
+    expect(other.id).toBeLessThan(wave2);
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    // THE FIXTURE'S POINT, measured: the newest-only read answers `DEAD`, which
+    // is `from`, which D-3028 admits — so under that read this reclaim SUCCEEDS
+    // with LIVE still bound to `demo-other-coordinator`'s open run.
+    expect(s.parentOfSession(LIVE)).toBe(DEAD);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+    expect(w.calls).toBe(0);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('a re-typed sitting claimant stays a no-op even when that claimant is somebody\'s worker — the rung is INSIDE `to !== from` (D-1136, D-3011)', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD);
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, DEAD);
+    const r = await reclaimRun(depsFor(home, s, ALIVE), id, DEAD);
+    expect(r).toMatchObject({ ok: true, to: DEAD });
+  });
+
+  it('the heir rung sits AFTER the registry-existence rung — an unseeded heir is still unknown-session', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD);                        // LIVE has no row AND is a worker
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'unknown-session' });
   });
 
   it('registry-unmeasurable when the directory will not list — and NOTHING is written', async () => {
@@ -310,7 +415,7 @@ describe('reclaimRun — the order is the guard', () => {
     const r = await reclaimRun(depsFor(home, s, GONE, blindIO()), id, LIVE);
     expect(r).toMatchObject({ ok: false, kind: 'registry-unmeasurable' });
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
     expect(s.runEvents(id)).toEqual([]);   // openRun writes no event, so [] is a real "untouched"
   });
 
@@ -338,7 +443,7 @@ describe('reclaimRun — the order is the guard', () => {
     // here would fold the two conditions the route is built not to collapse.
     expect(r.kind === 'registry-unmeasurable' && r.detail).toBe(detail);
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('registry-unmeasurable when the CLAIMANT is listed but unassembled — and NOTHING is written', async () => {
@@ -358,7 +463,7 @@ describe('reclaimRun — the order is the guard', () => {
     if (r.ok) throw new Error('unreachable — narrowed above');
     expect(r.kind === 'registry-unmeasurable' && r.detail).toContain('could not be assembled');
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
     expect(s.runEvents(id)).toEqual([]);
   });
 
@@ -373,7 +478,7 @@ describe('reclaimRun — the order is the guard', () => {
     if (r.ok) throw new Error('unreachable — narrowed above');
     expect(r.kind === 'claimant-alive' && r.detail).toContain('tmux');
     expect(w.calls).toBe(0);
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
   it('rewrites EVERY run of the program, terminal rows included (ruling R1)', async () => {
@@ -392,8 +497,8 @@ describe('reclaimRun — the order is the guard', () => {
     expect(r).toMatchObject({ ok: true, program: PROGRAM, from: DEAD, to: LIVE });
     if (!r.ok) throw new Error('unreachable — narrowed above');
     expect([...r.runIds].sort((a, b) => a - b)).toEqual([w1, w2]);
-    expect(s.run(w1)!.claimedBy).toBe(LIVE);
-    expect(s.run(w2)!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(w1))!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(w2))!.claimedBy).toBe(LIVE);
   });
 
   it('a `to` that is already the claimant is a no-op SUCCESS, not a refusal', async () => {
@@ -407,7 +512,76 @@ describe('reclaimRun — the order is the guard', () => {
     // ladder rather than inside it.
     const r = await reclaimRun(depsFor(home, s, ALIVE), id, DEAD);
     expect(r).toMatchObject({ ok: true, runIds: [], from: DEAD, to: DEAD });
-    expect(s.run(id)!.claimedBy).toBe(DEAD);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+});
+
+// FINAL WHOLE-BRANCH REVIEW, Important 2 (D-2922). Reclaim restamps the board
+// placement because the programme genuinely HAS a new coordinator (spec §7) —
+// and the value it stamps is MEASURED, with absence leaving null rather than
+// guessing, exactly as the open-time stamp is.
+describe('reclaimRun restamps the board placement it just invalidated', () => {
+  /** `coordProject` is stripped from `RunSummary` (it is not a wire field), so
+   *  it is read back through `runs()`, whose rows are `RunRow`s. */
+  const stampOn = (s: CoordStore, id: number): string | null => {
+    const read = s.runs({ includeClosed: true });
+    if (!read.ok) throw new Error('fixture: runs() refused');
+    return read.runs.find((r) => r.id === id)!.coordProject;
+  };
+
+  it('stamps the HEIR\'s measured project across the whole program', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const one = seedRun(s, DEAD, 1);
+    const two = seedRun(s, DEAD, 2);
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'the-heir-project' });
+    expect(await reclaimRun(depsFor(home, s, GONE), two, LIVE)).toMatchObject({ ok: true });
+    expect([stampOn(s, one), stampOn(s, two)]).toEqual(['the-heir-project', 'the-heir-project']);
+  });
+
+  it('leaves the stamp NULL when the heir\'s project cannot be READ — never the displaced one', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: 'the-heir-project' });
+    // The row LISTS and assembles — only `<LIVE>.project`'s bytes refuse — so
+    // the ladder still reaches the commit and this is a stamp question, not a
+    // refusal question.
+    const io = unreadableField(LIVE, 'project');
+    expect(await reclaimRun(depsFor(home, s, GONE, io), id, LIVE)).toMatchObject({ ok: true });
+    expect(stampOn(s, id)).toBeNull();
+  });
+
+  it('leaves the stamp NULL for an EMPTY project field — `?? null` does not catch `\'\'`', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
+    s.db.prepare('UPDATE runs SET coordProject = ? WHERE program = ?').run('the-dead-project', PROGRAM);
+    seedRow(home, DEAD);
+    seedRow(home, LIVE, { project: '' });
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: true });
+    // D-2872's class: an empty field is not a measurement, and a stamp written
+    // once and never backfilled must not carry `''` as a project name.
+    expect(stampOn(s, id)).toBeNull();
+  });
+
+  it('measures the field, not `SessionRecord.project`\'s `project ?? id` display default', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD, 1);
+    seedRow(home, DEAD);
+    // No `<LIVE>.project` file at all, but the row still assembles from its
+    // identity triple. `readSessionRecord(...).record.project` would answer the
+    // SESSION ID here — `buildRecord`'s `project ?? id` — and stamping that
+    // would put a session id on the board as a project name, permanently.
+    seedRowNoProject(home, LIVE);
+    expect(await reclaimRun(depsFor(home, s, GONE), id, LIVE)).toMatchObject({ ok: true });
+    expect(stampOn(s, id)).not.toBe(LIVE);
+    expect(stampOn(s, id)).toBeNull();
   });
 });
 

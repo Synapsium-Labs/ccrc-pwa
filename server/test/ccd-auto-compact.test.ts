@@ -36,7 +36,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-auto-compact-'); });
@@ -94,7 +94,7 @@ const sessionJsonNoStamp = (status: string): void => {
  *  name no pane pid. `send-keys` is logged and never sent; `_pane_box_draft` is
  *  stubbed empty except where a case is about the draft gate. */
 const STUBS = `
-  tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+  tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
     case "\${1:-}" in
       capture-pane) printf '%s\\n' "\${PANE_TEXT:-}"; return \${CAPTURE_RC:-0} ;;
       list-panes)   echo "\${PANE_PID_OUT-${PANE_PID}}" ;;
@@ -110,6 +110,9 @@ const tick = (pane: string, n = 1, extra = ''): string =>
 
 const AT_PROMPT = '▓ ctx ████████░░ 88%\n❯ ';
 const MODEST = '▓ ctx ███░░░░░░░ 55%\n❯ ';
+/** Below COMPACT_THRESHOLD (50) and above the worker's own 40 — the one
+ *  reading that tells a per-session threshold from the default. */
+const BELOW_DEFAULT = '▓ ctx ██░░░░░░░░ 45%\n❯ ';
 const LEAN = '▓ ctx █░░░░░░░░░ 12%\n❯ ';
 const NO_CTX = '? for shortcuts\n❯ ';
 
@@ -421,7 +424,7 @@ describe('the capture window is the last 8 pane ROWS, not 8 lines of content', (
   /** tmux, recording, answering `capture-pane` from a real file so blank rows
    *  survive into the pipeline. */
   const FILE_STUBS = `
-    tmux() { echo "tmux $*" >> "$HOME/ccd-calls";
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE}
       case "\${1:-}" in
         capture-pane) cat "$HOME/pane-rows.txt" ;;
         list-panes)   echo "${PANE_PID}" ;;
@@ -495,5 +498,115 @@ describe('an armed auto-continue is never cancelled by /compact (D-2229)', () =>
     seed(); sessionJson('idle', 120);
     tick(ARMED.split('\n').filter((l) => !l.includes('Usage limit')).join('\n'));
     expect(sendKeys().some((k) => k.includes('/compact'))).toBe(true);
+  });
+});
+
+// ── The per-session `compact` field (routing spec §5.1; slice 6, Task 5) ──
+//
+// `COMPACT_THRESHOLD` was the ONLY threshold: one number for every session on
+// the box. The routing record's `compact` field makes it per session — the
+// coordinator's matrix gives a worker 40 (S6-R9) so a dependent chain comes
+// back under the wall between tasks, while a coordinator keeps the default.
+//
+// The field is read through `_route_get` (controller ruling S6-R12), so its
+// vocabulary here is `_route_valid`'s `compact` arm and nothing looser: two or
+// three digits in 10–100. `5`, `0`, `007`, `120` and `99999` are all digits
+// and none of them is a threshold, so a raw `=~ ^[0-9]+$` read would have given
+// the field a second, wider vocabulary than the one the writer enforces — the
+// cases below walk both edges of that gap.
+//
+// The field is a registry FILE, so a value the writer would refuse is still
+// reachable (a torn write, a hand edit). It falls back to the default rather
+// than dying, and it SAYS so — silently compacting at a threshold the record
+// does not name is exactly the collapse D-2013 exists to prevent — but the
+// sentence is `_route_get`'s OWN (`route-reject … field compact …`), carried on
+// the routing reader's per-field floor marker. It is NOT a `compact-skip` note:
+// `compactskip` is the compactor's marker and `_compact_note_clear` erases it
+// on the very next below-threshold tick, which is where the first cut of this
+// read put a routing refusal and lost it.
+describe('routing slice 6: `compact` is this session’s threshold, absent means COMPACT_THRESHOLD', () => {
+  it('a session at `compact=40` compacts at 45%, where the default would not', () => {
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 40`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    // The log line names the threshold that actually decided — `>= 50%` beside
+    // `ctx 45%` would be a record of a comparison nothing made.
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 45% >= 40%`);
+  });
+
+  it('with no `compact` field the default decides: 45% is left alone, 55% compacts', () => {
+    // The control for the case above, and the absent-field half of the §5.1
+    // row. Mutation that must put this back to red: none — this is what goes
+    // red if the field read replaces the default instead of defaulting to it.
+    seed(); sessionJson('idle', 600);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys()).toEqual([]);
+    expect(swapLog(),
+      'an ABSENT field is not a refused one — `_route_get` is silent on absence')
+      .not.toContain('field compact');
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
+  });
+
+  it('a `compact` field that is not digits falls back to the default AND says so', () => {
+    // Mutation that must put this back to red: drop the `=~ ^[0-9]+$` guard.
+    // Without it `[[ "$pct" -ge "$thr" ]]` evaluates `abc` as an unset name,
+    // i.e. 0, so EVERY session with a torn field compacts on every tick.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact abc`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys(), '45% is under the default the torn field falls back to').toEqual([]);
+    // The refusal's journal is `_route_reject_note`'s own sentence, subject-bound
+    // to this field: it names the FIELD and a BYTE COUNT and never the bytes.
+    expect(swapLog()).toContain(
+      `route-reject ${ID}: field compact holds an unrecognised value (3 bytes) — treated as absent`);
+    // And `compactskip` does NOT carry it. This is the half that reds if the
+    // refusal is moved back onto `_compact_note`: that marker rides the
+    // compactor's shared floor, and this very tick's `_compact_note_clear`
+    // (45% is below the threshold) would have erased the refusal it just wrote.
+    expect(reason(), 'a routing refusal must not wear the compactor’s marker').toBeNull();
+    expect(skipLines().join('\n')).not.toContain('compact-field-invalid');
+  });
+
+  it('a `compact` field of 5 is refused by the field’s vocabulary, not admitted as digits', () => {
+    // The LOW edge of the gap between `^[0-9]+$` and `_route_valid`'s compact
+    // arm (`^[0-9]{2,3}$` and 10–100). Mutation, measured: read the field with
+    // `_reg_get` instead of `_route_get` and 45% compacts against a threshold
+    // of 5 — a session that compacts on every tick forever.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 5`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys(), '5 is not a threshold; the default 50 decides and 45% is under it').toEqual([]);
+    expect(swapLog()).toContain(`route-reject ${ID}: field compact`);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
+  });
+
+  it('a `compact` field of 120 is refused by the same arm — above the ceiling is not a threshold', () => {
+    // The HIGH edge. `120` passes `^[0-9]{2,3}$` and fails the 10–100 bound, so
+    // only the validated reader tells it from a real value. Mutation, measured:
+    // `_reg_get` in place of `_route_get` and 55% stops compacting — the session
+    // goes silent at a ceiling the writer never admitted.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 120`);
+    tick(BELOW_DEFAULT);
+    expect(sendKeys()).toEqual([]);
+    expect(swapLog()).toContain(`route-reject ${ID}: field compact`);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(swapLog()).toContain(`auto-compact ${ID}: ctx 55% >= 50%`);
+  });
+
+  it('a `compact` field of 100 is a session that never auto-compacts below the wall', () => {
+    // The other direction of the same read: the ceiling `_route_valid` admits
+    // (10–100) must actually hold the compactor off, or the field is decorative.
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} compact 100`);
+    tick('▓ ctx █████████░ 91%\n❯ ');
+    expect(sendKeys()).toEqual([]);
+    expect(h.reg(ID, 'lastcompact')).toBeNull();
   });
 });

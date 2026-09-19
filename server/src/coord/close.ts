@@ -1,11 +1,14 @@
+import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import type { CcrcConfig } from '../config.js';
 import type { FleetState } from '../fleetstate.js';
 import type { Deps } from '../server.js';
 import { CCD_ARGV, verbSupported, sweepDec } from '../ccdargv.js';
 import { readPrHistory } from './prhistory.js';
-import { verifyDone, type DoneClaim } from './fingerprint.js';
-import { type AdvanceResult, type CoordStore, type OpenSibling } from './store.js';
+import { verifyDone, verifyReviewDone, type DoneClaim } from './fingerprint.js';
+import {
+  type AdvanceResult, type CoordStore, type OpenSibling, type OpenSiblingsResult, type RunRow,
+} from './store.js';
 import {
   HANDOFF_SHA,
   holdReasonVerdict,
@@ -13,7 +16,7 @@ import {
   releaseIsSafe,
   type HoldReasonVerdict,
 } from './rundefs.js';
-import { RUN_TRANSITIONS, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
+import { transitionsFor, type DoneRejectCode, type RunRefuseCode, type RunState } from '../../../shared/api.js';
 
 /**
  * L1 decision function (architecture doc increment 4). Same model as
@@ -72,7 +75,13 @@ export interface CloseRunBody {
    *  shape below — an abandon that also carries close fields is refused rather
    *  than half-honoured. */
   intent?: unknown;
-  fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown };
+  /** The work claim's four fields and the review claim's two, in ONE optional
+   *  bag: which pair is required is decided by the run's KIND, in `closeRun`
+   *  and `closeReviewRun` respectively, never by this type. Declared here so
+   *  the accepted wire shape is readable without reading both validators
+   *  (Task 7 review m8). */
+  fingerprint?: { branchTip?: unknown; prNumber?: unknown; prPhase?: unknown; handoffCommit?: unknown;
+                  reviewedTip?: unknown; report?: unknown };
   final?: unknown; state?: unknown; archive?: unknown;
 }
 
@@ -97,14 +106,31 @@ export async function closeRun(
   causedBy: 'coordinator' | 'operator',
 ): Promise<CloseOutcome> {
   const coord = deps.coord;
-  const run = coord.run(id);
+  const read = coord.run(id);
+  // D-2545. THE ROW IS THERE AND THIS PROCESS CANNOT REPRESENT ITS INTEGERS —
+  // a different condition from "no such run", answered before any fleet act
+  // and in words, never by throwing: `CoordMutex.run` is `try`/`finally` with
+  // no catch and there is no `app.setErrorHandler` anywhere in `server/src`,
+  // so a throw here became a bare Fastify 500 with no `CloseOutcome` shape at
+  // all. `hold-invalid` is the right existing code rather than a new one: the
+  // refusal is that a persisted number in the hold's own domain cannot be
+  // accepted, which is exactly what that code names — and it carries `detail`,
+  // which names the COLUMN and never the value.
+  if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
+  const run = read.run;
   if (!run) return { ok: false, kind: 'unknown-run' };
 
   /** The OTHER open runs on this workspace. Read fresh at the decision point,
    *  never cached: a snapshot consulted at a destructive decision point is
    *  the shape `watch.ts` already had to fix once. The closing run excludes
-   *  itself — it has not transitioned yet (D-48 puts the fleet act first). */
-  const siblingsOf = (sessionId: string): OpenSibling[] => coord.openRunsForSession(sessionId, id);
+   *  itself — it has not transitioned yet (D-48 puts the fleet act first).
+   *
+   *  Returns the RESULT, not the list (D-2545): every caller below is one step
+   *  from an irreversible fleet act, and "the sibling rows could not be read"
+   *  must never arrive at one of them spelled `[]` — that is precisely how
+   *  "nothing else claims this workspace" gets asserted about a workspace
+   *  something else claims. */
+  const siblingsOf = (sessionId: string): OpenSiblingsResult => coord.openRunsForSession(sessionId, id);
   /** The claim that survives this close: the MOST RECENTLY opened run, because
    *  the coordinator protocol opens wave N+1 before closing wave N. With the
    *  ordinary one-sibling case this is a distinction without a difference; it
@@ -153,8 +179,11 @@ export async function closeRun(
      * Cost, named: ~14 lines of transition/fleet-act/commit shape appear twice
      * inside one function. That is the price of the property.
      */
-    const target: RunState = run.state === 'planned' ? 'failed' : 'closing';
-    if (!RUN_TRANSITIONS[run.state].includes(target)) {
+    // D-2807: a review run has no `closing` (REVIEW_RUN_TRANSITIONS); the
+    // operator's ungated valve must still reach it, so it fails directly — its
+    // own machine's terminal hop.
+    const target: RunState = run.state === 'planned' || run.kind === 'review' ? 'failed' : 'closing';
+    if (!transitionsFor(run.kind)[run.state].includes(target)) {
       return { ok: false, kind: 'bad-transition', from: run.state, to: target };
     }
     // The fleet act, AHEAD of the commit (D-48), and only when there is
@@ -165,7 +194,10 @@ export async function closeRun(
     // claimed. Never `wsArchive` on this arm (D-280).
     let released = false;
     if (run.sessionId !== null) {
-      const siblings = siblingsOf(run.sessionId);
+      const sibRead = siblingsOf(run.sessionId);
+      // Fail-shut ahead of the fleet act, for the reason `siblingsOf` states.
+      if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
+      const siblings = sibRead.siblings;
       const survivor = survivorOf(siblings);
       // DECIDED ONCE, USED TWICE (review finding, W2b). The act and the
       // reported field used to come from two independent expressions —
@@ -210,6 +242,9 @@ export async function closeRun(
     // re-measure against and no worker to mail a rejection back to.
     return { ok: false, kind: 'refused', code: 'not-dispatched' };
   }
+  // Design 2026-09-14 §5: a REVIEW run closes on its own claim, with no
+  // `closing` hop, no `.prhistory` and no PR check. One arm, one function.
+  if (run.kind === 'review') return closeReviewRun(deps, run, b, causedBy, siblingsOf, survivorOf);
   // A second precondition, read-only, checked BEFORE the fleet act (fix,
   // found in Task 9 review — D-48, the close-route half of D-46's same
   // ordering fix for dispatch): a run that cannot legally reach `closing`
@@ -222,7 +257,7 @@ export async function closeRun(
   // always going to be refused — trading one wedge for another.
   // `advance()` below still re-checks the live row and is still the only
   // WRITER of `state`.
-  if (!RUN_TRANSITIONS[run.state].includes('closing')) {
+  if (!transitionsFor(run.kind)[run.state].includes('closing')) {
     return { ok: false, kind: 'bad-transition', from: run.state, to: 'closing' };
   }
 
@@ -267,7 +302,13 @@ export async function closeRun(
   // Decide and validate the hold before any close-path write. In particular,
   // `foldPrLineage` persists measured history, so it must not run when the
   // subsequent hold boundary is already known to be unrepresentable.
-  const siblings = siblingsOf(run.sessionId);
+  const sibRead = siblingsOf(run.sessionId);
+  // Fail-shut ahead of `foldPrLineage` and the fleet act alike, for the reason
+  // `siblingsOf` states. Placed exactly where the hold verdict already is: this
+  // block's own comment says the hold must be decided before any close-path
+  // write, and an unreadable sibling list is the same class of answer.
+  if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
+  const siblings = sibRead.siblings;
   const survivor = survivorOf(siblings);
   const safe = releaseIsSafe(siblings);
   const needsHold = !((state === 'failed' && archive && safe) || (final && safe));
@@ -360,4 +401,111 @@ export async function closeRun(
   if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
 
   return { ok: true, id, state, released };
+}
+
+/** The review-kind close (design 2026-09-14 §5.3–5.4, D-2796). Body:
+ *  `{ fingerprint: { reviewedTip, report }, state?: 'done'|'failed' }`. `final`
+ *  and `archive` are REFUSED: a review run is always final (its workspace is its
+ *  own and is released here), and archive stays a human act. `state:'failed'`
+ *  is the coordinator's "the reviewer died" — nothing is re-measured, exactly
+ *  as the work path's abandon arm (D-49). On `state:'failed'` the fingerprint
+ *  is optional — a dead reviewer has none, and an abandon asserts no claim
+ *  (D-2812); a fingerprint that IS present on a `failed` close is still
+ *  shape-checked — malformed is refused, never silently ignored. */
+async function closeReviewRun(
+  deps: CloseRunDeps, run: RunRow, b: CloseRunBody, causedBy: 'coordinator' | 'operator',
+  siblingsOf: (sessionId: string) => OpenSiblingsResult,
+  survivorOf: (s: readonly OpenSibling[]) => OpenSibling | null,
+): Promise<CloseOutcome> {
+  const coord = deps.coord;
+  if (b.final !== undefined || b.archive !== undefined ||
+      (b.state !== undefined && b.state !== 'done' && b.state !== 'failed')) {
+    return { ok: false, kind: 'bad-request' };
+  }
+  const state: 'done' | 'failed' = b.state === 'failed' ? 'failed' : 'done';
+  // `state:'done'` (the default) always requires the fingerprint, shape-checked
+  // exactly as before D-2812. `state:'failed'` makes it OPTIONAL: an absent one
+  // (the reviewer never wrote one) skips the shape check entirely; a
+  // fingerprint PRESENT on a `failed` close is still shape-checked — malformed
+  // is refused, never silently ignored. `validFp` is computed ONCE, here,
+  // rather than re-derived at its one read site below (D-2812) — the
+  // non-null assertion there is justified by `fpRequired`'s own condition
+  // repeating `state !== 'failed'`, never by trusting the wire shape twice.
+  const fp = b.fingerprint;
+  const fpRequired = state === 'done' || fp !== undefined;
+  const validFp: { reviewedTip: string; report: string } | null = fpRequired
+    ? (typeof fp === 'object' && fp !== null &&
+       typeof fp.reviewedTip === 'string' && HANDOFF_SHA.test(fp.reviewedTip) &&
+       typeof fp.report === 'string' && path.isAbsolute(fp.report))
+      ? { reviewedTip: fp.reviewedTip, report: fp.report }
+      : null
+    : null;
+  if (fpRequired && validFp === null) {
+    return { ok: false, kind: 'bad-request' };
+  }
+  if (!transitionsFor(run.kind)[run.state].includes(state)) {
+    return { ok: false, kind: 'bad-transition', from: run.state, to: state };
+  }
+  // `run.sessionId` is non-null here: `closeRun`'s own `not-dispatched` check
+  // runs before this arm is entered. The type still says `string | null`, so
+  // narrow it once for the reads below rather than re-check a fact already decided.
+  const sessionId = run.sessionId as string;
+
+  if (state !== 'failed') {
+    if (run.reviews === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: 'this review run names no reviewed run' };
+    }
+    const workRead = coord.run(run.reviews);
+    if (!workRead.ok) return { ok: false, kind: 'hold-invalid', detail: workRead.detail };
+    if (workRead.run === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: `reviewed run ${run.reviews} no longer exists` };
+    }
+    const work = workRead.run;
+    if (work.sessionId === null) {
+      return { ok: false, kind: 'doneVerdict', code: 'tip-unmeasurable', detail: `reviewed run ${work.id} has no session to measure` };
+    }
+    const verdict = await verifyReviewDone(
+      { io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd, fleetState: deps.fleetState },
+      { sessionId: work.sessionId, project: work.project, branch: work.branch ?? '' },
+      // Non-null: `state !== 'failed'` here means `state === 'done'`, and
+      // `fpRequired` above was true in exactly that case — the guard already
+      // refused a null `validFp` on that path.
+      validFp!,
+    );
+    if (!verdict.ok) {
+      coord.recordRejection({ code: verdict.code, runId: run.id, toId: sessionId, detail: verdict.detail });
+      queueSystemMail(coord, run, { fromId: 'coordinator', toId: sessionId, runId: run.id,
+        kind: 'status', subject: 'review-done-rejected', body: `${verdict.code}: ${verdict.detail}` });
+      return { ok: false, kind: 'doneVerdict', code: verdict.code, detail: verdict.detail };
+    }
+  }
+
+  // The fleet act, AHEAD of the commit (D-48). A review workspace hosts one
+  // run, so the ordinary answer is a release; the sibling check is kept
+  // because it is a re-measurement, not an assumption.
+  const sibRead = siblingsOf(sessionId);
+  if (!sibRead.ok) return { ok: false, kind: 'hold-invalid', detail: sibRead.detail };
+  const survivor = survivorOf(sibRead.siblings);
+  const release = releaseIsSafe(sibRead.siblings) || survivor === null;
+  // Spelled hand-over-first so the compiler narrows `survivor` on the arm that
+  // reads it, and so `argv` is a `const` carrying the `CcdArgv` brand rather
+  // than an evolving `let` (the abandon arm's own shape — Task 7 review m7).
+  let handoff: HoldReasonVerdict | null = null;
+  if (!release && survivor !== null) {
+    handoff = holdReasonVerdict(survivor.program, survivor.wave, survivor.waveOf, survivor.id);
+    if (!handoff.ok) return handoff;
+  }
+  const argv = handoff !== null && handoff.ok
+    ? CCD_ARGV.wsHold(sessionId, handoff.reason, sweepDec(deps.fleetState, `run:${run.id} close`))
+    : CCD_ARGV.wsRelease(sessionId, sweepDec(deps.fleetState, `run:${run.id} close`));
+  if (!verbSupported(deps.fleetState, argv)) return { ok: false, kind: 'unsupported' };
+  const res = await deps.runCcd(argv);
+  if (!res.ok) return { ok: false, kind: 'fleetFailed', stderr: res.stderr };
+
+  const closed = coord.closeRun({
+    runId: run.id, finalState: state, causedBy, handoffCommit: null, program: run.program,
+    viaClosing: false,   // REVIEW_RUN_TRANSITIONS has no `closing` (§5.2)
+  });
+  if (!closed.ok) return { ok: false, kind: 'advanceFailed', adv: closed };
+  return { ok: true, id: run.id, state, released: release };
 }

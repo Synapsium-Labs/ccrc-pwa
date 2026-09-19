@@ -648,8 +648,8 @@ function pathWithout(home: string, missing: string): string {
   // missing those is a fixture about six absences at once, and the point of
   // this helper is to model exactly one.
   //
-  // `diff` joins the list in worker-skill Task 4: BOTH skill installers refuse
-  // by name without it ("refusing rather than rewriting blind"), and
+  // `diff` joins the list in worker-skill Task 4: all three skill installers
+  // refuse by name without it ("refusing rather than rewriting blind"), and
   // `_inst_tree_copy`'s convergence check is a `diff -r -q` too. Without this
   // link, `pathWithout(home, 'git')` — a fixture about ONE absence, which runs
   // the whole verb through to the wrappers step — would instead die at the
@@ -1699,20 +1699,26 @@ describe('ccrc install: the executables and files it installs', () => {
     // and a box that silently writes no `~/.cc-limits` telemetry.
     const { home } = installed;
     const cases: Array<[string, string, number]> = [
+      // The compaction card's helper (compaction-card spec §2): 0644, a script
+      // `node` runs under the hook's `timeout`, never executed directly.
+      [join(home, '.cc-sessions', 'compact-card.mjs'), placed(home, 'ccd', 'compact-card.mjs'), 0o644],
       [join(home, '.cc-sessions', 'session-hook.sh'), placed(home, 'ccd', 'session-hook.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-session-hooks.sh'),
         placed(home, 'ccd', 'install-session-hooks.sh'), 0o755],
       [join(home, '.cc-sessions', 'notify.sh'), placed(home, 'deploy', 'notify.sh'), 0o755],
-      // The two skill installers (worker-skill Task 4) are the same kind of
-      // artifact as the hooks installer beside them — a script the box EXECUTES
-      // — and land through the same `_inst_atomic`. 0755 is not decoration
-      // here: `_inst_skills` runs each one immediately afterwards, and a copy
-      // that arrived at the source's mode under this describe's hostile umask
-      // would be a step that installs a skill installer nobody can run.
+      // The three skill installers (worker-skill Task 4, reviewer-skill
+      // Task 10) are the same kind of artifact as the hooks installer beside
+      // them — a script the box EXECUTES — and land through the same
+      // `_inst_atomic`. 0755 is not decoration here: `_inst_skills` runs each
+      // one immediately afterwards, and a copy that arrived at the source's
+      // mode under this describe's hostile umask would be a step that
+      // installs a skill installer nobody can run.
       [join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
         placed(home, 'ccd', 'install-coordinator-skill.sh'), 0o755],
       [join(home, '.cc-sessions', 'install-worker-skill.sh'),
         placed(home, 'ccd', 'install-worker-skill.sh'), 0o755],
+      [join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
+        placed(home, 'ccd', 'install-reviewer-skill.sh'), 0o755],
       // graphify Task 3: `_inst_graphify_skill` stages this beside the other
       // two, through the same `_inst_atomic`, right after `_inst_skills`.
       [join(home, '.cc-sessions', 'install-graphify-skill.sh'),
@@ -1752,13 +1758,15 @@ describe('ccrc install: the executables and files it installs', () => {
       // NOT in the spread above: this one is on both arms.
       join(home, '.local', 'bin', 'ccd-account-auth'),
       join(home, '.local', 'bin', 'ccrc'),
+      join(home, '.cc-sessions', 'compact-card.mjs'),
       join(home, '.cc-sessions', 'session-hook.sh'),
       join(home, '.cc-sessions', 'install-session-hooks.sh'),
       join(home, '.cc-sessions', 'notify.sh'),
-      // The two skill installers `_inst_skills` stages beside them, through
-      // the same `_inst_atomic` (worker-skill Task 4).
+      // The three skill installers `_inst_skills` stages beside them, through
+      // the same `_inst_atomic` (worker-skill Task 4, reviewer-skill Task 10).
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
       join(home, '.tmux.conf'),
@@ -1876,7 +1884,7 @@ describe('ccrc install: the order is stated in one place', () => {
       '_inst_graphify_engine',
       '_inst_hooks',
       // Worker-skill Task 4. Beside `_inst_hooks` and after it, in deploy.sh's
-      // own order (`install-session-hooks.sh`, then the two skill installers):
+      // own order (`install-session-hooks.sh`, then the three skill installers):
       // both steps run an INSTALLED converge script over the config dirs
       // `_inst_dirs` has just created, and neither reads what the other wrote.
       // What IS load-bearing is that it follows `_inst_dirs` — the skill
@@ -2307,6 +2315,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // idiom), which is why it is not folded into the `_ccrc_die`-guarded
       // loop above it.
       '--user enable --now ccd-graph-sweep.timer',
+      // Routing slice 0 Task 7: another degrade-rather-than-die enable, on the
+      // graph-sweep's own terms, for the usage-accounting sweep's timer.
+      '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -2729,7 +2740,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // and the three timer-bound ones, macOS is a supported box for it.
         ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-telemetry-keepalive', 'ccrc', 'graphify']);
+           'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py', 'ccrc', 'graphify']);
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -2787,15 +2798,16 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
   });
 });
 
-describe('ccrc install: both skills reach every rostered account', () => {
+describe('ccrc install: all three skills reach every rostered account', () => {
   // ── THE ASYMMETRY THIS STEP CLOSES ──────────────────────────────────────
   // `deploy/deploy.sh agent <host>` has shipped the coordinator skill to the
-  // fleet host since Build 7 and now ships the worker skill beside it — but a
-  // box that installs ITSELF got neither, because no step of this verb had ever
-  // heard of a skill. That is not a cosmetic gap: both installers exist because
-  // skills resolve per `CLAUDE_CONFIG_DIR` and a session's ACCOUNT drifts on
-  // swap while its id does not, so a coordinator (or a worker) placed with no
-  // pinned account must find its skill in EVERY rostered home. On a
+  // fleet host since Build 7 and now ships the worker and reviewer skills
+  // beside it — but a box that installs ITSELF got none of them, because no
+  // step of this verb had ever heard of a skill. That is not a cosmetic gap:
+  // all three installers exist because skills resolve per `CLAUDE_CONFIG_DIR`
+  // and a session's ACCOUNT drifts on swap while its id does not, so a
+  // coordinator (or a worker, or a reviewer) placed with no pinned account
+  // must find its skill in EVERY rostered home. On a
   // self-installed box it found one in none of them, and the failure is silent:
   // the model simply does not have the protocol and improvises.
   //
@@ -2817,11 +2829,12 @@ describe('ccrc install: both skills reach every rostered account', () => {
     expect(skillBox.r.stdout).toMatch(/^install: skills: /m);
   });
 
-  it('lands BOTH skills in every account config dir the roster names', () => {
+  it('lands ALL THREE skills in every account config dir the roster names', () => {
     const { home } = skillBox;
     for (const d of ROSTER_DIRS) {
       for (const [name, src] of [
         ['ccrc-coordinator', 'coordinator-skill'], ['ccrc-worker', 'worker-skill'],
+        ['ccrc-reviewer', 'reviewer-skill'],
       ] as const) {
         const md = join(home, d, 'skills', name, 'SKILL.md');
         expect(existsSync(md), `${d}: ${name} never reached this home`).toBe(true);
@@ -2842,12 +2855,12 @@ describe('ccrc install: both skills reach every rostered account', () => {
   it('stages each skill tree under ~/.cc-sessions, where the fleet deploy puts it', () => {
     // ONE PATH FOR BOTH LANES. `deploy.sh` rsyncs each tree to
     // `~/.cc-sessions/<name>` and runs the installer against that copy; this
-    // verb places the same two directories at the same two paths from the tree
-    // it just put at `~/ccrc`. A box therefore looks the same afterwards
+    // verb places the same three directories at the same three paths from the
+    // tree it just put at `~/ccrc`. A box therefore looks the same afterwards
     // whichever lane converged it — which is what makes the installers' own
     // `CCRC_SKILL_SRC` default correct on a self-installed box.
     const { home } = skillBox;
-    for (const name of ['coordinator-skill', 'worker-skill']) {
+    for (const name of ['coordinator-skill', 'worker-skill', 'reviewer-skill']) {
       const staged = join(home, '.cc-sessions', name);
       expect(existsSync(staged), `${name} was never staged in ~/.cc-sessions`).toBe(true);
       expect(readFileSync(join(staged, 'SKILL.md')))
@@ -2904,8 +2917,10 @@ describe('ccrc install: both skills reach every rostered account', () => {
       join(home, '.claude', 'skills', 'ccrc-coordinator', 'SKILL.md'),
       join(home, '.claude', 'skills', 'ccrc-coordinator', 'references', 'wave-lifecycle.md'),
       join(home, '.claude', 'skills', 'ccrc-worker', 'SKILL.md'),
+      join(home, '.claude', 'skills', 'ccrc-reviewer', 'SKILL.md'),
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
     ];
     const before = watched.map((p) => [statSync(p).ino, mtime(p)]);
     const r = runInstall(home);
@@ -3164,13 +3179,16 @@ describe('ccrc install: running the WHOLE verb twice', () => {
       join(home, '.cc-sessions', 'notify.sh'),
       join(home, '.cc-sessions', 'install-coordinator-skill.sh'),
       join(home, '.cc-sessions', 'install-worker-skill.sh'),
+      join(home, '.cc-sessions', 'install-reviewer-skill.sh'),
       // graphify Task 3: staged beside them, through the same `_inst_atomic`.
       join(home, '.cc-sessions', 'install-graphify-skill.sh'),
-      // …and the two staged skill TREES, which are not `_inst_atomic`
+      // …and the three staged skill TREES, which are not `_inst_atomic`
       // destinations at all: `_inst_tree_copy` converges a directory, and the
-      // file inside it is what a re-run must not rewrite (worker-skill Task 4).
+      // file inside it is what a re-run must not rewrite (worker-skill Task 4,
+      // reviewer-skill Task 10).
       join(home, '.cc-sessions', 'coordinator-skill', 'SKILL.md'),
       join(home, '.cc-sessions', 'worker-skill', 'SKILL.md'),
+      join(home, '.cc-sessions', 'reviewer-skill', 'SKILL.md'),
       join(home, '.tmux.conf'),
       join(home, '.claude', 'statusline-command.sh'),
       // THE JOB FILES THIS PLATFORM ACTUALLY HAS. `UNIT_FILES` is systemd's
@@ -3427,6 +3445,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
       '--user enable --now ccd-graph-sweep.timer',
+      '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',

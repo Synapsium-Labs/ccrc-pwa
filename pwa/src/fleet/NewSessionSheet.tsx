@@ -6,14 +6,17 @@
 // team·alt") and posts api.createSession; success closes the sheet (the
 // new card arrives over /ws/fleet), failure toasts ccd's stderr and leaves
 // every choice in place.
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { ProjectRow } from '../../../shared/api';
+import { CLASSES, type ModelClass } from '../../../shared/models';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
-import { accountLabel } from '../lib/accounts';
+import { accountLabel, accountPool } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
+import { effortOptions, modelOptions } from '../lib/models';
+import { poolSide } from '../lib/pools';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   AccountRow,
@@ -25,6 +28,46 @@ import {
 import { useAccountUsage } from './useProjectedHome';
 import './fleet.css';
 
+function ProjectRowButton({ row, selected, pool, onPick }: {
+  row: ProjectRow;
+  selected: boolean;
+  pool: string | null;
+  onPick: (project: ProjectRow) => void;
+}): ReactNode {
+  const poolLabel = `pool · ${pool ?? ''}`;
+  return (
+    <button
+      type="button"
+      className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
+      onClick={() => onPick(row)}
+    >
+      <span className="proj-glyph" aria-hidden="true">{selected ? '❯' : ''}</span>
+      <span className="proj-name">{row.name}</span>
+      {pool !== null && (
+        <span className="acct-pool" aria-label={poolLabel} title={poolLabel}>
+          {poolLabel}
+        </span>
+      )}
+      <span className="proj-dir">{row.workdir}</span>
+    </button>
+  );
+}
+
+/** A `CLASSES` entry's display name for the sheet's `Class` select — the
+ *  label `modelOptions` already has for this wrapper/class pair (so gpt's
+ *  own aliases read the same here as they do in the session screen's own
+ *  picker) when the lane offers one, else the class word with its first
+ *  letter capitalised — with the class word ITSELF always appended (`—
+ *  <cls>`), because a gpt-lane label like "GPT-6 Astra" carries no class word
+ *  at all, though the option it labels posts `class=fable` (S4-R13). Never a
+ *  hand-typed list of the four names — this is the only path this file may
+ *  take to spell one, and it derives every spelling from `CLASSES` at render
+ *  time. */
+function classDisplayLabel(wrapper: string, cls: ModelClass): string {
+  const opt = modelOptions(wrapper, null).find((o) => o.route.field === 'class' && o.route.value === cls);
+  const base = opt?.label ?? cls.charAt(0).toUpperCase() + cls.slice(1);
+  return `${base} — ${cls}`;
+}
 
 export interface NewSessionSheetProps {
   open: boolean;
@@ -49,9 +92,21 @@ export function NewSessionSheet({
 
   const [wrapper, setWrapper] = useState<string | null>(null); // null = step 1
   const [project, setProject] = useState<ProjectRow | null>(null);
+  // Classification at the deliberate pick, not at the current render. A later
+  // eligible -> crossing transition must withdraw the selection; a project
+  // picked from the disclosed crossing side remains a deliberate crossing.
+  const selectedCrossingRef = useRef<boolean | null>(null);
   const [query, setQuery] = useState('');
+  const [showOther, setShowOther] = useState(false);
   const [list, setList] = useState<ProjectRow[] | null>(null); // null = loading
   const [listError, setListError] = useState<string | null>(null);
+  // The routing row's three fields (routing spec, slice 4, Task 6). Each is
+  // '' (unset) until the operator picks one; unset means the request carries
+  // no `route` key at all, so an operator who never touches this row starts
+  // a session exactly the way this sheet always has.
+  const [routeClass, setRouteClass] = useState('');
+  const [routeEffort, setRouteEffort] = useState('');
+  const [routeWorkflow, setRouteWorkflow] = useState('');
   const [starting, setStarting] = useState(false);
   /** `starting` has been true for long enough that "Starting…" is no longer an
    *  honest description of the wait. The server's `start`/`enable` budget is
@@ -95,7 +150,12 @@ export function NewSessionSheet({
     if (open) return;
     setWrapper(null);
     setProject(null);
+    selectedCrossingRef.current = null;
     setQuery('');
+    setShowOther(false);
+    setRouteClass('');
+    setRouteEffort('');
+    setRouteWorkflow('');
     setStarting(false);
     setSlow(false);
   }, [open]);
@@ -118,8 +178,31 @@ export function NewSessionSheet({
           return (rb ?? -1) - (ra ?? -1);
         });
   const needle = query.trim().toLowerCase();
-  const filtered =
+  const matching =
     needle === '' ? ordered : ordered.filter((p) => p.name.toLowerCase().includes(needle));
+  // At step 2 the account is fixed, so split the projects that account may take.
+  // An absent or undecidable project pool is offered plainly; only a measured
+  // mismatch requires disclosure and an explicit crossing override.
+  const wrapperPool = wrapper === null ? null : accountPool(roster, wrapper);
+  const poolClass = (candidate: ProjectRow) => poolSide(wrapperPool, candidate.pool ?? null);
+  const isCrossing = (candidate: ProjectRow): boolean => poolClass(candidate) === 'crossing';
+  const inPool = matching.filter((candidate) => poolClass(candidate) !== 'crossing');
+  const otherPool = matching.filter((candidate) => poolClass(candidate) === 'crossing');
+  const hasUnknownPool = inPool.some(
+    (candidate) => candidate.pool !== undefined && poolClass(candidate) === 'unknown',
+  );
+
+  useEffect(() => {
+    if (project !== null && selectedCrossingRef.current === false && isCrossing(project)) {
+      setProject(null);
+      selectedCrossingRef.current = null;
+    }
+  }, [project, wrapperPool]);
+
+  const pickProject = (candidate: ProjectRow): void => {
+    selectedCrossingRef.current = isCrossing(candidate);
+    setProject(candidate);
+  };
 
   // THE SAME RULE THE SWAP PICKER ASKS, AND THAT IS A DECISION, NOT A SHARED
   // HELPER'S SIDE EFFECT (D-1978). The two surfaces were re-examined separately, because
@@ -147,11 +230,26 @@ export function NewSessionSheet({
         ? 'No accounts to start a session on yet.'
         : 'Every account is switched off on the fleet host — turn one back on from Accounts.';
 
+  // Only the SET fields ride the request — an unset select contributes no
+  // key, so an operator who never touches the row gets the request shape
+  // this sheet has always sent (mirrors `crossPool`'s own rule just below).
+  const route: Partial<Record<'class' | 'effort' | 'workflow', string>> = {};
+  if (routeClass !== '') route.class = routeClass;
+  if (routeEffort !== '') route.effort = routeEffort;
+  if (routeWorkflow !== '') route.workflow = routeWorkflow;
+  const hasRoute = Object.keys(route).length > 0;
+
   const start = async (): Promise<void> => {
     if (wrapper === null || project === null || starting) return;
     setStarting(true);
     try {
-      await api.createSession({ wrapper, project: project.name, workdir: project.workdir });
+      const body = {
+        wrapper, project: project.name, workdir: project.workdir,
+        ...(hasRoute ? { route } : {}),
+      };
+      await (isCrossing(project)
+        ? api.createSession({ ...body, crossPool: true })
+        : api.createSession(body));
       toast(`Starting ${project.name} on ${accountLabel(roster, wrapper)}…`);
       onClose();
     } catch (err) {
@@ -180,6 +278,7 @@ export function NewSessionSheet({
                   facts={factsFor(accounts, w)}
                   onPick={setWrapper}
                   roster={roster}
+                  poolChip={accountPool(roster, w)}
                 />
               ))
             ) : (
@@ -195,6 +294,11 @@ export function NewSessionSheet({
             onClick={() => {
               setWrapper(null);
               setProject(null);
+              selectedCrossingRef.current = null;
+              setShowOther(false);
+              setRouteClass('');
+              setRouteEffort('');
+              setRouteWorkflow('');
             }}
           >
             <span aria-hidden="true">‹</span> on {accountLabel(roster, wrapper)} — change
@@ -215,28 +319,97 @@ export function NewSessionSheet({
             </p>
           ) : (
             <div className="proj-list">
-              {filtered.map((p) => {
-                const selected = p.workdir === project?.workdir;
-                return (
+              {inPool.map((candidate) => (
+                <ProjectRowButton
+                  key={candidate.workdir}
+                  row={candidate}
+                  selected={candidate.workdir === project?.workdir}
+                  pool={null}
+                  onPick={pickProject}
+                />
+              ))}
+              {hasUnknownPool && (
+                <p className="pool-note">
+                  One or more project pools are not known from here, so pool matching does not hide those projects.
+                </p>
+              )}
+              {otherPool.length > 0 && (
+                <>
                   <button
-                    key={p.workdir}
                     type="button"
-                    className={selected ? 'proj-row proj-row--selected' : 'proj-row'}
-                    onClick={() => setProject(p)}
+                    className="acct-disclosure"
+                    aria-expanded={showOther}
+                    onClick={() => setShowOther((shown) => !shown)}
                   >
-                    <span className="proj-glyph" aria-hidden="true">
-                      {selected ? '❯' : ''}
-                    </span>
-                    <span className="proj-name">{p.name}</span>
-                    <span className="proj-dir">{p.workdir}</span>
+                    show other pools ({otherPool.length})
                   </button>
-                );
-              })}
-              {filtered.length === 0 && (
+                  {showOther && otherPool.map((candidate) => (
+                    <ProjectRowButton
+                      key={candidate.workdir}
+                      row={candidate}
+                      selected={candidate.workdir === project?.workdir}
+                      pool={candidate.pool?.state === 'tagged' ? candidate.pool.name : null}
+                      onPick={pickProject}
+                    />
+                  ))}
+                </>
+              )}
+              {inPool.length === 0 && otherPool.length === 0 && (
                 <p className="proj-none">No project matches "{query}"</p>
               )}
             </div>
           )}
+          {/* The optional routing row (routing spec, slice 4, Task 6): every
+              option is derived from `CLASSES`/`effortOptions` at render time,
+              never a hand-typed list, so a class or effort rung this build
+              adds or drops shows up here for free. Leaving all three unset
+              sends no `route` key at all — the coordinator row an ordinary
+              start has always landed on. */}
+          <div className="route-row">
+            <label className="route-field">
+              <span className="route-field-label">Class</span>
+              <select
+                className="route-select"
+                value={routeClass}
+                onChange={(e) => setRouteClass(e.target.value)}
+              >
+                <option value="">Coordinator row</option>
+                <option value="default">Default</option>
+                {[...CLASSES].reverse().map((c) => (
+                  <option key={c} value={c}>{classDisplayLabel(wrapper, c)}</option>
+                ))}
+              </select>
+            </label>
+            <label className="route-field">
+              <span className="route-field-label">Effort</span>
+              <select
+                className="route-select"
+                value={routeEffort}
+                onChange={(e) => setRouteEffort(e.target.value)}
+              >
+                <option value="">Unset</option>
+                {effortOptions(wrapper, null, false).map((o) => (
+                  <option key={o.route.value} value={o.route.value}>{o.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="route-field">
+              <span className="route-field-label">Workflows</span>
+              <select
+                className="route-select"
+                value={routeWorkflow}
+                onChange={(e) => setRouteWorkflow(e.target.value)}
+              >
+                <option value="">Unset</option>
+                <option value="on">on</option>
+                <option value="off">off</option>
+              </select>
+            </label>
+          </div>
+          <p className="sheet-copy route-note">
+            Unset fields take the coordinator row (Fable · ultracode, Sonnet subagents, workflows on).
+            If the account can't serve the class today, ccd starts one rung down and restores it when it can.
+          </p>
           <button
             type="button"
             className="btn-primary sheet-confirm"

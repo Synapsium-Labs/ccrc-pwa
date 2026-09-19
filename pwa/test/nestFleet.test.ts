@@ -22,7 +22,7 @@ const sess = (id: string, over: Partial<FleetSession> = {}): FleetSession => ({
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
   lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null,
-  started: true, spawnState: null, ask: null, ...over,
+  started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
 });
 
 /** A run in the shape the `runs` frame actually carries one. `claimedBy` is
@@ -36,7 +36,8 @@ const run = (over: Partial<RunSummary> = {}): RunSummary => ({
   // non-null variants by spreading this builder; they must not re-add the field
   // here.
   project: 'ccrc-pwa', homeProject: null, sessionId: null, workspace: null, branch: null,
-  state: 'dispatched', claimedBy: 'coord', resumed: false, clearedAt: null,
+  state: 'dispatched', kind: 'work', reviews: null,
+  claimedBy: 'coord', resumed: false, clearedAt: null,
   openedAt: 1_800_000_000_000, dispatchStartedAt: null, dispatchedAt: null,
   closedAt: null, handoffCommit: null, items: { done: 0, total: 0 },
   unreadMail: 0,
@@ -89,7 +90,7 @@ describe('nestFleet — rule 1: the happy shape', () => {
   });
 });
 
-describe('nestFleet — rule 2: children are in PROGRAMME order, not status order', () => {
+describe("nestFleet — rule 2: children are attention-first, then in PROGRAMME order — never the list's own", () => {
   it('sorts children by the run’s wave ascending, then by run id — against the list’s own order', () => {
     // The input order DISAGREES with the programme order on purpose: `w2` is
     // ahead of `w1` in `sortFleet`'s result (it was interacted with more
@@ -110,6 +111,42 @@ describe('nestFleet — rule 2: children are in PROGRAMME order, not status orde
       run({ id: 20, wave: 2, sessionId: 'earlier', claimedBy: 'coord' }),
     ]);
     expect(shape(rows)).toEqual([['coord', 0], ['earlier', 1], ['later', 1]]);
+  });
+
+  it('puts a sibling that is waiting on the operator FIRST, ahead of programme order', () => {
+    // `later` is wave 2 and would sort after `earlier` by programme order
+    // alone; it is blocked on the operator, and an indented row three deep
+    // hides that just as well as a fold does (spec §6).
+    const sessions = [sess('coord'), sess('earlier'), sess('later', { bucket: 'attention' })];
+    const rows = nestFleet(sessions, [
+      run({ id: 20, wave: 1, sessionId: 'earlier', claimedBy: 'coord' }),
+      run({ id: 21, wave: 2, sessionId: 'later', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['coord', 0], ['later', 1], ['earlier', 1]]);
+  });
+
+  it('CONTROL: with no attention sibling the order is programme order exactly as before', () => {
+    // The existing rule-2 cases hard-code `bucket: 'idle'` on every fixture, so
+    // an attention-first key is a no-op on them and they cannot pin it. This
+    // case states that premise; the case above is the pin.
+    const sessions = [sess('coord'), sess('earlier'), sess('later')];
+    const rows = nestFleet(sessions, [
+      run({ id: 21, wave: 2, sessionId: 'later', claimedBy: 'coord' }),
+      run({ id: 20, wave: 1, sessionId: 'earlier', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['coord', 0], ['earlier', 1], ['later', 1]]);
+  });
+
+  it('never lifts a waiting row above its PARENT — the key is scoped to siblings', () => {
+    // Two children under `coord`, the waiting one at a LATER wave, and a
+    // top-level row ahead of `coord`: the waiting child rises among its
+    // siblings and no further — the top level is the caller's order, verbatim.
+    const sessions = [sess('other'), sess('coord'), sess('kidLate', { bucket: 'attention' }), sess('kidEarly')];
+    const rows = nestFleet(sessions, [
+      run({ id: 20, wave: 1, sessionId: 'kidEarly', claimedBy: 'coord' }),
+      run({ id: 21, wave: 2, sessionId: 'kidLate', claimedBy: 'coord' }),
+    ]);
+    expect(shape(rows)).toEqual([['other', 0], ['coord', 0], ['kidLate', 1], ['kidEarly', 1]]);
   });
 });
 

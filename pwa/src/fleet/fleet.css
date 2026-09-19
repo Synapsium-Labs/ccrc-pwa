@@ -43,6 +43,53 @@
   align-items: center;
   gap: var(--sp-3);
 }
+/* The class chooser (routing spec, slice 5, Task 6) shares the RUNS LINE, and
+ * both halves of that are measurements rather than preferences.
+ *
+ * It is not in the head because it does not fit there. The head's right group
+ * carries four other items — the count, the accounts door, the mail badge and
+ * the bell — whose min-content widths total 244px, and at 390px that group has
+ * 294px to spend. The ~38px left over once this control's gap is paid cannot
+ * hold a `<select>` sized to its widest option, "Coordinator row", which
+ * measures 167px. No floor, cap or shrink factor closes a 129px deficit; only
+ * leaving the row does. Measured in Chromium from 320px to 1440px.
+ *
+ * It does not get a row of its own either — that read as an orphan, a lone
+ * right-aligned control on an otherwise empty band. `.fleet-runs-row` was
+ * already full-width, `--tap-min` tall and nearly empty, so the pair costs no
+ * height at all. The partner is the runs door rather than `HotFilesStrip`
+ * because that strip returns null with no live claim: pairing with it would
+ * put two controls side by side only while somebody held a hot file, and leave
+ * this one orphaned again the moment the last claim expired.
+ *
+ * `.route-select`'s chrome is still reused verbatim — same edge, ground and
+ * tap-min height as the new-session sheet's routing row. What is NOT reused is
+ * its `width: 100%`, and this override must OUT-SPECIFY that rule rather than
+ * merely restate it: `.route-select` is declared some 650 lines further down
+ * and carries equal specificity (one class each), so the single-class
+ * `.fleet-class-select { width: auto }` that shipped lost the tie to source
+ * order and never applied once. That is why the control rendered at 286px
+ * instead of 167px, and `flex-shrink: 0` then forbade it giving any of that
+ * back: the head overflowed the viewport by 225px at 390px and by 219px at
+ * 700px, so the defect was never phone-only. `.fleet-runs-row` carries its own
+ * `width: 100%` and needs the same treatment for the same reason — it is
+ * declared later still, so the compound selector below is what lets it yield
+ * the row instead of claiming all of it. `fleet-css.test.ts` pins both. */
+.fleet-runs-line {
+  display: flex;
+  align-items: center;
+  gap: var(--sp-2);
+}
+.fleet-runs-line .fleet-runs-row {
+  flex: 1 1 0;
+  min-width: 0;
+  width: auto;
+}
+.route-select.fleet-class-select {
+  width: auto;
+  flex: none;
+  max-width: 100%;
+}
 /* Notification toggle — a quiet bell; lit when push is on. */
 .bell {
   border: none;
@@ -677,6 +724,44 @@
 .proj-skel {
   padding: var(--sp-3) 0;
 }
+/* The new-session sheet's optional routing row (routing spec, slice 4, Task
+ * 6) — three plain selects under the project list. Reuses `.proj-search`'s
+ * chrome tokens (edge, raised ground, tap-min height) rather than inventing a
+ * second control style for the app's first `<select>`. */
+.route-row {
+  display: grid;
+  /* `minmax(0, 1fr)`, never a bare `1fr`: a grid item's automatic minimum size
+   * is its min-content, so three `<select>`s whose option lists are wider than
+   * a third of a phone's sheet push the track past the container instead of
+   * scrolling inside it — the same defect `.proj-card`'s `min-width: 0` fixes
+   * elsewhere in this file. Measured 2026-09-17: this was the ONLY bare
+   * `repeat(n, 1fr)` left in `pwa/src`; the other nine multi-track grids
+   * already spell it this way. */
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--sp-2);
+  margin-bottom: var(--sp-2);
+}
+.route-field {
+  display: grid;
+  gap: 2px;
+}
+.route-field-label {
+  font: var(--weight-medium) var(--text-2xs) / 1 var(--font-mono);
+  color: var(--ink-tertiary);
+}
+.route-select {
+  width: 100%;
+  min-height: var(--tap-min);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-primary);
+  font: var(--weight-regular) var(--text-input) / var(--leading-normal) var(--font-ui);
+  padding: 0 var(--sp-2);
+}
+.route-select:focus {
+  border-color: var(--accent);
+}
 .sheet-confirm {
   margin-top: var(--sp-2);
 }
@@ -858,9 +943,19 @@
 .sess-line--active .sess-held,
 .sess-line--active .sess-lifecycle,
 .sess-line--active .sess-swapblocked,
+.sess-line--active .sess-stranded,
+.sess-line--active .sess-offpool,
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
+/* Task 6: .sess-repo paints --ink-tertiary of its own — it sits inside
+   `.sess-open` on the row's FIRST line, beside the label, not inside
+   `.sess-meta` like the cells above, but the same rule applies: a child's
+   own `color` beats the inherited flip, so without this line it strands on
+   the selected slab exactly the way `.sess-held` did before it joined this
+   group. Joins the pair this rule already declares — no new pair for
+   design/contrast-check.mjs. */
+.sess-line--active .sess-repo,
 /* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
    of its own, so it strands on the selected slab exactly the way .sess-warn
    would without this line. */
@@ -1038,9 +1133,25 @@
    taps — turning a tap on the bottom of the workspace name into a disclosure
    toggle. `position: relative` alone is not enough: the overlay is also
    positioned and comes LATER in tree order, so among z-index:auto siblings it
-   still wins. An explicit 1 is what puts the label back on top. */
+   still wins. An explicit 1 is what puts the label back on top.
+
+   Task 6 fix round 1: `display: flex` again (see `.sess-label`'s own note —
+   this file used to be flex here, and went to `display: block` before this
+   button ever grew a second child), because `.sess-repo` (below, fleet.css's
+   later `.sess-repo` rule) is a second inline fact that has to sit on the
+   SAME line as the label, after it, both ellipsis-guarded independently — a
+   block box stacks a trailing inline-level `<span>` onto its own new line
+   the instant that span carries `white-space: nowrap` (nothing to wrap onto
+   the label's line), which is exactly the extra third text line the
+   controller ruled out. `align-items: baseline` keeps the two texts'
+   baselines level despite `.sess-repo`'s smaller mono face; `gap` replaces
+   `.sess-repo`'s own `margin-left` (see that rule). `min-width: 0` is the
+   flex-child half of the same ellipsis fix `.sess-label` needs below — a
+   flex CONTAINER also defaults to a content-based minimum width. */
 .sess-open {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
   position: relative;
   z-index: 1;
   min-width: 0;
@@ -1054,10 +1165,23 @@
   line-height: inherit;
 }
 
-/* display: block, because .sess-open is no longer a flex container blockifying
-   it — an inline span cannot ellipsis. */
+/* `display: block` dates from when `.sess-open` was plain `display: block`
+   and an inline `<span>` cannot ellipsis on its own; kept rather than
+   dropped now that `.sess-open` is flex again (Task 6 fix round 1, above) —
+   a flex item's principal box is blockified by the flex layout regardless of
+   its own `display`, so this declaration is redundant under the CURRENT
+   parent, but it is what keeps `.sess-label` ellipsing correctly should this
+   ever render under a non-flex parent again (a standalone `<SessionLine>` in
+   a test, for one), and removing a working, harmless line was not this
+   fix's job. `flex: 1 1 auto` is what lets this cell claim the row's
+   remaining width instead of its own text width; `min-width: 0` is the
+   override every flex-child ellipsis needs — a flex item's default
+   `min-width: auto` refuses to shrink below its content's natural width, no
+   matter what `overflow`/`text-overflow` say. */
 .sess-label {
   display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1323,6 +1447,46 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink-tertiary);
+}
+
+/* Task 6: the repo slug composed into `.sess-open`'s accessible name, when
+   the card it sits on would otherwise imply another repo. Small and quiet —
+   same ink-tertiary register as `.sess-held` next door — because it is a
+   disambiguator, not a headline fact.
+
+   Task 6 fix round 1: `flex: none` — this cell keeps its own content width
+   rather than sharing the row's remaining space with `.sess-label` (which
+   claims all of it via `flex: 1 1 auto`); `max-width: 45%` is the ceiling
+   that stops a long slug from starving the workspace name down to nothing
+   on a narrow phone, with its own `overflow`/`text-overflow`/`white-space`
+   guarding that ceiling the same way `.sess-label` guards its own width. No
+   `margin-left` any more — `.sess-open`'s `gap` (above) now does the
+   spacing between the two cells, and doing it twice would double it. */
+.sess-repo {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
+
+/* A strand is deliberately louder than the neighbouring durable markers.
+   Like them, it truncates while its title preserves the complete reason. */
+.sess-stranded {
+  font-family: var(--font-mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--status-attention-text);
+}
+
+.sess-offpool {
+  flex: none;
+  font-family: var(--font-mono);
+  color: var(--status-attention-text);
 }
 
 /* Task 5: the hold reason, when a run backs it, is a DOOR onto /runs. The
@@ -1608,6 +1772,104 @@ button.sess-held {
 }
 .proj-card-pin[data-mixed] { color: var(--ink-tertiary); }
 
+/* The project's pool has the pin's quiet mono register. A button is interactive;
+   the shared class stays cursor-neutral so an inert span does not imitate one. */
+.proj-card-pool {
+  position: relative;
+  flex: none;
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  line-height: var(--leading-tight);
+  white-space: nowrap;
+  color: var(--ink-tertiary);
+}
+button.proj-card-pool { cursor: pointer; }
+button.proj-card-pool::before {
+  content: '';
+  position: absolute;
+  top: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  bottom: calc((var(--text-2xs) * var(--leading-tight) - var(--tap-min)) / 2);
+  left: min(0px, calc((100% - var(--tap-min)) / 2));
+  right: min(0px, calc((100% - var(--tap-min)) / 2));
+}
+/* An untagged project is the worklist, not a fault. Malformed, unreadable and
+   unrecognised all need attention; the wording tells their distinct remedies. */
+.proj-card-pool[data-pool='untagged'],
+.proj-card-pool[data-pool='malformed'],
+.proj-card-pool[data-pool='unreadable'],
+.proj-card-pool[data-pool='unrecognised'] {
+  color: var(--status-attention-text);
+}
+/* The loud card-level count for sessions with nowhere in their pool to go. */
+.proj-card-stranded {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  white-space: nowrap;
+  color: var(--status-attention-text);
+}
+
+/* Roster-derived options only: a free-text pool with no member would strand
+   every constrained session. */
+.pool-list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+}
+.pool-row {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  font-family: var(--font-mono);
+  color: var(--ink-primary);
+  text-align: left;
+  cursor: pointer;
+}
+.pool-row[data-none] { color: var(--ink-secondary); }
+
+/* A crossing names its destination pool on the revealed account row. */
+.acct-pool {
+  flex: 1 1 0;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
+.proj-row--selected .acct-pool {
+  color: var(--ink-tertiary);
+}
+
+/* Revealing crossings is a separate, full-size choice from making a move. */
+.acct-disclosure {
+  min-height: var(--tap-min);
+  padding: 0;
+  background: none;
+  border: 0;
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--ink-secondary);
+  text-align: left;
+  cursor: pointer;
+}
+
+/* An unknown pool changes disclosure, not eligibility. */
+.pool-note {
+  margin: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+
 /* A real button, not a bare glyph: bg-raised fill, edge-subtle hairline,
    r-md corner — the same treatment .sess-actions gives the ··· below, so
    the two read as one matched pair down the card's right edge. The 44px
@@ -1708,6 +1970,61 @@ button.sess-held {
   flex: none;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+}
+
+/* F4 (cross-repo): the sentence under a rule-3 orphan. NOT a tap surface and
+   never a --glow — it explains a row, it is not a row — and it takes
+   `--ink-tertiary` on `.proj-card-body`'s own ground, the register
+   `.proj-nest-bracket` and `.proj-pending-program` already use here: the
+   quietest thing on the card, because the row above it carries the fact. */
+.proj-crossing {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding-left: var(--sp-3);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.proj-crossing-glyph { flex: none; color: var(--ink-tertiary); }
+
+/* F4 (cross-repo): the home card's own sentence about a wave that is running in
+   another repo. Same register and same ground as `.proj-crossing` above — this
+   card's body — and a top border, because it is about a row that is NOT on this
+   card and must not read as one more session. */
+.proj-abroad {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+}
+.proj-abroad-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+.proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
+
+/* Wave 2 (board placement): the emptied card's sentence about where its own
+   workspaces render now. Same register and ground as `.proj-abroad` — about
+   rows that are NOT on this card — and never a tap surface (R2). */
+.proj-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+}
+.proj-elsewhere-line {
+  min-width: 0;
+  font-size: var(--text-2xs);
   color: var(--ink-tertiary);
 }
 
@@ -1979,6 +2296,37 @@ button.sess-held {
 }
 .mail-row .mail-body { grid-column: 1 / -1; font-size: var(--text-xs); color: var(--ink-secondary); }
 
+/* The programme filter and its headers. Chips take the same ground and the same
+   inks the rest of this screen does — `--ink-secondary` for a chip that is off,
+   `--ink-primary` for the one that is on — so nothing here is read out of
+   colour: the pressed chip carries `aria-pressed` and `data-on`, and — for
+   every chip but All, which shows every header at once — the one visible
+   group's own header repeats its label in words (D-2586: the claim used to
+   say this held for every chip, which is false of All). */
+.mail-filter {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--sp-1);
+  padding: 0 var(--sp-3) var(--sp-2);
+}
+.mail-chip {
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  background: none;
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-full);
+  color: var(--ink-secondary);
+  font: inherit;
+  font-size: var(--text-2xs);
+}
+.mail-chip[data-on] { color: var(--ink-primary); }
+.mail-group-head {
+  margin: 0;
+  padding: var(--sp-2) var(--sp-3) var(--sp-1);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+
 /* — Build 7: the run board. Machine voice throughout (ids, slugs, waves and
    tallies are all things the fleet says, not things a person wrote), and NO
    glow, no breathe, no box-shadow: a run is a record of a lifecycle position.
@@ -2041,6 +2389,29 @@ button.sess-held {
 .run-row .run-glyph { color: var(--ink-tertiary); }
 .run-row .run-state { font-size: var(--text-xs); color: var(--ink-secondary); }
 .run-ws { font-size: var(--text-sm); }
+/* F4 (cross-repo): which repo this run is in, and whether that is its
+   programme's home. Scoped under `.run-row` — self-grounded above, background
+   and colour both set — so these inherit the same recovered ground
+   `.run-row .run-state`/`.run-row .run-dispatch` do: no new token pair for
+   `design/contrast-check.mjs` to price. The badge takes `--ink-tertiary` (it is
+   context, present on every row, and must not compete with the workspace name);
+   the marker takes `--ink-secondary`, one step up, because it is the rarer fact
+   — and it is told apart by its GLYPH and its WORD, never by a hue. */
+.run-row .run-project { font-size: var(--text-2xs); color: var(--ink-tertiary); }
+.run-row .run-crossing {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-crossing-glyph { color: var(--ink-tertiary); }
+.run-row .run-kind {
+  display: inline-flex; align-items: baseline; gap: var(--sp-1);
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-secondary);
+}
+.run-row .run-kind-glyph { color: var(--ink-tertiary); }
 .run-row .run-tally, .run-row .run-when {
   font-size: var(--text-2xs); font-variant-numeric: tabular-nums; color: var(--ink-tertiary);
 }

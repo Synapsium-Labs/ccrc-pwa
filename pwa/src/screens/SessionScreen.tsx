@@ -6,7 +6,7 @@
 // DialogSheet and the TerminalDrawer mount at the bottom.
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { substrateFault } from '../../../shared/api';
+import { repoLabel, substrateFault, type RouteField } from '../../../shared/api';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
@@ -28,7 +28,7 @@ import { SessionHeader } from '../session/SessionHeader';
 import { HistoryTab } from '../session/HistoryTab';
 import { TaskStrip } from '../session/TaskStrip';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions } from '../lib/models';
+import { modelOptions, effortOptions, modelReadbackFor, effortIsKnown, type PickOption } from '../lib/models';
 import '../session/chat.css';
 
 /** Keyboard discipline: the bottom inset the on-screen keyboard covers. The
@@ -75,6 +75,7 @@ export function SessionScreen({
   // This session's fleet entry — live name, account, dialogPending badge.
   const live = useFleet((s) => s.sessions.find((x) => x.id === id) ?? null);
   const roster = useFleet((s) => s.roster);
+  const projects = useFleet((s) => s.projects);
 
   const kbInset = useKeyboardInsets();
   const [restarting, setRestarting] = useState(false);
@@ -90,6 +91,38 @@ export function SessionScreen({
   const [reapOpen, setReapOpen] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const composerRef = useRef<HTMLDivElement>(null);
+  // A routing write in flight, until the fleet frame reads it back — or 60s
+  // pass with no confirmation (routing spec §5.3, slice 4, Task 5). `readback`
+  // rides along so the read-back effect below never has to re-derive the
+  // option list that produced this write.
+  const [queued, setQueued] = useState<{ field: RouteField; value: string; readback: string } | null>(null);
+  const queuedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearQueuedTimer = (): void => {
+    if (queuedTimer.current !== null) {
+      clearTimeout(queuedTimer.current);
+      queuedTimer.current = null;
+    }
+  };
+  useEffect(() => clearQueuedTimer, []);
+
+  // The read-back half: a fleet frame that agrees with a queued write clears
+  // it (and the timeout that would otherwise clear it at 60s with the
+  // unconfirmed toast). `effort` compares the live level directly (or
+  // `live.ultracode` for the `ultracode` value, since that is a separate
+  // boolean on the wire, not an effort string); `class` compares the queued
+  // row's `readback` key against the live model string the same loose way
+  // `modelOptions`' own `active` highlight already does.
+  useEffect(() => {
+    if (queued === null) return;
+    const agrees = queued.field === 'effort'
+      ? (queued.value === 'ultracode' ? live?.ultracode === true : live?.effort === queued.value)
+      : (live?.model ?? '').toLowerCase().includes(queued.readback);
+    if (agrees) {
+      clearQueuedTimer();
+      setQueued(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queued, live?.effort, live?.ultracode, live?.model]);
 
   useEffect(() => {
     // Session sockets live with the screen: resume rides `?since=` on return.
@@ -137,6 +170,130 @@ export function SessionScreen({
   const wrapperFromId = id.split(':', 1)[0] ?? id;
   const project = live?.project ?? (id.slice(wrapperFromId.length + 1) || id);
   const wrapper = live?.wrapper ?? wrapperFromId;
+  // R3: the session view's repo label is unconditional — not conditioned on
+  // a card's context. `projects` is the fleet store's last successful
+  // `/api/projects` read (Task 7). Three conditions render nothing here: no
+  // read yet on this store instance (`projects === null`, D-3013), no row
+  // for this project in that read, or a row whose `repo` is not `named` —
+  // all three collapse deliberately at `repoLabel`, the one reader.
+  const repo = repoLabel(projects?.find((r) => r.name === project)?.repo);
+
+  // Routing slice 6, Task 4: once `live.route` rides the wire, the pickers'
+  // active row and the header's queued badge are DERIVED from it instead of
+  // this screen's own optimistic `queued` state below. `route: null` (an
+  // older ccd, or a session it has never routed) leaves every line here
+  // inert and `queuedField` below falls through to exactly today's
+  // behaviour — S6-R4's "nothing changes" contract.
+  const routeInfo = live?.route ?? null;
+  const classIntended = routeInfo?.fields.class ?? null;
+  const effortIntended = routeInfo?.fields.effort ?? null;
+  const classInert = routeInfo?.inert.includes('class') ?? false;
+  const effortInert = routeInfo?.inert.includes('effort') ?? false;
+  // Fix round 2, finding 1 (ruling S6-R5): a field named in `route.unreadable`
+  // is UNKNOWN, not "never routed" — its own read failed this pass, so it is
+  // ALSO absent from `route.fields` (never both). `classIntended`/
+  // `effortIntended` above are already `null` for it, same as a genuinely
+  // never-routed field, but that would otherwise fall back to the loose
+  // live-pane match (`modelOptions`/`effortOptions`'s own `intended === null`
+  // branch) and light a row anyway — a claim this read never established.
+  // `RoutingOverride.unreadable` below forces no active row for exactly this
+  // field, on top of the queued badge already skipping it for having no
+  // `intended` to compare.
+  //
+  // Whole-branch review, fix wave #5: `routeInfo.unreadable` is REQUIRED on
+  // a freshly-assembled `FleetSession.route` and on anything that has been
+  // through `reviveRoute` (the persisted-snapshot path), but the live
+  // `fleet` WS frame is never revived — `stores/fleet.ts`'s `asFleetMsg`
+  // casts the raw frame straight to `FleetMsg` — so a frame from an older
+  // server that predates this key arrives with `route` non-null and
+  // `route.unreadable` genuinely `undefined`. `routeInfo?.unreadable`
+  // alone still throws on `.includes` in that case; read it tolerantly
+  // ONCE here, the one place either field below is derived from it.
+  const routeUnreadable = routeInfo?.unreadable ?? [];
+  const classUnreadable = routeUnreadable.includes('class');
+  const effortUnreadable = routeUnreadable.includes('effort');
+  // Fix wave #4: `pick()` decides the local-timer carve-out from `routeInfo`
+  // at TAP TIME — a tap on a session that had never been routed yet
+  // (`route: null`) arms the 60s "not confirmed" toast below, same as
+  // always. Once the FIRST routing record for this session lands on any
+  // later fleet frame, `queuedField` below hands the badge to the wire for
+  // good, but nothing disarmed that already-running local timer — left
+  // alone it still fires 60s after the tap and pops a false "not confirmed"
+  // toast for a write the wire has since taken over entirely. This clears
+  // both the moment `routeInfo` stops being null.
+  useEffect(() => {
+    if (routeInfo === null) return;
+    clearQueuedTimer();
+    setQueued(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeInfo !== null]);
+  // The intended value's readback vs. the live read-back: `live.effort`
+  // directly for effort (`ultracode` is its own boolean, not an effort
+  // string — the same split `pick`'s own read-back effect already makes),
+  // the model display name for class, reusing `modelOptions`' own loose
+  // comparison through `modelReadbackFor`. An INERT field is never
+  // "queued" — ccd will not apply it on this lane, so there is nothing for a
+  // badge to wait on (`PickSheet` marks its row `inertOnThisLane` instead).
+  //
+  // Fix round 1, finding 1: two more conditions never light this badge,
+  // mirroring the pre-existing LOCAL-write carve-out below (`pick`'s own
+  // "neither value leaves a mark the pane can read back" comment) instead of
+  // leaving the wire path with none of it:
+  //   - `effort: 'auto'` / `class: 'default'` are ccd's absent-equivalents
+  //     (`ccd/ccd:16189-16192`'s `_route_apply_now` types NOTHING for
+  //     `auto` — "the live level stands" — so `live.effort` can never read
+  //     back `auto`, and a wrapper's own default has no distinguishing
+  //     model string `default` could ever match). Both AGREE unconditionally.
+  //   - an intended value that names no row on THIS wrapper's own option
+  //     list (`effortIsKnown` false, or `modelReadbackFor` null) is a word
+  //     ccd itself will never confirm here — a rejected/stale/foreign-build
+  //     registry value (the registry read behind `route` is deliberately
+  //     unvalidated). Nothing on this pane can ever read it back, so it is
+  //     UNMEASURABLE, not queued forever: no picker row highlights it either
+  //     (`activeFor`/`modelOptions`'s exact-match `active` finds no row),
+  //     so a permanent badge next to no active row is doubly wrong.
+  const wireQueuedField: RouteField | null = routeInfo === null ? null : (() => {
+    if (effortIntended !== null && !effortInert && effortIntended !== 'auto' && effortIsKnown(wrapper, effortIntended)) {
+      // Fix wave #2: `xhigh` and `ultracode` share the SAME wire value —
+      // `live.effort: 'xhigh'` — with `ultracode` distinguished only by the
+      // separate `live.ultracode` boolean (`effortOptions`'s own
+      // `activeFor`, models.ts:151-153, already carries this guard for the
+      // picker rows). Without it, an intended `xhigh` reads a live
+      // ultracode pane's `effort: 'xhigh'` as agreement and never queues —
+      // an unapplied `xhigh` write silently reporting itself confirmed.
+      const agrees = effortIntended === 'ultracode'
+        ? live?.ultracode === true
+        : effortIntended === 'xhigh'
+          ? live?.effort === 'xhigh' && live?.ultracode !== true
+          : live?.effort === effortIntended;
+      if (!agrees) return 'effort';
+    }
+    if (classIntended !== null && !classInert && classIntended !== 'default') {
+      const readback = modelReadbackFor(wrapper, classIntended);
+      const liveModel = (live?.model ?? '').toLowerCase();
+      // Fix wave #3: a degraded session (`routeInfo.degraded` names the
+      // class ccd is actually SERVING because no candidate lane could
+      // serve the intended one, spec §5.4) can never read the intended
+      // class back on `live.model` while the degrade stands — ccd's own
+      // `_route_wanted` types the SERVED class, not the intended one, into
+      // the pane. Without also agreeing on the served class, the badge
+      // never clears for as long as the degrade lasts, even though ccd is
+      // doing exactly what it can and the intended row already carries its
+      // own `degradedTo` note (`PickSheet`, whole-branch review M1).
+      const degradedClass = routeInfo?.degraded ?? null;
+      const degradedReadback = degradedClass !== null ? modelReadbackFor(wrapper, degradedClass) : null;
+      const agrees = readback !== null && (
+        liveModel.includes(readback)
+        || (degradedReadback !== null && liveModel.includes(degradedReadback))
+      );
+      if (readback !== null && !agrees) return 'class';
+    }
+    return null;
+  })();
+  // Exclusively one source or the other, never both: with `route` present the
+  // wire is the sole answer (a stale local write must not re-light a badge
+  // the wire already cleared); with `route: null`, today's local state.
+  const queuedField: RouteField | null = routeInfo !== null ? wireQueuedField : (queued?.field ?? null);
   // A direct roster lookup, not a re-parse of a colour-token NAME: this used
   // to derive `data-acct` by stripping `--acct-` off `accountColorVar`'s
   // return value, which worked only for a wrapper whose colour happened to be
@@ -214,16 +371,62 @@ export function SessionScreen({
 
   const openTerminal = (): void => setTerminalOpen(true);
 
-  // Model / effort are one-tap: the chooser sheets send `/model <alias>` or
-  // `/effort <level>` directly (a context-window switch surfaces its own
-  // confirm through DialogSheet).
+  // Model / effort are one-tap: the chooser sheets write the routing record
+  // (`api.route`) and ccd types it into the pane, session-only keystrokes —
+  // never a slash command sent straight from here (a context-window switch
+  // still surfaces its own confirm through DialogSheet).
   const changeModel = (): void => setPicker('model');
   const changeEffort = (): void => setPicker('effort');
-  const pick = async (command: string): Promise<void> => {
+  const pick = async (o: PickOption): Promise<void> => {
     setPicker(null);
+    clearQueuedTimer();
+    // Fix round 2, finding 2: once `route` rides the wire (`routeInfo !==
+    // null`), it is the WHOLE STORY for this field — `queuedField` above
+    // already derives straight from it, never from this local `queued`
+    // state. Arming the 60s timer here regardless used to pop "Routing
+    // queued; the pane has not confirmed it yet" a minute later for a field
+    // the wire already read back (or, worse, one on `route.inert` — ccd will
+    // never apply it on this lane, so nothing was ever going to confirm it)
+    // — contradicting the very sheet/badge this same tap just updated. Keep
+    // the optimistic local state only for the tap's own moment on a session
+    // `route` says nothing about yet; an unrouted session keeps exactly
+    // today's behaviour below.
+    //
+    // The timer, when armed, is installed in the SAME statement sequence as
+    // `setQueued`, before the `await` below (fix round 1, finding 1) — not
+    // after the write resolves. A fleet frame (or `route --apply`'s own pane
+    // keystroke) can read the write back WHILE the HTTP request is still in
+    // flight, and the read-back effect's `clearQueuedTimer()` has to find a
+    // real timer at that moment or the resumed continuation below installs a
+    // fresh one for a write that is already confirmed — a false 60s "not
+    // confirmed" toast. Installing it here also means this call's own
+    // leading `clearQueuedTimer()` always cancels a PRIOR pick's real timer,
+    // never a not-yet-installed one, so a fast second tap can no longer leak
+    // the first pick's handle.
+    if (routeInfo === null) {
+      setQueued({ field: o.route.field, value: o.route.value, readback: o.readback });
+      queuedTimer.current = setTimeout(() => {
+        setQueued(null);
+        toast('Routing queued; the pane has not confirmed it yet');
+      }, 60_000);
+    }
     try {
-      await api.prompt(id, command);
+      await api.route(id, o.route.field, o.route.value);
+      // Neither value leaves a mark the pane can read back — `auto` clears no
+      // slider position it can be measured against, and `default` is what the
+      // wrapper falls back to with no distinguishing model string of its own.
+      // Absence, not a lie, so the 2xx response IS the confirmation. The
+      // timer installed above must be cancelled here too, or it outlives its
+      // own confirmation and fires the false toast 60s later. A no-op when
+      // `routeInfo !== null` never armed one in the first place.
+      if ((o.route.field === 'effort' && o.route.value === 'auto')
+          || (o.route.field === 'class' && o.route.value === 'default')) {
+        clearQueuedTimer();
+        setQueued(null);
+      }
     } catch (err) {
+      clearQueuedTimer();
+      setQueued(null);
       toast(`Couldn't apply that — ${apiErrorText(err)}`, 'error');
     }
   };
@@ -259,11 +462,13 @@ export function SessionScreen({
         status={status}
         statusUpdatedAt={statusUpdatedAt}
         roster={roster}
+        repo={repo}
         onInterrupt={() => void interrupt()}
         onOpenTerminal={openTerminal}
         onBack={() => navigate('/')}
         onChangeModel={changeModel}
         onChangeEffort={changeEffort}
+        queuedField={queuedField}
         onMoveAccount={() => setSwapOpen(true)}
         onStopSession={() => setStopOpen(true)}
         onOpenHistory={() => setHistoryOpen(true)}
@@ -400,16 +605,29 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
-        options={modelOptions(live?.wrapper ?? wrapperFromId, live?.model ?? null)}
-        onPick={(c) => void pick(c)}
+        options={modelOptions(
+          wrapper, live?.model ?? null,
+          routeInfo
+            ? {
+              intended: classIntended, inert: classInert, unreadable: classUnreadable,
+              // Whole-branch review M1: `.degraded` is a CLASS, so it reaches
+              // the model picker alone — the effort sheet below passes none.
+              degraded: routeInfo.degraded,
+            }
+            : undefined,
+        )}
+        onPick={(o) => void pick(o)}
       />
       <PickSheet
         open={picker === 'effort'}
         onClose={() => setPicker(null)}
         eyebrow="effort"
         title="Reasoning effort"
-        options={effortOptions(live?.wrapper ?? wrapperFromId, live?.effort ?? null, live?.ultracode ?? false)}
-        onPick={(c) => void pick(c)}
+        options={effortOptions(
+          wrapper, live?.effort ?? null, live?.ultracode ?? false,
+          routeInfo ? { intended: effortIntended, inert: effortInert, unreadable: effortUnreadable } : undefined,
+        )}
+        onPick={(o) => void pick(o)}
       />
       <SwapSheet
         // `home: null` — not `wrapper`. With no live row there is no home

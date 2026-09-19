@@ -39,6 +39,13 @@ CCRC_ACCOUNTS_SH="$HOME/.ccrc/accounts.sh"
 # the refusal it came to measure.
 : "${CCRC_AUTH_TIMEOUT:=600}"
 : "${CCRC_AUTH_TICK:=1}"
+# THE PUMP'S OWN BACKSTOP, over and above the child's deadline (D-2736).
+# `_auth_timeout` bounds the CHILD; nothing bounded the LOOP THAT READS IT, so a
+# child that outlives its deadline left `_auth_pump` reading a FIFO that never
+# reaches EOF. This is the margin the backstop waits past the child's own
+# deadline before acting, so the ordinary `timeout` path always wins the race and
+# this fires only when that path did not.
+: "${CCRC_AUTH_PUMP_GRACE:=10}"
 : "${CCRC_AUTH_SCRIPT:=script}"
 
 # ── platform ──────────────────────────────────────────────────────────────
@@ -62,15 +69,126 @@ case "${OSTYPE:-}" in
 esac
 
 _auth_timeout() {   # <seconds> <cmd> [args...]
-  local bin
+  local secs="$1" bin rc=0 t0 el grace dl stamp pid watcher
+  # THE GRACE BETWEEN THE DEADLINE'S TERM AND THE KILL THAT ENFORCES IT, and
+  # both clamps are MEASURED rather than chosen. `-k 0` does not mean "kill at
+  # once": GNU accepts it and then never escalates at all - measured, a
+  # one-second deadline with `-k 0` sat through a TERM-ignoring child's full
+  # five seconds and still answered 124 - so a caller reaching for "no grace"
+  # would turn the whole bound off with no error. A value that is not a whole
+  # number is worse: GNU exits 125 in five milliseconds WITHOUT RUNNING THE
+  # COMMAND, and one bad environment variable would then read, at these call
+  # sites simultaneously, as a wedged tmux, an unwalkable reap scan and a gh
+  # that needs re-authenticating. The ceiling is `ccd-account-auth`'s own pump
+  # backstop (`CCRC_AUTH_PUMP_GRACE`, 10s): this escalation must finish INSIDE
+  # it, or that last resort becomes the first one. `10#` because a value like
+  # `08` is not octal here, and a bare `$(( 08 ))` writes a bash error to the
+  # stderr this call's caller may be capturing.
+  grace="${CCD_TIMEOUT_KILL_AFTER:-3}"
+  case "$grace" in ''|*[!0-9]*) grace=3 ;; esac
+  grace=$(( 10#$grace ))
+  [ "$grace" -lt 2 ] && grace=2
+  [ "$grace" -gt 8 ] && grace=8
+  # WHEN OUR OWN ESCALATION CAN HAVE LANDED - and nothing else is claimed. The
+  # binary sends TERM at the deadline and waits the WHOLE grace before the
+  # KILL, so an escalated run cannot return before `secs + grace`, and an outer
+  # signal that beat the escalation cannot return after it. A deadline this
+  # shim cannot read as whole seconds (empty, suffixed, or so long the
+  # arithmetic would wrap) leaves `dl` empty, and then no `-k` is passed and no
+  # code is reinterpreted: that call degrades to exactly today's behaviour
+  # rather than to a guess.
+  dl=''
+  case "${secs%%[.,]*}" in
+    ''|*[!0-9]*|??????????*) : ;;
+    *) dl=$(( 10#${secs%%[.,]*} + grace )) ;;
+  esac
+  t0=$SECONDS
   for bin in timeout gtimeout; do
-    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+    command -v "$bin" >/dev/null 2>&1 || continue
+    # `-k` IS PROVED, NEVER ASSUMED, AND THE PROOF IS THE CHILD'S OWN BYTES.
+    # An unknown flag measured rc 125 on GNU, rc 1 on busybox and rc 127 with
+    # no `printf` to run - and rc 1 lands on NO branch at any of the twenty
+    # call sites, so there it would read as an ordinary command failure.
+    # Asking "did this exit 0" would therefore believe a parser that swallowed
+    # the flag; asking "did the COMMAND run" cannot, because only a parser that
+    # consumed `-k`, consumed its argument and then exec'd the command can
+    # print these bytes. Measured: GNU 9.4 and busybox 1.36.1 both answer
+    # `ccd-k-ok`; a wrapper that rejects the flag with rc 1 answers nothing and
+    # is refused, and the argv it logged shows no `-k` ever reached it.
+    # The probe runs `printf`, never a caller's command, and that is what makes
+    # a probe possible here at all: the commands below include `gh pr create`
+    # and a billed `claude -p` turn, so "pass `-k`, and retry without it on an
+    # ambiguous code" is not available at any price.
+    if [ -z "${_CCD_TIMEOUT_K:-}" ]; then
+      if [ "$("$bin" -k 1 1 printf ccd-k-ok 2>/dev/null)" = ccd-k-ok ]; then
+        _CCD_TIMEOUT_K=yes
+      else
+        _CCD_TIMEOUT_K=no
+      fi
+    fi
+    # `2>&6 6<&-` ON THE COMMAND AND `6>&2 2>/dev/null` ON THE GROUP, and it is
+    # the difference between a reason and a corrupted one. When the KILL lands,
+    # the binary reports it by re-raising SIGKILL on ITSELF, so THIS shell
+    # prints its own job-status line - `<file>: line N: <pid> Killed ...`.
+    # MEASURED: at a call carrying its own redirections that line lands in the
+    # caller's stderr file, which `_ws_nested_checkouts` and
+    # `_ws_sensitive_inside` read back as `$err`; and at `ccd-account-auth`'s
+    # backgrounded `2>&1` it lands in `$AUTH_RUN/out`, the FIFO `_auth_pump`
+    # parses line by line. Command substitutions are immune (measured clean in
+    # all three shapes), which is why nobody had seen it: until this change the
+    # line needed an OUTER signal to appear at all. Handing the child the
+    # ORIGINAL stderr on fd 6 and silencing this shell's own keeps every byte
+    # the child wrote and drops the line about the shell's job - measured both
+    # ways. `6<&-` closes fd 6 IN THE CHILD, so nothing inherits a descriptor
+    # it was not handed; fd 6 is free, the only numbered descriptors these
+    # files use being 3, 4, 7, 8 and 9.
+    if [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ]; then
+      { "$bin" -k "$grace" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    else
+      { "$bin" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    fi
+    el=$(( SECONDS - t0 ))
+    # 137 BECOMES 124 ONLY ON PROOF, AND 137 IS NOT THE PROOF. coreutils'
+    # `timeout.c` relabels any status to 124 once its deadline has fired, with
+    # ONE deliberate exception - `sig == SIGKILL && kill_after`, commented
+    # "Allow users to distinguish if command was forcibly killed" - and that
+    # exception is the whole reason a 137 appears here. No call site can act on
+    # the distinction it exposes, while 137 ALREADY has a meaning in this tree
+    # ("an outer kill landed", `_lc_obs` says so in as many words), so
+    # propagating it would give one number two meanings. The CLOCK separates
+    # them, and only it can: our escalation cannot land before `secs + grace`,
+    # an outer kill that beat it cannot land after. MEASURED, the real binary
+    # SIGKILLed at t=3s of a two-second deadline with a three-second grace: rc
+    # stays 137 and the orphaned child ran to completion - the honest answer,
+    # because our deadline never got to enforce anything. `$SECONDS` is whole
+    # seconds (the declared bash floor is 4.4 and `EPOCHREALTIME` is 5.0), so
+    # the boundary is soft by up to one second in the direction of claiming an
+    # outer kill that landed in the last second before our own; both codes
+    # refuse at every call site, so that is a label, not a decision.
+    if [ "$rc" = 137 ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ] \
+       && [ "$el" -ge "$dl" ]; then
+      rc=124
+    fi
+    return "$rc"
   done
-  local secs="$1"; shift
-  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  shift
+  # THE PURE-BASH ARM DOES NOT ESCALATE, AND THAT IS A RULING, NOT AN OVERSIGHT
+  # (D-2764). The only escalation available here is a watcher subshell issuing
+  # `kill -KILL "$pid"`, and bash reaps background children ASYNCHRONOUSLY -
+  # measured: a child is unwaitable two seconds after it exits with no `wait`
+  # ever run - so a sibling watcher genuinely can signal a RECYCLED pid. On
+  # this fleet that pid could be a `ccd supervise`, a `claude-session@*` child
+  # or tmux, all three of which CLAUDE.md's SAFETY section forbids touching,
+  # and `ccrc-account.test.ts` deliberately contains PATH to force this arm on
+  # whatever box runs the suite - including the fleet box. A stamp handshake
+  # narrows that window but cannot be made to go red under mutation, which is
+  # an argument rather than a mechanism. So this arm keeps today's single TERM
+  # and reports what it always did; `ccd-plat-timeout.test.ts` text-scans all
+  # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
+  stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
   "$@" &
-  local pid=$! rc=0 watcher
+  pid=$!
   # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
   # with no coreutils — it returns INSTANTLY, and without this guard the
@@ -132,6 +250,12 @@ AUTH_ERROR=''
 # never ran, and 0 is the safe value — "no token was seen" is what a mint that
 # printed nothing means.
 AUTH_SECRET_WRITTEN=0
+# Set ONLY by `_auth_pump`'s backstop (D-2736). The callers cannot learn this from
+# `rc`: the backstop kills the child, so `wait` reports 143, and 143 is
+# indistinguishable from a mint someone else killed. `expired` is a PROMISED
+# terminal state of `_auth_setup_token`; without this flag the backstop would
+# stamp `failed: the mint exited 143` and break the contract it exists to keep.
+AUTH_EXPIRED=0
 
 _auth_publish() {   # -> $AUTH_DIR/$AUTH_ID.json
   local tmp
@@ -170,6 +294,12 @@ _auth_die() {   # <reason> — the file says failed, stderr says why, exit 1
 _auth_cancelled() {   # the trap. `tmux kill-session` sends SIGHUP to the pane.
   AUTH_STATE=cancelled; AUTH_ERROR=''
   _auth_publish || true
+  # AND IT CLOSES THE CHANNEL (D-2737). This trap used to `exit 0` straight past
+  # `_auth_close_pipes`, so a cancelled run left three FIFOs under
+  # `$REG/.auth/<id>.run/` and, on the darwin arm, the copier still blocked on
+  # one of them. The FIFOs are the worse half: they sit inside $HOME, and a
+  # recursive reader that does not skip devices blocks on them for ever.
+  _auth_close_pipes
   exit 0
 }
 
@@ -250,6 +380,10 @@ _auth_url_of() {   # <clean line> -> the first https:// run on it; rc 1 when the
 # The helper reads the code and writes it down fd 9 itself, so the child's
 # stdin has exactly one writer.
 AUTH_RUN=''
+# The pid `_auth_spawn_pty_child` backgrounded, so its callers can `wait` on it.
+# A GLOBAL and not an echoed value: a command substitution would run the spawn
+# in a subshell, and the parent cannot `wait` on another shell's job.
+AUTH_CHILD=''
 _auth_open_pipes() {
   AUTH_RUN="$AUTH_DIR/$AUTH_ID.run"
   mkdir -p "$AUTH_RUN" || return 1
@@ -275,6 +409,11 @@ _auth_open_pipes() {
 }
 
 _auth_close_pipes() {
+  # A GUARD THE TRAP MADE REACHABLE (D-2737). Every existing caller runs after
+  # `_auth_open_pipes`, so `AUTH_RUN` was always set and this could not fire. The
+  # trap above can run BEFORE the pipes exist — and with `AUTH_RUN` empty the
+  # `rm -f --` below spells three ABSOLUTE paths, `/in` `/out` `/in.child`.
+  [[ -n "${AUTH_RUN:-}" ]] || return 0
   # THE REDIRECTION IS ON THE GROUP, NOT ON THE `exec`s, and that is a
   # correctness fix rather than a style choice. `exec 7<&- 2>/dev/null` is an
   # `exec` with no command, so ALL of its redirections are made PERMANENT —
@@ -346,26 +485,100 @@ _auth_script_argv() {   # <cmd> [args…] -> the argv to run it under a pty, ONE
   # wrong program. `%q` is bash's own quoter and leaves ordinary tokens
   # untouched, so the common case reads exactly as it did.
   printf -v joined '%q ' "$@"; joined="${joined% }"
-  # THE BSD ARM'S ORDER IS RIGHT AND RUNNING IT IS NOT (D-2614, OPEN). The
-  # first macOS CI run this branch ever got — CI schedules nothing for a PR it
-  # cannot compute a merge commit for, and this one conflicted until 2026-09-12
-  # — passes all three argv-contract pins and fails every case that EXECUTES:
-  # 9 of them, 5 in setup-token and 4 in openai-login, which are the TWO
-  # methods that come through here. Hypothesis, unmeasurable from a Linux box:
-  # BSD `script` calls `tcgetattr` on its own stdin and exits 1 when that is
-  # not a terminal, and both callers hand the child a FIFO on stdin
-  # (`<"$AUTH_RUN/in.child"`), overriding the pane's tty. util-linux tolerates
-  # that; BSD does not. The fit is exact — every method through `script` fails,
-  # and `login` and `paste`, which touch no `script(1)` at all, both pass, so
-  # the DEFAULT path is unaffected on either userland. The obvious fix is not
-  # mechanical: `_auth_pump` calls `_auth_forward_code`, which writes into that
-  # same FIFO, so removing the redirect unconditionally would take the code
-  # channel away from any pane method that can be asked for one.
+  # THE BSD ARM'S ORDER IS RIGHT; RUNNING IT WAS NOT, AND THAT IS NOW FIXED
+  # NEXT DOOR (D-2614 diagnosed, D-2673 fixed). This function only ever chose
+  # the argv ORDER, and both spellings were correct all along — the three
+  # argv-contract pins passed on the first real Mac while every case that
+  # EXECUTED failed. What was wrong lived at the call site: a FIFO on
+  # `script`'s stdin. `_auth_spawn_pty_child` now pipes on darwin, and carries
+  # the measurement.
+  #
+  # Kept here because this is where a reader arrives asking "is the BSD
+  # spelling right?": it is, it was, and the failure that looked like it was
+  # about argv was about an errno. See D-2662 for the corollary that reasoning
+  # produced and that had to be retracted.
   if [ "$CCD_OS" = darwin ]; then
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -q /dev/null "$@"
   else
     printf '%s\n' "$CCRC_AUTH_SCRIPT" -qfc "$joined" /dev/null
   fi
+}
+
+_auth_spawn_pty_child() {   # <argv…> — background the mint under a pty, set AUTH_CHILD
+  # D-2679 SAID THE DEADLINE WAS WHAT STOOD BETWEEN THIS AND A HANG. IT WAS NOT
+  # (D-2734, correcting D-2679 and the objection raised against it in turn).
+  # `wait PID` on a member of a backgrounded PIPELINE blocks until EVERY process
+  # in that job has exited, not just the named one — so the first shape of this
+  # function hung with no help from any deadline. MEASURED, same helper, same
+  # mint (`echo line-one; exit 3`), only `CCD_OS` differing:
+  #
+  #     linux arm    pump returned 0s   wait rc=3, 0s
+  #     darwin arm   pump returned 0s   wait NEVER RETURNED
+  #
+  # The mint ran, printed, exited 3 and the pump saw its EOF — and the run still
+  # never ended, on the SUCCESS path, on Linux. Nothing about macOS, nothing
+  # about D-2661. The blocker was `cat`, which cannot exit while a writer holds
+  # `in.child` open, which `_auth_open_pipes` does deliberately on fd 9.
+  #
+  # So the mint is NOT in a pipeline. Process substitution hands it the same
+  # PIPE that D-2614 measured BSD `script` accepting, while leaving `wait`
+  # answerable by the mint alone.
+
+  # THE DARWIN ARM PIPES, THE LINUX ARM REDIRECTS, AND BOTH HAND THE CHILD THE
+  # SAME FIFO (D-2673). The difference is only how `$AUTH_RUN/in.child` reaches
+  # `script`'s stdin, so the code channel does not move: the operator's code
+  # still arrives on fd 7, `_auth_forward_code` still writes it to fd 9, and on
+  # darwin `cat` copies it into the pipe `script` reads.
+  #
+  # WHY: BSD `script` calls `tcgetattr` on its own stdin and dies unless the
+  # errno is ENOTTY. MEASURED on macos-latest 2026-09-12
+  # (`server/test/script-shim-platform.test.ts`): a FIFO answers **ENOTSUP** —
+  # "Operation not supported on socket", because macOS implements FIFOs over the
+  # socket layer — so the `errno != ENOTTY` guard is TRUE, `err(1,
+  # "tcgetattr/ioctl")` runs, and the mint never starts. That is D-2614, and it
+  # is why every case that EXECUTED failed there while the argv-contract pins
+  # passed.
+  #
+  # The same run measured `/dev/null` ACCEPTED, which is the load-bearing half:
+  # this was never a tty requirement, only an errno the implementation
+  # tolerates. A pipe is accepted too, and a pipe is the only accepted shape
+  # that is still LIVE — `/dev/null` carries nothing and a regular file cannot
+  # deliver a code that arrives later.
+  #
+  # util-linux tolerates the FIFO directly and IS LEFT ALONE. This is a
+  # credential-minting path: the arm measured working does not change shape to
+  # match the arm that was not.
+  if [ "$CCD_OS" = darwin ]; then
+    { exec 7<&- 9<&-; _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@"; } \
+      < <(exec 7<&- 9<&-; exec cat <"$AUTH_RUN/in.child") \
+      >"$AUTH_RUN/out" 2>&1 &
+  else
+    _auth_timeout "$CCRC_AUTH_TIMEOUT" "$@" <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
+  fi
+  # `exec 7<&- 9<&-` INSIDE THE SUBSTITUTION IS WHAT LETS THE COPIER END AT ALL
+  # (D-2735), and it is not hygiene. A process substitution inherits this
+  # shell's fds, so without those closes the copier holds fd 9 — a WRITE end on
+  # the very FIFO it is reading. It is then its own writer and can never see
+  # EOF, not even after `_auth_close_pipes` drops this shell's copy. The comment
+  # this replaces asserted the opposite ("it blocks reading the FIFO until
+  # `_auth_close_pipes` drops fd 9, so … the `cat` ends with it"); MEASURED on
+  # the darwin arm, 1 copier before that line and 1 after. With the closes: 1
+  # before, 0 after. `exec cat` so the pid that lingers is the copier itself
+  # rather than a shell wrapped around it.
+  #
+  # THE MINT DROPS THEM TOO, ON THIS ARM ONLY. It inherits fd 9 as readily as
+  # the copier does, so a mint that outlives the helper — the backstop's case —
+  # keeps `in.child` written-open and strands the copier even after this shell
+  # closes its own copy. MEASURED on this arm: copier 1 -> 1 across
+  # `_auth_close_pipes` before, 1 -> 0 after. The FIFO stays open for the mint
+  # regardless, because THIS shell still holds fd 9 — the whole point of
+  # `_auth_open_pipes` holding it read-write.
+  #
+  # THE LINUX ARM IS LEFT EXACTLY AS IT WAS, deliberately. There is no copier
+  # there to strand, so nothing measures a defect the same close would fix, and
+  # this is a credential-minting path: the arm measured working does not change
+  # shape to match the arm that was not.
+  AUTH_CHILD=$!
 }
 
 _auth_forward_code() {   # the operator's code: in on fd 7, out on fd 9, never on stdout
@@ -442,7 +655,28 @@ _auth_line() {   # <raw line from the child> [prefix already classified] — cla
 
 _auth_pump() {   # the one loop: the child's stream out, the operator's code in
   local line rc pending='' shown=''
+  # THE LOOP'S OWN DEADLINE (D-2736). `_auth_timeout` bounds the CHILD; this
+  # bounds the READER, and the two are not the same guarantee. The loop below
+  # leaves only on EOF, and EOF needs every writer of `$AUTH_RUN/out` to close
+  # — so a child that outlives its deadline (D-2661, still undiagnosed) parks
+  # this loop for ever and `wait` is never even reached. MEASURED: the remedy
+  # D-2679 prescribed, "a `wait` that cannot block forever", leaves the run
+  # hanging exactly as it was, because control never arrives at `wait`. A bound
+  # HERE is the one that ends it.
+  local secs=${CCRC_AUTH_TIMEOUT%%.*} grace=${CCRC_AUTH_PUMP_GRACE%%.*}
+  [[ $secs  =~ ^[0-9]+$ ]] || secs=600
+  [[ $grace =~ ^[0-9]+$ ]] || grace=10
+  local t0=$SECONDS bound=$(( secs + grace ))
   while :; do
+    if (( SECONDS - t0 >= bound )); then
+      # The child is still holding the stream open past every deadline it was
+      # given. Kill it so `wait` can answer, and record WHICH ending this was:
+      # `wait` reports 143, which on its own reads as "someone killed the mint"
+      # and would be stamped `failed` over a state the caller promises.
+      AUTH_EXPIRED=1
+      kill -TERM "$AUTH_CHILD" 2>/dev/null
+      return 0
+    fi
     line=''
     IFS= read -r -t "$CCRC_AUTH_TICK" -u 8 line; rc=$?
     if (( rc == 0 )); then
@@ -522,7 +756,7 @@ _auth_login() {   # `auth login --claudeai` — no pane, no pty, no script(1)
   # branch on — a bounded call that expired is a different fact from one that
   # failed, and collapsing them would tell an operator to retype a code into a
   # process that is gone.
-  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
   (( rc == 0 )) || _auth_die "the sign-in exited $rc"
   [[ -r "$cfg/.credentials.json" ]] || _auth_die "the sign-in reported success but wrote no $cfg/.credentials.json"
   _auth_state done
@@ -549,14 +783,13 @@ _auth_setup_token() {   # `claude setup-token` — an Ink TUI, so a pane and a p
   mapfile -t argv < <(_auth_script_argv \
     env -u CLAUDE_CODE_OAUTH_TOKEN "CLAUDE_CONFIG_DIR=$scratch" \
       "$WRAPPER_DIR/$CCRC_UPSTREAM" setup-token)
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
-    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
-  local child=$!
+  _auth_spawn_pty_child "${argv[@]}"
+  local child=$AUTH_CHILD
   exec 8<"$AUTH_RUN/out"
   _auth_pump
   wait "$child"; rc=$?
   _auth_close_pipes
-  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
   (( rc == 0 )) || _auth_die "the mint exited $rc"
   # A MINT THAT PRINTED NOTHING IS NOT A SUCCESS. `AUTH_SECRET_WRITTEN` is
   # declared with the other AUTH_* globals and written only by
@@ -581,14 +814,13 @@ _auth_openai_login() {   # `<launcher> login` — somebody else's program, under
   _auth_open_pipes || _auth_die 'cannot create the auth pipes'
   _auth_state starting
   mapfile -t argv < <(_auth_script_argv "$WRAPPER_DIR/$AUTH_ID" login)
-  _auth_timeout "$CCRC_AUTH_TIMEOUT" "${argv[@]}" \
-    <"$AUTH_RUN/in.child" >"$AUTH_RUN/out" 2>&1 &
-  local child=$!
+  _auth_spawn_pty_child "${argv[@]}"
+  local child=$AUTH_CHILD
   exec 8<"$AUTH_RUN/out"
   _auth_pump
   wait "$child"; rc=$?
   _auth_close_pipes
-  if (( rc == 124 )); then _auth_state expired; exit 1; fi
+  if (( rc == 124 || AUTH_EXPIRED )); then _auth_state expired; exit 1; fi
   (( rc == 0 )) || _auth_die "the launcher's login exited $rc"
   # NO CREDENTIAL ASSERTION HERE, unlike login and setup-token, and the absence
   # is the point: ccrc does not know where this launcher keeps its credential

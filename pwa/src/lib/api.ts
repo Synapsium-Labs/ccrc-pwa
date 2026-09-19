@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectRow, PrView, ReapResult, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -51,7 +51,25 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   'auto-continue-armed': 'Claude is waiting out a usage limit and will continue by itself — sending now would cancel that.',
 };
 
-export const sendErrorText = (code: string): string => SEND_ERROR_TEXT[code] ?? code;
+/**
+ * `verify-failed` has TWO outcomes and one code, so the sentence cannot come
+ * from the code alone. The server sets `submittable` when the box row it read
+ * back is a paste chip — Claude Code's own rendering of a large burst it holds
+ * in full — which means the opposite of the table's entry: the session DID take
+ * the text, it just showed a chip instead of the characters, and the `Send it`
+ * button beside this sentence presses the one Enter that sends it.
+ *
+ * Telling the operator "never echoed it back" next to a button that sends it is
+ * the contradiction this exists to remove. The flag is the discriminator here
+ * for the same reason it is one in `ChatList`'s gate: the code is shared, the
+ * proof is not.
+ */
+const VERIFY_FAILED_COLLAPSED = 'Typed it, and the session folded it into a paste chip instead of showing it.';
+
+export const sendErrorText = (code: string, submittable?: boolean): string =>
+  (code === 'verify-failed' && submittable === true)
+    ? VERIFY_FAILED_COLLAPSED
+    : (SEND_ERROR_TEXT[code] ?? code);
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
@@ -193,19 +211,47 @@ const API_ERROR_TEXT: Record<string, string> = {
   // sentence, where the session id is in scope anyway.
   'not-configured': 'This box does not run coordination — there is no mail store to queue a kickoff into.',
   'registry-unmeasurable': 'The session registry could not be read, so this box cannot say whether that session exists.',
+  // Account pools (spec §5.6). Three codes, three different things the box
+  // established — and NOT one sentence between them, because the remedies are
+  // not the same: cross on purpose, fix a file on the fleet box, or type a
+  // legal name. `unsupported` above already covers the 501 both pool routes
+  // can answer with, so no fourth entry is added for it.
+  //
+  // None of these is a code `uploadErrorText`, `kickoffErrorText` or
+  // `sendErrorText` owns — they consume this function's OUTPUT as a KEY, so a
+  // sentence here for a code one of them owns would lose its wording. The
+  // suite asserts that in both directions.
+  'pool-mismatch': 'That account is in a different pool from this project. Use a flow that can disclose and confirm a pool crossing, or change the project\'s pool.',
+  'pool-unreadable': 'The project\'s pool tag could not be read on the fleet host, so nothing here can decide. Fix or clear its file under ~/.cc-sessions/pools/ and try again.',
+  'bad-pool-name': 'A pool name starts with a lowercase letter and holds only lowercase letters, digits and hyphens.',
 };
 
 /** Human-readable failure text for a caught error.
  *
- *  Order matters and is unchanged at the top: lifecycle routes fail as
- *  502 { stderr } (ccd's own words, which are more specific than anything this
- *  module could say) — prefer that. A coded failure with no stderr is next.
- *  The bare message stays the floor. */
+ *  Lifecycle send sites answer `{ ok:false, stderr }`; coded send sites answer
+ *  `{ ok:false, error, ...fields }`. Those server shapes are disjoint, so these
+ *  branches do not express precedence between two fields on one response. The
+ *  bare message stays the floor. */
 export function apiErrorText(err: unknown): string {
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const stderr = (err.body as { stderr?: unknown }).stderr;
     if (typeof stderr === 'string' && stderr.trim().length > 0) return stderr.trim();
     const code = (err.body as { error?: unknown }).error;
+    if (code === 'pool-mismatch') {
+      const { accountPool, projectPool } = err.body as {
+        accountPool?: unknown;
+        projectPool?: unknown;
+      };
+      if (typeof accountPool === 'string' && typeof projectPool === 'string') {
+        return `The account pool (${accountPool}) differs from the project pool (${projectPool}).`;
+      }
+    }
+    if (code === 'pool-unreadable') {
+      const state = (err.body as { state?: unknown }).state;
+      if (state === 'malformed') {
+        return 'The project\'s pool tag contains an invalid pool name. Fix or clear its file under ~/.cc-sessions/pools/ and try again.';
+      }
+    }
     if (typeof code === 'string') {
       const text = API_ERROR_TEXT[code];
       if (text !== undefined) return text;
@@ -439,14 +485,70 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     // this exact failure mode, and F3's `readiness` is the field it predicted:
     // spelled inline here, this generic would have gone on declaring a shape
     // the server had already stopped sending (D-1028).
-    projects: () => getJson<{ roots: string[]; projects: ProjectRow[] }>('/api/projects'),
-    createSession: (b: { wrapper: string; project: string; workdir?: string }) =>
-      post('/api/sessions', b),
+    /** `cls` appends `?class=` only when given (routing spec, slice 4, Task 6)
+     *  — an ordinary fetch (the fleet screen, this sheet's own project list)
+     *  asks nothing and gets the byte-identical class-blind answer; only a
+     *  caller that means to forecast one class's placement sends it. */
+    projects: (cls?: string) => getJson<{ roots: string[]; projects: ProjectRow[] }>(
+      cls === undefined ? '/api/projects' : `/api/projects?class=${encodeURIComponent(cls)}`,
+    ),
+    /** `crossPool` is STRIPPED unless it is literally `true`, so an ordinary
+     *  start keeps the parsed request shape it sent before pools existed —
+     *  no key an older server does not know, and a flag that only ever means
+     *  "yes" never needs to travel saying "no". `route` rides the same rule:
+     *  present only when the sheet's routing row set at least one field, so
+     *  an ordinary start's body is unchanged from before that row existed. */
+    createSession: ({ crossPool, route, ...rest }: {
+      wrapper: string; project: string; workdir?: string; crossPool?: boolean;
+      route?: Partial<Record<Extract<RouteField, 'class' | 'effort' | 'workflow'>, string>>;
+    }) => post('/api/sessions', {
+      ...rest,
+      ...(crossPool === true ? { crossPool: true } : {}),
+      ...(route !== undefined && Object.keys(route).length > 0 ? { route } : {}),
+    }),
     ensure: (id: string) => post(`${sid(id)}/ensure`),
-    workspaceAdd: (project: string): Promise<void> =>
-      post(`/api/projects/${encodeURIComponent(project)}/workspaces`),
+    /** `route` rides the body ONLY when given — the fleet screen's class
+     *  chooser (routing spec, slice 5, Task 6) seeds it from whichever class
+     *  is selected there, and an ordinary `+` (the chooser left on
+     *  "Coordinator row") calls this with one argument, so its request body
+     *  is byte-identical to every caller that predates this parameter. */
+    workspaceAdd: (project: string, route?: RouteFields): Promise<void> =>
+      post(`/api/projects/${encodeURIComponent(project)}/workspaces`,
+        route === undefined ? undefined : { route }),
+    /** `POST /api/projects/:project/pool` — tag the project into an account
+     *  pool, or clear it with an explicit `null`.
+     *
+     *  `postJson`, not `post`: the route answers the pool it RE-READ off the
+     *  fleet box after the write, not the value that was requested, and that
+     *  measured state is the only thing `PoolSheet` may render before the next
+     *  `pools` frame settles it. The shape is spelled inline over the shared
+     *  `ProjectPoolWire`, the same way `projects` above composes `ProjectRow`.
+     *
+     *  `warning: 'unknown-pool'` is a WARNING and not a refusal (ruling O4):
+     *  this server's roster copy can lag the fleet's, so a pool no account
+     *  here carries may still be about to gain one. */
+    setProjectPool: (project: string, pool: string | null) =>
+      postJson<{ ok: true; pool: ProjectPoolWire; warning?: 'unknown-pool' }>(
+        `/api/projects/${encodeURIComponent(project)}/pool`, { pool }),
     stop: (id: string) => post(`${sid(id)}/stop`),
-    swap: (id: string, wrapper: string) => post(`${sid(id)}/swap`, { wrapper }),
+    /** `{crossPool:true}` ONLY when it is true — `opts?.crossPool === false`
+     *  and an absent `opts` both keep the ordinary `{wrapper}` request shape.
+     *  Not a checkbox anywhere in the UI: it is what a
+     *  pick made under `SwapSheet`'s "show other pools" disclosure sends, after
+     *  a confirm sentence that names the crossing. */
+    swap: (id: string, wrapper: string, opts?: { crossPool?: boolean }) =>
+      post(`${sid(id)}/swap`, opts?.crossPool === true ? { wrapper, crossPool: true } : { wrapper }),
+    /** The terminal drawer's scrollback — the pane's own history, read with
+     *  `capture-pane`. `lines` is the server's number, echoed back: this side
+     *  never names one, so there is nothing for the two to disagree about.
+     *
+     *  `scrollback`/`alternate`/`width` are ABSENT from an older server and
+     *  from a pane that could not be measured, and absence is not zero: the
+     *  drawer opens the history exactly as it always did when it cannot be
+     *  told how much sits above the screen. A non-2xx rejects with `ApiError`,
+     *  whose `.body` carries the route's own `{error, detail?}`. */
+    paneHistory: (id: string) =>
+      getJson<Extract<PaneHistoryReply, { ok: true }>>(`${sid(id)}/pane/history`),
     pr: (id: string) => getJson<PrView>(`${sid(id)}/pr`),
     prOpen: (id: string, b: { title: string; body: string; draft: boolean }) => post(`${sid(id)}/pr`, b),
     /** `{force:true}` ONLY when it is true — `opts?.force === false` and an
@@ -480,6 +582,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         ...(opts.replaceDraft === undefined ? {} : { replaceDraft: opts.replaceDraft }),
         ...(opts.attachments?.length ? { attachments: opts.attachments } : {}),
       }),
+    /** `POST /api/sessions/:id/route` — the model/effort pickers' write
+     *  (routing spec 2026-09-14 §5.3, slice 4, Task 5). ONE field, ONE value:
+     *  the picker taps a single control, and the record is the arbiter, never
+     *  a slash command typed straight into the pane — see `prompt` above,
+     *  which stays exactly that for the operator's own composer text. */
+    route: (id: string, field: RouteField, value: string) => post(`${sid(id)}/route`, { field, value }),
     /** `POST /api/sessions/:id/kickoff` — queues the coordinator kickoff as
      *  DURABLE system mail instead of typing it into the pane (program-leverage
      *  wave 4). Deliberately adjacent to `prompt`, because the pair is the

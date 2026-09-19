@@ -24,6 +24,7 @@ row for the whole program. `$REG` is `$HOME/.cc-sessions` throughout — SKILL.m
 | `claimed-by-another` | another coordinator holds this program; `by` names it | stop (clause 8) |
 | `project-mismatch` | the `sessionId` you passed belongs to a workspace in ANOTHER project; `by` names that project | do not retry with the same id. A wave that changes project opens WITHOUT `sessionId` and spawns fresh in the target repo. Nothing was opened and nothing was held |
 | `home-mismatch` | this programme already stores a DIFFERENT home project; `by` names the stored one | stop and report. A programme has one home — the repo holding its ledger, spec and plan — and it does not move. Either you are addressing the wrong programme or the `homeProject` you sent is wrong. Nothing was opened |
+| `claimant-is-a-worker` | the `claimedBy` you sent is itself the WORKER of an open run; `by` names that worker's coordinator | stop and report. A dispatched worker never opens a run — the board brackets one level and a chain would render its middle detached. This session is a worker until its own run is closed; nothing was opened and nothing was held |
 | `error:'bad-request'` (400) with a `detail` | the programme slug is longer than the shared budget (`detail` reads `program must be at most 56 characters`), or is not `[A-Za-z0-9_-]+` | **this is the refusal a too-long slug actually earns** — shorten the programme slug and retry. Refused at the door: nothing is opened, no programme row is written, and no `ws-hold` runs |
 | `error:'hold-invalid'` (400) | a wave, denominator, or exact generated/reused run id is not a positive JavaScript safe integer | stop and report the input defect. A fresh refusal rolls both inserts back; no `ws-hold` runs |
 | `error:'hold-oversize'` (413) | DEFENCE IN DEPTH, and unreachable from this route today | the slug cap above is derived so that the widest hold this route can compose is 124 of 127 characters, so a slug that would overflow is refused as `bad-request` before `openRun` is called. The row is kept because the store enforces it for any future non-HTTP caller; §2 and §3 CAN emit it, on persisted rows that never passed this door |
@@ -37,24 +38,39 @@ dispatch from the live registry row (§2) — and refuses both times. A session 
 run has ever named refuses nothing: absence permits, which is exactly the
 wave-1 open that adopts a workspace the operator made by hand.
 
-**`homeProject`, and the two paths it names.** `ledgerRepo` echoes the home the
-programme now stores, and `ledgerAbsPath` is that home's ledger by ABSOLUTE
-path — the file a wave running in another repository reads without guessing
-where it lives. Both are `null` while the programme stores no home. The server
-tolerates an absent `homeProject` for one deploy generation and records that it
-did; send it on every open anyway. A programme that stores no home takes the
-FIRST home any open sends — first writer wins, recorded as
-`home-project-backfilled` on that run — and nothing in the API can change it
-afterwards: a later open sending a different value is refused `home-mismatch`
-against it. Send the programme's home, the repo holding its ledger, spec and
-plan — never the repo you happen to be running in. The server trims the value
-and refuses one that is not a single path segment (a `/`, `.` or `..`) with a
-`400 bad-request` whose `detail` names `homeProject`.
+**`homeProject`, and the ledger path it names.** `ledgerRepo` echoes the home the
+programme now stores, and `ledgerAbsPath` is ONLY that home's programme ledger by
+ABSOLUTE path. It is not the home repository root, it is not the plan path, and a
+coordinator must not derive either from it. Both response fields are `null` while
+the programme stores no home. The server refuses an open with no `homeProject`
+outright, `400 bad-request` with `detail: 'homeProject is required'` — the
+legacy generation that tolerated it ended 2026-09-16; send it on every open. A
+programme that stores no home takes the FIRST home any open sends — first writer
+wins, recorded as `home-project-backfilled` on that run — and nothing in the API
+can change it afterwards: a later open sending a different value is refused
+`home-mismatch` against it. Send the programme's home, the repo holding its ledger,
+spec and plan — never the repo you happen to be running in. The server trims the
+value and refuses one that is not a single path segment (a `/`, `.` or `..`) with
+a `400 bad-request` whose `detail` names `homeProject`.
 
    For wave ≥ 2, reclaiming the workspace wave 1 held, add
    `"sessionId":"<the held session id>"` to the same call — it tells the open
    route this run reuses an existing workspace, so the next dispatch resumes
    it instead of spawning a fresh one.
+
+   **That reclaim is SAME-PROJECT.** `sessionId` reclaims a workspace, and a
+   workspace lives in ONE repo — so a wave that changes project sends no
+   `sessionId` at all and takes wave 1's own fresh-spawn path in the target
+   project. Naming a session whose workspace belongs to another project is
+   refused `project-mismatch`, `by:` that project, before any run row exists.
+
+   **Every open carries the home**, on every wave of the programme:
+   `"homeProject":"<the home project>"` in the same body. The response answers
+   `ledgerRepo` (the home project) and `ledgerAbsPath` (the home repo's
+   programme ledger, absolute) beside the `ledgerPath` it always carried; both
+   are null while the stored home is null, which is what a legacy-generation
+   programme opened before this field existed still reads. A later open naming a
+   DIFFERENT home is refused `home-mismatch`, `by:` the stored value.
 
 **The hold, precisely.** When this call names `sessionId` (wave ≥ 2, reclaiming
 an existing workspace), the server places the hold immediately, reason
@@ -72,7 +88,7 @@ run row's own `wave`.
 ## 2 — Dispatch a wave
 
 `POST /api/runs/:id/dispatch`
-`{"brief":"<the wave brief, prose>","items":["<title>", …]}`
+`{"brief":"<the wave brief, prose>","items":["<title>", …],"route":{"class":"…","effort":"…","subagent":"…","workflow":"…","compact":"…"}}`
 → `{"ok":true,"id":<run id>,"sessionId":…,"resumed":…,"clearedAt":…,"briefQueued":…}`
 with the run now `dispatched`, or a refusal:
 
@@ -85,7 +101,22 @@ with the run now `dispatched`, or a refusal:
 | `ambiguous-dispatch` | wave 1's spawn found 0 or >1 candidate workspaces | stop and report; the operator resolves it |
 | `worker-busy` | wave ≥ 2's session is observably mid-turn | wait and retry; do not force it |
 | `hookstate-unmeasurable` | wave ≥ 2's session has a hookstate file the server could not READ — so whether it is mid-turn was never measured at all | retry once: nothing was spawned, the run is untouched and still `planned`, and the workspace was only resumed. If it repeats, stop and report — a file on the fleet host needs a human, and this refusal will stand until it is readable |
-| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo. Expect the programme to hold two live workspaces from then on, which costs two concurrency slots and two of the daily budget |
+| `project-mismatch` | wave ≥ 2's session has a registry row whose `.project` was READ and names ANOTHER project than this run's; `by` names the project that was read. A row whose `.project` cannot be read answers `registry-unmeasurable` instead — take that code by its OWN row below (stop and report; never a blind retry): its wire shape is identical to the one a killed `ws-add` can send, so you cannot tell from the response which rung answered. A row with no `.project` at all is not refused | stop and report. Nothing was spawned, no `/clear` was sent, and the run is untouched and still `planned` — but the OPEN that named this `sessionId` placed a hold on that workspace, a worktree in the wrong repo, and it is still standing. Do not retry this dispatch, and do not simply open the wave again without `sessionId`: an open of the same still-`planned` wave returns the SAME run, still bound to the crossing session, and the next dispatch refuses identically. The operator must abandon the wedged run from the console; only after the operator reports it abandoned do you open the wave again WITHOUT `sessionId` so it spawns fresh in the target repo |
+
+**Caps count ACTIVE runs, not holds and not merely non-terminal ones.**
+Concurrency counts dispatched runs whose state is ACTIVE — `dispatched`,
+`working`, `unknown` — so a terminal producer retained on a hold, a planned
+undispatched consumer, and a run parked IDLE at `awaiting-review`, `merging` or
+`closing` all consume no running-worker slot. **An idle run gives its slot back
+WITHOUT closing** (D-2803); before wave 6 of review-runs it held one until it
+reached a terminal state, and prose written against that older rule is wrong
+rather than merely imprecise. Each actual dispatch still consumes daily budget,
+and a dispatched run consumes one concurrency slot for as long as it stays
+active. Each refusal's own numbers are the authority, and the two
+carry DIFFERENT ones: `cap-concurrency` carries `limit` and `running`, while
+`cap-daily` carries `limit` and `used` — it never carries `running`, so a
+coordinator refused `cap-daily` that goes looking for one is reading a field
+the frame does not have.
 
 **`worker-busy` and `hookstate-unmeasurable` are not two words for one
 answer.** `worker-busy` is a MEASUREMENT: the server read the session's
@@ -146,6 +177,24 @@ held: the run is untouched, still `planned`. Omitting `items`, or sending
 `[]`, is legal and means this wave declared no ledger — the board renders `—`
 rather than `0/0`.
 
+**`route` — the wave's placement, not a request.** `"route"` is an optional
+object of the FIVE writable fields — `class`, `effort`, `subagent`,
+`workflow`, `compact` — whose vocabularies `references/routing-matrix.md`
+spells out; that matrix is what you derive it from (clause 13), never a
+taste call made at dispatch time. The server carries it to `ccd`: on wave
+1's `ws-add` argv for a fresh spawn, and for wave N ≥ 2 — a resumed
+workspace, never a fresh one — through the routing verb instead, as ONE
+argv carrying every pair (validated together before anything is written),
+placed after the hold and before the `/clear`. An old `ccd` that cannot
+take it is never blocked on: the server journals the omission instead and
+moves on, as `route-omitted:no-route-argv-cap` (wave 1's argv path) or
+`route-omitted:no-route-v1-cap` (wave N ≥ 2's verb path) — two DIFFERENT
+run events because the two are different parse paths that can ship one
+without the other. Omitting `route` sends the identical bare argv it
+always has. The brief still names the routing in prose (clause 13) — this
+object is what carries that placement to the fleet, never a replacement
+for saying so.
+
 **The ledger is fixed at dispatch.** No route adds an item to a dispatched
 run, so `total` never grows and the tally can never move backwards. Work
 discovered mid-wave is a note in the wave-done mail and an item in the NEXT
@@ -204,8 +253,38 @@ of that in a brief buys nothing and spends the one budget a brief is short of
 the plan file's path, the tasks or task range this wave owns, **the execution
 skill the worker should invoke** (`superpowers:executing-plans` or
 `superpowers:subagent-driven-development`), the interfaces earlier waves
-settled, the deviations already ledgered, and whatever your review of the last
-handoff decided.
+settled, the deviations already ledgered, the shape of the wave and the
+routing the matrix derives from it — class, effort, subagent class, workflow
+mode, and the subagent effort the worker should name on its calls
+(`references/routing-matrix.md`, clause 13) — and whatever the last review
+run's report, and your ruling on it, decided.
+
+**Every brief for a wave in ANOTHER project carries three immutable-plan
+coordinates:** `homeRepoRoot`, the absolute path to the home repository root;
+`planRepoPath`, the tracked repository-relative plan path under
+`docs/superpowers/plans/`, with no leading slash; and `planSha`, the full 40-hex
+plan commit SHA. These are separate from `ledgerAbsPath`, which names only
+`docs/superpowers/programs/<slug>.md`. The worker reads the immutable plan object
+exactly with
+`git -C "$homeRepoRoot" show "$planSha:$planRepoPath"`. If that repository, commit,
+or path cannot be resolved, it reports and stops. It must not substitute `HEAD`,
+directly read a mutable checkout as authority, fetch, checkout, or otherwise
+mutate the home repository.
+
+**Only a consumer with a producer-interface dependency carries the producer
+contract:** `producerRepoRoot`, the absolute producer-repository root;
+`producerSourceRepoPath`, the producer source file's repository-relative path;
+`producerSha`, the exact full merged producer SHA; and the contract excerpt
+inlined verbatim from the merged file. A foreign-repo wave with no such
+dependency carries none of these producer fields and no invented excerpt. The
+worker proves producer-source provenance with
+`git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"`. If that
+producer repository, commit, or path cannot be resolved, it reports and stops.
+The inline excerpt controls dispatched interface shape; the immutable producer
+blob proves its provenance; the plan blob at `planSha` controls wave scope and
+requirements; and the current checkout's plan is not authoritative for this
+dispatch. It commits only on its own workspace's branch in the repo it is
+running in.
 
 **The execution skill is the one list item that is not merely useful.** The
 worker's own clause 6 reads "Invoke the execution skill the brief names rather
@@ -347,6 +426,21 @@ worker's `status`/`wave-done`, whose four fingerprint fields the coordinator
 submits unchanged. The worked example is in §4 — a worker sent here by its own
 skill should read that block before it writes its first done-claim.
 
+**Addressing, and the one rule that keeps it boring.** A worker is addressed
+either by its session id or as `toId:"worker"` with the run — the role resolves to
+whatever session that run currently names, which is what makes a replacement
+reachable without anyone re-typing an id. So carry the `runId` on every mail you
+send, whichever role you address: with it, `coordinator` resolves off that run's
+own claim regardless of programme state and `worker` resolves off its `sessionId`;
+without it, `coordinator` falls back to the single active programme and a `worker`
+mail with no `runId` is refused `unknown-recipient`. One habit, no asymmetry to
+remember. Reading a programme's whole lane is `GET /api/mail?program=<slug>&all=1`
+— without `&all=1` it answers only what is still outstanding, exactly as `?to=`
+does above — and its records are `GET /api/feed?program=<slug>`, which is always
+the full archive with no outstanding/all split of its own; together they are the
+filters that make a cross-repo programme legible from one call instead of two per
+repo.
+
 ## 4 — Advance the run as the wave progresses
 
 `RunState` reaches `awaiting-review` only from `working`, and `merging` only
@@ -382,6 +476,28 @@ produces `pr-unmeasurable` below: "PR #591 is green" is not a `prPhase`, and
 inventing one out of a sentence is the single commonest way a finished wave is
 refused.
 
+**Two signal lines open the body** (routing spec §5.5; worker clause 15), before any prose and
+before the JSON — the first two lines, in either order, grammar exactly `key: word` with one space:
+`suite: green|red|unrun` (the whole suite on its FIRST full run after the wave's implementation
+was complete — red stays red however many fix rounds followed; unrun when no full run happened)
+and, only when a check failed, `failure: shallow|ceiling|unclear` (shallow: tests missed, a plan
+half-followed — raise effort; ceiling: an ambiguity the worker could not resolve, a design flaw,
+a debug that survived two attempts — raise class; unclear: effort-first). A complete body:
+
+```
+suite: red
+failure: ceiling
+{"branchTip":"<40-hex sha>","prNumber":591,"prPhase":"open","handoffCommit":"<the same 40-hex sha>"}
+```
+
+The server reads them from the mail row, never from the envelope: `GET /api/runs/:id/signals`
+answers `signals.suite` and `signals.failure`, each one of THREE answers — a value, `absent`
+(the line was not sent: an older worker, or nothing to say), or `unrecognised` (a line was sent
+with a word outside the vocabulary — a defect in the worker's report, surfaced, never read as
+silence). They are what spec §6's first-run quality signal and clause 13's next-wave routing
+decision read; a wave-done that omits the suite line is accepted by the fingerprint route all the
+same, and shows as `absent`.
+
 - **`{"to":"working"}`** — no re-measurement (this is a status marker, not a
   doneness claim; the fingerprint above only satisfies the shape check and is
   never read). Send it once the worker is genuinely underway, and ALSO to
@@ -406,14 +522,17 @@ refused.
 | reject.code | meaning |
 |---|---|
 | `stale-tip` | the branch moved after the claim was written |
-| `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way) |
+| `tip-unmeasurable` | the branch tip could not be re-read (not evidence either way). On a REVIEW run's close it can also mean the reviewed run itself cannot be measured (it names no run, is gone, or has no session); the answer there is `{"state":"failed"}` on the review run, not a re-submit. |
 | `branch-unmeasurable` | the workspace's branch could not be resolved: the live registry has a row for this session and the row's own branch field is null — either listed with bytes that did not come back (transient) or absent (not). Not evidence either way; the run is unchanged. Re-submit once the registry reads clean. If it keeps answering this, the session's registry row needs a human — the run row's frozen branch column is deliberately not used as a guess |
 | `pr-regressed` | the PR is not in the phase the claim asserted |
 | `pr-unmeasurable` | the PR state could not be re-read (not evidence either way) — but see below: this is ALSO what a malformed submission of your own gets, before any I/O runs |
-| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays your ordinary review, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
+| `no-handoff-commit` | `handoffCommit` and `branchTip`, IN THIS CLAIM, are not the identical 40-hex sha (or either fails the sha shape) — a correspondence check ONLY ("the worker's two facts agree, and the tip is real"), never a claim that the commit's *content* is a real handoff (that stays the review run's job, §5 step 1). It fires on a perfectly good wave if you submit a freshly re-measured `branchTip` alongside the mail's ORIGINAL `handoffCommit`: any review fix, lint fix or merge commit pushed to the branch after `wave-done` moves the tip away from what the worker claimed, and mixing the two sources here reports that ordinary shape as this code instead of the accurate `stale-tip` |
 | `unknown-run` | the run id is wrong |
 | `not-dispatched` | this run has no worker session to re-measure against |
 | `bad-transition` | `to` is not reachable from the run's current state |
+| `review-in-flight` | a non-terminal review run already names this work run — on an OPEN, a second reviewer for one wave; on an ADVANCE to `working`, a send-back while its review is still open. Close the review run first (body `{"state":"failed"}` if it died — no fingerprint needed), then retry. |
+| `stale-review` | the reviewed branch's live tip is not the `reviewedTip` the report describes — the worker pushed after wave-done, or the report is about an older tip. Do not rule on it: close the review run with body `{"state":"failed"}` (no fingerprint needed), mail the worker the code and detail verbatim, and open a fresh review run against the live tip once its re-measured wave-done arrives. (A malformed `reviewedTip` reaching the verifier directly also answers this code, but the close route refuses that shape as `bad-request` first.) |
+| `report-unreadable` | the report path the reviewer named cannot be opened — absent or unreadable. Close the review run with body `{"state":"failed"}` (no fingerprint needed) and open a new one; the reviewer's clause 7 says the report is written by temp-then-rename, so a half-written file is never the cause. |
 
 **`pr-unmeasurable` has two causes, and they need different responses.** The
 server returns it both for a transient re-read failure (`detail` reads like
@@ -443,6 +562,38 @@ skill tells it to read that detail and act on which one it is, so a rejection
 that arrives with the code and nothing else asks a worker to guess between a
 fix-and-resend and a wait-and-retry. Copy it as the server sent it; do not
 paraphrase it into your own words.
+
+**When a check failed, the failure kind names the rung** (spec §3):
+
+```bash
+printf '{"target":"worker","kind":"<shallow|ceiling|unclear>","why":"<one sentence>"}' | "$API" runs route "$run_id" --json -
+```
+
+— the server computes the rung from the ladders on the session's record, writes it through the
+routing verb with no `--apply` (ccd applies it at the next settle or idle tick), and records a run
+event; `ceiling`/`floor`/`no-record` (409) are answers, not errors — record them in the ledger and
+decide by hand with `{"target":"worker","field":"<field>","value":"<value>","why":"…"}`.
+**Demotion** is your judgement (§3): after three consecutive clean waves of one shape on one
+session, `{"target":"worker","demote":"effort","why":"…"}`; any later failed check reverses it
+before the ladder applies. Never `ccd route` (clause 1) and never `--apply` (clause 12's evidence
+rule and spec §8 row 5). Every call that CHANGES a record is one run event and one journal row;
+a refusal — the ladder's answers included — records neither.
+
+**The reversal follows the SESSION, across every wave.** The door derives "the last unreversed
+demotion" — and the same-kind count that gates `max` — by walking every run that names the target
+session, worker or coordinator, in the order each `route:` event landed: a demotion taken on wave
+N's run IS reversed by a failed check you report against wave N+1's run, on the same session, and
+the same-kind count carries forward with it rather than restarting at zero. (D-2957, the run-scoped
+rule this paragraph used to state, is CLOSED by routing slice 6 — the `route:` event now names its
+own session, so the door can walk the session's whole trail instead of one run's rows.) Nothing
+here changes what you send: report the failure against the CURRENT wave's run id as always, and
+the door reads the session's history for you — there is no by-hand carry left to do.
+
+**A class rung is two fields in one write.** An escalation or demotion that moves `class` resets
+effort in the SAME call (spec §3 — effort names do not transfer across classes): to `high`, or to
+`auto` onto haiku, which takes no effort level at all. The answer's `applied.effortReset` names
+the value that went with it, and is `null` when the call wrote a single field — an effort rung, or
+a manual `field`/`value` write, which this door forwards exactly as you typed it.
 
 ### 4b — Settle the work items, AFTER the advance answers `ok`
 
@@ -479,6 +630,12 @@ Partial success on a ledger write is how tallies drift.
 
 ## 5 — The boundary: open the next wave's run, THEN close this one
 
+**The handoff review is a REVIEW RUN, and the held-out panel is its shape** (clause 14,
+`references/review-panel.md`): three Opus lenses over the wave's commit range, three Sonnet
+refuters per finding, majority deciding, model and effort literal in the script. The REVIEWER
+runs it — this session dispatches the review run and rules on the report it returns (step 1
+below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
+
 **Order is load-bearing here, and it is the opposite of what you might guess.**
 A program is `active` only while it has at least one open (non-`done`,
 non-`failed`) run; the instant its open-run count reaches zero the server
@@ -497,39 +654,46 @@ an operator/DB act, not a client one — or address the mail with an explicit
 program state. **Open first** — the new run keeps the count above zero the
 whole time, which is the only prevention this ordering rule buys.
 
-1. Review the handoff commit the way you would review any commit.
+1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the
    **Next-wave brief**, which is the whole of what the fresh session reads.
    Commit it.
-3. `POST /api/runs` for wave N+1 (§1, step 2, naming `sessionId` for the SAME
-   session this wave's run has) — this opens wave N+1's run row and re-holds
-   the same workspace with reason `program:<slug> wave:<N+1>/M run:<id>`,
-   naming the run row it has just opened. The program
-   now has two open runs (this wave's, still `working`/`awaiting-review`/
-   `merging`, and the new `planned` one) — it can never read as zero from
-   here.
-4. `POST /api/runs/:id/close` `{"fingerprint":{…},"final":false}` on **this
-   wave's** run id — re-measures the SAME facts, against the SAME codes, as
-   `/advance` does (skipped only on an explicit `"state":"failed"` abandon),
-   closes this wave's run row as `done`, and places the SAME hold reason
-   again (`program:<slug> wave:<N+1>/M run:<id>` — idempotent; step 3 already
-   wrote it, and close takes its SURVIVOR arm here, so it re-writes that same
-   run's reason byte for byte). The response SHAPE differs from §4's table, though: a mismatch here
-   answers `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
+3. `POST /api/runs` for wave N+1 (§1, step 2) before closing this run. The
+   program now has two open runs (this wave's, still `working`/
+   `awaiting-review`/`merging`, and the new `planned` one), so it can never
+   read as zero between waves.
+
+   **Same project:** open wave N+1 first with this producer's `sessionId`, then
+   close the producer with `final:false`; the hold transfers to the already-open
+   successor on the same workspace. After that same-project close, run
+   `"$API" runs list --closed 1`, find this producer by run id, and require its
+   own `state` to be `done`.
+
+   **Different project:** open wave N+1 first without this producer's `sessionId`,
+   then close the producer with `final:true` and require `released:true`; there is
+   no same-workspace successor to receive a synthetic hold. After that
+   cross-project close, run `"$API" runs list --closed 1`, find this producer by
+   run id, and require its own `state` to be `done`. If the consumer depends on
+   an interface from this producer, independently prove the producer interface
+   PR merged at the exact `producerSha` carried with `producerRepoRoot` and
+   `producerSourceRepoPath` in the conditional producer contract. The closed row
+   proves fingerprint and terminal state, not merge.
+
+   A missing/non-`done` producer row, failed release, or required exact-SHA merge
+   proof that is absent means report and do not dispatch. The default `runs list`
+   excludes `done` and `failed` rows, so it cannot perform the state check.
+4. The close re-measures the SAME facts, against the SAME codes, as `/advance`
+   does (skipped only on an explicit `"state":"failed"` abandon). Its response
+   SHAPE differs from §4's table: a mismatch answers
+   `{"ok":false,"error":"<code>","detail":"<why>"}` — `error`, not
    `reject.code` — so read `$body.error` on this route, not `$body.reject`.
-   Two refusals besides the re-measurement codes: `not-dispatched` (this
-   run's `sessionId` is null — it was never dispatched, so there is nothing
-   to re-measure or mail) and `prhistory-unreadable` (`.prhistory` could not
-   be read — the route refuses to close on a ledger it cannot verify; retry
-   once the file is readable again) — both of THESE two ride `refused`, the
-   third shape this one route can answer with. A re-hold that would exceed
-   the hook's 127-character display window instead answers
-   `error:'hold-oversize'` (413): no fleet act runs and the run remains open.
-   Shorten the programme slug through an operator correction before retrying.
-   `error:'hold-invalid'` (400) has the same no-act/no-close guarantees, but
-   means the stored programme or numeric domain cannot satisfy the hook grammar;
-   stop and report it rather than retrying unchanged.
-5. Dispatch wave N+1 (§2, step 2) into the **same workspace**.
+   Two refusals besides the re-measurement codes are `not-dispatched` and
+   `prhistory-unreadable`; both ride `refused`. A hold write that would exceed
+   the hook's display window answers `error:'hold-oversize'` (413), while an
+   invalid stored programme or numeric domain answers `error:'hold-invalid'`
+   (400). Both leave the run open; report rather than retrying unchanged.
+5. Dispatch wave N+1 (§2, step 2) only after the applicable close, closed-row
+   proof, release proof, and exact-SHA merge proof above succeed.
 
 ## 6 — Final merge
 
@@ -571,6 +735,81 @@ Three families sit side by side on every row and they never merge. `obs` is what
 was destroyed. When the first two disagree the census raises it as a divergence; nothing picks a
 winner. A `null` in `meas` means it was not measured, never that it was empty.
 
+## The run's own signals — a measurement, never a dial
+
+`GET /api/runs/:id/signals` — speed and quality signals re-measured off this run's own rows: the
+worker's paired holds, a swap COUNT (swap TIME is unpairable in today's journal, and the wire says
+so rather than guessing), and the closes this run was REFUSED. It takes a session cookie or the box
+token, so it reads cookieless from the fleet host the same way `GET /api/runs` does. Since routing
+slice 2 it also answers `waveDoneMails` (how many `wave-done` mails the worker sent on this run)
+and `signals` — the two signal lines off the LAST of them, or `null` when there are none (§4
+above). `error:'unknown-run'` (404) means the id is wrong or the DB was rebuilt;
+`error:'bad-request'` (400) means the id is not an integer.
+
+```
+run_id=<the run id>
+"$API" runs signals "$run_id"
+```
+
+answers the holds, the swap count, the refused-close count, `waveDoneMails` and the two signal
+lines off the last of them — every field this section names, off one call.
+
+It writes nothing — the refused-close count it reports is the row `POST /api/runs/:id/close` already
+recorded when it refused you, not a new judgement about the worker. And nothing it reports licenses
+a different dispatch: it exists so a wave's speed and cost can be read AFTER the fact (routing spec
+2026-09-14 §6), so read it when the operator asks what a wave cost, not while a wave is running. A
+worker re-cut, re-ordered or leaned on because a counter moved is a wave steered by a number that
+was only ever meant to describe it.
+
+Since routing slice 5 it also answers `arm` — the routing fields the dispatcher seeded onto this
+run's FIRST well-formed `arm:` event, or `null` for an old run, a dispatch that carried no routing
+at all, OR a run whose `arm:` rows are all malformed — and `routing`, every routing change since,
+in order: the door's escalations, demotions, reversals and manual overrides that landed on this run
+after it was dispatched. `armUnparsed` and `routingUnparsed` count the rows their own parser could
+not read, never thrown away silently — a malformed record is still a fact worth surfacing; for
+`arm`, `armUnparsed` is what tells its two `null` causes apart (S5-R9): `arm === null &&
+armUnparsed === 0` means no arm was ever seeded (or this is an old run), while `arm === null &&
+armUnparsed > 0` means an arm event exists that could not be parsed, and the run is excluded from
+its arm's mean. A run whose `routing` is non-empty changed routing mid-flight and is read apart
+from its arm's mean (§6): the arm says what the wave started on, `routing` says what moved after.
+
+## The routing door — escalation, demotion, and manual overrides
+
+`POST /api/runs/:id/route` is the ONLY way the coordinator changes a run's session onto a
+different rung of the class/effort ladders (routing spec 2026-09-14 §5.3, slice 5) — never
+`ccd route` directly (clause 1). Body: `{"target":"worker"|"coordinator","why":"<1..400 bytes,
+no control characters>", ...one of...}`:
+
+- `"kind":"shallow"|"ceiling"|"unclear"` — walk `escalate()` (`references/routing-matrix.md`'s
+  own Escalation paragraph) off the target session's SERVED class/effort (a degraded lane's
+  ladder runs off the degraded class, never the record's own).
+- `"demote":"class"|"effort"` — walk `demote()`, one rung down, never below the mechanical floor.
+- `"field":"class"|"effort"|"subagent"|"workflow"|"compact"`, `"value":"<string>"` — the
+  coordinator's own judgement; this door checks only SHAPE (non-empty, no control characters,
+  <= 32 bytes) — ccd's `_route_valid` is the sole authority on whether the value is a legal
+  member of that field's own vocabulary.
+
+Success answers `{"ok":true,"applied":{"session","mode","field","from","to","kind","effortReset"}}`,
+`mode` one of `escalate`/`demote`/`reverse-demotion`/`manual`; `effortReset` is the companion
+effort a CLASS rung wrote in the same argv (§4 above), `null` on a single-field write. Refusals: `no-session` (the target has no
+session id on this run), `bad-session` (the target has a session id, but not one this door will write
+into a routing event — a shape check, refused before the write rather than silently mis-recorded),
+`no-record` (the registry has no `.class` file at all — an ABSENT `.effort`
+alongside a present `.class` is not this: it reads as `effort: 'auto'`, the record's own vocabulary
+for "no override, the model's default"), `unrouteable-record` (`.class`/`.effort`/`.degraded` IS
+present and readable but its content is not a rung of the ladder — a record, not a rung: a stray ccd
+value like `class=default`, or a torn/never-written field — refused
+here rather than silently resolved to the ladder's bottom rung), `registry-unreadable` (transient
+— one of the three registry files is listed but unreadable), `run-closed` (the run is in a
+TERMINAL state — `done` or `failed`; every other state, including `unknown` and `planned`, is
+routable and refuses later on its true reason), `ceiling`/`floor`/`no-effort-rungs` (the ladder, or the
+degraded-record guard, has nowhere to move this request to — an answer, not an error),
+`unsupported` (501, the fleet host predates `route-v1`), `fleetFailed` (502, ccd refused the write
+— no run event is recorded on a refusal). Any failed check reverses the target SESSION's last
+unreversed demotion before the ladder applies to the new failure — that bookkeeping is derived
+from the session's own event trail, across every run it touches as worker or coordinator, not sent
+by the caller (§4 above).
+
 ## Build 9 — peers, claims, deviations (wave 7 surface)
 
 The protocol prose for these routes lands with the build-9 skill wave (coordinator clause 10,
@@ -594,41 +833,67 @@ a child's pane, and this session never does it by any other means. All three rou
 lane are named here — a coordinator IS a parent and calls all three, so this is the truthful
 entry, not an invitation like the operator-only doors above.
 
-- `POST /api/asks/:id/answer` — press an answer in. Body `{"fromId":"<your id>","fromUuid":"<your
-  uuid>","optionIndexes":[<n>]}`. A 409 here carries `error` set to one of THREE different
-  conditions, and none of them is interchangeable with another. Nothing was pressed in any of
-  the three — every gate on this route runs before the keystroke.
-  - `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
-    endings, not one: another principal is mid-answer, the grace window lapsed and the operator
-    was notified after all, the child's dialog went away, or someone already ruled. Only the
-    first is a race a retry could win, and you cannot tell which from this code alone — read the
-    row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
-    against another principal that already took the row" for one wave, naming one of the four:
-    the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
-  - `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
-    on its screen right now may be a different instance of what looks like the same question.
-    This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
-    same call — a blind retry risks pressing a digit into a menu that has since moved on.
-  - `child-unmeasurable` — the server could not read the child's live state at all (no session
-    record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
-    wrong with your call: re-reading the ask will show you the same `held` row it showed before,
-    so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
-    the operator's own notification on schedule regardless.
-- `POST /api/asks/:id/release` — decline to rule on it. Body `{"fromId":"<your
-  id>","fromUuid":"<your uuid>"}`. A decline is not a failure: it is what turns the grace window
-  into a CEILING rather than a flat tax on every question you cannot answer — the operator's
-  notification fires AT ONCE on release, instead of the child's question sitting quiet until the
-  window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
-  words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
-  guessing at it.
-- `GET /api/asks?parent=<your id>&fromUuid=<your uuid>` — read your own children's open asks, to
-  see whether two of them are asking contradictory things before either grace window lapses.
-  **`&fromUuid=` is not optional the moment `CCRC_AUTH` is armed on the box you are running on.**
-  The box token alone proves only "a process on this box", never WHICH parent is asking, so an
-  armed box additionally requires the same attribution proof `/answer` and `/release` already
-  take above — omit it and the call answers `400` on every armed box, not just some. A dark box
-  (the shipped default) accepts the bare `?parent=` form, but nothing here tells you which kind
-  of box you are on, so always send both.
+```bash
+: "${ask_id:?set ask_id to the held ask row positive decimal id}"
+"$API" asks answer "$ask_id" --json - <<JSON
+{"fromId":"$id","fromUuid":"$uuid","optionIndexes":[0]}
+JSON
+```
+
+Press an answer in with that body. A 409 from this route can come from three
+route/CAS guards before `answerAsk` (`not-held`, `ask-moved`, or
+`child-unmeasurable`) or from a downstream `answerAsk` refusal. No refusal path
+presses a digit when the eligible ask is single-select, which is the only shape
+this hold lane mints; after a downstream refusal the route rolls the row back to
+`held`.
+- `not-held` — the row has LEFT `held` and is no longer pre-emptible. That is FOUR different
+  endings, not one: another principal is mid-answer, the grace window lapsed and the operator
+  was notified after all, the child's dialog went away, or someone already ruled. Only the
+  first is a race a retry could win, and you cannot tell which from this code alone — read the
+  row (`GET /api/asks`, below) rather than retrying blind. (This entry said "a lost race
+  against another principal that already took the row" for one wave, naming one of the four:
+  the gloss came from `store.ts`, where it was equally wrong, and both were corrected together.)
+- `ask-moved` — the CHILD REPAINTED AN IDENTICAL QUESTION since this row was minted; the menu
+  on its screen right now may be a different instance of what looks like the same question.
+  This IS a reason to re-read the ask and answer the CURRENT one, never a reason to retry the
+  same call — a blind retry risks pressing a digit into a menu that has since moved on.
+- `child-unmeasurable` — the server could not read the child's live state at all (no session
+  record, no measured identity, or no readable hookstate). Nothing has moved and nothing is
+  wrong with your call: re-reading the ask will show you the same `held` row it showed before,
+  so do NOT loop on it. Wait for the next tick, or leave it to the grace window, which fires
+  the operator's own notification on schedule regardless.
+- Downstream `answerAsk` refusals include `stale-ask`, `not-waiting`,
+  `ask-mismatch`, `multi-question`, `range`, `multiselect`, `duplicate-index`,
+  `not-alive`, `no-menu`, and `menu-mismatch`. Each names the failed live-state,
+  option, or pane guard; stop and re-read rather than treating 409 as three
+  possible conditions or retrying blind. Counting both halves, this route answers
+  409 with thirteen (3 + 10) distinct codes.
+```bash
+: "${ask_id:?set ask_id to the held ask row positive decimal id}"
+"$API" asks release "$ask_id" --json - <<JSON
+{"fromId":"$id","fromUuid":"$uuid"}
+JSON
+```
+
+Decline to rule on it with that body. A decline is not a failure: it is what turns the grace window
+into a CEILING rather than a flat tax on every question you cannot answer — the operator's
+notification fires AT ONCE on release, instead of the child's question sitting quiet until the
+window lapses on its own. Decline anything that would be a NEW decision (clause 11's own
+words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+guessing at it.
+```bash
+"$API" asks list
+```
+
+Read your own children's HELD asks — the ones still waiting on a ruling — to see whether two of
+them are asking contradictory things before either grace window lapses. The client hard-codes
+`state=held`, which is NARROWER than the open set the route itself can return: an ask another
+principal has already taken reads `answering`, and this view deliberately omits it, because a row
+someone else is mid-answer on is not yours to rule on. The client derives this pane's parent id and
+current uuid and sends both; neither is caller-selectable. `--parent <your id>` is accepted only
+  as a matching compatibility assertion and cannot select another parent. The box token alone proves
+  only "a process on this box", never WHICH parent is asking, so the derived uuid supplies the same
+  attribution proof `/answer` and `/release` take above.
 
 What the ask row does NOT carry is the reason to answer it. `question` and `options` are its
 entire evidentiary surface — no rationale, no chat history, no transcript of the child's

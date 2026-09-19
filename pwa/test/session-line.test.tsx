@@ -21,7 +21,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
   ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null, held: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null,
   bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, ...over,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null, ...over,
 });
 
 describe('label', () => {
@@ -1341,5 +1341,135 @@ describe('sessionAsk — the live (cast) frame\'s tolerant reader, pinned direct
       .toEqual({ state: 'released', parentId: 'coord-1', answeredBy: null });
     expect(sessionAsk({ ask: { state: 'unknown', parentId: 'coord-1', answeredBy: null } }))
       .toEqual({ state: 'unknown', parentId: 'coord-1', answeredBy: null });
+  });
+});
+
+// Account pools, wave 4. Two cells, two different facts: the STRAND is "this
+// session has nowhere to go and is not moving on its own" (ruling 6), and
+// OFF-POOL is "it is running where the project's pool does not want it, and it
+// will move when its cooldown gate opens or its hold clears" (ruling 5). One
+// is stuck; the other is in transit. Rendering them as one cell would lose the
+// difference the operator acts on.
+describe('the strand cell', () => {
+  it('renders the reason verbatim and repeats it in the title', () => {
+    render(<SessionLine session={s({ stranded: { at: 1, reason: 'no account in pool pool-a can take it' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const cell = screen.getByText('stranded — no account in pool pool-a can take it');
+    expect(cell).toHaveAttribute('title', 'no account in pool pool-a can take it');
+  });
+
+  it('keeps the marker when the reason is missing or unreadable — presence is the durable fact', () => {
+    // The registry reads `.stranded` fail-shut, so a marker it could see and
+    // not read arrives with `at: 0` and a stand-in reason. Dropping the half it
+    // does not have and keeping the half it does is `.sess-swapblocked`'s own
+    // contract, restated.
+    const { rerender } = render(
+      <SessionLine session={s({ stranded: { at: 0, reason: '' } })} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('stranded')).toBeInTheDocument();
+
+    rerender(<SessionLine session={s({ stranded: { at: 0, reason: 'registry field unreadable' } })}
+                          onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('stranded — registry field unreadable')).toBeInTheDocument();
+  });
+
+  it('is silent on a dead row, exactly as `away` is', () => {
+    // Nothing is running, so "stranded" would describe a rescue with nothing
+    // left to rescue.
+    render(<SessionLine session={s({ status: 'dead', bucket: 'dead', stranded: { at: 1, reason: 'nowhere' } })}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+
+  it('is silent with no marker, and on a server that predates the field', () => {
+    render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+
+    const older = { ...s() } as Record<string, unknown>;
+    delete older['stranded'];
+    cleanup();
+    render(<SessionLine session={older as unknown as FleetSession} onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.queryByText(/stranded/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the off-pool marker', () => {
+  const pooled = (byId: Record<string, string>) =>
+    TEST_ROSTER.map((a) => ({ ...a, pool: byId[a.id] ?? null }));
+
+  it('marks the account cell and shows one visible cue when both pools are known and differ', () => {
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                        roster={pooled({ claude2: 'pool-b' })}
+                        projectPool={{ state: 'tagged', name: 'pool-a' }}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(acct).toHaveAttribute('data-offpool', 'true');
+    expect(screen.getAllByText('off-pool')).toHaveLength(1);
+  });
+
+  it('says nothing when only one side is known — an untagged account is not off-pool', () => {
+    const { rerender } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                   roster={pooled({})} projectPool={{ state: 'tagged', name: 'pool-a' }}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+
+    // …and the mirror: the account is tagged, the project is not.
+    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                          roster={pooled({ claude2: 'pool-b' })} projectPool={{ state: 'untagged' }}
+                          onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('says nothing when the names agree, and nothing at all with no projectPool', () => {
+    const { rerender } = render(
+      <SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                   roster={pooled({ claude2: 'pool-a' })} projectPool={{ state: 'tagged', name: 'pool-a' }}
+                   onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+
+    rerender(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2' })}
+                          roster={pooled({ claude2: 'pool-b' })}
+                          onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('is silent on a dead row', () => {
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude2', status: 'dead', bucket: 'dead' })}
+                        roster={pooled({ claude2: 'pool-b' })}
+                        projectPool={{ state: 'tagged', name: 'pool-a' }}
+                        onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByText('team·alt').closest('.sess-acct')).not.toHaveAttribute('data-offpool');
+    expect(screen.queryByText('off-pool')).not.toBeInTheDocument();
+  });
+
+  it('outranks the away arrow\'s aria sentence, and leaves the arrow itself alone', () => {
+    // A session can be BOTH away from its pin and off-pool — a retag is
+    // exactly how that happens. One element, one accessible name: off-pool is
+    // the sharper fact and already names the account it is running on, so it
+    // is the sentence that wins. `data-away` and the ↗ are untouched.
+    render(<SessionLine session={s({ wrapper: 'claude2', home: 'claude' })}
+                        roster={pooled({ claude2: 'pool-b' })}
+                        projectPool={{ state: 'tagged', name: 'pool-a' }}
+                        onOpen={() => {}} onActions={() => {}} />);
+    const acct = screen.getByLabelText('running on team·alt (pool pool-b), project is pool pool-a');
+    expect(acct).toHaveAttribute('data-away', 'true');
+    expect(acct).toHaveAttribute('data-offpool', 'true');
+  });
+});
+
+describe('the repo label (board-placement wave 2, Task 6)', () => {
+  it('sits INSIDE the row button\'s accessible name, so two same-slug rows are two names', () => {
+    render(<SessionLine session={s()} repo="Synapsium-Labs/custom-tools" onOpen={() => {}} onActions={() => {}} />);
+    expect(screen.getByRole('button', { name: /quiet-mesa.*Synapsium-Labs\/custom-tools/ })).toBeInTheDocument();
+    expect(document.querySelector('.sess-repo')?.textContent).toBe('Synapsium-Labs/custom-tools');
+  });
+  it('renders nothing when the card already implies the repo', () => {
+    render(<SessionLine session={s()} onOpen={() => {}} onActions={() => {}} />);
+    expect(document.querySelector('.sess-repo')).toBeNull();
+    expect(screen.getByRole('button', { name: 'quiet-mesa' })).toBeInTheDocument();
   });
 });

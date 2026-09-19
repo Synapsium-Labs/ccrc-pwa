@@ -43,6 +43,7 @@ import { fileURLToPath } from 'node:url';
 import { parseRoster, MODEL_ID_RE, POOL_NAME_RE } from '../../shared/roster.js';
 import { PROVIDERS, PROVIDER_IDS } from '../../shared/providers.js';
 import { generateAccountsSh } from '../../shared/generate.mjs';
+import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
 import { markGenerated, bodyDigest } from '../../shared/mark.mjs';
 import { rosterFromJson as rosterFromJsonSync } from '../../shared/roster-json.mjs';
 import { baseUrlCases } from './fixtures/baseUrlCases.js';
@@ -609,6 +610,23 @@ describe('the new roster fields do not reach accounts.sh', () => {
       .toContain('CCRC_ACCOUNTS=(claude)');
     expect(generateAccountsSh(parseRoster(DEFAULT_TEST_ROSTER)))
       .toContain('CCRC_MEASURED=(claude claude-a claude-b claude-d)');
+  });
+});
+
+// The projection is NOT one of "the new roster fields" the block above is about
+// — it is derived from `shared/models.mjs`, not from any roster JSON field — so
+// it gets its own block rather than inheriting a title that misdescribes it
+// (controller ruling S1-R1).
+describe('accounts.sh projects the subagent class vocabulary (routing slice 1)', () => {
+  it('projects SUBAGENT_CLASSES as CCRC_SUBAGENT_CLASSES — derived, not respelled', () => {
+    const sh = generateAccountsSh(parseRoster(DEFAULT_TEST_ROSTER));
+    expect(sh).toContain(`CCRC_SUBAGENT_CLASSES=(${SUBAGENT_CLASSES.join(' ')})`);
+    expect(sh).toContain('CCRC_SUBAGENT_CLASSES=(haiku sonnet)');
+    // DIRECTLY after the backend array, which is what the comment claimed and
+    // `indexOf > indexOf` did not: adjacency, not "somewhere after". The
+    // backend array's own CONTENTS stay unpinned here — `roster-generate`
+    // owns those — so the assertion is the line break between the two.
+    expect(sh).toMatch(/^CCRC_ANTHROPIC_BACKEND=\([^)]*\)\nCCRC_SUBAGENT_CLASSES=\(haiku sonnet\)$/m);
   });
 });
 

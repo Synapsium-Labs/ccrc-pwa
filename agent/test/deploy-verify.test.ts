@@ -493,7 +493,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     for (const dest of [
       '.local/bin/ccd', '.cc-sessions/notify.sh',
       '.cc-sessions/session-hook.sh', '.cc-sessions/install-session-hooks.sh',
-      '.ccrc/accounts.sh', '.local/bin/ccrc',
+      '.ccrc/accounts.sh', '.local/bin/ccrc', '.cc-sessions/compact-card.mjs',
     ]) {
       const escaped = dest.replace(/[./]/g, '\\$&');
       const direct = new RegExp(
@@ -501,15 +501,28 @@ describe('the verification is actually wired into the deploy, and can observe a 
       expect(direct.test(deploySh),
         `${dest} is scp'd directly to its final name — the in-place overwrite is back`).toBe(false);
     }
+    // EXECUTABLE LINES, AND EXACTLY ONE EACH (wb T10-M4). This ran `toContain`
+    // over the whole file text, comments included, so commenting a call out —
+    // `# install_atomic ccd/ccd .local/bin/ccd` — left the assertion GREEN
+    // while the agent lane installed nothing. MEASURED in a throwaway copy:
+    // 44/44 green with the call commented out. `compact-card-ship.test.ts`
+    // solved this for its own file with a `code()` rule and an exactly-one
+    // count, and that backstopped the HELPER entry alone; the other six had
+    // none. EXACTLY ONE rather than at-least-one for that file's reason too: a
+    // second copy means two lanes install the same artifact and the one bash
+    // runs is the LAST, which no reader of a `toContain` would know.
+    const codeLines = deploySh.split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
     for (const call of [
       'install_atomic ccd/ccd .local/bin/ccd',
       'install_atomic deploy/notify.sh .cc-sessions/notify.sh',
+      'install_atomic ccd/compact-card.mjs .cc-sessions/compact-card.mjs',
       'install_atomic ccd/session-hook.sh .cc-sessions/session-hook.sh',
       'install_atomic ccd/install-session-hooks.sh .cc-sessions/install-session-hooks.sh',
       'install_atomic "$ACCOUNTS_SH" .ccrc/accounts.sh',
       'install_atomic "$shim" .local/bin/ccrc 755',
     ]) {
-      expect(deploySh, `missing atomic install call: ${call}`).toContain(call);
+      expect(codeLines.filter((l) => l.includes(call)).length,
+        `atomic install call not present exactly once on an executable line: ${call}`).toBe(1);
     }
   });
 
@@ -1573,7 +1586,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // for the same reason — the roster is where it learns which config dirs
       // exist at all.
       ['worker skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-worker-skill.sh'"],
-      // The graphify skill's installer is the FOURTH (graphify Task 10,
+      // The reviewer skill's installer is the fourth roster reader this
+      // branch starts (review-runs Task 10) and it `source`s the same
+      // generated file for the same reason — the roster is where it learns
+      // which config dirs exist at all.
+      ['reviewer skill', "\"${SSH[@]}\" \"$BOX\" 'bash ~/.cc-sessions/install-reviewer-skill.sh'"],
+      // The graphify skill's installer is the FIFTH (graphify Task 10,
       // O3/O6b): it `source`s the same `~/.ccrc/accounts.sh` too, for the
       // identical reason — see `install-graphify-skill.sh`'s own fallback
       // `source "$HOME/.ccrc/accounts.sh"` branch. R-8 (fix round F1) gated

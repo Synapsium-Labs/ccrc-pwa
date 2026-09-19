@@ -14,10 +14,11 @@ import fs from 'node:fs';
 import { loadConfig } from '../src/config.js';
 import { localIO } from '../src/io.js';
 import { readLimits, projectHome, projectPlacement, type AccountLimits } from '../src/limits.js';
+import { readSharesMeasured, type SharesRead } from '../src/shares.js';
 import { poolFor, readProjectPools, POOLS_DIR_NAME } from '../src/pools.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
-import { leastLoadedCases } from './fixtures/leastLoaded.js';
+import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
 import { CCD, seedAccountsSh } from './ccdWsHelpers.js';
@@ -127,6 +128,22 @@ const seedPoolTag = (project: string, tag: string): void => {
   fs.writeFileSync(path.join(dir, project), tag);
 };
 
+/** The sweep's own report, `<HOME>/.cc-sessions/usage/sweep/latest.json` —
+ *  the server's `readSharesMeasured` and (Task 4) ccd's bash reader both read
+ *  it from there. Absent `sweep` means no file at all (removed, not written
+ *  empty), which both sides must read as unmeasured. */
+const seedSweep = (s: LeastLoadedCase['sweep']): void => {
+  const dir = path.join(home, '.cc-sessions', 'usage', 'sweep');
+  fs.rmSync(dir, { recursive: true, force: true });
+  if (!s) return;
+  fs.mkdirSync(dir, { recursive: true });
+  const finishedAt = new Date((now() - s.ageS) * 1000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  fs.writeFileSync(path.join(dir, 'latest.json'), JSON.stringify({
+    finishedAt,
+    perAccount: Object.fromEntries(Object.entries(s.estimates).map(([a, e]) => [a, { fableShare: { estimate: e } }])),
+  }));
+};
+
 describe('projectHome agrees with ccd _ws_least_loaded', () => {
   it.each(leastLoadedCases(now()).map((c) => [c.name, c] as const))(
     '%s',
@@ -142,6 +159,7 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       seedDisabled(c.disabled ?? []);
       seedAuthDead(c.authDead ?? []);
       seedAuthDeadMalformed(c.authDeadMalformed ?? {});
+      seedSweep(c.sweep);
       if (c.project?.tag != null) seedPoolTag(c.project.name, c.project.tag);
       const cfg = loadConfig({ CCRC_HOME: home });
       // The tag reaches the TS side through the real reader, not a literal —
@@ -151,11 +169,19 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       const pool: ProjectPoolWire = c.project === undefined
         ? { state: 'untagged' }
         : poolFor(read, c.project.name);
-      const projected = projectHome(cfg.roster, await readLimits(localIO, cfg), pool);
+      const projected = projectHome(
+        cfg.roster, await readLimits(localIO, cfg), pool,
+        c.cls ?? 'default', await readSharesMeasured(localIO, cfg.registryDir), now(),
+      );
       // The bash positional stays OPTIONAL: a case with no `project` calls
       // `_ws_least_loaded` with no argument, exactly as every pre-pool case
-      // always has.
-      const bashPick = (): string => sh(`_ws_least_loaded ${c.project?.name ?? ''}`);
+      // always has. `JSON.stringify` on the (possibly empty) project name is
+      // the shell-quoting that keeps an absent project as its OWN positional
+      // rather than collapsing into the class argument that follows it — an
+      // unquoted empty interpolation vanishes under bash word-splitting and
+      // would shift `$2` (the class) into `$1` (the project).
+      const bashPick = (): string =>
+        sh(`_ws_least_loaded ${JSON.stringify(c.project?.name ?? '')} ${c.cls ?? ''}`);
 
       if (c.expect === null) {
         // Nothing is placeable. The fixture can't express one shared "empty"
@@ -170,9 +196,9 @@ describe('projectHome agrees with ccd _ws_least_loaded', () => {
       // 1. The prediction is right in its own terms.
       expect(projected, c.why).toEqual(c.expect);
       // 2. …and bash, the authority, picks the same account.
-      expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
       // 3. …and scores it the same, so the headroom the user reads is the
       //    headroom the account really has.
+      expect(bashPick(), `ccd disagrees: ${c.why}`).toBe(c.expect.wrapper);
       expect(shellScore(c.expect.wrapper), `score drift: ${c.why}`).toBe(c.expect.score);
     },
   );
@@ -461,6 +487,46 @@ describe('projectPlacement — unmeasurable is a VALUE, not a null', () => {
       { state: 'tagged', name: 'pool-b' })).toEqual({ kind: 'none', pool: 'pool-b' });
     expect(projectPlacement(cfg.roster, { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off },
       { state: 'untagged' })).toEqual({ kind: 'none', pool: null });
+  });
+
+  it('the `none` arm carries `class` only when the caller named one AND that class is what emptied the pool (routing slice 4, Task 6, D-2854, S4-R12)', () => {
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const off = { ...L(1, 1), disabled: true };
+    const limits = { claude: off, 'claude-a': off, 'claude-b': off, 'claude-d': off };
+    // No class asked (the pre-slice-4 default): the pre-existing shape, no
+    // `class` key at all — an older reader must see exactly what it always has.
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }))
+      .toEqual({ kind: 'none', pool: null });
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }), 'class')).toBe(false);
+    // A class asked, but every lane is DISABLED regardless of it — the
+    // class-blind re-call (`projectHome(roster, limits, pool)`, no class, no
+    // shares) is null too, so the class did not cause this emptiness. `none`
+    // stays plain, with NO `class` key — the defect S4-R12 fixed: a pool
+    // empty because every lane is disabled must not read "no lane can serve
+    // fable".
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, 'fable'))
+      .toEqual({ kind: 'none', pool: null });
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }, 'fable'), 'class')).toBe(false);
+    // `default` asked EXPLICITLY is the same as no class at all — it is the
+    // class-blind path, not a fifth class.
+    expect(Object.hasOwn(projectPlacement(cfg.roster, limits, { state: 'untagged' }, 'default'), 'class')).toBe(false);
+  });
+
+  it('the `none` arm names the class when a class-blind placement WOULD have found a home (routing slice 4, Task 6, fix round 2, S4-R12)', () => {
+    const cfg = loadConfig({ CCRC_HOME: home });
+    const nowS = now();
+    // Every lane servable class-blind — plain, non-disabled `L(5,5)` — but
+    // every one of them sits over the Fable share ceiling (40%), so the
+    // `cls: 'fable'` call empties the pool while the class-blind re-call
+    // (default class, no shares) finds a home. THIS emptiness IS the class's
+    // doing, so `none` names it.
+    const limits = { claude: L(5, 5), 'claude-a': L(5, 5), 'claude-b': L(5, 5), 'claude-d': L(5, 5) };
+    const overCeiling: SharesRead = {
+      kind: 'reading', finishedAtS: nowS,
+      byAccount: { claude: 50, 'claude-a': 50, 'claude-b': 50, 'claude-d': 50 },
+    };
+    expect(projectPlacement(cfg.roster, limits, { state: 'untagged' }, 'fable', overCeiling, nowS))
+      .toEqual({ kind: 'none', pool: null, class: 'fable' });
   });
 });
 

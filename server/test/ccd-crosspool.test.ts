@@ -28,7 +28,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness }
+import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness, WIDE_PANE }
   from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
@@ -69,7 +69,7 @@ const writeLimits = (w: string, five: number, seven: number): void => {
 
 const SWAP_STUBS = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };'
   + ' launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };'
-  + ' tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 0; }; sleep() { :; };';
+  + ` tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} return 0; }; sleep() { :; };`;
 
 /** The registry row cmd_swap reads. Returns `mdir` — the munge of the resolved
  *  workdir, computed here exactly as ccd's `tr '/._' '---'` computes it. */
@@ -102,14 +102,14 @@ const shFail = (snippet: string, env: NodeJS.ProcessEnv = {}):
 
 /** The tick, with `_swap_target` and `_auto_swap_check` REAL. */
 const BLOCKED = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 const QUIET = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -335,6 +335,38 @@ describe('`_reg_read` — the distinguishing read C1 is built on', () => {
     expect(rc(`_reg_read ${ID} dangling`)).toBe('2');
   });
 
+  it('a symlink to an EXISTING REGULAR FILE is rc 2 — never rc 0 with the target\'s bytes', () => {
+    // D-2989 (review 71 CRITICAL 1), AND THE SHAPE NO EXISTING CASE PLANTED.
+    // The dangling case above is GREEN without the guard, because `-f` is
+    // false for a broken link — which is exactly why it pinned nothing and
+    // why this escape survived two rounds of review. `-f` FOLLOWS a chain, so
+    // a link that RESOLVES answered rc 0 with a foreign file's bytes:
+    // indistinguishable from a real field read, from outside `$REG`.
+    seedRow();
+    const foreign = path.join(h.home, 'outside-the-registry');
+    fs.writeFileSync(foreign, 'SECRET-OUTSIDE-REG');
+    // `seedRow()` plants a REAL field here; the link replaces it, which is
+    // also the realistic shape — a field that existed and was swapped.
+    fs.rmSync(reg(`${ID}.wrapper`), { force: true });
+    fs.symlinkSync(foreign, reg(`${ID}.wrapper`));
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('2');
+    // `|| true` because the helper now exits non-zero here and `execFileSync`
+    // THROWS on that — without it this line fails for the right reason wearing
+    // the wrong costume, and would keep failing after a regression too.
+    expect(h.sh(`_reg_read ${ID} wrapper || true`), 'the target\'s bytes must never reach stdout')
+      .not.toContain('SECRET-OUTSIDE-REG');
+  });
+
+  it('CONTROL: a real regular file at the same path still answers its own bytes, rc 0', () => {
+    // The control the guard needs to prove it refuses a TYPE and not the
+    // field. Without it, "rc 2" above is equally consistent with a guard that
+    // broke every read.
+    seedRow();
+    fs.writeFileSync(reg(`${ID}.wrapper`), 'claude');
+    expect(rc(`_reg_read ${ID} wrapper`)).toBe('0');
+    expect(h.sh(`_reg_read ${ID} wrapper`)).toBe('claude');
+  });
+
   it.skipIf(process.getuid?.() === 0)(
     'an UNSEARCHABLE registry directory is rc 2 for every field — not rc 1', () => {
       // The arm with the widest blast radius, and the one no caller can reach
@@ -347,6 +379,37 @@ describe('`_reg_read` — the distinguishing read C1 is built on', () => {
       try { expect(rc(`_reg_read ${ID} wrapper`)).toBe('2'); }
       finally { fs.chmodSync(dir, 0o755); }
     });
+});
+
+describe('`_reg_get` — the same escape, in the fold-everything twin (D-2989)', () => {
+  const rc = (snippet: string): string => h.sh(`${snippet} >/dev/null; echo $?`);
+
+  it('a symlink to an EXISTING REGULAR FILE is rc 1 and prints nothing', () => {
+    // `_reg_get` folds ABSENT/UNREADABLE/EMPTY into one `""` deliberately, so
+    // it cannot report WHY — but it must not answer a FABRICATED value. `-f`
+    // followed the chain here too; the `! -L` conjunct is what stops it. rc 1
+    // is its existing not-a-field arm, not a new verdict.
+    seedRow();
+    const foreign = path.join(h.home, 'outside-the-registry-get');
+    fs.writeFileSync(foreign, 'SECRET-OUTSIDE-REG');
+    // `seedRow()` plants a REAL field here; the link replaces it, which is
+    // also the realistic shape — a field that existed and was swapped.
+    fs.rmSync(reg(`${ID}.home`), { force: true });
+    fs.symlinkSync(foreign, reg(`${ID}.home`));
+    expect(rc(`_reg_get ${ID} home`)).toBe('1');
+    // `|| true` because the helper now exits non-zero here and `execFileSync`
+    // THROWS on that — without it this line fails for the right reason wearing
+    // the wrong costume, and would keep failing after a regression too.
+    expect(h.sh(`_reg_get ${ID} home || true`), 'the target\'s bytes must never reach stdout')
+      .not.toContain('SECRET-OUTSIDE-REG');
+  });
+
+  it('CONTROL: a real regular file still answers its own bytes, rc 0', () => {
+    seedRow();
+    fs.writeFileSync(reg(`${ID}.home`), '/home/demo');
+    expect(rc(`_reg_get ${ID} home`)).toBe('0');
+    expect(h.sh(`_reg_get ${ID} home`)).toBe('/home/demo');
+  });
 });
 
 describe('C1 — the tick MEASURES its own inputs, so a transient failure never ends a crossing', () => {
@@ -693,7 +756,7 @@ const SELF = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
   sleep() { :; };
-  tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
+  tmux() { ${WIDE_PANE} case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
     echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
   _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };
 `;
@@ -908,7 +971,7 @@ describe('cmd_swap\'s CCD_SWAP_AUTO strand filter (§5.8.4) — a sound filter, 
     tagPool('demo', 'pool-a'); plantNotify();
     const AUTO_GATED_SUPERVISOR = `
       systemctl() { :; }; launchctl() { :; }; sleep() { :; };
-      tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+      tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
       _swap_target() { echo claude-b; };
       # A SUBSHELL, because that is what the real one is: _dispatch_swap runs
       # cmd_swap in a transient systemd unit, and cmd_swap's guard reaches
@@ -1435,7 +1498,7 @@ describe('the SECOND crossing read in `_swap_target` is guarded too', () => {
 // remedies measured as defects). Every case below is one that went RED against
 // PR #69 exactly as shipped.
 const NOPANE = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) : ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -1658,14 +1721,39 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     fs.rmSync(f);
   });
 
-  it('no call site can see that rc — which is what licenses the change, not the inputs', () => {
-    // THE MEASURED PROPERTY THAT REPLACES A FALSE ONE (#69 review round 3).
-    // `_reg_get`'s comment argued its own safety from the INPUTS ("rc 1 either
-    // way"), and one of the five named inputs falsifies it. The argument that
-    // actually holds is about the CALLERS, and unlike the other it is
-    // measurable: every invocation is a `$(…)` capture whose status nothing
-    // reads. Pin it here so the first rc-consuming caller reds this case and
-    // inherits the duty, rather than inheriting a sentence.
+  it('the call sites that read that rc are ENUMERATED, and each one is pinned by a case that measures it', () => {
+    // THE MEASURED PROPERTY THAT REPLACES A FALSE ONE (#69 review round 3),
+    // NOW HANDED ON (routing slice 1, Task 10). `_reg_get`'s comment argued its
+    // own safety from the INPUTS ("rc 1 either way"), and one of the five named
+    // inputs falsifies it. The argument that actually holds is about the
+    // CALLERS, and unlike the other it is measurable.
+    //
+    // It used to be measurable as "nobody reads the rc at all". Routing slice 1
+    // ended that: `_route_get` and `_route_peek` both read it, and they are
+    // RIGHT to — the rc is exactly the question they ask ("could this field be
+    // read at all"), and its answer separates an ABSENT field from an empty or
+    // unrecognised one, which is the difference between silence and a
+    // `route-reject` note (`ccd-route-fields.test.ts`'s first two cases pin
+    // both sides). So the property this case pins is no longer "no reader" but
+    // "no UNARGUED reader": the two sanctioned lines are written out here, and
+    // the third rc-consumer this slice first shipped — `_inject_spawn_effort`,
+    // which took the rc for PRESENCE, a question `_reg_get`'s `-f` guard
+    // genuinely cannot answer for a `/dev/null` symlink — redded this case at
+    // the tip and was converted to `[[ -e ]]`, which is where that story ends.
+    //
+    // A new reader therefore reds here, and the remedy is to argue it and add
+    // its own case, never to widen the list on its own.
+    //
+    // `_route_get`'s entry RESPELLED (fix round 2, Finding 2), same reader,
+    // same question: its `||` arm now calls `_route_unread_note` before
+    // returning, because `_reg_get`'s rc folds ABSENT and
+    // PRESENT-BUT-UNREADABLE together and only the second can change behaviour
+    // silently (`ccd-route-settle.test.ts`'s `/dev/null`-symlink case pins both
+    // halves: nothing typed, and a `route-unmeasured` line saying why). That
+    // also fixes the weakness this list carried when its two entries were
+    // BYTE-IDENTICAL and could only prove "two such lines exist": they are
+    // distinct now, so each entry names one function's line and a reader moved
+    // between the two would red.
     const src = fs.readFileSync(CCD, 'utf8');
     const lines = src.split('\n')
       .filter((l) => l.includes('_reg_get "') && !l.trim().startsWith('#'));
@@ -1674,9 +1762,16 @@ describe('S3 — the type check reaches `_reg_get` too, not just its measured si
     const outsideCapture = lines.filter((l) => !/\$\(_reg_get "/.test(l));
     expect(outsideCapture, 'an invocation outside a capture COULD branch on the rc')
       .toEqual([]);
-    const rcReaders = lines.filter((l) => /=\$\(_reg_get "[^)]*\)\s*(\|\||&&)/.test(l));
-    expect(rcReaders, 'an assignment followed by || or && branches on the rc')
-      .toEqual([]);
+    const rcReaders = lines.filter((l) => /=\$\(_reg_get "[^)]*\)\s*(\|\||&&)/.test(l))
+      .map((l) => l.trim());
+    expect(rcReaders,
+      'a NEW assignment-then-|| branches on `_reg_get`\'s rc: argue why the rc answers that '
+      + 'caller\'s question, pin what it does with each answer, and only then name it here')
+      .toEqual([
+        // _route_get: absent is silent; present-but-unreadable gets a line
+        'v=$(_reg_get "$id" "$f") || { _route_unread_note "$id" "$f"; return 0; }',
+        'v=$(_reg_get "$id" "$f") || return 0',   // _route_peek: the same read, PURE — no note, no marker
+      ]);
   });
 });
 
@@ -1827,7 +1922,7 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     seedRow();
     const pane = 'ctx ▓▓▓▓ 80%\\n❯ ';
     const stubs = `
-      tmux() { case "\${1:-}" in
+      tmux() { ${WIDE_PANE} case "\${1:-}" in
                  capture-pane) printf '%s\\n' "${pane}" ;;
                  list-panes)   echo ${PANE_PID} ;;
                esac; return 0; };
@@ -1864,7 +1959,7 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     seedRow();
     const pane = 'ctx ▓▓▓▓ 80%\n❯ ';
     const stubs = `
-      tmux() { case "\${1:-}" in
+      tmux() { ${WIDE_PANE} case "\${1:-}" in
                  capture-pane) printf '%s\\n' "${pane}" ;;
                  list-panes)   echo ${PANE_PID} ;;
                esac; return 0; };

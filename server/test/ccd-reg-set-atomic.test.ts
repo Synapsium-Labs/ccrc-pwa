@@ -63,15 +63,37 @@ describe('_reg_set writes atomically', () => {
     // THE RENAME MOVED ONE FRAME DEEPER when macOS arrived: BSD `mv` has no
     // `-T`, so the GNU call this used to scan for now lives in
     // `_plat_mv_notdir`, whose Linux arm IS that call and whose Darwin arm
-    // reproduces its refusal. The invariant is unchanged and so is the
-    // strength of this check — it just has to follow the indirection, and it
-    // pins BOTH ends so neither can be loosened alone.
+    // reproduces its refusal. The invariant on THIS end — that `_reg_set`
+    // reaches the destination through the rename helper and nothing else —
+    // is unchanged.
     expect(body, 'the destination is reached by the rename helper only')
       .toMatch(/_plat_mv_notdir\s+"\$tmp"\s+"\$REG\/\$1\.\$2"/);
     const mvBody = /_plat_mv_notdir\(\)\s*\{([\s\S]*?)\n\}/.exec(ccd)?.[1] ?? '';
     expect(mvBody, '_plat_mv_notdir must be a multi-line function').not.toBe('');
     expect(mvBody, 'the helper reaches the destination by rename only').toMatch(/mv\s+-[a-zA-Z]*T[a-zA-Z]*\s/);
-    expect(mvBody, 'the helper must never unlink its destination').not.toMatch(/rm\s+[^\n]*"\$2"/);
+    // THE OTHER END IS NOT PINNED HERE, and a scan that once tried to was
+    // REMOVED (final-round item 6), not just narrowed: D-2187 (A2) added
+    // one narrowly-guarded `rm -f -- "$2"` to `_plat_mv_notdir`'s own body,
+    // for the one destination shape a bare Darwin `mv -f` cannot replace
+    // correctly (a symlink to a directory) — so an unconditional "never
+    // unlinks" pin on THIS function stopped being honest for THAT one. A
+    // regex over a function body cannot decide whether an `rm` sits INSIDE
+    // a guarded arm — it can only see that an `rm "$2"`, a `[ -L "$2" ]` and
+    // a `[ -d "$2" ]` all appear somewhere in the same text — so a version
+    // narrowed to "if the body contains an rm of \"$2\", both -L \"$2\" and
+    // -d \"$2\" must also appear in it" was tried here. MEASURED to hold
+    // NOTHING: the pre-existing refusal guard three lines above the `rm`
+    // (`if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi`) supplies both
+    // tokens UNCONDITIONALLY, so deleting that guard ALONE — leaving the
+    // `rm`'s own guard and the `|| return 1` exactly as shipped — left this
+    // scan GREEN (mutation table row 6, `partA-report.md`/the plan's A5);
+    // only `macos-platform.test.ts`'s "refuses a real directory destination"
+    // case caught it. A pin whose name promises containment while its body
+    // cannot fail is worse than none: the next reader sees a named
+    // assertion and stops looking. The real proof that `_plat_mv_notdir`'s
+    // Darwin arm stays honest lives entirely in `macos-platform.test.ts`'s
+    // "_plat_mv_notdir's Darwin arm, forced from Linux (D-2187)" describe —
+    // re-verify there, not here.
     expect(mvBody, 'the helper must never redirect into its destination').not.toMatch(/>\s*"\$2"/);
   });
 
@@ -123,8 +145,14 @@ describe('_reg_set writes atomically', () => {
     // naming scheme exists to prevent.
     expect(all.filter((n) => n.endsWith('.uuid'))).toEqual(['demo-quiet-basin.uuid']);
     // And ccd's own globs: `_ws_slug_residue` lists exactly the real fields.
+    // RETARGETED, NOT LOOSENED (D-2605): it now emits complete `$REG`-relative
+    // BASENAMES rather than bare suffixes, because its caller prints them as a
+    // list rooted once and a dot-LEADING private family has no bare suffix to
+    // print. A substring match here would destroy exactly the pin the comment
+    // above describes — a tmp ending in a field name minting a phantom session
+    // id — so the equality stays an equality.
     expect(h.sh('_ws_slug_residue demo quiet-basin').split(', ').sort())
-      .toEqual(['uuid', 'workspace', 'wrapper']);
+      .toEqual(['demo-quiet-basin.uuid', 'demo-quiet-basin.workspace', 'demo-quiet-basin.wrapper']);
   });
 
   // ROOT-TOLERANT, deliberately: `chmod 500` does not stop uid 0, so under a

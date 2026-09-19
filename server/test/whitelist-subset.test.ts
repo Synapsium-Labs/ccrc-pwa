@@ -71,6 +71,24 @@ const SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   // 3 fails outright if nothing builds one of them.
   projectPoolSet: ['demo', 'pool-a'],
   projectPoolClear: ['demo'],
+  // Routing slice 1: the record's one writer besides ccd. The sample carries
+  // a real field=value so layer 2 proves the flagged shape is reachable under
+  // the granted `['route','--session']` prefix.
+  route: ['demo-quiet-basin', 'effort', 'high'],
+  // The SAME `['route','--session']` grant, second builder — `wsAdd`/
+  // `wsAddWorker`'s own precedent. The multi-pair form is what a writer with
+  // more than one field to set must use (ccd validates every pair before it
+  // writes any; N calls would half-apply), and it is enumerated separately so
+  // the repeated-`--set` shape cannot hide behind its single-field sibling.
+  routeSet: ['demo-quiet-basin', { class: 'opus', effort: 'high' }],
+  // The live-change form (slice 4, Task 5): same `['route','--session']`
+  // grant as `route`/`routeSet` above, `--apply` is a trailing token and
+  // trailing tokens are unconstrained by the agent's prefix, so no new grant
+  // is needed — this sample proves the flagged shape still crosses it.
+  routeApply: ['demo-quiet-basin', 'effort', 'high', null],
+  // TERMINAL DRAWER wave 2. The mode is part of the argv, not a parameter the
+  // route may omit: `cmd_win_size` asserts exactly four tokens.
+  winSize: ['demo-quiet-basin', 'smallest'],
 };
 
 /**
@@ -221,6 +239,65 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     expect(isExecAllowed('ccd', [...CCD_ARGV.wsRename('demo-quiet-basin', 'ws/x', null)])).toBe(true);
   });
 
+  // Enrolled in REQUIRED_VERB_FLAG for its ARGUMENT SURFACE rather than for a
+  // confirmation token — `ws-rename`, `coord-pause`, `project-pool` and
+  // `route`'s reason — and reached from a door as open as any of theirs, with
+  // one more hazard on top: `GET /ws/pty/:id` (wave 3) carries no box token at
+  // all, as `coord-pause`'s own route does not (D-282), and the `:id` it hands
+  // down is a path param THAT HANDLER VALIDATES NOWHERE. Measured over the
+  // handler body in `server/src/server.ts`: it destructures `req.params` and
+  // passes the id straight to `resizeWindow` and `spawnPty`, with no id-class
+  // test, no roster lookup and no 400 in it — so ccd's `cmd_win_size` is the
+  // whole gate behind this grant, and wave 3's plan lists validating `:id` as
+  // work it will do. A bare `['win-size']` would
+  // permit `ccd win-size <anything> <anything…>` — every positional form the
+  // verb might ever grow — and it would stay green in layer 2 and in layer 3's
+  // reachability check, because `['win-size']` is a genuine prefix of the argv
+  // `CCD_ARGV.winSize` builds. Cross-PACKAGE and object-reading, for the
+  // reasons the ws-reap assertion above states.
+  it('win-size is grantable ONLY with --session', () => {
+    const ws = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'win-size');
+    expect(ws.length, 'exactly one win-size grant').toBe(1);
+    expect(ws[0]).toEqual(['win-size', '--session']);
+    expect(isExecAllowed('ccd', ['win-size', 'demo-quiet-basin', '--mode', 'smallest'])).toBe(false);
+    expect(isExecAllowed('ccd', ['win-size'])).toBe(false);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'smallest')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.winSize('demo-quiet-basin', 'canonical')])).toBe(true);
+  });
+
+  // The other half of the same decision, and the half a `not.toContain(
+  // 'set-option')` check cannot carry: `tmux set-option` is NOT granted and
+  // must never be — prefix matching leaves every later token unconstrained, so
+  // a `['tmux','set-option']` prefix would permit setting ANY option on ANY
+  // target of the shared server, which is the whole reason the un-pin was
+  // wrapped in a ccd verb (`server/test/ccd-win-size.test.ts`'s header).
+  //
+  // THE HEADS ARE PINNED EXACTLY, not screened by name, because tmux verbs have
+  // aliases: measured here with `tmux -L <unused-socket> list-commands` on tmux
+  // 3.4, which prints `set-option (set)` and `set-window-option (setw)`. A grant
+  // of `['tmux','set']` is byte-for-byte the capability this program refused to
+  // take, and it walks straight past a check that looks for the long spelling.
+  // An exact list is the only form that also catches the spelling this
+  // comment's author did not think of; it costs a deliberate edit here the next
+  // time the fleet genuinely needs a sixth tmux verb, which is the point.
+  // Sorted on both sides, so reordering the list is not a failure — only its
+  // MEMBERSHIP is pinned. It is also what makes `ccd-win-size.test.ts`'s
+  // "grants tmux exactly five verbs, `set-option` not among them" a measured
+  // claim rather than a sentence in a header.
+  it('tmux is granted exactly five verbs, and no option-setter under any spelling', () => {
+    const heads = EXEC_WHITELIST.tmux.map((p) => p[0]);
+    expect([...heads].sort()).toEqual(
+      ['has-session', 'list-panes', 'capture-pane', 'send-keys', 'resize-window'].sort());
+    for (const spelling of ['set-option', 'set', 'set-window-option', 'setw']) {
+      expect(heads, spelling).not.toContain(spelling);
+      expect(isExecAllowed('tmux', [spelling, '-t', 'cc-demo', 'window-size', 'smallest']), spelling)
+        .toBe(false);
+    }
+    // …and the pin is not a blanket refusal of tmux: the verb the server's own
+    // window PIN already rides on is still granted (wave 3 keeps using it).
+    expect(isExecAllowed('tmux', ['resize-window', '-t', 'cc-demo', '-x', '220', '-y', '50'])).toBe(true);
+  });
+
   // Fix round 1 (task 14 follow-up): the drift pin above caught `stopId`/
   // `stopPair` shipping with no `--surface` at all, sixteen tasks and eleven
   // reviews after the spec named the flag. `stop`'s grant is the ONE-token
@@ -368,6 +445,13 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     coordPause: ['coord-pause', '--state', 'on'],
     projectPoolSet: ['project-pool', '--project', 'demo', '--pool', 'pool-a'],
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
+    route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
+    // Pairs in `ROUTE_WRITABLE_FIELDS` order — `class` before `effort` — not
+    // the sample object's own key order, which happens to agree here; the
+    // out-of-order case is pinned in `dispatch-route.test.ts`.
+    routeSet: ['route', '--session', 'demo-quiet-basin', '--set', 'class=opus', '--set', 'effort=high'],
+    routeApply: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high', '--apply'],
+    winSize: ['win-size', '--session', 'demo-quiet-basin', '--mode', 'smallest'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
@@ -380,6 +464,37 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'true']);
     expect(CCD_ARGV.prOpen('demo-quiet-basin', 'the work', 'Ym9keQ==', false))
       .toEqual(['pr-open', '--session', 'demo-quiet-basin', '--title', 'the work', '--body-b64', 'Ym9keQ==', '--draft', 'false']);
+  });
+
+  // The exact-argv row above pins the TOKEN ORDER of the mode that is built;
+  // this pins the VOCABULARY the builder will accept at all, which no runtime
+  // assertion in this file can reach. `mode` is a two-member union, so the
+  // third word is a compile error at every call site in `server/src` — and the
+  // third word is not hypothetical: `window-size latest` is the one value
+  // `cmd_win_size`'s own comment refuses outright (a keystroke-driven reflow
+  // flip measured at +6 MB tmux RSS per flip, never returned).
+  //
+  // THE DIRECTIVE IS THE PIN, not the call. Widen `mode` to `string` and the
+  // line below stops being an error, which tsc reports as TS2578 ("unused
+  // '@ts-expect-error' directive") — a real gate here, because
+  // `typecheck-tests.test.ts` compiles all of `server/test/` under
+  // `test/tsconfig.tests.json`. (In `agent/test/` it would be a pin that cannot
+  // fail; `whitelist-structural.test.ts`'s header says why.)
+  // THE TITLE SAYS ONLY WHAT THIS MEASURES (fix round 2). It read "… a third
+  // word never reaches ccd", which is the one thing the body then shows is
+  // false: the argv IS allowed by the whitelist, and what refuses `latest` is
+  // the TYPE on the server side and ccd's own `case` on the box — not this
+  // table. The disclosure below was always honest; the title was not.
+  it('winSize`s mode vocabulary is closed at the TYPE — and the GRANT does not close it', () => {
+    // @ts-expect-error 'latest' is not a member of the union, and must not be.
+    const forced: readonly string[] = CCD_ARGV.winSize('demo-quiet-basin', 'latest');
+    // DISCLOSED, not implied: the agent's grant does NOT constrain the mode —
+    // it is two tokens wide, and everything after a granted prefix is
+    // unconstrained. So this argv is allowed by the whitelist, and the two
+    // things that actually refuse it are the type above (server side) and
+    // ccd's own `case` on the box, which `ccd-win-size.test.ts` pins with
+    // `bad mode: latest (want smallest|canonical)` against the real binary.
+    expect(isExecAllowed('ccd', [...forced])).toBe(true);
   });
 
   it('the cross-pool builders carry the workdir AFTER the positionals, flag still leading', () => {

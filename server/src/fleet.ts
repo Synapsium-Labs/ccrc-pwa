@@ -7,7 +7,7 @@ import { readLimits } from './limits.js';
 import { liveSessionStatus, readLiveState, readLiveStateMeasured } from './livestate.js';
 import type { Statusline } from './pane/statusline.js';
 import type { HookState } from './hookstate.js';
-import type { FleetSession, LifecycleInput, PrState, SessionStatus, TaskProgress } from '../../shared/api.js';
+import type { FleetSession, LifecycleInput, PrState, SessionStatus, SessionUsage, TaskProgress } from '../../shared/api.js';
 // The ladder lives in `shared/` because `reviveFleetSession` is its second
 // producer and the two must not be able to disagree — see its own docstring.
 import { sessionBucket, sessionLifecycle, spawnVerdict } from '../../shared/api.js';
@@ -15,6 +15,12 @@ import type { Roster } from '../../shared/roster.js';
 // Task 19: the chip's own read. No cycle — `coord/store.ts` imports nothing
 // from this file, the same pairing `watch.ts` already has with both.
 import type { AskRow, CoordStore } from './coord/store.js';
+// Task 3: the pure board-placement decision (Task 2) — this file supplies its
+// ONE port (`stampOf`) from a `coord.db` read, placement.ts itself imports
+// nothing from here. D-2921 moved the fold that BUILDS that port into
+// placement.ts too: it is the same pure decision, and holding half of it here
+// in L3 is what let the two halves disagree about what the hop is keyed on.
+import { boardPlacement, foldCoordPlacements, type StampLookup } from './coord/placement.js';
 // F2(b): the `held` chip's ceiling, DERIVED from the lane's own two
 // windows. It lives in `askwindow.ts` because `watch.ts` (their first
 // reader) imports this module, so the constants could not stay there.
@@ -165,10 +171,78 @@ function fleetAsk(row: AskRow | null, nowMs: number): FleetSession['ask'] {
 function readCurrentAsks(coord: CoordStore | undefined, childIds: readonly string[]): Map<string, AskRow> {
   if (!coord || childIds.length === 0) return new Map();
   try {
-    return coord.currentAsksFor(childIds);
+    const read = coord.currentAsksFor(childIds);
+    // D-2545. An unreadable ask row degrades the WHOLE frame's ask chips to
+    // absent, exactly as a throw already did — the fail-safe direction this
+    // function was written for, reached by a typed result instead of an
+    // exception. The warn is what distinguishes it from a fleet with no asks.
+    if (!read.ok) {
+      console.warn(`ccrc-server: currentAsksFor refused for ${childIds.length} session(s) — ${read.detail} — one bad read must not kill the poll`);
+      return new Map();
+    }
+    return read.asks;
   } catch (err) {
     console.warn(`ccrc-server: currentAsksFor failed for ${childIds.length} session(s) (${childIds.join(', ')}) — ${err instanceof Error ? err.message : String(err)} — one bad read must not kill the poll`);
     return new Map();
+  }
+}
+
+/** `boardPlacement`'s empty port: nothing stamped, so every row goes home.
+ *  Handed back by `readCoordPlacements`'s guards below when there is nothing
+ *  TO read — no `coord` wired, or `sessionCount === 0` (an empty registry) —
+ *  and by a successful read that found nothing stamped
+ *  (`foldCoordPlacements([])`). A refused or throwing read no longer hands
+ *  this back: since wave 2 (D-2875) it answers `{ ok: false }` instead. */
+const emptyCoordPlacements = (): StampLookup => () => null;
+
+/** What `readCoordPlacements` hands back: the port when the store answered
+ *  (including "nothing stamped" — an empty port is a measurement), or `ok:
+ *  false` when the READ itself failed. The two used to fold to one empty
+ *  port, so every row of a broken box read `boardProject === project` as if
+ *  measured (D-2875; the field's own docstring carried the gap as prose). */
+type CoordPlacementsRead = { ok: true; stampOf: StampLookup } | { ok: false };
+
+/**
+ * Task 3's own batched, guarded read — the `boardPlacement` port supply,
+ * built ONCE per assembly (never per row, which would be O(rows x hops)
+ * `coord.db` queries), by handing `coordPlacementStamps`' rows to the pure
+ * `foldCoordPlacements` (`coord/placement.ts`, L1 — D-2921 moved it there, to
+ * sit beside the walk it feeds). Same guard shape as `readCurrentAsks` right
+ * above: `coord` is absent on a dark box and in every pre-Task-3 test, and
+ * `node:sqlite` can throw SYNCHRONOUSLY on a closed connection or a lock
+ * race — either failure is caught, never thrown out of `assembleFleet`, and
+ * answers `{ ok: false }`, which the row literal emits as `boardProject:
+ * null` (the wire's own word for "this server did not decide", D-2875) — a
+ * broken coord.db costs every row its placement rather than the whole tick.
+ * `sessionCount === 0` (an empty registry) also skips the read entirely —
+ * `readCurrentAsks`'s own `childIds.length === 0` short-circuit, restated
+ * here: no row exists to spend the answer on.
+ *
+ * Fix round 1: this used to call `coord.runs({includeClosed:true})`, which
+ * hydrates every row (`itemTally`, `unreadMailCount`, batch health, a
+ * `prLineage` JSON parse) to obtain three columns — priced at "~3,000 [SQL
+ * statements] for one [on-demand] board load" (`store.ts`), paid here every
+ * 2s tick and every `/ws/fleet` connect instead. `coord.coordPlacementStamps`
+ * is the narrow sibling built for this one caller (`store.ts`'s own
+ * docstring), no hydration, `coordProject IS NOT NULL` pushed into SQL.
+ *
+ * `includeClosed: true` is deliberate (`coordPlacementStamps` always
+ * includes closed runs, up to its own clamp): a placement keyed on open runs
+ * alone would bounce every worker between cards at the close-then-open wave
+ * boundary, one of the four defects this design exists to end.
+ */
+function readCoordPlacements(coord: CoordStore | undefined, sessionCount: number): CoordPlacementsRead {
+  if (!coord || sessionCount === 0) return { ok: true, stampOf: emptyCoordPlacements() };
+  try {
+    const read = coord.coordPlacementStamps();
+    if (!read.ok) {
+      console.warn(`ccrc-server: coordPlacementStamps refused while computing board placement — ${read.detail} — boardProject reads null this tick`);
+      return { ok: false };
+    }
+    return { ok: true, stampOf: foldCoordPlacements(read.stamps) };
+  } catch (err) {
+    console.warn(`ccrc-server: coordPlacementStamps failed while computing board placement — ${err instanceof Error ? err.message : String(err)} — boardProject reads null this tick`);
+    return { ok: false };
   }
 }
 
@@ -223,7 +297,7 @@ export function idHomeWrapper(roster: Roster, id: string): string {
 export async function liveStatus(io: FleetIO, cfg: CcrcConfig, tmux: Tmux, id: string): Promise<SessionStatus> {
   // C0.3: this only ever asks about ONE id — no uniqueness or subtraction
   // over the rest of the fleet — so it reads just that id's row rather than
-  // the whole registry (a 24-session fleet's baseline is 553 agent-WS
+  // the whole registry (a 24-session fleet's baseline is 721 agent-WS
   // operations [registry-read-census:fleet] per `readRegistry` call, before
   // conditional reconfirmation, for a question about one session).
   const read = await readSessionRecord(io, cfg, id);
@@ -361,7 +435,7 @@ export async function assembleFleet(
    * straight off THIS call's own return value (`sessions[i].unmeasured`), not
    * off a separately-read set of `SessionRecord`s. If this function took its
    * OWN read instead of the rows `tick()` already has, that would be a
-   * SEPARATE whole-fleet sweep, 23 [registry-read-census:fields] field reads
+   * SEPARATE whole-fleet sweep, 30 [registry-read-census:fields] field reads
    * per session, a few hundred ms after the one `tick()` used for
    * `sweepHookStates`/`detectDialogs` — and a
    * row that read clean in tick()'s sweep and degraded in THIS one would
@@ -386,6 +460,10 @@ export async function assembleFleet(
    * `coord` is actually passed.
    */
   coord?: CoordStore,
+  /** Fresh per-session usage readings (routing slice 0, the watcher's usage
+   *  lane), same pattern as `hookStates`: absent on a cold start and in every
+   *  older test, which is why the field defaults to null. */
+  usageReadings?: Map<string, SessionUsage>,
 ): Promise<FleetSession[]> {
   const [recs, limits] = await Promise.all([records ?? readRegistry(io, cfg), readLimits(io, cfg, now)]);
   // Task 19 fix round 1, item 3: ONE batched read for the whole assembly,
@@ -394,6 +472,10 @@ export async function assembleFleet(
   // rows carry millisecond timestamps (`settleAsk`'s callers all pass
   // `Date.now()`), so `nowMs` is computed once and threaded into `fleetAsk`.
   const asksByChild = readCurrentAsks(coord, recs.map((r) => r.id));
+  // Task 3: ONE pass over the stamped runs, reused by every row below — see
+  // `readCoordPlacements`'s own docstring for why this is batched rather than
+  // a per-row query.
+  const placements = readCoordPlacements(coord, recs.length);
   const nowMs = now * 1000;
   return Promise.all(recs.map(async (r): Promise<FleetSession> => {
     // D-309: `hasSession` here deliberately collapses `unknown` into `alive
@@ -540,6 +622,14 @@ export async function assembleFleet(
     const session: FleetSession = {
       id: r.id, wrapper: r.wrapper, home: r.home ?? idHomeWrapper(cfg.roster, r.id),
       project: r.project, workdir: r.workdir, workspace: r.workspace, name, status, statusUpdatedAt,
+      // Task 3: which CARD this row renders on. ONE port, SESSION-keyed
+      // (D-2921) — the walk starts at this row's own id and every later hop
+      // asks the same question of the coordinator it just reached. Built ONCE
+      // above, outside this per-row map.
+      // D-2875: a failed read is the wire's null, never a non-null that reads as measured.
+      boardProject: placements.ok
+        ? boardPlacement({ sessionId: r.id, ownProject: r.project, held: r.held !== null, stampOf: placements.stampOf })
+        : null,
       limits: acct ? { five: acct.five, seven: acct.seven } : null,
       // Either source can raise the flag: the pane detector sees an
       // AskUserQuestion/permission menu the hook never gets a write for
@@ -562,6 +652,7 @@ export async function assembleFleet(
       // statusline (dead pane, pre-first-capture, or a build with no ▓
       // segment at all), and a measured 0 must ride through unchanged.
       ctxPct: sl?.ctxPct ?? null,
+      usage: usageReadings?.get(r.id) ?? null,
       tasks: taskProgress?.get(r.id) ?? null,
       pr: prStates?.get(r.id) ?? persistedPr(r),
       archivedAt: r.archivedAt,
@@ -650,6 +741,12 @@ export async function assembleFleet(
       // against). This is a PROJECTION onto the wire, not a second field.
       started: r.started,
       spawnState: spawnVerdict(r.spawn === null ? null : r.spawn.rc),
+      // Carried straight off the record — the seven routing files
+      // `SessionRecord.route` already read alongside every other field on the
+      // registry's one `Promise.all` (registry.ts). No timestamp inside it to
+      // convert (unlike `stoppedBy`/`swapBlocked`/`stranded`/`substrate`
+      // above), so this is a bare passthrough.
+      route: r.route,
       bucket: 'idle', bucketSince: null,   // replaced immediately below
     };
     // Computed FROM the assembled session, never from a second copy of the

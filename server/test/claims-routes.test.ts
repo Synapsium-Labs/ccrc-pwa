@@ -61,9 +61,9 @@ const storeClaim = (coord: CoordStore, who: { byId: string; byUuid: string },
 const claim = (app: FastifyInstance, body: Record<string, unknown>,
                headers: Record<string, string> = tok) =>
   app.inject({ method: 'POST', url: '/api/claims', headers, payload: body });
-const release = (app: FastifyInstance, id: number, body: Record<string, unknown>) =>
+const release = (app: FastifyInstance, id: number | string, body: Record<string, unknown>) =>
   app.inject({ method: 'POST', url: `/api/claims/${id}/release`, headers: tok, payload: body });
-const brk = (app: FastifyInstance, id: number, payload?: Record<string, unknown>) =>
+const brk = (app: FastifyInstance, id: number | string, payload?: Record<string, unknown>) =>
   app.inject({ method: 'POST', url: `/api/claims/${id}/break`,
     ...(payload ? { payload } : { payload: {} }) });
 const list = (app: FastifyInstance, qs = '?project=demo') =>
@@ -301,6 +301,24 @@ describe('release and break', () => {
     expect(res.json()).toMatchObject({ ok: false, error: 'not-owner', heldBy: A.byId });
     expect((await release(app, 9999, { ...A })).statusCode).toBe(404);
   });
+
+  it.each(['1.0', '01', String(Number.MAX_SAFE_INTEGER + 1)])(
+    'release and break refuse non-canonical id %s without changing claim 1', async (id) => {
+      const home = mkTmp('ccrc-claims-');
+      seed(home, A.byId, UUID_A);
+      const w = await openApp(home); app = w.app;
+      const claimId = await acquire(app);
+      expect(claimId).toBe(1);
+
+      const releaseRes = await release(app, id, { ...A });
+      const breakRes = await brk(app, id);
+      expect(releaseRes.statusCode).toBe(400);
+      expect(breakRes.statusCode).toBe(400);
+      expect(releaseRes.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(breakRes.json()).toEqual({ ok: false, error: 'bad-request' });
+      expect(w.coord.activeClaims().find((c) => c.id === claimId)?.state).toBe('live');
+    },
+  );
 
   it('break answers WITHOUT the box token and NEVER reads the body — the abandon-door shape', async () => {
     const home = mkTmp('ccrc-claims-');

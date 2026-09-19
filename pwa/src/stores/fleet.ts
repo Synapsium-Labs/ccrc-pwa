@@ -1,7 +1,7 @@
 // Fleet zustand store: mirrors the `/ws/fleet` stream — full session
 // snapshots on every change plus fleet-wide notices (account swaps etc.).
 import { create, type StoreApi, type UseBoundStore } from 'zustand';
-import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type RosterWire, type RunSummary } from '../../../shared/api';
+import { FLEET_PROTO, type AccountsResponse, type CoordStatus, type FleetMsg, type FleetSession, type NotifyEvent, type ProjectPoolsWire, type ProjectRow, type RosterWire, type RunSummary } from '../../../shared/api';
 import { api } from '../lib/api';
 import { loadFleetSnapshot, saveFleetSnapshot } from '../lib/offline';
 import { applyCatchUp, loadMark } from '../lib/notifymark';
@@ -123,6 +123,33 @@ export interface FleetState {
    *  `RunsScreen` reads `runsFrameSeen` rather than inferring "has arrived"
    *  from the payload's own shape. */
   coordFrameSeen: boolean;
+  /** Which pool each project is tagged into, off the fleet-level `pools` frame
+   *  (spec §5.4.5). `null` means NO FRAME HAS ARRIVED — an older server, or a
+   *  socket that has not spoken yet — and every surface renders NOTHING for
+   *  it, never a "no pool" flag: absence is not a measurement.
+   *
+   *  DELIBERATELY NOT HYDRATED from `loadFleetSnapshot()` and deliberately not
+   *  written by `saveFleetSnapshot` (spec §5.4.1: "Not persisted server-side …
+   *  A cached tag rendered as live policy would lie"). `sessions` and `roster`
+   *  survive a cold start because a stale session row reads as stale and a
+   *  stale label is still that account's name; a stale POOL TAG is a claim
+   *  about what the fleet is enforcing right now, which nothing on this device
+   *  can stand behind. `FleetSnapshot` has no field for it, so the exclusion is
+   *  structural rather than a line someone must remember not to add.
+   *
+   *  Sticky once it has arrived, like `runs`/`coord`: the watcher only re-emits
+   *  when the value actually changes (`watch.ts`'s byte-equality guard), so
+   *  holding the last value between emits is what makes it correct to read. */
+  pools: ProjectPoolsWire | null;
+  /** The LAST successful `/api/projects` read, as `FleetScreen` made it —
+   *  lifted here so the session view can label a repo (R3) without a second
+   *  agent round trip per project on every mount. `null` = no read yet on
+   *  this store instance. DELIBERATELY NOT HYDRATED and not written by
+   *  `saveFleetSnapshot`, for `pools`' own reason: a stale repo slug is a
+   *  claim about a checkout this device cannot stand behind. `FleetSnapshot`
+   *  has no field for it (D-3013). */
+  projects: readonly ProjectRow[] | null;
+  setProjects(rows: readonly ProjectRow[]): void;
   connect(): void;
   disconnect(): void;
   dismissNotice(id: number): void;
@@ -165,6 +192,26 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
   // `runState`/`runItems` do for `runs`.
   if (t === 'coord' && typeof (m as { coord?: unknown }).coord === 'object' && (m as { coord?: unknown }).coord !== null) {
     return m as FleetMsg;
+  }
+  // Validate the envelope that makes `ProjectPoolsWire` safe to read, but not
+  // its project members: a later member state belongs to that reader's additive
+  // tolerance. A malformed envelope must leave the last live policy standing.
+  if (t === 'pools') {
+    const pools = (m as { pools?: unknown }).pools;
+    // Array rejection is over-determined by the exact discriminants below, but
+    // this keeps the neighboring envelope-narrowing idiom explicit. Unlike it,
+    // the byProject array guard is load-bearing (stores.test.ts:1087).
+    if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
+    const outer = pools as { listed?: unknown; enforcement?: unknown; byProject?: unknown };
+    const validEnforcement = outer.enforcement === 'enforced'
+      || outer.enforcement === 'unavailable'
+      || outer.enforcement === 'unknown';
+    const validByProject = typeof outer.byProject === 'object'
+      && outer.byProject !== null
+      && !Array.isArray(outer.byProject);
+    if (validEnforcement && (outer.listed === false || (outer.listed === true && validByProject))) {
+      return m as FleetMsg;
+    }
   }
   // present-but-wrong-typed proto/min is rejected, not coerced — a `hello`
   // this parser cannot trust is exactly the kind of frame absence-permits
@@ -230,6 +277,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
       fleetFrameSeen: false,
       coord: null,
       coordFrameSeen: false,
+      // NOT `snapshot?.pools` — there is no such field, and there must not be
+      // one. See the field's own docstring.
+      pools: null,
+      projects: null,
       roster: snapshot?.roster ?? [],
 
       connect() {
@@ -376,6 +427,13 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
               // `coordFrameSeen` flips once and stays flipped, even the first
               // time the frame arrives.
               set({ coord: msg.coord, coordFrameSeen: true });
+            } else if (msg.type === 'pools') {
+              // No `poolsFrameSeen` twin: unlike `runs`/`coord`, the payload
+              // itself is never an empty array whose emptiness could be
+              // mistaken for silence — `null` and a `ProjectPoolsWire` are
+              // already distinguishable, and `projectPoolOf` reads exactly
+              // that distinction.
+              set({ pools: msg.pools });
             }
           },
           onState: (conn) => set({ conn }),
@@ -400,6 +458,10 @@ export function createFleetStore(deps: FleetStoreDeps = {}): FleetStore {
 
       dismissNotice(id) {
         set((s) => ({ notices: s.notices.filter((n) => n.id !== id) }));
+      },
+
+      setProjects(rows) {
+        set({ projects: rows });
       },
 
       mergeFeed(events, dropped) {

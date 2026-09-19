@@ -62,7 +62,7 @@ const tokenHeader = { 'x-ccrc-mail-token': BOX_TOKEN };
  */
 const EXEMPT_BUT_AUTHENTICATED = new Set(
   ['GET /api/feed', 'GET /api/lifecycle', 'GET /api/runs', 'GET /api/runs/:id/items',
-   'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
+   'GET /api/runs/:id/signals', 'GET /api/peers', 'GET /api/claims', 'GET /api/asks']);
 
 // ── the scanner ──────────────────────────────────────────────────────────
 
@@ -192,7 +192,7 @@ describe('the scanner is looking at something', () => {
     // precisely the state this whole file exists to make impossible. Adding a
     // route is now a deliberate act that edits these three numbers, with a
     // reviewer looking at them.
-    expect(scanRoutes('server.ts').length).toBe(47);
+    expect(scanRoutes('server.ts').length).toBe(49);
     // 22 since `GET /api/runs/:id/items` — the READ half of the settle route,
     // which keys on item ids that nothing else published.
     // 23 since `POST /api/runs/:id/reclaim` — the fourth ungated operator door,
@@ -209,7 +209,13 @@ describe('the scanner is looking at something', () => {
     // 28 since `GET /api/asks` (Task 11, the lane's READ side) — a fleet
     // parent's cross-sibling read plus the PWA's chip source, EXEMPT-BUT-
     // AUTHENTICATED (D-149's pattern) rather than a plain box-token lane.
-    expect(scanRoutes('coord/routes.ts').length).toBe(28);
+    // 29 since `GET /api/runs/:id/signals` (routing slice 0, Task 5) — the
+    // run's speed/quality signals, EXEMPT-BUT-AUTHENTICATED same shape as
+    // `GET /api/runs`.
+    // 30 since `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 5, Task 2) — the coordinator's door onto the escalation/demotion
+    // ladders, box-token gated like its dispatch/close/advance/items siblings.
+    expect(scanRoutes('coord/routes.ts').length).toBe(30);
     // The `server.ts` half moved too, and NOT on that ladder: 47 since
     // `POST /api/projects/:project/pool` (account pools wave 3, task 9) — the
     // project-pool tag write, registered in `server.ts` rather than in
@@ -217,8 +223,40 @@ describe('the scanner is looking at something', () => {
     // `NOT in auth/gate.ts's EXEMPT table — session-gated when armed, open
     // dark` and `NO BOX TOKEN: this is fleet control, not a coordination
     // write` — so it raises the scanned count and the gated count and leaves
-    // the exempt one alone. 47 + 28 = 75.
-    expect(ROUTES.length).toBe(75);
+    // the exempt one alone.
+    // 48 since `GET /api/sessions/:id/pane/history` (the terminal drawer's
+    // scrollback) — the same shape once more: registered in `server.ts`, NOT
+    // EXEMPT, and carrying no box token. It is a READ, and it is gated for
+    // exactly that reason: a pane's scrollback is session CONTENT, so the one
+    // thing it must not be is liftable by a caller who never signed in. Its
+    // own docstring argues the absent `knownId` gate, which is a different
+    // question from this one.
+    // 49 since `POST /api/sessions/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 4, Task 5) — the PWA pickers' write: the SAME shape a third time,
+    // registered in `server.ts`, NOT EXEMPT (its own docstring says so, and
+    // `sessions-route-route.test.ts` pins the absence) and carrying NO box
+    // token — a picker tap is as human-driven as a typed prompt, so it is
+    // session-gated like `POST /api/sessions/:id/prompt` beside it.
+    //
+    // THE TWO HALVES MOVED ON DIFFERENT BRANCHES, and this line is why the
+    // arithmetic is spelled out rather than carried. The drawer wave took the
+    // `server.ts` half 47 -> 48 and left `coord/routes.ts` where it was;
+    // routing slice 0 took `coord/routes.ts` 28 -> 29 and left `server.ts`
+    // where it was. Each branch read 76 and neither was wrong. Git saw the same
+    // 75 -> 76 edit on both sides and auto-merged that assertion to 76 with no
+    // marker on it — the one line that is false on the merged tree is the one
+    // line the merge would not have shown.
+    //
+    // IT HAPPENED AGAIN, on the 2026-09-16 merge of `origin/main` into routing
+    // slice 4, and the same way: routing slice 4 took `server.ts` 47 -> 48 with
+    // `POST /api/sessions/:id/route` while main took the SAME half 47 -> 48
+    // with `GET /api/sessions/:id/pane/history`. Both sides read 48 and 76, so
+    // nothing conflicted and the merge carried a number neither parent's tree
+    // has: the merged `server.ts` registers BOTH routes, 49. Re-derived here on
+    // the merged tree, not taken from a side — 49 + 29 = 78, and routing
+    // slice 5's own `POST /api/runs/:id/route` took `coord/routes.ts` 29 -> 30,
+    // so the merged tree now reads 49 + 30 = 79.
+    expect(ROUTES.length).toBe(79);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
     // DERIVED, not the literal 68 (D-1242's family, extended — F7). `WS_ROUTES`
@@ -349,7 +387,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 75 scanned + the static wildcard when the bundle is built.
+    // 79 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -392,22 +430,28 @@ describe('EXEMPT is complete in both directions', () => {
 
   it('exempts exactly the six classes the plan names — nothing has crept in', () => {
     // The whole set, spelled out, so that adding an exemption is a deliberate act
-    // that edits this list with a reviewer looking at it. 29 = /health + the 15
+    // that edits this list with a reviewer looking at it. 30 = /health + the 15
     // hard-token coordination lanes + /api/notify + login + status + the SPA shell
-    // + the two halves of the passkey door + the SEVEN exempt-BUT-authenticated
-    // GETs: GET /api/runs, GET /api/runs/:id/items, GET /api/feed,
-    // GET /api/lifecycle, GET /api/peers, GET /api/claims and GET /api/asks.
+    // + the two halves of the passkey door + the EIGHT exempt-BUT-authenticated
+    // GETs: GET /api/runs, GET /api/runs/:id/items, GET /api/runs/:id/signals,
+    // GET /api/feed, GET /api/lifecycle, GET /api/peers, GET /api/claims and
+    // GET /api/asks.
     // (13/FIVE/25 until the ask pre-emption lane's three routes met account
     // pools wave 3 in this merge; the ask lane's two POSTs joined the box-token
     // class and its GET joined D-149's.)
     //
     // It read 24 and enumerated 24 until F7 (D-1302), a few lines above the
-    // `toEqual` below, which now lists 28 keys: the tail omitted
+    // `toEqual` below, which now lists 30 keys: the tail omitted
     // `GET /api/runs/:id/items`,
     // which IS in the exempt-but-authenticated class and is the fifth member
-    // `EXEMPT_BUT_AUTHENTICATED` in box-token-census.test.ts already derives. A
+    // `EXEMPT_BUT_AUTHENTICATED` in box-token-census.test.ts already derives.
+    // 30 since `GET /api/runs/:id/signals` (routing slice 0, Task 5) joined
+    // the same class — and this sentence said 29 about a 30-key array for
+    // exactly one wave, the same hand-kept-count defect one paragraph up. A
     // breakdown beside the list it describes is the one place a reader checks
     // the list against, so it being wrong is worse than it being absent.
+    // 31 since `POST /api/runs/:id/route` (routing spec 2026-09-14 §5.3,
+    // slice 5, Task 2) joined the plain box-token lanes.
     expect([...EXEMPT.keys()].sort()).toEqual([
       'GET /*',
       'GET /api/asks',
@@ -421,6 +465,7 @@ describe('EXEMPT is complete in both directions', () => {
       'GET /api/peers',
       'GET /api/runs',
       'GET /api/runs/:id/items',
+      'GET /api/runs/:id/signals',
       'GET /health',
       'POST /api/asks/:id/answer',
       'POST /api/asks/:id/release',
@@ -438,6 +483,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/close',
       'POST /api/runs/:id/dispatch',
       'POST /api/runs/:id/items',
+      'POST /api/runs/:id/route',
     ]);
     // `/api/auth/logout` is the auth route that is NOT here — logging out is
     // something only a logged-in caller can do.
@@ -452,7 +498,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect(EXEMPT.has('POST /api/auth/passkey/register/finish')).toBe(false);
   });
 
-  it('the twenty-two box-token lanes in EXEMPT are those coord routes, and twenty-three with notify', () => {
+  it('the twenty-four box-token lanes in EXEMPT are those coord routes, and twenty-five with notify', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -470,6 +516,14 @@ describe('EXEMPT is complete in both directions', () => {
       const body = coord.slice(at, end);
       return /requireMailToken\(req/.test(body) || /checkMailToken\(/.test(body);
     }).map((h) => h.k);
+    // TWENTY-FOUR since `POST /api/runs/:id/route` (routing spec 2026-09-14
+    // §5.3, slice 5, Task 2) joined the plain box-token lanes: the
+    // coordinator's door onto the escalation/demotion ladders, never a
+    // session-only write.
+    // TWENTY-THREE since `GET /api/runs/:id/signals` (routing slice 0, Task 5)
+    // joined the same dual-credential class: the coordinator skill reads a
+    // run's speed/quality signals cookieless from the fleet host, same shape
+    // as `GET /api/runs` beside it.
     // TWENTY-TWO since `GET /api/feed` joined the same dual-credential class:
     // `ccrc-api feed list` reads cookieless from the fleet host while the PWA
     // reads with a session. TWENTY-ONE before that, when `GET /api/asks` (Task
@@ -497,20 +551,23 @@ describe('EXEMPT is complete in both directions', () => {
     // worst kind of hole.
     expect(gated.sort()).toEqual([
       'GET /api/asks', 'GET /api/claims', 'GET /api/feed', 'GET /api/ledger', 'GET /api/lifecycle', 'GET /api/mail',
-      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items',
+      'GET /api/mail/:id', 'GET /api/peers', 'GET /api/runs', 'GET /api/runs/:id/items', 'GET /api/runs/:id/signals',
       'POST /api/asks/:id/answer', 'POST /api/asks/:id/release',
       'POST /api/claims', 'POST /api/claims/:id/release', 'POST /api/ledger/deviations',
       'POST /api/mail', 'POST /api/mail/:id/ack',
       'POST /api/runs', 'POST /api/runs/:id/advance', 'POST /api/runs/:id/close',
-      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items',
+      'POST /api/runs/:id/dispatch', 'POST /api/runs/:id/items', 'POST /api/runs/:id/route',
     ]);
     for (const k of gated) expect(EXEMPT.has(k), `${k} is box-token gated but not EXEMPT`).toBe(true);
-    // …and `/api/notify`, the twenty-third lane, which lives in server.ts
+    // …and `/api/notify`, the twenty-fourth lane, which lives in server.ts
     // (D-1242: this comment used to call it the eighteenth, double-counting
     // the coord routes' own eighteen — since corrected once already for
     // `POST /api/asks/:id/answer` joining the nineteen, again for `POST
     // /api/asks/:id/release` joining the twenty, again for `GET /api/asks`
-    // joining the twenty-one, and now for `GET /api/feed` joining the twenty-two).
+    // joining the twenty-one, again for `GET /api/feed` joining the
+    // twenty-two, again for `GET /api/runs/:id/signals` joining the
+    // twenty-three, and now for `POST /api/runs/:id/route` joining the
+    // twenty-four).
     expect(server).toContain('checkMailToken(deps.mailToken');
     expect(EXEMPT.has('POST /api/notify')).toBe(true);
   });
@@ -746,7 +803,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 72 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 76 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -810,7 +867,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 72 HTTP routes, not the 28 exempt.
+          //    is not itself flag-aware — the assertion that covers all 76 HTTP routes, not the 30 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

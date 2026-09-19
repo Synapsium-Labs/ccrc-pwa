@@ -49,10 +49,10 @@ infer your own id from the brief's text. The pane is the source.
 
 ## The contract
 
-These thirteen clauses are the boundary between "a wave worker" and "an agent with
+These fifteen clauses are the boundary between "a wave worker" and "an agent with
 a shell on the fleet host". They are not advice.
 
-**Editing note (D-104):** these thirteen lines are pinned verbatim by
+**Editing note (D-104):** these fifteen lines are pinned verbatim by
 `server/test/worker-skill.test.ts`, whose clause literals are double-quoted.
 Keep every apostrophe STRAIGHT — a curly one is a different byte and reds the
 pin without looking like an edit — and keep double-quote characters out of a
@@ -71,6 +71,8 @@ clause, where they would have to be escaped on the other side.
 11. Claim before you edit: `POST /api/claims` with every path this wave touches, all-or-nothing. A 409 is an answer, not an obstacle — it names the holder, and the holder IS the address: mail them through the response's own `mailHint` instead of editing anyway. Discovery is `GET /api/peers?of=<your id>`, history is `GET /api/lifecycle`, and each row's own lifecycle is what to read — never its archive stamp, which is silently false on some live rows. Peer mail is human-timescale: a busy peer answers when it next idles, so send once and work what is uncontested. Never invent a deviation number — the coordinator allocated this program's block at run-open, and a number you cannot get is `D-TBD-<slug>` plus a report, never a guess.
 12. When your workspace carries `graphify-out/graph.json`, a question about the codebase goes to `graphify query` before `grep` or a file read, and to `graphify path` / `graphify explain` for relationships and concepts — but weigh that answer by your SessionStart card: only `fresh` licenses taking it as read, while `N commits behind HEAD`, `not an ancestor of HEAD` (the graph was built on a tree yours cannot reach, so it describes code you do not have), `freshness unmeasured`, or no freshness clause at all makes every query answer a LEAD to verify by opening the file it names. Never run `graphify update` or any graphify build in the workspace: the sweep owns the write side, and a session-side build holds you at `working` for minutes and wedges the next dispatch as `worker-busy`.
 13. When a child of yours asks a question, you may answer it — POST /api/asks/:id/answer is the one route that does, and this session never types into another session's pane by any other means. Rule only from what you can read: the spec, the plan, the ledger, the branch, and your own prior rulings. You cannot see the child's reasoning — only its question and its options, and that is the entire evidence surface: no rationale, no chat history, no transcript. If answering would require guessing rather than reading, decline. Anything that would be a NEW decision — product intent, scope, a tradeoff nobody ruled on, anything irreversible — is the operator's; decline it with POST /api/asks/:id/release so their notification fires at once rather than waiting out the window.
+14. Route your own subagents by the shape of their task, from `../ccrc-coordinator/references/routing-matrix.md`, and never let one inherit your model: name the class on every Agent or Workflow call and the effort on every Workflow `agent()` call (an Agent-tool subagent runs at your own effort) — implementation from a spec'd plan on Sonnet at high, review with judgement and adversarial verification on Opus at high, scouts and transcription-grade edits on Haiku, and Fable never as a fan-out worker. A subagent effort the brief names governs over that default.
+15. Your wave-done body opens with two signal lines the server parses, before any prose and before the fingerprint: `suite: green|red|unrun` says whether the whole suite passed on its FIRST full run after this wave's implementation was complete (red stays red however many fix rounds followed; unrun when no full run happened), and, only when a check failed, `failure: shallow|ceiling|unclear` names the kind — shallow for tests missed or a plan half-followed, ceiling for an ambiguity you could not resolve, a design flaw or a debug that survived two attempts, unclear otherwise. The suite line is never omitted.
 
 **Clause 2 is the one that decides whether this wave can close at all.** The
 ordinary per-PR convention elsewhere in this codebase — "cut a fresh
@@ -86,6 +88,67 @@ the AskUserQuestion tool becomes a structured ask the hook captures, and it
 is read first by this session's parent, if it has one and answers in time,
 before it ever reaches the operator. Free text reaches neither one. The tool
 gets answered.
+
+## The plan the brief names may live in another repository
+
+A programme is homed in ONE repo and its waves may run in any, so the plan file
+your brief names can sit OUTSIDE this workspace. Every foreign-plan brief
+carries three separate values: `homeRepoRoot`, the absolute path to the home
+repository root; `planRepoPath`, the tracked repository-relative plan path with
+no leading slash; and `planSha`, a full 40-hex commit SHA. Read that immutable
+Git object:
+
+```bash
+git -C "$homeRepoRoot" show "$planSha:$planRepoPath"
+```
+
+If the repository, commit, or path cannot be resolved, report and stop. Never
+substitute `HEAD`, read a mutable checkout directly with `cat` or a file read,
+fetch, checkout, or otherwise mutate the home repository. `ledgerAbsPath` is
+only the absolute programme-ledger path under `docs/superpowers/programs/`; it is
+not `homeRepoRoot` and it is not `planRepoPath`. You commit only on this
+workspace's own branch in THIS repository (clause 2).
+
+Only a wave that depends on a producer interface carries a producer contract:
+`producerRepoRoot`, the absolute path to the producer repository root;
+`producerSourceRepoPath`, the producer source file's repository-relative path;
+`producerSha`, the exact full merged producer SHA; and the contract excerpt
+INLINED in the brief, verbatim from that merged file. A foreign-plan wave with
+no producer-interface dependency requires none of those producer fields and no
+excerpt. When the producer contract is present, read its immutable Git object:
+
+```bash
+git -C "$producerRepoRoot" show "$producerSha:$producerSourceRepoPath"
+```
+
+If that producer repository, commit, or path cannot be resolved, report and
+stop under the same immutable-read rule above. The inline copy is the authority
+for the INTERFACE — the shape of the thing you build against, frozen at the
+moment the brief was cut. The producer blob at `producerSha` proves the
+excerpt's provenance; it does not replace the excerpt as shape authority. The
+plan blob read at `planSha` is the authority for the WAVE'S REQUIREMENTS — what
+to build and why (clause 6). The current checkout's plan is not authoritative
+for this dispatched wave. Those are different questions, so a disagreement is
+not a tie to break: the excerpt still wins on shape, the producer blob proves
+provenance, the named plan blob still wins on scope, and you say so either way
+in your `wave-done` mail so the ledger gets it. A deviation you find is still
+never a number you invent (clause 11): report it, and the coordinator mints it
+against the programme's home project.
+
+A reply may arrive addressed to the ROLE `worker` rather than to your session id.
+Nothing changes on your side: the role resolves to whichever session this run names,
+which is you, the envelope's `to:` is still your own id, you ack the DELIVERY id as
+always (clause 3), and you answer `toId:'coordinator'` as always.
+
+## Routing your subagents
+
+The strategy is `../ccrc-coordinator/references/routing-matrix.md`, installed beside this skill
+(clause 14). Name the class on every Agent or Workflow call — a subagent that inherits your model
+is the one thing the matrix forbids outright — and the effort on every Workflow `agent()` call,
+where it can be set; the Agent tool runs a subagent at your own effort. The brief may name the
+subagent effort the coordinator expects for this wave; that governs. A Workflow script on this
+fleet passes `model:` and `effort:` on every `agent()` call, and its agents run on Opus or Sonnet
+(Haiku for scouts) — never on the class your own main loop runs on if that is above Opus.
 
 ## How to call the API
 
@@ -146,7 +209,8 @@ an explicit path and not by name.
   call wrong are `bad-kind` (wrong shape, wrong `kind`, or a relative
   `artifacts` path) and `stale-uuid` (you cached the uuid — clause 1).
 - `kind` is one of `finding`, `question`, `answer`, `status`, `artifact`.
-  `wave-done` is a `status` mail whose subject says so.
+  `wave-done` is a `status` mail whose subject is that same string, exactly
+  (below).
 
 **Reading mail is three calls, not one.** What lands in your pane is a one-line
 nudge, never the message: list with `GET /api/mail?to=<your id>`, then per row
@@ -155,6 +219,12 @@ as `:id` for `GET /api/mail/:id` (the body) and `POST /api/mail/:id/ack`
 (body `{"fromId":…,"fromUuid":…}`). Ack before you act on it (clause 3).
 
 ## Reporting a wave-done
+
+**The subject is exactly `wave-done`** — that byte string alone, with no wave
+number, no slug and no parenthetical. The server selects this run's done-claims
+on that exact subject, so a decorated one is not a variant spelling it will
+still find: it is invisible, and the run reads as a wave whose worker reported
+nothing at all.
 
 Your `wave-done` mail carries a fingerprint the coordinator submits **exactly
 as you wrote it**. It does not rebuild it, and it must not: half from your mail
@@ -168,6 +238,21 @@ push, and send them once:
 | `prNumber` | the PR number, or `null` if there is none | the PR you opened for this wave; `null` is a legitimate answer |
 | `prPhase` | one of the eight words in clause 9 | read it, never invent it — prose like "PR #591 is green" is not a value, and an unrecognised word is refused before any I/O runs |
 | `handoffCommit` | the commit a reviewer should read as the wave's handoff | the same sha as `branchTip` — the server checks they are identical |
+
+**The body opens with two signal lines** (clause 15) — the leading pair, before any prose and
+before the JSON, grammar exactly `key: word` with one space after the colon and nothing after the
+word. `suite:` is never omitted; `failure:` only when a check failed. A complete body:
+
+```
+suite: red
+failure: ceiling
+{"branchTip":"<40-hex sha>","prNumber":591,"prPhase":"open","handoffCommit":"<the same 40-hex sha>"}
+```
+
+The server reads them off the mail row (`GET /api/runs/:id/signals`, the coordinator's read); a
+word outside the vocabulary is reported as unrecognised, never as green. Say `red` when the first
+full run after your implementation was complete failed, even if a fix round made it green before
+you sent this — the signal is what the first run said, and the fix round is counted on its own.
 
 Then stop pushing (clause 9). A lint fix, a review nit or a merge commit landed
 after the mail moves the tip away from the sha you claimed, and the coordinator
@@ -205,3 +290,9 @@ re-send the old numbers.
 - **The brief and the plan disagree.** The plan's text governs (clause 6). Note
   the disagreement in your `wave-done` mail so the ledger gets it — that is how
   the next wave finds out.
+- **A `fix-round` mail arrives** (kind `status`, from the coordinator, naming
+  this run): a review run read your wave and the coordinator ruled. The report
+  at the path in the mail's `artifacts` — plus the rulings in its body — is
+  your brief for the fix round. Ack it (clause 3), fix on this workspace's own
+  branch (clause 2), and report a FRESH wave-done fingerprint (clause 9); never
+  re-send the old numbers.

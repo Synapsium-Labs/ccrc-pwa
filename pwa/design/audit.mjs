@@ -490,6 +490,7 @@ export const GROUNDS = {
   'chat.css .pending-actions button': { under: ['var(--bg-page)'], why: 'ghost button in the message column; chat.css:16 paints the screen --bg-page. Clears on every plausible ground' },
   'chat.css .code-block-copy': { under: ['var(--well-bar-bg)'], why: 'the copy affordance sits in the code block BAR (.code-block-bar, background --well-bar-bg — 5% ink over the well), not on the bare well: MessageBubble.tsx renders it inside that div. The entry used to say --bg-well, which flattered every ratio here by ~0.3; the bar is the pixels behind it. Load-bearing either way — it reads 1.10-1.29 on page / surface / raised / sheet' },
   'chat.css .compaction-head': { under: ['var(--bg-page)'], why: 'a full-width divider in the message column. Clears on every plausible ground' },
+  'chat.css .task-card-toggle': { under: ['var(--bg-surface)'], why: 'the disclosure is rendered INSIDE .task-card (TaskCard.tsx), which paints background: var(--bg-surface) — the same ground .mail-card gives its own contents' },
   'primitives.css .btn-ghost': { under: ['var(--bg-sheet)'], why: 'the ghost button is a sheet/dialog control. Clears on every plausible ground' },
 };
 
@@ -517,17 +518,134 @@ export const SELF_GROUNDED_EXEMPT = {
  *  is hand-written (a parser cannot recover it); the COLOUR is read from the
  *  stylesheet, so retinting the rule re-measures it. */
 export const INHERITED_GROUNDS = {
+  // ── the task card and the compaction card (PR #89) ──────────────────────
+  // Seven rules that set a colour and paint no ground. Their hosts DO paint
+  // one — `.task-card` and `.compaction` both set `background: var(--bg-surface)`
+  // — but neither is named in these selectors, and the named-ancestor route
+  // grounds a rule only against a host its own selector names. So all seven
+  // were measured at nothing and sat in the uncovered census, which is where
+  // the last unmeasured meta cell was shipping below AA. Registered rather
+  // than grandfathered on purpose: the ground is recoverable by reading the
+  // component, so calling them unmeasurable would be false, and a registration
+  // keeps the COLOUR read from the stylesheet so a retint re-measures.
+  // `.task-card-toggle` was already in GROUNDS with this same ground and the
+  // same reasoning; these are its siblings, missed because it paints
+  // `background: transparent` and they paint nothing at all.
+  'chat.css .compaction-raw': {
+    under: ['var(--bg-surface)'],
+    why: 'the raw body of a compaction card. `.compaction` (chat.css:1207) paints background: var(--bg-surface) and `.compaction-body` adds only padding and a top border, so the card fill is what is behind this text. Its selector names no painted ancestor',
+  },
+  'chat.css .task-card-glyph': {
+    under: ['var(--bg-surface)'],
+    why: 'the task card\'s leading glyph, rendered inside .task-card (TaskCard.tsx), which paints background: var(--bg-surface). Same ground and same reason as the .task-card-toggle entry already in GROUNDS; its selector names no painted ancestor',
+  },
+  'chat.css .task-card-status': {
+    under: ['var(--bg-surface)'],
+    why: 'the status chip in .task-card-head. It draws a border and no fill, so the card\'s --bg-surface is behind it; its selector names no painted ancestor',
+  },
+  'chat.css .task-card-status--ok': {
+    under: ['var(--bg-surface)'],
+    why: 'the ok variant retints the chip to --status-busy-text over the same card ground. A grouped or variant selector still names no painted ancestor, so it needs its own registration',
+  },
+  'chat.css .task-card-status--bad': {
+    under: ['var(--bg-surface)'],
+    why: 'the bad variant retints the chip to --status-dead-text over the same card ground. Registered separately from the base chip for the same reason the .proj-card-pool attention states are',
+  },
+  'chat.css .task-card-field dt': {
+    under: ['var(--bg-surface)'],
+    why: 'the field label in .task-card-fields. `.task-card-field` sets display and gap only, so the ground is still the card\'s --bg-surface; naming .task-card-field in the selector does not help, because the descendant route requires a SELF-GROUNDED host and that rule paints nothing',
+  },
+  'chat.css .task-card-field dd': {
+    under: ['var(--bg-surface)'],
+    why: 'the field value, same host and same ground as its dt. It scrolls within a max-height but paints no fill of its own',
+  },
+  'fleet.css .proj-card-pool': {
+    under: ['var(--bg-surface)'],
+    why: 'the project-pool chip sits in .proj-card-head on the project card. Its selector names no ancestor and sets no ground, so the auditor cannot recover the card background from CSS alone',
+  },
+  "fleet.css .proj-card-pool[data-pool='untagged'], .proj-card-pool[data-pool='malformed'], .proj-card-pool[data-pool='unreadable'], .proj-card-pool[data-pool='unrecognised']": {
+    under: ['var(--bg-surface)'],
+    why: 'every attention-state project-pool chip uses the same project-card ground as the base chip. The grouped selector changes the ink but still names no painted ancestor, so it needs its own registration',
+  },
+  'fleet.css .proj-card-stranded': {
+    under: ['var(--bg-surface)'],
+    why: 'the stranded count sits inside .proj-card-toggle, whose transparent background leaves the project card\'s --bg-surface behind it. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .acct-pool': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .proj-row--selected .acct-pool': {
+    under: ['var(--accent-tint)'],
+    why: 'a selected crossing project paints --accent-tint behind its pool chip. The contrast test binds this registration to .proj-row--selected\'s declared background so the two cannot silently diverge',
+  },
+  'fleet.css .acct-disclosure': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .pool-note': {
+    under: ['var(--bg-sheet)'],
+    why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .route-field-label': {
+    under: ['var(--bg-sheet)'],
+    why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
     why: "the language label is the copy affordance's sibling inside .code-block-bar (MessageBubble.tsx) and takes --syn-comment on the same 5%-ink-over-well fill. It sets no background of its own and its selector names no ancestor, so no route could ground it — it was in the uncovered census next to a rule that was shipping at 3.03:1",
+  },
+  'chat.css .term-histbar-word': {
+    under: ['color-mix(in srgb, var(--bg-well) 88%, var(--ink-on-well))'],
+    why: "the history bar's legend — `reading history…`, and the sentence a failed read says — sits inside .term-histbar (TerminalDrawer.tsx), whose own background is the well lifted 12% toward the ink. It sets no background of its own and its selector names no ancestor, so no route could ground it; the same shape as .code-block-lang on .code-block-bar. Naming --bg-well instead would flatter the ratio by measuring pixels that are not behind it",
+  },
+  'chat.css .compaction-raw': {
+    under: ['var(--bg-surface)'],
+    why: "the raw body of a `system` compaction card is rendered as `<pre class=\"compaction-body compaction-raw\">` INSIDE the card (MessageBubble.tsx:285), and .compaction-body paints nothing — the ground is .compaction's own `background: var(--bg-surface)` (chat.css:1223), the same ground .compaction-head is registered against in GROUNDS. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  'chat.css .task-card-glyph': {
+    under: ['var(--bg-surface)'],
+    why: "the clock glyph sits in .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:39-40), which paints `background: var(--bg-surface)` (chat.css:1286) — the same ground .task-card-toggle is registered against. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone",
+  },
+  'chat.css .task-card-status': {
+    under: ['var(--bg-surface)'],
+    why: "the status chip is the last cell of .task-card-head inside <article class=\"task-card\"> (TaskCard.tsx:46); its own `border` is the whole fill it has, so the pixels behind its ink are the card's `background: var(--bg-surface)` (chat.css:1286)",
+  },
+  'chat.css .task-card-status--ok': {
+    under: ['var(--bg-surface)'],
+    why: "the done tone of that same chip (TaskCard.tsx:29, applied beside .task-card-status), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
+  },
+  'chat.css .task-card-status--bad': {
+    under: ['var(--bg-surface)'],
+    why: "the failed tone of that same chip (TaskCard.tsx:30), on the same task-card ground (chat.css:1286). It overrides `color` DIRECTLY, so it is measured in its own right rather than inheriting the base chip's measurement",
+  },
+  'chat.css .task-card-field dt': {
+    under: ['var(--bg-surface)'],
+    why: "the field NAME of a task card's definition list: <dt> inside .task-card-field inside .task-card-fields inside <article class=\"task-card\"> (TaskCard.tsx:63-67). Neither list level paints anything, so the ground is the card's `background: var(--bg-surface)` (chat.css:1286)",
+  },
+  'chat.css .task-card-field dd': {
+    under: ['var(--bg-surface)'],
+    why: "the field VALUE beside that name (TaskCard.tsx:68), on the same task-card ground (chat.css:1286). It scrolls inside its own box but paints no background of its own, so the card is still what is behind the ink",
   },
   'fleet.css .proj-archived-body .sess-line:not(.sess-line--active) .sess-label': {
     under: ['var(--bg-surface)'],
     why: 'the past-tense signal for an archived row is an ink STEP on the label, not element opacity (see the note above the rule). Its ground is the project card. :not(.sess-line--active) is load-bearing — the selected row inverts to background: var(--ink-primary), where --ink-secondary reads 1.81 dark / 2.24 light',
   },
+  'fleet.css .sess-repo': {
+    under: ['var(--bg-surface)'],
+    why: "the repo slug composed into .sess-open's accessible name (Task 6, board-placement wave 2), same ink-tertiary register as .sess-held next door — both sit directly on the project card's own ground. Its selector names no ancestor, so no route could ground it. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts",
+  },
   'fleet.css .sess-spawn': {
     under: ['var(--bg-surface)'],
     why: 'the spawn chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so no route could ground it — without this entry it joins .sess-held/.sess-lifecycle in the uncovered census, which is exactly where the last unmeasured meta cell was shipping below AA. The SELECTED row is answered by the achromatic group (--edge-strong), pinned separately in fleet-css.test.ts',
+  },
+  'fleet.css .sess-stranded': {
+    under: ['var(--bg-surface)'],
+    why: 'the stranded chip is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row does not use this registered attention ink: .sess-line--active answers it through the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
+  },
+  'fleet.css .sess-offpool': {
+    under: ['var(--bg-surface)'],
+    why: 'the visible off-pool cue is a .sess-meta cell on an unselected .sess-line, whose ground is the project card. Its selector names no ancestor, so the auditor cannot recover that ground from CSS alone. The SELECTED row is answered by the achromatic group with --edge-strong, pinned separately in fleet-css.test.ts',
   },
   'fleet.css .sheet-panel .proj-ready': {
     under: ['var(--bg-sheet)'],
@@ -556,6 +674,46 @@ export const INHERITED_GROUNDS = {
   "fleet.css .sess-spawn[data-spawn='expired'], .sess-spawn[data-spawn='unrecognised']": {
     under: ['var(--bg-surface)'],
     why: 'the two "we do not know" verdicts drop to --ink-tertiary, and an attribute variant recovers no ground from its selector any more than the base rule does — so grounding only the base would leave HALF a new cell measured. Same project-card ground, same unselected row; the selected row is again the achromatic group, which carries the [data-spawn] member for exactly this rule',
+  },
+  'fleet.css .proj-crossing': {
+    under: ['var(--bg-surface)'],
+    why: "the rule-3 orphan's programme note (F4, cross-repo wave 2) sits directly on .proj-card-body's own ground, same register .proj-nest-bracket and .proj-pending-program already use here. It sets no background of its own and its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-crossing-glyph': {
+    under: ['var(--bg-surface)'],
+    why: 'the same marker\'s glyph. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the glyph half of the marker unmeasured while the report looked complete',
+  },
+  'fleet.css .proj-abroad-line': {
+    under: ['var(--bg-surface)'],
+    why: "the home card's own sentence about a wave running in another repo (F4, cross-repo wave 2), same ground and register as .proj-crossing above. Its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .proj-abroad-glyph': {
+    under: ['var(--bg-surface)'],
+    why: "the abroad line's glyph, same ground and same reason as .proj-crossing-glyph above",
+  },
+  'fleet.css .proj-elsewhere-line': {
+    under: ['var(--bg-surface)'],
+    why: "the emptied card's own sentence about where its work went (spec §6, board-placement wave 2), same ground and register as .proj-abroad-line above — both sit directly on .proj-card-body's ground. Its selector names no ancestor, so no route could ground it",
+  },
+  'fleet.css .mail-chip': {
+    under: ['var(--bg-page)'],
+    why: "the OFF state of the programme filter chip (F4, cross-repo wave 2). `.mail-screen` sets no background of its own, so its real ground is body's --bg-page (styles/base.css). Its selector names no ancestor, so no route could ground it",
+  },
+  "fleet.css .mail-chip[data-on]": {
+    under: ['var(--bg-page)'],
+    why: 'the ON state of the same chip, same ground. Registered separately for the reason the .auth-block-sub entry states: grounding only the base rule would leave the pressed state — the one a reader taps to confirm — unmeasured',
+  },
+  'fleet.css .mail-group-head': {
+    under: ['var(--bg-page)'],
+    why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",
+  },
+  'chat.css .opt-inert': {
+    under: ['var(--bg-sheet)'],
+    why: "routing slice 6, Task 4: the model/effort picker's 'inert on this lane' marker, rendered inside <Sheet>'s .sheet-panel (Sheet.tsx:59), which paints background: var(--bg-sheet) (primitives.css:141) with no colour of its own. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same shape as fleet.css's .pool-note/.route-field-label on the same .sheet-panel ground. Registered rather than left in the uncovered census: the ground is recoverable by reading the component, so calling it unmeasurable would be false.",
+  },
+  'chat.css .opt-degraded': {
+    under: ['var(--bg-sheet)'],
+    why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
   },
 };
 

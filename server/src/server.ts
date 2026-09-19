@@ -11,6 +11,8 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, liveStatus } from './fleet.js';
 import { readLimits, projectHome, projectPlacement } from './limits.js';
+import { readSharesMeasured } from './shares.js';
+import { CLASSES, type ModelClass } from '../../shared/models.js';
 import {
   poolFor, poolsEnforcement, poolsWire, readProjectPools, readProjectPoolsWithRoot,
 } from './pools.js';
@@ -26,8 +28,8 @@ import { buildAgreement, defaultCachePath, loadSnapshot, rosterAgreement, type F
 // include list and the ESM-emit invariant honest.
 import { generateAccountsSh } from '../../shared/generate.mjs';
 import { bodyDigest } from '../../shared/mark.mjs';
-import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, capSupported, deviceActor, stopSurfaceSupported, verbSupported,
-         type ActorFlags, type CcdArgv } from './ccdargv.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, POOLS_CAP, ROUTE_APPLY_CAP, ROUTE_ARGV_CAP, capSupported, deviceActor,
+         stopSurfaceSupported, verbSupported, type ActorFlags, type CcdArgv } from './ccdargv.js';
 import { parsePrLines, prView, unknownView } from './prstate.js';
 import { parseAudit, parseReap } from './wsaudit.js';
 import { readTasks } from './tasks/read.js';
@@ -63,15 +65,15 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN,
+  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES, PANE_HISTORY_LINES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
   type PasskeyAssertStart, type PasskeyListResponse, type PasskeyRegisterStart,
   type RunSummary,
   type SessionClientMsg, type SessionStreamMsg, type TaskItem,
-  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire,
-  programKickoffVerdict,
+  type FloorState, type ProjectRow, type ProjectPoolsWire, type ProjectPoolWire, type ProjectRepoWire,
+  parseRouteFields, programKickoffVerdict, routeFieldsOrNull, routeParseDetail, type RouteFields,
 } from '../../shared/api.js';
 
 /**
@@ -1044,7 +1046,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
     return {
-      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord),
+      sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage()),
       pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
     };
   });
@@ -1262,7 +1264,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // independently would race — and often WIN, sending `runs` before
     // `fleet` ever resolves. Chaining pins the wire order every client (and
     // `fleetws.test.ts`) can rely on: hello, fleet, runs.
-    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord).then((sessions) => {
+    void assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage()).then((sessions) => {
       onFleet(sessions);
       // Cold start for THIS socket, same reasoning as the `fleet` push just
       // above: the `runs` frame is only emitted ON CHANGE (`FleetWatcher.
@@ -1280,7 +1282,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // and the next real transition's `FleetWatcher.emitRuns` broadcast
       // reaches it exactly as it would any other already-connected client.
       if (deps.coord) {
-        try { onRuns(deps.coord.runs().map(toRunSummary)); }
+        try {
+          const read = deps.coord.runs();
+          // D-2545: SKIP THE FRAME, same degrade as the throw arm below and for
+          // the same stated reason. A refusal here is not an empty fleet — an
+          // empty `runs` frame would tell this client every run had closed —
+          // so nothing is sent and the next successful broadcast reaches this
+          // socket exactly as it would any other already-connected client.
+          if (!read.ok) {
+            console.warn(`ccrc-server: /ws/fleet cold-start runs() refused (${read.detail}) — no runs frame for this socket`);
+          } else {
+            onRuns(read.runs.map(toRunSummary));
+          }
+        }
         catch (err) {
           console.warn(`ccrc-server: /ws/fleet cold-start runs() failed (${err instanceof Error ? err.message : String(err)})`);
         }
@@ -1458,7 +1472,67 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.get('/ws/pty/:id', { websocket: true }, (socket, req) => {
     const { id } = req.params as { id: string };
     const q = req.query as { cols?: string; rows?: string };
-    const p = spawnPty(id, dim(q.cols, 80), dim(q.rows, 24));
+    const cols = dim(q.cols, 80);
+    const rows = dim(q.rows, 24);
+    // THE LATCH, AND IT GOES BEFORE THE ATTACH (spec §5.1, F3, F14).
+    //
+    // ccd spawns every session `window-size latest` (`ccd/ccd:14790`), and
+    // tmux's own default is `latest` too — so the window follows whichever
+    // client most recently typed. A phone's pty client is a full tmux client
+    // (F6), so the first phone attach NARROWS the window, tmux REFLOWS the
+    // stored lines to the new width, and everything past `history-limit` is
+    // shed on the next scrolled line and never comes back. That reflow is
+    // measured, not assumed (F1, private tmux 3.4 socket): `resize-window -x 43`
+    // on a 220-column pane holding 1853 stored lines takes `history_size` to
+    // 9460, and at `history-limit 2000` the next output sheds the overflow for
+    // good.
+    //
+    // `resize-window` latches `window-size manual` (F3), so once it ARRIVES the
+    // attaching client cannot move the window. MEASURED end to end on one
+    // session (F14), 1153 stored lines / 1203 logical: unpinned, a 43-column
+    // attach left 1046 logical of 1203 — 157 destroyed; pinned first, the window
+    // read `manual`, stayed 220 throughout, and the history was untouched.
+    //
+    // ISSUING IT FIRST IS A BIAS, NOT A BARRIER, and the difference is measured.
+    // An earlier version of this comment said the later client "cannot move the
+    // window at all"; that is too strong. Both commands are in flight at once —
+    // this one is merely started first — and a harness TIGHTER than shipped
+    // raced them 40 times and saw the attach win TWICE, with the window at 43
+    // for transients of 0.47 ms and 4.28 ms before the pin landed. It is not a
+    // data-loss defect: tmux 3.4 does not collect history during a reflow, and
+    // the narrow-then-wide round trip was measured LOSSLESS even at 3.7x the
+    // limit (1452 stored / 1502 logical at 220, out to 43 where `history_size`
+    // reads 7463, and back to 220 byte-identical).
+    //
+    // THAT ROUND TRIP WAS MEASURED WITH NO OUTPUT IN FLIGHT, and the condition
+    // is load-bearing: the first paragraph above is the counterexample. A line
+    // that lands WHILE the window sits at 43 is written into a history already
+    // reflowed past `history-limit`, and the overflow it sheds is gone. So what
+    // losing the race costs is bounded by what the pane emits during a transient
+    // measured at 0.47 ms and 4.28 ms — usually nothing, and never nothing by
+    // guarantee. The pin is what keeps that window from being the whole session,
+    // which is why it is issued here rather than dropped.
+    //
+    // NOT AWAITED, and that is deliberate: the socket handler is L4 and decides
+    // nothing, `resizeWindow` answers a boolean this route has no branch for,
+    // and a tmux that cannot be reached is a session the attach below will fail
+    // on anyway. Awaiting it would ALSO put a round trip to the fleet box in
+    // front of every drawer open in remote mode, to buy back a transient that
+    // costs no history. What it must not be is LATER than the attach.
+    //
+    // WHAT THE TEST CAN SEE is issue ORDER, and only that: `pty.test.ts` drives
+    // one ordered log shared by the Runner and the spawn stub, so it pins that
+    // the pin is issued before the attach. It cannot pin arrival, because a unit
+    // test has no tmux to arrive at. The claim above about arrival is a
+    // measurement on a private socket, not something this suite re-checks.
+    //
+    // NO PER-CLIENT GRID MAP rides with it (§5.1): the window is one fixed size
+    // for every drawer, so a second drawer closing restores nothing anyone was
+    // depending on, and the close handler's own 220x50 becomes a no-op rather
+    // than the defect PR #96's handoff was built to cure. The deliberate
+    // un-pin is wave 3, under the fit guard, through an advertised ccd verb.
+    void deps.tmux.resizeWindow(id, 220, 50);
+    const p = spawnPty(id, cols, rows);
     const sub = p.onData((data) => socket.send(data));   // server->client: raw utf8 frames
     socket.on('message', (raw) => {
       try {
@@ -1478,15 +1552,86 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     });
   });
 
+  /**
+   * The drawer's scrollback, and the whole of why it is a READ.
+   *
+   * `tmux attach` puts the CLIENT on the alternate screen (every attach begins
+   * ESC[?1049h — measured off a real pty), where xterm has no scrollback and
+   * turns a wheel notch into arrow keys aimed at the pane. tmux holds the
+   * pane's history regardless, so the fix is to read that history rather than
+   * to make the wheel drive the pane.
+   *
+   * The PANE's own alt flag is a SEPARATE layer and it is not always 0 — an
+   * earlier note here said `alternate_on=0` on every live session; measured
+   * across ten, two read 1. It does not matter, and that is worth stating so
+   * nobody "fixes" it: entering the alternate screen SAVES the normal-screen
+   * grid rather than dropping it, so `capture-pane` without `-a` still answers
+   * out of history. Measured on a private socket — 400 lines written, then
+   * ESC[?1049h: `alternate_on` flips to 1 and `capture-pane -S -400` still
+   * returns all 353 retained history lines.
+   *
+   * WHY NOT copy-mode, which is the other way to scroll a pane: copy mode is
+   * PANE state, not client state — a second attached client is dragged into the
+   * scrolled view too — and while a pane is in it `send-keys -l` does not
+   * deliver. Measured against tmux 3.4 with a client attached: the literal
+   * write HUNG (killed at 5 s), the Enter after it was eaten by the mode, and
+   * the text never reached the program — i.e. every prompt this server injects
+   * would wedge for as long as the mode lasted, and nothing in this tree can
+   * see or clear it. `capture-pane` mutates nothing: pane mode and attached
+   * clients measure identical either side of it.
+   *
+   * NO `knownId` GATE, deliberately (so it is absent from `routes.test.ts`'s
+   * census by construction, not by exemption): this route's own answer IS the
+   * measurement of whether the pane is there, taken against the pane rather
+   * than against a registry listing, and it tells `gone` from `unmeasured`
+   * where `knownId` folds both into 404.
+   */
+  app.get('/api/sessions/:id/pane/history', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!isSafeSessionId(id)) return reply.code(400).send({ ok: false, error: 'bad-session-id' });
+    // THE MEASUREMENT COMES FIRST, AND IT SIZES THE READ (spec §5.2). PR #96
+    // captured 2000 lines and then asked how many there were, so a pane holding
+    // 47 paid for 2000 and the answer's own `lines` was a constant rather than
+    // a fact. One `list-panes -F` costs a single tmux round trip and turns the
+    // capture window into a measurement.
+    //
+    // A MEASURED ZERO KEEPS THE CONSTANT: `-S -0` starts at the screen's own
+    // top and returns nothing above it, which one layer up is indistinguishable
+    // from a failed read. The zero still travels as `scrollback: 0`, which is
+    // the fact the drawer refuses to open a layer on.
+    //
+    // AN UNMEASURABLE PROBE DOES NOT FAIL THE ROUTE. It falls back to the
+    // constant and OMITS the three measured fields — absence-permitting, and
+    // absent is not zero. The CAPTURE is what decides the status, because the
+    // capture is what the reader came for: `gone` -> 404, anything else -> 502
+    // carrying tmux's own message.
+    const probe = await deps.tmux.paneProbe(id);
+    const asked = probe.ok && probe.history > 0 ? probe.history : PANE_HISTORY_LINES;
+    const r = await deps.tmux.captureHistory(id, asked);
+    if (!r.ok) {
+      return r.reason === 'gone'
+        ? reply.code(404).send({ ok: false, error: 'gone' })
+        : reply.code(502).send({ ok: false, error: 'unmeasured', detail: r.detail });
+    }
+    // `width` rides along so the DRAWER can size its own scrollback against the
+    // pane's width rather than a constant multiplier: a stored line re-wrapped
+    // at the reader's width is at most ceil(paneWidth / readerCols) rows, and
+    // the census holds a 302-column window, so the multiplier is measured
+    // rather than assumed (spec §5.4).
+    return probe.ok
+      ? { ok: true, text: r.text, lines: asked, scrollback: probe.history, alternate: probe.alternate, width: probe.width }
+      : { ok: true, text: r.text, lines: asked };
+  });
+
   // Write routes: serialized per session through one KeyedQueue; injection
   // errors map to 409 with the {ok:false,...} body, unknown session ids to 404.
   // `sendDeps`/`askDeps` themselves are built ABOVE, ahead of
   // `registerCoordRoutes` — see that call site's own comment.
   //
-  // C0.2: `knownId` gates 17 request-id routes (13 POST, 4 GET — every one of
+  // C0.2: `knownId` gates 18 request-id routes (14 POST, 4 GET — every one of
   // them a per-request check, not a periodic sweep) plus the constructed-id
   // revival probe below, and previously called `readRegistry` — a 24-session
-  // fleet's baseline is 553 agent-WS operations [registry-read-census:fleet]
+  // fleet's baseline is 721 agent-WS operations [registry-read-census:fleet]
   // per call in remote mode, before conditional reconfirmation, in front of
   // every human keystroke — purely to answer "does
   // this id exist". It carries no identity of its own: `isSafeSessionId` is
@@ -1499,7 +1644,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // "known".
   //
   // Side benefit: this no longer runs `readRegistry`'s full per-session parse
-  // (23 [registry-read-census:fields] field reads; identity failures follow
+  // (30 [registry-read-census:fields] field reads; identity failures follow
   // `registry.ts`'s measured drop/degrade ladder), so a transient
   // failure to read one of a LIVE session's own sibling fields (e.g.
   // `workdir`) can no longer 404 a prompt typed into that session.
@@ -1542,6 +1687,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const res = await sendPrompt(sendDeps, id, body.text, { replaceDraft: body.replaceDraft === true, attachments });
     return res.ok ? res : reply.code(409).send(res);
+  });
+
+  /**
+   * The PWA pickers' write, LIVE (routing spec 2026-09-14 §5.3, slice 4, Task
+   * 5). A tap on the model or effort sheet no longer types `/model <alias>`
+   * or `/effort <level>` into the pane directly — it writes ONE field of the
+   * routing record and asks ccd to apply it, session-only keystrokes, once
+   * the write itself has landed. `no-routing-keystroke-from-server.test.ts`
+   * is the census that keeps a slash command from creeping back into this
+   * file or `pwa/src`.
+   *
+   * Session-gated like `/prompt` directly above (NOT in `auth/gate.ts`'s
+   * `EXEMPT` table) — a picker tap is exactly as human-driven as a typed
+   * prompt, and `sessions-route-route.test.ts` pins the absence.
+   *
+   * `{field, value}`, one pair, never the multi-field `{route: {...}}` body
+   * the operator's own spawn/dispatch doors take (`parseOperatorRoute`
+   * above): the picker taps ONE control, and `routeApply` builds ONE `--set`.
+   * `parseRouteFields` is reused for its SHAPE guard only — built from the
+   * single named field so its `Object.keys(...).length !== 1` arm can never
+   * see more than the one key this body can produce, defensive against the
+   * function's own general contract rather than reachable from this route.
+   *
+   * 501 `unsupported`, never a silent drop, when the box has not advertised
+   * `route-apply-v1` — the operator tapped a live control and would otherwise
+   * see `{ok:true}` for a write nobody applied (`parseOperatorRoute`'s own
+   * docstring makes the same argument for the spawn-time `--route`).
+   */
+  app.post('/api/sessions/:id/route', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
+    const body = (req.body ?? {}) as { field?: unknown; value?: unknown };
+    const parsed = parseRouteFields(typeof body.field === 'string' ? { [body.field]: body.value } : null);
+    if (!parsed.ok || Object.keys(parsed.route).length !== 1) {
+      return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    if (!capSupported(deps.fleetState, ROUTE_APPLY_CAP)) return reply.code(501).send({ ok: false, error: 'unsupported' });
+    const [field, value] = Object.entries(parsed.route)[0] as [string, string];
+    return runCcdOr502(reply, CCD_ARGV.routeApply(id, field, value, pwaDec(req)));
   });
 
   /**
@@ -1736,7 +1920,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // present but broken rather than absent.
     let held: AskRow | null;
     try {
-      held = coord.heldAskFor(id);
+      const read = coord.heldAskFor(id);
+      // D-2545: the SAME degrade as the throw arm just below, reached by a
+      // typed result. D-2169's promise is that the operator's own lock-screen
+      // press never becomes a 500, and a row this box cannot read is no more
+      // a reason to refuse the digit than a database it cannot open.
+      if (!read.ok) {
+        console.warn(`ccrc-server: heldAskFor(${id}) refused (${read.detail}) — answering the ` +
+          "operator's press unrecorded rather than refusing it");
+        return pressPlain();
+      }
+      held = read.ask;
     } catch (err) {
       console.warn(`ccrc-server: heldAskFor(${id}) failed ` +
         `(${err instanceof Error ? err.message : String(err)}) — answering the operator's press ` +
@@ -1885,6 +2079,49 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return res.ok ? { ok: true } : reply.code(502).send({ ok: false, stderr: res.stderr });
   };
 
+  /**
+   * `route?` on an OPERATOR's own body (`POST /api/sessions`, `POST
+   * /api/projects/:project/workspaces` — routing spec §5.3, slice 4).
+   * `refusePool`'s own shape just above: `reply: null` means the caller may
+   * proceed, with `.route` carrying the parsed value; anything else has
+   * ALREADY sent the reply.
+   *
+   * THIS DIFFERS FROM DISPATCH'S OWN RULE ON PURPOSE. `dispatch.ts`'s wave-1
+   * and wave-N≥2 arms OMIT a missing capability and JOURNAL it — an
+   * unattended coordinator wave must not fail outright on an old ccd. An
+   * operator who tapped a routing control and gets back today's plain argv,
+   * with no error and no journal a phone screen shows, has been silently
+   * downgraded and would never know it. So a bad shape is 400 and a box that
+   * cannot yet parse `--route` is 501 — never a quiet fallback to the argv
+   * `route === undefined` gets for free, which is `route === undefined`'s
+   * own case just below and the ONLY one that stays silent, because there was
+   * nothing asked for it to silently drop.
+   */
+  const parseOperatorRoute = (
+    reply: FastifyReply, route: unknown,
+  ): { reply: FastifyReply; route?: undefined } | { reply: null; route: RouteFields | null } => {
+    if (route === undefined) return { reply: null, route: null };
+    const parsed = parseRouteFields(route);
+    if (!parsed.ok) {
+      // `routeParseDetail` (`shared/api.ts`, fix round 2 finding #2): the
+      // refusal GRAMMAR is shared with `dispatch.ts`, which spelled the same
+      // template string out verbatim. The CURRENCY is not — a 400 reply here,
+      // a typed `DispatchOutcome` there — and that stays at each call site.
+      return { reply: reply.code(400).send({ ok: false, error: 'bad-request',
+        detail: routeParseDetail(parsed) }) };
+    }
+    // An empty `{}` names no field — `wsAdd`/`wsAddWorker`'s reason for
+    // treating it as `routeFlags(null)` would anyway: there is nothing to gate
+    // the 501 on, so it is never spent asking whether the box can parse a flag
+    // this call was never going to send. `routeFieldsOrNull` is that collapse,
+    // shared with `dispatch.ts` for the same reason the grammar above is.
+    const fields = routeFieldsOrNull(parsed.route);
+    if (fields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
+      return { reply: reply.code(501).send({ ok: false, error: 'unsupported' }) };
+    }
+    return { reply: null, route: fields };
+  };
+
   // F3 — the program-ready readiness join (program-leverage wave 3). Read ONCE
   // off the watcher, exactly the way `/api/fleet` above reads
   // `watcher?.currentPending()`: the expensive half (two skill files per
@@ -1902,7 +2139,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // that arm means "not swept yet" and nothing else. Same shape of reasoning
   // as D-1024: the arm is kept because a build that could not express it could
   // never report the day it becomes reachable.
-  app.get('/api/projects', async () => {
+  app.get('/api/projects', async (req, reply) => {
+    // `?class=` (routing spec, slice 4, Task 6): the placement FORECAST by
+    // class, so a caller can ask "who could take this project running that
+    // class of model today" rather than only the class-blind default.
+    // Validated BEFORE any read — a bad value is refused, never silently
+    // treated as `default` — and `default` (or an absent query) takes the
+    // pre-slice-4 path with no shares read at all, so the answer stays
+    // byte-identical to what this route has always sent.
+    const q = req.query as { class?: unknown };
+    let cls: ModelClass | 'default' = 'default';
+    // Absent entirely (no key at all) is the ONLY silent case — an empty
+    // `?class=` is present and outside the vocabulary just as much as a
+    // misspelled one, so it is refused rather than quietly read as `default`.
+    if (q.class !== undefined) {
+      if (typeof q.class === 'string' && (q.class === 'default' || (CLASSES as readonly string[]).includes(q.class))) {
+        cls = q.class as ModelClass | 'default';
+      } else {
+        return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'class: not in the vocabulary' });
+      }
+    }
     const listed = await listProjects(deps.io, deps.cfg);
     // The pool half, composed HERE and never inside `listProjects`: that is the
     // fleet read (a readdir of the projects root unioned with registry
@@ -1918,13 +2174,30 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       PROJECT_POOLS_REQUEST_BUDGET_MS,
     );
     const limits = await readLimits(deps.io, deps.cfg);
+    // ONE shares read for the whole request, exactly the way `limits` above
+    // is one `readLimits` for every row — and skipped entirely for the
+    // default class, so a caller that never asked for a class never pays for
+    // a read whose answer it could not use.
+    const shares = cls === 'default' ? { kind: 'absent' as const } : await readSharesMeasured(deps.io, deps.cfg.registryDir);
+    const nowS = Math.floor(Date.now() / 1000);
     const poolCells = (p: ProjectRow): Pick<ProjectRow, 'pool' | 'placement'> => {
       const pool = poolFor(poolsRead, p.name);
-      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool) };
+      return { pool, placement: projectPlacement(deps.cfg.roster, limits, pool, cls, shares, nowS) };
     };
+    // A project the sweep has not reached reads `unmeasured`, NOT `absent`.
+    // That includes every project with no workspaces — the sweep enumerates
+    // workspaces — and saying `absent` there would claim a measurement that
+    // never happened about four projects on this fleet that genuinely have no
+    // origin, making the true answer and the unasked question the same value.
+    const repos = watcher?.currentProjectRepos() ?? new Map<string, ProjectRepoWire>();
+    const repoCell = (p: ProjectRow): Pick<ProjectRow, 'repo'> =>
+      ({ repo: repos.get(p.name) ?? { state: 'unmeasured' } });
     const fleet = watcher?.currentReadiness();
     if (fleet === undefined) {
-      return { ...listed, projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p) })) };
+      return {
+        ...listed,
+        projects: listed.projects.map((p) => ({ ...p, readiness: null, ...poolCells(p), ...repoCell(p) })),
+      };
     }
     const coord = deps.coord;
     return {
@@ -1942,17 +2215,25 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         } catch {
           floor = 'unmeasurable';
         }
-        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p) };
+        return { ...p, readiness: projectReadiness(fleet, floor), ...poolCells(p), ...repoCell(p) };
       }),
     };
   });
 
   app.post('/api/sessions', async (req, reply) => {
-    const body = (req.body ?? {}) as { wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown };
+    const body = (req.body ?? {}) as {
+      wrapper?: unknown; project?: unknown; workdir?: unknown; enable?: unknown; crossPool?: unknown; route?: unknown;
+    };
     if (typeof body.wrapper !== 'string' || body.wrapper.length === 0
       || typeof body.project !== 'string' || body.project.length === 0) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // BEFORE `knownId`/the revival logic below (routing spec §5.3, slice 4):
+    // a bad `route` body must never reach ccd, on either the creation or the
+    // revival arm — see `parseOperatorRoute`'s own docstring for why an
+    // operator's ask is refused rather than silently dropped.
+    const routed = parseOperatorRoute(reply, body.route);
+    if (routed.reply !== null) return routed.reply;
     const workdir = typeof body.workdir === 'string' && body.workdir.length > 0 ? body.workdir : undefined;
     // ONE bounded registry listing, two questions: is this a revival, and, only
     // for an ordinary creation, what is this project's tag. The predicate keeps
@@ -1980,8 +2261,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
           return reply.code(501).send({ ok: false, error: 'unsupported' });
         }
         return runCcdOr502(reply, body.enable === false
-          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir)
-          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir));
+          ? CCD_ARGV.startCross(body.wrapper, body.project, workdir, routed.route)
+          : CCD_ARGV.enableCross(body.wrapper, body.project, workdir, routed.route));
       }
       const pool = poolFor(
         measured.poolsRead ? measured.pools : { listed: false },
@@ -1993,9 +2274,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // enable = start + systemd enable. The ternary picks the ENTRY rather than
     // interpolating a verb into an array, so both spellings are enumerated by
     // whitelist-subset.test.ts and neither can drift out of the agent's list.
+    //
+    // `routed.route` reaches EVERY arm below it — the crossPool branch just
+    // above (its own `startCross`/`enableCross` call), the creating arm and
+    // the revival arm (Task 2 made `start`/`enable` write the pairs whether
+    // the row is new or old) — so no arm this handler can take drops an
+    // operator's route (fix round 1, finding #1: the crossPool branch used to
+    // return before ever reaching `routed.route`, silently dropping it).
     return runCcdOr502(reply, body.enable === false
-      ? CCD_ARGV.start(body.wrapper, body.project, workdir)
-      : CCD_ARGV.enable(body.wrapper, body.project, workdir));
+      ? CCD_ARGV.start(body.wrapper, body.project, workdir, routed.route)
+      : CCD_ARGV.enable(body.wrapper, body.project, workdir, routed.route));
   });
 
   app.post('/api/sessions/:id/ensure', async (req, reply) => {
@@ -2005,7 +2293,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
 
   app.post('/api/projects/:project/workspaces', async (req, reply) => {
     const { project } = req.params as { project: string };
-    return runCcdOr502(reply, CCD_ARGV.wsAdd(project));
+    const body = (req.body ?? {}) as { route?: unknown };
+    const routed = parseOperatorRoute(reply, body.route);
+    if (routed.reply !== null) return routed.reply;
+    return runCcdOr502(reply, CCD_ARGV.wsAdd(project, routed.route));
   });
 
   /**
@@ -2393,7 +2684,23 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       //
       // `?.` — a server with coordination switched off archives exactly as it
       // did before this wave.
-      const runs = deps.coord?.openRunsForSession(id) ?? [];
+      const read = deps.coord?.openRunsForSession(id);
+      // D-2545, AND THE SUCCESS PATH IS UNCHANGED — the 409 still carries the
+      // full `OpenSibling[]` it has always carried, and the wave-1 ruling's
+      // "409 with no row detail" describes only the FAILURE arm below.
+      //
+      // On a refusal the archive is refused as CLAIMED with an EMPTY `runs`
+      // array: this box could not prove the workspace free, and the fail-shut
+      // direction at a destructive act is to refuse. The array is empty rather
+      // than absent because the field's shape must not change with the
+      // condition; the caller reads a refusal that names no row, which is the
+      // honest answer when no row was read.
+      //
+      // `?.` still means "coordination switched off archives exactly as before".
+      if (read !== undefined && !read.ok) {
+        return reply.code(409).send({ ok: false, error: 'run-open', runs: [] });
+      }
+      const runs = read?.siblings ?? [];
       if (runs.length > 0) return reply.code(409).send({ ok: false, error: 'run-open', runs });
     }
     const argv = CCD_ARGV.wsArchive(id, pwaDec(req));
@@ -2457,6 +2764,45 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     // `HOLD_EMPTY_REASON_TEXT`'s wording.
     if (typeof body.reason !== 'string' || body.reason.trim() === '') {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
+    }
+    // THE BUDGET, not a repair (D-2546). Nothing downstream truncates, crashes
+    // or mis-renders at any width — the census found no binding constraint, and
+    // the one discriminating reader (the session hook) degrades to silence by
+    // its own shape gate. `HOLD_ROUTE_REASON_MAX_BYTES` is an operator-ruled
+    // budget for free-form text in a registry field; its own docstring carries
+    // the warrant for the number, why it is a separate constant from the
+    // structurally identical `LC_REASON_MAX_BYTES`, and why it is a CONTRACT AT
+    // THIS CHOKEPOINT rather than an OS wall (`ccd ws-hold` stays directly
+    // callable on the box at any width).
+    //
+    // MEASURED ON THE UNTRIMMED STRING — the one `wsHold` is about to forward
+    // verbatim, not the trimmed copy the emptiness test above reads. A cap and
+    // the value it bounds must be the same value, or padding is a way to
+    // exceed it; the check above asks a different question ("did the operator
+    // say anything at all?") and is entitled to its own reading.
+    //
+    // BYTES, UTF-8, matching the constant's unit and NOT `HOLD_REASON_MAX_CHARS`'s
+    // characters — that one sizes the hook's readable display window, this one
+    // bounds an HTTP ingress.
+    //
+    // A DISTINCT CODE from the `bad-request` directly above, deliberately:
+    // "you sent the wrong shape" and "your reason is too long" are two
+    // conditions a caller acts on differently (retype versus shorten), and
+    // collapsing them is the overloaded-value-at-a-seam defect in its
+    // error-code form. `oversize` is the mail seam's own spelling for exactly
+    // this condition. REFUSED, never truncated: a shortened hold reason is a
+    // silently altered operator statement.
+    //
+    // 413, not 400 (D-2731): every other `oversize` in this tree answers 413 —
+    // the kickoff seam three hundred lines up and all four mail seams in
+    // `coord/routes.ts` — and a client that routes on `err.status` rather than
+    // on the slug (`AbandonSheet` does) reads a 400 as "you sent the wrong
+    // shape", which is the one distinction the paragraph above exists to keep.
+    if (Buffer.byteLength(body.reason, 'utf8') > HOLD_ROUTE_REASON_MAX_BYTES) {
+      return reply.code(413).send({ ok: false, error: 'oversize',
+        limit: HOLD_ROUTE_REASON_MAX_BYTES,
+        detail: `reason exceeds ${HOLD_ROUTE_REASON_MAX_BYTES} bytes — it is written verbatim into ` +
+          'the registry hold field and refused rather than shortened' });
     }
     const argv = CCD_ARGV.wsHold(id, body.reason, pwaDec(req));
     // Same verb generation and same skew answer as `/archive`/`/restore`

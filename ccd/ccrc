@@ -126,14 +126,92 @@ esac
 # `-T` treats a symlink-to-directory as the NAME and replaces it, where
 # `[ -d ]` follows the link and would refuse a rename GNU performs.
 #
+# A SYMLINK-TO-DIRECTORY DEST IS THE ONE SHAPE GNU'S `-T` REPLACES THAT BARE
+# `mv -f` DOES NOT (D-2187): measured on GNU coreutils 9.4, `mv -f -- src dest`
+# with `dest` a symlink to a directory returns 0 with `dest` still the same
+# symlink and `src` moved INSIDE the linked directory — the postcondition
+# (`0 iff src is now at dest`) is false while the exit code says otherwise.
+# Every other destination shape (symlink-to-file, dangling symlink, plain
+# file) already replaces correctly; only this one needs help, so the
+# `rm -f -- "$2"` below is scoped to exactly that shape — guarded on BOTH
+# `-L` and `-d`, never unconditional — not a general unlink-before-rename.
+#
 # NOT ATOMIC THE WAY `-T` IS, and written down rather than hidden: between the
 # test and the rename another process could create a directory at the
-# destination. Nothing in ccd can reach that window — every destination is
-# `$REG/<id>.<field>`, and this function is its only writer — so the race is
-# unreachable here rather than tolerated.
+# destination. Measured repo-wide (D-2189): this function has EIGHT
+# executable call sites across ccd and ccrc — the paragraph this replaces
+# claimed it was the destination's ONLY WRITER, which undercounted the call
+# sites themselves, not a cardinal it ever stated. The eight, each named WITH
+# ITS FILE since this comment is one shared text mirrored into both: (in
+# EACH file) `_svc_write_session_plist`, to a launchd plist under
+# `$HOME/Library/LaunchAgents` — outside `$REG` entirely; (`ccd/ccd` only)
+# `_reg_set` (to `$REG/<id>.<field>`, canonical), `_lc_err` (to
+# `$REG/.lifecycle/errors`, a subdirectory), `cmd_project_pool` (to
+# `$REG/pools/<project>`, a subdirectory) and `cmd_supervise` (to
+# `$REG/.<id>.starts`, dot-leading); (`ccd/ccrc` only) `_acct_mark_off` (to
+# `$REG/<id>-disabled`, a marker) and `_acct_rehome` (to `$REG/<id>.<field>`,
+# canonical). Only `_reg_set` and `_acct_rehome` write the canonical shape;
+# the other six write elsewhere under `$REG` or outside it entirely. The
+# race stays unreachable TODAY: every directory that sits
+# at one of the eight destinations exists BEFORE this function is ever
+# called (test fixtures included), so the refusal guard's `[ -d ]` arm sees
+# it and returns 1 — the race this paragraph is about is a directory
+# appearing INSIDE the window between the test and the rename, not one any
+# of the eight call sites creates. A measured fact about today's call sites,
+# not a guarantee about future ones.
+# THE INSTRUMENT FOR THE FIXTURE HALF, because a sentence about fixtures
+# that names no way to re-measure itself is the shape F14 ruled against and
+# F3 then caught again:
+#   git grep -nE "mkdirSync\(.*(REG\(\)|cc-sessions)" -- 'server/test/*.ts'
+# Every hit that lands on a `$REG/<id>.<field>` path rather than on `$REG`
+# itself is one to read — today `<id>.hold` (`ccd-hold`, `ccd-auto-swap-hold`)
+# and `<id>.<WEDGE>` (`ccd-lifecycle-purge`), all of them in per-test SETUP,
+# which is precisely the ordering claimed above. This does not bound future
+# fixtures; it is a command that ANSWERS, which is what the claim lacked.
+#
+# ONE MORE PRICE, undisclosed until now: the `rm` below runs BEFORE the `mv`,
+# so a call with `dest` a symlink-to-directory and `src` absent leaves the
+# destination GONE, where the pre-fix behavior left the symlink intact
+# (measured against both revisions). That price is conditional on the unlink
+# SUCCEEDING — `rm -f -- "$2" || return 1` below refuses rather than falling
+# into the `mv` on a failed unlink (D-2187's own recurrence, closed this
+# round: the unguarded fall-through moved `src` INSIDE the linked directory
+# and returned 0), so a failing `rm` leaves the symlink in place and answers
+# 1, never this price. Reachability from `_reg_set` is nil today through the
+# `ln -s` census (scoped to a literal `ln -s` call in the shipped files, not
+# to test fixtures) — but that census cannot see a `rename(2)`/`os.replace`
+# of an EXISTING symlink onto this path, only an `ln -s` invocation, which is
+# a narrower method than the sentence it was backing (this file's own
+# `_pr_py`, in ccd only, has such a path — see its `put()`). Narrowed to what
+# the census actually measured, not a proof that no symlink is ever created
+# here by any code path in either file. THE CONDITION, not a verdict with an
+# expiry date nothing re-measures: this price is real for any caller whose
+# destination's identity matters and whose `src` may be absent — check a
+# new call site against THAT, not against "reachability is nil today", which
+# was true of the eight above only until one of them changed shape. And no
+# symlink-to-DIRECTORY is created at any of the eight BY ANY `ln -s` IN THE
+# SHIPPED FILES — which is the whole of what the census measured, and is
+# strictly narrower than the "anywhere in the tree" this sentence claimed
+# until F14 (review run 69): the census's SCOPE IS THE SHIPPED FILES, and
+# that one reason is the whole of it. A SECOND reason stood here and was
+# FALSE (F3, review run 71) — it said fixtures create links with
+# `symlinkSync`, "which no `ln -s` scan can see". Measured:
+# `git grep -c -F 'ln -s' -- 'server/test/*.ts'` answers 30 across 13 files,
+# three of them in the file this wave itself created. It is deleted and NOT
+# replaced: one true reason is the whole warrant, and stacking a third is
+# how this paragraph acquired a false one twice.
+# NO CLAIM IS MADE ABOUT FIXTURES HERE, and not for
+# cost: an absence over them would rest on a census nothing in this tree
+# maintains, so it would go false the moment one is added. The plan records
+# what run 69 measured about them, and when. What was wrong was the WARRANT,
+# not the conclusion — the D-2189 shape inside the paragraph fixing D-2189.
+# Stated as measured, the price is real for the
+# one destination shape this `rm` covers, so it is disclosed here rather than
+# only in a mutation table.
 _plat_mv_notdir() {   # <src> <dest> -> 0 iff <src> is now at <dest>
   if [ "$CCD_OS" = darwin ]; then
     if [ ! -L "$2" ] && [ -d "$2" ]; then return 1; fi
+    if [ -L "$2" ] && [ -d "$2" ]; then rm -f -- "$2" || return 1; fi
     mv -f -- "$1" "$2"
   else
     mv -fT -- "$1" "$2"
@@ -410,15 +488,126 @@ _plat_cgroup() {
 # fired and the sleeper that lost and was reaped, which is the bug that makes
 # a hand-rolled timeout report success on expiry.
 _plat_timeout() {   # <seconds> <cmd> [args...]
-  local bin
+  local secs="$1" bin rc=0 t0 el grace dl stamp pid watcher
+  # THE GRACE BETWEEN THE DEADLINE'S TERM AND THE KILL THAT ENFORCES IT, and
+  # both clamps are MEASURED rather than chosen. `-k 0` does not mean "kill at
+  # once": GNU accepts it and then never escalates at all - measured, a
+  # one-second deadline with `-k 0` sat through a TERM-ignoring child's full
+  # five seconds and still answered 124 - so a caller reaching for "no grace"
+  # would turn the whole bound off with no error. A value that is not a whole
+  # number is worse: GNU exits 125 in five milliseconds WITHOUT RUNNING THE
+  # COMMAND, and one bad environment variable would then read, at these call
+  # sites simultaneously, as a wedged tmux, an unwalkable reap scan and a gh
+  # that needs re-authenticating. The ceiling is `ccd-account-auth`'s own pump
+  # backstop (`CCRC_AUTH_PUMP_GRACE`, 10s): this escalation must finish INSIDE
+  # it, or that last resort becomes the first one. `10#` because a value like
+  # `08` is not octal here, and a bare `$(( 08 ))` writes a bash error to the
+  # stderr this call's caller may be capturing.
+  grace="${CCD_TIMEOUT_KILL_AFTER:-3}"
+  case "$grace" in ''|*[!0-9]*) grace=3 ;; esac
+  grace=$(( 10#$grace ))
+  [ "$grace" -lt 2 ] && grace=2
+  [ "$grace" -gt 8 ] && grace=8
+  # WHEN OUR OWN ESCALATION CAN HAVE LANDED - and nothing else is claimed. The
+  # binary sends TERM at the deadline and waits the WHOLE grace before the
+  # KILL, so an escalated run cannot return before `secs + grace`, and an outer
+  # signal that beat the escalation cannot return after it. A deadline this
+  # shim cannot read as whole seconds (empty, suffixed, or so long the
+  # arithmetic would wrap) leaves `dl` empty, and then no `-k` is passed and no
+  # code is reinterpreted: that call degrades to exactly today's behaviour
+  # rather than to a guess.
+  dl=''
+  case "${secs%%[.,]*}" in
+    ''|*[!0-9]*|??????????*) : ;;
+    *) dl=$(( 10#${secs%%[.,]*} + grace )) ;;
+  esac
+  t0=$SECONDS
   for bin in timeout gtimeout; do
-    if command -v "$bin" >/dev/null 2>&1; then "$bin" "$@"; return $?; fi
+    command -v "$bin" >/dev/null 2>&1 || continue
+    # `-k` IS PROVED, NEVER ASSUMED, AND THE PROOF IS THE CHILD'S OWN BYTES.
+    # An unknown flag measured rc 125 on GNU, rc 1 on busybox and rc 127 with
+    # no `printf` to run - and rc 1 lands on NO branch at any of the twenty
+    # call sites, so there it would read as an ordinary command failure.
+    # Asking "did this exit 0" would therefore believe a parser that swallowed
+    # the flag; asking "did the COMMAND run" cannot, because only a parser that
+    # consumed `-k`, consumed its argument and then exec'd the command can
+    # print these bytes. Measured: GNU 9.4 and busybox 1.36.1 both answer
+    # `ccd-k-ok`; a wrapper that rejects the flag with rc 1 answers nothing and
+    # is refused, and the argv it logged shows no `-k` ever reached it.
+    # The probe runs `printf`, never a caller's command, and that is what makes
+    # a probe possible here at all: the commands below include `gh pr create`
+    # and a billed `claude -p` turn, so "pass `-k`, and retry without it on an
+    # ambiguous code" is not available at any price.
+    if [ -z "${_CCD_TIMEOUT_K:-}" ]; then
+      if [ "$("$bin" -k 1 1 printf ccd-k-ok 2>/dev/null)" = ccd-k-ok ]; then
+        _CCD_TIMEOUT_K=yes
+      else
+        _CCD_TIMEOUT_K=no
+      fi
+    fi
+    # `2>&6 6<&-` ON THE COMMAND AND `6>&2 2>/dev/null` ON THE GROUP, and it is
+    # the difference between a reason and a corrupted one. When the KILL lands,
+    # the binary reports it by re-raising SIGKILL on ITSELF, so THIS shell
+    # prints its own job-status line - `<file>: line N: <pid> Killed ...`.
+    # MEASURED: at a call carrying its own redirections that line lands in the
+    # caller's stderr file, which `_ws_nested_checkouts` and
+    # `_ws_sensitive_inside` read back as `$err`; and at `ccd-account-auth`'s
+    # backgrounded `2>&1` it lands in `$AUTH_RUN/out`, the FIFO `_auth_pump`
+    # parses line by line. Command substitutions are immune (measured clean in
+    # all three shapes), which is why nobody had seen it: until this change the
+    # line needed an OUTER signal to appear at all. Handing the child the
+    # ORIGINAL stderr on fd 6 and silencing this shell's own keeps every byte
+    # the child wrote and drops the line about the shell's job - measured both
+    # ways. `6<&-` closes fd 6 IN THE CHILD, so nothing inherits a descriptor
+    # it was not handed; fd 6 is free, the only numbered descriptors these
+    # files use being 3, 4, 7, 8 and 9.
+    if [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ]; then
+      { "$bin" -k "$grace" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    else
+      { "$bin" "$@" 2>&6 6<&-; rc=$?; } 6>&2 2>/dev/null
+    fi
+    el=$(( SECONDS - t0 ))
+    # 137 BECOMES 124 ONLY ON PROOF, AND 137 IS NOT THE PROOF. coreutils'
+    # `timeout.c` relabels any status to 124 once its deadline has fired, with
+    # ONE deliberate exception - `sig == SIGKILL && kill_after`, commented
+    # "Allow users to distinguish if command was forcibly killed" - and that
+    # exception is the whole reason a 137 appears here. No call site can act on
+    # the distinction it exposes, while 137 ALREADY has a meaning in this tree
+    # ("an outer kill landed", `_lc_obs` says so in as many words), so
+    # propagating it would give one number two meanings. The CLOCK separates
+    # them, and only it can: our escalation cannot land before `secs + grace`,
+    # an outer kill that beat it cannot land after. MEASURED, the real binary
+    # SIGKILLed at t=3s of a two-second deadline with a three-second grace: rc
+    # stays 137 and the orphaned child ran to completion - the honest answer,
+    # because our deadline never got to enforce anything. `$SECONDS` is whole
+    # seconds (the declared bash floor is 4.4 and `EPOCHREALTIME` is 5.0), so
+    # the boundary is soft by up to one second in the direction of claiming an
+    # outer kill that landed in the last second before our own; both codes
+    # refuse at every call site, so that is a label, not a decision.
+    if [ "$rc" = 137 ] && [ "${_CCD_TIMEOUT_K:-}" = yes ] && [ -n "$dl" ] \
+       && [ "$el" -ge "$dl" ]; then
+      rc=124
+    fi
+    return "$rc"
   done
-  local secs="$1"; shift
-  local stamp; stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
+  shift
+  # THE PURE-BASH ARM DOES NOT ESCALATE, AND THAT IS A RULING, NOT AN OVERSIGHT
+  # (D-2764). The only escalation available here is a watcher subshell issuing
+  # `kill -KILL "$pid"`, and bash reaps background children ASYNCHRONOUSLY -
+  # measured: a child is unwaitable two seconds after it exits with no `wait`
+  # ever run - so a sibling watcher genuinely can signal a RECYCLED pid. On
+  # this fleet that pid could be a `ccd supervise`, a `claude-session@*` child
+  # or tmux, all three of which CLAUDE.md's SAFETY section forbids touching,
+  # and `ccrc-account.test.ts` deliberately contains PATH to force this arm on
+  # whatever box runs the suite - including the fleet box. A stamp handshake
+  # narrows that window but cannot be made to go red under mutation, which is
+  # an argument rather than a mechanism. So this arm keeps today's single TERM
+  # and reports what it always did; `ccd-plat-timeout.test.ts` text-scans all
+  # three copies for `kill -9`/`kill -KILL` so the ruling is a mechanism too.
+  stamp="${TMPDIR:-/tmp}/.ccd-timeout.$BASHPID.$$.stamp"
   rm -f -- "$stamp" 2>/dev/null
   "$@" &
-  local pid=$! rc=0 watcher
+  pid=$!
   # `|| exit 0` ON THE SLEEP, and it is the difference between a deadline and
   # a guillotine. If `sleep` is absent or refuses — a contained PATH, a box
   # with no coreutils — it returns INSTANTLY, and without this guard the
@@ -5426,10 +5615,11 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # PER-HOME, BY THE VERB, NOT BY THE INSTALL SPINE (spec §5). `_inst_dirs` (:6613),
   # `_inst_hooks` (:6812), `_inst_skills` (:6850) and `_inst_graphify_skill` (:6865) take
   # no arguments by contract and converge EVERY rostered home; this verb has one home to
-  # provision, and the four standalone scripts all take `--homes <dir>…`
+  # provision, and the five standalone scripts all take `--homes <dir>…`
   # (install-session-hooks.sh:63, and the identical line at
   # install-coordinator-skill.sh:36, install-worker-skill.sh:36,
-  # install-graphify-skill.sh:77). So the scripts are called directly,
+  # install-reviewer-skill.sh:31, install-graphify-skill.sh:77). So the
+  # scripts are called directly,
   # `ccrc-install.test.ts:1812-1893`'s 23-entry `_inst_*` spine is untouched, and no
   # agent restart is needed — every one of them is idempotent per home.
   local dir="$1" burl="$2" models="$3" n step stands=""
@@ -5467,7 +5657,7 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   # either would publish a write that did not happen; appending nothing would hide a step
   # that RAN. So the key's vocabulary carries both words and the array's length never changes.
   #
-  # The four installer tokens below mean something weaker on purpose — "ran and
+  # The five installer tokens below mean something weaker on purpose — "ran and
   # returned 0" — because each is a separate process converging a home and this verb
   # cannot see what it wrote. The merge is this verb's OWN write, so it can say which.
   if [ -n "$ACCT_SETTINGS_WRITTEN" ]; then
@@ -5477,10 +5667,11 @@ _acct_provision() {   # <cfgdir> <base-url> <models-json> -> appends to ACCT_PRO
   fi
   # THE INSTALLED COPIES under $HOME/.cc-sessions, never the tree's — `_inst_hooks`'
   # rule (:6799-6804): "the INSTALLED copy, never the one in the tree … It is also the
-  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER:
-  # the worker skill points at ../ccrc-coordinator/references/… (`_inst_skills`, :6841-6844).
+  # copy every future run, and every operator, will reach." COORDINATOR BEFORE WORKER
+  # BEFORE REVIEWER: the worker skill points at ../ccrc-coordinator/references/…, and
+  # the reviewer skill points into the same tree (`_inst_skills`, :6841-6844).
   for n in install-session-hooks.sh install-coordinator-skill.sh \
-           install-worker-skill.sh install-graphify-skill.sh; do
+           install-worker-skill.sh install-reviewer-skill.sh install-graphify-skill.sh; do
     [ -x "$HOME/.cc-sessions/$n" ] \
       || _acct_refuse 1 provision-failed "the installer $HOME/.cc-sessions/$n is missing or not executable, so this lane's home cannot be converged — and 'ccrc install' is what places it there. $stands"
     bash "$HOME/.cc-sessions/$n" --homes "$dir" \
@@ -5580,7 +5771,7 @@ _acct_mark_off() {   # <id> <what-still-stands> — the regular marker ccd reads
 # supplies. The costs are asymmetric: one inert file against unmeasured work.
 #
 # NOTHING AFTER THE ROSTER ENTRY ROLLS BACK. `_inst_accounts_sh`, `cmd_wrappers`, the
-# config dir and the four installers are roster-driven CONVERGERS — `ccrc install`'s
+# config dir and the five installers are roster-driven CONVERGERS — `ccrc install`'s
 # own spine — so a failure among them leaves a lane rostered and not yet converged,
 # and the cure is to converge again. Un-writing an operator's roster entry to tidy up
 # a failed chmod would be the destructive act, on the one file this CLI calls theirs.
@@ -6948,7 +7139,7 @@ _acct_unprovision() {   # <id> <what-still-stands> -> ACCT_REMOVE_CFG
   if [ -d "$cfg/skills" ]; then
     real="$(realpath "$cfg/skills" 2>/dev/null)" \
       || _acct_refuse 1 skills-unreadable "could not resolve $cfg/skills, so no skill can be removed safely. $stands"
-    for name in ccrc-coordinator ccrc-worker graphify; do
+    for name in ccrc-coordinator ccrc-worker ccrc-reviewer graphify; do
       { [ -e "$real/$name" ] || [ -L "$real/$name" ]; } || continue
       if [ -L "$real/$name" ] || [ -f "$real/$name" ]; then
         rm -f -- "$real/$name" \
@@ -9329,7 +9520,7 @@ _inst_atomic() {   # <src> <dest> <mode>
 # contract for that shape, and it keeps the three properties the file-level
 # helper's callers already depend on:
 #
-#   1. IT COMPARES FIRST. `diff -r -q` is the identical check both skill
+#   1. IT COMPARES FIRST. `diff -r -q` is the identical check all three skill
 #      installers make before they touch a converged home, so "nothing to do"
 #      costs one walk and rewrites nothing — the measurement an operator uses to
 #      see what a run actually did (`_inst_accounts_sh`'s rule, applied to a
@@ -9354,7 +9545,7 @@ _inst_tree_copy() {   # <src-dir> <dest-dir>
   if [ -d "$dest" ] && diff -r -q "$src" "$dest" >/dev/null 2>&1; then
     return 0
   fi
-  # `.tmp.$$` and `.old.$$` are the two skill installers' own staging names, and
+  # `.tmp.$$` and `.old.$$` are the three skill installers' own staging names, and
   # `.tmp.` is the spelling `_inst_atomic`'s stray sweep and the test suite's
   # both already look for.
   tmp="$dest.tmp.$$"
@@ -9503,6 +9694,10 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # `deploy/gen-wrappers.mjs`'s `TOOLCHAIN_EXECUTABLES` knows the name, or
     # the orphan scan in `_inst_wrappers` (every role) would report it.
     _inst_atomic "$tree/ccd/ccd-graph-sweep" "$bin/ccd-graph-sweep" 755
+    # Routing slice 0: the usage accounting sweep and its scanner, on the sweep's
+    # exact terms — every role, systemd only (its only runner is a timer).
+    _inst_atomic "$tree/ccd/ccd-usage-sweep" "$bin/ccd-usage-sweep" 755
+    _inst_atomic "$tree/ccd/ccd-usage-sweep.py" "$bin/ccd-usage-sweep.py" 755
     # The account-health probe, on the sweep's exact terms: every ROLE, but not
     # Darwin — its only runner is a systemd timer, and a binary whose runner
     # never fires would be the same no-op cap-scopes' own comment warns about.
@@ -9525,9 +9720,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health and no ccd-telemetry-keepalive — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive and no ccd-usage-sweep — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep and the ccrc launcher in \$HOME/.local/bin"
   fi
 }
 
@@ -9538,6 +9733,12 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # of them was running on the live fleet host with nothing installing it.
   local tree="$BOX_TREE_DIR"
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
+  # The compaction card's helper, 0644 (compaction-card spec §2): a script
+  # `node` runs under the hook's `timeout`, never executed directly. Before the
+  # hook for the reason deploy.sh's agent lane states at its own copy — the
+  # hook's guard for it is silent, so only this order makes a half-finished
+  # converge fail in the harmless direction.
+  _inst_atomic "$tree/ccd/compact-card.mjs" "$HOME/.cc-sessions/compact-card.mjs" 644
   _inst_atomic "$tree/ccd/session-hook.sh" "$HOME/.cc-sessions/session-hook.sh" 755
   _inst_atomic "$tree/ccd/install-session-hooks.sh" "$HOME/.cc-sessions/install-session-hooks.sh" 755
   _inst_atomic "$tree/deploy/notify.sh" "$HOME/.cc-sessions/notify.sh" 755
@@ -9550,7 +9751,7 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   _inst_atomic "$tree/ccd/tmux.conf" "$HOME/.tmux.conf" 644
   _inst_keep_aside "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh"
   _inst_atomic "$tree/ccd/statusline-command.sh" "$HOME/.claude/statusline-command.sh" 755
-  echo "install: files: session hooks, notify.sh, tmux.conf and the statusline in place"
+  echo "install: files: session hooks, the compaction-card helper, notify.sh, tmux.conf and the statusline in place"
 }
 
 # ── _inst_stamp_shipped — the release-artifact arm (stage 4, Task 6) ──────
@@ -9903,6 +10104,8 @@ _inst_units() {
   if [ "$INST_ROLE" != server ]; then
     _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.service" 644
     _inst_atomic "$tree/deploy/systemd/ccd-graph-sweep.timer" "$dir/ccd-graph-sweep.timer" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccd-usage-sweep.timer" "$dir/ccd-usage-sweep.timer" 644
     # The account-health probe's pair, role-gated for its own reason rather than
     # by imitation: a server box holds no wrapper HOMEs and no ~/.cc-secrets, so
     # there is no credential on it to measure.
@@ -9989,6 +10192,12 @@ _inst_enable() {
   # sweep is convenience, not the guardrail `ccd-cap-scopes.timer` is.
   [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-graph-sweep.timer \
     || echo "install: graphify: could not enable ccd-graph-sweep.timer — run: systemctl --user enable --now ccd-graph-sweep.timer" >&2
+  # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: the
+  # usage-accounting sweep is a reading, not the guardrail `ccd-cap-scopes.timer`
+  # is, so a systemd that will not take this one timer must not turn an
+  # otherwise converged install into a failed one.
+  [ "$INST_ROLE" = server ] || systemctl --user enable --now ccd-usage-sweep.timer \
+    || echo "install: usage-sweep: could not enable ccd-usage-sweep.timer — run: systemctl --user enable --now ccd-usage-sweep.timer" >&2
   # Same gate, same DEGRADE-rather-than-die idiom as the sweep above it: a
   # health probe is a reading, not the guardrail `ccd-cap-scopes.timer` is, so a
   # systemd that will not take this one timer must not turn an otherwise
@@ -10307,17 +10516,18 @@ _inst_hooks() {
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
 }
 
-# ── _inst_skills — the two skills, placed and then INSTALLED ──────────────
+# ── _inst_skills — the three skills, placed and then INSTALLED ────────────
 # THE ASYMMETRY THIS STEP CLOSES. `deploy/deploy.sh agent <host>` has shipped
 # the coordinator skill to the fleet host since Build 7, and now ships the
-# worker skill beside it — while a box that installed ITSELF got NEITHER,
-# because no step of this verb had ever heard of a skill. That gap is not
-# cosmetic. Both installers exist because skills resolve per
-# `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap while its id does
-# not: a coordinator (or a worker) is placed with no pinned account, so it has
-# to find its skill in EVERY rostered home. On a self-installed box it found one
-# in none of them, and the failure is silent — the model does not announce that
-# it has no protocol, it improvises one.
+# worker and reviewer skills beside it — while a box that installed ITSELF
+# got NONE OF THEM, because no step of this verb had ever heard of a skill.
+# That gap is not cosmetic. All three installers exist because skills
+# resolve per `CLAUDE_CONFIG_DIR`, and a session's ACCOUNT drifts on swap
+# while its id does not: a coordinator (or a worker, or a reviewer) is
+# placed with no pinned account, so it has to find its skill in EVERY
+# rostered home. On a self-installed box it found one in none of them, and
+# the failure is silent — the model does not announce that it has no
+# protocol, it improvises one.
 #
 # TWO HALVES PER SKILL, IN DEPLOY'S OWN ORDER. The TREE is placed under
 # `~/.cc-sessions/<name>` — the same path `deploy.sh` rsyncs it to, which is
@@ -10333,7 +10543,8 @@ _inst_hooks() {
 # THE COORDINATOR GOES FIRST, for deploy.sh's reason: the worker skill carries
 # no `references/` of its own and points a live worker at the coordinator's
 # installed tree by relative path (`../ccrc-coordinator/references/…`, both
-# skills side by side under one config dir).
+# skills side by side under one config dir) — and the reviewer skill, third,
+# points into the same tree.
 #
 # ITS FAILURE IS FATAL, exactly as `_inst_hooks`' is. Each installer converges
 # per home, backs up what it is about to replace and rolls back a swap it could
@@ -10342,13 +10553,13 @@ _inst_hooks() {
 _inst_skills() {
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
-  for name in coordinator-skill worker-skill; do
+  for name in coordinator-skill worker-skill reviewer-skill; do
     _inst_tree_copy "$tree/ccd/$name" "$HOME/.cc-sessions/$name"
     _inst_atomic "$tree/ccd/install-$name.sh" "$HOME/.cc-sessions/install-$name.sh" 755
     CCRC_SKILL_SRC="$HOME/.cc-sessions/$name" bash "$HOME/.cc-sessions/install-$name.sh" \
       || _ccrc_die "install-$name.sh refused — read its lines above; it converges one account's skill directory at a time and rolls back a swap it could not finish, so no home was left without the skill it already had"
   done
-  echo "install: skills: ccrc-coordinator and ccrc-worker in each account's skills directory"
+  echo "install: skills: ccrc-coordinator, ccrc-worker and ccrc-reviewer in each account's skills directory"
 }
 
 # The graphify skill is NOT one of _inst_skills' names on purpose (spec §B):
@@ -10854,6 +11065,7 @@ _upd_backup() {
   _upd_backup_copy "$BOX_TREE_DIR/agent/dist"      agent-dist
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
+  _upd_backup_copy "$HOME/.cc-sessions/compact-card.mjs" compact-card.mjs
   _upd_backup_copy "$HOME/.cc-sessions/notify.sh"  notify.sh
   # R34 (final whole-branch review): since `ccrc memory --apply`,
   # `~/.ccrc/memory` is the SOLE live copy of every project's durable
@@ -11361,6 +11573,7 @@ _uninst_units() {
     : "${DBUS_SESSION_BUS_ADDRESS:=unix:path=${XDG_RUNTIME_DIR}/bus}"; export DBUS_SESSION_BUS_ADDRESS
     for u in "${BOX_UNIT_NAMES[@]}" ccd-cap-scopes.timer ccd-cap-scopes.service \
       ccd-graph-sweep.timer ccd-graph-sweep.service \
+      ccd-usage-sweep.timer ccd-usage-sweep.service \
       ccd-account-health.timer ccd-account-health.service \
       ccd-telemetry-keepalive.timer ccd-telemetry-keepalive.service \
       ccrc-models.timer ccrc-models.service; do
@@ -11374,6 +11587,7 @@ _uninst_units() {
   rm -f -- "$dir/${BOX_UNIT_NAMES[0]}" "$dir/${BOX_UNIT_NAMES[1]}" \
     "$dir/claude-session@.service" "$dir/ccd-cap-scopes.service" "$dir/ccd-cap-scopes.timer" \
     "$dir/ccd-graph-sweep.service" "$dir/ccd-graph-sweep.timer" \
+    "$dir/ccd-usage-sweep.service" "$dir/ccd-usage-sweep.timer" \
     "$dir/ccd-account-health.service" "$dir/ccd-account-health.timer" \
     "$dir/ccd-telemetry-keepalive.service" "$dir/ccd-telemetry-keepalive.timer" \
     "$dir/ccrc-models.service" "$dir/ccrc-models.timer" \
@@ -11460,7 +11674,7 @@ _uninst_wrappers() {
     # adds `ccd-account-auth` on those same terms again — id-shaped, a
     # WRAPPER_ID_RE match, and `_inst_bins`' only executable that lands on
     # BOTH platform arms, so it is the one most likely to be met here.
-    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth) continue ;; esac
+    case "$name" in ccd|ccrc|ccd-cap-scopes|ccd-graph-sweep|ccd-account-health|ccd-telemetry-keepalive|ccd-account-auth|ccd-usage-sweep) continue ;; esac
     [[ "$name" =~ $WRAPPER_ID_RE ]] || continue
     verdict="$(node --no-warnings --input-type=module -e '
 import { readFileSync, statSync } from "node:fs";
@@ -11496,12 +11710,14 @@ _uninst_cc_sessions() {
     return 0
   fi
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
+    "$reg/compact-card.mjs" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
+    "$reg/install-reviewer-skill.sh" \
     "$reg/install-graphify-skill.sh" \
     || _ccrc_die "removing ccrc's files under $reg failed"
-  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" \
+  rm -rf -- "$reg/coordinator-skill" "$reg/worker-skill" "$reg/reviewer-skill" \
     || _ccrc_die "removing the skill trees under $reg failed"
-  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, both skill trees); the registry rows and operator switches stay"
+  echo "uninstall: ~/.cc-sessions: ccrc's own artifacts removed (hooks, notify, the three skill trees); the registry rows and operator switches stay"
 }
 
 # ── _uninst_graphify_skills — the per-home graphify skill directories ─────
@@ -11557,32 +11773,35 @@ _uninst_graphify_skills() {
 _uninst_tree_bins() {
   rm -rf -- "$BOX_TREE_DIR" \
     || _ccrc_die "removing $BOX_TREE_DIR failed"
-  # `ccd-cap-scopes` is `_inst_bins`' third executable: an uninstall that
-  # removed its units (above) and left the binary would strand an orphan on
-  # PATH for ever (spec §7 predates the third bin; the ledger records this).
-  # `ccd-graph-sweep` is the fourth (graphify Task 10/fix-round F2, same
-  # reasoning exactly — its own units were already removed by `_uninst_units`
-  # above, and leaving the binary behind orphans it the same way).
-  # `ccd-account-health` is the FIFTH ccrc-OWNED executable, `ccd-telemetry-
-  # keepalive` the SIXTH and `ccd-account-auth` the SEVENTH, and the rule the
-  # four above them follow binds here identically: an uninstall that removed
-  # its units and left the binary orphans it on PATH for ever. (`graphify`,
-  # below, keeps its own rule and its own paragraph — it is the EIGHTH entry
-  # in this census and the only one that is not ccrc's own binary.)
+  # ONE RULE, and the `rm -f` below IS the census: every executable
+  # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
+  # uninstall that removed a binary's units (above) and left the binary itself
+  # strands an orphan on PATH for ever. That covers `ccd-cap-scopes` (spec §7
+  # predates it), `ccd-graph-sweep` (graphify Task 10/fix-round F2),
+  # `ccd-account-health`, `ccd-telemetry-keepalive`, `ccd-account-auth` and the
+  # usage sweep's PAIR — `ccd-usage-sweep` and its Python engine
+  # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
+  # must therefore be removed as two. (`graphify`, below, keeps its own rule
+  # and its own paragraph: it is the one name in this census that is not
+  # ccrc's own binary.)
   #
-  # This census is HAND-KEPT and has now been caught stale twice (D-2594):
-  # D-1347 the
-  # first time, and again at the account wave's merge, where main had added
-  # `ccd-telemetry-keepalive` to the `rm` below without amending the sentence
-  # that counts it — so the paragraph said SIXTH about a list of seven. The
-  # uninstall suite measures the LIST; nothing measures these ORDINALS, which
-  # is why only a reader catches them.
+  # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
+  # was hand-kept and was caught stale THREE times (D-1347; again at the
+  # account wave's merge, where main added `ccd-telemetry-keepalive` to the
+  # `rm` without amending the sentence that counted it, D-2594; and again in
+  # routing slice 0, where the sweep's two names landed in the `rm` and the
+  # paragraph still said SEVENTH-then-EIGHTH). The uninstall suite measures the
+  # LIST and nothing can measure a spelled-out ordinal, so the numbering was a
+  # standing request for a reader to do a machine's job. A rule that names no
+  # count cannot go stale when the list grows; the NAMES above are redundant
+  # with the `rm`, checkable by eye against it in one line.
   rm -f -- "$HOME/.local/bin/ccd" "$HOME/.local/bin/ccrc" "$HOME/.local/bin/ccd-cap-scopes" \
     "$HOME/.local/bin/ccd-graph-sweep" "$HOME/.local/bin/ccd-account-health" \
     "$HOME/.local/bin/ccd-telemetry-keepalive" "$HOME/.local/bin/ccd-account-auth" \
+    "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth and the ccrc launcher removed from \$HOME/.local/bin"
-  # ── the EIGHTH entry, and the only one that is not ccrc's own binary ─────
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py and the ccrc launcher removed from \$HOME/.local/bin"
+  # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
   # uninstall that removed the engine's home (`--purge` takes `~/.ccrc` whole,
@@ -11590,8 +11809,8 @@ _uninst_tree_bins() {
   # first on every session's PATH — strictly worse than the box was before
   # ccrc, because the pip shim that used to answer there was copied aside by
   # the install and never put back (`_uninst_keep_asides` prints that `mv`).
-  # D-1347: the install grew a fifth name and this census did not, because it
-  # is hand-kept.
+  # D-1347: the install grew a name and this census did not, because it was
+  # hand-kept — the defect whose third recurrence retired the ordinals above.
   #
   # ONLY IF IT IS OURS, which is `_uninst_wrappers`' rule one function up:
   # "everything ccrc could not prove it wrote was left in place". Proof here is

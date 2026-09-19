@@ -63,7 +63,7 @@ const fleetSession = (patch: Partial<FleetSession> = {}): FleetSession => ({
   limits: null,
   dialogPending: false, model: null, effort: null, ultracode: false, branch: null, ctxPct: null, tasks: null, pr: null, archivedAt: null, archivedBytes: null,
   hookState: null, askSummary: null, subagents: null, graphQueries: null, graphGateDenials: null, held: null, bucket: 'idle', bucketSince: null, unmeasured: [], statusUnmeasured: false,
-  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null,
+  lifecycle: null, stoppedBy: null, swapBlocked: null, stranded: null, substrate: null, started: true, spawnState: null, ask: null, usage: null, boardProject: null, route: null,
   version: null,
   ...patch,
 });
@@ -244,6 +244,19 @@ describe('SessionHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to fleet' }));
     expect(props.onBack).toHaveBeenCalledOnce();
   });
+
+  it('a queued class write still shows the badge when the session has no model yet (fix round 2, finding 4)', () => {
+    // The model chip itself only renders when `model !== null` — a freshly
+    // spawned session's pane has not printed a model string yet. `effort`
+    // set makes `hasMeta` true so the meta row renders at all; `model` stays
+    // null so the model chip is absent and the badge has no chip to ride.
+    renderHeader({
+      session: fleetSession({ model: null, effort: 'medium' }),
+      queuedField: 'class',
+    });
+    expect(screen.getByText('queued')).toBeInTheDocument();
+    expect(document.querySelector('.route-queued')).toBeInTheDocument();
+  });
 });
 
 describe('interrupt control', () => {
@@ -372,6 +385,41 @@ describe('SessionScreen account accent (data-acct)', () => {
       <SessionScreen id="claude2:OpenClawHetzner" store={store} fleet={fleet} />,
     );
     expect(container.querySelector('.chat')).toHaveAttribute('data-acct', 'unknown');
+  });
+});
+
+// Task 7 (board-placement wave 2): the repo label reaches the header THROUGH
+// the fleet store's `projects` field, not a prop SessionScreen invents on its
+// own — this exercises the store round trip `renderHeader` above cannot.
+describe('SessionScreen repo label (board-placement wave 2, Task 7, R3)', () => {
+  const makeStores = () => {
+    const store = createSessionStore('claude:OpenClawHetzner', {
+      makeSocket: fakeSocket,
+      api: { prompt: vi.fn().mockResolvedValue(undefined) },
+    });
+    const fleet = createFleetStore({ makeSocket: fakeSocket });
+    act(() => {
+      fleet.setState({ sessions: [fleetSession({ status: 'idle' })], conn: 'open' });
+    });
+    return { store, fleet };
+  };
+
+  it('renders the repo the store carries for this session\'s project', () => {
+    const { store, fleet } = makeStores();
+    act(() => {
+      fleet.getState().setProjects([
+        { name: 'OpenClawHetzner', workdir: '/root/projects/OpenClawHetzner', repo: { state: 'named', slug: 'Synapsium-Labs/OpenClawHetzner' } },
+      ]);
+    });
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    expect(screen.getByText('Synapsium-Labs/OpenClawHetzner')).toBeInTheDocument();
+    expect(document.querySelector('.chip--repo')).not.toBeNull();
+  });
+
+  it('renders no repo chip when the store has never read `/api/projects` (D-3013)', () => {
+    const { store, fleet } = makeStores();
+    render(<SessionScreen id="claude:OpenClawHetzner" store={store} fleet={fleet} />);
+    expect(document.querySelector('.chip--repo')).toBeNull();
   });
 });
 
@@ -775,6 +823,18 @@ describe('archived chip', () => {
         ahead: 3, reason: null, checkedAt: 1, mergedAt: 1, retryAt: null },
     }) })} />);
     expect(screen.queryByText(/^archived/)).not.toBeInTheDocument();
+  });
+});
+
+describe('the repo label in the session view (board-placement wave 2, Task 7, R3)', () => {
+  it('renders the repo unconditionally when it is known', () => {
+    renderHeader({ repo: 'Synapsium-Labs/custom-tools' });
+    expect(screen.getByText('Synapsium-Labs/custom-tools')).toBeInTheDocument();
+    expect(document.querySelector('.chip--repo')).not.toBeNull();
+  });
+  it('renders nothing when it is not — an older server, or a deep link before any fleet read (D-3013)', () => {
+    renderHeader({});
+    expect(document.querySelector('.chip--repo')).toBeNull();
   });
 });
 

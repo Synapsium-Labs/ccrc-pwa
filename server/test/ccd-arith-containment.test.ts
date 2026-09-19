@@ -23,6 +23,13 @@
 // registry field, not a live-vulnerability fix. The one live wire-reachable
 // instance was `cmd_ensure`'s positional, closed in 73bc0fe.
 //
+// ROUTING SLICE 6 ADDS ONE OPERAND WITH A WRITER OUTSIDE THAT PICTURE, and it
+// is a ROW in the structural table below rather than a paragraph here:
+// `compact`, the per-session compaction threshold `_auto_compact_check`
+// compares `ctx` against, is written by `ccd route` / `--route`, which the
+// server reaches from a wave dispatch. That row states what still reaches its
+// `-ge` and why the guard sits there anyway.
+//
 // Each payload test plants `REG[$(touch <marker>)]` in the source a site reads
 // and asserts the marker never appears. Before the guards it appears (RED);
 // after, `=~ ^[0-9]+$` short-circuits and it does not. The structural test
@@ -31,19 +38,39 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness } from './ccdWsHelpers.js';
+import { CCD, makeCcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 describe('arithmetic-injection containment (D-299): no swept site evaluates a torn field', () => {
   it('_auto_swap_check does not evaluate a payload planted in lastswap', () => {
     const h = makeCcdHarness('arith-swap');
     // A torn or hand-edited `lastswap` is the threat model — not a wire caller.
+    // WIDE_PANE IS LOAD-BEARING, NOT DECORATION. `_pane_measurable` is the first
+    // statement after `_auto_swap_check`'s locals; the cooldown arithmetic this
+    // case exists for is far below it. With a bare `tmux(){ :; }` the stub answers
+    // nothing to `pane_active`, the guard stands the tick down, and the payload
+    // line is never reached — so the case passes because nothing ran.
+    // Measured 2026-09-16, mutating the cooldown to `-n "$last"`:
+    //   bare stub  -> this case GREEN (vacuous); WIDE_PANE -> this case RED.
+    // The structural row below reds either way, which is why it did not catch it.
     // Stubs keep the rest of the tick inert; the payload fires (or not) at the
     // cooldown line, which is reached before any swap decision.
+    //
+    // THIS IS THE ONLY ONE OF THE FOUR `WIDE_PANE` SPREADS BELOW THAT IS
+    // LOAD-BEARING BY THIS ARGUMENT (review round 3, S17): the other three
+    // (`_auto_compact_check` x2, `_spawn_start`) were widened in the same
+    // commit with no before/after table of their own. Re-measured: both
+    // `_auto_compact_check` arithmetic sites sit ABOVE its own
+    // `_pane_measurable` guard, and `_spawn_start` calls no
+    // `_pane_measurable` at all — a bare `tmux(){ :; }` could not have
+    // short-circuited any of the three, so those spreads are prophylactic
+    // (harmless, consistent with the stub every OTHER ccd fixture now
+    // answers) rather than required by this file's own threat model. Say so
+    // at each rather than let the claim above read as if it covered all four.
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid home claude;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-swap\")]';"
       + ' _home_for(){ echo claude; }; _swap_target(){ return 1; };'
-      + ' _dispatch_swap(){ :; }; tmux(){ :; };'
+      + ` _dispatch_swap(){ :; }; tmux(){ ${WIDE_PANE} :; };`
       + ' _auto_swap_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-swap'))).toBe(false);
     h.cleanup();
@@ -51,9 +78,14 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
 
   it('_auto_compact_check does not evaluate a payload planted in lastcompact', () => {
     const h = makeCcdHarness('arith-compact');
+    // PROPHYLACTIC, NOT LOAD-BEARING (S17): this function's arithmetic sites
+    // sit ABOVE its own `_pane_measurable` guard, so a bare `tmux(){ :; }`
+    // could not have short-circuited this case either way — unlike the
+    // `_auto_swap_check` case above, nothing here was measured to depend on
+    // WIDE_PANE. Kept for stub consistency with the rest of this file.
     h.sh(
       " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-compact\")]';"
-      + ' tmux(){ :; }; _pane_ctx_pct(){ :; };'
+      + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compact'))).toBe(false);
     h.cleanup();
@@ -63,11 +95,46 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     const h = makeCcdHarness('arith-compact-swap');
     // lastcompact left unset so the lastcompact gate falls through to the
     // lastswap gate — the second arithmetic site inside the same function.
+    // PROPHYLACTIC, NOT LOAD-BEARING (S17) — see the note on the case above;
+    // this is the same function's other arithmetic site, also above the guard.
     h.sh(
       " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-compactswap\")]';"
-      + ' tmux(){ :; }; _pane_ctx_pct(){ :; };'
+      + ` tmux(){ ${WIDE_PANE} :; }; _pane_ctx_pct(){ :; };`
       + ' _auto_compact_check myid || :');
     expect(existsSync(path.join(h.home, 'PWNED-compactswap'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_auto_compact_check does not evaluate a payload planted in the compact field', () => {
+    const h = makeCcdHarness('arith-compactfield');
+    // Routing slice 6, Task 5 — the per-session threshold reaches
+    // `[[ "$thr" =~ ^[0-9]+$ && "$pct" -ge "$thr" ]]`, an arithmetic context,
+    // exactly as the two cooldowns above reach theirs. TWO things have to fail
+    // for the payload to fire, and this case walks past both: `_route_get`'s
+    // `_route_valid` check, which refuses the value so `$thr` is the default
+    // here, AND the `=~ ^[0-9]+$` that short-circuits the `-ge`. The pane and
+    // idle predicates are stubbed so the tick reaches the comparison and stops
+    // there; the payload fires (or not) on the way past.
+    h.sh(
+      '_reg_set myid wrapper claude;'
+      + ' _reg_set myid compact \'REG[$(touch "$HOME/PWNED-compactfield")]\';'
+      + ' _pane_for_keystroke(){ KS_PANE="▓ ctx ████ 88%"; return 0; };'
+      + ' _idle_for_keystroke(){ KS_WHY=not-idle; KS_DETAIL=x; return 1; };'
+      + ' _auto_compact_check myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-compactfield'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_route_compact_settling does not evaluate a payload planted in lastcompact', () => {
+    const h = makeCcdHarness('arith-routecompact');
+    // The applier's interlock reads the SAME field `_auto_compact_check` writes
+    // and compares it in the same arithmetic context, so it inherits that row's
+    // threat model exactly: a torn or hand-edited registry field, one writer, no
+    // wire route.
+    h.sh(
+      " _reg_set myid lastcompact 'REG[$(touch \"$HOME/PWNED-routesettling\")]';"
+      + ' _route_compact_settling myid || :');
+    expect(existsSync(path.join(h.home, 'PWNED-routesettling'))).toBe(false);
     h.cleanup();
   });
 
@@ -76,10 +143,13 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
     // wrapper/workdir/uuid non-empty so the `incomplete registry` die does not
     // fire first; tmux stubbed so the fromswap line is
     // reached and nothing real spawns. mode=new avoids the resume settle.
+    // PROPHYLACTIC, NOT LOAD-BEARING (S17): `_spawn_start` calls no
+    // `_pane_measurable` at all, so WIDE_PANE here changes nothing about this
+    // guard's threat model — kept for stub consistency only.
     h.sh(
       '_reg_set myid wrapper claude; _reg_set myid workdir "$HOME"; _reg_set myid uuid u1;'
       + " _reg_set myid lastswap 'REG[$(touch \"$HOME/PWNED-spawn\")]';"
-      + ' tmux(){ :; };'
+      + ` tmux(){ ${WIDE_PANE} :; };`
       + ' _spawn_start myid new || :');
     expect(existsSync(path.join(h.home, 'PWNED-spawn'))).toBe(false);
     h.cleanup();
@@ -121,6 +191,20 @@ describe('arithmetic-injection containment (D-299): no swept site evaluates a to
       " _reg_set myid compactnote 'REG[$(touch \"$HOME/PWNED-note\")]';"
       + ' _compact_note myid mid-turn');
     expect(existsSync(path.join(h.home, 'PWNED-note'))).toBe(false);
+    h.cleanup();
+  });
+
+  it('_pane_narrow_note does not evaluate a payload planted in its floor anchor', () => {
+    const h = makeCcdHarness('arith-narrownote');
+    // §6.3's stand-down note (drawer wave 2) floors itself on
+    // `$REG/<id>.<site>narrownote`, a bare epoch it reads back as an arithmetic
+    // operand — the same threat model as `compactnote` and `strandnotify`, and
+    // the same guard. The site word is part of the FIELD NAME, so the payload
+    // is planted in the field the `swap` arm actually reads.
+    h.sh(
+      " _reg_set myid swapnarrownote 'REG[$(touch \"$HOME/PWNED-narrow\")]';"
+      + ' _pane_narrow_note myid swap');
+    expect(existsSync(path.join(h.home, 'PWNED-narrow'))).toBe(false);
     h.cleanup();
   });
 
@@ -168,6 +252,37 @@ describe('structural: every swept site guards its arithmetic operand with =~ ^[0
     { fn: '_dispatch_swap (SWAP_JITTER)',           anchors: ['RANDOM % (SWAP_JITTER + 1)'],          arith: '-gt' },
     { fn: '_strand_mark (strandnotify floor)',      anchors: ['$((now - nts))', 'SWAPBLOCK_COOLDOWN'], arith: '$((' },
     { fn: '_compact_note (compactnote floor)',      anchors: ['$((now - nts))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
+    // Routing slice 4, controller ruling S4-R7: `routetries` (`<n> <epoch>`) is the
+    // applier's bounded-retry counter and BOTH of its tokens are arithmetic operands —
+    // the attempt count against `ROUTE_RETRY_MAX`, the epoch against
+    // `ROUTE_RETRY_BACKOFF`, and the count again when it is incremented. Same threat
+    // model as every row above: one writer (`_route_try_bump`, from `$(date +%s)` and its
+    // own arithmetic), no wire route, a torn or hand-edited registry field.
+    { fn: '_route_try_bump (routetries increment)', anchors: ['$((n + 1))', 'else n=1'],           arith: '$((' },
+    { fn: '_route_retry_ok (attempt cap)',          anchors: ['-ge "$ROUTE_RETRY_MAX"'],           arith: '-ge' },
+    { fn: '_route_retry_ok (backoff)',              anchors: ['$((now - ts))', 'ROUTE_RETRY_BACKOFF'], arith: '$((' },
+    // The final review's finding 5: the applier's compaction interlock reads
+    // `lastcompact` — `_auto_compact_check`'s own field, one writer, from
+    // `$(date +%s)` — into the same shape of comparison.
+    { fn: '_route_compact_settling (quiet window)',  anchors: ['$((now - last))', 'ROUTE_COMPACT_QUIET'], arith: '$((' },
+    // Routing slice 6, Task 5, controller ruling S6-R12: `compact` is the per-session
+    // compaction threshold and the ONE operand in this table whose writer sits outside the
+    // header's picture — `ccd route` / `--route`, which the server reaches from a wave
+    // dispatch. It arrives at the `-ge` already validated, because `_auto_compact_check`
+    // reads it through `_route_get` and `_route_valid`'s `compact` arm admits only two or
+    // three digits in 10–100, answering nothing otherwise so the read falls back to
+    // `COMPACT_THRESHOLD`. The `=~ ^[0-9]+$` is first inside the same `[[ ]]` anyway: a
+    // validated reader is another function's promise, and this row is what refuses the
+    // future edit that reads the field raw again — the shape the first cut of this site had.
+    { fn: '_auto_compact_check (compact threshold)', anchors: ['-ge "$thr"', '_compact_note_clear'], arith: '-ge' },
+    // The drawer wave's §6.3 note floor. It reads the SAME constant as the row
+    // above, so its operand is deliberately named `said` rather than `nts`:
+    // with `nts` the two lines are byte-identical and this sweep's
+    // `toHaveLength(1)` reds on `_compact_note`'s row — a site identified by
+    // the fragments on its line cannot tell two identical lines apart
+    // (measured when `_pane_narrow_note` landed). Distinct operand, distinct
+    // row, and the population stays exactly enumerated.
+    { fn: '_pane_narrow_note (narrownote floor)',   anchors: ['$((now - said))', 'COMPACT_NOTE_FLOOR'], arith: '$((' },
   ];
   // A LEADING `if ` IS STRIPPED, and that is a correction to this scan's own
   // premise (#69 review round 4). The comment here said "the seven sites are all

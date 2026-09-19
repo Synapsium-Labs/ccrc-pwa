@@ -202,6 +202,10 @@ describe('the closed route table', () => {
     [['runs', 'close', '12'], 'POST', '/api/runs/12/close'],
     [['runs', 'items', '12'], 'POST', '/api/runs/12/items'],
     [['runs', 'items-list', '12'], 'GET', '/api/runs/12/items'],
+    [['runs', 'signals', '12'], 'GET', '/api/runs/12/signals'],
+    // The coordinator's escalation/demotion/manual-override door (routing
+    // spec 2026-09-14 §5.3, slice 5, Task 4) — never `ccd route` directly.
+    [['runs', 'route', '12'], 'POST', '/api/runs/12/route'],
     [['mail', 'list'], 'GET', '/api/mail'],
     [['mail', 'send'], 'POST', '/api/mail'],
     [['mail', 'fetch', '7'], 'GET', '/api/mail/7'],
@@ -213,6 +217,9 @@ describe('the closed route table', () => {
     [['claims', 'release', '3'], 'POST', '/api/claims/3/release'],
     [['ledger', 'list'], 'GET', '/api/ledger'],
     [['ledger', 'allocate'], 'POST', '/api/ledger/deviations'],
+    [['asks', 'list'], 'GET', '/api/asks'],
+    [['asks', 'answer', '7'], 'POST', '/api/asks/7/answer'],
+    [['asks', 'release', '7'], 'POST', '/api/asks/7/release'],
     // The durable feed, filterable by programme (cross-repo programmes §4). A
     // NEW ROW rather than a `--program` on some existing one: the table is the
     // client's own contract and grows by a row, never by a URL argument.
@@ -220,7 +227,9 @@ describe('the closed route table', () => {
   ];
 
   it.each(ROWS)('%s -> %s %s', async (args, method, url) => {
-    await run(args as string[]);
+    if (args[0] === 'asks' && args[1] === 'list') plantPane('demo-ws');
+    await run(args as string[], undefined,
+      args[0] === 'asks' && args[1] === 'list' ? { TMUX_PANE: '%7' } : undefined);
     expect(seen).toHaveLength(1);
     expect(seen[0]!.method).toBe(method);
     // Query strings are the caller's (`mail list --to x` appends one); the path
@@ -241,9 +250,9 @@ describe('the closed route table', () => {
     // measured from the callers, and coordinator clause 4 forbids a session
     // from touching that file at all. Its absence is a decision.
     //
-    // Nineteen since `feed list` landed — the programme-scoped read of the
-    // durable feed, which the coordinator corpus is about to name.
-    expect(keys).toHaveLength(19);
+    // Twenty-four since `runs.route` (routing slice 5, Task 4's escalation
+    // door) landed.
+    expect(keys).toHaveLength(24);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -251,6 +260,7 @@ describe('the closed route table', () => {
     const WORDS: Record<number, string> = {
       15: 'fifteen', 16: 'sixteen', 17: 'seventeen', 18: 'eighteen',
       19: 'nineteen', 20: 'twenty', 21: 'twenty-one', 22: 'twenty-two',
+      23: 'twenty-three', 24: 'twenty-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -405,6 +415,84 @@ describe('the token', () => {
   });
 });
 
+// D-2724, D-2725. Two properties this file PROMISES in its own header — "stdout
+// stays machine-readable on every path", and "a caller never parses two shapes" —
+// and neither was pinned, so both were false. The existing refusal cases assert
+// `stdout + stderr`, a CONCATENATION that the stderr copy alone satisfies, and
+// `toContain` substrings rather than a parse. These parse.
+describe('every refusal leaves as one parseable envelope on stdout', () => {
+  /** The three refusals a caller meets before a request is ever built. They ran
+   *  inside `$(server_url)` / `$(read_token)`, so their envelope was captured
+   *  into a variable and discarded — the caller saw an EMPTY stdout. */
+  const CONFIG_REFUSALS: readonly (readonly [string, () => void, string])[] = [
+    ['the token file is absent',
+      () => fs.rmSync(path.join(home, '.cc-secrets', 'ccrc-mail.token')), 'no-token'],
+    ['the token file is all preamble',
+      () => fs.writeFileSync(path.join(home, '.cc-secrets', 'ccrc-mail.token'),
+        '# only a comment\n\n'), 'no-token'],
+    ['agent.env is absent',
+      () => fs.rmSync(path.join(home, '.ccrc', 'agent.env')), 'no-agent-env'],
+    ['CCRC_SERVER_URL is unset',
+      () => fs.writeFileSync(path.join(home, '.ccrc', 'agent.env'),
+        'CCRC_AGENT_TOKEN=irrelevant\n'), 'no-server-url'],
+  ];
+
+  it.each(CONFIG_REFUSALS)('answers a parseable envelope when %s', async (_what, break_, code) => {
+    break_();
+    const r = await runBoth(['runs', 'list']);
+    expect(r.status, 'a config refusal must not exit 0').not.toBe(0);
+    expect(seen, 'a config refusal must send nothing').toHaveLength(0);
+    // The whole point: stdout ALONE, parsed — not `stdout + stderr`, and not a
+    // substring. An empty stdout throws here, which is the regression.
+    const body = JSON.parse(r.stdout) as { ok: boolean; error: string; detail: string };
+    expect(body.ok).toBe(false);
+    expect(body.error, `${_what} no longer refuses ${code}`).toBe(code);
+    expect(typeof body.detail).toBe('string');
+    expect(body.detail, 'the refusal detail must never carry the token').not.toContain(TOKEN);
+  });
+
+  /** D-2725: `detail` embeds caller argv verbatim at four sites. Every one of
+   *  these used to emit an envelope that does not parse. */
+  it.each([
+    ['a double quote', '/tmp/a"b'],
+    ['a backslash', '/tmp/a\\b'],
+    ['a trailing backslash', '/tmp/a\\'],
+    ['a newline', '/tmp/a\nb'],
+    ['a tab', '/tmp/a\tb'],
+  ])('keeps the envelope parseable when an argument carries %s', async (_what, arg) => {
+    const r = await runBoth(['runs', 'open', '--json', arg]);
+    expect(r.status).not.toBe(0);
+    const body = JSON.parse(r.stdout) as { ok: boolean; error: string; detail: string };
+    expect(body.ok).toBe(false);
+    expect(body.error).toBe('no-body');
+    // Escaped, not dropped: the caller still learns which path failed.
+    expect(body.detail).toContain(arg);
+  });
+});
+
+// D-2726. `-` means "this row declares no query keys" AND is a string the
+// membership test matches, so `--- value` satisfied the guard and rode onto the
+// wire as `?-=value` for every such row. The value was still SAFE_RE-checked, so
+// nothing could be injected — but an UNDECLARED key reached the request, which is
+// the one property the closed table exists to state.
+describe('the no-query sentinel is not itself a query key', () => {
+  it('refuses `---` on a row that declares no query keys, and sends nothing', async () => {
+    const r = await runBoth(['runs', 'open', '---', 'smuggle']);
+    expect(r.status).not.toBe(0);
+    expect(seen, 'an undeclared query key reached the wire').toHaveLength(0);
+    const body = JSON.parse(r.stdout) as { ok: boolean; error: string };
+    expect(body.error).toBe('unknown-query');
+  });
+
+  it('still accepts a real declared query key on a row that has one', async () => {
+    // The control: the fix must not refuse the keys the table really declares.
+    reply = { code: 200, body: '{"ok":true,"mail":[]}' };
+    const r = await runBoth(['mail', 'list', '--to', 'someone']);
+    expect(r.status).toBe(0);
+    expect(seen.at(-1)!.url).toContain('to=someone');
+  });
+});
+
 describe('the address is config, never a guess', () => {
   it('refuses when CCRC_SERVER_URL is absent instead of guessing a host', async () => {
     // A worker guessed a host on 2026-08-25 and reported success against
@@ -456,15 +544,20 @@ describe('an id reaches a path template only if the table declared one', () => {
 });
 
 describe('a query key rides only if its row declared it', () => {
-  // Every key any row declares, today: `to`, `program`, `all`, `limit` (mail
-  // list), `of`/`project` (peers), `session` (lifecycle), `project`/`all`
-  // (claims), `project` (ledger), `program`/`limit` (feed list). Anything else
-  // is refused rather than appended, for the same reason the path is a template
-  // and not an argument — a client that forwarded arbitrary query keys would be
-  // a URL builder with extra steps.
+  // Every key any row declares, today: `closed` (runs list), `to`, `program`,
+  // `all`, `limit` (mail list), `of`/`project` (peers), `session` (lifecycle),
+  // `project`/`all` (claims), `project` (ledger), `program`/`limit` (feed list).
+  // Anything else is refused rather than appended, for the same reason the path
+  // is a template and not an argument — a client that forwarded arbitrary query
+  // keys would be a URL builder with extra steps.
   it('appends a declared key', async () => {
     await run(['mail', 'list', '--to', 'a-workspace']);
     expect(seen[0]!.url).toBe('/api/mail?to=a-workspace');
+  });
+
+  it('lists closed runs through the route table instead of hiding the query in prose', async () => {
+    await run(['runs', 'list', '--closed', '1']);
+    expect(seen[0]!.url).toBe('/api/runs?closed=1');
   });
 
   it('appends two declared keys on a row that takes two', async () => {
@@ -519,6 +612,51 @@ describe('a query key rides only if its row declared it', () => {
     expect(r.status).not.toBe(0);
     expect(seen).toHaveLength(0);
   });
+
+  it('derives the ask-list parent and uuid from this pane', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['asks', 'list'], undefined, { TMUX_PANE: '%7' });
+    expect(r.status).toBe(0);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.url).toBe('/api/asks?parent=demo-ws&fromUuid=uuid-7&state=held');
+  });
+
+  it('accepts only the derived parent when asks list is given --parent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const same = await run(['asks', 'list', '--parent', 'demo-ws'], undefined,
+      { TMUX_PANE: '%7' });
+    expect(same.status).toBe(0);
+    expect(seen[0]!.url).toBe('/api/asks?parent=demo-ws&fromUuid=uuid-7&state=held');
+
+    seen = [];
+    const other = await run(['asks', 'list', '--parent', 'someone-else'], undefined,
+      { TMUX_PANE: '%7' });
+    expect(other.status).not.toBe(0);
+    expect(other.stdout).toContain('parent-mismatch');
+    expect(seen, 'a caller-selected parent reached the wire').toHaveLength(0);
+  });
+
+  it('does not expose fromUuid as a caller-supplied ask-list query', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await run(['asks', 'list', '--fromUuid', 'forged'], undefined,
+      { TMUX_PANE: '%7' });
+    expect(r.status).not.toBe(0);
+    expect(seen).toHaveLength(0);
+  });
+
+  it('refuses ask listing with no pane or a non-URL-safe derived uuid', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const noPane = await run(['asks', 'list'], undefined, { TMUX_PANE: undefined, TMUX: undefined });
+    expect(noPane.status).not.toBe(0);
+    expect(noPane.stdout).toContain('no-pane');
+    expect(seen).toHaveLength(0);
+
+    plantPane('demo-ws', 'uuid?forged=1');
+    const badUuid = await run(['asks', 'list'], undefined, { TMUX_PANE: '%7' });
+    expect(badUuid.status).not.toBe(0);
+    expect(badUuid.stdout).toContain('bad-uuid');
+    expect(seen).toHaveLength(0);
+  });
 });
 
 describe('the body comes from --json, and only from there', () => {
@@ -545,6 +683,18 @@ describe('the body comes from --json, and only from there', () => {
     fs.writeFileSync(f, '{}');
     await run(['runs', 'open', '--json', f]);
     expect(seen).toHaveLength(1);
+  });
+
+  it.each([
+    ['answer', '/api/asks/7/answer'],
+    ['release', '/api/asks/7/release'],
+  ])('carries only the declared ask %s id and JSON body', async (verb, url) => {
+    const body = verb === 'answer'
+      ? '{"fromId":"parent","fromUuid":"u","optionIndexes":[0]}'
+      : '{"fromId":"parent","fromUuid":"u"}';
+    await run(['asks', verb, '7', '--json', '-'], body);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ method: 'POST', url, body });
   });
 });
 
