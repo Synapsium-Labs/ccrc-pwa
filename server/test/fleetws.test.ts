@@ -1144,6 +1144,34 @@ describe('fleet REST + WS', () => {
         ws.close();
       });
 
+      it('THE REGRESSION ITEM 1 FIXES: a SECOND tick reports a CHANGED $REG/pool-epoch — the value refreshes instead of freezing at its first read forever', async () => {
+        // Before item 1, `observedEpoch` rode `deps.fleetState.observedEpoch`,
+        // sampled once at WS handshake and never re-read for the connection's
+        // whole life — `ccd-pool-sync` rewriting the real file underneath it
+        // every 60s changed nothing on the wire. This drives the watcher's
+        // OWN tick twice, rewriting the file between them, against the real
+        // reader and real bytes (no `fleetState` override at all — nothing to
+        // freeze), and requires the SECOND frame to disagree with the first.
+        plantPoolEpoch(home, {}, { epoch: 1 });
+        const { ws, next, watcher } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const first = await next();
+        expect(first.pools).toMatchObject({ observedEpoch: 1 });
+
+        plantPoolEpoch(home, {}, { epoch: 2 });
+        await watcher.tick();
+        // Nothing about the coordinator-pause/mail-disabled markers moved, so
+        // `emitCoord`'s own byte-equality guard stays quiet (same pattern as
+        // the "re-emits only on CHANGE" case above) — `pools` is the very
+        // next frame, carrying the refreshed value.
+        const second = await next();
+        expect(second.type).toBe('pools');
+        expect(second.pools).toMatchObject({ observedEpoch: 2 });
+        ws.close();
+      });
+
       it('carries observedEpoch:null (never synced) when $REG/pool-epoch is absent, rather than dropping it or fabricating a number', async () => {
         // No `plantPoolEpoch` call: the home fixture's `.cc-sessions/pool-epoch`
         // genuinely does not exist, the same real ENOENT `_acct_pool_state`
