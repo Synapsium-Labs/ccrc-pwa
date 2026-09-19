@@ -70,17 +70,24 @@ describe('GET /api/fleet/health', () => {
     await app.close();
   });
 
+  it('never emits `builds` in local mode — there is no second box to show', async () => {
+    const app = await buildServer(testDeps());
+    const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    expect('builds' in body).toBe(false);
+    await app.close();
+  });
+
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
     await app.close();
   });
 

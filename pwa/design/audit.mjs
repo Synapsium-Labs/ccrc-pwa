@@ -735,6 +735,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
   },
+  'fleet.css .build-line': {
+    under: ['var(--bg-page)'],
+    why: "release/rollout Task 7: the foot-of-screen build stamp is rendered as the last child of FleetScreen's own <main class=\"fleet\"> (FleetScreen.tsx), and .fleet (fleet.css:10) sets only sizing/padding — no background of its own — so the pixels behind it are the app shell's --bg-page. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone.",
+  },
+  'fleet.css .build-line-side--warn': {
+    under: ['var(--bg-page)'],
+    why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same .fleet ground as the base rule above. Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
+  },
 };
 
 // ── element opacity ─────────────────────────────────────────────────────────

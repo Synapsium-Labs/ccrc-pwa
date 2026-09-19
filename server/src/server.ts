@@ -1178,6 +1178,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
         // scripts) — an absent stamp and a null one are the same condition,
         // exactly as `/health` treats them.
         build: buildAgreement(deps.fleetState.build, deps.build ?? null),
+        builds: { own: deps.build ?? null, fleet: deps.fleetState.build ?? null },
         projectPools: poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
         ...(lifecycle ? { lifecycle } : {}),
       };

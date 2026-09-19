@@ -176,4 +176,45 @@ describe('FleetHostBanner', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Reboot the fleet host' }));
     expect(reboot).toHaveBeenCalledTimes(1);
   });
+
+  it('warns when the boxes run DIFFERENT builds, naming both versions and the verb (spec §6)', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({
+      connected: true, downSince: null, roster: 'agreed', build: 'skewed',
+      builds: {
+        fleet: { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.7' },
+        own: { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' },
+      },
+    }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/run different builds/i)).toBeInTheDocument();
+    expect(screen.getByText(/fleet v0\.0\.7 \(bd2bf57a\)/)).toBeInTheDocument();
+    expect(screen.getByText(/server v0\.0\.9 \(2985b9d1\)/)).toBeInTheDocument();
+    expect(screen.getByText(/ccrc rollout/)).toBeInTheDocument();
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+  });
+
+  it('a skewed side with no version reads as unversioned (a deploy.sh stamp)', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({
+      connected: true, downSince: null, build: 'skewed',
+      builds: {
+        fleet: { sha: 'bd2bf57a8733883085b3c118911fc983dc441299', ref: 'HEAD', builtAt: '2026-09-17T17:16:09Z', dirty: false },
+        own: { sha: '2985b9d1000000000000000000000000000000000', ref: 'release', builtAt: '2026-09-18T00:00:00Z', dirty: false, version: 'v0.0.9' },
+      },
+    }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/fleet unversioned \(bd2bf57a\)/)).toBeInTheDocument();
+  });
+
+  it('skewed from an OLDER server (no builds field) still warns, without versions', async () => {
+    vi.spyOn(api, 'fleetHealth').mockResolvedValue(health({ connected: true, downSince: null, build: 'skewed' }));
+    render(<FleetHostBanner />);
+    expect(await screen.findByText(/run different builds/i)).toBeInTheDocument();
+  });
+
+  it('takes an injected health and does not poll — FleetScreen polls once for two readers', async () => {
+    const spy = vi.spyOn(api, 'fleetHealth');
+    render(<FleetHostBanner health={health({ connected: true, downSince: null, roster: 'divergent' })} />);
+    expect(await screen.findByText(/different account rosters/i)).toBeInTheDocument();
+    expect(spy).not.toHaveBeenCalled();
+  });
 });

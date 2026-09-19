@@ -38,7 +38,7 @@ import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
-  statSync, chmodSync, readdirSync, appendFileSync, renameSync,
+  statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -481,6 +481,45 @@ function freshUpdateBox(prefix: string): string {
   return home;
 }
 
+/** The MANDATORY KillMode=process drop-in (R1). Hoisted to file scope
+ *  because two describes need it: the sweep's own cases, and the gate's
+ *  `converged()` — a "NO sweep" assertion on a box with no drop-in is
+ *  VACUOUS, since the preflight would refuse the sweep with the gate
+ *  deleted too. */
+function plantKillModeDropIn(home: string): void {
+  const d = join(home, '.config', 'systemd', 'user', 'claude-session@.service.d');
+  mkdirSync(d, { recursive: true });
+  writeFileSync(join(d, '50-killmode.conf'), '[Service]\nKillMode=process\n');
+}
+
+/** What the recording `systemctl --user list-units claude-session@*` stub
+ *  answers with — two live supervisors, so a sweep that RAN has something
+ *  to restart and leaves a `try-restart` in the recording. */
+const UNIT_LINES =
+  'claude-session@alpha.service loaded active running fixture supervisor\n'
+  + 'claude-session@beta.service loaded active running fixture supervisor\n';
+
+/** A sorted recursive listing of `<home>` as `<relpath>\t<size>` lines —
+ *  the before/after snapshot the `--check` write-nothing case compares.
+ *  `<home>/tmp/**` is the staging dir TMPDIR points at (update's own
+ *  mktemp -d space, cleaned by its EXIT trap but timing-dependent) and
+ *  `<home>/curl-argv` is the fixture's own recording, so both are the
+ *  harness writing, not the verb. */
+function homeSnapshot(home: string): string[] {
+  const out: string[] = [];
+  const walk = (d: string, prefix: string): void => {
+    for (const e of readdirSync(d).sort()) {
+      const rel = prefix === '' ? e : `${prefix}/${e}`;
+      if (rel === 'tmp' || rel.startsWith('tmp/') || rel === 'curl-argv') continue;
+      const p = join(d, e);
+      const st = lstatSync(p);
+      if (st.isDirectory()) { out.push(`${rel}/`); walk(p, rel); } else out.push(`${rel}\t${st.size}`);
+    }
+  };
+  walk(home, '');
+  return out.sort();
+}
+
 /** Every file under `dir` with its digest — the byte-compare the
  *  "changes NOTHING" refusal tests rest on. */
 function treeDigest(dir: string): Record<string, string> {
@@ -718,14 +757,9 @@ describe('ccrc update: the supervisor sweep (Task 7 — R1, granted 2026-08-21)'
   // sitting in whichever claude-session@ cgroup created it), so an absent
   // drop-in refuses the SWEEP, never fails the UPDATE. All against the
   // RECORDING systemctl stub above — no real systemd, no real sweep, ever.
-  const plantKillModeDropIn = (home: string): void => {
-    const d = join(home, '.config', 'systemd', 'user', 'claude-session@.service.d');
-    mkdirSync(d, { recursive: true });
-    writeFileSync(join(d, '50-killmode.conf'), '[Service]\nKillMode=process\n');
-  };
-  const UNIT_LINES =
-    'claude-session@alpha.service loaded active running fixture supervisor\n'
-    + 'claude-session@beta.service loaded active running fixture supervisor\n';
+  // `plantKillModeDropIn` and `UNIT_LINES` are at FILE scope — the gate's
+  // `converged()` needs both, so that its "NO sweep" assertion has a sweep
+  // to be the absence of.
 
   itLinux('with KillMode=process resolving per unit, the sweep runs: preflight, try-restart, the failed warn query, the active verify query — in that argv order', () => {
     const home = freshUpdateBox('ccrc-update-sweep-');
@@ -931,5 +965,221 @@ describe('ccrc update: source pins', () => {
     // Both refusal messages must keep NAMING the floor they enforce.
     expect(inst).toContain(`ccd needs ${instFloor} or newer`);
     expect(ccrc).toContain(`ccd needs ${instFloor} or newer`);
+  });
+});
+
+describe('ccrc update --check: what runs here vs what is published (spec §6)', () => {
+  const firstLine = (s: string): string => s.split('\n')[0] ?? '';
+  const parse = (s: string): Record<string, string> =>
+    Object.fromEntries(firstLine(s).replace(/^check: /, '').split(' ').map((kv) => kv.split('=') as [string, string]));
+
+  it('behind: an older version on the box, exit 1, SHA256SUMS fetched and nothing else, nothing written', () => {
+    const home = freshUpdateBox('ccrc-update-check-behind-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', state: 'behind' });
+    expect(r.stdout).toMatch(/^this box: v1\.0\.0 \(oldsha[0-9a-f]*\) · latest: v2\.0\.0 — behind$/m);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('writes NOTHING under HOME (spec §11) — the whole home is byte-identical, not just the three places we thought to look', () => {
+    // The three assertions above name places a write WE EXPECTED would land
+    // (`~/ccrc`, `~/ccrc-backups`, the staged install's argv record). Spec
+    // §11's claim is larger and nothing observed it: `--check` writes
+    // nothing AT ALL. A recursive before/after listing is the observation —
+    // it catches the write nobody predicted, which is the only kind that
+    // matters here.
+    //
+    // Two exclusions, both the HARNESS writing rather than the verb: the
+    // staging dir under `$TMPDIR` (which `updateEnv` puts at `<home>/tmp`,
+    // update's own mktemp -d space, removed by its EXIT trap) and
+    // `<home>/curl-argv`, the fixture curl's recording of the one fetch the
+    // case above already pins.
+    const home = freshUpdateBox('ccrc-update-check-writes-nothing-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // `runUpdate` builds its environment on EVERY call, and building it
+    // plants fixtures under HOME (`updateEnv`'s `fixture-graphify-pkg` and
+    // its `ghContainedEnv` poison, then `replantDoctorStubs`' copies over
+    // the top of it). Doing that once BEFORE the snapshot, IN RUNUPDATE'S
+    // OWN ORDER, is what keeps this case measuring the VERB: both are
+    // idempotent and byte-identical on the second call, so anything that
+    // moves between the two listings below was written by `ccrc update
+    // --check` itself. (The order matters — `replantDoctorStubs` is what
+    // leaves `.local/bin/gh` as the doctor stub rather than the poison.)
+    updateEnv(home);
+    replantDoctorStubs(home);
+    const before = homeSnapshot(home);
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(homeSnapshot(home)).toEqual(before);
+  });
+
+  it('--check and --force are exclusive — one refusal, exit 2, nothing fetched', () => {
+    // `--check` MEASURES; `--force` reinstalls a converged box. The check arm
+    // returns before `--force` is ever read, so the pair used to mean "drop
+    // the flag you also typed" in silence.
+    const home = freshUpdateBox('ccrc-update-check-force-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check', '--force']);
+    expect(r.code, `stdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/--check and --force are exclusive/);
+    // Before anything is fetched: the refusal is an argument-surface one.
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+  });
+
+  it('current: same version AND the completed-install record names the stamped sha, exit 0', () => {
+    const home = freshUpdateBox('ccrc-update-check-current-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(parse(r.stdout).state).toBe('current');
+    expect(r.stdout).toMatch(/— current$/m);
+  });
+
+  it('incomplete: same version but no (or a stale) completed-install record, exit 1 — rollout must not skip it', () => {
+    const home = freshUpdateBox('ccrc-update-check-incomplete-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    let r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout).state).toBe('incomplete');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'stalesha00000000000000000000000000000000\n');
+    r = runUpdate(home, ['--check']);
+    expect(parse(r.stdout).state).toBe('incomplete');
+  });
+
+  it('unversioned: a deploy.sh stamp (no version), exit 1, and --to labels the target', () => {
+    const home = freshUpdateBox('ccrc-update-check-unversioned-');
+    plantOldBox(home);
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"deploysha0000000000000000000000000000000","ref":"HEAD","builtAt":"2026-09-17T17:16:09Z","dirty":false}\n');
+    packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
+    const r = runUpdate(home, ['--check', '--to', 'v1.0.0']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', state: 'unversioned' });
+    expect(r.stdout).toMatch(/^this box: unversioned \(deploysha[0-9a-f]*\) · target: v1\.0\.0 — a release install would be the first on this box$/m);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
+  });
+
+  it('unstamped: no build.json at all reads as unversioned with sha=none', () => {
+    const home = freshUpdateBox('ccrc-update-check-unstamped-');
+    plantOldBox(home);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toMatchObject({ box: 'unversioned', sha: 'none', state: 'unversioned' });
+  });
+});
+
+describe('ccrc update: the "already there" gate (spec §5)', () => {
+  const converged = (prefix: string): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v2.0.0' });
+    plantCoordDb(home);
+    // The stub release's stamp sha is what stubTree writes: newsha…; the box
+    // must carry the SAME sha for the gate's second comparison to hold.
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"newsha0000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v2.0.0"}\n');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'newsha0000000000000000000000000000000000\n');
+    // EVERYTHING A SWEEP NEEDS, so that "NO sweep" below is a statement
+    // about the GATE. Without the KillMode=process drop-in the preflight
+    // refuses the sweep on its own, so deleting the gate would leave the
+    // recording just as free of `try-restart` — the assertion would be
+    // green for a reason that has nothing to do with what it claims to
+    // pin. With the drop-in planted and two live units enumerated, an
+    // un-gated run DOES record `--user try-restart claude-session@*`
+    // (measured: see the plan's mutation table).
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    return home;
+  };
+
+  it('three matching shas → nothing to do: exit 0, tarball verified, NO backup, NO install, NO sweep', () => {
+    const home = converged('ccrc-update-gate-skip-');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^update: this box already runs v2\.0\.0 \(newsha[0-9a-f]*\) and that install completed — nothing to do \(pass --force to reinstall\)$/m);
+    // Both fetches happened (the gate's exact stage reads the staged stamp)…
+    expect(localUrls(home)).toEqual([
+      `local://${home}/releases/latest/download/SHA256SUMS`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz`,
+    ]);
+    // …and nothing after them.
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    const calls = existsSync(join(home, 'systemctl-calls')) ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '';
+    expect(calls).not.toMatch(/try-restart|restart/);
+  });
+
+  it('--force skips the gate: the same box installs and sweeps', () => {
+    const home = converged('ccrc-update-gate-force-');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).not.toMatch(/nothing to do/);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  // THE CONTROL FOR THE "NO SWEEP" ASSERTION ABOVE. An absence proves nothing
+  // unless the same fixture can produce the presence: the skip case's
+  // `expect(calls).not.toMatch(/try-restart/)` was vacuous while `converged()`
+  // planted no KillMode=process drop-in, because the preflight would have
+  // refused the sweep with the gate deleted too. This case runs the IDENTICAL
+  // fixture, differing only by `--force`, and measures the try-restart the
+  // skip case says is absent. Linux-only because it names systemd's argv;
+  // the launchd siblings live in the sweep describe above.
+  itLinux('…and on that same fixture the sweep really does try-restart — so the skip case\'s "no sweep" is a real absence', () => {
+    const home = converged('ccrc-update-gate-force-sweeps-');
+    const r = runUpdate(home, ['--force']);
+    expect(r.code, r.stderr).toBe(0);
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    expect(calls).toMatch(/--user try-restart claude-session@\*/);
+  });
+
+  it('same version, record absent → proceeds', () => {
+    const home = converged('ccrc-update-gate-norecord-');
+    rmSync(join(home, '.ccrc', 'installed'));
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('same version, record names an older sha → proceeds', () => {
+    const home = converged('ccrc-update-gate-stale-');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('same version, the RELEASE carries a different sha (a moved tag) → proceeds', () => {
+    const home = converged('ccrc-update-gate-moved-');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"boxsha00000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v2.0.0"}\n');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'boxsha00000000000000000000000000000000000\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+
+  it('a different version never consults the record', () => {
+    const home = converged('ccrc-update-gate-differs-');
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"newsha0000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v1.0.0"}\n');
+    const r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
   });
 });

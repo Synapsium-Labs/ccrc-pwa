@@ -1923,6 +1923,10 @@ describe('ccrc install: the order is stated in one place', () => {
       // the brief's own placement rather than a measured dependency.
       '_inst_graph_hooks_off',
       '_inst_wrappers',
+      // Release/rollout design §5, Task 3. LAST, deliberately: this is the
+      // completed-install record, so it must run only once every step above
+      // has already converged or died.
+      '_inst_installed',
     ]);
   });
 
@@ -3061,6 +3065,34 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     // …and the gate check really RAN and really found the box uncredentialed:
     // `0 warned` must not be reachable by the check having vanished.
     expect(r.stdout).toMatch(/^PASS auth: no passphrase file at .*nothing is gated/m);
+  });
+
+  it('writes ~/.ccrc/installed LAST, naming the stamped sha — and a spine that dies before its end leaves none', () => {
+    // The completed-install record (spec §5). It cannot ride in build.json:
+    // `_inst_stamp` sits mid-spine because the server restarted by
+    // `_inst_enable` reads the stamp at boot, so a stamp-only signal would
+    // read "installed" on a box whose skills never landed.
+    const home = freshBox('ccrc-install-installed-');
+    const sha = gitInit(treeRoot(home));
+    const ok = runInstall(home);
+    expect(ok.code, ok.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\n`);
+    expect(ok.stdout).toMatch(/^install: installed: [0-9a-f]{40} \(the spine completed/m);
+    // Ordering: the line is printed AFTER the wrappers step's own line.
+    const lines = ok.stdout.split('\n');
+    expect(lines.findIndex((l) => l.startsWith('install: installed:')))
+      .toBeGreaterThan(lines.findIndex((l) => l.startsWith('install: wrappers:')));
+
+    // A fault INSIDE the spine, after the stamp: the reviewer skill's
+    // installer refuses when its SKILL.md is missing, which kills
+    // `_inst_skills` — the exact shape of the 2026-09-17 incident.
+    const broken = freshBox('ccrc-install-installed-fault-');
+    gitInit(treeRoot(broken));
+    rmSync(treeFile(broken, 'ccd/reviewer-skill/SKILL.md'));
+    const r = runInstall(broken);
+    expect(r.code).toBe(1);
+    expect(existsSync(join(broken, '.ccrc', 'build.json')), 'the stamp is written mid-spine, as designed').toBe(true);
+    expect(existsSync(join(broken, '.ccrc', 'installed')), 'a spine that died must leave NO completed-install record').toBe(false);
   });
 
   it('says, in one line, that it wrote no passphrase and what arming the gate takes', () => {

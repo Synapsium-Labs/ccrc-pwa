@@ -1117,6 +1117,15 @@ CCRC_HERE="$(cd "${CCRC_HERE%/*}" && pwd)"
 BOX_STAMP_FILE="$HOME/.ccrc/build.json"
 BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 
+# The completed-install record (release/rollout design §5): one line, the
+# sha of the stamp the install spine COMPLETED under. Written by
+# `_inst_installed`, the LAST step of `cmd_install`, so it exists only when
+# every step before it did. `build.json` cannot carry this — `_inst_stamp`
+# sits mid-spine because the server `_inst_enable` restarts reads the stamp
+# at boot — and a stamp that means both "installed" and "half-installed" is
+# the overloaded value this tree bans at a seam. deploy.sh never writes it.
+BOX_INSTALLED_FILE="$HOME/.ccrc/installed"
+
 # ── THE EXPOSURE FILE, WHICH `expose` WRITES AND THE SERVER UNIT READS ────
 # `~/.ccrc/exposure.env` — stage 3b, spec D3. Exposure keys (CCRC_ORIGIN,
 # CCRC_RP_ID, the DuckDNS trio) get their OWN EnvironmentFile because ccrc.env
@@ -1375,6 +1384,14 @@ UPD_STAGE=""
 UPD_TREE=""
 UPD_VERSION=""
 UPD_BACKUP_DIR=""
+UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
+UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
+
+# `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
+# scope for the `set -u` reason UPD_* above are: they carry state built in
+# one part of the verb and read in another.
+ROLLOUT_SSH=()       # cmd_rollout: the ssh argv built from deploy.env's coordinates
+ROLLOUT_VERSION=""   # cmd_rollout: the ONE version both boxes are moved to
 # `set -u` out-parameter discipline, same as the UPD_* four above: the _inst_*
 # steps read it, cmd_install overwrites it — a direct _inst_* call must meet a
 # stated default, never an unbound-variable death.
@@ -1435,7 +1452,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollout|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1497,8 +1514,19 @@ already running).
             verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
             print the from -> to report. [--to vX.Y.Z] pins a version — the
             rollback path too: a downgrade prints the coord.db restore
-            commands and never auto-restores. Never automatic; per box;
-            fleet box first, then the server box
+            commands and never auto-restores. A box already running the
+            target, whose install completed, is left alone (--force
+            reinstalls). --check only compares this box with what is
+            published (exit 0 current, 1 otherwise) and writes nothing.
+            Per box; across a fleet, 'ccrc rollout' runs it in order
+  rollout   move BOTH boxes of a fleet to one published release, in order,
+            from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
+            coordinates), preflights each box's recorded CCRC_ROLE, pins the
+            version from SHA256SUMS once, runs 'ccrc update --to' over ssh on
+            the fleet box then the server box (--server-first inverts), stops
+            at the first failure, and re-measures both ('ccrc version',
+            /health). --check only prints where each box stands; --force
+            passes through; [--to vX.Y.Z] pins a tag. Exit 2 = nothing touched
   uninstall move this box off ccrc, leaving reinstall safe: stop, disable
             and remove the units (incl. both drop-ins and the slice
             escape), remove ccrc's managed settings.json hook entries
@@ -1640,12 +1668,23 @@ _models_refuse() {   # <error> <exit code> <detail…>
 # roster ids, for the same reason.
 _box_build_fields() {
   # The optional argument (stage 4, Task 6) points this SAME parser at a
-  # stamp that is not the box's own — `_inst_stamp`'s shipped-stamp arm
-  # validates a release artifact's `build.json` before installing it. One
-  # parser, two files, rather than a second jq filter that would come to
-  # disagree with this one about what a well-formed stamp is
-  # (single-definition.test.ts counts the `jq -r` parses in this file and
-  # fails on a second). No caller but that arm passes an argument.
+  # stamp that is not the box's own. One parser, many files, rather than a
+  # second jq filter that would come to disagree with this one about what a
+  # well-formed stamp is (single-definition.test.ts counts the `jq -r`
+  # parses in this file and fails on a second).
+  #
+  # TWO callers pass one, and each reads a RELEASE ARTIFACT'S OWN
+  # `build.json`, never the box's:
+  #   `_inst_stamp_shipped` — the stamp that came inside the artifact,
+  #     validated BEFORE it is installed over the box's own, so a
+  #     malformed one is refused rather than becoming what the box claims
+  #     to run.
+  #   `_upd_converged` — the STAGED tree's stamp (`$UPD_TREE/build.json`),
+  #     compared against the box's, because "already converged" is a
+  #     statement about the release about to be installed and the box's own
+  #     stamp cannot answer it. It saves and restores `BOX_BUILD` around
+  #     the call for exactly that reason: the second parse must not leave
+  #     the caller holding the staged tree's fields.
   local stamp="${1:-$BOX_STAMP_FILE}"
   BOX_BUILD=()
   [[ -e "$stamp" ]] || return 3
@@ -1705,6 +1744,17 @@ cmd_version() {
   # line, so an unversioned box's output is byte-identical to before.
   if [[ -n "${BOX_BUILD[4]}" ]]; then
     echo "version ${BOX_BUILD[4]}"
+  fi
+  local rec=""
+  if [[ -f "$BOX_INSTALLED_FILE" ]]; then
+    IFS= read -r rec < "$BOX_INSTALLED_FILE" || rec=""
+    if [[ "$rec" == "${BOX_BUILD[0]}" ]]; then
+      echo "install: complete"
+    else
+      echo "install: incomplete — stamp ${BOX_BUILD[0]}, completed-install record names ${rec:-nothing}"
+    fi
+  else
+    echo "install: incomplete — stamp ${BOX_BUILD[0]}, no completed-install record (ccrc install and ccrc update write one last; deploy.sh never does)"
   fi
 }
 
@@ -9046,6 +9096,7 @@ cmd_install() {
   _inst_graph_excludes
   _inst_graph_hooks_off
   _inst_wrappers
+  _inst_installed
 
   # ── THE LANDING BLOCK, AND WHY DOCTOR IS THE LAST WORD ─────────────────
   # Every step above either converged or died, so "done" is a statement about
@@ -10903,6 +10954,23 @@ _inst_wrappers() {
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
 
+# ── _inst_installed — the completed-install record, the spine's LAST write ─
+# Not degraded when the box has no readable stamp (a git-less checkout):
+# `ccrc version` already explains "unstamped", and a record naming no sha
+# would let update's gate skip a box it cannot identify.
+_inst_installed() {
+  local rc=0 tmp dest="$BOX_INSTALLED_FILE"
+  _box_build_fields || rc=$?
+  if [ "$rc" -ne 0 ]; then
+    echo "install: installed: not recorded — this box has no readable build stamp (ccrc version explains), so 'ccrc update' will never treat it as already installed"
+    return 0
+  fi
+  tmp="$dest.tmp.$$"
+  printf '%s\n' "${BOX_BUILD[0]}" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
+    || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
+  echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it)"
+}
+
 # ── cmd_update — the box moves to a published release (stage 4, Task 6) ───
 # Per box, explicit, never automatic (spec §4). The sequence, each step
 # refusing loudly rather than degrading:
@@ -10950,7 +11018,7 @@ _inst_wrappers() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to=""
+  local to="" check=0 force=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -10958,6 +11026,8 @@ cmd_update() {
         [ $# -ge 2 ] || { echo "$PROG: --to needs a value: a release tag shaped vX.Y.Z" >&2; usage >&2; exit 2; }
         to="$2"; shift ;;
       --to=*) to="${1#--to=}" ;;
+      --check) check=1 ;;
+      --force) force=1 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
@@ -10966,6 +11036,44 @@ cmd_update() {
     echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
     usage >&2
     exit 2
+  fi
+  # `--check` MEASURES and writes nothing; `--force` reinstalls a converged
+  # box. Together they name two different acts, and the check arm below
+  # returns before `--force` is ever read — so the pair used to mean
+  # "measure, and silently drop the flag you also typed". Refuse instead:
+  # an operator who typed both wanted one of them, and which one is not
+  # ours to guess.
+  if [ "$check" -eq 1 ] && [ "$force" -eq 1 ]; then
+    echo "$PROG: update: --check and --force are exclusive — --check measures and writes nothing, --force reinstalls a converged box; pick one" >&2
+    exit 2
+  fi
+
+  if [ "$check" -eq 1 ]; then
+    command -v curl >/dev/null 2>&1 || _ccrc_die "curl is required by 'ccrc update --check' but is not on PATH"
+    local sha="none" box="unversioned" state="unversioned" label="latest" rec="" rc=0
+    [ -n "$to" ] && label="target"
+    _box_build_fields || rc=$?
+    if [ "$rc" -eq 0 ]; then
+      sha="${BOX_BUILD[0]}"
+      if [ -n "${BOX_BUILD[4]}" ]; then
+        box="${BOX_BUILD[4]}"; state="behind"
+      fi
+    fi
+    _upd_resolve "$to" >/dev/null
+    if [ "$state" = behind ] && [ "$box" = "$UPD_VERSION" ]; then
+      state="incomplete"
+      if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then
+        state="current"
+      fi
+    fi
+    # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
+    echo "check: box=$box sha=$sha target=$UPD_VERSION state=$state"
+    case "$state" in
+      current)    echo "this box: $box ($sha) · $label: $UPD_VERSION — current"; return 0 ;;
+      incomplete) echo "this box: $box ($sha) · $label: $UPD_VERSION — same version, but the install never completed (ccrc version explains); update will reinstall"; return 1 ;;
+      behind)     echo "this box: $box ($sha) · $label: $UPD_VERSION — behind"; return 1 ;;
+      *)          echo "this box: unversioned ($sha) · $label: $UPD_VERSION — a release install would be the first on this box"; return 1 ;;
+    esac
   fi
 
   # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
@@ -10998,7 +11106,15 @@ cmd_update() {
   esac
 
   _upd_fleet_warn
-  _upd_fetch "$to"
+  _upd_resolve "$to"
+  _upd_fetch
+  # THE GATE (design §5): the no-op path costs one verified download and no
+  # write — no backup, no restart, no sweep. Two operators told to ship the
+  # same release no longer restart the fleet twice.
+  if [ "$force" -eq 0 ] && _upd_converged; then
+    echo "update: this box already runs $UPD_VERSION (${BOX_BUILD[0]}) and that install completed — nothing to do (pass --force to reinstall)"
+    return 0
+  fi
   _upd_backup
 
   # THE RECORDED ROLE (spec §5): `ccrc.env`'s CCRC_ROLE, written by
@@ -11046,47 +11162,78 @@ _upd_fleet_warn() {
   return 0
 }
 
-# Fetch + verify, into a throwaway staging dir this process removes on ANY
+# ── _upd_resolve / _upd_fetch — SHA256SUMS first, then the tarball ────────
+# Split (release/rollout design §5-6) so `--check` and `rollout` can learn
+# WHICH version is published from the sums file alone — one small download,
+# nothing staged beyond it — while the full verb goes on to fetch, verify
+# twice and extract exactly as before.
+#
+# `_upd_resolve` — into a throwaway staging dir this process removes on ANY
 # exit. The URL space is GitHub's release layout (`latest/download/<asset>`,
 # `download/<tag>/<asset>`) under the one owner/repo pair at the top;
 # `install.sh --release` walks the same space with the same order — SUMS
 # first, because under `latest/` only the sums file knows the tarball's name.
-_upd_fetch() {   # $1 = pinned tag, or "" for the newest release
-  local to="$1" base url_dir _sum tarname
+_upd_resolve() {   # $1 = pinned tag, or "" for the newest release
+  local to="$1" base _sum
   base="${CCRC_RELEASE_BASE_URL:-https://github.com/$CCRC_RELEASE_OWNER/$CCRC_RELEASE_REPO/releases}"
-  if [ -n "$to" ]; then url_dir="$base/download/$to"; else url_dir="$base/latest/download"; fi
+  if [ -n "$to" ]; then UPD_URL_DIR="$base/download/$to"; else UPD_URL_DIR="$base/latest/download"; fi
   UPD_STAGE="$(_plat_mktemp_d)" || _ccrc_die "mktemp -d failed — no staging dir could be made, nothing was fetched"
   # The staging tree holds nothing this run does not either install or
   # refuse, so it is removed on every exit — success, die, or Ctrl-C.
   trap '[ -z "$UPD_STAGE" ] || rm -rf "$UPD_STAGE"' EXIT
-  echo "update: fetching $url_dir/SHA256SUMS …"
-  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$url_dir/SHA256SUMS" \
-    || _ccrc_die "download failed: $url_dir/SHA256SUMS (is there a release?) — nothing on this box was changed"
-  read -r _sum tarname < "$UPD_STAGE/SHA256SUMS" \
+  echo "update: fetching $UPD_URL_DIR/SHA256SUMS …"
+  curl -fsSL -o "$UPD_STAGE/SHA256SUMS" "$UPD_URL_DIR/SHA256SUMS" \
+    || _ccrc_die "download failed: $UPD_URL_DIR/SHA256SUMS (is there a release?) — nothing on this box was changed"
+  read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
-  tarname="${tarname#\*}"
-  case "$tarname" in
+  UPD_TARNAME="${UPD_TARNAME#\*}"
+  case "$UPD_TARNAME" in
     ccrc-*.tar.gz) ;;
-    *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $tarname) — refusing; nothing on this box was changed" ;;
+    *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $UPD_TARNAME) — refusing; nothing on this box was changed" ;;
   esac
-  UPD_VERSION="${tarname#ccrc-}"
+  UPD_VERSION="${UPD_TARNAME#ccrc-}"
   UPD_VERSION="${UPD_VERSION%.tar.gz}"
-  echo "update: fetching $url_dir/$tarname …"
-  curl -fsSL -o "$UPD_STAGE/$tarname" "$url_dir/$tarname" \
-    || _ccrc_die "download failed: $url_dir/$tarname — nothing on this box was changed"
+}
+
+# `_upd_fetch` — the tarball itself, verified twice and extracted. Reads
+# `UPD_URL_DIR`/`UPD_TARNAME`, both set by `_upd_resolve` above.
+_upd_fetch() {
+  echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME …"
+  curl -fsSL -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
+    || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME — nothing on this box was changed"
   # Verify BEFORE extracting: a tarball that fails its checksum never puts a
   # file on disk, let alone runs one (install.sh's rule, same words).
   ( cd "$UPD_STAGE" && _plat_sha256_check SHA256SUMS >/dev/null 2>&1 ) \
-    || _ccrc_die "checksum verification FAILED for $tarname — refusing to extract or install; nothing on this box was changed"
+    || _ccrc_die "checksum verification FAILED for $UPD_TARNAME — refusing to extract or install; nothing on this box was changed"
   UPD_TREE="$UPD_STAGE/tree"
   mkdir "$UPD_TREE" || _ccrc_die "cannot create $UPD_TREE"
-  tar -xzf "$UPD_STAGE/$tarname" -C "$UPD_TREE" \
-    || _ccrc_die "extracting $tarname failed — nothing outside the staging dir was touched"
+  tar -xzf "$UPD_STAGE/$UPD_TARNAME" -C "$UPD_TREE" \
+    || _ccrc_die "extracting $UPD_TARNAME failed — nothing outside the staging dir was touched"
   [ -f "$UPD_TREE/MANIFEST" ] \
     || _ccrc_die "the release ships no MANIFEST — refusing to install a set nothing can verify"
   ( cd "$UPD_TREE" && _plat_sha256_check MANIFEST >/dev/null 2>&1 ) \
     || _ccrc_die "MANIFEST verification FAILED after extraction — a file in the release set does not match its recorded digest; refusing to install"
-  echo "update: verified $tarname (transport checksum, then the per-file MANIFEST)"
+  echo "update: verified $UPD_TARNAME (transport checksum, then the per-file MANIFEST)"
+}
+
+# ── _upd_converged — 0 iff stamp sha == staged sha == the completed record ─
+# Three comparisons, none dropped: version equality alone is a moved tag
+# away from wrong; stamp==staged alone is a half-installed box away from
+# wrong (the record is the spine's LAST write, Task 3). An unreadable stamp
+# or record is no evidence, so it answers 1 and the update proceeds.
+_upd_converged() {
+  local rec="" staged=""
+  local -a box=()
+  _box_build_fields || return 1
+  [ -n "${BOX_BUILD[4]}" ] && [ "${BOX_BUILD[4]}" = "$UPD_VERSION" ] || return 1
+  box=("${BOX_BUILD[@]}")
+  _box_build_fields "$UPD_TREE/build.json" || { BOX_BUILD=("${box[@]}"); return 1; }
+  staged="${BOX_BUILD[0]}"
+  BOX_BUILD=("${box[@]}")
+  [ "$staged" = "${box[0]}" ] || return 1
+  [ -f "$BOX_INSTALLED_FILE" ] || return 1
+  IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1
+  [ "$rec" = "${box[0]}" ]
 }
 
 # Deploy's backup set (deploy.sh:363-369 agent lane, :788-792 server lane),
@@ -11375,6 +11522,233 @@ _upd_report() {   # $1 = old description, $2 = old version ("" when unknown)
       echo "update: rollback:   (no coord.db existed before this run — there is nothing to restore)"
     fi
   fi
+}
+
+# ── _rollout_need — deploy.sh's `_deploy_need`, the verb's own words ──────
+# Exit 2, nothing touched. There is deliberately no default: a rollout that
+# guessed its target would update someone else's box.
+_rollout_need() {   # <value> <name> <what> <envfile>
+  [ -n "$1" ] && return 0
+  echo "$PROG: rollout: \$$2 is not set ($3)." >&2
+  echo "  Set it in $4, or pass it in the environment. There is deliberately no default: a rollout that guessed its target would update someone else's box." >&2
+  exit 2
+}
+
+# ── _rollout_role — the ONE line of a box's ccrc.env this verb reads ──────
+# `grep` on the remote, never `cat`: ccrc.env is the box's live config and
+# may carry tokens; only the role's value crosses back. No overloaded null
+# at this seam (R7): the remote pipeline's own status (grep|cut) is masked
+# by `; exit 0` so an absent file/role — the ordinary "role-less" case —
+# always reads as rc 0 with empty output, and ONLY ssh's own transport
+# failure (unreachable host, bad key, refused port — 255 and friends)
+# reaches the caller as a non-zero return. A caller MUST check the return.
+#
+# ONE SPELLING OF THE ENV FILE (D-88, ruling R11). The remote path is this
+# box's own `$BOX_ENV_FILE` with the LOCAL `$HOME/` prefix stripped and the
+# REMOTE `$HOME` put back INSIDE the single-quoted command, so the remote
+# still expands its own home. A second literal here is exactly the drift
+# `BOX_ENV_FILE`'s own definition warns about, and it would be a second
+# spelling on a path this verb can only get wrong silently.
+#
+# AND SSH'S OWN LAST WORD IS KEPT. `2>/dev/null` threw away the only
+# evidence of WHY a box is unreachable (permission denied / connection
+# refused / name not resolved), leaving the caller's refusal to name an
+# exit code and nothing else. ssh's stderr goes to `$ROLLOUT_ERRF`, the
+# FILE `cmd_rollout` made before it called anything — NOT to a shell
+# variable: every caller reads this function's stdout through `$( )`, so
+# anything it assigned would die with that subshell. A file crosses it.
+_rollout_role() {   # <user@host> -> prints the recorded CCRC_ROLE (or nothing); returns ssh's own exit status
+  local out rc rel
+  rel="${BOX_ENV_FILE#"$HOME/"}"
+  : >"$ROLLOUT_ERRF" 2>/dev/null || :
+  out="$("${ROLLOUT_SSH[@]}" "$1" 'grep -m1 "^CCRC_ROLE=" "$HOME/'"$rel"'" 2>/dev/null | cut -d= -f2-; exit 0' 2>>"$ROLLOUT_ERRF")"
+  rc=$?
+  printf '%s' "$out" | tr -d '[:space:]'
+  return $rc
+}
+
+# The " — ssh said: <line>" tail for an unreachable-box refusal: ssh's last
+# non-blank word, or nothing at all when it was silent. One helper so both
+# callers say it the same way, and so "ssh said nothing" stays visibly
+# different from "ssh said something" rather than printing an empty quote.
+_rollout_role_why() {
+  local why=""
+  why="$(sed -e 's/[[:space:]]*$//' -e '/^$/d' "$ROLLOUT_ERRF" 2>/dev/null | tail -n1)"
+  [ -n "$why" ] && printf ' — ssh said: %s' "$why"
+  return 0
+}
+
+# ── cmd_rollout — one act, both boxes, in order (release/rollout design §4)
+# Runs on the deploying machine, needs no checkout. Coordinates are
+# deploy.sh's (`~/.ccrc/deploy.env`); the boxes' recorded roles are
+# preflighted BEFORE anything runs (an absent role installs `both`); the
+# version is pinned from SHA256SUMS ONCE and passed to both boxes, so a
+# release landing mid-rollout cannot split the fleet; box two is never
+# touched when box one fails; and the result is RE-MEASURED (`ccrc version`
+# on each box, `/health` on the server), never read off update's stdout.
+cmd_rollout() {
+  local to="" server_first=0 check=0 force=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --to)
+        [ $# -ge 2 ] || { echo "$PROG: --to needs a value: a release tag shaped vX.Y.Z" >&2; usage >&2; exit 2; }
+        to="$2"; shift ;;
+      --to=*) to="${1#--to=}" ;;
+      --server-first) server_first=1 ;;
+      --check) check=1 ;;
+      --force) force=1 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2; usage >&2; exit 2
+  fi
+  local t
+  for t in ssh curl jq; do
+    command -v "$t" >/dev/null 2>&1 \
+      || { echo "$PROG: rollout: $t is required by 'ccrc rollout' but is not on PATH — nothing was touched" >&2; exit 2; }
+  done
+
+  # Step 0 — coordinates.
+  local envf="${CCRC_DEPLOY_ENV:-$HOME/.ccrc/deploy.env}"
+  # shellcheck source=/dev/null
+  [ -r "$envf" ] && . "$envf"
+  _rollout_need "${CCRC_BOX:-}" CCRC_BOX "the server box, user@host" "$envf"
+  _rollout_need "${CCRC_AGENT_BOX:-}" CCRC_AGENT_BOX "the fleet box, user@host — never defaulted from CCRC_BOX" "$envf"
+  _rollout_need "${CCRC_SSH_KEY:-}" CCRC_SSH_KEY "the ssh identity file that reaches both boxes" "$envf"
+  ROLLOUT_SSH=(ssh -p "${CCRC_SSH_PORT:-22}" -i "$CCRC_SSH_KEY" -o BatchMode=yes)
+  # ONE scratch file for every remote's STDERR, made before the first ssh
+  # call and removed however this verb ends. It is a file rather than a
+  # variable because `_rollout_role` is read through `$( )`, and a subshell
+  # cannot hand an assignment back to its parent.
+  ROLLOUT_ERRF="$(_plat_mktemp)" \
+    || _ccrc_die "rollout: could not create a temp file for the boxes' stderr (mktemp failed) — nothing was touched"
+  trap '[ -z "${ROLLOUT_ERRF:-}" ] || rm -f -- "$ROLLOUT_ERRF"' EXIT
+
+  # Step 1 — preflight the roles, before touching either box.
+  local single=0 frole="" srole="" rrc=0
+  [ "$CCRC_AGENT_BOX" = "$CCRC_BOX" ] && single=1
+  frole="$(_rollout_role "$CCRC_AGENT_BOX")"; rrc=$?
+  if [ "$rrc" -ne 0 ]; then
+    echo "$PROG: rollout: the fleet box (CCRC_AGENT_BOX) is unreachable over ssh (exit $rrc)$(_rollout_role_why) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
+    exit 2
+  fi
+  if [ "$single" -eq 1 ]; then
+    [ "$frole" = both ] || {
+      echo "$PROG: rollout: CCRC_BOX and CCRC_AGENT_BOX name the same host, which records CCRC_ROLE=${frole:-nothing}, not 'both' — nothing was touched" >&2; exit 2; }
+  else
+    srole="$(_rollout_role "$CCRC_BOX")"; rrc=$?
+    if [ "$rrc" -ne 0 ]; then
+      echo "$PROG: rollout: the server box (CCRC_BOX) is unreachable over ssh (exit $rrc)$(_rollout_role_why) — check CCRC_SSH_KEY, CCRC_SSH_PORT and the host; nothing was touched" >&2
+      exit 2
+    fi
+    [ "$frole" = fleet ] || {
+      echo "$PROG: rollout: the fleet box (CCRC_AGENT_BOX) records CCRC_ROLE=${frole:-nothing}, not 'fleet' — its update would install the wrong role; nothing was touched" >&2; exit 2; }
+    [ "$srole" = server ] || {
+      echo "$PROG: rollout: the server box (CCRC_BOX) records CCRC_ROLE=${srole:-nothing}, not 'server' — its update would install the wrong role (an absent role installs 'both': an agent unit on the server box); nothing was touched" >&2; exit 2; }
+  fi
+
+  # Step 2 — pin the version: ONE SHA256SUMS read, the same read update makes.
+  # Run in a command substitution so a failure inside _upd_resolve (which
+  # calls _ccrc_die, exit 1) maps to THIS verb's exit-2 contract — nothing
+  # has touched a box yet — while its stderr (the die message itself)
+  # still reaches the terminal, and its EXIT trap still cleans up its own
+  # staging dir in the subshell that ran it.
+  ROLLOUT_VERSION="$( _upd_resolve "$to" >/dev/null && printf '%s' "$UPD_VERSION" )" \
+    || { echo "$PROG: rollout: could not resolve the target release — read the line above; nothing was touched" >&2; exit 2; }
+  # The name came out of a DOWNLOADED SHA256SUMS, and every use of it below
+  # is interpolated into a command a remote shell parses (`ccrc update --to
+  # $ROLLOUT_VERSION`). `--to`'s own value is shape-checked at parse time;
+  # this is the same check for the value the release space supplied, which
+  # no operator typed. Refuse before any box is touched.
+  [[ "$ROLLOUT_VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || { echo "$PROG: rollout: the published release name is not vX.Y.Z-shaped (got: $ROLLOUT_VERSION) — refusing to hand it to a remote shell; nothing was touched" >&2; exit 2; }
+  echo "rollout: target $ROLLOUT_VERSION"
+
+  local -a boxes=() labels=()
+  if [ "$single" -eq 1 ]; then boxes=("$CCRC_BOX"); labels=(box)
+  elif [ "$server_first" -eq 1 ]; then boxes=("$CCRC_BOX" "$CCRC_AGENT_BOX"); labels=(server fleet)
+  else boxes=("$CCRC_AGENT_BOX" "$CCRC_BOX"); labels=(fleet server); fi
+
+  # Step 3 — measure, then decide. `--check`'s check line is fixed-shape.
+  #
+  # STDOUT ONLY for parsing, and the remote's STDERR RELAYED rather than
+  # merged. `2>&1` plus "the check line is the FIRST line" made an ssh
+  # `Warning: Permanently added …` or a login banner — neither of them the
+  # remote ccrc's doing, and both entirely ordinary — read as "this box has
+  # no ccrc new enough to know --check", blaming the box for the transport.
+  # So: the remote's stderr goes to ours with this box's own label on it
+  # (an operator needs to SEE a host-key warning, not have it swallowed),
+  # and the check line is looked for ANYWHERE in stdout, first match wins.
+  # The refusal now fires only when no `check: ` line exists at all.
+  local i out first line state box sha allcurrent=1
+  for i in "${!boxes[@]}"; do
+    : >"$ROLLOUT_ERRF"
+    out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
+    [ -s "$ROLLOUT_ERRF" ] && sed "s/^/${labels[$i]}: /" "$ROLLOUT_ERRF" >&2
+    line="$(printf '%s\n' "$out" | grep -m1 '^check: ')" || line=""
+    if [ -z "$line" ]; then
+      first="${out%%$'\n'*}"
+      echo "$PROG: rollout: the ${labels[$i]} box's 'ccrc update --check' printed no check line (got: ${first:-nothing}) — is ccrc installed there, and new enough to know --check? nothing was touched" >&2
+      exit 2
+    fi
+    box="${line#*box=}"; box="${box%% *}"
+    sha="${line#*sha=}"; sha="${sha%% *}"
+    state="${line##*state=}"
+    echo "rollout: ${labels[$i]}: $box (${sha:0:8}) → $ROLLOUT_VERSION [$state]"
+    [ "$state" = current ] || allcurrent=0
+  done
+  if [ "$check" -eq 1 ]; then
+    [ "$allcurrent" -eq 1 ] && return 0
+    return 1
+  fi
+  if [ "$allcurrent" -eq 1 ] && [ "$force" -eq 0 ]; then
+    echo "rollout: every box already runs $ROLLOUT_VERSION — nothing to do"
+    return 0
+  fi
+
+  # Steps 4–5 — each box in order; stop on the first failure.
+  local forceflag="" rc=0 untouched=""
+  [ "$force" -eq 1 ] && forceflag=" --force"
+  for i in "${!boxes[@]}"; do
+    echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$forceflag"
+    "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$forceflag" 2>&1 | sed "s/^/${labels[$i]}: /"
+    rc="${PIPESTATUS[0]}"
+    if [ "$rc" -ne 0 ]; then
+      untouched=""
+      [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
+      _ccrc_die "rollout: the ${labels[$i]} box's update exited $rc — stopped here.$untouched Its lines above name the backup taken before anything changed; deploy.sh remains the fallback"
+    fi
+  done
+
+  # Step 6 — verify by re-measurement.
+  local v="" report="" bad=0
+  for i in "${!boxes[@]}"; do
+    out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" 'ccrc version' 2>/dev/null)" || out=""
+    v="$(printf '%s\n' "$out" | awk '/^version /{print $2; exit}')"
+    sha="$(printf '%s\n' "$out" | awk 'NR==1{print $2; exit}')"
+    if [ "$v" != "$ROLLOUT_VERSION" ]; then
+      echo "$PROG: rollout: the ${labels[$i]} box reports ${v:-no version}, not $ROLLOUT_VERSION, after its update — read that box's lines above" >&2; bad=1
+    fi
+    report="$report${report:+ · }${labels[$i]} ${v:-unversioned} (${sha:0:8})"
+  done
+  # EVERY shape includes the server box — `boxes` is either both boxes in
+  # one order or the other, or the single box which IS `$CCRC_BOX` — so
+  # `/health` is always re-measured, on `$CCRC_BOX`. The guard this replaces
+  # asked two questions whose answer was always yes: the single case, and
+  # `"${labels[*]}" != "${labels[*]/server/}"`, which is true for any labels
+  # containing `server` and therefore for both two-box orders. A condition
+  # no input can falsify is not a guard; it only hides which boxes get here.
+  v="$("${ROLLOUT_SSH[@]}" "$CCRC_BOX" 'curl -fsS http://127.0.0.1:7788/health' 2>/dev/null | jq -r '.version // empty' 2>/dev/null)" || v=""
+  if [ "$v" != "$ROLLOUT_VERSION" ]; then
+    echo "$PROG: rollout: the server box reports ${v:-no version}, not $ROLLOUT_VERSION, on /health after its restart" >&2; bad=1
+  fi
+  if [ "$bad" -ne 0 ]; then
+    echo "rollout: $report — NOT agreed"; return 1
+  fi
+  echo "rollout: $report — agreed"
 }
 
 # ── cmd_backup — update's step 2 standalone (stage 4, Task 8; spec §7) ────
@@ -11836,6 +12210,8 @@ _uninst_graphify_skills() {
 _uninst_tree_bins() {
   rm -rf -- "$BOX_TREE_DIR" \
     || _ccrc_die "removing $BOX_TREE_DIR failed"
+  rm -f -- "$BOX_INSTALLED_FILE" \
+    || _ccrc_die "removing $BOX_INSTALLED_FILE failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself
@@ -11869,7 +12245,7 @@ _uninst_tree_bins() {
     "$HOME/.local/bin/ccd-usage-sweep" "$HOME/.local/bin/ccd-usage-sweep.py" \
     "$HOME/.local/bin/ccd-pool-sync" \
     || _ccrc_die "removing the executables from \$HOME/.local/bin failed"
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-pool-sync and the ccrc launcher removed from \$HOME/.local/bin; the completed-install record removed"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
   # pinned venv, and the rule the four names above follow binds here too: an
@@ -12047,6 +12423,7 @@ case "$VERB" in
   models)  cmd_models "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
+  rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   backup)  cmd_backup "$@" ;;
   logs)    cmd_logs "$@" ;;
