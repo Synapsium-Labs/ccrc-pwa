@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=d2a24965855314ae4b2e1cec8a09379ee2fc2a6c833ba5349a6551d486e10e10
+# ccrc:generated 1 sha256=c7e91f31d912e5546d562d521e7ecacf6d1ad15b1e89801b228d77661c63d086
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2408,6 +2408,15 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   [[ "$epoch"  =~ $numRe ]] || { echo malformed; return 0; }
   [[ "$issued" =~ $numRe ]] || { echo malformed; return 0; }
   [[ "$lease"  =~ $numRe ]] || { echo malformed; return 0; }
+  # CLOCK SKEW, NAMED (item 10): `$lease` is an ABSOLUTE unix-seconds
+  # timestamp the SERVER box issued (`server.ts`'s `nowS + POOL_LEASE_MS`),
+  # compared here against THIS (fleet) box's own `date +%s` — nothing
+  # resynchronises the two clocks in between. Skew between the two boxes
+  # therefore shifts the whole staleness dial directly: a fleet box running
+  # fast calls the projection stale early, one running slow keeps serving it
+  # past the server's own idea of the lease. Not this function's to fix —
+  # NTP-typical skew is noise against the default 15-minute lease — but
+  # nothing said so before this comment.
   now=$(date +%s)
   (( now > 10#$lease )) && { echo stale; return 0; }
   # An account the document does not name is UNTAGGED, not unknown: the
@@ -2522,6 +2531,18 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
 # between), and a caller must never read them without having called first —
 # hence the unconditional reset on entry, so a rc-0 return can never leave the
 # previous call's words standing.
+#
+# FOUR MORE FUNCTIONS CLOBBER THESE GLOBALS WHEN CALLED DIRECTLY, beside
+# `cmd_swap` above: `_strand_why`, `_ws_least_loaded`, `_swap_target` and
+# `_place_for_class` each call `_pool_ok` themselves. They are safe today only
+# because every one of their eight call sites (`_place_for_class` x2,
+# `_ws_least_loaded` x4, `_swap_target` x1, `_strand_why` x1) is `$( )`
+# -substituted — a subshell, so the clobber dies with the subshell and never
+# reaches the caller's own `POOL_OK_SIDE`/`POOL_OK_STATE`. That is fragile,
+# not structural: this file already has precedent for de-substituting such a
+# call (`_place_for_class`'s `PLACE_DEGRADED_TO`, printed on a second line to
+# survive the subshell) — the day one of these four is called bare instead of
+# captured, the next `_pool_ok` render silently reads the wrong call's answer.
 _pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
   local ap pp
   POOL_OK_SIDE=''; POOL_OK_STATE=''
@@ -2563,7 +2584,7 @@ _pool_undecidable_why() {   # side state project account-id -> the rc-2 sentence
   case "$state" in
     stale)     echo "the pool projection for $acct is stale: $REG/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; project '$project' is tagged and its tag reads fine" ;;
     malformed) echo "the pool projection for $acct is malformed: $REG/pool-epoch is off the grammar — re-sync or remove it; project '$project' is tagged and its tag reads fine" ;;
-    *)         echo "the pool projection for $acct is unreadable: $REG/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; project '$project' is tagged and its tag reads fine" ;;
+    *)         echo "the pool projection for $acct is $state: $REG/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; project '$project' is tagged and its tag reads fine" ;;
   esac
 }
 _pool_mismatch_why() {   # account-id account-state project project-pool-state -> the rc-1 clause
@@ -9017,6 +9038,21 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # warning honest means counting home-able members separately — a behaviour
     # change with its own red-first test, deliberately NOT folded into the
     # merge that found it.
+    #
+    # THE CARRIER THIS CENSUS READS IS THE DECLARED ONE (item 6, carried
+    # Task-2 M5): `_acct_pool` is the roster read, not `_acct_pool_state`'s
+    # projection. Defensible — this fires at tag time, an honest claim about
+    # the roster — but say so, since every other pool-aware reader in this
+    # file now prefers the projection and a future author may assume this
+    # one does too.
+    #
+    # AND ON A TWO-BOX FLEET IT IS THE ONE REMAINING LIVE READER OF THAT
+    # DECLARED CARRIER (item 7, pre-existing, outside this wave's diff): it
+    # walks THIS (the fleet) box's `accounts.sh`, while placement now follows
+    # the SERVER box's roster copy through `$REG/pool-epoch` (spec §5.6 rule
+    # 1). A roster edit that has reached the server but not yet synced to
+    # this box's `accounts.sh` makes this warning and placement disagree —
+    # noted here, not restructured.
     local w hit=0
     for w in "${CCRC_ACCOUNTS[@]}"; do
       [[ "$(_acct_pool "$w")" == "$pool" ]] && { hit=1; break; }
