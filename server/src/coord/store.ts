@@ -5347,7 +5347,13 @@ export class CoordStore {
    *
    *  Purely content-derived: two epochs over identical membership collide on
    *  the same digest. Intended — the digest fingerprints WHAT is tagged, not
-   *  WHEN — but stated here since nothing said it before this round. */
+   *  WHEN — but stated here since nothing said it before this round.
+   *
+   *  PROVENANCE, NOT A MECHANISM (item 8): nothing reads `pool_epoch.digest`
+   *  back out — `poolEpoch()`'s callers all consume `epoch`/`issuedAt` — so
+   *  do not go looking for a consumer. It is written so a later debugging
+   *  session can tell two epochs' membership apart (or confirm they match)
+   *  without re-deriving this exact concatenation by hand. */
   private poolEdgeDigest(): string {
     const lines: string[] = [];
     for (const [subjectId, pools] of this.accountPoolEdges()) {
