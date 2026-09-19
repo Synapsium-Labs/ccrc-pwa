@@ -154,7 +154,7 @@ export function AccountPoolSheet({
           type="button"
           className="pool-row"
           data-none="true"
-          aria-label="no pool — this account may serve any project"
+          aria-label="no pool set here — defers to the roster's declared default"
           onClick={() => onSet(account, [])}
         >
           no pool

@@ -292,6 +292,13 @@ changes nothing about this path at all, not merely its latency.
    `SwapSheet.tsx` and **one** lib file (`pools.ts`) — so the precedence is folded in exactly once
    and no surface can render a value the API would refuse.
 
+**Clearing is not untagging.** There is no verb that centrally untags a declared account: setting
+an account's central pools to the empty set deletes its `pool_edges` row (rule 3's "which carrier
+decided" then has only one answer left), and by rule 1 that falls through to whatever
+`accounts.json` declares — never to `untagged`. An account with a declared roster `pool` cannot be
+made unconstrained from the central side at all; the only way is to remove the roster's own `pool`
+key.
+
 The roster field is **deprecated in documentation, not in code.** Retiring it is a later wave with
 its own skew analysis.
 
