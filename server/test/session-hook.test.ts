@@ -8288,7 +8288,24 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // broke resolve into `shared/api.ts`, so measuring the map before repairing
     // them would have read `shared/api.ts` 5 and shipped a census of a tree
     // that was about to stop existing.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(192);
+    // AND ON THE MERGE WITH `083aeb10` IT IS 196, WHICH IS 192 + 4 AND ALL FOUR
+    // ARE ONE ENTRY: `ccd/ccd` 144 -> 148. Every other key is byte-identical to
+    // main's map above — `session-hook.sh` 21, `compact-card.mjs` 4,
+    // `ccd-ws-reap` 2, `ccd-workspaces` 5, `deploy.sh` 2, `ccrc` 5,
+    // `single-definition` 8, and `shared/api.ts` back at 1 — so the sum moves
+    // by exactly what this branch did to `ccd/ccd` and by nothing else. The
+    // four movers are argued individually beside the map; they are not
+    // re-derived here, because the headline is a MECHANISM (`total` is
+    // literally `Object.values(byFile).reduce`), not a second measurement that
+    // could disagree with it.
+    //
+    // `shared/api.ts` HAD to be repaired before this number could be taken:
+    // measured 5 until the four README anchors this branch broke were
+    // re-pointed (`:7366-7368`/`:7406`/`:7414`/`:7427` -> `:7452-7454`/`:7492`/
+    // `:7500`/`:7513`, +86, each located by exact content match rather than by
+    // adding the delta). Taking the sum first would have banked a 200 for a
+    // tree that was about to stop existing.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
