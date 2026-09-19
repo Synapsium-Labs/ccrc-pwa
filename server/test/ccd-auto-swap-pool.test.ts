@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness }
+import { CCD, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness, WIDE_PANE }
   from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
@@ -104,7 +104,7 @@ const seed = (): void => {
  *  `_avail` left REAL: a pane at a clean prompt, a pane pid, and a dispatch
  *  that logs instead of running systemd-run. */
 const AFFINITY = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -114,7 +114,7 @@ const AFFINITY = `
 /** The RESCUE fixture: a real limit banner, matched by the REAL
  *  `_pane_hard_blocked` — the classifier IS the discriminator here. */
 const BLOCKED = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -129,7 +129,7 @@ const BLOCKED = `
  *  presence or absence of `--cross-pool` on an automatic move is decidable.
  *  Same technique as `ccd-crosspool.test.ts`'s self-swap fixture. */
 const BLOCKED_REAL_DISPATCH = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };

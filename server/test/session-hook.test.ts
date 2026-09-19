@@ -8087,7 +8087,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // counted. 161 -> 162 failures overall, +1 on `ccd/ccd` and +0 everywhere
     // else.
     expect(byFile, 'the citation debt moved — re-measure, and lower the census rather than the rule').toEqual({
-      'ccd/ccd': 145,
+      // RE-DERIVED on the FOURTH merge with main (`ad3d2fbc`, #136), 145 -> 144,
+      // and DOWN is the direction that needs an argument rather than a shrug.
+      // Neither corpus document changed: `specs/2026-09-09-…-design.md` and
+      // `plans/2026-09-10-…-plan-a.md` are byte-identical to `origin/main` at
+      // this tree, measured. So no citation was re-pointed and nothing here is
+      // a repair — the one reference that stopped failing did so because
+      // `ccd/ccd` grew on BOTH sides of this merge (+388 this branch, +427 main)
+      // and a different line slid under its anchor. A coincidental pass is not
+      // a green anchor; the debt is unchanged and Task 11 still owns it.
+      'ccd/ccd': 144,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8145,7 +8154,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 182 (this branch alone) and 163 (main alone) are both measurements of trees
     // that no longer exist; neither was carried forward. 184 is what the instrument
     // printed on the tree that ships.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(184);
+    //
+    // AND ON THE FOURTH MERGE (`ad3d2fbc`, #136) it is 183, which is 184 - 1 and
+    // not a rounding of it: the map's `ccd/ccd` entry fell by exactly one because
+    // `ccd/ccd:5828-5830` stopped failing the census. That reference did not get
+    // repaired — no citation in this corpus changed at all, both documents being
+    // byte-identical to `origin/main` here — it simply now lands on `for f in
+    // "$REG/.$id".*; do` instead of the `THREE TIERS DEEP` comment it named at main.
+    // It is still stale in fact, and it is still counted by the **Files:** pass,
+    // where it moved INTO the only-this-pass-can-see list on the same measurement.
+    // The debt did not fall; its visibility to this pass did.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(183);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8278,6 +8297,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:6478',
         'ccd/ccd:13020',
         'ccd/ccd:19131',
+        // ENTERS on the fourth merge (`ad3d2fbc`), and it is the mirror of the
+        // census entry that left: at `origin/main` this range opened on
+        // `_auto_swap_check`'s reachability paragraph, and at this tree it opens
+        // on `IT MINTS THE DIRECTORY ITSELF`. Same mechanism, opposite sign.
+        'ccd/ccd:4006-4035',
         'ccd/ccd:4045',
         'ccd/ccd:4029',
         'ccd/ccd:4047',
@@ -8347,7 +8371,13 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // the D-2989 guards and their arguments), which shifts every anchor
         // below it — main's anchors going stale on this branch, not the other
         // way round. Whatever the instrument printed is what ships.
-      'ccd/ccd:1330-1333', 'ccd/session-hook.sh:1098', 'ccd/ccrc:7129-7130',
+        // `ccd/ccd:5828-5830` ENTERS on the fourth merge — the same reference the
+        // census above lost, arriving here by the same one measurement. That is the
+        // pair the headline comment names: the debt moved passes, it did not go.
+      'ccd/ccd:5828-5830',
+      'ccd/ccd:1330-1333',
+      'ccd/session-hook.sh:1098',
+      'ccd/ccrc:7129-7130',
     ]);
   });
 
@@ -8635,13 +8665,26 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // 78's F6 and stays DECLARED, corrected only where a comment was being
         // rewritten anyway) and main's own insertions move it again. Whatever the
         // instrument printed is what ships.
+        // RE-DERIVED AGAIN on the FOURTH merge with main (`ad3d2fbc`, #136), and
+        // the set SHRANK, 54 -> 48, which is the direction that can hide a rotting
+        // corpus behind a smaller number. It does not here, and that is measured
+        // rather than asserted: both corpus documents are byte-identical to
+        // `origin/main` at this tree, so not one citation was re-pointed by either
+        // side of this merge. Every move is `ccd/ccd` drift. Each was checked by
+        // reading the anchor's own line at `origin/main` and at this tree — all
+        // fourteen name different content at the two trees, none the same content
+        // at a new number. FOUR ENTER (`:3038`, `:19120`, `:12594-12659`, `:2793`)
+        // and TEN LEAVE (`:11665-11670` x2, `:2874` x2, `:3050` x2, `:13650-13652`,
+        // `:3390-3402`, `:5385-5388`, `:5828-5830`). A coincidental pass is not a
+        // green anchor and a coincidental fail is not new rot; Task 11 still owns
+        // the debt this measures.
         'ccd/ccd:203',
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd:13573-13575',
+        'ccd/ccd:3038',
         'ccd/ccd:5797',
         'ccd/ccd:7568',
         'ccd/ccd:11025',
-        'ccd/ccd:11665-11670',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
@@ -8650,20 +8693,20 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
         'ccd/ccd:19098',
+        'ccd/ccd:19120',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
         'ccd/ccd:11665-11670',
+        'ccd/ccd:12594-12659',
         'ccd/ccd:13809',
         'ccd/ccd:13812',
         'ccd/ccd:6425',
         'ccd/ccd:1223',
         'ccd/ccd:6547',
-        'ccd/ccd:3390-3402',
         'ccd/ccd:3401',
         'ccd/ccd:4029',
         'ccd/ccd:4046',
@@ -8673,22 +8716,16 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:8654',
         'ccd/ccd:8673',
         'ccd/ccd:13573-13575',
-        'ccd/ccd:11665-11670',
         'ccd/session-hook.sh:795',
         'ccd/session-hook.sh:796',
-        'ccd/ccd:2874',
-        'ccd/ccd:2874',
         'ccd/session-hook.sh:993',
         'ccd/ccd:3070',
-        'ccd/ccd:3050',
-        'ccd/ccd:3050',
         'ccd/ccd:3070',
         'ccd/ccd:2455',
+        'ccd/ccd:2793',
         'ccd/ccd:3070',
         'ccd/session-hook.sh:802',
         'ccd/ccd:5725',
-        'ccd/ccd:5385-5388',
-        'ccd/ccd:5828-5830',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -8737,7 +8774,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // RE-DERIVED on the merge with `f06abdce` (round 7), from the same run as
       // the set above — the two are one measurement and must not be taken from
       // different trees.
+      // RE-DERIVED on the fourth merge (`ad3d2fbc`), 38 -> 34, from the SAME run
+      // as the row-pass set above — the two are one measurement and must not be
+      // taken from different trees. Every move mirrors one there: `:3038` and
+      // `:19120` enter, `:3390-3402`, `:2874` x2, `:3050` x2 and `:5385-5388`
+      // leave. `:2793` and `:12594-12659` entered the row set and are absent here
+      // because no other pass reaches them, which is what this list measures.
         'spec:2123 ccd/ccd:13573-13575',
+        'spec:2124 ccd/ccd:3038',
         'spec:2125 ccd/ccd:5797',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
@@ -8747,6 +8791,7 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',
         'spec:2125 ccd/ccd:19098',
+        'spec:2125 ccd/ccd:19120',
         'spec:2125 ccd/ccd:19131',
         'spec:2204 ccd/ccd:12032-12034',
         'spec:2204 ccd/ccd:12032-12034',
@@ -8755,7 +8800,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:6425',
         'spec:2209 ccd/ccd:1223',
         'spec:2209 ccd/ccd:6547',
-        'spec:2209 ccd/ccd:3390-3402',
         'spec:2209 ccd/ccd:3401',
         'spec:2209 ccd/ccd:4029',
         'spec:2209 ccd/ccd:4046',
@@ -8765,16 +8809,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2209 ccd/ccd:8654',
         'spec:2209 ccd/ccd:8673',
         'spec:2210 ccd/ccd:13573-13575',
-        'spec:2220 ccd/ccd:2874',
-        'spec:2220 ccd/ccd:2874',
         'spec:2220 ccd/session-hook.sh:993',
         'spec:2220 ccd/ccd:3070',
-        'spec:2220 ccd/ccd:3050',
-        'spec:2220 ccd/ccd:3050',
         'spec:2220 ccd/ccd:3070',
         'spec:2220 ccd/ccd:3070',
         'spec:2222 ccd/ccd:5725',
-        'spec:2222 ccd/ccd:5385-5388',
       ]);
   });
 

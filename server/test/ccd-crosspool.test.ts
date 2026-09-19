@@ -29,7 +29,7 @@ import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD,
-  type CcdHarness } from './ccdWsHelpers.js';
+  type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
@@ -77,7 +77,7 @@ const writeLimits = (w: string, five: number, seven: number): void => {
 
 const SWAP_STUBS = 'systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };'
   + ' launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };'
-  + ' tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; return 0; }; sleep() { :; };';
+  + ` tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} return 0; }; sleep() { :; };`;
 
 /** The registry row cmd_swap reads. Returns `mdir` — the munge of the resolved
  *  workdir, computed here exactly as ccd's `tr '/._' '---'` computes it. */
@@ -110,14 +110,14 @@ const shFail = (snippet: string, env: NodeJS.ProcessEnv = {}):
 
 /** The tick, with `_swap_target` and `_auto_swap_check` REAL. */
 const BLOCKED = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) echo "API Error: 429 Too Many Requests" ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
   _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };
 `;
 const QUIET = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) printf '%s\\n' "❯ " ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -764,7 +764,7 @@ const SELF = `
   systemctl() { echo "systemctl $*" >> "$HOME/ccd-calls"; return 0; };
   launchctl() { echo "launchctl $*" >> "$HOME/ccd-calls"; return 0; };
   sleep() { :; };
-  tmux() { case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
+  tmux() { ${WIDE_PANE} case "\${1:-}" in display-message) echo "cc-${ID}";; esac;
     echo "tmux $*" >> "$HOME/ccd-calls"; return 0; };
   _svc_run_detached() { echo "detached $*" >> "$HOME/ccd-calls"; return 0; };
 `;
@@ -985,7 +985,7 @@ describe('cmd_swap\'s CCD_SWAP_AUTO strand filter (§5.8.4) — a sound filter, 
     tagPool('demo', 'pool-a'); plantNotify();
     const AUTO_GATED_SUPERVISOR = `
       systemctl() { :; }; launchctl() { :; }; sleep() { :; };
-      tmux() { case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
+      tmux() { ${WIDE_PANE} case "\${1:-}" in capture-pane) echo "API Error: 429 Too Many Requests";; esac; return 0; };
       _swap_target() { echo claude-b; };
       # A SUBSHELL, because that is what the real one is: _dispatch_swap runs
       # cmd_swap in a transient systemd unit, and cmd_swap's guard reaches
@@ -1586,7 +1586,7 @@ describe('the SECOND crossing read in `_swap_target` is guarded too', () => {
 // remedies measured as defects). Every case below is one that went RED against
 // PR #69 exactly as shipped.
 const NOPANE = `
-  tmux() { case "\${1:-}" in
+  tmux() { ${WIDE_PANE} case "\${1:-}" in
              capture-pane) : ;;
              list-panes)   echo ${PANE_PID} ;;
            esac; return 0; };
@@ -2010,7 +2010,7 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     seedRow();
     const pane = 'ctx ▓▓▓▓ 80%\\n❯ ';
     const stubs = `
-      tmux() { case "\${1:-}" in
+      tmux() { ${WIDE_PANE} case "\${1:-}" in
                  capture-pane) printf '%s\\n' "${pane}" ;;
                  list-panes)   echo ${PANE_PID} ;;
                esac; return 0; };
@@ -2047,7 +2047,7 @@ describe('R2 — the FIFO hang class, closed on the whole tick and not just one 
     seedRow();
     const pane = 'ctx ▓▓▓▓ 80%\n❯ ';
     const stubs = `
-      tmux() { case "\${1:-}" in
+      tmux() { ${WIDE_PANE} case "\${1:-}" in
                  capture-pane) printf '%s\\n' "${pane}" ;;
                  list-panes)   echo ${PANE_PID} ;;
                esac; return 0; };

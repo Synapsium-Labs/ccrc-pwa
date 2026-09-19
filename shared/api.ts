@@ -8023,3 +8023,48 @@ export type PaneProbe =
 export type PaneHistoryReply =
   | { ok: true; text: string; lines: number; scrollback?: number; alternate?: boolean; width?: number }
   | { ok: false; error: 'gone' | 'unmeasured' | 'bad-session-id'; detail?: string };
+
+/**
+ * The narrowest pane width at which the fleet's phrase-matching readers may be
+ * trusted (spec §6.3). Below it, `ccd`'s typing sites stand down — a narrow
+ * pane is UNMEASURED, not idle.
+ *
+ * WHAT DOES NOT YET HONOUR IT. `ccd/ccd` is the only consumer: run
+ * `grep -rn 'READER_MIN_COLS' server/src pwa/src agent/src shared/*.ts` and the
+ * only hits inside those four trees are this declaration and this sentence's
+ * own quotation of the command — no other file in server/src, pwa/src or
+ * agent/src references the constant. In particular the server's mail
+ * lane is NOT width-aware: `server/src/watch.ts` asks for the hold with
+ * `sendPrompt(…, holdIfAutoContinueArmed: true)` and `server/src/inject/send.ts`
+ * decides it with `autoContinueArmed(armWindow)` over the last 8 captured rows —
+ * a phrase match (`AUTO_CONTINUE_RE`) with no width measurement anywhere on that
+ * path. The failure direction is the dangerous one: on a pane below this width
+ * Claude Code's own limit-recovery line WRAPS, the phrase is no longer on one
+ * row, `autoContinueArmed` answers false, the hold does NOT fire, and the server
+ * types into a pane whose auto-continue was armed — cancelling it. An earlier
+ * version of this docstring said "and the mail lane holds"; nothing shipped ever
+ * made that true. Teaching that lane this floor is a deliberate later widening,
+ * not something to infer from this constant's existence.
+ *
+ * DERIVED, not chosen. Claude Code's TUI is Ink, which wraps its own status
+ * line at the terminal width before tmux ever stores the row. This tree cannot
+ * measure which wrap call Claude Code's bundled Ink major actually makes, so
+ * the derivation runs `wrap-ansi@9` (the exact major matters — see below)
+ * TWICE over Claude Code's known status-line carriers at every width in
+ * 40–220, once as `{ hard: false }` and once as `{ trim: false, hard: true }`
+ * (Ink `<Text>`'s documented default for `wrap="wrap"`), and asks at which
+ * widths a phrase is still on ONE line. Measured 2026-09-14: both option sets
+ * agree on every carrier, so the floor below does not depend on which one
+ * Claude Code's Ink uses. The widest carrier
+ * (`✳ Procrastinating… (2h 14m 52s · ↑ 128.4k tokens · esc to interrupt)`)
+ * needs 69 columns under both, and the widest `· <segment>` in the sample is
+ * 37 — so 120 carries room for one whole extra segment (69 + 37 = 106) and
+ * still leaves a 171-column desktop client measurable while every phone is
+ * below it. The major version is load-bearing: under `wrap-ansi@10` the same
+ * carriers measure 68 and 55 instead of 69 and 56 (ambiguous-width handling of
+ * `✳` moved), so a derivation that does not pin the major is not reproducible.
+ *
+ * `ccd/ccd` carries the same number as a bash global, because bash cannot
+ * import this file; `server/test/reader-min-cols.test.ts` holds the two equal.
+ */
+export const READER_MIN_COLS = 120;
