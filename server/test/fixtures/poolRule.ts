@@ -16,6 +16,7 @@
 // this repository at all (spec §8, "Single definition"); `topology-clean.test.ts`
 // is what keeps that true.
 import type { ProjectPoolWire } from '../../../shared/api.js';
+import type { AccountPoolWire } from '../../../shared/poolrule.js';
 import { DEFAULT_TEST_ROSTER } from '../helpers.js';
 
 /** Which fixture accounts carry a tag. Two accounts share `pool-a` on purpose —
@@ -23,7 +24,7 @@ import { DEFAULT_TEST_ROSTER } from '../helpers.js';
  *  rule picked the only account left". `gpt` and `claude-d` are absent from this
  *  map, so they stay untagged, which is the state every account on a live box is
  *  in on the day pools ship. */
-const POOL_BY_ID: Readonly<Record<string, string | undefined>> = {
+export const POOL_BY_ID: Readonly<Record<string, string | undefined>> = {
   claude: 'pool-a',
   'claude-a': 'pool-a',
   'claude-b': 'pool-b',
@@ -125,6 +126,23 @@ export interface PoolRuleCase {
   expect: 'serve' | 'mismatch' | 'undecidable';
   /** Why this row is in the table, in one sentence — what breaks if it goes. */
   why: string;
+  /** OPTIONAL (added by wave 1 Task 5): when set, the driver builds the row's
+   *  `AccountPoolWire` from this bare state instead of from `accountPool` —
+   *  the only way this table can express `unreadable` / `malformed` / `stale`
+   *  on the ACCOUNT side, which `accountPool: string | null` has no vocabulary
+   *  for. Every existing row leaves this `undefined` and MUST keep producing
+   *  exactly the verdict it produces today; a row that opts in owes its own
+   *  `accountPool` no meaning (the driver ignores it in that case).
+   *
+   *  DELIBERATELY NARROWED to exclude `'tagged'`/`'untagged'` (fix round
+   *  T5-R2, M6): those two states carry `pools`/`origin`, which a bare
+   *  `{ state }` cannot supply, so the driver builds THOSE two straight from
+   *  `accountPool` instead. Widening this back to the full
+   *  `AccountPoolWire['state']` would silently reopen the runtime `TypeError`
+   *  a cast used to hide — `wireFor` builds `{ state }` with no cast, so a row
+   *  that opted into `'tagged'`/`'untagged'` here would fail to COMPILE rather
+   *  than construct a malformed wire at runtime. */
+  accountState?: Exclude<AccountPoolWire['state'], 'tagged' | 'untagged'>;
 }
 
 export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
@@ -199,5 +217,52 @@ export const POOL_RULE_CASES: readonly PoolRuleCase[] = [
   {
     name: 'malformed-untagged-account', accountPool: null, project: { state: 'malformed' }, expect: 'undecidable',
     why: 'the same short-circuit as unreadable-untagged-account, for the other undecidable state',
+  },
+  // Added by wave 1 Task 2 — the ACCOUNT side's own undecidable states, now
+  // that `_pool_ok` reads `_acct_pool_state` instead of a bare name. The rows
+  // above exercise the PROJECT side's `unreadable`/`malformed`; these mirror
+  // it on the account side, plus the two short-circuit rows that prove the
+  // project-decides-first ordering (spec §5.8) still holds once the account
+  // side can ALSO answer undecidable.
+  {
+    name: 'acct-unreadable-project-tagged', accountPool: null, accountState: 'unreadable',
+    project: { state: 'tagged', name: 'pool-a' }, expect: 'undecidable',
+    why: 'a node that has never synced must refuse into a tagged project, never serve — the cold-pod fail-shut and the EKS default path',
+  },
+  {
+    name: 'acct-stale-project-tagged', accountPool: null, accountState: 'stale',
+    project: { state: 'tagged', name: 'pool-a' }, expect: 'undecidable',
+    why: 'past the lease nobody decides; a stale node must not serve a constraint it can no longer read',
+  },
+  {
+    name: 'acct-malformed-project-tagged', accountPool: null, accountState: 'malformed',
+    project: { state: 'tagged', name: 'pool-a' }, expect: 'undecidable',
+    why: 'a document off the grammar is not an empty one',
+  },
+  {
+    name: 'acct-unreadable-project-untagged', accountPool: null, accountState: 'unreadable',
+    project: { state: 'untagged' }, expect: 'serve',
+    why: 'THE SHORT-CIRCUIT: an untagged project is unconstrained, so a control-plane outage must not stop placement into it — this row is what bounds the blast radius to the constrained set',
+  },
+  {
+    name: 'acct-stale-project-untagged', accountPool: null, accountState: 'stale',
+    project: { state: 'untagged' }, expect: 'serve',
+    why: 'the same short-circuit for the stale arm — ordering, not a special case',
+  },
+  {
+    name: 'acct-unreadable-project-unreadable', accountPool: null, accountState: 'unreadable',
+    project: { state: 'unreadable' }, expect: 'undecidable',
+    // THIS ROW'S SUBJECT IS THE PROJECT ARM, NOT THE ACCOUNT ARM, and saying so
+    // is the fix for the fix round's M1: the `why` used to read "both sides
+    // unreadable is still one verdict, and it is not a mismatch", which claims
+    // an account-side fact this row cannot possibly measure. Measured: the
+    // project arm answers first and returns, so `_acct_pool_state` is never
+    // called at all here and the row passes with ANY account state — vacuous
+    // for the claim it was making. What it DOES pin is worth keeping: an
+    // unreadable project side is `undecidable` and never a MISMATCH, however
+    // "different" two unmeasurable sides look, and it stays `undecidable` when
+    // the account side would also have refused, so the two do not add up to a
+    // stronger verdict.
+    why: 'an unreadable PROJECT side answers undecidable and returns before the account side is read at all — two unmeasurable sides are one verdict, never a mismatch, and never a stronger one',
   },
 ];

@@ -846,7 +846,14 @@ describe('GET /api/projects — the program-ready readiness', () => {
   it('carries a per-project readiness once the watcher has swept', async () => {
     const { app } = await makeApp({
       readiness: SWEPT,
-      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }) },
+      // Item 15 (fix wave B): a stub missing `accountPoolEdges` entirely
+      // makes `readAccountPoolEdges()`'s try/catch swallow a `TypeError`
+      // instead of the `DatabaseSync`-shaped hazard it exists to catch — this
+      // test then quietly measures the DEGRADED path, not the ledger-floor
+      // behaviour its name claims. `projects-route-placement.test.ts`'s "a
+      // throwing accountPoolEdges() degrades placement to declared-only"
+      // already covers that hazard on purpose; this stub just needs to work.
+      coord: { ledgerFloor: () => ({ floor: 1, evidence: 'x', updatedAt: 1 }), accountPoolEdges: () => new Map() },
     });
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
@@ -862,7 +869,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     // THE CASE THE FEATURE EXISTS FOR. `CoordStore.runs()` joins `programs`,
     // so a runs-shaped seam has no row at all here; this one does.
     const { app } = await makeApp({
-      readiness: SWEPT, coord: { ledgerFloor: () => null },
+      readiness: SWEPT, coord: { ledgerFloor: () => null, accountPoolEdges: () => new Map() },
     });
     const row = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects[0];
     expect(row.readiness.floor).toBe('not-seeded');
@@ -884,7 +891,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
     // would send an operator to seed a floor that may already exist.
     const { app } = await makeApp({
       readiness: SWEPT,
-      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); } },
+      coord: { ledgerFloor: () => { throw new Error('SQLITE_BUSY'); }, accountPoolEdges: () => new Map() },
     });
     const res = await app.inject({ method: 'GET', url: '/api/projects' });
     expect(res.statusCode).toBe(200);
@@ -905,6 +912,7 @@ describe('GET /api/projects — the program-ready readiness', () => {
           if (project === 'alpha') throw new Error('SQLITE_BUSY');
           return { floor: 1, evidence: 'x', updatedAt: 1 };
         },
+        accountPoolEdges: () => new Map(),
       },
     });
     const rows = (await app.inject({ method: 'GET', url: '/api/projects' })).json().projects;

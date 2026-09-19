@@ -920,6 +920,51 @@ describe('the pool chip and the strand are real cells, and the chip is a real ta
     }
   });
 
+  // Review round 1, C1. The account-pool chip (AccountsScreen) carries BOTH
+  // `.proj-card-pool` and `.acct-pool-chip`, so the shared untagged-attention
+  // rule proven above ALSO matches it — but an untagged ACCOUNT is the
+  // default, unconstrained state, not the worklist fault an untagged PROJECT
+  // is. `.acct-pool-chip[data-pool='untagged']` must win that colour back.
+  // Same shape as the spawn-chip / ctx-pressure cascade-tie tests above this
+  // file's `selection is polarity` describe: membership is necessary and not
+  // sufficient — a render test cannot see this at all (jsdom applies no
+  // stylesheet), so only reading the text can prove the override actually
+  // wins the tie rather than merely existing.
+  it("wins the untagged account chip's colour back from .proj-card-pool by SOURCE ORDER — both tie at (0,2,0)", () => {
+    const spec = (sel: string): number =>
+      (sel.match(/\.[A-Za-z0-9_-]+|\[[^\]]*\]|:[a-z-]+/g) ?? []).length;
+    const sharedSel = ".proj-card-pool[data-pool='untagged']";
+    const acctSel = ".acct-pool-chip[data-pool='untagged']";
+    // The shared rule really does paint attention ink — without that there is
+    // nothing to beat and everything below would be vacuous.
+    expect(declValue(ruleFor(sharedSel), 'color'), `${sharedSel} no longer sets its own colour`)
+      .toBe('var(--status-attention-text)');
+    // …and the account chip's own rule really does win the quiet ink back.
+    expect(declValue(ruleFor(acctSel), 'color'), `${acctSel} no longer sets its own colour`)
+      .toBe('var(--ink-tertiary)');
+    // Equal specificity is why source order is load-bearing here at all — if
+    // one side already out-specified the other, this test would prove nothing
+    // about ORDER.
+    expect(spec(acctSel), 'the two selectors no longer tie at (0,2,0) — this test may be moot')
+      .toBe(spec(sharedSel));
+    const scrubbed = stripComments(css);
+    const sharedAt = scrubbed.indexOf(sharedSel);
+    const acctAt = scrubbed.indexOf(acctSel);
+    expect(sharedAt, `${sharedSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} is not in the stylesheet any more`).toBeGreaterThan(-1);
+    expect(acctAt, `${acctSel} now precedes the shared rule — this test no longer proves anything`)
+      .toBeGreaterThan(sharedAt);
+  });
+
+  // `stale` is account-only (AccountPoolWire has no project-side counterpart,
+  // design §5.7), so it is absent from `.proj-card-pool`'s shared list and
+  // would otherwise fall through to the base `--ink-tertiary` instead of the
+  // attention ink `poolRule` treats it the same as malformed/unreadable for.
+  it('gives the stale account chip the same attention ink as malformed/unreadable', () => {
+    expect(declValue(ruleFor(".acct-pool-chip[data-pool='stale']"), 'color'))
+      .toBe('var(--status-attention-text)');
+  });
+
   it('keeps unavailable chip text unfaded while its inert form carries the distinction', () => {
     expect(css).not.toMatch(/\.proj-card-pool\[data-dim\][^}]*opacity\s*:/s);
   });

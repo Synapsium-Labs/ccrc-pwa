@@ -555,6 +555,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // own box is the defect the whole stage exists to close.
       'systemd/ccrc-models.service',
       'systemd/ccrc-models.timer',
+      // account-pool-membership wave 1, Task 4: the pool-sync pair, shipped
+      // the same way — a repo that cannot reproduce its own box is the
+      // defect the whole stage exists to close.
+      'systemd/ccd-pool-sync.service',
+      'systemd/ccd-pool-sync.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -620,6 +625,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-telemetry-keepalive.timer ~/.config/systemd/user/ccd-telemetry-keepalive.timer',
       '_unit_atomic ~/ccrc/deploy/systemd/ccrc-models.service ~/.config/systemd/user/ccrc-models.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccrc-models.timer ~/.config/systemd/user/ccrc-models.timer',
+      // account-pool-membership wave 1, Task 4: the pool-sync pair, installed
+      // the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer ~/.config/systemd/user/ccd-pool-sync.timer',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -650,6 +659,17 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(keepaliveTimerAt, 'the keepalive timer is never enabled').toBeGreaterThan(reloadAt);
     const modelsTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccrc-models.timer'));
     expect(modelsTimerAt, 'the models timer is never enabled').toBeGreaterThan(reloadAt);
+    // account-pool-membership wave 1, Task 4: the pool-sync timer, needing the
+    // same daemon-reload to have already picked up the unit AGENT_BUILD_CMD
+    // installed. NO ORDINAL (ruling T4-R4, fix round 2): this one shipped
+    // reading "a sixth timer", which was wrong on the day it was written —
+    // `deploy.sh`'s agent lane enables SEVEN, and the ordinals above it skip
+    // `ccrc-models.timer` and `ccd-usage-sweep.timer` entirely. `ccd/ccrc`
+    // retired its own spelled-out ordinals for exactly this (D-1347, D-2594):
+    // nothing can measure one, so it is a standing request for a reader to do
+    // a machine's job. The assertions below ARE the census.
+    const poolSyncTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-pool-sync.timer'));
+    expect(poolSyncTimerAt, 'the pool-sync timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -670,6 +690,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccd-telemetry-keepalive .local/bin/ccd-telemetry-keepalive 755');
     expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });

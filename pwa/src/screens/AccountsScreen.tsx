@@ -14,11 +14,14 @@
 import { useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { AccountUsage, AuthStatus, PasskeyListResponse, ProjectedHome, RosterWire } from '../../../shared/api';
+import type { AccountPoolWire } from '../../../shared/poolrule';
+import { toast } from '../components/Toast';
 import { limitBand } from '../components/LimitBar';
 import { Skeleton } from '../components/Skeleton';
+import { AccountPoolSheet } from '../fleet/AccountPoolSheet';
 import { formatAge, formatReset } from '../fleet/formatReset';
 import { sessionLabel } from '../fleet/sessionLabel';
-import { accountColorVar, accountLabel, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
+import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { authPostureChanged, raiseAuthLost, readAuthStatus } from '../lib/auth';
 import { PasskeyCeremonyError, enrollPasskey, passkeyEnrollSupported } from '../lib/passkey';
@@ -26,6 +29,91 @@ import { navigate } from '../lib/router';
 import { useNow } from '../lib/useNow';
 import { useFleetStore } from '../stores/fleet';
 import '../fleet/fleet.css';
+
+/** The chip's short text, accessible name and `data-pool`/`data-origin` for
+ *  EVERY `AccountPoolWire` state — review round 1, I4. `malformed`,
+ *  `unreadable` and `stale` are just as UNDECIDABLE to `poolRule` as each
+ *  other (a 503, never a crossing offer, design §5.7) — collapsing any of
+ *  them to "no pool" claims the opposite of what the server actually does
+ *  with them: unconstrained, may serve any project. Distinct words for
+ *  `stale` vs `unreadable` on purpose (design §5.7's own words: "one's
+ *  remedy is file permissions, the other's is the control-plane link").
+ *  Not producible by today's server (`resolvedAccountPool` only ever
+ *  returns `tagged`/`untagged` — server/src/poolrule.ts), so this is latent,
+ *  forward-looking coverage, not a reachable-today path.
+ *
+ *  Exhaustive over the current five-member union: the `never` assignment in
+ *  the default arm is what makes a sixth member (a future server) a compile
+ *  error here, rather than a silent "no pool" narrowing — `ProjectCard`'s own
+ *  `PoolChip` makes the identical argument for its `unrecognised` fallback,
+ *  the one condition TypeScript cannot see: a value that arrives at runtime
+ *  off the type this build was compiled against. */
+/** What the account-pool chip discloses when the fleet host's `ccd` has no
+ *  ACCOUNT-pool machinery yet (`accountPools: 'unavailable'`) — the sibling
+ *  fact `ProjectCard.tsx`'s `POOL_UNAVAILABLE_TEXT` states for project pools,
+ *  named separately because the two are independent capabilities
+ *  (`poolsEnforcement` reads `PROJECT_POOL_VERB`; `accountPoolsEnforcement`
+ *  reads `ACCOUNT_POOLS_CAP` — a fleet can have one without the other).
+ *
+ *  UNLIKE the project chip, this one stays a clickable button when dimmed
+ *  (see its `data-dim` usage below) rather than degrading to an inert span:
+ *  a project tag write dispatches a `ccd` verb that a `poolsEnforcement:
+ *  'unavailable'` fleet genuinely cannot run, but an account tag write is a
+ *  central `coord.db` row this SERVER always accepts — `accountPools:
+ *  'unavailable'` means no fleet node reads it YET, not that the write would
+ *  fail. Disabling the control would also be the only way an operator could
+ *  ever see this text, since the chip is the sheet's one entry point.
+ *
+ *  Exported so the suite pins the sentence rather than a paraphrase of it. */
+export const ACCOUNT_POOL_UNAVAILABLE_TEXT = 'fleet ccd predates account pools';
+
+function acctPoolChip(state: AccountPoolWire): {
+  word: string; ariaLabel: string; dataPool: string; origin?: 'central' | 'declared';
+} {
+  switch (state.state) {
+    case 'tagged':
+      return {
+        word: state.pools[0], dataPool: 'tagged', origin: state.origin,
+        ariaLabel: `pool ${state.pools[0]}, opens the account pool editor`,
+      };
+    case 'untagged':
+      return {
+        word: 'no pool', dataPool: 'untagged', origin: state.origin,
+        ariaLabel: 'no pool, opens the account pool editor',
+      };
+    case 'malformed':
+      return {
+        word: 'pool malformed', dataPool: 'malformed',
+        ariaLabel: "this account's pool tag is malformed — nobody can decide whether it may serve a tagged project, opens the account pool editor",
+      };
+    case 'unreadable':
+      return {
+        word: 'pool unreadable', dataPool: 'unreadable',
+        ariaLabel: "this account's pool tag could not be read — check permissions on the fleet host, opens the account pool editor",
+      };
+    case 'stale':
+      return {
+        word: 'pool stale', dataPool: 'stale',
+        ariaLabel: "this account's pool projection is stale — the control-plane link may be down, opens the account pool editor",
+      };
+    default: {
+      const unhandled: never = state;
+      void unhandled;
+      return {
+        word: 'pool unrecognised', dataPool: 'unrecognised',
+        ariaLabel: 'app bundle is older than the fleet; reload to understand this account pool, opens the account pool editor',
+      };
+    }
+  }
+}
+
+// `accountPoolState(roster, wrapper)` — no edges map (ruling T9-R1). This
+// screen's own `GET /api/accounts` poll (`useAccountsPoll` below) carries the
+// roster, and `RosterWire.resolvedPool` (Task 7's T7-R2 fix round) rides the
+// same response when the server has one to offer — see `lib/accounts.ts`'s
+// own docstring. Every row below renders whatever `accountPoolState` returns
+// without this screen having to know whether that came from a resolved
+// central tag or the declared fallback.
 
 interface AccountsPoll {
   accounts: AccountUsage[] | null;               // null: no poll has landed yet
@@ -120,10 +208,48 @@ function Bar({ label, pct, resetAt, nowSec, rolledOver }: {
 export function AccountsScreen(): ReactNode {
   const { accounts, projected, roster } = useAccountsPoll();
   const sessions = useFleetStore((s) => s.sessions);
+  // Item 3 (I1, wave-1 fix round A): the fleet-level `pools` frame's
+  // `accountPools` capability — produced (T9-R2/F2, `server/src/pools.ts`'s
+  // `accountPoolsEnforcement`) and, until this round, read by nothing in
+  // `pwa/`. `null` (no frame yet) and `undefined` (an older server that never
+  // sends the field) both mean "no evidence", the same as `ProjectCard`'s own
+  // `pools?.enforcement` read — only a MEASURED `'unavailable'` dims the chip.
+  const accountPools = useFleetStore((s) => s.pools?.accountPools);
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
 
   const order = rowOrder(roster, accounts ?? []);
+
+  // The account-pool editor — one sheet, retargeted per tap, on the exact
+  // terms `PoolSheet`/`FleetScreen`'s own pool sheet already use: the route-
+  // owned subject lives here, not inside the sheet.
+  const [poolSheetAccount, setPoolSheetAccount] = useState<string | null>(null);
+  const [poolSheetOpen, setPoolSheetOpen] = useState(false);
+
+  // `POST /api/pools/accounts/:id` (Task 7) does not echo the account's
+  // resulting tag — only the epoch the write produced — so this toasts off
+  // the REQUEST, not a remeasurement, and leans on `useAccountsPoll`'s own
+  // 20s interval to bring the row's next `accountPoolState` read in line
+  // with what the fleet host actually converges to (ccd-pool-sync's pull,
+  // `OnUnitActiveSec=60s` — the same lag the fleet head's epoch/observed
+  // indicator exists to make visible elsewhere).
+  const setAccountPool = (accountId: string, pools: string[]): void => {
+    void api.setAccountPools(accountId, pools).then(
+      (response) => {
+        if (response.warning === 'unknown-account') {
+          toast(
+            `Tagged ${accountId}${pools.length > 0 ? ` into pool ${pools[0]}` : ''}, but this box's roster `
+              + 'does not know that account yet.',
+            'error',
+          );
+        } else {
+          toast(pools.length > 0 ? `${accountId} is now in pool ${pools[0]}.` : `${accountId} is no longer in a pool.`);
+        }
+      },
+      (error: unknown) => toast(`Couldn't set the pool — ${apiErrorText(error)}`, 'error'),
+    );
+    setPoolSheetOpen(false);
+  };
 
   // ccd's own rule, restated ("next workspace lands here — least-loaded"),
   // including the Rider B case where nothing is placeable. `undefined`
@@ -225,6 +351,31 @@ export function AccountsScreen(): ReactNode {
           const onAccount = sessions.filter(
             (s) => s.wrapper === wrapper && s.archivedAt === null && s.status !== 'dead',
           );
+          // `accountPoolState`, not `accountPool` — this chip is the one
+          // surface in the app whose whole job is to say WHICH carrier
+          // decided (`data-origin`), so an operator who just cleared a
+          // central tag sees the declared default take over rather than a
+          // chip that looks unchanged. `acctPoolChip` covers all five states,
+          // not just tagged/untagged (I4).
+          //
+          // Review round 1, Minor: `inRoster` gates the chip entirely for a
+          // wrapper `rowOrder` added from LIVE TELEMETRY the roster does not
+          // (yet) have an entry for (`rowOrder`'s own docstring). Without
+          // this, `accountPoolState` still answers `{state:'untagged',
+          // origin:'declared'}` for such a wrapper — a POSITIVE claim ("the
+          // roster declares this untagged") about an account this roster has
+          // no entry to declare anything about, which is a different, worse
+          // claim than the old code's silence. `accountLabel`'s raw-name
+          // fallback is a safe degrade for the SAME condition because it
+          // asserts nothing; an origin claim is not that.
+          const inRoster = roster.some((a) => a.id === wrapper);
+          const poolState = accountPoolState(roster, wrapper);
+          const chip = acctPoolChip(poolState);
+          // Item 3 (I1): measured `'unavailable'` only — `undefined`/`'unknown'`
+          // are no-evidence-either-way, same polarity as `ProjectCard`'s
+          // `poolDim`, so a fleet nobody has measured yet never dims the chip
+          // on a guess.
+          const acctPoolDim = accountPools === 'unavailable';
           return (
             <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
               <div className="accounts-row-head">
@@ -240,6 +391,21 @@ export function AccountsScreen(): ReactNode {
                     measured dead is shown for a sharper version of the same
                     reason: it is the one lane an operator has to go and fix. */}
                 {off && <span className="accounts-disabled-note">{offNote}</span>}
+                {inRoster && (
+                  <button
+                    type="button"
+                    className="proj-card-pool acct-pool-chip"
+                    data-testid={`acct-pool-chip-${wrapper}`}
+                    data-pool={chip.dataPool}
+                    data-origin={chip.origin}
+                    data-dim={acctPoolDim || undefined}
+                    aria-label={acctPoolDim ? `${chip.ariaLabel} — ${ACCOUNT_POOL_UNAVAILABLE_TEXT}` : chip.ariaLabel}
+                    title={acctPoolDim ? ACCOUNT_POOL_UNAVAILABLE_TEXT : undefined}
+                    onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
+                  >
+                    {chip.word}
+                  </button>
+                )}
               </div>
 
               <div className="acct-rows">
@@ -270,6 +436,16 @@ export function AccountsScreen(): ReactNode {
       </div>
 
       <AuthSection />
+
+      <AccountPoolSheet
+        account={poolSheetAccount}
+        roster={roster}
+        current={poolSheetAccount === null ? undefined : accountPoolState(roster, poolSheetAccount)}
+        unenforced={accountPools === 'unavailable'}
+        open={poolSheetOpen}
+        onClose={() => setPoolSheetOpen(false)}
+        onSet={setAccountPool}
+      />
     </div>
   );
 }

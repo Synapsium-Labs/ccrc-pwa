@@ -191,6 +191,7 @@ CCRC_DOCTOR_CHECKS=(
   accounts
   credentials
   pools
+  pool-sync
   graphify
   graphify-path
   build
@@ -831,7 +832,7 @@ _check_services() {
   # Not a glob over the directory: `claude-session@*.service` lives there too
   # (every ccd session is one, CLAUDE.md) and those are long-lived by design and
   # none of doctor's business.
-  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer)
+  local -a known=(ccrc.service ccrc-agent.service ccd-cap-scopes.timer ccd-account-health.timer ccd-telemetry-keepalive.timer ccrc-models.timer ccd-pool-sync.timer)
   # ON DISK BY THE PLATFORM'S NAME, reported by systemd's. `_dr_unit_file` is
   # the one translation; keeping `installed` in unit vocabulary is what lets
   # every message below read the same on both platforms. ccd-cap-scopes has no
@@ -887,9 +888,11 @@ _check_services() {
         # than one shared string.
         #
         # The `*` arm is not decoration: `known` above is the list this file
-        # maintains, and the day a seventh unit joins it, a timer with no sentence
-        # of its own says something true and vague rather than something
-        # confidently wrong about memory caps.
+        # maintains, and a unit that joins it with no sentence of its own here
+        # says something true and vague rather than something confidently
+        # wrong about memory caps. `ccd-pool-sync.timer` (account-pool-
+        # membership wave 1, Task 4) is the seventh unit this comment
+        # anticipated — it got its own arm, below, rather than falling to `*`.
         case "$u" in
           ccd-cap-scopes.timer) why="panes spawned while it is stopped run without their memory cap" ;;
           ccd-account-health.timer) why="no account's credential is being probed, so a lane whose sign-in has died goes on looking healthy to placement" ;;
@@ -898,6 +901,13 @@ _check_services() {
           # (D-2190): "a dead timer means every lane's catalogue goes stale and nothing
           # says so."
           ccrc-models.timer) why="a dead timer means every lane's catalogue goes stale and nothing says so" ;;
+          # account-pool-membership wave 1, Task 4: a stopped sync is SILENT —
+          # unlike the four above, nothing about a stale-but-present cache
+          # looks wrong until the lease expires, minutes later, and placement
+          # starts refusing into every tagged project with no error anywhere.
+          # That silence is the ruling (task-4-brief.md) for putting this
+          # timer in `known` at all.
+          ccd-pool-sync.timer) why="the node stops refreshing its pool projection, and nothing surfaces until the lease expires and placement starts refusing with no error anywhere" ;;
           *) why="the job it fires is not running" ;;
         esac
         # Unreachable on macOS today (`_inst_units` installs none of these
@@ -3264,6 +3274,140 @@ _check_pools() {
   else
     _dr_pass pools "every project tag under $dir is one legal pool name and names a project that exists — the pool-vocabulary half is UNMEASURED: \$HOME/.ccrc/accounts.sh could not be read, and no other check here reports that file (_check_wrappers reads accounts.json, not the projection)"
   fi
+}
+
+# ── pool-sync: the EFFECT the timer's own ACTIVE state cannot prove ───────
+# Item 4 (I2, wave-1 fix round A). `_check_services` (`known` array, above)
+# measures `ccd-pool-sync.timer`'s ACTIVATION state, which stays `active`
+# while its oneshot fails every run — no `~/.cc-secrets/ccrc-mail.token`, a
+# rotated token, a non-200 from the control plane, all print PASS there.
+# Combined with items 1 and 5 (same round) there used to be no working
+# surface anywhere that reported a stale projection at all.
+#
+# This is the EFFECT check the activation state cannot be: the ARTIFACT the
+# oneshot WRITES, `$REG/pool-epoch`, and its own lease — never the timer's
+# reported state. Same design `_check_graphify`'s own census sub-check
+# already uses for its sibling timer (this file's own header, `:808-827`,
+# names that precedent and why: "the EFFECT design reaches a job through its
+# OUTPUT").
+#
+# INSTALLED, not merely present, gates whether ABSENCE is even a finding —
+# the identical test `_check_services` uses to build its own `installed`
+# array (`CCRC_UNIT_DIR`/`_dr_unit_file`), so this check and that one can
+# never disagree about which boxes have the unit at all. A box with no
+# `ccd-pool-sync.timer` file has no control plane BY CONFIGURATION (item 5's
+# own fix, same round: `--role both`/`--role server`, the single-box
+# default) — that box places from the DECLARED roster tag instead, which is
+# correct there, not a gap doctor should raise.
+_check_pool-sync() {
+  local f="$HOME/.cc-sessions/pool-epoch"
+  local unit_path="$CCRC_UNIT_DIR/$(_dr_unit_file ccd-pool-sync.timer)"
+  if [ ! -f "$unit_path" ]; then
+    _dr_skip pool-sync "ccd-pool-sync.timer is not installed on this box — no control plane by configuration (--role both/--role server, the single-box default); this box places from the declared \$HOME/.ccrc/accounts.json tag instead, which is correct here"
+    return 3
+  fi
+
+  # ABSENCE, on an INSTALLED box, is the false-PASS `_check_services` cannot
+  # see: this node's own `ccd-pool-sync` oneshot has never once succeeded,
+  # so `_acct_pool_state` (`ccd/ccd`) answers `unreadable` for every account
+  # and EVERY tagged project on this box refuses placement, silently, until
+  # now.
+  if [ ! -e "$f" ] && [ ! -L "$f" ]; then
+    # Final fix round, item 16. FAILing this UNCONDITIONALLY made a correct
+    # `ccrc install --role fleet` end at exit 1 on every box, always: the
+    # timer converges on its own (`OnUnitActiveSec=60s`,
+    # deploy/systemd/ccd-pool-sync.timer) and a box that just landed the unit
+    # has not had one tick yet. Measured: server/test/ccrc-install.test.ts,
+    # 3 failures, all in the fleet-role describe, all from this arm. The
+    # FAIL text itself is false on the box that trips it — "placement into
+    # every tagged project... refuses" — a fresh box tags nothing yet.
+    #
+    # DISCRIMINATOR (preference 1 of the brief): the installed timer FILE's
+    # own mtime, evidence the sync has had its chance rather than an
+    # invented sentinel. Verified sound before relying on it: `_inst_units`
+    # (ccd/ccrc) lands this unit through `_inst_atomic`, whose copy is a
+    # plain `cp` — never `cp -p` — followed by `mv -f` onto the final name.
+    # A bare `cp` does NOT preserve the source's mtime; the destination gets
+    # the wall-clock instant the copy ran. So this file's mtime is genuinely
+    # install (or re-install) time, never a timestamp carried in from the
+    # shipped tree — unlike `_inst_keep_aside`'s `cp -p`, which is a
+    # different call for a different, personal-file purpose. `_inst_atomic`
+    # also short-circuits to a bare `chmod` when the bytes already match
+    # (`cmp -s`), so an idempotent re-run of an unchanged unit does NOT reset
+    # this mtime either — it only moves on a real (re)install. That `cmp -s`
+    # short-circuit is `ccd/ccrc`'s own, though: `deploy/deploy.sh:785`'s
+    # `_unit_atomic` — CLAUDE.md's AGENT-FIRST rule makes it the COMMON path
+    # for this unit, not `ccd/ccrc`'s — carries no `cmp -s` at all and
+    # re-copies `ccd-pool-sync.timer` unconditionally (`deploy/deploy.sh:798`)
+    # on every `deploy.sh agent <host>`, so on that path this mtime resets on
+    # every deploy, not only a real (re)install.
+    #
+    # GRACE = two of the timer's own periods, not an invented constant: one
+    # tick for `OnBootSec=45s`/`AccuracySec=10s` slack plus one more so a
+    # doctor run landing mid-cycle is not itself the reason this goes red
+    # (both from deploy/systemd/ccd-pool-sync.timer).
+    #
+    # COST, stated as the brief requires: an unrelated `ccrc install` that
+    # ships new BYTES for this one unit (not a fresh install) also resets
+    # this mtime, so a box that has genuinely never synced in days goes back
+    # to WARN for up to 120s after any such reinstall, before this arm can
+    # FAIL again on the next doctor run. Narrow and self-healing — never a
+    # permanent mask — and strictly better than the permanent false-FAIL
+    # this replaces on every fresh install.
+    #
+    # A `_plat_mtime` that cannot answer (stat missing, file raced away)
+    # falls straight through to the FAIL below — the safe direction: no
+    # evidence of a chance means no benefit of the doubt.
+    local pool_sync_grace=$((2 * 60)) unit_mtime unit_age
+    unit_mtime="$(_plat_mtime "$unit_path" 2>/dev/null)"
+    if [[ "$unit_mtime" =~ ^[0-9]+$ ]]; then
+      unit_age=$(($(date +%s) - unit_mtime))
+      if [ "$unit_age" -ge 0 ] && [ "$unit_age" -lt "$pool_sync_grace" ]; then
+        _dr_warn pool-sync "pool-sync-not-yet-synced: ccd-pool-sync.timer was installed ${unit_age}s ago and $f has not been written yet — the timer fires every 60s (OnUnitActiveSec) and converges on its own; expected right after an install, not a fault" \
+          "wait for the timer to fire (up to ~60s) and re-run ccrc doctor — still absent past that window is the real fault: read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service))"
+        return 2
+      fi
+    fi
+    _dr_fail pool-sync "pool-sync-never-synced: ccd-pool-sync.timer is installed (this is a fleet box) but $f has never been written — placement into every tagged project on this box refuses" \
+      "read the oneshot's own log ($(_dr_log_hint ccd-pool-sync.service)) — a missing or rotated \$HOME/.cc-secrets/ccrc-mail.token and a non-200 from the control plane are the two measured causes; \`systemctl --user start ccd-pool-sync.service\` forces an immediate retry once fixed"
+    return 1
+  fi
+  if [ ! -f "$f" ] || [ ! -r "$f" ]; then
+    _dr_fail pool-sync "pool-sync-unreadable: $f exists but cannot be read, so this box's placement authority (_acct_pool_state) answers unreadable for every account" \
+      "check permissions: ls -l $f"
+    return 1
+  fi
+
+  # LIGHTER-WEIGHT THAN THE PLACEMENT AUTHORITY'S OWN GRAMMAR, DELIBERATELY —
+  # the same stance `parseObservedEpochDoc`'s own docstring takes for this
+  # IDENTICAL file (`shared/agent-protocol.ts`, item 1, same round): doctor's
+  # job is diagnostic disclosure, not placement-safety enforcement, so this
+  # reads only the `lease <n>` line's own freshness rather than
+  # re-implementing `_acct_pool_state`'s full terminator/duplicate-line/
+  # NUL/64-KiB grammar a second time in a second file for a third purpose.
+  # PURE BASH, NO `grep` — this file resolves no external binary it does not
+  # already need for the subject it is measuring (`_check_disk`'s own rule,
+  # stated once there and followed here): a line-oriented read plus parameter
+  # expansion is the same move `_acct_pool_state`'s own per-line loop makes.
+  local lease='' line
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      lease\ *) lease="${line#lease }" ;;
+    esac
+  done < "$f"
+  if [[ ! "$lease" =~ ^(0|[1-9][0-9]*)$ ]]; then
+    _dr_warn pool-sync "pool-sync-malformed: $f does not parse as this box's own reader would — no single, well-formed \`lease <n>\` line" \
+      "the next timer fire (every 60s) rewrites it atomically; inspect the current content by hand: cat $f"
+    return 2
+  fi
+  local now; now="$(date +%s)"
+  if [ "$now" -gt "$lease" ]; then
+    _dr_fail pool-sync "pool-sync-stale: $f is past its lease — the control-plane link has been down longer than the lease, so this box's placement authority answers stale (undecided) for every account, not merely last-known" \
+      "check the control-plane link: is the server reachable, and is \$HOME/.ccrc/agent.env's URL/token current — $(_dr_log_hint ccd-pool-sync.service) shows the oneshot's own last attempt"
+    return 1
+  fi
+
+  _dr_pass pool-sync "this box's account-pool projection ($f) is present and within its lease — the control plane is reaching it"
 }
 
 # ── graphify: the AST-graph sweep's engine, skills, excludes, census, and

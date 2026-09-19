@@ -13,8 +13,9 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, seedAccountsSh, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { CCD, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness, WIDE_PANE }
+  from './ccdWsHelpers.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
 let h: CcdHarness;
@@ -24,6 +25,12 @@ beforeEach(() => {
   // Re-seeded rather than hand-written: a fixture accounts.sh typed out here
   // would be a fourth copy of the roster.
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  // The central projection, agreeing with the declared roster above — this
+  // file's real, unstubbed `_auto_swap_check`/`_swap_target` read the account
+  // side through it since wave 1 Task 2, and without it every account reads
+  // `unreadable` (no document at all) and every decision below becomes
+  // undecidable rather than the pool verdict each case is about.
+  plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });
 
@@ -239,6 +246,47 @@ describe('_strand_why names the candidates the decision was actually about', () 
     seed(); tagPool('demo', 'Pool Orate');
     expect(h.sh(`_strand_why ${ID} demo`))
       .toBe(`tag:malformed ${h.home}/.cc-sessions/pools/demo`);
+  });
+
+  it('obeys that same rule for the ACCOUNT side — one projection token, not one per candidate', () => {
+    // I2, fix round 1. The rule above was written about the project TAG, and
+    // this loop was violating it the moment `_pool_ok`'s account arm gained
+    // undecidable states of its own: `! [the rule]` takes rc 2 as true, so a
+    // cold node (no projection document at all) put a `pool=` token on EVERY
+    // candidate — five invented per-candidate reasons for one shared
+    // condition, and each one naming a pool the account may not even be in.
+    // The three account-side undecidable words are all properties of the ONE
+    // document, so the honest answer is one token naming that document.
+    //
+    // THE PROJECT TAG IS READABLE HERE, deliberately: `named pool-b`. If the
+    // token were still `tag:` this case could not tell the two conditions
+    // apart, which is the whole finding.
+    // Item 5 (I3, wave-1 fix round A): absence alone now falls back to the
+    // declared tag on a non-fleet box, so this cold-node/fail-shut case
+    // needs `plantPoolSyncTimer` to keep meaning what it says — a FLEET
+    // node whose control plane has never synced, not a box that was never
+    // asked to run one.
+    seed(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, undefined);
+    plantPoolSyncTimer(h.home);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe(`projection:unreadable ${h.home}/.cc-sessions/pool-epoch`);
+  });
+
+  it('and tells that projection token apart from a STALE one — different remedy, different word', () => {
+    seed(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe(`projection:stale ${h.home}/.cc-sessions/pool-epoch`);
+  });
+
+  it('guards the guard: with the projection readable the per-candidate census is unchanged', () => {
+    // Without this the two cases above would also pass against a `_strand_why`
+    // that had simply stopped annotating candidates at all.
+    seed(); tagPool('demo', 'pool-b');
+    disable('claude-b'); writeLimits('claude-d', 99, 99); writeLimits('claude-a', 99, 99);
+    expect(h.sh(`_strand_why ${ID} demo`))
+      .toBe('claude-a:pool=pool-a claude-b:disabled claude-d:limit');
   });
 });
 

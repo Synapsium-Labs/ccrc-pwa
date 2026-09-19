@@ -2,8 +2,9 @@ import path from 'node:path';
 import { performance } from 'node:perf_hooks';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
-import { CCD_ARGV } from './ccdargv.js';
+import { ACCOUNT_POOLS_CAP, CCD_ARGV } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
+import { parseObservedEpochDoc, POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
 
 /**
@@ -317,9 +318,166 @@ export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnfor
   return ccdVerbs.includes(PROJECT_POOL_VERB) ? 'enforced' : 'unavailable';
 }
 
-/** The read, on the wire. The Map becomes a plain object; nothing narrows. */
-export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement): ProjectPoolsWire {
+/**
+ * Does the deployed ccd honour ACCOUNT pools? Same three-state shape and
+ * same polarity as `poolsEnforcement` just above, sourced from a different
+ * channel: `PROJECT_POOL_VERB`'s presence is evidence because the verb and
+ * every reader ship in one `ccd` inode (spec §5.11), but there is no `ccd
+ * account-pools` verb to dispatch (ruling R2 removed the one the design
+ * assumed) — only `ACCOUNT_POOLS_CAP`, a CAPABILITY token `cmd_caps` echoes
+ * (`ccd/ccd`), the same channel `POOLS_CAP`/`ACTOR_FLAGS_CAP` already ride
+ * (`ccdargv.ts`'s own docstring on `ACCOUNT_POOLS_CAP`). `null` is no
+ * evidence (`unknown`); only a measured absence reads `unavailable`.
+ */
+export function accountPoolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnforcement {
+  if (ccdVerbs === null) return 'unknown';
+  return ccdVerbs.includes(ACCOUNT_POOLS_CAP) ? 'enforced' : 'unavailable';
+}
+
+/**
+ * The account-pool epoch (`CoordStore.poolEpoch().epoch`), degraded exactly
+ * the way `readAccountPoolEdges()` (`server.ts`) degrades its own
+ * `coord.accountPoolEdges()` read (F1, pre-merge gate).
+ *
+ * `coord` ABSENT (no coordination db wired — local mode, or a test double)
+ * leaves `epoch` off the wire: nothing to read, so `?.` alone is the right
+ * guard for that arm. But `coord.poolEpoch()` can also THROW — a full disk,
+ * a locked or closed `node:sqlite` connection — and `?.` does not guard a
+ * throw, only an absent receiver. A bare `coord?.poolEpoch().epoch` call
+ * site therefore let a broken coord.db escape as an uncaught throw: past
+ * `FleetWatcher.tick()` (killing the whole poll, not just this one
+ * freshness field — `push-copy.test.ts`) and past the `GET /api/fleet`
+ * handler (500ing the whole response over a field nobody asked to place
+ * anything against). Both call sites route through this one function now,
+ * so the two cannot diverge on it again the way they did the first time —
+ * the epoch producer landed identically wired in both places, and neither
+ * was guarded against the throw, only the absence.
+ *
+ * Returns `undefined` on either failure — absence, which already means
+ * "cannot tell you" on this wire (`ProjectPoolsWire`'s own `epoch?` shape) —
+ * never a fabricated number and never a propagated throw.
+ *
+ * DISCLOSED, NOT FIXED (item 1, wave-1 fix round A — wave-2 design's to
+ * own): this counts only CENTRAL `pool_edges` writes, but since T7-R4 the
+ * pool document an operator sees also derives from the declared roster,
+ * which carries no epoch of its own — so a declared-only pool change can
+ * alter that document while this number, and `epoch === observedEpoch`,
+ * both stand still.
+ */
+export function readPoolEpoch(coord: { poolEpoch(): { epoch: number } } | undefined): number | undefined {
+  if (!coord) return undefined;
+  try {
+    return coord.poolEpoch().epoch;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * THIS node's own observed epoch, measured fresh off `$REG/pool-epoch` —
+ * `$REG/pools/`'s sibling in the same registry root, read the SAME way
+ * (`FleetIO.readFileMeasured`, on a caller-owned budget) that
+ * `readProjectPoolsWithinDeadline` above reads every project marker (item 1,
+ * wave-1 fix round A).
+ *
+ * Replaces `deps.fleetState?.observedEpoch` as the `pools` wire's
+ * `observedEpoch` producer at both call sites (`watch.ts`'s `emitPools` tick
+ * and `server.ts`'s `GET /api/fleet` route) — that field was sampled ONCE at
+ * WS handshake and never refreshed for a connection's whole multi-day life
+ * (see `AgentReady.observedEpoch`'s doc, `shared/agent-protocol.ts`, for the
+ * full defect). This function has no such staleness: it is called on every
+ * tick / every request, exactly like the pool-tag marker reads beside it.
+ *
+ * THREE-VALUED, and the two failure arms are NOT interchangeable (no
+ * overloaded null at a seam):
+ *   - `read.reason === 'absent'` (a proven ENOENT) is this node's own PROOF
+ *     it has never synced — the identical fact `readObservedEpoch`
+ *     (`agent/src/server.ts`) reports as `null` for the same missing file,
+ *     read locally instead of through this box's own FleetIO. Reported here
+ *     as `null` too, so a local-mode box (whose FleetIO IS the local
+ *     filesystem) agrees with what the agent would say about itself.
+ *   - `read.reason === 'unreadable'`, a `deadline.race` timeout (`null` from
+ *     the race, not from the read), or no usable budget at all is a
+ *     MEASUREMENT failure — this box could not learn whether the fleet host
+ *     has synced, which is a fact about THIS READ, not about the fleet
+ *     host's sync state. Reported as `undefined` — "no evidence" — the same
+ *     value an agent build too old to send the field produces. Folding this
+ *     into `null` would misreport a transient remote hiccup as "this node
+ *     has never synced"; folding `absent` into `undefined` would bury a
+ *     genuine never-synced node behind "we'll know next tick".
+ *
+ * The byte-to-number PARSE, once bytes are in hand, is not re-implemented
+ * here: {@link parseObservedEpochDoc} (`shared/agent-protocol.ts`) is the one
+ * grammar reader, shared with the agent's own handshake parser, so a
+ * malformed or torn document reads the same `null` regardless of which side
+ * read it.
+ */
+export async function readObservedEpochFromRegistry(
+  io: FleetIO, cfg: CcrcConfig, budgetMs: number,
+): Promise<number | null | undefined> {
+  const deadline = openPoolReadDeadline(budgetMs);
+  if (deadline === null) return undefined;
+  try {
+    const read = await deadline.race(
+      io.readFileMeasured(path.join(cfg.registryDir, POOL_EPOCH_FILE_NAME), deadline.budgetMs, deadline.signal),
+    );
+    if (read === null || deadline.expired()) return undefined;
+    if (!read.ok) return read.reason === 'absent' ? null : undefined;
+    return parseObservedEpochDoc(read.content);
+  } finally {
+    deadline.close();
+  }
+}
+
+/**
+ * The read, on the wire. The Map becomes a plain object; nothing narrows.
+ *
+ * `epoch`/`observedEpoch` (T9-R2) are the two callers' own facts, not
+ * anything this function measures — `epoch` from `deps.coord?.poolEpoch()`,
+ * `observedEpoch` from {@link readObservedEpochFromRegistry} (item 1, wave-1
+ * fix round A — was `deps.fleetState?.observedEpoch` until this round; see
+ * that function's own docstring for why) — passed in so this module stays
+ * free of a `CoordStore`/`FleetState` import for two scalars.
+ * Both parameters are OMITTED from the returned object, not merely set to
+ * `undefined`, whenever the caller passed no value: `Object.hasOwn` must
+ * answer `false` for an absent fact, the same test a JSON round-trip would
+ * apply by dropping an `undefined`-valued key, so a caller inspecting the
+ * plain object before serialization sees the identical shape. `0` is a real
+ * epoch (the migration-seeded default) and a real observed epoch alike, and
+ * must never be treated as if it were the missing argument — hence `!==
+ * undefined`, never a truthiness check. This is not belt-and-braces:
+ * `JSON.stringify` erases an `undefined`-valued key on its own, so ONLY the
+ * wire, after serialization, would have kept the three-valued distinction
+ * true by accident — any in-process reader of this function's own return
+ * value (a unit test asserting with `toEqual`, which itself ignores
+ * `undefined`-valued keys, or future code that inspects the object before it
+ * is ever serialized) would see the key as present and silently collapse the
+ * three-way to a two-way, with nothing red to catch it.
+ *
+ * `accountPools` (F2, pre-merge gate) rides the SAME omitted-when-undefined
+ * shape as `epoch`/`observedEpoch` above, for a different reason: it is not a
+ * staleness fact that can be genuinely absent for THIS build (a caller always
+ * has a `PoolsEnforcement` value to give it, `accountPoolsEnforcement`'s
+ * return type is never `undefined`), but the wire's own `accountPools?`
+ * field (`shared/api.ts`) is optional so an OLDER peer omitting it still
+ * parses. Its own optional trailing parameter here mirrors that, rather than
+ * inserting a new required positional argument ahead of `epoch`/
+ * `observedEpoch` and forcing every existing call site (this file's own
+ * tests included) to learn a value it was never testing.
+ */
+export function poolsWire(
+  read: ProjectPoolsRead,
+  enforcement: PoolsEnforcement,
+  epoch?: number,
+  observedEpoch?: number | null,
+  accountPools?: PoolsEnforcement,
+): ProjectPoolsWire {
+  const staleness = {
+    ...(epoch !== undefined ? { epoch } : {}),
+    ...(observedEpoch !== undefined ? { observedEpoch } : {}),
+    ...(accountPools !== undefined ? { accountPools } : {}),
+  };
   return read.listed
-    ? { listed: true, byProject: Object.fromEntries(read.tags), enforcement }
-    : { listed: false, enforcement };
+    ? { listed: true, byProject: Object.fromEntries(read.tags), enforcement, ...staleness }
+    : { listed: false, enforcement, ...staleness };
 }

@@ -656,6 +656,11 @@ if [ "$TARGET" = "agent" ]; then
   # 13-days-silently-broken postmortem); tmux.conf is how truecolor survives
   # to the attaching client; statusline is what writes ~/.cc-limits telemetry.
   install_atomic ccd/ccd-cap-scopes .local/bin/ccd-cap-scopes 755
+  # account-pool-membership wave 1, Task 4: the leased-projection puller,
+  # unconditional here on the same terms as its sibling above — the agent
+  # lane only ever ships to a fleet host, so there is no server-role branch
+  # to gate it against.
+  install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755
   # graphify Task 10 (O3/O6b): the per-tree AST sweep executable, unconditional
   # here exactly as its sibling above — the agent lane only ever ships to a
   # fleet host, so there is no server-role branch to gate it against the way
@@ -789,6 +794,8 @@ cd ~/ccrc/agent && npm ci && npm run build \
     && _unit_atomic ~/ccrc/deploy/systemd/ccrc-agent.service.d/protect.conf ~/.config/systemd/user/ccrc-agent.service.d/protect.conf \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.service ~/.config/systemd/user/ccd-cap-scopes.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-cap-scopes.timer ~/.config/systemd/user/ccd-cap-scopes.timer \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service \
+    && _unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer ~/.config/systemd/user/ccd-pool-sync.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.service ~/.config/systemd/user/ccd-graph-sweep.service \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-graph-sweep.timer ~/.config/systemd/user/ccd-graph-sweep.timer \
     && _unit_atomic ~/ccrc/deploy/systemd/ccd-account-health.service ~/.config/systemd/user/ccd-account-health.service \
@@ -897,6 +904,7 @@ cd ~/ccrc/agent && npm ci && npm run build \
   AGENT_CMD='export XDG_RUNTIME_DIR=/run/user/$(id -u) \
     && systemctl --user daemon-reload && bash ~/ccrc/deploy/assert-slice-policy.sh && systemctl --user enable --now ccrc-agent.service \
     && systemctl --user enable --now ccd-cap-scopes.timer \
+    && systemctl --user enable --now ccd-pool-sync.timer \
     && systemctl --user enable --now ccd-graph-sweep.timer \
     && systemctl --user enable --now ccd-account-health.timer \
     && systemctl --user enable --now ccd-telemetry-keepalive.timer \
