@@ -88,6 +88,34 @@ export interface AgentReady {
 }
 
 /**
+ * The pool-epoch projection's own FILENAME — `$REG/pool-epoch` on the fleet
+ * box, `~/.cc-sessions/pool-epoch` read from `$HOME`. `POOLS_DIR_NAME`
+ * (`server/src/pools.ts`) is this constant's DIRECTORY sibling, created the
+ * same way for the same reason; this one names the single FILE the
+ * projection is published as, sitting beside that directory in the same
+ * registry root.
+ *
+ * Item 17 (final fix round): five shipped files across three languages held
+ * this literal with no single source — `ccd/ccd-pool-sync` (the WRITER, bash
+ * and python), `ccd/ccd` (the placement reader, `_acct_pool_state`),
+ * `ccd/ccrc-doctor-checks` (the doctor, `_check_pool-sync`), and this
+ * constant's own two TypeScript readers (`server/src/pools.ts`'s
+ * `readObservedEpochFromRegistry`, `agent/src/server.ts`'s
+ * `readObservedEpoch`). `shared/agent-protocol.ts` is the home rather than
+ * either package's own `src/`, for the same reason `OBSERVED_EPOCH_NUM` and
+ * `ReadFailure` are here: neither package's tsconfig `include`s the other's
+ * `src/`, so a production import across that boundary is not the supported
+ * shape, and this constant is read by both. The three bash/python spellings
+ * cannot import it — bash cannot import a TypeScript constant —
+ * `pool-name-parity.test.ts` holds them byte-equal to this value by text
+ * scan instead, exactly as it already does for `POOL_NAME_RE` and
+ * `POOLS_DIR_NAME`. The WRITER's spelling matters most: a rename there alone
+ * leaves every reader answering "never synced" forever — fail-shut, so not
+ * dangerous, but the whole feature silently stops with no red anywhere.
+ */
+export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
+
+/**
  * The `$REG/pool-epoch` document's numeric sub-grammar — `_acct_pool_state`'s
  * own `numRe` (`ccd/ccd:2131`, shared by `epoch`/`issued`/`lease`) and
  * `ccd-pool-sync`'s own `NUM` (`ccd/ccd-pool-sync:156`): zero, or a non-zero

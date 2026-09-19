@@ -27,7 +27,7 @@ import type {
   TailReset,
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
-import { parseCcdCaps, parseObservedEpochDoc } from '../../shared/agent-protocol.js';
+import { parseCcdCaps, parseObservedEpochDoc, POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -614,7 +614,7 @@ export { OBSERVED_EPOCH_NUM } from '../../shared/agent-protocol.js';
  */
 export function readObservedEpoch(home: string): number | null {
   try {
-    const text = readFileSync(path.join(home, '.cc-sessions', 'pool-epoch'), 'utf8');
+    const text = readFileSync(path.join(home, '.cc-sessions', POOL_EPOCH_FILE_NAME), 'utf8');
     return parseObservedEpochDoc(text);
   } catch {
     return null;

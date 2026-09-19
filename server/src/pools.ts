@@ -4,7 +4,7 @@ import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
 import { ACCOUNT_POOLS_CAP, CCD_ARGV } from './ccdargv.js';
 import { POOL_NAME_RE } from '../../shared/roster.js';
-import { parseObservedEpochDoc } from '../../shared/agent-protocol.js';
+import { parseObservedEpochDoc, POOL_EPOCH_FILE_NAME } from '../../shared/agent-protocol.js';
 import type { PoolsEnforcement, ProjectPoolWire, ProjectPoolsWire } from '../../shared/api.js';
 
 /**
@@ -419,7 +419,7 @@ export async function readObservedEpochFromRegistry(
   if (deadline === null) return undefined;
   try {
     const read = await deadline.race(
-      io.readFileMeasured(path.join(cfg.registryDir, 'pool-epoch'), deadline.budgetMs, deadline.signal),
+      io.readFileMeasured(path.join(cfg.registryDir, POOL_EPOCH_FILE_NAME), deadline.budgetMs, deadline.signal),
     );
     if (read === null || deadline.expired()) return undefined;
     if (!read.ok) return read.reason === 'absent' ? null : undefined;
