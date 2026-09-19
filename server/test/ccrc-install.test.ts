@@ -2782,9 +2782,20 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .sort();
     expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
       .toBeGreaterThanOrEqual(3);
+    // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
+    // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
+    // PREFIX of another name this same census carries (`ccd-account-auth`,
+    // `ccd-cap-scopes`, … and `ccd-usage-sweep.py` respectively), so deleting
+    // either bare name from the real echo would leave this pin GREEN as long
+    // as its longer sibling still printed. PLAIN `\b` does not close this —
+    // a hyphen is a NON-word character, so `\bccd\b` still matches the `ccd`
+    // inside `ccd-account-auth` (the boundary fires on the hyphen itself,
+    // measured). The name must not be immediately flanked by a word
+    // character OR a hyphen on either side.
     for (const b of placed) {
+      const escaped = b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
       expect(line, `${b} is in $HOME/.local/bin and the install transcript never says it arrived`)
-        .toContain(b);
+        .toMatch(new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`));
     }
   });
 
