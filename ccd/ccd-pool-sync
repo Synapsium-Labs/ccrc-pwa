@@ -263,7 +263,13 @@ try:
         # SOLE defense — deleting either check ENTIRELY (not merely
         # weakening it to `.match`) reds the corresponding test, measured.
         if not ID.fullmatch(k):
-            raise ValueError("account id %r" % k)
+            # C-B (fix wave B, item 13): `k` is UNVALIDATED here — this is
+            # the branch that fires precisely because it failed `ID.fullmatch`
+            # — so an untrusted 1 MB id would otherwise write a
+            # ~1,000,114-byte journal line every failing tick. `trunc_repr`
+            # already exists in this file for exactly this; the id is one of
+            # the two values this script exists to distrust.
+            raise ValueError("account id %s" % trunc_repr(k))
         acct = accts[k]
         if not isinstance(acct, dict): raise ValueError("account %r must be an object" % k)
         pools = acct.get("pools", [])
@@ -289,7 +295,13 @@ try:
             # non-zero, nothing written). Kept for the diagnostic, not
             # because it is load-bearing for safety.
             if not isinstance(p, str) or not NAME.fullmatch(p):
-                raise ValueError("pool %r" % (p,))
+                # C-B (fix wave B, item 13): `p` is UNVALIDATED here, same
+                # shape as the account id above — an untrusted 1 MB pool
+                # value would otherwise write a ~1,000,114-byte journal line
+                # every failing tick. `trunc_repr` on an int still prints the
+                # same "pool 123" the comment above promises; only a
+                # runaway string is bounded.
+                raise ValueError("pool %s" % trunc_repr(p))
             lines.append("acct %s %s" % (k, p))
     lines.append("end")
     doc = "\n".join(lines) + "\n"

@@ -417,6 +417,21 @@ describe('ccd-pool-sync', () => {
     expect(doc()).toBe(baseline);
   });
 
+  // C-A (fix wave B, item 12): `whole_num`'s comment already ARGUES the bool
+  // arm — `type(v) is not int` rather than `isinstance`, because a JSON bool
+  // IS an `int` under `isinstance` in Python — but nothing measured it before
+  // this test. `{"epoch":true,...}` renders as `epoch 1`, a perfectly
+  // well-formed line the whole-document pass structurally cannot see is
+  // wrong, so this is the only test able to catch a relax to `isinstance`.
+  it('refuses (writes nothing) when epoch is a JSON bool, not merely a non-bool wrong type', () => {
+    const before = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(before).rc).toBe(0);
+    const baseline = doc();
+    const bin = stubCurl('{"epoch":true,"issuedAt":1,"leaseUntil":9999999999,"accounts":{}}');
+    expect(run(bin).rc).not.toBe(0);
+    expect(doc(), 'a rejected bool epoch must leave the prior document untouched').toBe(baseline);
+  });
+
   it('refuses (writes nothing) when pools is a string, rather than iterating its characters', () => {
     const bin = stubCurl('{"epoch":1,"issuedAt":1,"leaseUntil":9999999999,"accounts":{"acct-a":{"pools":"p"}}}');
     expect(run(bin).rc).not.toBe(0);
