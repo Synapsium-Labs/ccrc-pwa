@@ -1756,9 +1756,59 @@ Rollback is `DELETE FROM pool_edges` and letting the lease expire; nothing moves
 
 ## Deviations found
 
-**Do NOT pre-allocate.** Numbers are ISSUED by `POST /api/ledger/deviations` and **defined in the same act** — you cannot define a departure you have not yet found. Mint one block after the whole-wave review, per the convention the two most recent shipped plans follow, and record each departure as `- **D-N** (slug) — what departed and why`. Never spell the block's unspent tail; never write a bare `D-TBD-` into a tracked file (report instead).
+**ISSUED AND DEFINED IN ONE ACT**, 2026-09-19, via `POST /api/ledger/deviations`:
+forty-two numbers, **D-3055 through D-3096**, every one of them defined below and none
+left unspent. The count was derived by writing the entries first and counting them, not
+estimated — a number minted and not defined seals its own band forever and raises this
+project's floor anyway. The floor stood at 3055 before this block and 3097 after.
 
-Known departures to record at the mint, at minimum: the eight spec corrections and the four rulings R1–R4 in this plan's own sections above.
+Five of these carry the `D-TBD-<slug>` placeholders this wave shipped while the
+allocator was out of reach; all nine sites were substituted in the same commit as this
+section, so `dtbd.test.ts` goes green on the act that defines them rather than later:
+D-3075, D-3076, D-3084, D-3085 and D-3086.
+
+- **D-3055** (mv-fT-gnu-only) spec §5.4 specified `mktemp` + `mv -fT`; `mv -fT` is GNU-only and would ship broken on macOS. The projection uses ccd's existing `_plat_mv_notdir` shim.
+- **D-3056** (pool-sync-standalone-executable) spec assumed a timer dispatching a `ccd` verb; no timer job does that. `ccd-pool-sync` is a standalone executable like the other five.
+- **D-3057** (poolrule-callers-retracted) the plan ASSERTED `poolRule()` had no production call site and RETRACTED it during Task 5: there are five, all predating the wave. Recorded so a reader tracing the re-signaturing finds the false premise it was first argued on.
+- **D-3058** (poolrule-fold-preserved) `poolRule`'s permissive `accountPool: null` fold is DOCUMENTED behaviour and was preserved, not reversed as the spec's reading implied.
+- **D-3059** (citation-homes-corrected) four spec citations named the wrong homes: `generateAccountsSh` and the `_ccrc_pool` emission are in `shared/generate.mjs`, not `roster.ts`.
+- **D-3060** (ready-is-a-different-wire) `AgentReady`/`rosterFp` live in `shared/agent-protocol.ts` (agent<->server), NOT `shared/api.ts` (PWA<->server, the wire `FLEET_PROTO` governs). The spec conflated them.
+- **D-3061** (accountpool-call-sites-eight) `accountPool()` has 8 call sites, not the spec's 9, and only one lib file calls it.
+- **D-3062** (deviations-allocated-retrospectively) spec §9 said the plan allocates its block at plan time; measured, the two most recent shipped plans both allocate retrospectively, and this wave followed them.
+- **D-3063** (plan-r1) plan ruling R1.
+- **D-3064** (plan-r2) plan ruling R2 — removed the `ccd account-pools` verb the design assumed, leaving a capability token and a decision `_pool_ok` already makes.
+- **D-3065** (plan-r3) plan ruling R3.
+- **D-3066** (plan-r4) plan ruling R4.
+- **D-3067** (acct-pool-state-no-memoisation) T1-R1 — memoisation DROPPED from `_acct_pool_state`; the projection is read on every call, because a cached answer outlives the 60s convergence it describes.
+- **D-3068** (projection-end-terminator) T1-R3 (re-argued as T8-R1) — the projection's last line is a literal `end`. A WIRE-FORMAT change: the reader is line-oriented and cannot otherwise tell a complete final row from a torn one.
+- **D-3069** (absent-id-is-unreadable) T1-R4 — an empty or absent account id answers `unreadable`, never `untagged`. Untagged is unconstrained, so the permissive answer is the one that must never be guessed.
+- **D-3070** (poolrule-driver-guarded-skip) T2-R1 — `pools.test.ts`'s driver SKIPS rows carrying `accountState`, and the skip is itself guarded so it cannot silently widen.
+- **D-3071** (whole-document-validation) T3-R1 — the WHOLE rendered document is validated against the grammar before staging, replacing three per-field checks.
+- **D-3072** (crosscheck-reads-working-tree) T3-R2 — the cross-check reads the WORKING TREE, not `git show HEAD:`; in CI the two are identical and the stricter one is free.
+- **D-3073** (pool-sync-install-gated-on-agent-env) T4-R1 — pool-sync's install and enable are gated on the SAME predicate that writes `agent.env`, not a sibling's `!= server` gate, which would arm a timer on the single-box default whose binary can never succeed there.
+- **D-3074** (pools-empty-tuple-override) T5-R3 — override of the plan-mandated `pools[0] ?? ''`, which fabricated an empty pool name into an operator-facing 409.
+- **D-3075** (edges-required-not-optional) T5-R4 + T7-R1 — `edges` is REQUIRED, not optional, on both `poolVerdict` and `poolEligible`: an optional parameter lets a caller that HAS central edges fall back to declared-only by forgetting it.
+- **D-3076** (resolved-pool-wire) T7-R2 — `RosterWire.resolvedPool`; the central-beats-declared-beats-untagged precedence is folded SERVER-SIDE, because a client deriving it from the declared carrier contradicts `refusePool` the moment a central edge exists.
+- **D-3077** (pwa-consumes-one-resolved-field) T9-R1 — the PWA consumes that one resolved field and derives no precedence itself; the server holds both carriers, a reader should hold one.
+- **D-3078** (forecast-refusal-divergence-closed) T7-R3 — the forecast/refusal divergence closed by threading live edges to `projectHome`, reversing latitude this wave had earlier given.
+- **D-3079** (epoch-document-emits-resolved-pool) T7-R4 — `GET /api/pools/epoch` emits the RESOLVED pool per account, fixing a three-reader disagreement without touching the document grammar.
+- **D-3080** (duplicate-epoch-line-refused) T8-R2 — a duplicate `epoch` line is REFUSED; bash read `malformed` where the TS reader took the first value.
+- **D-3081** (journal-throws-on-unparseable) Task 6 REVIEW (not a ruling — Task 6 produced none): `maxEpoch` THROWS on an existing-but-unparseable journal and only ENOENT answers `null`; `append([])` is refused outright. A new wedge condition, deliberately chosen over a silent zero.
+- **D-3082** (lease-milliseconds-to-seconds) the plan PRESCRIBED `Date.now() + POOL_LEASE_MS` against readers using `date +%s`. Measured: 56,696 years to staleness, so the `stale` arm shipped unreachable and the wave's central fail-shut was disabled. The most consequential departure from plan-prescribed code in the wave.
+- **D-3083** (watcher-poolepoch-throw-safe) the watcher's `poolEpoch()` call made throw-safe: `?.` guarded coord being ABSENT, not `poolEpoch()` THROWING, in a file whose every sibling swallows and warns.
+- **D-3084** (pools-epoch-exempt) `GET /api/pools/epoch` joins the EXEMPT-BUT-AUTHENTICATED dual-credential set: `ccd-pool-sync.timer` pulls it cookieless from the fleet host every 60s and the PWA reads the same document with a session. A security-surface change the brief never asked for.
+- **D-3085** (pools-id-poison) `ACCOUNT_ID_RE` validation at `POST /api/pools/accounts/:id`, which the plan argued AGAINST: an off-grammar id becomes a key in a document the renderer refuses OUTRIGHT — the whole document, not the bad row — stalling convergence fleet-wide.
+- **D-3086** (pool-epoch-parser-shared) the projection's numeric sub-grammar moved to L0 `shared/agent-protocol.ts` so ccd's bash reader, the python writer and the TS reader are held to one grammar.
+- **D-3087** (observedepoch-measured-on-the-tick) final review C1 — `observedEpoch` is measured on the server's own watcher tick, not read from the agent's `ready` frame. Departs from spec §4/§6's candidate C: a handshake sampled once on a link that lives for days cannot carry a fact that changes every 60s, so the lag indicator could never clear.
+- **D-3088** (journal-reconstruction-claim-corrected) final review C2 — `pooledgelog.ts`, spec §5.1 and §5.3 each claimed a lost coord.db reconstructs from the journal. No replay exists; the journal gives epoch MONOTONICITY. Claim corrected, automatic replay recorded as a wave-2 item in the spec.
+- **D-3089** (accountpools-consumer-shipped) final review I1 — the `accountPools` enforcement field gained its consumer, closing "produced with no consumer" (the mirror of the defect the pre-merge gate had just closed).
+- **D-3090** (doctor-measures-the-artifact) final review I2 — `ccrc doctor` checks the pool-sync ARTIFACT and its lease, not the timer's activation state, which stays `active` while its oneshot fails every 60s.
+- **D-3091** (non-fleet-box-falls-back-to-declared) final review I3 — a box with no `ccd-pool-sync.timer` installed falls back to the DECLARED tag instead of failing shut. "No control plane BY CONFIGURATION" and "a fleet node that cannot read its projection" are two conditions with opposite correct answers, and this wave had collapsed them, regressing the single-box default install against main.
+- **D-3092** (poolside-takes-the-wire) final review I4 — `poolSide` takes the account's full wire instead of a narrowed `null` that folded `untagged`/`malformed`/`unreadable`/`stale` into one permissive value.
+- **D-3093** (box-token-enumeration-corrected) final review I5 — the second box-token enumeration in `auth/gate.ts` still read 24+1=26; the numeral had been bumped and the enumeration left alone, the exact defect an earlier review had named.
+- **D-3094** (pool-sync-doctor-grace-window) the never-synced doctor arm is grace-windowed on the installed timer's mtime, because it FAILed a correct fresh `--role fleet` install and made `ccrc install` exit 1 on every new fleet box.
+- **D-3095** (pool-epoch-filename-one-source) the projection FILENAME gets the single source the pools DIRECTORY already had (`POOL_EPOCH_FILE_NAME`), with the writer, the placement reader and the doctor pinned to it; it had become a bare literal in five shipped files across three languages.
+- **D-3096** (readme-anchor-false-at-base) a README anchor was repointed because it was FALSE AT THE MERGE-BASE, not merely shifted: it named `_swap_carry_sidecars` while its own sentence is about `cmd_ensure`'s `_reg_generation_init`, 418 lines away. Repointing changes what the README ASSERTS.
 
 ## Carried, not owned by this wave
 

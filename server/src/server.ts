@@ -1333,7 +1333,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       roster: deps.cfg.roster.accounts.map((a) => ({
         id: a.id, label: a.label, hue: a.hue, homeAble: a.homeAble, hidden: a.hidden,
         pool: a.pool,
-        // T7-R2 (D-TBD-resolved-pool-wire): the RESOLVED membership (central
+        // T7-R2 (D-3076): the RESOLVED membership (central
         // beats declared beats untagged, design §5.6) — `pool` above is the
         // declared carrier alone, and a client that computed its own
         // crossing warning from it would contradict what `POST

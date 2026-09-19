@@ -575,7 +575,7 @@ function readRosterFp(home: string): string | undefined {
 
 /** Re-exported so `pool-epoch-numeric-parity.test.ts`'s existing import
  *  keeps resolving unchanged. The grammar itself, and the document parser
- *  below, moved to `shared/agent-protocol.ts` (D-TBD-pool-epoch-parser-shared,
+ *  below, moved to `shared/agent-protocol.ts` (D-3086,
  *  item 1, wave-1 fix round A): the SERVER now has its own reader of this
  *  same file (`server/src/pools.ts`'s `readObservedEpochFromRegistry`, via
  *  `FleetIO.readFileMeasured` rather than this file's `readFileSync`), and

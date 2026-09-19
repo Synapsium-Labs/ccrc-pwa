@@ -377,7 +377,7 @@ export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
  * THIRD spelling this grammar must never be allowed to become: an id off this
  * grammar becomes a key in the document `ccd-pool-sync`'s renderer refuses
  * OUTRIGHT (the whole document, not just the bad row), which stops
- * convergence fleet-wide until the next operator notices (D-TBD-pools-id-poison).
+ * convergence fleet-wide until the next operator notices (D-3085).
  */
 export const ACCOUNT_ID_RE = /^[A-Za-z0-9._-]{1,64}$/;
 

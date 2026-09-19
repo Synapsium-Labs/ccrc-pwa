@@ -3492,7 +3492,7 @@ export interface RosterWire {
    *  dropping one. */
   pool: string | null;
   /** The RESOLVED membership — central beats declared beats untagged (design
-   *  §5.6), folded in SERVER-SIDE (account-pool-membership wave 1, T7-R2, D-TBD-resolved-pool-wire).
+   *  §5.6), folded in SERVER-SIDE (account-pool-membership wave 1, T7-R2, D-3076).
    *  `pool` above is the declared carrier alone; this is what `POST
    *  /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool` pre-check
    *  actually decides from — a UI that computed its own crossing warning from

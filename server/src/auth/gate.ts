@@ -75,7 +75,7 @@ import type { SessionStore } from './sessions.js';
  *  2. The twenty-four box-token machine lanes plus `/api/notify` and `/api/pools/epoch`
  *     — the fleet host's ingress. These callers are `curl` inside a Claude Code
  *     session, ccd's `notify.sh` and `ccd-pool-sync.timer` (account-pool-membership
- *     wave 1, T7, D-TBD-pools-epoch-exempt); none of them has a cookie jar and never
+ *     wave 1, T7, D-3084); none of them has a cookie jar and never
  *     will. All twenty-six CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
@@ -224,7 +224,7 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'handler requires one of those credentials before revealing even `501 not-configured`, so this ' +
     'entry restores the machine read without making the durable feed anonymous'],
   ['GET /api/pools/epoch',
-    'EXEMPT-BUT-AUTHENTICATED (D-TBD-pools-epoch-exempt, account-pool-membership wave 1 task 7), ' +
+    'EXEMPT-BUT-AUTHENTICATED (D-3084, account-pool-membership wave 1 task 7), ' +
     'the same dual-credential arrangement as `GET /api/feed`: `ccd-pool-sync.timer` reads it cookieless from the fleet host ' +
     'every minute, and the PWA reads the same document with a session for the `epoch N / observed ' +
     "M` chip. The handler requires one of those credentials before revealing even `501 " +

@@ -122,7 +122,7 @@ export const POOL_EPOCH_FILE_NAME = 'pool-epoch';
  * digit followed by any digits — no leading zero, because the control
  * plane's `%d` can never produce one.
  *
- * D-TBD-pool-epoch-parser-shared (item 1, wave-1 fix round A): this constant
+ * D-3086 (item 1, wave-1 fix round A): this constant
  * and {@link parseObservedEpochDoc} moved here from `agent/src/server.ts`,
  * where task 8/9 first wrote them as a LOCAL, unexported grammar for the
  * agent's own handshake reader (`readObservedEpoch`). Item 1 gives the

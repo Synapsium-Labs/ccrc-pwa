@@ -45,7 +45,7 @@ function centralAccountPool(pools: readonly string[]): AccountPoolWire {
 
 /**
  * The pool this ACCOUNT is in, RESOLVED — central beats declared beats
- * untagged (design §5.6, T7-R2, D-TBD-resolved-pool-wire). Distinct question
+ * untagged (design §5.6, T7-R2, D-3076). Distinct question
  * from {@link poolVerdict}:
  * this names a pool, `poolVerdict` names a VERDICT against one project's tag.
  * `GET /api/accounts`'s wire uses this so the PWA can render (and reason
@@ -132,7 +132,7 @@ export function poolVerdict(
  * tell the two apart (`projectPlacement` in `limits.ts` does).
  *
  * `edges` is REQUIRED (T7-R1, account-pool-membership wave 1,
- * D-TBD-poolEligible-required-edges), on `poolVerdict`'s exact reasoning: an
+ * D-3075), on `poolVerdict`'s exact reasoning: an
  * optional parameter lets a caller that HAS central edges silently fall back
  * to declared-only by forgetting to pass them, which is the fail-open T5-R4
  * was written to close at every call site, not only `refusePool`'s.
