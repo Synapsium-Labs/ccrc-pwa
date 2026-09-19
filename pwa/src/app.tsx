@@ -37,6 +37,16 @@ export function App(): ReactNode {
     useFleetStore.getState().connect();
   }, []);
   const sessions = useFleetStore((s) => s.sessions);
+  // T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
+  // `epoch`/`observedEpoch` props were fully tested but had no producer — this
+  // was the ONE place `<FleetScreen>` renders, and it passed neither, so a
+  // tested component could never actually render in production. The `pools`
+  // frame is the existing carrier (no second poll, no new route call): `?.`
+  // preserves THE THREE-VALUED RULE at this hop too — `pools === null` (no
+  // frame has arrived yet) and a `pools` object simply missing the key both
+  // read as `undefined`, exactly like an absent key on the wire itself, and
+  // `pools.observedEpoch === null` (never synced) passes through unchanged.
+  const pools = useFleetStore((s) => s.pools);
   // The dormant handshake (shared/api.ts's FLEET_PROTO_MIN): set by the fleet
   // store on an incompatible `hello`, cleared by a later compatible one.
   // BlockScreen mounts as a SIBLING before .app-shell, not inside it — a
@@ -113,7 +123,12 @@ export function App(): ReactNode {
           {/* Always mounted so it's the desktop sidebar; hidden on mobile when a
               session is open. selectedId marks the active card in the sidebar;
               showAccounts is false on desktop (they're in the top bar instead). */}
-          <FleetScreen selectedId={sessionId} showAccounts={!desktop} />
+          <FleetScreen
+            selectedId={sessionId}
+            showAccounts={!desktop}
+            epoch={pools?.epoch}
+            observedEpoch={pools?.observedEpoch}
+          />
         </aside>
         <section className="shell-detail" ref={detail}>
           {sessionId ? (

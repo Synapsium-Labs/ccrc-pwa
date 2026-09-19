@@ -620,6 +620,50 @@ describe('poolsWire', () => {
     });
     expect(poolsWire({ listed: false }, 'unknown')).toEqual({ listed: false, enforcement: 'unknown' });
   });
+
+  // T9-R2: the epoch/observedEpoch producer. THREE-VALUED for observedEpoch —
+  // absent (no argument passed, e.g. no FleetState at all), `null` (a real
+  // "never synced" fact) and a number must never fold into one another, and
+  // `poolsWire` must not invent a claim its two optional parameters did not
+  // carry.
+  it('omits epoch and observedEpoch entirely when neither argument is passed — absence, not a fabricated null', () => {
+    const wire = poolsWire({ listed: false }, 'unknown');
+    expect(Object.hasOwn(wire, 'epoch')).toBe(false);
+    expect(Object.hasOwn(wire, 'observedEpoch')).toBe(false);
+  });
+
+  it('carries a real epoch and observedEpoch through on both the listed and unlisted arms', () => {
+    expect(poolsWire({ listed: false }, 'unknown', 5, 5)).toEqual({
+      listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 5,
+    });
+    expect(poolsWire({ listed: true, tags: new Map() }, 'enforced', 5, 5)).toEqual({
+      listed: true, byProject: {}, enforcement: 'enforced', epoch: 5, observedEpoch: 5,
+    });
+  });
+
+  it('keeps observedEpoch:null distinct from an absent observedEpoch, even with a real epoch present', () => {
+    const wire = poolsWire({ listed: false }, 'unknown', 3, null);
+    expect(Object.hasOwn(wire, 'epoch')).toBe(true);
+    expect((wire as { epoch?: number }).epoch).toBe(3);
+    expect(Object.hasOwn(wire, 'observedEpoch')).toBe(true);
+    expect((wire as { observedEpoch?: number | null }).observedEpoch).toBeNull();
+  });
+
+  it('treats epoch 0 and observedEpoch 0 as real values, never as absence', () => {
+    const wire = poolsWire({ listed: false }, 'unknown', 0, 0);
+    expect((wire as { epoch?: number }).epoch).toBe(0);
+    expect((wire as { observedEpoch?: number | null }).observedEpoch).toBe(0);
+  });
+
+  it('carries epoch without observedEpoch, and observedEpoch without epoch — the two are independent facts', () => {
+    const epochOnly = poolsWire({ listed: false }, 'unknown', 7, undefined);
+    expect((epochOnly as { epoch?: number }).epoch).toBe(7);
+    expect(Object.hasOwn(epochOnly, 'observedEpoch')).toBe(false);
+
+    const observedOnly = poolsWire({ listed: false }, 'unknown', undefined, 4);
+    expect(Object.hasOwn(observedOnly, 'epoch')).toBe(false);
+    expect((observedOnly as { observedEpoch?: number | null }).observedEpoch).toBe(4);
+  });
 });
 
 // §11 row 17, server half. Under `CCRC_FLEET=remote` — the live server's

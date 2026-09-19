@@ -1086,6 +1086,84 @@ describe('fleet REST + WS', () => {
       expect(FLEET_PROTO_MIN).toBe(1);
       ws.close();
     });
+
+    // T9-R2: the epoch/observedEpoch producer. `epoch` comes off
+    // `deps.coord.poolEpoch()` (CoordStore); `observedEpoch` comes off
+    // `deps.fleetState.observedEpoch` (Task 8's agent-ready handshake).
+    // No coord and no fleetState at all is the DEFAULT `connect()` here —
+    // covered already by the "old client still shrugs" case above, which pins
+    // the frame's keys to exactly `['pools', 'type']` (i.e. no `epoch` key
+    // reaches the wire when nothing produced one).
+    describe('the epoch/observedEpoch staleness fields', () => {
+      it('carries the coordinator\'s epoch once a coord store is wired, even the seeded 0', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        expect(coord.poolEpoch().epoch).toBe(0);   // the migration-seeded default — a real, falsy value
+        const { ws, next } = await connect({ coord });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('runs');   // a wired coord adds this frame to the cold start
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.type).toBe('pools');
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', epoch: 0 });
+        ws.close();
+      });
+
+      it('carries observedEpoch straight from FleetState, distinguishing a number from never-synced null', async () => {
+        const { ws, next } = await connect({
+          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: 12 },
+        });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: 12 });
+        ws.close();
+      });
+
+      it('carries observedEpoch:null (never synced) rather than dropping it or fabricating a number', async () => {
+        const { ws, next } = await connect({
+          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: null },
+        });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null });
+        expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(true);
+        ws.close();
+      });
+
+      it('omits observedEpoch entirely when FleetState carries no evidence — absence, not a fabricated null', async () => {
+        // `observedEpoch: undefined` is FleetState's OWN "no evidence" answer
+        // (fleetstate.ts's docstring) — distinct from the `null` case above.
+        const { ws, next } = await connect({
+          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: undefined },
+        });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown' });
+        expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(false);
+        ws.close();
+      });
+
+      it('GET /api/fleet carries the same epoch/observedEpoch the WS pools frame does', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        const deps = {
+          ...testDeps(home), coord,
+          fleetState: { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null, observedEpoch: 0 },
+        };
+        const bus = new Bus();
+        app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { epoch?: number; observedEpoch?: number | null } };
+        expect(body.pools.epoch).toBe(0);
+        expect(body.pools.observedEpoch).toBe(0);   // 0 is a real observed epoch, not absence
+      });
+    });
   });
 
   // — Task 10, orchestrator-added scope: the durable feed table behind

@@ -1097,7 +1097,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     );
     return {
       sessions: await assembleFleet(deps.io, deps.cfg, deps.tmux, undefined, watcher?.currentPending(), watcher?.currentStatuslines(), watcher?.currentTaskProgress(), watcher?.currentPrStates(), watcher?.currentHookStates(), undefined, deps.coord, watcher?.currentUsage()),
-      pools: poolsWire(poolsRead, poolsEnforcement(deps.fleetState?.ccdVerbs ?? null)),
+      pools: poolsWire(
+        poolsRead,
+        poolsEnforcement(deps.fleetState?.ccdVerbs ?? null),
+        // T9-R2: the epoch/observedEpoch producer. `deps.coord` absent (no
+        // coordination db wired) leaves `epoch` off the wire entirely —
+        // short-circuited by `?.` before `poolEpoch()` ever runs.
+        // `deps.fleetState?.observedEpoch` forwards FleetState's own
+        // three-valued answer unchanged (absent/null/number).
+        deps.coord?.poolEpoch().epoch,
+        deps.fleetState?.observedEpoch,
+      ),
     };
   });
 

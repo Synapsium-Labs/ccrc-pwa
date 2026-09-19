@@ -317,9 +317,40 @@ export function poolsEnforcement(ccdVerbs: readonly string[] | null): PoolsEnfor
   return ccdVerbs.includes(PROJECT_POOL_VERB) ? 'enforced' : 'unavailable';
 }
 
-/** The read, on the wire. The Map becomes a plain object; nothing narrows. */
-export function poolsWire(read: ProjectPoolsRead, enforcement: PoolsEnforcement): ProjectPoolsWire {
+/**
+ * The read, on the wire. The Map becomes a plain object; nothing narrows.
+ *
+ * `epoch`/`observedEpoch` (T9-R2) are the two callers' own facts, not
+ * anything this function measures — `epoch` from `deps.coord?.poolEpoch()`,
+ * `observedEpoch` from `deps.fleetState?.observedEpoch` — passed in so this
+ * module stays free of a `CoordStore`/`FleetState` import for two scalars.
+ * Both parameters are OMITTED from the returned object, not merely set to
+ * `undefined`, whenever the caller passed no value: `Object.hasOwn` must
+ * answer `false` for an absent fact, the same test a JSON round-trip would
+ * apply by dropping an `undefined`-valued key, so a caller inspecting the
+ * plain object before serialization sees the identical shape. `0` is a real
+ * epoch (the migration-seeded default) and a real observed epoch alike, and
+ * must never be treated as if it were the missing argument — hence `!==
+ * undefined`, never a truthiness check. This is not belt-and-braces:
+ * `JSON.stringify` erases an `undefined`-valued key on its own, so ONLY the
+ * wire, after serialization, would have kept the three-valued distinction
+ * true by accident — any in-process reader of this function's own return
+ * value (a unit test asserting with `toEqual`, which itself ignores
+ * `undefined`-valued keys, or future code that inspects the object before it
+ * is ever serialized) would see the key as present and silently collapse the
+ * three-way to a two-way, with nothing red to catch it.
+ */
+export function poolsWire(
+  read: ProjectPoolsRead,
+  enforcement: PoolsEnforcement,
+  epoch?: number,
+  observedEpoch?: number | null,
+): ProjectPoolsWire {
+  const staleness = {
+    ...(epoch !== undefined ? { epoch } : {}),
+    ...(observedEpoch !== undefined ? { observedEpoch } : {}),
+  };
   return read.listed
-    ? { listed: true, byProject: Object.fromEntries(read.tags), enforcement }
-    : { listed: false, enforcement };
+    ? { listed: true, byProject: Object.fromEntries(read.tags), enforcement, ...staleness }
+    : { listed: false, enforcement, ...staleness };
 }

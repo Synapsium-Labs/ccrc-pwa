@@ -1244,7 +1244,17 @@ export class FleetWatcher {
     const read = await readProjectPools(
       this.deps.io, this.deps.cfg, names, Math.max(1, Math.floor(this.intervalMs / 2)),
     );
-    const wire = poolsWire(read, poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null));
+    // T9-R2: the epoch/observedEpoch producer, the SAME two reads `/api/fleet`
+    // (server.ts) makes for its own `poolsWire` call — `deps.coord` absent
+    // leaves `epoch` off the wire (short-circuited before `poolEpoch()` runs),
+    // and `deps.fleetState?.observedEpoch` forwards FleetState's own
+    // three-valued answer (absent/null/number) unchanged.
+    const wire = poolsWire(
+      read,
+      poolsEnforcement(this.deps.fleetState?.ccdVerbs ?? null),
+      this.deps.coord?.poolEpoch().epoch,
+      this.deps.fleetState?.observedEpoch,
+    );
     const json = JSON.stringify(wire);
     if (json === this.lastPoolsJson) return;
     this.lastPoolsJson = json;

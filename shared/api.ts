@@ -1987,11 +1987,40 @@ export type ProjectPoolsWire =
        *  version-skew channel as `enforcement`, sourced from `_acct_pool_state`'s
        *  presence in `ccd caps`. ABSENT on an older server, which reads `unknown`. */
       accountPools?: PoolsEnforcement;
+      /** T9-R2: the control plane's current account-pool epoch
+       *  (`CoordStore.poolEpoch()`, `server/src/coord/store.ts`; the same
+       *  number `GET /api/pools/epoch` answers), carried on THIS frame
+       *  instead of a second poll — Task 9's staleness indicator reads it
+       *  alongside `observedEpoch` below. ABSENT when this server has no
+       *  coordinator wired (`deps.coord` unset, e.g. local mode) — never a
+       *  fabricated `0`, though `0` is itself a legitimate epoch (the
+       *  migration-seeded default) and must survive as a real value. */
+      epoch?: number;
+      /** What THIS connected fleet node reported it actually holds
+       *  (`FleetState.observedEpoch`, `server/src/fleetstate.ts`, populated
+       *  from the agent's `ready` handshake, `server/src/remote/client.ts`).
+       *  THREE answers, and no reader may fold one into another: ABSENT (the
+       *  key itself missing) means "this build/agent cannot tell you" — an
+       *  older agent that predates the field, or no `FleetState` at all;
+       *  `null` means the node has never synced; a number is the epoch it
+       *  holds, INCLUDING `0`. `epoch === observedEpoch` is a staleness
+       *  signal only ("the fleet has pulled since the last central change"),
+       *  never a health one — a node past its lease still reports a number
+       *  while `ccd` refuses every tagged placement, and since a
+       *  DECLARED-only pool change moves the document without moving
+       *  `epoch`, equality does not even mean the document matches. See
+       *  `FleetState.observedEpoch`'s own docstring. */
+      observedEpoch?: number | null;
     }
   | {
       listed: false; enforcement: PoolsEnforcement;
       /** See the `listed: true` arm's `accountPools` — same field, same fold. */
       accountPools?: PoolsEnforcement;
+      /** See the `listed: true` arm's `epoch` — same field, same fold. */
+      epoch?: number;
+      /** See the `listed: true` arm's `observedEpoch` — same field, same
+       *  three-valued fold. */
+      observedEpoch?: number | null;
     };
 
 /** Fold one skill's answer across every rostered HOME. A proven absence
