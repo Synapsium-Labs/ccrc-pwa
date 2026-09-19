@@ -507,6 +507,14 @@
   color: var(--ink-secondary);
   margin-bottom: var(--sp-4);
 }
+/* Item 3 (I1, wave-1 fix round A): `AccountPoolSheet`'s "nothing enforces
+   this yet" disclosure — the same attention token every other undecidable/
+   unenforced pool state already carries elsewhere in this file
+   (`.acct-pool-chip[data-pool='stale']` and friends), never opacity (this
+   file's own rule, see the offline-banner note earlier in this file). */
+.sheet-copy-notice {
+  color: var(--status-attention-text);
+}
 .acct-list {
   display: grid;
   border-top: 1px solid var(--edge-subtle);
@@ -1792,6 +1800,20 @@ button.proj-card-pool::before {
    same attention treatment those already inherit from the shared rule. */
 .acct-pool-chip[data-pool='stale'] {
   color: var(--status-attention-text);
+}
+/* Item 3 (I1, wave-1 fix round A): `accountPools: 'unavailable'` — the
+   fleet's deployed `ccd` does not read account pools yet. UNLIKE the project
+   chip's span/button switch (`.proj-card-pool` note above), this chip stays
+   a `<button>` when dim (`AccountsScreen.tsx`'s own comment says why: the
+   write still lands in `coord.db` regardless, and disabling the control
+   would hide `AccountPoolSheet`'s own disclosure, its one entry point). The
+   dim signal here is therefore chrome on an otherwise-unchanged color — a
+   dashed underline, never opacity (this file's own rule, see the
+   offline-banner note earlier in this file) — so it costs nothing against
+   `contrast.test.ts`'s gate. */
+.acct-pool-chip[data-dim] {
+  text-decoration: underline dashed var(--ink-tertiary);
+  text-underline-offset: 2px;
 }
 /* The loud card-level count for sessions with nowhere in their pool to go. */
 .proj-card-stranded {

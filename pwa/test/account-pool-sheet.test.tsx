@@ -180,4 +180,39 @@ describe('AccountPoolSheet', () => {
     expect(screen.getByText(new RegExp(expected.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')))).toBeInTheDocument();
     expect(screen.queryByText(/older than the fleet/)).not.toBeInTheDocument();
   });
+
+  // Item 3 (I1, wave-1 fix round A): the sheet's own disclosure that nothing
+  // on the fleet enforces an account tag yet — the ONE place this fact
+  // reaches the operator, since `AccountsScreen`'s dimmed chip stays
+  // clickable specifically so this sheet still opens (see
+  // `ACCOUNT_POOL_UNAVAILABLE_TEXT`'s own docstring).
+  it('discloses nothing-enforces-this-yet when the caller measured accountPools:unavailable', () => {
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        unenforced
+        open
+        onClose={() => {}}
+        onSet={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId('account-pool-unenforced-notice')).toHaveTextContent(
+      /nothing on the fleet enforces it yet/,
+    );
+  });
+
+  it.each([undefined, false] as const)('says nothing when unenforced is %s — no evidence, no claim', (unenforced) => {
+    render(
+      <AccountPoolSheet
+        account="acct-a"
+        roster={rosterWith('acct-a', null)}
+        unenforced={unenforced}
+        open
+        onClose={() => {}}
+        onSet={vi.fn()}
+      />,
+    );
+    expect(screen.queryByTestId('account-pool-unenforced-notice')).not.toBeInTheDocument();
+  });
 });

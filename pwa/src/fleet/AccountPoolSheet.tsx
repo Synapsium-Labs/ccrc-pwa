@@ -37,6 +37,16 @@ export interface AccountPoolSheetProps {
    *  `accountPoolState` read, so the sheet renders what was already
    *  computed rather than a second, possibly differently-timed one. */
   current?: AccountPoolWire;
+  /** Item 3 (I1, wave-1 fix round A): true when the fleet-level `pools`
+   *  frame MEASURED `accountPools: 'unavailable'` — the deployed `ccd`
+   *  predates account pools, so nothing on the fleet reads a tag set from
+   *  here yet. `undefined`/`false` covers both "enforced" and "no evidence",
+   *  the same no-overclaiming stance `AccountsScreen`'s own `acctPoolDim`
+   *  takes: a fleet nobody has measured is not told it is unenforced. The
+   *  write below still happens regardless — it is a central `coord.db` row
+   *  this server always accepts — this prop only controls whether the
+   *  operator is TOLD nothing enforces it yet. */
+  unenforced?: boolean;
   open: boolean;
   onClose: () => void;
   /** The pools to WRITE for this account — `[]` clears. The caller performs
@@ -81,7 +91,7 @@ const currentCopy = (account: string, current: AccountPoolWire | undefined): str
 };
 
 export function AccountPoolSheet({
-  account, roster, current, open, onClose, onSet,
+  account, roster, current, unenforced, open, onClose, onSet,
 }: AccountPoolSheetProps): ReactNode {
   const [name, setName] = useState('');
 
@@ -122,6 +132,12 @@ export function AccountPoolSheet({
         {currentCopy(account, current)}{' '}
         An account may serve a project when either side is untagged or the names agree.
       </p>
+      {unenforced && (
+        <p className="sheet-copy sheet-copy-notice" data-testid="account-pool-unenforced-notice">
+          This fleet's <code>ccd</code> predates account pools — a tag set here is recorded, but
+          nothing on the fleet enforces it yet.
+        </p>
+      )}
       <div className="pool-list">
         {options.map((poolName) => (
           <button

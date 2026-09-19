@@ -711,6 +711,10 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",
   },
+  'fleet.css .sheet-copy-notice': {
+    under: ['var(--bg-sheet)'],
+    why: "item 3 (I1, wave-1 fix round A)'s \"nothing enforces this account pool tag yet\" disclosure, rendered inside AccountPoolSheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same shape as chat.css's .opt-inert on the identical .sheet-panel ground.",
+  },
   'fleet.css .pool-epoch-lag': {
     under: ['var(--bg-page)'],
     why: "the account-pool epoch/observed staleness indicator (Task 9, account-pool-membership wave 1) sits in .fleet-head-right on the fleet screen's header. .fleet, .fleet-head and .fleet-head-right all paint no background of their own, so the real ground is body's --bg-page (styles/base.css:111) — same reasoning and same ground as .mail-chip/.mail-group-head above, which sit on the sibling .mail-screen's unpainted body. Its selector names no ancestor, so no route could ground it. Review round 1, C2: this was first added to GRANDFATHERED_UNCOVERED on the mistaken claim that nothing at this header level paints a background — INHERITED_GROUNDS already grounds three OTHER rules in this exact file against --bg-page for exactly this reason, and --ink-tertiary over --bg-page measures 6.23 dark / 5.25 light, clearing the 4.5 floor in both themes.",

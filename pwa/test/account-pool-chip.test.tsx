@@ -20,7 +20,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import type { AccountUsage, RosterWire } from '../../shared/api';
 import type { AccountPoolWire } from '../../shared/poolrule';
 import { accountPoolState } from '../src/lib/accounts';
-import { AccountsScreen } from '../src/screens/AccountsScreen';
+import { ACCOUNT_POOL_UNAVAILABLE_TEXT, AccountsScreen } from '../src/screens/AccountsScreen';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { api } from '../src/lib/api';
 import { navigate } from '../src/lib/router';
@@ -30,7 +30,7 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
 });
 
 /** A minimal one-account roster, built directly (not off `TEST_ROSTER`, which
@@ -175,6 +175,53 @@ describe('AccountsScreen — the account pool chip', () => {
     expect(chip).not.toHaveTextContent('no pool');
     expect(chip).not.toHaveAttribute('data-origin');
     expect(chip).toHaveAttribute('data-pool', state);
+  });
+
+  // Item 3 (I1, wave-1 fix round A): `accountPools` was produced by
+  // `poolsWire` (T9-R2/F2) and read by nothing in `pwa/` — this proves the
+  // chip actually dims, the way `ProjectCard`'s own `poolDim` already does
+  // for project pools, and stays a real control while it does (see
+  // `ACCOUNT_POOL_UNAVAILABLE_TEXT`'s own docstring for why this chip does
+  // NOT switch to an inert span the way the project one does).
+  describe('dims on accountPools:unavailable — the fleet-level `pools` frame, item 3', () => {
+    it('carries data-dim and the disclosure text once the fleet MEASURES accountPools:unavailable', async () => {
+      stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({})]);
+      act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', accountPools: 'unavailable' } }));
+      render(<AccountsScreen />);
+      const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+      expect(chip).toHaveAttribute('data-dim', 'true');
+      expect(chip).toHaveAttribute('title', ACCOUNT_POOL_UNAVAILABLE_TEXT);
+      expect(chip.getAttribute('aria-label')).toContain(ACCOUNT_POOL_UNAVAILABLE_TEXT);
+      // Still a real, clickable control — unlike the project chip's dim span,
+      // an account tag write always lands in coord.db regardless of whether
+      // any fleet node reads it yet.
+      expect(chip.tagName).toBe('BUTTON');
+      expect(chip).not.toBeDisabled();
+    });
+
+    it('does NOT dim on accountPools:enforced', async () => {
+      stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({})]);
+      act(() => useFleetStore.setState({ pools: { listed: false, enforcement: 'unknown', accountPools: 'enforced' } }));
+      render(<AccountsScreen />);
+      const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+      expect(chip).not.toHaveAttribute('data-dim');
+      expect(chip).not.toHaveAttribute('title');
+    });
+
+    it('does NOT dim on no evidence — accountPools:unknown, absent, or no pools frame at all', async () => {
+      stubAccounts(rosterWith('acct-a', 'pool-roster'), [acct({})]);
+      for (const pools of [
+        null,
+        { listed: false as const, enforcement: 'unknown' as const },
+        { listed: false as const, enforcement: 'unknown' as const, accountPools: 'unknown' as const },
+      ]) {
+        act(() => useFleetStore.setState({ pools }));
+        const { unmount } = render(<AccountsScreen />);
+        const chip = await screen.findByTestId('acct-pool-chip-acct-a');
+        expect(chip).not.toHaveAttribute('data-dim');
+        unmount();
+      }
+    });
   });
 });
 

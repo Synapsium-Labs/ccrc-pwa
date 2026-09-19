@@ -195,11 +195,22 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
     if (typeof pools !== 'object' || pools === null || Array.isArray(pools)) return null;
     const outer = pools as {
       listed?: unknown; enforcement?: unknown; byProject?: unknown;
-      epoch?: unknown; observedEpoch?: unknown;
+      epoch?: unknown; observedEpoch?: unknown; accountPools?: unknown;
     };
     const validEnforcement = outer.enforcement === 'enforced'
       || outer.enforcement === 'unavailable'
       || outer.enforcement === 'unknown';
+    // Item 3 (I1, wave-1 fix round A): `accountPools` rides the SAME
+    // `PoolsEnforcement` domain as `enforcement` above and gets the identical
+    // envelope-level gate — it was produced by `poolsWire` (T9-R2/F2) and
+    // shipped on the wire type, but nothing here named it, so a malformed
+    // value would have slipped through unrejected into the first real
+    // consumer (`AccountsScreen`'s account-pool chip, below). Optional, like
+    // `epoch`/`observedEpoch`: an older server simply omits it.
+    const validAccountPools = outer.accountPools === undefined
+      || outer.accountPools === 'enforced'
+      || outer.accountPools === 'unavailable'
+      || outer.accountPools === 'unknown';
     const validByProject = typeof outer.byProject === 'object'
       && outer.byProject !== null
       && !Array.isArray(outer.byProject);
@@ -220,7 +231,7 @@ const asFleetMsg = (m: unknown): FleetMsg | null => {
       || outer.observedEpoch === null
       || typeof outer.observedEpoch === 'number';
     if (
-      validEnforcement && validEpoch && validObservedEpoch
+      validEnforcement && validEpoch && validObservedEpoch && validAccountPools
       && (outer.listed === false || (outer.listed === true && validByProject))
     ) {
       return m as FleetMsg;

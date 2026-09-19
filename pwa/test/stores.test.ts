@@ -1198,6 +1198,47 @@ describe('fleet store', () => {
       });
     });
 
+    // Item 3 (I1, wave-1 fix round A): `accountPools` shares `enforcement`'s
+    // own `PoolsEnforcement` domain and, before this round, the ONLY gate on
+    // it anywhere was `poolsWire`'s producer-side type — nothing at this
+    // envelope named it, so a malformed value from a broken or adversarial
+    // peer would have reached the first real consumer (`AccountsScreen`'s
+    // account-pool chip) unrejected. Same shape as the `enforcement` cases
+    // just above, one level down.
+    describe('the accountPools field (item 1, corrected item 3)', () => {
+      it('carries every valid accountPools value straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        for (const accountPools of ['enforced', 'unavailable', 'unknown']) {
+          const pools = { listed: false, enforcement: 'unknown', accountPools };
+          lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+          expect(store.getState().pools).toEqual(pools);
+        }
+        store.getState().disconnect();
+      });
+
+      it('leaves accountPools absent as a missing key when an older server omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown' };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'accountPools')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed accountPools', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', accountPools: 'nope' },
+          { listed: false, enforcement: 'unknown', accountPools: null },
+          { listed: false, enforcement: 'unknown', accountPools: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
+    });
+
     it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {
       const store = createFleetStore({ makeSocket });
       store.getState().connect();

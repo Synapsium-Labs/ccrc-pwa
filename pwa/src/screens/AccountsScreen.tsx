@@ -48,6 +48,25 @@ import '../fleet/fleet.css';
  *  `PoolChip` makes the identical argument for its `unrecognised` fallback,
  *  the one condition TypeScript cannot see: a value that arrives at runtime
  *  off the type this build was compiled against. */
+/** What the account-pool chip discloses when the fleet host's `ccd` has no
+ *  ACCOUNT-pool machinery yet (`accountPools: 'unavailable'`) — the sibling
+ *  fact `ProjectCard.tsx`'s `POOL_UNAVAILABLE_TEXT` states for project pools,
+ *  named separately because the two are independent capabilities
+ *  (`poolsEnforcement` reads `PROJECT_POOL_VERB`; `accountPoolsEnforcement`
+ *  reads `ACCOUNT_POOLS_CAP` — a fleet can have one without the other).
+ *
+ *  UNLIKE the project chip, this one stays a clickable button when dimmed
+ *  (see its `data-dim` usage below) rather than degrading to an inert span:
+ *  a project tag write dispatches a `ccd` verb that a `poolsEnforcement:
+ *  'unavailable'` fleet genuinely cannot run, but an account tag write is a
+ *  central `coord.db` row this SERVER always accepts — `accountPools:
+ *  'unavailable'` means no fleet node reads it YET, not that the write would
+ *  fail. Disabling the control would also be the only way an operator could
+ *  ever see this text, since the chip is the sheet's one entry point.
+ *
+ *  Exported so the suite pins the sentence rather than a paraphrase of it. */
+export const ACCOUNT_POOL_UNAVAILABLE_TEXT = 'fleet ccd predates account pools';
+
 function acctPoolChip(state: AccountPoolWire): {
   word: string; ariaLabel: string; dataPool: string; origin?: 'central' | 'declared';
 } {
@@ -189,6 +208,13 @@ function Bar({ label, pct, resetAt, nowSec, rolledOver }: {
 export function AccountsScreen(): ReactNode {
   const { accounts, projected, roster } = useAccountsPoll();
   const sessions = useFleetStore((s) => s.sessions);
+  // Item 3 (I1, wave-1 fix round A): the fleet-level `pools` frame's
+  // `accountPools` capability — produced (T9-R2/F2, `server/src/pools.ts`'s
+  // `accountPoolsEnforcement`) and, until this round, read by nothing in
+  // `pwa/`. `null` (no frame yet) and `undefined` (an older server that never
+  // sends the field) both mean "no evidence", the same as `ProjectCard`'s own
+  // `pools?.enforcement` read — only a MEASURED `'unavailable'` dims the chip.
+  const accountPools = useFleetStore((s) => s.pools?.accountPools);
   const now = useNow(30_000);
   const nowSec = Math.floor(now / 1000);
 
@@ -345,6 +371,11 @@ export function AccountsScreen(): ReactNode {
           const inRoster = roster.some((a) => a.id === wrapper);
           const poolState = accountPoolState(roster, wrapper);
           const chip = acctPoolChip(poolState);
+          // Item 3 (I1): measured `'unavailable'` only — `undefined`/`'unknown'`
+          // are no-evidence-either-way, same polarity as `ProjectCard`'s
+          // `poolDim`, so a fleet nobody has measured yet never dims the chip
+          // on a guess.
+          const acctPoolDim = accountPools === 'unavailable';
           return (
             <section key={wrapper} className="accounts-row" data-disabled={off ? 'true' : 'false'}>
               <div className="accounts-row-head">
@@ -367,7 +398,9 @@ export function AccountsScreen(): ReactNode {
                     data-testid={`acct-pool-chip-${wrapper}`}
                     data-pool={chip.dataPool}
                     data-origin={chip.origin}
-                    aria-label={chip.ariaLabel}
+                    data-dim={acctPoolDim || undefined}
+                    aria-label={acctPoolDim ? `${chip.ariaLabel} — ${ACCOUNT_POOL_UNAVAILABLE_TEXT}` : chip.ariaLabel}
+                    title={acctPoolDim ? ACCOUNT_POOL_UNAVAILABLE_TEXT : undefined}
                     onClick={() => { setPoolSheetAccount(wrapper); setPoolSheetOpen(true); }}
                   >
                     {chip.word}
@@ -408,6 +441,7 @@ export function AccountsScreen(): ReactNode {
         account={poolSheetAccount}
         roster={roster}
         current={poolSheetAccount === null ? undefined : accountPoolState(roster, poolSheetAccount)}
+        unenforced={accountPools === 'unavailable'}
         open={poolSheetOpen}
         onClose={() => setPoolSheetOpen(false)}
         onSet={setAccountPool}
