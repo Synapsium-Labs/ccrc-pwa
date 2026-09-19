@@ -2313,6 +2313,15 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // account-pool-membership wave 1, Task 4 fix round 2 (ruling T4-R1):
+      // `ccd-pool-sync.timer` is ABSENT here, and its absence is the
+      // assertion. This describe's install is the default role, `both`, and
+      // `both` is not `fleet` — so it gets no `~/.ccrc/agent.env`, which is
+      // the one file `ccd-pool-sync` refuses without. Arming the timer here
+      // would enable a oneshot that exits 1 every 60 seconds forever while
+      // the TIMER (which is what `_check_services` measures) stays active, so
+      // `ccrc doctor` would print PASS on a box the sync has never worked on.
+      // The fleet-role describe below is where this enable is pinned present.
       // graphify Task 10 (O3/O6b): a THIRD enable, beside cap-scopes', for the
       // role-gated sweep timer — the default install here is role `both`, so
       // it fires. Degrades rather than dies on failure (`_inst_linger`'s own
@@ -2743,8 +2752,55 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
         // and the three timer-bound ones, macOS is a supported box for it.
         ? ['ccd', 'ccd-account-auth', 'ccrc', 'graphify']
+        // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
+        // joins the non-Darwin list on the timer-bound names' own terms. THIS
+        // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
+        // an exact set, so deleting the install reds here rather than leaving
+        // `ccd-pool-sync.timer` enabled against a 203/EXEC.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py', 'ccrc', 'graphify']);
+           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
+           'ccrc', 'graphify']);
+  });
+
+  it('_inst_bins\' own closing line names every executable it placed', () => {
+    // account-pool-membership wave 1, Task 4 fix round 2 (B6). That echo is a
+    // SECOND, hand-kept census of the same set the assertion above measures,
+    // and it shipped one wave behind it: `ccd-pool-sync` landed in
+    // `_inst_bins` in fix round 1 and the sentence that tells the operator
+    // what arrived never gained the name. Nothing could see it, because the
+    // only pin on that line was `/^install: bins: /`.
+    //
+    // DERIVED FROM THE BIN DIRECTORY, so the next executable added is caught
+    // by the same mechanism rather than by someone remembering this line —
+    // `macos-platform.test.ts:184-189`'s rule under D-1250. Two names are
+    // excluded and each says why: `graphify` is `_inst_graphify_engine`'s
+    // symlink into the pinned venv, not one of `_inst_bins`' copies, and
+    // `ccd-usage-sweep.py` is the sweep's ENGINE, carried by the entry that
+    // names the sweep itself (`ccrc-uninstall`'s own census calls them a
+    // PAIR).
+    const { home, r } = converged;
+    const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
+    expect(line, 'no `install: bins:` line in the transcript at all').toBeDefined();
+    const placed = readdirSync(join(home, '.local', 'bin'))
+      .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify' && !b.endsWith('.py'))
+      .sort();
+    expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
+      .toBeGreaterThanOrEqual(3);
+    // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
+    // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
+    // PREFIX of another name this same census carries (`ccd-account-auth`,
+    // `ccd-cap-scopes`, … and `ccd-usage-sweep.py` respectively), so deleting
+    // either bare name from the real echo would leave this pin GREEN as long
+    // as its longer sibling still printed. PLAIN `\b` does not close this —
+    // a hyphen is a NON-word character, so `\bccd\b` still matches the `ccd`
+    // inside `ccd-account-auth` (the boundary fires on the hyphen itself,
+    // measured). The name must not be immediately flanked by a word
+    // character OR a hyphen on either side.
+    for (const b of placed) {
+      const escaped = b.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      expect(line, `${b} is in $HOME/.local/bin and the install transcript never says it arrived`)
+        .toMatch(new RegExp(`(?<![\\w-])${escaped}(?![\\w-])`));
+    }
   });
 
   it('never calls ccrc\'s own executables orphans (D-93)', () => {
@@ -3398,6 +3454,13 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
       if (dest === 'ccrc.service') continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
+    // Ruling T4-R1: the pool-sync pair lands HERE AND ONLY HERE. It is not in
+    // `UNIT_FILES` — that list is what a role-`both` install places, and this
+    // pair deliberately is not — so it takes its own two lines. This is the
+    // role that gets `~/.ccrc/agent.env` (asserted three tests up), which is
+    // the only precondition under which `ccd-pool-sync` can ever exit 0.
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(true);
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(true);
   });
 
   itLinux('enables and restarts the AGENT unit, and never asks systemd about ccrc.service', async () => {
@@ -3410,6 +3473,12 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
     // C5: fleet is not server, so the models timer enables here too.
     expect(argv).toContain('--user enable --now ccrc-models.timer');
+    // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
+    // — the role whose install wrote the `~/.ccrc/agent.env` the binary
+    // refuses without. `--role both` and `--role server` below assert the
+    // matching absence, so the pair of claims cannot both be satisfied by a
+    // gate that is simply always true or always false.
+    expect(argv).toContain('--user enable --now ccd-pool-sync.timer');
     expect(argv).toContain('--user restart ccrc-agent.service');
     // The blanket half of the old refusal, inverted: on a fleet box it is
     // ccrc.service that must never be touched — there is no server here.
@@ -3465,6 +3534,11 @@ describe('ccrc install --role: the refusals and the default', () => {
     }
     expect(existsSync(unitDir(home, 'ccrc-agent.service'))).toBe(false);
     expect(existsSync(dotCcrc(home, 'agent.env'))).toBe(false);
+    // Ruling T4-R1, the unit-file half: `_inst_units` gates the pool-sync
+    // pair on `fleet` too, so a `both` box is never given a unit file for the
+    // timer it is not supposed to arm.
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(false);
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=both$/m);
     const calls = systemctlCalls(home)
       // Reads dropped, mutations kept — see the sibling assertion above for why
@@ -3476,6 +3550,11 @@ describe('ccrc install --role: the refusals and the default', () => {
       '--user daemon-reload',
       '--user enable --now ccrc.service',
       '--user enable --now ccd-cap-scopes.timer',
+      // Ruling T4-R1: `ccd-pool-sync.timer` is absent from BOTH lists, which
+      // is what keeps "byte-identical to a plain install" true — and `both`
+      // is precisely the role the old unconditional enable got wrong, because
+      // it is the DEFAULT and it is the role the `existsSync(agent.env)` line
+      // above proves gets no agent.env.
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
       '--user enable --now ccd-account-health.timer',
@@ -3511,6 +3590,14 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
+    // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
+    // NARROWER gate than the four pairs above it. Those are `!= server`;
+    // this one is `= fleet`, because `both` gets no agent.env either. A
+    // server box failing this assertion under the sibling gate would look
+    // identical, which is why `--role both` above asserts the same absence.
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-pool-sync.timer'))).toBe(false);
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-pool-sync');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-graph-sweep');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');

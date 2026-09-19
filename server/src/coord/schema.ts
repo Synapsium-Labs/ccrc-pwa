@@ -924,6 +924,53 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE runs ADD COLUMN coordProject TEXT;
   `,
+
+  // ── 13: user_version 12 -> 13 ───────────────────────────────────────────
+  // Account-pool membership: the authoritative store (design 2026-09-18 §5.2).
+  //
+  // ROW PER EDGE, not a column on an account (operator ruling 2). `subjectKind`
+  // exists from day one though wave 1 writes only 'account' rows: the project
+  // half may migrate in later, and the org edition's `user -> pinned account` is
+  // a DIFFERENT EDGE, not a wider column. Wave 1's "one pool per account" is a
+  // PARTIAL UNIQUE INDEX, so relaxing it to multi-pool later drops an index and
+  // rewrites no rows and changes no wire shape — where widening a column would
+  // change the rule in three languages at once.
+  //
+  // `addedBy` is NULLABLE and null is a real answer: a row written by a path
+  // that had no session identity. It is attribution, never authentication.
+  //
+  // `pool_epoch` takes the single-row idiom from `coordinator_state` above
+  // (`id INTEGER PRIMARY KEY CHECK (id = 1)`) and is SEEDED here, so every
+  // reader after this migration finds a row and none has to handle its absence.
+  // Epoch 0 means "nothing has ever been tagged", which is a measurement.
+  //
+  // MIGRATIONS[0..11] are frozen: `db.ts:182` iterates from the live
+  // `user_version`, so an edit to an applied entry never runs.
+  //
+  // THIS ENTRY IS SLOT 13 AS WRITTEN. PR #40 (automation-runner) carries a
+  // migration spelled slot 11 — already taken on main — so it must move up when
+  // rebased and may take 13 first. Migration 12's own comment records the last
+  // branch that lost this race. RE-MEASURE against origin/main before merge.
+  `
+  CREATE TABLE pool_edges (
+    id          INTEGER PRIMARY KEY,
+    subjectKind TEXT    NOT NULL,
+    subjectId   TEXT    NOT NULL,
+    pool        TEXT    NOT NULL,
+    addedAt     INTEGER NOT NULL,
+    addedBy     TEXT
+  );
+  CREATE UNIQUE INDEX pool_edges_one_per_account
+    ON pool_edges(subjectId) WHERE subjectKind = 'account';
+
+  CREATE TABLE pool_epoch (
+    id       INTEGER PRIMARY KEY CHECK (id = 1),
+    epoch    INTEGER NOT NULL,
+    issuedAt INTEGER NOT NULL,
+    digest   TEXT    NOT NULL
+  );
+  INSERT INTO pool_epoch (id, epoch, issuedAt, digest) VALUES (1, 0, 0, '');
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

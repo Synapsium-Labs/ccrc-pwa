@@ -10,12 +10,29 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { ProjectPoolWire } from '../../shared/api.js';
-import { poolRule } from '../../shared/poolrule.js';
+import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
+import type { AccountPoolWire } from '../../shared/poolrule.js';
 import { POOL_RULE_CASES } from './fixtures/poolRule.js';
+import type { PoolRuleCase } from './fixtures/poolRule.js';
+
+/** Build one fixture row's account side. Existing rows never set
+ *  `accountState` and must keep producing exactly today's verdict — only a
+ *  row that opts in with `accountState` (added by a later task) reaches the
+ *  new undecidable/tagged-origin shapes. Added by wave 1 Task 5. */
+const wireFor = (c: PoolRuleCase): AccountPoolWire =>
+  c.accountState === undefined
+    ? (c.accountPool === null
+        ? { state: 'untagged', origin: 'central' }
+        : { state: 'tagged', pools: [c.accountPool], origin: 'central' })
+    : { state: c.accountState };
+
+const taggedAccount = (name: string): AccountPoolWire =>
+  ({ state: 'tagged', pools: [name], origin: 'central' });
+const untaggedAccount: AccountPoolWire = { state: 'untagged', origin: 'central' };
 
 describe('poolRule over the shared truth table', () => {
   it.each(POOL_RULE_CASES.map((c) => [c.name, c] as const))('%s', (_name, c) => {
-    const v = poolRule(c.accountPool, c.project);
+    const v = poolRule(wireFor(c), c.project);
     const actual = v.ok ? 'serve' : v.reason === 'pool-mismatch' ? 'mismatch' : 'undecidable';
     expect(actual, c.why).toBe(c.expect);
   });
@@ -25,7 +42,7 @@ describe('poolRule over the shared truth table', () => {
     // sentence will each need to name the two pools. Carrying them on the
     // verdict is what will stop three callers each looking them up again —
     // and disagreeing when one of them looks in the wrong roster copy.
-    expect(poolRule('pool-a', { state: 'tagged', name: 'pool-b' })).toEqual({
+    expect(poolRule(taggedAccount('pool-a'), { state: 'tagged', name: 'pool-b' })).toEqual({
       ok: false, reason: 'pool-mismatch', accountPool: 'pool-a', projectPool: 'pool-b',
     });
   });
@@ -33,9 +50,9 @@ describe('poolRule over the shared truth table', () => {
   it('an undecidable carries WHICH state, because the two have different remedies', () => {
     // `unreadable` is a permissions problem; `malformed` is "rewrite the file".
     // A single `undecidable` token would send the operator to the wrong one.
-    expect(poolRule('pool-a', { state: 'unreadable' }))
+    expect(poolRule(taggedAccount('pool-a'), { state: 'unreadable' }))
       .toEqual({ ok: false, reason: 'pool-undecidable', state: 'unreadable' });
-    expect(poolRule('pool-a', { state: 'malformed' }))
+    expect(poolRule(taggedAccount('pool-a'), { state: 'malformed' }))
       .toEqual({ ok: false, reason: 'pool-undecidable', state: 'malformed' });
   });
 
@@ -43,10 +60,76 @@ describe('poolRule over the shared truth table', () => {
     // "served because the project is untagged" and "served because the names
     // agree" are different facts to a reader deciding whether tagging the
     // project would change anything — and the PWA's copy is built from them.
-    expect(poolRule(null, { state: 'untagged' })).toEqual({ ok: true, why: 'untagged-project' });
-    expect(poolRule('pool-a', { state: 'untagged' })).toEqual({ ok: true, why: 'untagged-project' });
-    expect(poolRule(null, { state: 'tagged', name: 'pool-a' })).toEqual({ ok: true, why: 'untagged-account' });
-    expect(poolRule('pool-a', { state: 'tagged', name: 'pool-a' })).toEqual({ ok: true, why: 'same-pool' });
+    expect(poolRule(untaggedAccount, { state: 'untagged' })).toEqual({ ok: true, why: 'untagged-project' });
+    expect(poolRule(taggedAccount('pool-a'), { state: 'untagged' })).toEqual({ ok: true, why: 'untagged-project' });
+    expect(poolRule(untaggedAccount, { state: 'tagged', name: 'pool-a' })).toEqual({ ok: true, why: 'untagged-account' });
+    expect(poolRule(taggedAccount('pool-a'), { state: 'tagged', name: 'pool-a' })).toEqual({ ok: true, why: 'same-pool' });
+  });
+
+  // The three assertions below are what no fixture row (today) can express —
+  // `PoolRuleCase.accountPool` has no vocabulary for `unreadable` / `stale` /
+  // `malformed` on the account side, and a fixture row with `pools.length > 1`
+  // does not exist yet. Added by wave 1 Task 5.
+
+  it('an account the roster does not carry stays PERMISSIVE, not undecidable', () => {
+    // poolrule.ts's docstring argues this fold deliberately: the PWA's roster
+    // can lag the fleet's, and hiding a live non-roster account is worse than
+    // offering it and letting `ccd` refuse. `unreadable` must NOT swallow this
+    // case — `untagged` is the only account state that means "cannot see it".
+    expect(poolRule({ state: 'untagged', origin: 'central' }, { state: 'tagged', name: 'pool-a' }))
+      .toEqual({ ok: true, why: 'untagged-account' });
+  });
+
+  it('stale and unreadable are two words, not one', () => {
+    const a = poolRule({ state: 'stale' }, { state: 'tagged', name: 'pool-a' });
+    const b = poolRule({ state: 'unreadable' }, { state: 'tagged', name: 'pool-a' });
+    expect(a).toEqual({ ok: false, reason: 'pool-undecidable', state: 'stale' });
+    expect(b).toEqual({ ok: false, reason: 'pool-undecidable', state: 'unreadable' });
+    expect(a).not.toEqual(b);
+  });
+
+  it('multi-pool membership is set membership, so the wire needs no change later', () => {
+    expect(poolRule({ state: 'tagged', pools: ['pool-a', 'pool-b'], origin: 'central' },
+                    { state: 'tagged', name: 'pool-b' })).toEqual({ ok: true, why: 'same-pool' });
+  });
+
+  it('acct-unreadable-project-untagged', () => {
+    // Guards the ORDERING invariant the brief calls out twice: the project
+    // decides FIRST. If the account's unreadable/malformed/stale block were
+    // moved above the `projectPool.state === 'untagged'` return, an untagged
+    // project would stop serving the moment the account side could not be
+    // read — turning a bounded, deliberately-tagged-projects-only outage into
+    // a fleet-wide stop. The correct order never even LOOKS at the account
+    // here, so any account state — including an undecidable one — must still
+    // serve.
+    expect(poolRule({ state: 'unreadable' }, { state: 'untagged' }))
+      .toEqual({ ok: true, why: 'untagged-project' });
+  });
+});
+
+describe('declaredAccountPool — the adapter the five roster-only call sites now share (T5-R1)', () => {
+  // `server/src/poolrule.ts` and `pwa/src/lib/pools.ts` predate this wave and
+  // still hold only a roster NAME, never a wire. This is the seam that turns
+  // that name into an `AccountPoolWire`, and it must preserve `poolRule`'s
+  // documented permissive fold: a roster miss is `untagged`, not `unreadable`.
+  it('declaredAccountPool(null) against a tagged project preserves the roster-miss fold', () => {
+    expect(poolRule(declaredAccountPool(null), { state: 'tagged', name: 'pool-a' }))
+      .toEqual({ ok: true, why: 'untagged-account' });
+  });
+
+  it('declaredAccountPool(name) against the same name still serves', () => {
+    expect(poolRule(declaredAccountPool('pool-a'), { state: 'tagged', name: 'pool-a' }))
+      .toEqual({ ok: true, why: 'same-pool' });
+  });
+
+  // M6 (fix round T5-R2): `origin` is produced here but was pinned by
+  // nothing — every assertion above is `toEqual` on a `PoolVerdict`, which
+  // never carries `origin`. Task 9 renders it as operator-facing copy
+  // (`data-origin`), so a silent flip from `'declared'` to `'central'` would
+  // become a visible lie with no red anywhere. These pin the WIRE itself.
+  it('declaredAccountPool tags the wire origin as declared, not central', () => {
+    expect(declaredAccountPool('pool-a')).toEqual({ state: 'tagged', pools: ['pool-a'], origin: 'declared' });
+    expect(declaredAccountPool(null)).toEqual({ state: 'untagged', origin: 'declared' });
   });
 });
 
@@ -58,24 +141,24 @@ describe('poolRule fails shut on an unrecognised project-pool wire state', () =>
   const unrecognisedState = { state: 'unrecognised' } as unknown as ProjectPoolWire;
 
   it.each([
-    ['a future state without a name', 'pool-a', futureStateWithoutName],
-    ['a named archived state', 'pool-a', archivedNamedPool],
-    ['an unrecognised state over an untagged account', null, unrecognisedState],
-  ] as const)('%s is undecidable rather than inferred', (_name, accountPool, projectPool) => {
-    expect(poolRule(accountPool, projectPool)).toEqual({
+    ['a future state without a name', taggedAccount('pool-a'), futureStateWithoutName],
+    ['a named archived state', taggedAccount('pool-a'), archivedNamedPool],
+    ['an unrecognised state over an untagged account', untaggedAccount, unrecognisedState],
+  ] as const)('%s is undecidable rather than inferred', (_name, account, projectPool) => {
+    expect(poolRule(account, projectPool)).toEqual({
       ok: false, reason: 'pool-undecidable', state: 'unrecognised',
     });
   });
 
   it.each([
-    ['unreadable', 'pool-a', { state: 'unreadable' }, { ok: false, reason: 'pool-undecidable', state: 'unreadable' }],
-    ['malformed', null, { state: 'malformed' }, { ok: false, reason: 'pool-undecidable', state: 'malformed' }],
-    ['untagged project', 'pool-a', { state: 'untagged' }, { ok: true, why: 'untagged-project' }],
-    ['untagged account', null, { state: 'tagged', name: 'pool-a' }, { ok: true, why: 'untagged-account' }],
-    ['same tagged pool', 'pool-a', { state: 'tagged', name: 'pool-a' }, { ok: true, why: 'same-pool' }],
-    ['different tagged pools', 'pool-a', { state: 'tagged', name: 'pool-b' }, { ok: false, reason: 'pool-mismatch', accountPool: 'pool-a', projectPool: 'pool-b' }],
-  ] as const)('%s remains in-vocabulary', (_name, accountPool, projectPool, expected) => {
-    expect(poolRule(accountPool, projectPool)).toEqual(expected);
+    ['unreadable', taggedAccount('pool-a'), { state: 'unreadable' }, { ok: false, reason: 'pool-undecidable', state: 'unreadable' }],
+    ['malformed', untaggedAccount, { state: 'malformed' }, { ok: false, reason: 'pool-undecidable', state: 'malformed' }],
+    ['untagged project', taggedAccount('pool-a'), { state: 'untagged' }, { ok: true, why: 'untagged-project' }],
+    ['untagged account', untaggedAccount, { state: 'tagged', name: 'pool-a' }, { ok: true, why: 'untagged-account' }],
+    ['same tagged pool', taggedAccount('pool-a'), { state: 'tagged', name: 'pool-a' }, { ok: true, why: 'same-pool' }],
+    ['different tagged pools', taggedAccount('pool-a'), { state: 'tagged', name: 'pool-b' }, { ok: false, reason: 'pool-mismatch', accountPool: 'pool-a', projectPool: 'pool-b' }],
+  ] as const)('%s remains in-vocabulary', (_name, account, projectPool, expected) => {
+    expect(poolRule(account, projectPool)).toEqual(expected);
   });
 });
 
@@ -94,7 +177,7 @@ describe('the table this drives is a real table', () => {
 
   it('exercises all five verdicts the rule can produce', () => {
     const outcomes = new Set(POOL_RULE_CASES.map((c) => {
-      const v = poolRule(c.accountPool, c.project);
+      const v = poolRule(wireFor(c), c.project);
       return v.ok ? v.why : v.reason;
     }));
     expect([...outcomes].sort()).toEqual([
@@ -118,8 +201,7 @@ describe('the table this drives is a real table', () => {
     // `mismatch-on-a-project-prefix` (long account, short project) is the only
     // row that kills either `accountPool.startsWith(projectPool.name)` or a
     // bare `accountPool.includes(projectPool.name)` — measured: each of those
-    // three mutations passes every row except its own. Drop one row and one
-    // mutation walks the whole table.
+    // three mutations survived the whole table.
     expect(POOL_RULE_CASES.filter((c) => c.expect === 'mismatch').length).toBeGreaterThanOrEqual(4);
     // Two DIFFERENT names must agree-and-serve, not one. A rule that hard-coded
     // a single pool passes `same-pool-a` alone, and the floor above cannot see

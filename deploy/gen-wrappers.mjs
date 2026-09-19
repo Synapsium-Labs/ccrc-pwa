@@ -175,9 +175,31 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  terms again — non-Darwin only, no marker. Its scanner, `ccd-usage-sweep.py`,
  *  is placed alongside it but carries a dot, which `ID_RE` never matches before
  *  this Set is even consulted — so it needs no entry here, the same property
- *  `ccd/ccrc`'s own orphan-scan comment documents for that name. */
+ *  `ccd/ccrc`'s own orphan-scan comment documents for that name.
+ *
+ *  account-pool-membership wave 1, Task 4 fix round 1 (F3): `ccd-pool-sync`
+ *  joins on `ccd-graph-sweep`'s own terms — non-Darwin only (its only runner
+ *  is a systemd timer) and carrying no provenance marker. NO ORDINAL, and
+ *  that is the fix rather than an omission (ruling T4-R4, fix round 2):
+ *  `ccd/ccrc:11856-11865` retired the ordinals from its own twin census after
+ *  it was caught stale three times (D-1347, D-2594) — "nothing can measure a
+ *  spelled-out ordinal, so the numbering was a standing request for a reader
+ *  to do a machine's job." The Set below is the list; counting it is the
+ *  reader's, in one line, and cannot go stale.
+ *
+ *  AND THE CLAUSE ORDER, stated correctly here because three paragraphs above
+ *  state it backwards (fix round 2, B4): the scan tests THIS SET FIRST
+ *  (`TOOLCHAIN_EXECUTABLES.has(name)`) and the marker only afterwards
+ *  (`verifyMarker(text) === 'foreign'`) — which is what the header at the top
+ *  of this comment already says, "BEFORE the marker test, and after
+ *  `rosterIds`". So for every name IN this Set the marker clause is
+ *  unreachable, and "the marker clause already skips it today" is true only
+ *  of a name that is NOT here. What an entry buys is therefore not redundancy
+ *  with the marker clause — it is the skip that no longer depends on the FILE
+ *  happening to stay unmarked, which is the day this entry starts mattering
+ *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep']);
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing

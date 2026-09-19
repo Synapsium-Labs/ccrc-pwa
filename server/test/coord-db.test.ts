@@ -657,12 +657,13 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     db.close();
   });
 
-  it('COORD_SCHEMA_VERSION derives to 12 — never hand-edited beside a growing array', () => {
-    // Bumped to 12 by two migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
-    // design 2026-09-14 §5.1) and MIGRATIONS[11] (runs.coordProject, board
-    // placement wave 1 Task 1).
-    expect(COORD_SCHEMA_VERSION).toBe(12);
-    expect(MIGRATIONS.length).toBe(12);
+  it('COORD_SCHEMA_VERSION derives to 13 — never hand-edited beside a growing array', () => {
+    // Bumped to 13 by three migrations: MIGRATIONS[10] (runs.kind/runs.reviews,
+    // design 2026-09-14 §5.1), MIGRATIONS[11] (runs.coordProject, board
+    // placement wave 1 Task 1) and MIGRATIONS[12] (pool_edges/pool_epoch,
+    // account-pool membership wave 1 Task 6).
+    expect(COORD_SCHEMA_VERSION).toBe(13);
+    expect(MIGRATIONS.length).toBe(13);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -717,7 +718,7 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     const db = openCoordDb(p);
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version)
       .toBe(COORD_SCHEMA_VERSION);
-    expect(COORD_SCHEMA_VERSION).toBe(12);
+    expect(COORD_SCHEMA_VERSION).toBe(13);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -907,13 +908,19 @@ describe('coord.db: migration 12 — runs.coordProject', () => {
     // 10 until #108 (review runs) took `user_version 10 -> 11` and moved this
     // one down a slot; the assertion is unchanged in meaning — a database one
     // version behind the current build gains `coordProject` on open.
+    //
+    // The reached version is COORD_SCHEMA_VERSION, not a hardcoded 12: task 6
+    // (account-pool membership) appended MIGRATIONS[12] after this one, so
+    // opening now migrates 11 -> 12 -> 13, not 11 -> 12. `coordProject`
+    // appearing is still this migration's own effect; the total is whatever
+    // the build currently ships.
     const old = new DatabaseSync(p);
     for (let v = 0; v < 11; v++) old.exec(MIGRATIONS[v]!);
     old.exec('PRAGMA user_version = 11');
     old.close();
 
-    const db = openCoordDb(p);                    // must migrate 11 -> 12
-    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: 12 });
+    const db = openCoordDb(p);                    // must migrate 11 -> current
+    expect(db.prepare('PRAGMA user_version').get()).toMatchObject({ user_version: COORD_SCHEMA_VERSION });
     expect(columnOf(db, 'runs', 'coordProject')).toBeDefined();
     db.close();
   });

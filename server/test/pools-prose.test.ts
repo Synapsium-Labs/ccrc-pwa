@@ -850,9 +850,19 @@ describe('CLAUDE.md: the account-pools bullet is GROUNDED where it can be, QUOTE
   });
 
   it('is short enough to be the non-obvious rules rather than the README', () => {
+    // RAISED 12 → 22 (task 10, account-pool-membership wave 1): the bullet grew
+    // a second paragraph naming the account side's own freshness dependency —
+    // spec §8's "named, not discovered" requirement — which this ceiling exists
+    // to keep honest, not to freeze. Re-measured at the new size, not padded
+    // past it: this is still the project+account pool-decision rules in full,
+    // not a README-length essay.
+    // RAISED 22 → 25 (item 5, wave-1 fix round A): the freshness-dependency
+    // sentence itself was FALSE — it claimed a fleet-wide fact that item 5
+    // corrected to a FLEET-box-only one — and the correction genuinely needs
+    // three more lines to say honestly. Re-measured, not padded.
     const raw = passage('CLAUDE.md, the account-pools bullet (raw)', read('CLAUDE.md'), ...RAW_BULLET);
     expect(raw.split('\n').filter((l) => l.trim() !== '').length,
-      'CLAUDE.md says README is canonical — this bullet is over 12 lines').toBeLessThanOrEqual(12);
+      'CLAUDE.md says README is canonical — this bullet is over 25 lines').toBeLessThanOrEqual(25);
   });
 
   it("keeps CLAUDE.md's README size claim within 100 lines of the real file", () => {

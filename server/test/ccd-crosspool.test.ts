@@ -28,15 +28,24 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD, type CcdHarness, WIDE_PANE }
-  from './ccdWsHelpers.js';
-import { POOLED_TEST_ROSTER } from './fixtures/poolRule.js';
+import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD,
+  type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
 
+import { itLinux } from './platformFixtures.js';
 let h: CcdHarness;
 beforeEach(() => {
   h = makeCcdHarness('ccrc-ccd-crosspool-');
   seedAccountsSh(h.home, POOLED_TEST_ROSTER);
+  // The central projection, agreeing with the declared roster above. Every
+  // case in this file exercises the cross-pool machinery over a TAGGED
+  // account, and `_pool_ok` reads that side through THIS document since wave 1
+  // Task 2 — without it every account reads `unreadable` (no document at all:
+  // the cold-node fail-shut, spec §5.8) and every verdict below becomes
+  // undecidable instead of the mismatch or serve each case is about. The two
+  // cases that are ABOUT the carriers disagreeing re-plant it themselves.
+  plantPoolEpoch(h.home, POOL_BY_ID);
 });
 afterEach(() => { h.cleanup(); });
 
@@ -768,8 +777,14 @@ describe('cmd_swap refuses a crossing that was not asked for', () => {
     const mdir = seedRow(); plant('.claude', mdir, 'HISTORY\n'); tagPool('demo', 'pool-a');
     const r = shFail(`${SELF} cmd_swap ${ID} claude-b`, { TMUX: '/tmp/x,1,0' });
     expect(r.code).not.toBe(0);
+    // THE CLAUSE NAMES ITS CARRIER (wave 1 Task 2 fix round 1, I2): the pool
+    // it prints is the PROJECTED one, which is what `_pool_ok` read, not
+    // `_acct_pool`'s declared roster name — they agree here, and the case
+    // where they do not is `cmd_prefer`'s skew case further down.
     expect(r.stderr).toContain(
-      "pool-mismatch: claude-b is in pool 'pool-b' and project 'demo' is in pool 'pool-a'");
+      "pool-mismatch: claude-b is in pool 'pool-b' (measured from the projection, "
+      + `${h.home}/.cc-sessions/pool-epoch — not the declared roster)`
+      + " and project 'demo' is in pool 'pool-a'");
     expect(r.stderr).toContain(`ccd swap --cross-pool ${ID} claude-b`);
     expect(h.calls().join('\n'), 'the detach arm was never reached').not.toContain('detached');
     expect(h.reg(ID, 'wrapper')).toBe('claude');
@@ -1171,6 +1186,91 @@ describe('cmd_prefer', () => {
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('pool-mismatch: claude-b is in pool');
     expect(r.stderr).toContain(`ccd prefer --cross-pool ${ID} claude-b`);
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('the PROJECTION decides which pool the target is in, not the declared roster', () => {
+    // I2 + I4, fix round 1. The declared roster says `claude-b -> pool-b`
+    // (`POOLED_TEST_ROSTER`, untouched); the projection below says
+    // `claude-b -> pool-a`. The project is tagged `pool-b`, so the two
+    // carriers give OPPOSITE verdicts and the case cannot pass under both:
+    //   declared read  -> pool-b == pool-b: SERVE. `ccd prefer` succeeds and
+    //                     rewrites `.home`. No refusal text at all.
+    //   projected read -> pool-a vs pool-b: MISMATCH, refuse, and the
+    //                     sentence must name `pool-a` — the pool the account
+    //                     was actually judged to be in.
+    // That is both halves of the finding in one case: which carrier decides,
+    // and which pool the refusal names.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, { ...POOL_BY_ID, 'claude-b': 'pool-a' });
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("pool-mismatch: claude-b is in pool 'pool-a'");
+    expect(r.stderr).not.toContain("is in pool 'pool-b' (measured");
+    expect(r.stderr).toContain("project 'demo' is in pool 'pool-b'");
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('guards the guard: with the two carriers AGREEING, the same call is a plain in-pool rehome', () => {
+    // Without this the case above proves only that something refused. Same
+    // row, same project tag, same verb — only the projection's `claude-b`
+    // row moves back to `pool-b`, and the rehome goes through.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, { ...POOL_BY_ID, 'claude-b': 'pool-b' });
+    h.sh(`cmd_prefer ${ID} claude-b`);
+    expect(h.reg(ID, 'home')).toBe('claude-b');
+  });
+
+  // LINUX-ONLY, and not because the assertion is awkward on darwin: a darwin
+  // FLEET BOX CANNOT EXIST. `ccd-pool-sync` is never installed there at all —
+  // its only runner is a systemd timer, and `ccrc` says so in its own install
+  // summary ("no ccd-pool-sync — their timers are systemd-only",
+  // `ccd/ccrc:9733`). So `_pool_sync_installed` is correctly FALSE on darwin,
+  // the box has no control plane BY CONFIGURATION, and the declared-tag
+  // fallback is the right answer there rather than a degraded one. Planting a
+  // plist to force this arm would fabricate a state production cannot reach
+  // and would test a branch that is dead on that platform. Measured: these
+  // four ran on the macOS CI leg and read `untagged`, which is the CORRECT
+  // darwin answer to a question this test was not asking.
+  itLinux('a cold node dies naming the PROJECTION and its own remedy, never the healthy project tag', () => {
+    // I1, fix round 1. All three manual verbs rendered ONE sentence for all
+    // five of `_pool_ok`'s rc-2 conditions — "pool tag for demo is named
+    // pool-a: <path> — fix or clear it; nothing was touched" — which on a
+    // node that has never synced blames a tag that is perfectly readable and
+    // whose stated remedy ("clear it") would UNTAG THE PROJECT. The tag here
+    // is `named pool-b` and fine; the projection is the thing nobody can
+    // read.
+    // Item 5 (I3, wave-1 fix round A): `plantPoolSyncTimer` marks this a
+    // FLEET box, so absence still fails shut here — without it, absence now
+    // falls back to the declared tag instead, a different case entirely.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, undefined);       // no document at all: never synced
+    plantPoolSyncTimer(h.home);
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain(
+      `the pool projection for claude-b is unreadable: ${h.home}/.cc-sessions/pool-epoch`);
+    // It says POSITIVELY that the other side is fine, because the sentence it
+    // replaces said the opposite.
+    expect(r.stderr).toContain("project 'demo' is tagged and its tag reads fine");
+    expect(r.stderr).not.toContain('pool tag for demo');
+    expect(r.stderr).toContain('nothing was touched');
+    expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
+  });
+
+  it('tells STALE from UNREADABLE — the control-plane link, not this file', () => {
+    // The pair spec §5.7 names: "both mean nobody decides, but one's remedy
+    // is file permissions and the other's is the control-plane link, and the
+    // die message and the chip each need to say which." A well-formed
+    // document past its lease is not an absent one.
+    seedRow(); tagPool('demo', 'pool-b');
+    plantPoolEpoch(h.home, POOL_BY_ID, { lease: 1 });     // 1970: expired
+    const r = shFail(`cmd_prefer ${ID} claude-b`);
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain('the pool projection for claude-b is stale');
+    expect(r.stderr).toContain('past its lease');
+    expect(r.stderr).toContain('the control-plane link');
+    expect(r.stderr).not.toContain('is unreadable');
     expect(h.reg(ID, 'home'), 'nothing was touched').toBe('claude');
   });
 

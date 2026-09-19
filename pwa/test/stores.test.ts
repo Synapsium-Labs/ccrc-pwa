@@ -1122,6 +1122,123 @@ describe('fleet store', () => {
       ]) expectPriorWireToSurvive(pools);
     });
 
+    // T9-R2: the epoch/observedEpoch producer's PWA half. Both are
+    // FLEET-LEVEL scalars, siblings of `enforcement` above (not per-project
+    // `byProject` members), so they get the same envelope-level type gate.
+    // `observedEpoch` is THREE-VALUED and every case below is a value the
+    // gate must accept unmodified — absent, `null` ("never synced") and a
+    // number all have to survive the round trip exactly as they arrived,
+    // never folded into one another.
+    describe('the epoch/observedEpoch staleness fields (T9-R2)', () => {
+      it('carries a real epoch and observedEpoch straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7, observedEpoch: 3 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+        store.getState().disconnect();
+      });
+
+      it('keeps observedEpoch:null distinct from an absent key — never synced is a real answer', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7, observedEpoch: null };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'observedEpoch')).toBe(true);
+        expect((got as typeof pools | null)?.observedEpoch).toBeNull();
+        store.getState().disconnect();
+      });
+
+      it('leaves observedEpoch absent as a MISSING key, not coerced to null, when the frame omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 7 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'observedEpoch')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('leaves epoch absent as a missing key when the producer has no coordinator wired', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', observedEpoch: 4 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'epoch')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('treats epoch 0 and observedEpoch 0 as real values, never as absence', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown', epoch: 0, observedEpoch: 0 };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        expect(store.getState().pools).toEqual(pools);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed epoch or observedEpoch', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', epoch: 'seven' },
+          { listed: false, enforcement: 'unknown', epoch: null },
+          { listed: false, enforcement: 'unknown', epoch: true },
+          { listed: false, enforcement: 'unknown', observedEpoch: 'seven' },
+          { listed: false, enforcement: 'unknown', observedEpoch: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
+    });
+
+    // Item 3 (I1, wave-1 fix round A): `accountPools` shares `enforcement`'s
+    // own `PoolsEnforcement` domain and, before this round, the ONLY gate on
+    // it anywhere was `poolsWire`'s producer-side type — nothing at this
+    // envelope named it, so a malformed value from a broken or adversarial
+    // peer would have reached the first real consumer (`AccountsScreen`'s
+    // account-pool chip) unrejected. Same shape as the `enforcement` cases
+    // just above, one level down.
+    describe('the accountPools field (item 1, corrected item 3)', () => {
+      it('carries every valid accountPools value straight through, unmodified', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        for (const accountPools of ['enforced', 'unavailable', 'unknown']) {
+          const pools = { listed: false, enforcement: 'unknown', accountPools };
+          lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+          expect(store.getState().pools).toEqual(pools);
+        }
+        store.getState().disconnect();
+      });
+
+      it('leaves accountPools absent as a missing key when an older server omits it', () => {
+        const store = createFleetStore({ makeSocket });
+        store.getState().connect();
+        lastSocket().open();
+        const pools = { listed: false, enforcement: 'unknown' };
+        lastSocket().message(JSON.stringify({ type: 'pools', pools }));
+        const got = store.getState().pools;
+        expect(got).toEqual(pools);
+        expect(got !== null && Object.hasOwn(got, 'accountPools')).toBe(false);
+        store.getState().disconnect();
+      });
+
+      it('silently retains the exact prior valid state for a malformed accountPools', () => {
+        for (const pools of [
+          { listed: false, enforcement: 'unknown', accountPools: 'nope' },
+          { listed: false, enforcement: 'unknown', accountPools: null },
+          { listed: false, enforcement: 'unknown', accountPools: true },
+        ]) expectPriorWireToSurvive(pools);
+      });
+    });
+
     it('keeps the exact prior policy across a genuine disconnect and fresh-socket reconnect', () => {
       const store = createFleetStore({ makeSocket });
       store.getState().connect();

@@ -38,6 +38,22 @@
   font-variant-numeric: tabular-nums;
   color: var(--ink-tertiary);
 }
+/* Task 9: the account-pool epoch/observed STALENESS indicator — never a
+   health tick (see `FleetScreen`'s own `observedEpoch` docs). Sized and
+   coloured like `.fleet-count` beside it, since both are quiet machine
+   readouts in the same row. It is CONDITIONALLY rendered — only while the
+   two numbers actually differ — which is deliberate given the width note a
+   few lines below this one: `.fleet-head-right`'s four steady-state items
+   already leave only ~38px of slack at 390px, so this is sized to fit inside
+   that margin for the common short case ("epoch 12 / observed 11") rather
+   than assumed to have room. A sustained large gap producing a long string
+   is the one case this has not been measured against in a real browser. */
+.pool-epoch-lag {
+  font: var(--weight-regular) var(--text-xs) / 1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-tertiary);
+  white-space: nowrap;
+}
 .fleet-head-right {
   display: flex;
   align-items: center;
@@ -504,6 +520,14 @@
   line-height: var(--leading-normal);
   color: var(--ink-secondary);
   margin-bottom: var(--sp-4);
+}
+/* Item 3 (I1, wave-1 fix round A): `AccountPoolSheet`'s "nothing enforces
+   this yet" disclosure — the same attention token every other undecidable/
+   unenforced pool state already carries elsewhere in this file
+   (`.acct-pool-chip[data-pool='stale']` and friends), never opacity (this
+   file's own rule, see the offline-banner note earlier in this file). */
+.sheet-copy-notice {
+  color: var(--status-attention-text);
 }
 .acct-list {
   display: grid;
@@ -1817,6 +1841,55 @@ button.proj-card-pool::before {
 .proj-card-pool[data-pool='unrecognised'] {
   color: var(--status-attention-text);
 }
+
+/* The account-side pool chip (AccountsScreen's `.accounts-row-head`) shares
+   `.proj-card-pool`'s quiet mono register and tap target, but NOT its
+   untagged warning colour above: an untagged ACCOUNT is the default,
+   unconstrained state, not a fault the way an untagged PROJECT is the
+   worklist that rule exists for. `data-origin='declared'` is styled ever so
+   slightly quieter than `'central'` — the roster's retained default is a
+   fallback, not the authoritative tag `pool_edges` carries — so the chip
+   itself hints at the same fact `data-origin` states for anything that reads
+   the DOM (spec §5.9: "showing its origin when it is the declared default
+   rather than central"). */
+.acct-pool-chip[data-origin='declared'] {
+  font-style: italic;
+}
+/* Review round 1, C1: this chip also carries `.proj-card-pool`, so its shared
+   `[data-pool='untagged']` rule above (`color: var(--status-attention-text)`,
+   written for an untagged PROJECT — the worklist, a fault) was winning here
+   too, painting every untagged account amber — the exact opposite of the
+   comment two rules up. Both selectors are one class + one attribute =
+   (0,2,0), a tie the cascade breaks by SOURCE ORDER, so being declared AFTER
+   the shared rule is what makes this win — `fleet-css.test.ts` pins both the
+   tie and the order so this cannot regress silently (jsdom applies no
+   stylesheet, so no render test can see a cascade defect like this one). */
+.acct-pool-chip[data-pool='untagged'] {
+  color: var(--ink-tertiary);
+}
+/* `stale` is account-only — `AccountPoolWire` has no project-side
+   counterpart (design §5.7) — so it is not a member of `.proj-card-pool`'s
+   shared `[data-pool=…]` list above and would otherwise fall through to the
+   base `--ink-tertiary`. `poolRule` treats `stale` exactly as undecidable as
+   `malformed`/`unreadable` (a 503, never a crossing offer), so it gets the
+   same attention treatment those already inherit from the shared rule. */
+.acct-pool-chip[data-pool='stale'] {
+  color: var(--status-attention-text);
+}
+/* Item 3 (I1, wave-1 fix round A): `accountPools: 'unavailable'` — the
+   fleet's deployed `ccd` does not read account pools yet. UNLIKE the project
+   chip's span/button switch (`.proj-card-pool` note above), this chip stays
+   a `<button>` when dim (`AccountsScreen.tsx`'s own comment says why: the
+   write still lands in `coord.db` regardless, and disabling the control
+   would hide `AccountPoolSheet`'s own disclosure, its one entry point). The
+   dim signal here is therefore chrome on an otherwise-unchanged color — a
+   dashed underline, never opacity (this file's own rule, see the
+   offline-banner note earlier in this file) — so it costs nothing against
+   `contrast.test.ts`'s gate. */
+.acct-pool-chip[data-dim] {
+  text-decoration: underline dashed var(--ink-tertiary);
+  text-underline-offset: 2px;
+}
 /* The loud card-level count for sessions with nowhere in their pool to go. */
 .proj-card-stranded {
   flex: none;
@@ -1847,6 +1920,36 @@ button.proj-card-pool::before {
   cursor: pointer;
 }
 .pool-row[data-none] { color: var(--ink-secondary); }
+
+/* AccountPoolSheet's free-text row — the one pool-naming field in this app.
+   Sits below the roster-derived `.pool-list` options above, its own labelled
+   field rather than a bare placeholder-only input, on `pr-title-input`'s
+   exact terms (`session/chat.css`) so a typed pool name gets the same
+   tap-min height and edge treatment as every other single-line field. */
+.pool-new-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-3);
+}
+.pool-new-label {
+  font-size: var(--text-xs);
+  color: var(--ink-tertiary);
+}
+.pool-new-input {
+  width: 100%;
+  min-height: var(--tap-min);
+  padding: 0 var(--sp-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-input);
+  color: var(--ink-primary);
+  background: var(--bg-raised);
+  border: 1px solid var(--edge-strong);
+  border-radius: var(--r-sm);
+}
+.pool-new-create {
+  margin-top: var(--sp-2);
+}
 
 /* A crossing names its destination pool on the revealed account row. */
 .acct-pool {

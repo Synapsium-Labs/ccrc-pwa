@@ -133,6 +133,18 @@ const GRANDFATHERED_UNCOVERED = new Set([
   'fleet.css .wordmark',
   'fleet.css .wordmark::before',
   'fleet.css .fleet-count',
+  // `.pool-epoch-lag` (Task 9) is REGISTERED in INHERITED_GROUNDS
+  // (design/audit.mjs), not grandfathered here — review round 1, C2: an
+  // earlier version of this file admitted it here on the mistaken claim that
+  // nothing at the fleet-head level paints a background. `.mail-chip`/
+  // `.mail-group-head` already ground three rules in this same stylesheet
+  // against --bg-page (body's own background, styles/base.css:111) for
+  // exactly this shape, and --ink-tertiary over --bg-page measures 6.23
+  // dark / 5.25 light — a real, passing measurement was available, so this
+  // entry does not belong in a set whose own header says "an added identity
+  // must be measured or explicitly registered before it ships." `.fleet-count`
+  // itself stays grandfathered as pre-existing debt, not a licence to add a
+  // second one beside it.
   'fleet.css .notice-x',
   'fleet.css .notice-x:active',
   'fleet.css .status-line--busy',
@@ -1652,6 +1664,35 @@ describe('the account-pool picker colours are measured, not left in the blind sp
     expect(report.uncovered, key).not.toContain(key);
     for (const row of rows) {
       expect(row.detail, row.label).toContain('var(--ink-tertiary)');
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+});
+
+// Review round 1, C2. `.pool-new-label` was registered correctly the first
+// time (INHERITED_GROUNDS, --bg-sheet — same ground as .pool-note/
+// .acct-disclosure above); `.pool-epoch-lag` was NOT — it first shipped in
+// GRANDFATHERED_UNCOVERED, which only ADMITS an identity, never measures it,
+// even though --bg-page (body's own background) was a real, computable, and
+// passing ground the same way .mail-chip already proves for this file. Both
+// now go through the same "measured, not left in the blind spot" shape as
+// every other pool cell above, so a future regression on either — dropping
+// the registration, or re-grandfathering — reds here rather than silently
+// leaving a rule unmeasured.
+describe('the Task 9 fleet-head, sheet, and account-chip colours are measured, not left in the blind spot', () => {
+  it.each([
+    ['fleet.css .pool-new-label', 'var(--ink-tertiary)', 'var(--bg-sheet)'],
+    ['fleet.css .pool-epoch-lag', 'var(--ink-tertiary)', 'var(--bg-page)'],
+    ["fleet.css .acct-pool-chip[data-pool='untagged']", 'var(--ink-tertiary)', 'var(--bg-surface)'],
+    ["fleet.css .acct-pool-chip[data-pool='stale']", 'var(--status-attention-text)', 'var(--bg-surface)'],
+  ])('%s is grounded, not grandfathered', (key, ink, ground) => {
+    const rows = report.measured.filter((m) => m.label.endsWith(key));
+    expect(rows, key).toHaveLength(2);
+    expect(report.uncovered, key).not.toContain(key);
+    expect(GRANDFATHERED_UNCOVERED, key).not.toContain(key);
+    expect(INHERITED_GROUNDS[key]?.under).toEqual([ground]);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
       expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
     }
   });

@@ -1,0 +1,5 @@
+[Unit]
+Description=Pull the account-pool projection (leased cache; absence means never-synced)
+[Service]
+Type=oneshot
+ExecStart=%h/.local/bin/ccd-pool-sync

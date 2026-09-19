@@ -33,6 +33,68 @@ const CLI = path.join(ccrcRoot, 'deploy', 'gen-wrappers.mjs');
 
 const fixtureJson: { accounts: Array<{ id: string; configDirSuffix: string; exec: { kind: string; secretsFile?: string } }> } =
   DEFAULT_TEST_ROSTER;
+
+/**
+ * `gen-wrappers.mjs`'s own `TOOLCHAIN_EXECUTABLES`, DERIVED FROM ITS SOURCE
+ * (ruling T4-R3), never retyped.
+ *
+ * Two reasons, and the second is the one that made this a fix rather than a
+ * tidy-up. (1) `single-definition.test.ts` text-scans for a second copy of an
+ * enumerated set, and nine names typed out here would be exactly that.
+ * (2) MEASURED: the literal this replaces named six, against a Set of nine —
+ * `ccd-account-auth`, `ccd-usage-sweep` and `ccd-pool-sync` were in the
+ * shipped Set and in no assertion anywhere, so dropping any of the three from
+ * the Set was a GREEN mutation (task-4-report.md's mutation 2, and its
+ * control 2c proves the suite CAN red on a Set entry: dropping `ccd`, which
+ * carries a real marker, reds at this test). Deriving makes all three
+ * testable at once and changes no shipped file — the alternative on the table
+ * was stamping `ccd/ccd-pool-sync` to buy testability, which would have moved
+ * its provenance semantics and `ownership.test.ts`'s `ccrc-unmodified`
+ * contract to make a test green.
+ *
+ * TEXT, not an import: the Set is module-private in a CLI that is driven here
+ * as a subprocess, and exporting it would be a change to a shipped file for a
+ * test's convenience.
+ */
+const TOOLCHAIN_EXECUTABLES: readonly string[] = (() => {
+  const src = readFileSync(CLI, 'utf8');
+  const m = /const TOOLCHAIN_EXECUTABLES = new Set\(\[([\s\S]*?)\]\);/.exec(src);
+  if (m === null) {
+    throw new Error(
+      'gen-wrappers.test.ts: could not find `const TOOLCHAIN_EXECUTABLES = new Set([...]);` in '
+      + `${CLI}. Re-point this derivation at wherever that set now lives — do NOT retype the names `
+      + 'here, or this suite goes back to testing six of nine entries and saying nothing.',
+    );
+  }
+  return [...m[1]!.matchAll(/'([^']+)'/g)].map((x) => x[1]!);
+})();
+
+/**
+ * What `_inst_bins` ACTUALLY places in `$HOME/.local/bin`, read out of
+ * `ccd/ccrc` — a SECOND derivation, from the other side of the claim.
+ *
+ * It exists because deriving the plant list from the Set alone would make
+ * this suite tautological in the one direction that matters: a name deleted
+ * from the Set is then also absent from the plant, so the scan is never asked
+ * about it and the deletion is green. MEASURED — that is exactly what
+ * happened when the six-name literal was first replaced by the derivation,
+ * and it is a coverage REGRESSION against the literal, which did red for the
+ * six names it happened to carry.
+ *
+ * `_inst_bins` is the right second source rather than `deploy.sh`'s agent
+ * lane because it is the source the Set's own header argues from, entry by
+ * entry ("`ccd-graph-sweep` is `_inst_bins`' fourth executable", and so on).
+ * Names carrying a DOT are dropped: `gen-wrappers.mjs`'s `ID_RE` can never
+ * match one, so the orphan scan settles `ccd-usage-sweep.py` before this Set
+ * is consulted — which that file's own comment already states. Dropped by
+ * spelling the reason rather than by mirroring `ID_RE` a fifth time.
+ */
+const INST_BINS_NAMES: readonly string[] = (() => {
+  const src = readFileSync(path.join(ccrcRoot, 'ccd', 'ccrc'), 'utf8');
+  return [...src.matchAll(/_inst_atomic\s+"[^"]*"\s+"\$bin\/([^"]+)"/g)]
+    .map((m) => m[1]!)
+    .filter((n) => !n.includes('.'));
+})();
 const UPSTREAM_ID = 'claude';
 const GENERATED_IDS = ['claude-a', 'claude-b', 'claude-d'];
 
@@ -266,24 +328,60 @@ describe('gen-wrappers.mjs', () => {
     // CCRC MARKER. The marker is deliberate provenance (41bdf60, gated by
     // ownership.test.ts:139-153, so that ccrc's own shipped `ccd` reads
     // `ccrc-unmodified` and the installer may replace it on a box), so the fix
-    // cannot be to remove it: the scan has to know these six are ccrc's own
-    // toolchain rather than candidate account wrappers.
+    // cannot be to remove it: the scan has to know this whole toolchain is
+    // ccrc's own rather than candidate account wrappers.
     //
     // What the operator saw without this: `ORPHAN ccd: … remedy: … or remove
     // $HOME/.local/bin/ccd by hand` — printed by every install, four lines
     // above that same transcript's "next: add your first session with: ccd
     // menu".
+    //
+    // THE SUBJECT IS THE WHOLE SET (ruling T4-R3) — see
+    // `TOOLCHAIN_EXECUTABLES` above for why it is derived and what it was
+    // silently missing before.
     const { rosterFile, binDir, stagingDir } = fixture(fixtureJson);
+    // ANTI-VACUITY: a derivation that matched an empty Set would make both
+    // loops below iterate nothing and report green. The floor is what the
+    // hand-written literal carried, so it is a ratchet nobody bumps for a new
+    // toolchain name; `ccd` is named because it is the one entry whose
+    // exclusion is load-bearing TODAY (every other name is currently unmarked
+    // and would be skipped by the marker clause anyway), so a derivation that
+    // lost it would lose the only case that can red on its own.
+    expect(TOOLCHAIN_EXECUTABLES.length,
+      'the derivation found fewer names than the literal it replaced — re-read it before trusting this suite')
+      .toBeGreaterThanOrEqual(6);
+    expect(TOOLCHAIN_EXECUTABLES, 'the derived toolchain set lost `ccd`, its one marked member')
+      .toContain('ccd');
+    // THE SECOND DIRECTION, and the reason `INST_BINS_NAMES` exists: the loop
+    // below can only ask the scan about names the Set already carries, so on
+    // its own it can never notice one being DELETED from the Set. This is the
+    // assertion that does — every executable `_inst_bins` places in
+    // `$HOME/.local/bin` must be named here, measured from `ccd/ccrc` rather
+    // than from the Set it is checking.
+    expect(INST_BINS_NAMES.length,
+      'the _inst_bins derivation found nothing — re-read it before trusting the coverage claim below')
+      .toBeGreaterThanOrEqual(6);
+    for (const name of INST_BINS_NAMES) {
+      expect(TOOLCHAIN_EXECUTABLES,
+        `_inst_bins places ${name} in $HOME/.local/bin, where this scan walks, but `
+        + 'TOOLCHAIN_EXECUTABLES does not name it — the day it gains a provenance marker '
+        + 'every install will print it as an orphan account wrapper (D-93)')
+        .toContain(name);
+    }
     // Marked the way the real ones are. `ccd`'s marker is over its own bytes;
     // any marked script is the same five-for-five shape as far as this scan is
     // concerned, and using the real 570 KB `ccd` here would test file size.
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']) {
+    // MARKING EVERY ENTRY is what makes the unmarked ones testable at all:
+    // planted unmarked, `verifyMarker` answers `foreign` and the scan skips
+    // them for a reason that has nothing to do with this Set, which is exactly
+    // how three entries came to be in the shipped Set and in no assertion.
+    for (const name of TOOLCHAIN_EXECUTABLES) {
       writeFileSync(path.join(binDir, name),
         markGenerated(`#!/usr/bin/env bash\n# ccrc's own ${name}, installed by ccrc install\nexit 0\n`));
     }
     const r = run([rosterFile, binDir, stagingDir]);
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
-    for (const name of ['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']) {
+    for (const name of TOOLCHAIN_EXECUTABLES) {
       expect(r.stdout, `${name} was reported as an account wrapper nobody claims`)
         .not.toMatch(new RegExp(`^orphan\\t${name}$`, 'm'));
     }

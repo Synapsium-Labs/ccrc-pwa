@@ -12,10 +12,12 @@ import { FleetWatcher } from '../src/watch.js';
 import { loadConfig } from '../src/config.js';
 import { localIO, type FleetIO } from '../src/io.js';
 import { loadSnapshot } from '../src/fleetstate.js';
+import { ACCOUNT_POOLS_CAP } from '../src/ccdargv.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { NotifyLog } from '../src/notifylog.js';
 import { seedRoster, testDeps } from './helpers.js';
+import { plantPoolEpoch } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { okRuns } from './coordReadHelpers.js';
@@ -1015,8 +1017,12 @@ describe('fleet REST + WS', () => {
       expect((await next()).type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
+      // No `$REG/pool-epoch` planted here — the observedEpoch reader (item 1)
+      // runs independently of the tag sweep above and honestly proves this
+      // node has never synced.
       expect(frame.pools).toEqual({
         listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+        observedEpoch: null, accountPools: 'unknown',
       });
       ws.close();
     });
@@ -1071,7 +1077,10 @@ describe('fleet REST + WS', () => {
       expect(coordFrame.type).toBe('coord');
       const frame = await next();
       expect(frame.type).toBe('pools');
-      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown' });
+      // `flaky` only degrades `readdir` (the tag sweep's own root listing);
+      // `readObservedEpochFromRegistry` reads `$REG/pool-epoch` directly via
+      // `readFileMeasured`, unaffected, and honestly proves absence here too.
+      expect(frame.pools).toEqual({ listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
       ws.close();
     });
 
@@ -1085,6 +1094,186 @@ describe('fleet REST + WS', () => {
       expect(FLEET_PROTO).toBe(1);
       expect(FLEET_PROTO_MIN).toBe(1);
       ws.close();
+    });
+
+    // T9-R2, updated by item 1 (wave-1 fix round A): the epoch/observedEpoch
+    // producer. `epoch` comes off `deps.coord.poolEpoch()` (CoordStore);
+    // `observedEpoch` used to come off `deps.fleetState.observedEpoch` (Task
+    // 8's agent-ready handshake, sampled once and never refreshed) and now
+    // comes off a fresh MEASURED read of `$REG/pool-epoch`
+    // (`readObservedEpochFromRegistry`, `server/src/pools.ts`) — real bytes
+    // through the real `localIO`, planted with `plantPoolEpoch`
+    // (`ccdWsHelpers.ts`), the same grammar `ccd-pool-sync` writes.
+    // `fleetState.observedEpoch` is no longer read by this frame at all; the
+    // fixtures below stop setting it.
+    //
+    // No coord and no planted file at all is the DEFAULT `connect()` here —
+    // covered already by the "old client still shrugs" case above, which pins
+    // the frame's keys to exactly `['pools', 'type']`... except it no longer
+    // can, now that an unplanted file measures as a real `observedEpoch:
+    // null` ("this node has never synced") rather than absence. That case is
+    // pinned directly below instead.
+    describe('the epoch/observedEpoch staleness fields', () => {
+      it('carries the coordinator\'s epoch once a coord store is wired, even the seeded 0 — and observedEpoch:null when nothing has ever synced', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        expect(coord.poolEpoch().epoch).toBe(0);   // the migration-seeded default — a real, falsy value
+        const { ws, next } = await connect({ coord });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('runs');   // a wired coord adds this frame to the cold start
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.type).toBe('pools');
+        // No `$REG/pool-epoch` was planted in this test's home, so the new
+        // reader proves a real ENOENT and answers `null` ("never synced") —
+        // not absence, and not the `epoch: 0` next to it collapsing with it.
+        expect(frame.pools).toEqual({
+          listed: true, byProject: {}, enforcement: 'unknown', epoch: 0, observedEpoch: null, accountPools: 'unknown',
+        });
+        ws.close();
+      });
+
+      it('carries observedEpoch measured off a real $REG/pool-epoch document, distinguishing a number from never-synced null', async () => {
+        plantPoolEpoch(home, {}, { epoch: 12 });
+        const { ws, next } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: 12, accountPools: 'unknown' });
+        ws.close();
+      });
+
+      it('THE REGRESSION ITEM 1 FIXES: a SECOND tick reports a CHANGED $REG/pool-epoch — the value refreshes instead of freezing at its first read forever', async () => {
+        // Before item 1, `observedEpoch` rode `deps.fleetState.observedEpoch`,
+        // sampled once at WS handshake and never re-read for the connection's
+        // whole life — `ccd-pool-sync` rewriting the real file underneath it
+        // every 60s changed nothing on the wire. This drives the watcher's
+        // OWN tick twice, rewriting the file between them, against the real
+        // reader and real bytes (no `fleetState` override at all — nothing to
+        // freeze), and requires the SECOND frame to disagree with the first.
+        plantPoolEpoch(home, {}, { epoch: 1 });
+        const { ws, next, watcher } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const first = await next();
+        expect(first.pools).toMatchObject({ observedEpoch: 1 });
+
+        plantPoolEpoch(home, {}, { epoch: 2 });
+        await watcher.tick();
+        // Nothing about the coordinator-pause/mail-disabled markers moved, so
+        // `emitCoord`'s own byte-equality guard stays quiet (same pattern as
+        // the "re-emits only on CHANGE" case above) — `pools` is the very
+        // next frame, carrying the refreshed value.
+        const second = await next();
+        expect(second.type).toBe('pools');
+        expect(second.pools).toMatchObject({ observedEpoch: 2 });
+        ws.close();
+      });
+
+      it('carries observedEpoch:null (never synced) when $REG/pool-epoch is absent, rather than dropping it or fabricating a number', async () => {
+        // No `plantPoolEpoch` call: the home fixture's `.cc-sessions/pool-epoch`
+        // genuinely does not exist, the same real ENOENT `_acct_pool_state`
+        // itself would measure on a cold node.
+        const { ws, next } = await connect();
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' });
+        expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(true);
+        ws.close();
+      });
+
+      it('omits observedEpoch entirely when the registry root itself is unreadable — no evidence, not a fabricated null', async () => {
+        // Unlike a proven-absent FILE (the case above, `null`), a file this
+        // box cannot READ is a MEASUREMENT failure — this box does not know
+        // whether the fleet host has synced, which must not collapse into
+        // "it never has" (no overloaded null at a seam).
+        const { ws, next } = await connect({ io: degradedReadIO((p) => p.endsWith('pool-epoch')) });
+        expect((await next()).type).toBe('hello');
+        expect((await next()).type).toBe('fleet');
+        expect((await next()).type).toBe('coord');
+        const frame = await next();
+        expect(frame.pools).toEqual({ listed: true, byProject: {}, enforcement: 'unknown', accountPools: 'unknown' });
+        expect(Object.hasOwn(frame.pools, 'observedEpoch')).toBe(false);
+        ws.close();
+      });
+
+      it('GET /api/fleet carries the same epoch/observedEpoch the WS pools frame does', async () => {
+        plantPoolEpoch(home, {}, { epoch: 0 });
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        const deps = { ...testDeps(home), coord };
+        const bus = new Bus();
+        app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { epoch?: number; observedEpoch?: number | null } };
+        expect(body.pools.epoch).toBe(0);
+        expect(body.pools.observedEpoch).toBe(0);   // 0 is a real observed epoch, not absence
+      });
+
+      // F1 (pre-merge gate): `?.` on `deps.coord?.poolEpoch().epoch` only
+      // guards `coord` being ABSENT, not `poolEpoch()` THROWING — a broken or
+      // locked coord.db must degrade this READ the same way
+      // `readAccountPoolEdges()` degrades (epoch off the wire), never 500 the
+      // whole `/api/fleet` response over one stale-freshness field nobody
+      // asked to place anything against.
+      it('a broken coord.db leaves epoch off GET /api/fleet\'s pools wire instead of 500ing the whole response', async () => {
+        const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+        coord.db.close();
+        const deps = { ...testDeps(home), coord };
+        const bus = new Bus();
+        app = await buildServer(deps, bus, new FleetWatcher(deps, bus));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { epoch?: number } };
+        expect(Object.hasOwn(body.pools, 'epoch')).toBe(false);
+      });
+    });
+
+    // F2 (pre-merge gate): `accountPools` was declared on `ProjectPoolsWire`
+    // (spec §5.9) with no producer anywhere in `server/src` — Task 10's gate
+    // found the wire field, but nothing read the `account-pools` capability
+    // token Task 2 added to `cmd_caps` to fill it. `accountPoolsEnforcement`
+    // (pools.ts) is that producer, wired into both `poolsWire` call sites the
+    // same way `poolsEnforcement`/`enforcement` already are.
+    describe('the accountPools field', () => {
+      it('reads enforced/unavailable off the account-pools capability token, on both GET /api/fleet and the WS pools frame', async () => {
+        const enforcedDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: [ACCOUNT_POOLS_CAP], rosterFp: null, build: null },
+        };
+        const bus = new Bus();
+        const watcher = new FleetWatcher(enforcedDeps, bus);
+        app = await buildServer(enforcedDeps, bus, watcher);
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        expect(res.statusCode).toBe(200);
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('enforced');
+
+        await watcher.tick();
+        expect(watcher.currentPools()?.accountPools).toBe('enforced');
+        await app.close();
+        app = undefined;
+
+        const unavailableDeps = {
+          ...testDeps(home),
+          fleetState: { connected: true, downSince: null, ccdVerbs: ['swap'], rosterFp: null, build: null },
+        };
+        app = await buildServer(unavailableDeps);
+        const res2 = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body2 = res2.json() as { pools: { accountPools?: string } };
+        expect(body2.pools.accountPools).toBe('unavailable');
+      });
+
+      it('is absent-reads-unknown when there is no ccdVerbs evidence at all', async () => {
+        app = await buildServer(testDeps(home));
+        const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+        const body = res.json() as { pools: { accountPools?: string } };
+        expect(body.pools.accountPools).toBe('unknown');
+      });
     });
   });
 

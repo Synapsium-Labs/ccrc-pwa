@@ -120,6 +120,12 @@ export const TREE_FILES = [
   // engine Task 6 landed, and `_inst_bins` places both under this name each.
   'ccd/ccd-usage-sweep',
   'ccd/ccd-usage-sweep.py',
+  // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
+  // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
+  // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a
+  // source the tree does not carry and EVERY Linux describe in the install
+  // suite goes red for a fixture reason (measured: 72 of them).
+  'ccd/ccd-pool-sync',
   // The account-connection helper `ccd account-pane` execs. `_inst_bins`
   // places it on BOTH platform arms — it is neither cgroup- nor timer-bound —
   // so unlike the four above it, a Darwin install expects it on PATH too.

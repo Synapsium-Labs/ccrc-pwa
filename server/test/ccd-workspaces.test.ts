@@ -1465,8 +1465,15 @@ describe('every _ws_slug_residue and ws-add-refusal assertion is on the disposit
       what: 'retargeted to `<id>.`-prefixed basenames — one assertion and two comments naming the glob family it shares' },
     { file: 'ccd-authdead.test.ts', grammar: 'residue', count: 1,
       what: 'a comment naming the three globs that share the dot-leading second pass' },
-    { file: 'session-hook.test.ts', grammar: 'residue', count: 2,
-      what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair' },
+    { file: 'session-hook.test.ts', grammar: 'residue', count: 4,
+      what: 'the documentation-consistency pin that the hook comment names BOTH halves of the pair (a comment '
+        + 'stating the pair rule, and the assertion itself) — plus TWO prose mentions added when the deferred '
+        + 'citation census landed on the merged tree (account-pool-membership wave 1): both name '
+        + '`_ws_slug_residue` as the REFERENT whose body moved, quoting its old and new line spans as the proof '
+        + 'that a `**Files:**` anchor shifted rather than broke. They are census EVIDENCE, not assertions about '
+        + 'slug residue, and they are counted here for the same reason the brace-template entry below counts its '
+        + 'own retracting comments: this grammar deliberately sees prose, so the honest move is to name what the '
+        + 'prose is rather than reword a citation proof to duck an unrelated census' },
     { file: 'ccd-workspaces.test.ts', grammar: 'brace-template', count: 2,
       what: 'RETRACTED HISTORY ONLY — two comments naming the template Task 9 deleted, beside the assertions that replaced it; pinned to comments by the clause below' },
   ];

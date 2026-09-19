@@ -20,7 +20,8 @@ import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  CCD, ghContainedEnv, makeCcdHarness, seedAccountsSh, WS_ADD_REAL_SPAWN, type CcdHarness,
+  CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, seedAccountsSh, WS_ADD_REAL_SPAWN,
+  type CcdHarness,
 } from './ccdWsHelpers.js';
 import { decOf, eventsOf } from './lifecycleHelpers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -101,10 +102,20 @@ const POOLED = {
     ? { ...a, homeAble: true, pool: 'codex' }
     : { ...a, pool: 'main' })),
 };
+/** `POOLED`'s declared tags as the shared `plantPoolEpoch` takes them. This
+ *  file builds its own roster rather than using `POOLED_TEST_ROSTER`, so the
+ *  map is derived from `POOLED.accounts` here — the DERIVATION is this file's,
+ *  the grammar is the harness's (see `plantPoolEpoch`'s own docstring for why
+ *  the two are not the same kind of thing). */
+const POOLED_TAGS: Record<string, string | undefined> = Object.fromEntries(
+  POOLED.accounts.map((a) => [a.id, typeof a.pool === 'string' ? a.pool : undefined]),
+);
+
 /** A pool whose only member is the codex lane: `fable` is unservable there by
  *  BACKEND, before any figure is read, so the rung below is the only answer. */
 const gptOnlyPool = (seven: number): void => {
   seedAccountsSh(h.home, POOLED);
+  plantPoolEpoch(h.home, POOLED_TAGS);
   install('gpt');
   tagPool('demo', 'codex');
   writeLimits('gpt', 5, seven);
@@ -189,6 +200,7 @@ describe('cmd_ws_add places by class and stamps the rung it took', () => {
     // The pool's one lane has no sweep row, so `_class_gate` answers 2. The
     // verb must place, not refuse.
     seedAccountsSh(h.home, POOLED);
+    plantPoolEpoch(h.home, POOLED_TAGS);
     install('gpt');
     tagPool('demo', 'codex');
     writeLimits('gpt', 5, 10);

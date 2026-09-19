@@ -131,6 +131,18 @@ describe('whitelist.checkPath', () => {
       expect(await checkPath(p, cfg, 'write'), `${p} must NOT be writable`).toBeNull();
     }
   });
+
+  it('the pool projection is READ-ONLY to the agent — a write frame cannot forge membership', async () => {
+    seed();
+    const cfg = { home, projectsRoot };
+    const proj = path.join(home, '.cc-sessions', 'pool-epoch');
+    // Readable so the SERVER can measure what the fleet actually holds ($REG is
+    // the only fleet-box location it can read back, design §3.1) ...
+    expect(await checkPath(proj, cfg, 'read')).not.toBeNull();
+    // ... and unwritable, because a projection the wire could write would let a
+    // compromised channel forge membership instead of merely observing it.
+    expect(await checkPath(proj, cfg, 'write')).toBeNull();
+  });
 });
 
 describe('whitelist.isExecAllowed', () => {
