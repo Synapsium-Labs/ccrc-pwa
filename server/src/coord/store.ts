@@ -4876,6 +4876,49 @@ export class CoordStore {
     return row?.claimedBy ?? null;
   }
 
+  /** EVERY coordinator that currently has `sessionId` working for it: the
+   *  DISTINCT non-null `claimedBy` of every non-terminal run naming it as
+   *  `sessionId`, newest run first.
+   *
+   *  A SET, NOT THE NEWEST, and that difference is the whole reason this
+   *  method exists beside `parentOfSession` rather than replacing it.
+   *  `runs_by_session` (`schema.ts`) is a NON-UNIQUE index, and two shipped
+   *  paths deliberately put several open runs on one session: the coordinator
+   *  protocol opens wave N+1 before closing wave N, and nothing stops a
+   *  session being one programme's worker while another programme's run still
+   *  names it. `parentOfSession`'s `LIMIT 1` therefore answers a question
+   *  about the NEWEST run — which is the right question for the ask lane, whose
+   *  own docstring argues it, and the WRONG one for a guard whose sentence is
+   *  "this session is nobody else's worker". Read newest-first so a caller
+   *  taking the first offender names the most recent one.
+   *
+   *  OWNERLESS ROWS CONTRIBUTE NOTHING. `claimedBy IS NOT NULL` is spelled in
+   *  the query, so a reconstructed row (D-12, `claimedBy` left NULL because
+   *  `reconstruct` cannot know who will resume) is not an entry here and is
+   *  not a silent one either — D-3012 ruled that such a run is ADMITTED at the
+   *  doors, because `by` is what those refusals are for and there is no `by`
+   *  to name. That admission is D-3012's and stays; this method just refuses
+   *  to smuggle a `null` into a list of ids.
+   *
+   *  A FINISHED WORKER IS NOT A WORKER: a session whose runs are all terminal
+   *  answers `[]`, the same complement of `TERMINAL_RUN_STATES_SQL` every
+   *  session-keyed read in this file uses (including the `'unknown'` token a
+   *  newer build may have written, which is OPEN here). Synchronous, like
+   *  every read on this store. */
+  openClaimantsOf(sessionId: string): string[] {
+    const rows = this.db.prepare(
+      // D-3054. `GROUP BY claimedBy` is what makes the answer DISTINCT — no `DISTINCT`
+      // keyword beside it, which would be a second spelling of the same fact —
+      // and `MAX(id)` is what "newest first" is ordered on: each claimant is
+      // placed by its most recent open run, so one claimant appearing on three
+      // waves is one entry at the newest of them.
+      'SELECT claimedBy, MAX(id) AS newest FROM runs ' +
+      `WHERE sessionId = ? AND claimedBy IS NOT NULL AND state NOT IN ${TERMINAL_RUN_STATES_SQL} ` +
+      'GROUP BY claimedBy ORDER BY newest DESC',
+    ).all(sessionId) as { claimedBy: string }[];
+    return rows.map((r) => r.claimedBy);
+  }
+
   /** D-2545, the ask half. `id` and `runId` — the two columns in the RUN-ID
    *  DOMAIN (`isPositiveDecimalSafeInteger`) — are CAST to TEXT and proven,
    *  exactly as `RUN_ROW_COLUMNS` does for its four.

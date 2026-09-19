@@ -63,6 +63,10 @@ export interface SessionHeaderProps {
    *  `accountLabel`'s own raw-wrapper-name fallback rather than needing a
    *  roster it was never given. */
   roster?: readonly RosterWire[];
+  /** The repository this session's project was last measured to be — R3:
+   *  shown whenever known, there is no card here to imply it. `null`/absent
+   *  renders nothing. */
+  repo?: string | null;
 }
 
 /** '04:12' (or '1:04:12') elapsed — rendered in tabular-nums mono. */
@@ -102,6 +106,7 @@ export function SessionHeader({
   fallback,
   roster = [],
   queuedField = null,
+  repo = null,
 }: SessionHeaderProps): ReactNode {
   const [menuOpen, setMenuOpen] = useState(false);
   const [prOpen, setPrOpen] = useState(false);
@@ -268,6 +273,11 @@ export function SessionHeader({
             <span className="chip chip--active">
               <i aria-hidden="true" />
               {accountLabel(roster, wrapper)}
+            </span>
+          )}
+          {repo !== null && (
+            <span className="chip chip--repo" title="repository">
+              {repo}
             </span>
           )}
           {/* Derived from archivedAt, never from pr.phase — merging archives

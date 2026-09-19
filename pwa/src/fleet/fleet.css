@@ -972,6 +972,14 @@
 .sess-line--active .sess-ask-state,
 .sess-line--active .sess-unmeasured,
 .sess-line--active .sess-substrate,
+/* Task 6: .sess-repo paints --ink-tertiary of its own — it sits inside
+   `.sess-open` on the row's FIRST line, beside the label, not inside
+   `.sess-meta` like the cells above, but the same rule applies: a child's
+   own `color` beats the inherited flip, so without this line it strands on
+   the selected slab exactly the way `.sess-held` did before it joined this
+   group. Joins the pair this rule already declares — no new pair for
+   design/contrast-check.mjs. */
+.sess-line--active .sess-repo,
 /* §1.6b's chip paints --status-dead-text (and --ink-tertiary on two variants)
    of its own, so it strands on the selected slab exactly the way .sess-warn
    would without this line. */
@@ -1149,9 +1157,25 @@
    taps — turning a tap on the bottom of the workspace name into a disclosure
    toggle. `position: relative` alone is not enough: the overlay is also
    positioned and comes LATER in tree order, so among z-index:auto siblings it
-   still wins. An explicit 1 is what puts the label back on top. */
+   still wins. An explicit 1 is what puts the label back on top.
+
+   Task 6 fix round 1: `display: flex` again (see `.sess-label`'s own note —
+   this file used to be flex here, and went to `display: block` before this
+   button ever grew a second child), because `.sess-repo` (below, fleet.css's
+   later `.sess-repo` rule) is a second inline fact that has to sit on the
+   SAME line as the label, after it, both ellipsis-guarded independently — a
+   block box stacks a trailing inline-level `<span>` onto its own new line
+   the instant that span carries `white-space: nowrap` (nothing to wrap onto
+   the label's line), which is exactly the extra third text line the
+   controller ruled out. `align-items: baseline` keeps the two texts'
+   baselines level despite `.sess-repo`'s smaller mono face; `gap` replaces
+   `.sess-repo`'s own `margin-left` (see that rule). `min-width: 0` is the
+   flex-child half of the same ellipsis fix `.sess-label` needs below — a
+   flex CONTAINER also defaults to a content-based minimum width. */
 .sess-open {
-  display: block;
+  display: flex;
+  align-items: baseline;
+  gap: var(--sp-1);
   position: relative;
   z-index: 1;
   min-width: 0;
@@ -1165,10 +1189,23 @@
   line-height: inherit;
 }
 
-/* display: block, because .sess-open is no longer a flex container blockifying
-   it — an inline span cannot ellipsis. */
+/* `display: block` dates from when `.sess-open` was plain `display: block`
+   and an inline `<span>` cannot ellipsis on its own; kept rather than
+   dropped now that `.sess-open` is flex again (Task 6 fix round 1, above) —
+   a flex item's principal box is blockified by the flex layout regardless of
+   its own `display`, so this declaration is redundant under the CURRENT
+   parent, but it is what keeps `.sess-label` ellipsing correctly should this
+   ever render under a non-flex parent again (a standalone `<SessionLine>` in
+   a test, for one), and removing a working, harmless line was not this
+   fix's job. `flex: 1 1 auto` is what lets this cell claim the row's
+   remaining width instead of its own text width; `min-width: 0` is the
+   override every flex-child ellipsis needs — a flex item's default
+   `min-width: auto` refuses to shrink below its content's natural width, no
+   matter what `overflow`/`text-overflow` say. */
 .sess-label {
   display: block;
+  flex: 1 1 auto;
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1434,6 +1471,30 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--ink-tertiary);
+}
+
+/* Task 6: the repo slug composed into `.sess-open`'s accessible name, when
+   the card it sits on would otherwise imply another repo. Small and quiet —
+   same ink-tertiary register as `.sess-held` next door — because it is a
+   disambiguator, not a headline fact.
+
+   Task 6 fix round 1: `flex: none` — this cell keeps its own content width
+   rather than sharing the row's remaining space with `.sess-label` (which
+   claims all of it via `flex: 1 1 auto`); `max-width: 45%` is the ceiling
+   that stops a long slug from starving the workspace name down to nothing
+   on a narrow phone, with its own `overflow`/`text-overflow`/`white-space`
+   guarding that ceiling the same way `.sess-label` guards its own width. No
+   `margin-left` any more — `.sess-open`'s `gap` (above) now does the
+   spacing between the two cells, and doing it twice would double it. */
+.sess-repo {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+  white-space: nowrap;
 }
 
 /* A strand is deliberately louder than the neighbouring durable markers.
@@ -2052,6 +2113,23 @@ button.proj-card-pool::before {
   color: var(--ink-tertiary);
 }
 .proj-abroad-glyph { flex: none; color: var(--ink-tertiary); }
+
+/* Wave 2 (board placement): the emptied card's sentence about where its own
+   workspaces render now. Same register and ground as `.proj-abroad` — about
+   rows that are NOT on this card — and never a tap surface (R2). */
+.proj-elsewhere {
+  display: flex;
+  flex-direction: column;
+  gap: var(--sp-1);
+  margin-top: var(--sp-1);
+  padding-top: var(--sp-1);
+  border-top: 1px solid var(--edge-subtle);
+}
+.proj-elsewhere-line {
+  min-width: 0;
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
 
 .proj-archived { border-top: 1px solid var(--edge-subtle); margin-top: var(--sp-1); }
 .proj-archived-toggle {

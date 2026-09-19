@@ -8167,18 +8167,66 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // carrying this debt. Re-measured, not adjusted to keep a number green —
       // the entry is gone because the debt is, which is the direction this
       // census is allowed to move without a finding.
-      // AND THE ENTRY IS BACK AT 1, WITH THE PARAGRAPH ABOVE CORRECTED RATHER
-      // THAN DELETED: what it read as a repair was a coincidence. The
-      // reference is plan:3379's `shared/api.ts:5644`, whose clause quotes
-      // `return isLcRefusalToken(token) ? LC_REFUSAL_WORD[token] : null;`.
-      // MEASURED at `7a6220f6`, which carries #137: that quoted line already
-      // stood at `:7395` there, so the anchor was ALREADY stale at the base and
-      // the 0 recorded an accidental hit on the token `null` in a neighbouring
-      // docstring — not a landed re-point. This branch's +88 lines move the
-      // quoted line to `:7481` and the accident stops. Frozen like the rest:
-      // the plan is byte-identical to `origin/main` here, so this is recorded,
-      // never repaired.
+      //
+      // AND IT COMES BACK, 0 -> 1, AT THIS WAVE (board-placement wave 2), for a
+      // reason the paragraph above could not have foreseen: the entry reached 0
+      // because a shift slid the right bytes back under a FROZEN anchor, never
+      // because that anchor was re-pointed — and this wave shifted them off
+      // again. `shared/api.ts` is `64 20` against `origin/main` here, seven
+      // hunks (`:368`, `:2886`, `:5173`, `:5182`, `:5238`, `:5247`, `:5365`),
+      // a NET +44 above plan `:3379`'s `shared/api.ts:5644`. The referent was
+      // FOLLOWED, not inferred: the line that anchor named at the base is a
+      // `RoutingArm` docstring line reading "into `arm === null`. Rows after
+      // the first well-formed `arm:` are never", and those bytes now stand at
+      // `:5691` — +47 exactly, measured at both trees. The anchor is NOT
+      // re-pointed, because `plans/2026-09-10-…-plan-a.md` is byte-identical to
+      // `origin/main` at this tree (measured, `git diff --quiet origin/main --`
+      // on the file), so re-pointing it is editing a closed programme's
+      // document. Measured, left where it is, and counted.
+      // RE-MEASURED at the final fix round, +44 -> +47 and NOT adjusted to keep
+      // a number green: D-3028 added three lines to the `heir-is-a-worker`
+      // bullet — `git diff -U0 -- shared/api.ts` is one replacement at `:5366`
+      // and ONE pure-insertion hunk `@@ -5370 +5370,4 @@`, so every line below
+      // shifts by exactly +3 and the `RoutingArm` referent went `:5688` ->
+      // `:5691`. Still not `:5644`, so this entry stays 1. README's own four
+      // `shared/api.ts` anchors sit below that insertion and were RE-POINTED by
+      // content (+3) rather than counted, on the same ground the round before
+      // this one used: README is the one corpus document this branch may repair,
+      // so a rotted anchor there is a repair and never a debt.
       'shared/api.ts': 1,
+      // `server/test/single-definition.test.ts` 0 -> 8, A NEW ENTRY, and the
+      // whole of it is ONE shift. This wave's Task 1 added 23 lines low in that
+      // file — two `describe` blocks immediately after the `one sessionLabel`
+      // describe — and every anchor this corpus holds into it sits below them.
+      // `git diff --numstat origin/main --` reads `23 0` and there is a SINGLE
+      // hunk header, `@@ -377,0 +378,23 @@`, so the shift is +23 with nothing
+      // deleted anywhere above. EACH REFERENT WAS FOLLOWED BY CONTENT, measured
+      // at both trees rather than derived by adding 23 to a number:
+      //   `:1274` -> `:1297`, the `bashRoots` declaration — FOUR of the eight,
+      //     MEASURED rather than counted by eye. `grep -no ':1274'` over the two
+      //     corpus documents (`specs/2026-09-09-graphify-compaction-card-design.md`
+      //     and `plans/2026-09-10-graphify-compaction-card-plan-a.md`) prints
+      //     exactly four sites: spec `:308`, spec `:1353`, plan `:32`, plan
+      //     `:3236`. The audit keys a reference by its PARAGRAPH-START line,
+      //     which is why two of those read `:1347` and `:28` elsewhere in this
+      //     breakdown; the grep reports the line the token itself is on. The
+      //     sentence this replaces said FIVE and blamed the fifth on a clause
+      //     "naming it twice in one clause" — no such clause exists, and the
+      //     four measured sites are what make this breakdown sum to the 8 it
+      //     annotates;
+      //   `:1319-1320` -> `:1342-1343`, the two opening lines of the `for`
+      //     over the bash file list — TWO (spec `:308`, plan `:28`);
+      //   `:1303-1304` -> `:1326-1327` and the bare `:1304` -> `:1327`, both
+      //     lines of `holdersOf` — ONE each (spec `:1347`, plan `:3236`).
+      // NOT REPAIRED, and that is a constraint rather than a preference: BOTH
+      // corpus documents are byte-identical to `origin/main` at this tree
+      // (measured, `git diff --quiet origin/main --` on each), so re-pointing
+      // either is editing a closed programme's document — the same ground on
+      // which `deploy/deploy.sh`, `ccd/ccrc` and `shared/api.ts` above are
+      // measured rather than fixed. UP needs no argument beyond the numbers,
+      // and this is the standing rule S6-R11 applied to two more instances its
+      // own list could not name: no rule changed, so no D-number.
+      'server/test/single-definition.test.ts': 8,
     });
     // THE HEADLINE, AS A MECHANISM (r3 B-M3). The prose above used to carry a
     // number of its own, and it went stale against this very map. Now the
@@ -8230,13 +8278,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // where it moved INTO the only-this-pass-can-see list on the same measurement.
     // The debt did not fall; its visibility to this pass did.
     //
-    // AND ON THE FIFTH MERGE (`9743dc18`, main at `7a6220f6`) it is 188, which
-    // is 183 + 5 and not a drift: +4 on `ccd/ccd` (five sites in, one out) and
-    // the `shared/api.ts` entry returning at 1. Both are argued entry by entry
-    // beside the map above, and both were derived ON THIS TREE — the same run
-    // that produced the two set-valued ratchets below, because a sum taken from
-    // a different run of a moving corpus is a forecast, not a measurement.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(188);
+    // AND ON THIS WAVE (board-placement wave 2) it is 192, which is 183 + 9 and
+    // every one of the nine is accounted for above: +8 on the NEW
+    // `server/test/single-definition.test.ts` entry and +1 on `shared/api.ts`
+    // returning. `ccd/ccd` does not move at all — this wave touches neither it
+    // nor `ccd/session-hook.sh`, so the entry that swings this number on every
+    // merge sat still for once. DERIVED ON THIS TREE, LAST, after the README
+    // repair in the case below had landed: the four README anchors this wave
+    // broke resolve into `shared/api.ts`, so measuring the map before repairing
+    // them would have read `shared/api.ts` 5 and shipped a census of a tree
+    // that was about to stop existing.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(192);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8259,7 +8311,12 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // claim this list makes is unchanged — every failing citation points
       // into a file this work REWROTE — and the entry is named because the
       // work rewrote the file, not to admit a stale reference.
-      'shared/api.ts'];
+      'shared/api.ts',
+      // `server/test/single-definition.test.ts`, on exactly the same ground and
+      // MEASURED rather than assumed: this wave's Task 1 rewrote it, `23 0`
+      // against `origin/main` in one hunk at `:378`. Named because the work
+      // rewrote the file — the claim this list makes is unchanged.
+      'server/test/single-definition.test.ts'];
     expect([...new Set(r.failures.map((f) => f.file))].filter((f) => !TOUCHED.includes(f)),
       'a stale citation into a file this task never touched').toEqual([]);
   });
@@ -8291,6 +8348,28 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `'purge-mechanism-absent'` arms), `:14431-14433` -> `:16330-16332` (the
     // `genrc == 1` arm). The other two, `:97` and `:103-105`, never moved:
     // every insertion in that file lands below them.
+    //
+    // AND BOARD-PLACEMENT WAVE 2 PROVED IT AGAIN, on this branch's own edits
+    // rather than on a merge's: FOUR of the nine stopped resolving, all four
+    // the `shared/api.ts` anchors of ONE sentence — the purge-refusal
+    // vocabulary paragraph — because this wave added a NET +44 lines to
+    // `shared/api.ts` above them (seven hunks, at `:368`, `:2886`, `:5173`,
+    // `:5182`, `:5238`, `:5247`, `:5365`; `64 20` by `git diff --numstat
+    // origin/main --`). EACH WAS RE-ANCHORED BY CONTENT, never by adding 44 to
+    // a number: the block the anchor named at the branch base was located
+    // byte-identically in this tree — `diff` over the two extractions, empty —
+    // and the anchor moved to where those bytes now stand.
+    //   `:7311-7313` -> `:7355-7357`, the three `LcRefusalToken` union arms
+    //     (`'purge-refused'`, `'purge-incomplete'`, `'purge-mechanism-absent'`
+    //     with their `D-2605` comments), and the three operator sentences
+    //   `:7351` -> `:7395`, `:7359` -> `:7403`, `:7372` -> `:7416`, the map
+    //     keys of those same three words.
+    // All four shifts MEASURE +44, which is a result of following the bytes and
+    // not the method that produced them. AND README IS THE ONE DOCUMENT IN THIS
+    // CORPUS THIS BRANCH MAY REPAIR: the spec and the plan are byte-identical
+    // to `origin/main` here, so the same +44 rots an anchor of theirs into the
+    // census above instead. That asymmetry is the whole reason README gets an
+    // equality with empty and they get a debt.
     expect(CORPUS.map(([label]) => label),
       'README is in the corpus, and dropping it would make the line below vacuous')
       .toEqual(['spec', 'plan', 'readme']);
@@ -8766,47 +8845,26 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         // `:3390-3402`, `:5385-5388`, `:5828-5830`). A coincidental pass is not a
         // green anchor and a coincidental fail is not new rot; Task 11 still owns
         // the debt this measures.
-        // RE-DERIVED AGAIN ON THE FIFTH MERGE, on the tree that ships
-        // (`9743dc18`), and the set GREW, 48 -> 56. Same base as the census map
-        // above and the SAME measurement run: `origin/main` at `7a6220f6`,
-        // which is the only candidate ref that reproduces that map exactly.
-        // Both corpus documents are byte-identical to that base, measured, so
-        // not one citation was re-pointed by either side; every move is
-        // `ccd/ccd` drift under a frozen anchor. Each was measured AT BOTH
-        // TREES with the shipped `cellsOf`/`occurs` — reading which token the
-        // row actually offered and which line the anchor actually landed on —
-        // rather than inferred from the file's growth, which is not uniform
-        // here: the base blocks below moved +478 or +541 lines, measured one
-        // by one.
-        // TEN ENTER, and every one of them was passing on an ACCIDENTAL token
-        // rather than on its referent:
-        //   spec:2125 and spec:2210 `ccd/ccd:11665-11670` — hit `unchanged` and
-        //     `fail` respectively, both in the upstream-comparison comment that
-        //     stood there; those bytes are now at `:12206-12211`.
-        //   spec:2204 `ccd/ccd:13650-13652` — hit `refused`, inside a `printf`
-        //     of `{"refused":"tree-unreadable"…}`; base bytes -> `:14191-14193`.
-        //   spec:2209 `ccd/ccd:3390-3402` — hit `cmd_ws_restore`, in
-        //     `_ws_unarchive`'s header comment; base bytes -> `:3868-3880`. It
-        //     enters the census above on the same measurement.
-        //   spec:2220 `ccd/ccd:2874` x2 — hit `link`, in a comment about a
-        //     `link` shim; base bytes -> `:3352`.
-        //   spec:2220 `ccd/ccd:2433-2439` — hit the quoted span ` and `, six
-        //     times over, in a prose comment; base bytes -> `:2911-2917`.
-        //   spec:2222 `ccd/ccd:5385-5388`, `:4642-4653` and `:5353-5362` — hit
-        //     `$REG` and/or `stat` in the embedded python and its tunables;
-        //     base bytes -> `:5863-5866`, `:5120-5131` and `:5831-5840`.
-        // TWO LEAVE, AND NEITHER IS A REPAIR — each now hits a token by exactly
-        // the kind of accident the ten above lost:
-        //   spec:2125 `ccd/ccd:13560-13562` now hits `workspace`, in a comment
-        //     naming `$REG/*.workspace`; the bytes it named are at
-        //     `:14101-14103`.
-        //   spec:2210 `ccd/ccd:13573-13575` now hits `flock`, in `ws-reap`'s
-        //     flock-unavailable refusal; the bytes it named are at
-        //     `:14114-14116`.
-        // A coincidental pass is not a green anchor and a coincidental fail is
-        // not new rot. Nothing here is repairable in this wave — both documents
-        // are main's — and Task 11 still owns the debt this measures.
+        // RE-DERIVED AGAIN at board-placement wave 2's whole-wave gate, 48 -> 50,
+        // and BOTH new entries are the same single shift, in the position the
+        // instrument prints them. Task 1 of this wave added 23 lines to
+        // `server/test/single-definition.test.ts` — one hunk, `@@ -377,0
+        // +378,23 @@`, two `describe` blocks after the `one sessionLabel`
+        // describe, nothing deleted — and the two anchors a `|` row holds into
+        // that file both sit below it. FOLLOWED BY CONTENT at both trees:
+        // `:1274` is the `bashRoots` declaration, now at `:1297`; `:1319-1320`
+        // is the head of the `for` over the bash file list, now at
+        // `:1342-1343`. NEITHER IS RE-POINTED: the row lives in
+        // `specs/2026-09-09-…-design.md` and `plans/2026-09-10-…-plan-a.md`,
+        // both byte-identical to `origin/main` at this tree (measured), so this
+        // branch may not edit them. Every `ccd/ccd` entry below is UNMOVED —
+        // this wave touches neither `ccd/ccd` nor `ccd/session-hook.sh` — so
+        // the set changes by exactly the two lines the shift explains and
+        // nothing else. Whatever the instrument printed is what ships; the
+        // standing rule S6-R11 covers it, so no D-number.
         'ccd/ccd:203',
+        'server/test/single-definition.test.ts:1274',
+        'server/test/single-definition.test.ts:1319-1320',
         'server/test/ccd-ws-reap.test.ts:344',
         'ccd/ccd:13573-13575',
         'ccd/ccd:3038',
@@ -8916,16 +8974,19 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // `:19120` enter, `:3390-3402`, `:2874` x2, `:3050` x2 and `:5385-5388`
       // leave. `:2793` and `:12594-12659` entered the row set and are absent here
       // because no other pass reaches them, which is what this list measures.
-      // RE-DERIVED ON THE FIFTH MERGE, 34 -> 36, from the SAME run as the row
-      // set above — the two are one measurement and must not be taken from
-      // different trees. Every move mirrors one there: `spec:2209
-      // ccd/ccd:3390-3402`, `spec:2220 ccd/ccd:2874` x2 and `spec:2222
-      // ccd/ccd:5385-5388` enter; `spec:2125 ccd/ccd:13560-13562` and
-      // `spec:2210 ccd/ccd:13573-13575` leave. The six other entrants to the
-      // row set — `:11665-11670` at spec:2125 and spec:2210, `:13650-13652`,
-      // `:2433-2439`, `:4642-4653` and `:5353-5362` — are absent here because
-      // no other pass reaches those sites, which is exactly what this list
-      // measures.
+      // RE-DERIVED AGAIN at board-placement wave 2's gate, 34 -> 36, FROM THE
+      // SAME RUN as the row-pass set above — the two are one measurement. Both
+      // new entries MIRROR the two that entered there, and they appear here
+      // because the paragraph audit reaches the same sites: the spec's `:308`
+      // paragraph cites `server/test/single-definition.test.ts:1274` and
+      // `:1319-1320` in prose as well as in a `|` row, so this pass adds no
+      // reach for them. Same single cause as there — Task 1's +23 lines at
+      // `:378` of that file — and the same reason nothing is re-pointed: the
+      // spec is byte-identical to `origin/main` at this tree. Nothing else
+      // moves, because this wave touches neither `ccd/ccd` nor
+      // `ccd/session-hook.sh`.
+        'spec:308 server/test/single-definition.test.ts:1274',
+        'spec:308 server/test/single-definition.test.ts:1319-1320',
         'spec:2123 ccd/ccd:13573-13575',
         'spec:2124 ccd/ccd:3038',
         'spec:2125 ccd/ccd:5797',

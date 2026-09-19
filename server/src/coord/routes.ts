@@ -1302,6 +1302,34 @@ export function registerCoordRoutes(
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: 'homeProject is required' });
     }
 
+    // §12 (spec 2026-09-16, addendum 2026-09-18) — a dispatched worker may not
+    // coordinate. The question is about ANY open run that names `claimedBy` as
+    // its worker and is claimed by SOMEBODY ELSE, so the read is
+    // `openClaimantsOf` — every coordinator this session currently works for —
+    // and not `parentOfSession`, which is `LIMIT 1` and answers only about the
+    // NEWEST such run (second fix round, D-3054). A session self-claimed on its newest
+    // run while still somebody's worker on an older open one used to walk
+    // straight through here; `runs_by_session` is non-unique and the
+    // coordinator protocol opens wave N+1 before closing wave N, so that state
+    // is protocol, not corruption.
+    //
+    // A SELF-CLAIMED RUN IS NOT SOMEBODY ELSE, and an ownerless open run (a
+    // reconstructed row, `claimedBy` NULL) is not an entry in the list at all —
+    // both ADMITTED, D-3012, because `by` is what this refusal is for and
+    // neither has one to name. Scope is any open run, `planned` through
+    // `closing`, and `unknown`, not only `dispatched`: a finished worker is not
+    // a worker (`[]`), an idle one still is. `by` names the FIRST offender the
+    // list carries, which is the newest, so the operator is sent to the most
+    // recent binding rather than the oldest.
+    //
+    // HERE, synchronous and DB-only, ahead of the awaited registry read and of
+    // `openRun`, so a refusal leaves no `planned` orphan and places no hold
+    // — F1's reason.
+    const workerOf = coord.openClaimantsOf(claimedBy).find((c) => c !== claimedBy);
+    if (workerOf !== undefined) {
+      return reply.code(409).send({ ok: false, refused: 'claimant-is-a-worker', by: workerOf });
+    }
+
     // The coordinator's project, from the REGISTRY — never `sessionProject`,
     // which reads the runs table and so answers only for a session that has
     // been a worker. Measured over all 64 runs in history: no session has ever
@@ -1592,6 +1620,8 @@ export function registerCoordRoutes(
       // operator with a refusal and no next move.
       case 'claimant-alive':
         return reply.code(409).send({ ok: false, refused: 'claimant-alive', by: r.by, detail: r.detail });
+      case 'heir-is-a-worker':
+        return reply.code(409).send({ ok: false, refused: 'heir-is-a-worker', by: r.by });
       default: {
         const _exhaustive: never = r;
         return reply.code(500).send({ ok: false, error: 'internal', kind: (_exhaustive as { kind: string }).kind });

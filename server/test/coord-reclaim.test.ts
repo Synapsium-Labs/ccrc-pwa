@@ -315,6 +315,97 @@ describe('reclaimRun — the order is the guard', () => {
     expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
   });
 
+  it('heir-is-a-worker when the INCOMING coordinator is a live worker of another run — and NOTHING is written (spec §12, D-3011)', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    // LIVE is somebody else's worker on an OPEN run.
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+    expect(w.calls).toBe(0);                      // `watchCommit` counts `reclaimProgram` calls
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('the DEAD claimant\'s OWN worker IS admitted as heir — the programme inherits itself', async () => {
+    // The scenario the whole door exists for, and the one the first spelling of
+    // the rung refused: a coordinator dies, its live worker is the session in
+    // the pane beside the corpse, and `parentOfSession(LIVE)` answers `DEAD` —
+    // the very id being replaced. `heirWorkerOf !== from` is what admits it.
+    // What lands is a SELF-CLAIMED run (LIVE claims a run it is also the
+    // sessionId of), which the open door already admits (D-3012) and which
+    // `nestFleet` never brackets (`r.claimedBy !== r.sessionId`), so no chain
+    // can form out of this and §12's one-level rationale is untouched.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);              // wave 1, the row being reclaimed
+    const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the SAME programme
+    s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    expect(s.parentOfSession(LIVE)).toBe(DEAD);   // the fixture reaches the arm
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toMatchObject({ ok: true, program: PROGRAM, from: DEAD, to: LIVE });
+    // EVERY row of the programme moved, not just the one named — `reclaimProgram`
+    // selects on `claimedBy != ?`, so the wave the heir works is rewritten too.
+    expect(okRun(s.run(id))!.claimedBy).toBe(LIVE);
+    expect(okRun(s.run(wave2))!.claimedBy).toBe(LIVE);
+  });
+
+  it('a DOUBLY-BOUND heir is refused — the dying coordinator\'s worker on the newest run is still somebody ELSE\'s on an older one', async () => {
+    // The second fix round's case, and the one the newest-only read could not
+    // see. `parentOfSession(LIVE)` answers about ONE run — the newest — so an
+    // heir whose newest binding is to `from` walked through the rung while an
+    // OLDER open run still bound it to a third coordinator: precisely the
+    // chain §12 exists to prevent, admitted by the door built to prevent it.
+    // `openClaimantsOf` asks about every open run instead, and the admission
+    // becomes what D-3028's sentence always claimed: every open run naming the
+    // heir is claimed by the coordinator being replaced, or by the heir itself.
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);              // wave 1, the row being reclaimed
+    // OLDER than the wave-2 row below, and claimed by a THIRD party.
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const wave2 = seedRun(s, DEAD, 2);        // wave 2 of the programme being reclaimed…
+    s.bindSession(wave2, LIVE);               // …and LIVE is ITS worker too
+    expect(other.id).toBeLessThan(wave2);
+    seedRow(home, DEAD); seedRow(home, LIVE);
+    // THE FIXTURE'S POINT, measured: the newest-only read answers `DEAD`, which
+    // is `from`, which D-3028 admits — so under that read this reclaim SUCCEEDS
+    // with LIVE still bound to `demo-other-coordinator`'s open run.
+    expect(s.parentOfSession(LIVE)).toBe(DEAD);
+    const w = watchCommit(s);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'heir-is-a-worker', by: 'demo-other-coordinator' });
+    expect(w.calls).toBe(0);
+    expect(okRun(s.run(id))!.claimedBy).toBe(DEAD);
+  });
+
+  it('a re-typed sitting claimant stays a no-op even when that claimant is somebody\'s worker — the rung is INSIDE `to !== from` (D-1136, D-3011)', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD);
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, DEAD);
+    const r = await reclaimRun(depsFor(home, s, ALIVE), id, DEAD);
+    expect(r).toMatchObject({ ok: true, to: DEAD });
+  });
+
+  it('the heir rung sits AFTER the registry-existence rung — an unseeded heir is still unknown-session', async () => {
+    const home = mkTmp('ccrc-reclaim-');
+    const s = store(home);
+    const id = seedRun(s, DEAD);
+    seedRow(home, DEAD);                        // LIVE has no row AND is a worker
+    const other = s.openRun({ program: 'other', title: 'w', project: 'demo', wave: 1, waveOf: 1, claimedBy: 'demo-other-coordinator' }) as { id: number };
+    s.bindSession(other.id, LIVE);
+    const r = await reclaimRun(depsFor(home, s, GONE), id, LIVE);
+    expect(r).toEqual({ ok: false, kind: 'unknown-session' });
+  });
+
   it('registry-unmeasurable when the directory will not list — and NOTHING is written', async () => {
     const home = mkTmp('ccrc-reclaim-');
     const s = store(home);

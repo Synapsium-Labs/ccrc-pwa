@@ -409,6 +409,27 @@ describe('FleetScreen', () => {
         .toBeInTheDocument();
     });
 
+    // Task 7 (board-placement wave 2): `refreshProjects` also lifts the last
+    // successful read onto the fleet store itself (`setProjects`), not just
+    // this screen's own component-local `projectRows` — the session view
+    // reads it from THERE, with no round trip of its own, so a ready read
+    // that never reaches the store would leave that view permanently blind.
+    it('writes the last successful read onto the fleet store too, not just this screen\'s own rows', async () => {
+      vi.spyOn(api, 'projects').mockResolvedValue({
+        roots: [],
+        projects: [{ name: 'alpha', workdir: '/alpha', repo: { state: 'named', slug: 'o/alpha' } }],
+      });
+      const store = makeStore();
+      render(<FleetScreen store={store} />);
+      seed(store, {
+        conn: 'open', roster: TEST_ROSTER,
+        pools: { listed: true, byProject: {}, enforcement: 'enforced' },
+        sessions: [session({ id: 'a', project: 'alpha' })],
+      });
+
+      await waitFor(() => expect(store.getState().projects?.[0]?.name).toBe('alpha'));
+    });
+
     it('skips the null-state cold-load sweep, then refreshes for each pools frame only', async () => {
       const projects = vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [] });
       const store = makeStore();
@@ -1347,6 +1368,20 @@ describe('FleetScreen', () => {
       await act(async () => { rejectFirst(new Error('stale failure')); });
       expect(screen.getByRole('button', { name: 'New workspace on alpha — team·alt, 91% free' }))
         .toBeInTheDocument();
+    });
+  });
+
+  it('renders a card for a known project with no session on it, once /api/projects lands (R5)', async () => {
+    vi.spyOn(api, 'projects').mockResolvedValue({ roots: [], projects: [
+      { name: 'OpenClawHetzner', workdir: '/home/rc/projects/OpenClawHetzner' },
+      { name: 'ghost', workdir: '/home/rc/projects/ghost' },
+    ] });
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, { conn: 'open', sessions: [session()], pools: { listed: true, byProject: {}, enforcement: 'enforced' } });
+    await waitFor(() => {
+      const names = [...document.querySelectorAll('.proj-card-name')].map((n) => n.textContent);
+      expect(names).toEqual(['OpenClawHetzner', 'ghost']);
     });
   });
 
@@ -2454,6 +2489,100 @@ describe('the programme tree on the fleet screen', () => {
     const gamma = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'gamma');
     expect(gamma, 'no card for gamma').toBeTruthy();
     expect(gamma!.querySelector('.proj-abroad')).toBeNull();
+  });
+
+  it('brackets a cross-repo worker under its coordinator ON THE COORDINATOR\'S CARD — the run follows the row (Task 4)', () => {
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove', boardProject: 'alpha' }),
+      ],
+      runs: [runRow({ id: 40, project: 'beta', homeProject: 'alpha', sessionId: 'claude:worker', claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+    });
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const alpha = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'alpha')!;
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
+    // The edge is drawn on alpha…
+    expect(alpha.querySelectorAll('.proj-nest')).toHaveLength(1);
+    expect(alpha.querySelector('.proj-nest .sess-label')?.textContent).toBe('still-cove');
+    // …with no orphan marker (the coordinator IS on this card) and NO abroad
+    // line (the worker renders here — stating the run twice is the defect §6 names)…
+    expect(alpha.querySelector('.proj-crossing')).toBeNull();
+    expect(alpha.querySelector('.proj-abroad')).toBeNull();
+    // …and beta, emptied, says where its work went, as text with no control.
+    expect(beta.querySelector('.sess-line')).toBeNull();
+    const line = beta.querySelector('.proj-elsewhere-line')!;
+    expect(line.textContent).toBe('1 workspace under alpha');
+    expect(line.closest('button, a')).toBeNull();
+    expect(line.querySelector('button, a')).toBeNull();
+  });
+
+  it('threads coordOf/frameSeen down to the marker — a coordinator measured dead reaches the operator (Task 8 fix round 1, Finding 1)', () => {
+    // D-3009: `coordOf` must be a FLEET-WIDE lookup, not the card's own
+    // `g.sessions` — the coordinator sits on alpha's card while the marker is
+    // drawn on beta's. Nothing in project-card.test.tsx alone can catch a
+    // regression at the wiring site (it passes the props directly), so this
+    // case mounts the whole screen and seeds the store the way `coordPresence`
+    // actually needs: a dead-measured session fleet-wide, and BOTH frame-seen
+    // flags true.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa', status: 'dead', bucket: 'dead', lifecycle: 'orphan' }),
+        session({ id: 'claude:worker', project: 'beta', workspace: 'still-cove', boardProject: null }),
+      ],
+      runs: [runRow({ id: 42, project: 'beta', sessionId: 'claude:worker', claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+      fleetFrameSeen: true,
+    });
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
+    const marker = beta.querySelector('.proj-crossing')!;
+    expect(marker.getAttribute('data-presence')).toBe('dead');
+    expect(marker.getAttribute('title')).toContain('reclaim');
+    // …and in the TEXT, which is the half a phone can read (final fix round):
+    // the wiring case owns this too, because `data-presence` reaching the
+    // marker proves nothing about the sentence beside it.
+    expect(marker.textContent).toContain('coordinator gone');
+  });
+
+  it('a pending spawn reaches its COORDINATOR\'s card, not the wave\'s — the null-session arm of runCard', () => {
+    // TWO CARDS, because one card cannot tell the two rules apart (final fix
+    // round): the coordinator renders on `alpha` and the wave's own project is
+    // `beta`, so routing by `run.project` puts the phantom on beta as a depth-0
+    // orphan spawn and routing by the coordinator puts it inside alpha, nested
+    // under the row it belongs to. With `project: 'alpha'` — the old fixture —
+    // both rules answer alpha and the case is blind.
+    const store = makeStore();
+    render(<FleetScreen store={store} />);
+    seed(store, {
+      conn: 'open',
+      sessions: [
+        session({ id: 'claude:coord', project: 'alpha', workspace: 'quiet-mesa' }),
+        // An unrelated row, only so `beta` HAS a card to be empty of phantoms:
+        // the card set is a union over sessions, and the wave's own project
+        // earns no card by being named on a run.
+        session({ id: 'claude:bystander', project: 'beta', workspace: 'still-cove' }),
+      ],
+      runs: [runRow({ id: 41, project: 'beta', state: 'planned', dispatchStartedAt: RUN_FROZEN - 1_000, sessionId: null, claimedBy: 'claude:coord' })],
+      runsFrameSeen: true,
+    });
+    const cards = [...document.querySelectorAll('.proj-card')];
+    const alpha = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'alpha')!;
+    const beta = cards.find((c) => c.querySelector('.proj-card-name')?.textContent === 'beta')!;
+    expect(beta).not.toBeUndefined();
+    const pending = alpha.querySelector('.proj-pending')!;
+    expect(pending).not.toBeNull();
+    // INSIDE alpha, and nested — the phantom sits under its coordinator, which
+    // is exactly where the worker will render once it binds.
+    expect(pending.closest('.proj-nest')).not.toBeNull();
+    expect(beta.querySelector('.proj-pending')).toBeNull();
   });
 
   it('gives a single-project programme no abroad line at all', () => {

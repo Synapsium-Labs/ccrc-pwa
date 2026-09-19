@@ -1788,6 +1788,70 @@ describe('CoordStore.openRunsForSession', () => {
   });
 });
 
+// Board-placement wave 2, SECOND fix round. `parentOfSession`'s own cases live
+// in `asks-store.test.ts` (the lane that read is for), not here — so this block
+// sits beside `openRunsForSession`, the other session-keyed read of the same
+// `TERMINAL_RUN_STATES_SQL` complement, rather than beside a describe this file
+// does not carry.
+//
+// WHAT THE FOUR CASES ARE FOR. The two §12 doors (`claimant-is-a-worker` at
+// `POST /api/runs`, `heir-is-a-worker` at the reclaim ladder) used to read
+// `parentOfSession`, which is `LIMIT 1`: it answers about the NEWEST open run
+// and says nothing about the older ones. `runs_by_session` is non-unique and the
+// coordinator protocol opens wave N+1 before closing wave N, so "the newest run
+// that names this session" and "every coordinator this session currently works
+// for" are different facts — and the doors' sentences were about the second.
+describe('CoordStore.openClaimantsOf — every coordinator a session currently works for', () => {
+  it('names BOTH claimants when two open runs name one session, newest first', () => {
+    const s = store();
+    // Two DIFFERENT programmes, `asks-store.test.ts`'s own reason: `openRun`
+    // refuses a second `claimedBy` for one programme, and a reclaim would
+    // rewrite both rows to agree and defeat the point.
+    const older = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(older.id, 'demo-alpha');
+    const newer = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
+    s.setSession(newer.id, 'demo-alpha');
+    expect(older.id).toBeLessThan(newer.id);
+    expect(s.openClaimantsOf('demo-alpha')).toEqual(['coord-2', 'coord-1']);
+    // …and THIS is the difference the doors needed: the same fixture through
+    // the newest-only read hides `coord-1` entirely.
+    expect(s.parentOfSession('demo-alpha')).toBe('coord-2');
+  });
+
+  it('excludes a TERMINAL run\'s claimant — a finished worker is not a worker', () => {
+    const s = store();
+    const done = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(done.id, 'demo-alpha');
+    expect(s.advance(done.id, 'dispatched', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(done.id, 'closing', 'coordinator')).toMatchObject({ ok: true });
+    expect(s.advance(done.id, 'done', 'coordinator')).toMatchObject({ ok: true });
+    const open = s.openRun({ program: 'prog-b', title: 'B', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-2' }) as { id: number };
+    s.setSession(open.id, 'demo-alpha');
+    expect(s.openClaimantsOf('demo-alpha')).toEqual(['coord-2']);
+  });
+
+  it('an OWNERLESS open row contributes nothing — there is no id to name (D-3012)', () => {
+    const s = store();
+    const orphan = s.openRun({ program: 'prog-a', title: 'A', project: 'p',
+      wave: 1, waveOf: null, claimedBy: 'coord-1' }) as { id: number };
+    s.setSession(orphan.id, 'demo-alpha');
+    // The shape `reconstruct` writes and `openRun`'s D-12 clause skips.
+    tx(s.db, () => { s.db.prepare('UPDATE runs SET claimedBy = NULL WHERE id = ?').run(orphan.id); });
+    expect(s.openClaimantsOf('demo-alpha')).toEqual([]);
+    // NOT `[null]` and not a hole in the list: the guard reads ids, and the
+    // admission for an ownerless run is the doors' ruling, not this read's.
+    expect(s.openClaimantsOf('demo-alpha').every((c) => typeof c === 'string')).toBe(true);
+  });
+
+  it('answers [] for a session no run names at all', () => {
+    expect(store().openClaimantsOf('demo-nobody')).toEqual([]);
+  });
+});
+
 describe('releaseIsSafe', () => {
   it('is true only when NOTHING else names the session', () => {
     expect(releaseIsSafe([])).toBe(true);
