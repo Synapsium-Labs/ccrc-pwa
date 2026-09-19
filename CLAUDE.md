@@ -175,7 +175,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   default) has none of this: absence falls back to the DECLARED tag, exactly as `main` did.
   The server never nudges; convergence is the timer's pull alone, bounded by `OnUnitActiveSec=60s`.
   `GET /api/pools/epoch` answers the RESOLVED pool (central if present, else declared), so `ccd`,
-  the server's forecast and its refusal all agree.
+  the server's forecast and its refusal all agree on the CARRIER, not the VERDICT (§5.7).
 
 ## Coordination (Build 7) invariants a coder must NOT break
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather
