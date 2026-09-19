@@ -1808,7 +1808,19 @@ D-3075, D-3076, D-3084, D-3085 and D-3086.
 - **D-3093** (box-token-enumeration-corrected) final review I5 — the second box-token enumeration in `auth/gate.ts` still read 24+1=26; the numeral had been bumped and the enumeration left alone, the exact defect an earlier review had named.
 - **D-3094** (pool-sync-doctor-grace-window) the never-synced doctor arm is grace-windowed on the installed timer's mtime, because it FAILed a correct fresh `--role fleet` install and made `ccrc install` exit 1 on every new fleet box.
 - **D-3095** (pool-epoch-filename-one-source) the projection FILENAME gets the single source the pools DIRECTORY already had (`POOL_EPOCH_FILE_NAME`), with the writer, the placement reader and the doctor pinned to it; it had become a bare literal in five shipped files across three languages.
-- **D-3096** (readme-anchor-false-at-base) a README anchor was repointed because it was FALSE AT THE MERGE-BASE, not merely shifted: it named `_swap_carry_sidecars` while its own sentence is about `cmd_ensure`'s `_reg_generation_init`, 418 lines away. Repointing changes what the README ASSERTS.
+- **D-3096** (readme-anchor-broken-by-the-merge) a README anchor (`README.md:2540`, `cmd_ensure` minting a
+  missing generation) was repointed because **the MERGE broke it — neither parent did.** It was correct at the
+  merge-base `ad3d2fbc` (`ccd/ccd:19588` was that exact `_reg_generation_init "$id"` call) and correct again at
+  `origin/main` `7a6220f6` (`:19974`, likewise). The merge froze main's number against a file both sides had
+  grown, so on the merged tree `:19974` lands inside `_supervised_start` and the referent stands at `:20543`,
+  569 lines away. A citation defect that exists in no parent and only in their merge — "a merge is a tree
+  nobody ran", in citation form.
+  **This entry's FIRST text was wrong and is corrected here rather than quietly replaced.** It claimed the
+  anchor named `_swap_carry_sidecars` 418 lines away and was false AT THE MERGE-BASE. That was an artifact of
+  my measuring against `f06abdce` instead of the true merge-base `ad3d2fbc` — one commit too early, the same
+  base error recorded in this wave's ledger. `_swap_carry_sidecars` encloses neither number at any tree.
+  Finding a bad input does not correct the conclusions already drawn from it; I found that base error and did
+  not re-derive this.
 
 ## Carried, not owned by this wave
 
