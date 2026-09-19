@@ -499,6 +499,7 @@ describe('TerminalDrawer against a closed gate', () => {
   const fakeTerm = (): { makeTerm: (host: HTMLElement) => DrawerTerm } => ({
     makeTerm: () => ({
       write: () => {}, onData: () => {}, onWheel: () => {},
+      setFontSize: () => ({ cols: 48, rows: 20 }),
       fit: () => ({ cols: 48, rows: 20 }), focus: () => {}, dispose: () => {},
     }),
   });
