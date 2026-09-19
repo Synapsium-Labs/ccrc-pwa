@@ -12,7 +12,7 @@
 // organised to match that review, each one commented with the finding it
 // pins.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { makeCcdHarness, plantPoolSyncTimer, type CcdHarness } from './ccdWsHelpers.js';
 import { writeFileSync, mkdirSync, chmodSync } from 'node:fs';
 import path from 'node:path';
 
@@ -81,7 +81,20 @@ function stateRc(id: string): { out: string; rc: number } {
 }
 
 describe('_acct_pool_state', () => {
-  it('answers `unreadable` when the file does not exist — absence is NOT untagged', () => {
+  // Item 5 (I3, wave-1 fix round A): absence used to answer `unreadable`
+  // unconditionally — now it is role-split. `h` plants no
+  // `ccd-pool-sync.timer` by default (see `plantPoolSyncTimer`'s own
+  // docstring), so THIS case is the non-fleet box this wave's own doctrine
+  // used to get backwards: "this box has no control plane BY CONFIGURATION"
+  // must fall back to the declared tag, exactly as `main` did.
+  it('answers the DECLARED tag on a non-fleet box (no ccd-pool-sync.timer installed) — absence is the box\'s own configuration, not "never synced"', () => {
+    // `h`'s roster (`DEFAULT_TEST_ROSTER`) declares no pool for `acct-a`, so
+    // the honest declared answer is `untagged`, not a fabricated name.
+    expect(state('acct-a')).toBe('untagged');
+  });
+
+  it('answers `unreadable` when the file does not exist ON A FLEET BOX — absence is NOT untagged there', () => {
+    plantPoolSyncTimer(h.home);
     expect(state('acct-a')).toBe('unreadable');
   });
 

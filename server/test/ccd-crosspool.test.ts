@@ -28,7 +28,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import path from 'node:path';
-import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, seedAccountsSh, WS_ADD,
+import { CCD, ghContainedEnv, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD,
   type CcdHarness } from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
@@ -1228,8 +1228,12 @@ describe('cmd_prefer', () => {
     // whose stated remedy ("clear it") would UNTAG THE PROJECT. The tag here
     // is `named pool-b` and fine; the projection is the thing nobody can
     // read.
+    // Item 5 (I3, wave-1 fix round A): `plantPoolSyncTimer` marks this a
+    // FLEET box, so absence still fails shut here — without it, absence now
+    // falls back to the declared tag instead, a different case entirely.
     seedRow(); tagPool('demo', 'pool-b');
     plantPoolEpoch(h.home, undefined);       // no document at all: never synced
+    plantPoolSyncTimer(h.home);
     const r = shFail(`cmd_prefer ${ID} claude-b`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain(

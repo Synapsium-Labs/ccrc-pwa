@@ -13,7 +13,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { CCD, makeCcdHarness, plantPoolEpoch, seedAccountsSh, type CcdHarness }
+import { CCD, makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, type CcdHarness }
   from './ccdWsHelpers.js';
 import { POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import { eventsOf, measOf, decOf } from './lifecycleHelpers.js';
@@ -261,8 +261,14 @@ describe('_strand_why names the candidates the decision was actually about', () 
     // THE PROJECT TAG IS READABLE HERE, deliberately: `named pool-b`. If the
     // token were still `tag:` this case could not tell the two conditions
     // apart, which is the whole finding.
+    // Item 5 (I3, wave-1 fix round A): absence alone now falls back to the
+    // declared tag on a non-fleet box, so this cold-node/fail-shut case
+    // needs `plantPoolSyncTimer` to keep meaning what it says — a FLEET
+    // node whose control plane has never synced, not a box that was never
+    // asked to run one.
     seed(); tagPool('demo', 'pool-b');
     plantPoolEpoch(h.home, undefined);
+    plantPoolSyncTimer(h.home);
     expect(h.sh(`_strand_why ${ID} demo`))
       .toBe(`projection:unreadable ${h.home}/.cc-sessions/pool-epoch`);
   });

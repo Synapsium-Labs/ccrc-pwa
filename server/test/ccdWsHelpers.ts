@@ -80,9 +80,16 @@ export function seedAccountsSh(home: string, roster: unknown = DEFAULT_TEST_ROST
  *  `tags` UNDEFINED MEANS NO DOCUMENT AT ALL — removed, never written empty,
  *  because those are two different answers: no document is the cold node that
  *  has never synced (`unreadable` -> undecidable -> refuse into a tagged
- *  project), while a document with an `epoch` and no `acct` rows is SYNCED,
- *  NOTHING TAGGED. `ccd-pool-sync`'s own header states that pair; a helper
- *  that folded them would make the fail-shut untestable.
+ *  project) ON A FLEET BOX — item 5 (I3, wave-1 fix round A) split this:
+ *  absence on a box with NO `ccd-pool-sync.timer` installed (this harness's
+ *  own default — nothing here plants one) now falls back to the DECLARED
+ *  tag instead, exactly as `main` did before this feature existed. A test
+ *  that means "this is a fleet node that has never synced" must call
+ *  {@link plantPoolSyncTimer} first, or its absence measures the OTHER
+ *  condition. A document with an `epoch` and no `acct` rows is SYNCED,
+ *  NOTHING TAGGED, on either kind of box. `ccd-pool-sync`'s own header
+ *  states that pair; a helper that folded them would make the fail-shut
+ *  untestable.
  *
  *  `lease` DEFAULTS FAR IN THE FUTURE so a planted document is CURRENT; pass
  *  a past one to plant the `stale` state without a second copy of the
@@ -107,6 +114,28 @@ export function plantPoolEpoch(
     'end', '',
   ];
   fs.writeFileSync(f, lines.join('\n'));
+}
+
+/** Marks a `makeCcdHarness`/plain fixture HOME as a FLEET box — the ONLY
+ *  probe item 5 (I3, wave-1 fix round A) trusts for "does this box have a
+ *  control plane BY CONFIGURATION": `ccd-pool-sync.timer`'s unit file,
+ *  installed on disk, never `$REG/pool-epoch`'s own presence or absence
+ *  (`ccd/ccd`'s `_pool_sync_installed`). Content is irrelevant — only the
+ *  path is read — so an empty file is planted, the same "existence is the
+ *  fact" idiom `plantPoolEpoch`'s own tags use for a marker row.
+ *
+ *  LINUX PATH ONLY: this suite's `CcdHarness.sh` always runs under
+ *  `CCD_OS=linux` (`ccd/ccd`'s own `uname`-based detection, computed once at
+ *  source time — measured, not assumed: this repo's test boxes are Linux,
+ *  and nothing here overrides `CCD_OS`), matching `ccrc-doctor-checks`'
+ *  `CCRC_UNIT_DIR` for the identical reason. A harness that needed the
+ *  darwin arm would target `~/Library/LaunchAgents/app.ccrc.ccd-pool-sync.timer.plist`
+ *  instead — `macos-platform.test.ts` is where that arm is actually
+ *  exercised, not here. */
+export function plantPoolSyncTimer(home: string): void {
+  const dir = path.join(home, '.config', 'systemd', 'user');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, 'ccd-pool-sync.timer'), '');
 }
 
 /** ws-add spawns a session; tmux is not available under test, so stub the spawn

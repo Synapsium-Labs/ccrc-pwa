@@ -23,7 +23,7 @@
 //     separately against the REAL generated `accounts.sh`, which is the only
 //     thing that can prove the generator and this reader agree.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { makeCcdHarness, plantPoolEpoch, seedAccountsSh, WS_ADD, CCD, type CcdHarness }
+import { makeCcdHarness, plantPoolEpoch, plantPoolSyncTimer, seedAccountsSh, WS_ADD, CCD, type CcdHarness }
   from './ccdWsHelpers.js';
 import { POOL_RULE_CASES, POOLED_TEST_ROSTER, POOL_BY_ID } from './fixtures/poolRule.js';
 import type { PoolRuleCase } from './fixtures/poolRule.js';
@@ -435,9 +435,16 @@ describe('cmd_ws_add refuses in-pool, names the reason, and touches nothing', ()
     // it"), which blames a healthy file and whose remedy would UNTAG the
     // project. The two conditions have different remedies, so they get
     // different sentences.
+    // Item 5 (I3, wave-1 fix round A): the "EKS default path" this test's
+    // own comment names IS a fleet node (§6's future-fit text: "pods hold
+    // only a leased projection"), just a cold-started one — `plantPoolSyncTimer`
+    // is what keeps this case meaning that, distinct from a box with no
+    // control plane by configuration at all, which now falls back to the
+    // declared tag instead.
     h.makeRepo('demo');
     tag('demo', 'pool-b');
     plantPoolEpoch(h.home, undefined);      // no document at all: never synced
+    plantPoolSyncTimer(h.home);
     const r = shFail2(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
     expect(r.code).not.toBe(0);
     expect(r.stderr).toContain('projection=unreadable');

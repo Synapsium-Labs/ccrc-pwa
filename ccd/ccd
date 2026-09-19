@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=5604a96e34f6f2af1cca57a9e481d7d28edaa560bdc5df7f1469e4187f627d7e
+# ccrc:generated 1 sha256=d2a24965855314ae4b2e1cec8a09379ee2fc2a6c833ba5349a6551d486e10e10
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -2059,6 +2059,32 @@ _codex_lanes() {
 # untagged — today's behaviour, with no `command not found` on stderr and no
 # rc 127 leaking into a `$(…)` capture.
 _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# Item 5 (I3, wave-1 fix round A) — whether THIS box has a control plane BY
+# CONFIGURATION, measured the ONLY honest way: is `ccd-pool-sync.timer`'s
+# unit file actually installed. NEVER `$REG/pool-epoch`'s own absence — that
+# is the condition `_acct_pool_state` (below) must still tell apart from
+# THIS one, because they call for opposite answers. `ccrc:10131-10132`
+# (`_inst_units`) derives the timer's install from `[ "$INST_ROLE" = fleet ]`
+# alone (T4-R1's own ruling: copying a sibling unit's `!= server` gate would
+# leave the single-box DEFAULT role arming a timer whose binary can never
+# succeed there — `ccd-pool-sync:52` refuses outright without
+# `$HOME/.ccrc/agent.env`, which only `--role fleet`'s install ever writes).
+# `INST_ROLE` itself is an installer-local variable inside a DIFFERENT
+# script (`ccrc`), unreadable from here, so this re-measures the INSTALLED
+# ARTIFACT that decision left on disk instead — the identical filesystem
+# fact `ccrc-doctor-checks`' `_check_services` reads to build its own
+# `installed` census (`CCRC_UNIT_DIR`/`_dr_unit_file`, doctor item 4's own
+# fix, same round). The darwin arm reuses `_svc_plist`/`_svc_label` (above)
+# rather than restating their translation; the linux arm matches
+# `_check_services`' own path because there is no `_svc_*` helper for a
+# plain systemd unit FILE's location (only for its ACTIVE state).
+_pool_sync_installed() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    [ -f "$(_svc_plist ccd-pool-sync.timer)" ]
+  else
+    [ -f "$HOME/.config/systemd/user/ccd-pool-sync.timer" ]
+  fi
+}
 # THE ACCOUNT SIDE'S STATE, and the reason it is not `_acct_pool`'s shape.
 #
 # `_acct_pool` answers a NAME or empty, and empty means untagged — which was
@@ -2147,6 +2173,25 @@ _acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | mal
   # ABSENCE PROVEN AT EVERY LEVEL IT IS CLAIMED, exactly as
   # `_project_pool_state` does it one directory down.
   [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  # Item 5 (I3, wave-1 fix round A) — ABSENCE OF THE FILE ITSELF, split from
+  # every other reason this function answers `unreadable`, is the ONE
+  # branch a non-fleet box's missing control plane changes: `--role both`/
+  # `--role server` (the single-box default) never gets `ccd-pool-sync.timer`
+  # installed at all (`ccrc:10131-10132`, T4-R1), so THIS node's absence is
+  # not "has not synced yet" — it is "was never asked to", the fail-shut
+  # answer `main` never gave before this feature existed. Falls back to the
+  # DECLARED tag (`_acct_pool`), exactly as `main` did, ONLY for that box; a
+  # FLEET box (`_pool_sync_installed`) still fails shut on the identical
+  # absence, because THERE it means "has never synced" — the fact
+  # `_acct_pool_state`'s own five-word vocabulary exists to distinguish from
+  # every declared-tag guess. The `-r`/malformed/permission checks just below
+  # are UNCHANGED and still fail shut regardless of role: an unreadable or
+  # torn document is never "this box was never asked", on either box.
+  if [[ ! -e "$f" && ! -L "$f" ]] && ! _pool_sync_installed; then
+    local declared; declared="$(_acct_pool "$id")"
+    if [[ -n "$declared" ]]; then echo "named $declared"; else echo untagged; fi
+    return 0
+  fi
   [[ -e "$f" || -L "$f" ]]     || { echo unreadable; return 0; }
   [[ -f "$f" && -r "$f" ]]     || { echo unreadable; return 0; }
   # BOUNDED, NUL-AWARE, NO SUBSHELL — the same move `_project_pool_state`

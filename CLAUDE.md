@@ -167,12 +167,15 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `~/.ccrc/coord.db` (authoritative, journalled to `~/.ccrc/pool-edges.log`) and reaches the fleet as
   `$REG/pool-epoch`, pulled by `ccd-pool-sync.timer`; `accounts.json`'s `pool` is RETAINED as the
   lowest-precedence declared default — retiring it would make an old `ccd` read every account untagged,
-  fail-OPEN. **`ccd`'s placement now has a freshness dependency it never had:** `_project_pool_state`'s
-  absent file means "nobody tagged anything"; `_acct_pool_state`'s absent file means "I have not synced" and
-  answers `unreadable` → undecidable → refuse into a tagged project — `stale` and `unreadable` are two
-  words with two remedies, never folded. The server never nudges; convergence is the timer's pull alone,
-  bounded by `OnUnitActiveSec=60s`. `GET /api/pools/epoch` answers the RESOLVED pool (central if present,
-  else declared), so `ccd`, the server's forecast and its refusal all agree.
+  fail-OPEN. **`ccd`'s placement now has a freshness dependency it never had, on a FLEET box only
+  (item 5):** `_project_pool_state`'s absent file means "nobody tagged anything"; `_acct_pool_state`'s
+  absent file means "I have not synced" and answers `unreadable` → undecidable → refuse into a
+  tagged project — `stale` and `unreadable` are two words with two remedies, never folded. A box
+  with `ccd-pool-sync.timer` never installed (`--role both`/`--role server`, the single-box
+  default) has none of this: absence falls back to the DECLARED tag, exactly as `main` did.
+  The server never nudges; convergence is the timer's pull alone, bounded by `OnUnitActiveSec=60s`.
+  `GET /api/pools/epoch` answers the RESOLVED pool (central if present, else declared), so `ccd`,
+  the server's forecast and its refusal all agree.
 
 ## Coordination (Build 7) invariants a coder must NOT break
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather
