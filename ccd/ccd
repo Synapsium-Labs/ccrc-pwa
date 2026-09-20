@@ -15542,19 +15542,46 @@ CONTINUED_IN_TAIL_BYTES=8192
 #   - `_CI_DONE[id]` holds the LAST "$uuid:$st" this id actually EXAMINED —
 #     enough to stop re-reading a file whose content has not changed since
 #     the last read; it does not need history, because cycle detection is
-#     `_CI_WALK`'s job, not this one's.
+#     `_CI_WALK`/`_CI_ORIGIN`'s job, not this one's.
 #   - `_CI_WALK[id]` is the uuids visited on the CURRENT walk, newest last,
-#     capped at the last `_CI_WALK_CAP`. Before hopping to a candidate
-#     successor, the walk is checked: a candidate already on it stops the
-#     walk right there (F2) — no history beyond the cap survives, so this is
-#     a fixed ~600 bytes per session forever, not a growing log. A cycle
-#     longer than the cap is pathological disk data; with the cap, the worst
-#     case is re-following such a cycle once every `_CI_WALK_CAP` hops,
-#     rather than once every two ticks before this memo existed — a decision,
-#     not an accident.
-declare -A _CI_LAST=()   # id -> "$uuid:$st" observed on the PREVIOUS tick
-declare -A _CI_DONE=()   # id -> the LAST "$uuid:$st" actually examined
-declare -A _CI_WALK=()   # id -> uuids visited on the current walk, space-joined, newest last
+#     capped at the last `_CI_WALK_CAP` — a fixed ~600 bytes per session
+#     forever, not a growing log.
+#
+# THIRD REVIEW ROUND (M1): the cap traded away an unconditional guarantee.
+# Measured: a continued-in cycle LONGER than the cap never terminates on the
+# cap alone — a 20-node cycle kept flapping at the pre-memo rate (one write,
+# one 8 KiB tail, every two ticks) because by the time the walk returns to
+# its first node, the cap has already evicted it. Round 2's unbounded set
+# caught every cycle, of any length, after one lap; the bounded walk alone
+# does not. Closed with ONE more O(1) entry, not a bigger cap:
+#   - `_CI_ORIGIN[id]` is the uuid the CURRENT walk began from. Before
+#     hopping to a candidate, it is checked FIRST: a candidate equal to the
+#     origin ends the walk right there, WHATEVER the walk's length — the
+#     origin is never evicted, so this catches a return of any length.
+#   - `_CI_WALK`'s capped membership check still runs too, and is what
+#     catches a SHORTER repeat that does not return all the way to the
+#     origin (a local sub-cycle inside a longer walk).
+#   - `_CI_EXPECT[id]` is what makes "the current walk" a well-defined
+#     thing at all: the uuid this function itself last considered its own
+#     position — either a walk's first uuid, or the destination of its own
+#     last hop. A registry uuid that does not match it arrived from OUTSIDE
+#     this function (first sight, or the pane read after a `/clear`), which
+#     starts a NEW walk: origin and walk both reset to it. Without this, an
+#     old walk's origin could silently keep gating a new, unrelated chain.
+#
+# THE HONEST LIMIT, stated rather than implied (the previous wording here
+# claimed a worst case the measurement above contradicted): a cycle LONGER
+# than the cap that does not pass back through its own origin is still not
+# caught — pathological disk data twice over, both longer than
+# `_CI_WALK_CAP` and never returning to where it started. Termination is
+# UNCONDITIONAL for any cycle that returns to the walk's origin, whatever
+# its length, and for any local repeat up to the cap; nothing stronger is
+# claimed.
+declare -A _CI_LAST=()    # id -> "$uuid:$st" observed on the PREVIOUS tick
+declare -A _CI_DONE=()    # id -> the LAST "$uuid:$st" actually examined
+declare -A _CI_WALK=()    # id -> uuids visited on the current walk, space-joined, newest last
+declare -A _CI_ORIGIN=()  # id -> the uuid the CURRENT walk began from
+declare -A _CI_EXPECT=()  # id -> the uuid this function itself last placed there
 _CI_WALK_CAP=16
 
 _ci_walk_has() {   # id uuid -> 0 iff uuid is already on id's current walk
@@ -15564,6 +15591,14 @@ _ci_walk_has() {   # id uuid -> 0 iff uuid is already on id's current walk
 }
 
 _ci_walk_add() {   # id uuid -> record uuid on id's walk, capped at the last _CI_WALK_CAP
+  # THE DEDUP IS LOAD-BEARING (M2, review round). This is called every time a
+  # fresh (uuid, stamp) pair is examined, including a CURRENT uuid whose file
+  # keeps churning (repeatedly growing then going quiescent again) without
+  # ever actually hopping — measured without this check: sixteen duplicates
+  # of that one uuid fill the walk, evicting an earlier DISTINCT uuid the
+  # cap was relying on, and flapping resumes for a short cycle the walk
+  # would otherwise have caught (4 writes over 120 ticks, against 1 write
+  # and silence with the guard in place).
   local id="$1" u="$2"
   _ci_walk_has "$id" "$u" && return 0
   local -a words=(${_CI_WALK[$id]:-} "$u")
@@ -15587,6 +15622,14 @@ _ci_walk_add() {   # id uuid -> record uuid on id's walk, capped at the last _CI
 # fresh every tick, and a memo that quietly drops a distinction its caller
 # handed it is the exact shape this codebase's "an adapter may not narrow a
 # distinction it received" rule exists to forbid, reachable or not today.
+#
+# M3 (third review round): the only one of these memos with NO eviction at
+# all — bounded by chain length like the others, which is within the second
+# round's own ruling, but nothing was ever dropped from it either. There is
+# no reason to keep a resolved path for a uuid the walk has already left, so
+# a hop now drops the entry for the uuid it hops OFF in the same breath it
+# adds the one for the uuid it hops TO — O(1) per id, like `_CI_LAST` and
+# `_CI_DONE`, not O(chain length).
 declare -A _CI_PATH=()   # "$cfg:$id:$uuid" -> the resolved transcript path, once found
 
 _ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
@@ -15659,12 +15702,23 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # is resolved — see `_CI_PATH` above), and one 8 KiB read per quiescence. A
   # busy session pays nothing; a frozen one pays once. A chain of forks
   # therefore converges over a few ticks rather than in one call: `_CI_DONE`
-  # stops a re-read of unchanged content, and `_CI_WALK` — bounded, not the
-  # tick-unbounded set the first review round measured as a leak — stops a
-  # cycle before it re-enters a uuid already on the current walk (see the
-  # F1/F2 comment above `_CI_LAST`).
+  # stops a re-read of unchanged content, and `_CI_ORIGIN`/`_CI_WALK` stop a
+  # cycle — unconditionally through the origin, or through the capped walk
+  # for a shorter local repeat (see the comment above `_CI_LAST`).
   local id="$1" cfg="$2" uuid pk f st key prev done_key next sf
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
+  # WALK-START DETECTION (M1, third review round). A registry uuid that does
+  # not match what this function itself last placed there — a hop's
+  # destination, or a prior walk's very first uuid — arrived from OUTSIDE
+  # this function (first sight of this id, or the pane read after a
+  # `/clear`), so this is a NEW walk: start the origin over. Without this, an
+  # old walk's origin could keep gating hops on a chain it has nothing to do
+  # with.
+  if [[ "$uuid" != "${_CI_EXPECT[$id]:-}" ]]; then
+    _CI_ORIGIN["$id"]="$uuid"
+    _CI_WALK["$id"]=""
+    _CI_EXPECT["$id"]="$uuid"
+  fi
   pk="$cfg:$id:$uuid"
   f="${_CI_PATH[$pk]:-}"
   if [[ -z "$f" ]]; then
@@ -15683,10 +15737,13 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   _ci_walk_add "$id" "$uuid"
   next=$(_continued_in_of "$f" "$uuid")
   [[ -n "$next" ]] || return 0
-  _ci_walk_has "$id" "$next" && return 0                # already on this walk — a cycle, stop here
+  [[ "$next" == "${_CI_ORIGIN[$id]:-}" ]] && return 0   # back to the walk's origin — a cycle of ANY length, stop
+  _ci_walk_has "$id" "$next" && return 0                # already on this walk — a shorter local cycle, stop
   sf=$(_ci_transcript_path "$id" "$cfg" "$next") || return 0   # tried both spellings, same as the current file
   [[ -s "$sf" ]] || return 0                                    # announced but not yet written
+  unset "_CI_PATH[$pk]"   # M3: drop the entry for the uuid we're hopping OFF
   _CI_PATH["$cfg:$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
+  _CI_EXPECT["$id"]="$next"   # our own hop's destination — recognised as a continuation, not a new walk
   _reg_set "$id" uuid "$next"
   return 0
 }

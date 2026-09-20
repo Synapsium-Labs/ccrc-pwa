@@ -334,4 +334,84 @@ describe('_sync_uuid follows a fork', () => {
     ticks(2);
     expect(h.reg(ID, 'uuid')).toBe(B);
   });
+
+  it('a cycle longer than the walk cap still terminates, by returning to its origin', () => {
+    // Third review round, M1. `_CI_WALK_CAP` is 16; a cycle of 20 distinct
+    // uuids outlives it — by the time the walk returns to node 0, the capped
+    // walk itself has long since evicted it (it only remembers the last 16).
+    // `_CI_ORIGIN` is what still catches this: a single O(1) value, set once
+    // per walk and never evicted, so a return to it ends the cycle whatever
+    // its length.
+    //
+    // MEASURED (this exact fixture, 80 ticks, node index after each tick):
+    //   0 1 1 2 2 3 3 4 4 5 5 6 6 7 7 8 8 9 9 10 10 11 11 12 12 13 13 14 14
+    //   15 15 16 16 17 17 18 18 19 19 19 19 19 ... (stays 19 forever)
+    // 19 writes total (one hop per node, node 0 through 19), then PERMANENT
+    // silence: the 20th hop (19 -> 0) is refused because 0 is the walk's
+    // origin. Without `_CI_ORIGIN` this cycle never terminates at all — it
+    // keeps flapping at the pre-memo rate (one write, one 8 KiB tail, every
+    // two ticks) because the capped walk alone cannot see that far back.
+    const N = 20;
+    const uuids = Array.from({ length: N }, (_, i) => `${i.toString(16).padStart(2, '0')}${'0'.repeat(34)}`);
+    row('/w', uuids[0]!);
+    for (let i = 0; i < N; i++) {
+      plant('/w', uuids[i]!, marker(uuids[i]!, uuids[(i + 1) % N]!));
+    }
+    // 45 ticks is comfortably past the ~40 needed to traverse all 20 nodes
+    // (2 ticks/node); 60 more prove it has gone permanently silent rather
+    // than merely paused.
+    const out = h.sh(
+      `${Array.from({ length: 45 }, () => `_sync_uuid ${ID}`).join('; ')}; echo "AT45:$(_reg_get ${ID} uuid)"; `
+      + `${Array.from({ length: 60 }, () => `_sync_uuid ${ID}`).join('; ')}; echo "AT105:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(/AT45:(\S+)/.exec(out)?.[1]).toBe(uuids[19]);
+    expect(/AT105:(\S+)/.exec(out)?.[1]).toBe(uuids[19]);
+  });
+
+  it('a churning current file cannot flush a distinct uuid off the walk', () => {
+    // Third review round, M2. `_ci_walk_add`'s own dedup is load-bearing:
+    // without it, a uuid examined repeatedly (its file changes size, goes
+    // quiescent, changes size again — the DONE-key differs each time, so
+    // each quiescence re-triggers an examination) gets appended to the walk
+    // AGAIN on every one of those re-examinations, and once enough
+    // duplicates accumulate past the cap, an EARLIER, genuinely distinct
+    // uuid falls off the walk — even though it was never revisited, only
+    // crowded out.
+    //
+    // Fixture: O -> X -> CH (settle, 2 ticks each), then CH's file is
+    // rewritten 20 times with growing padding before its constant last line
+    // (a marker back to X) — CH's own uuid never changes, only its size, so
+    // each rewrite is a fresh (uuid, stamp) pair that re-triggers
+    // examination and re-attempts the walk_add call. X is NOT the walk's
+    // origin (O is), so only `_ci_walk_has(id, X)` — not the origin check —
+    // stands between this and a flap back to X.
+    //
+    // MEASURED with the real code: registry reaches CH after the settle and
+    // NEVER moves again, through all 20 churns and 6 more ticks — silence.
+    // MEASURED with `_ci_walk_add`'s dedup deleted (same mutant as the
+    // table's M2 row): registry stays at CH through churn 1-15, then at
+    // churn 16 — the point at which 16 duplicate CH entries have finally
+    // flushed X off the capped walk — it flips to X and stays there: one
+    // erroneous write the real code never makes.
+    const O = 'e'.repeat(36), X = 'f'.repeat(36), CH = '1'.repeat(36);
+    row('/w', O);
+    plant('/w', O, marker(O, X));
+    plant('/w', X, marker(X, CH));
+    plant('/w', CH, marker(CH, X));   // initial CH file, so the X->CH hop has somewhere to land
+    const chFile = path.join(projectDir('/w'), `${CH}.jsonl`);
+    const mk = marker(CH, X).trimEnd();
+    const churn = Array.from({ length: 20 }, (_, i) => {
+      const n = i + 1;
+      return `pad=$(printf 'x%.0s' $(seq 1 ${n})); printf '%s\\n%s' "$pad" '${mk}' > "${chFile}"; `
+        + `_sync_uuid ${ID}; _sync_uuid ${ID};`;
+    }).join(' ');
+    const out = h.sh(
+      `_sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; echo "SETTLED:$(_reg_get ${ID} uuid)"; `
+      + `${churn} echo "AFTER_CHURN:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; _sync_uuid ${ID}; echo "FINAL:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(/SETTLED:(\S+)/.exec(out)?.[1]).toBe(CH);
+    expect(/AFTER_CHURN:(\S+)/.exec(out)?.[1]).toBe(CH);
+    expect(/FINAL:(\S+)/.exec(out)?.[1]).toBe(CH);
+  });
 });
