@@ -255,6 +255,51 @@ describe('parseRoster', () => {
       warn.mockRestore();
     }
   });
+
+  // ── the fourth exec kind (2026-09-20 GPT-lane ownership design §4.1) ──
+  /** A minimal valid roster: the mandatory `upstream`, plus one `codex` lane
+   *  whose `exec` is `over` — so each gate below names exactly one field. */
+  const withCodex = (over: Record<string, unknown> = {}) => ({
+    version: 1,
+    accounts: [
+      {
+        id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      },
+      {
+        id: 'codex-a', label: 'team·codex', configDirSuffix: '.claude-codex-a',
+        exec: {
+          kind: 'codex', provider: 'openai',
+          proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/codex-a',
+          ...over,
+        },
+        homeAble: true, hue: 'violet', telemetry: 'codex',
+      },
+    ],
+  });
+
+  it('accepts a codex lane and keeps every field of its exec', () => {
+    const r = parseRoster(withCodex());
+    const e = r.byId.get('codex-a')!.exec;
+    expect(e.kind).toBe('codex');
+    expect(e).toEqual({
+      kind: 'codex', provider: 'openai',
+      proxyPort: 45010, litellmPort: 45011,
+      authDir: '.local/share/ccrc/codex/codex-a',
+    });
+  });
+
+  it('a codex lane may carry a secretsFile, like every other kind', () => {
+    const r = parseRoster(withCodex({ secretsFile: '.cc-secrets/codex-a.env' }));
+    expect((r.byId.get('codex-a')!.exec as { secretsFile?: string }).secretsFile)
+      .toBe('.cc-secrets/codex-a.env');
+  });
+
+  it('names codex in the unknown-kind refusal, so the remedy lists every legal value', () => {
+    expect(() => parseRoster(withCodex({ kind: 'wrapper' })))
+      .toThrow(/"upstream", "generated", "external" or "codex"/);
+  });
 });
 
 describe('exec.secretsFile is a path, not merely a string', () => {

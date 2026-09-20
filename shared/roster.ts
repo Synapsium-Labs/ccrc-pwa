@@ -139,7 +139,22 @@ export type ExecSpec =
     kind: 'generated'; secretsFile?: string; provider: ProviderId;
     baseUrl?: string; models?: ApiKeyModels;
   }
-  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string };
+  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string }
+  /** A ChatGPT/Codex subscription lane ccrc OWNS end to end: it writes the
+   *  launcher, installs the runtime, renders the LiteLLM config, publishes the
+   *  usage and removes all of it. Distinct from `external` — whose contract is
+   *  "ccrc records this launcher and never writes it" — and from `generated`,
+   *  whose contract is one wrapper in front of an API credential.
+   *
+   *  The three extra fields are TOPOLOGY: two loopback ports and the directory
+   *  holding the lane's OAuth. None can be derived, none may be defaulted (the
+   *  fallbacks in the shim this replaces are how one lane bound another lane's
+   *  ports and spent another account's subscription), and none may appear as a
+   *  real value in this public tree — they live in `~/.ccrc/accounts.json`. */
+  | {
+    kind: 'codex'; secretsFile?: string; provider: 'openai';
+    proxyPort: number; litellmPort: number; authDir: string;
+  };
 
 /** One account, as validated by `parseRoster`. */
 export interface AccountDef {
@@ -398,7 +413,7 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  a caller that never went through this parser). */
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
-const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
+const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
   ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
@@ -420,6 +435,12 @@ const EXEC_KEYS_EXTERNAL: ReadonlySet<string> =
   new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'baseUrl']);
 const EXEC_KEYS_GENERATED: ReadonlySet<string> =
   new Set([...EXEC_KEYS_EXTERNAL, 'models']);
+/** NOT in the containment chain above. A codex lane takes neither `baseUrl`
+ *  (its upstream is its own LiteLLM, on `litellmPort` — a second spelling is a
+ *  second thing to disagree) nor `models` (the class registry owns model
+ *  policy), and it takes three fields no other kind has. */
+const EXEC_KEYS_CODEX: ReadonlySet<string> =
+  new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'proxyPort', 'litellmPort', 'authDir']);
 /** Keyed so the call site is a lookup rather than a chain of ternaries, and so
  *  a fourth `ExecSpec` kind would be a compile error here before it was a
  *  silent fall-through to the wrong set. */
@@ -427,6 +448,7 @@ const EXEC_KEYS: Readonly<Record<ExecSpec['kind'], ReadonlySet<string>>> = {
   upstream: EXEC_KEYS_UPSTREAM,
   external: EXEC_KEYS_EXTERNAL,
   generated: EXEC_KEYS_GENERATED,
+  codex: EXEC_KEYS_CODEX,
 };
 
 /** Named in every remedy below, since `parseRoster` itself never sees a
@@ -549,15 +571,15 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
     throw new RosterError(
       `account "${id}" has a missing or invalid "exec".`,
       `Set "exec" for account "${id}" in ${ROSTER_PATH} to an object with a "kind" of ` +
-        '"upstream", "generated" or "external".',
+        '"upstream", "generated", "external" or "codex".',
     );
   }
   const kind = raw['kind'];
   if (typeof kind !== 'string' || !EXEC_KINDS.has(kind)) {
     throw new RosterError(
       `account "${id}" has an invalid exec.kind ${JSON.stringify(kind)}: it must be ` +
-        '"upstream", "generated" or "external".',
-      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated" or "external".`,
+        '"upstream", "generated", "external" or "codex".',
+      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated", "external" or "codex".`,
     );
   }
   warnUnknownKeys(raw, EXEC_KEYS[kind as ExecSpec['kind']], `on account "${id}"'s exec`);
@@ -596,6 +618,19 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
   const withSecrets = secretsFile !== undefined ? { secretsFile } : {};
 
   if (kind === 'upstream') return { kind: 'upstream', ...withSecrets };
+
+  if (kind === 'codex') {
+    // Field gates arrive in Tasks 2-4; this arm exists first so the union has a
+    // constructor and every later gate has one place to refuse from.
+    return {
+      kind: 'codex',
+      provider: 'openai',
+      proxyPort: raw['proxyPort'] as number,
+      litellmPort: raw['litellmPort'] as number,
+      authDir: raw['authDir'] as string,
+      ...withSecrets,
+    };
+  }
 
   // `provider`. Refused if present and unknown, on both remaining kinds; the
   // DEFAULT applies to `generated` only, because absent on `external` is the
