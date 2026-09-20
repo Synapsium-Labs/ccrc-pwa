@@ -1360,7 +1360,7 @@ Re-run any red one IN ISOLATION before calling it a break — both are on the kn
 | drop the `_CI_READ` gate | "re-reads nothing on a third tick" |
 | drop the `-s` check on the successor | "writes nothing when the successor transcript does not exist" |
 | drop the `claims` check in `_continued_in_of` | "prints nothing for a marker another session wrote" |
-| move `_follow_continued_in` above the pane read | a `/clear` rotation test in the existing suite |
+| move `_follow_continued_in` above the pane read | "the pane's stale sessionId does not undo a chain the follow just wrote" — the ONLY fixture that discriminates order, because in every other shape both orders answer the same uuid. Measured: without it the mutation reds nothing. |
 
 - [ ] **Step 6: Commit**
 
@@ -1736,6 +1736,8 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 | id | what |
 |---|---|
 | `D-TBD-ccd-one-hop` | The spec has `ccd` walk the continuation chain with a hop bound and a visited set within one call; Task 6 follows **one hop per supervise tick** instead, because each hop's quiescence must be observed before its file may be read. Same end state, and the per-stamp memo is the visited set. |
+| `D-TBD-ccd-tail-once` | The brief's own `_continued_in_of` piped `tail -c` into `grep` into a second `tail -1`, which invokes `tail` TWICE per examination and so fails the read-budget test the same task ships. The last non-empty line is taken with bash parameter expansion instead — one `tail` per quiescence, which is what the budget actually promises. Found by the Task 6 implementer while measuring. |
+| `D-TBD-ccd-pane-first` | The mutation "move `_follow_continued_in` above the pane read" went red nowhere, because no fixture combined a live pane-pid answer with a live continuation chain. It is not cosmetic: with the chain first, a pane still publishing the OLD id overwrites the successor the chain just wrote, every tick, and the registry never converges. Pinned by a fixture where the pane's sessions file still names the pre-fork uuid. |
 | `D-TBD-dispatch-stale-timer` | Pre-existing, found by Task 5's review and reproduced empirically: `dispatch` replaces the `timers` MAP ENTRY without clearing the old `setTimeout`, so a re-send through `resolve`/`retry` leaves the superseded cycle's deadline armed and it later deletes a pending that is legitimately back in flight — the "message vanishes while waiting" defect through the rescue path. The five-second horizon made it rare, not absent. Fixed by one `arm()` helper both arming sites go through. |
 | `D-TBD-clearconfirmed-timer` | Pre-existing: `clearConfirmed` drops a pending without cancelling its timer. Harmless at five seconds, a real per-message leak at the ten-minute horizon Task 5 introduces, and the timer is now the thing that ends the bubble — so Task 5 makes `clearConfirmed` report the keys it dropped and cancels them. |
 
