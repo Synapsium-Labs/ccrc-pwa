@@ -35,7 +35,7 @@
 // roster `parseRoster` genuinely throws on, asserted here rather than assumed,
 // so a case that stops being invalid on the TypeScript side cannot quietly
 // stop testing anything.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { spawnSync } from 'node:child_process';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -286,6 +286,57 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
     expect(Object.hasOwn(byId.get('up')!, 'proxyPort')).toBe(false);
     expect(Object.hasOwn(byId.get('up')!, 'litellmPort')).toBe(false);
     expect(Object.hasOwn(byId.get('up')!, 'authDir')).toBe(false);
+  });
+
+  it('accepts a codex lane with an invalid generic-only baseUrl on both sides', () => {
+    const spec = {
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+            authDir: '.local/share/ccrc/codex/codex-a', baseUrl: 'not-a-url',
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    };
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      expect(() => parseRoster(spec)).not.toThrow();
+    } finally {
+      warn.mockRestore();
+    }
+    expect(() => rosterFromJsonSync(spec)).not.toThrow();
+  });
+
+  it.each([
+    ['missing', undefined],
+    ['non-string', 7],
+  ])('gives the intended authDir diagnostic for a %s value', async (_label, authDir) => {
+    const { rosterFromJson } = await import('../../shared/roster-json.mjs');
+    const spec = {
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir,
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    };
+    expect(() => rosterFromJson(spec)).toThrow('missing or non-string exec.authDir');
   });
 
   it('accepts two codex lanes with four disjoint ports', async () => {

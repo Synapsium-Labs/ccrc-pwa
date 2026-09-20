@@ -79,13 +79,15 @@
 //     `process.exitCode` on import BY DESIGN as a one-shot CLI. A shared
 //     module a second caller merely imports must not inherit that exit
 //     status.
-//  3. `secretsFile` is validated on ALL THREE exec kinds, not only
-//     `generated` — and `provider`, `baseUrl` and `models` are validated and
-//     deliberately NOT returned. The two gates used to be conjoined with
-//     `kind === 'generated'` while the return spread the field unconditionally,
-//     which made this file LAXER than `parseRoster` on the exact direction its
-//     header above says cannot be tolerated (D-1855). The new fields are not
-//     returned because nothing downstream reads them: `generateAccountsSh`
+//  3. `secretsFile` is validated on ALL FOUR exec kinds, not only
+//     `generated` — including Codex, whose ccrc-owned launcher may source its
+//     optional file. `provider`, `baseUrl` and `models` are validated and
+//     deliberately NOT returned where they are legal. The two gates used to be
+//     conjoined with `kind === 'generated'` while the return spread the field
+//     unconditionally, which made this file LAXER than `parseRoster` on the
+//     exact direction its header above says cannot be tolerated (D-1855). The
+//     new fields are not returned because nothing downstream reads them:
+//     `generateAccountsSh`
 //     emits ids, home-ability, `CCRC_MEASURED`, the upstream id, config dirs,
 //     labels and hues, and `generateWrapperBody` reads `id`,
 //     `configDirSuffix`, `execKind` and `secretsFile`.
@@ -289,7 +291,8 @@ function checkAccount(raw, index) {
   // entry carrying `'/etc/shadow'` or `'../.ssh/id_ed25519'` passed validation
   // untouched and reached `deploy/gen-wrappers.mjs`'s manifest. Latent while no
   // roster put the field on a non-generated entry; `parseRoster` now makes it
-  // legal on all three kinds, which is what created the callers.
+  // legal on all four kinds, including the ccrc-owned Codex launcher, which is
+  // what created the callers.
   if (exec['secretsFile'] !== undefined && typeof exec['secretsFile'] !== 'string') {
     bad(`account "${id}" has a non-string exec.secretsFile.`,
       `Set exec.secretsFile for account "${id}" to a string path relative to $HOME, or remove it.`);
