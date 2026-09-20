@@ -30,9 +30,12 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **Link:** ONE authenticated WebSocket (bearer token, agent :7789). The server **never SSHes the fleet box at
   runtime** — it drives the fleet only through whitelisted agent frames. `local` mode (default, dev) shells out
   to ccd/tmux on the server's own box and never touches the agent.
-- **Tailscale is NOT part of the machinery.** No shipped code invokes the `tailscale` binary — every hit in
-  `server/src`, `ccd/`, `deploy/` is a **comment** naming `tailscale serve` as one *example* of a TLS-terminating
-  proxy ("`tailscale serve` and Caddy alike"), and no doctor check requires it. Never add a tailnet dependency,
+- **Tailscale is NOT part of the machinery.** No shipped code invokes the `tailscale` binary. The hits in
+  `server/src`, `ccd/`, `deploy/` are comments and message strings naming `tailscale serve` as one *example* of a
+  TLS-terminating proxy ("`tailscale serve` and Caddy alike"), the `ts.net`/`tailscale.net` entries in `webauthn.ts`'s
+  `PUBLIC_SUFFIX_TRAPS` (a refusal list), and one systemd ORDERING line — `After=… tailscaled.service` in
+  `ccd/claude-session@.service`, which nothing `Wants=` or `Requires=`, so the unit starts without it. No doctor check
+  requires it. Never add a tailnet dependency,
   and never read a live `tailscale serve` mapping on a box as the product's path — those are operator plumbing
   this tree does not know about. The one place a tailnet is still load-bearing is **outside ccrc**: the
   docs-preview convention in the operator's global `CLAUDE.md` serves `/docs` over the tailnet only, from a
@@ -42,7 +45,7 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **NEVER run destructive `ccd` verbs against the live host:** `ws-rm`, `ws-reap`, `ws-gc --prune`,
   `ws-archive`/`ws-restore`. `ws-rm`, `ws-reap`, `ws-gc --prune` delete workspaces/branches/clips;
   `ws-archive`/`ws-restore` delete nothing but cost the tmux pane — scrollback and any in-flight turn
-  (`ccd/ccd:2643`). All five forbidden; `ws-reap` is **human-only by contract**.
+  (`cmd_ws_archive`'s header in `ccd/ccd`). All five forbidden; `ws-reap` is **human-only by contract**.
 - **NEVER touch tmux, `~/.cc-sessions`, `~/.cc-limits`, or `claude-session@*.service` directly.** Each unit is a
   long-lived `ccd supervise`; killing/overwriting one out of band breaks the live fleet. ONE scoped exception
   (operator ruling 2026-08-21, R1): `ccrc update`'s step-4 supervisor sweep (`_upd_sweep`) and deploy.sh's
@@ -56,8 +59,8 @@ real values: `deploy/reference-fleet.md` (gitignored).
 - **NEVER print secret file CONTENTS.** The box/mail token is one shared secret per box
   (`~/.cc-secrets/ccrc-mail.token` on fleet host, `~/.ccrc/mail.token` on server), from one gitignored
   `deploy/ccrc-mail.token`. Existence checks by `ls` only. The committed `.example` placeholder is refused at boot
-  (`MailTokenPlaceholderUnedited`) — this repo is **bound for public release**, the flip gated on operator go
-  (Stage 5 S3): treat it as public.
+  (`MailTokenPlaceholderUnedited`) — this repo is **public** (AGPL-3.0 since 2026-08-22: `LICENSE`, `CONTRIBUTING.md`,
+  `SECURITY.md`): treat everything in it as public.
 - **`gh` has NO exec-whitelist entry, deliberately** — the host `gh` token has `repo` WRITE scope and there's no
   cwd sandbox, so one grant is the sole gate between the PWA and `gh pr merge`. Never add one. (See `agent/CLAUDE.md`.)
 - **Identity on the fleet is attribution, not authentication:** single UNIX user, ccd has no caller auth. The
@@ -119,7 +122,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
   file's IMPORTS, not its path — check a file by reading its import block. L0 `shared/*.ts` imports NOTHING (not
   even `node:*`) — the reason is that the PWA bundles those files, so deploy-side `shared/*.mjs`, which it never
-  imports, may use `node:*` (`shared/mark.mjs:30`); L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
+  imports, may use `node:*` (`shared/mark.mjs`'s `node:crypto` import); L1 policy = pure decisions, no `fs`/fastify/`reply`; L2 ports
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
   distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
   DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
