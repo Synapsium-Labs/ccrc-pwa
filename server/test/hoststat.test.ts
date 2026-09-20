@@ -6,11 +6,15 @@
 // protect: NOT MEASURED is not 0%.
 import { describe, it, expect } from 'vitest';
 import {
+  createHostSampler,
   cpuBetween,
   hostStatFailed,
   hottestCpus,
   parseMeminfo,
   parseProcStat,
+  type HostFileRead,
+  type HostProbe,
+  type HostStatFailure,
 } from '../../shared/hoststat.js';
 
 // Two readings of a two-CPU box 100 jiffies apart: the box is 50% busy over the
@@ -154,5 +158,98 @@ describe('hostStatFailed', () => {
   it('fails both halves with one reason, from one writer', () => {
     const stat = hostStatFailed('offline', 42);
     expect(stat).toEqual({ at: 42, cpu: { ok: false, why: 'offline' }, mem: { ok: false, why: 'offline' } });
+  });
+});
+
+/** A probe with no clock of its own: `sleep` ADVANCES the fake clock, so a test
+ *  can assert the window a reading claims without waiting for it. */
+function fakeProbe(plan: {
+  stat?: readonly (string | HostStatFailure)[];
+  meminfo?: string | HostStatFailure;
+  startAt?: number;
+}): { probe: HostProbe; reads: string[]; clock: { t: number } } {
+  const reads: string[] = [];
+  const clock = { t: plan.startAt ?? 1_000_000 };
+  let statIndex = 0;
+  const answer = (v: string | HostStatFailure | undefined): HostFileRead => {
+    if (v === undefined) return { ok: false, reason: 'absent' };
+    if (v === 'absent' || v === 'unreadable') return { ok: false, reason: v };
+    return { ok: true, content: v };
+  };
+  return {
+    reads,
+    clock,
+    probe: {
+      read: async (p: string): Promise<HostFileRead> => {
+        reads.push(p);
+        if (p.endsWith('/meminfo')) return answer(plan.meminfo ?? MEMINFO);
+        const list = plan.stat ?? [STAT_A, STAT_B];
+        // The last entry repeats: a sampler asked twice more than the fixture
+        // plans for reads a file that simply stopped changing, which is a real
+        // condition and not a fixture running out.
+        const v = list[Math.min(statIndex++, list.length - 1)];
+        return answer(v);
+      },
+      now: () => clock.t,
+      sleep: async (ms: number): Promise<void> => { clock.t += ms; },
+    },
+  };
+}
+
+describe('createHostSampler', () => {
+  it('takes a PAIR on the first call and reports over the interval it slept', async () => {
+    const { probe, reads, clock } = fakeProbe({});
+    const stat = await createHostSampler(probe, { windowMs: 400 })();
+    expect(reads.filter((p) => p.endsWith('/stat'))).toHaveLength(2);
+    expect(stat.cpu.ok && stat.cpu.total).toBe(50);
+    expect(stat.cpu.ok && stat.cpu.windowMs).toBe(400);
+    expect(stat.at).toBe(clock.t);
+  });
+
+  it('reuses the previous sample on the next poll — ONE read, and the window is the poll interval', async () => {
+    const { probe, reads, clock } = fakeProbe({ stat: [STAT_A, STAT_A, STAT_B] });
+    const sample = createHostSampler(probe, { windowMs: 400, reuseMinMs: 900, reuseMaxMs: 60_000 });
+    await sample();
+    const before = reads.length;
+    clock.t += 6_000;
+    const stat = await sample();
+    expect(reads.length - before).toBe(2);          // one /proc/stat, one /proc/meminfo
+    expect(stat.cpu.ok && stat.cpu.windowMs).toBe(6_000);
+  });
+
+  it('takes a fresh pair when the previous sample is too old to trust', async () => {
+    const { probe, reads, clock } = fakeProbe({ stat: [STAT_A, STAT_A, STAT_A, STAT_B] });
+    const sample = createHostSampler(probe, { windowMs: 400, reuseMaxMs: 60_000 });
+    await sample();
+    const before = reads.filter((p) => p.endsWith('/stat')).length;
+    clock.t += 10 * 60_000;
+    await sample();
+    expect(reads.filter((p) => p.endsWith('/stat')).length - before).toBe(2);
+  });
+
+  it('keeps absent and unreadable apart — the first says "not Linux", the second says "fix the permissions"', async () => {
+    const absent = await createHostSampler(fakeProbe({ stat: ['absent'], meminfo: 'absent' }).probe)();
+    const denied = await createHostSampler(fakeProbe({ stat: ['unreadable'], meminfo: 'unreadable' }).probe)();
+    expect(absent.cpu.ok === false && absent.cpu.why).toBe('absent');
+    expect(denied.cpu.ok === false && denied.cpu.why).toBe('unreadable');
+    expect(absent.mem.ok === false && absent.mem.why).toBe('absent');
+    expect(denied.mem.ok === false && denied.mem.why).toBe('unreadable');
+  });
+
+  it('fails the two halves INDEPENDENTLY — an unreadable meminfo does not blank the cpu row', async () => {
+    const stat = await createHostSampler(fakeProbe({ meminfo: 'unreadable' }).probe)();
+    expect(stat.cpu.ok).toBe(true);
+    expect(stat.mem.ok === false && stat.mem.why).toBe('unreadable');
+  });
+
+  it('calls a file that never moves unparsable rather than reporting 0%', async () => {
+    const stat = await createHostSampler(fakeProbe({ stat: [STAT_A] }).probe)();
+    expect(stat.cpu.ok === false && stat.cpu.why).toBe('unparsable');
+  });
+
+  it('reads exactly the two files, under the root it was given, and never a path from a caller', async () => {
+    const { probe, reads } = fakeProbe({});
+    await createHostSampler(probe, { procRoot: '/fixture/proc' })();
+    expect(new Set(reads)).toEqual(new Set(['/fixture/proc/stat', '/fixture/proc/meminfo']));
   });
 });

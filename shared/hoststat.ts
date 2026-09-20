@@ -262,6 +262,68 @@ export function parseMeminfo(text: string): HostMemReading | null {
   };
 }
 
+/**
+ * A sampler bound to one probe, holding the previous `/proc/stat` reading so a
+ * poll that arrives while it is still fresh costs ONE read and no sleep, and
+ * reports over the poll's own interval instead of a 400ms burst. The first
+ * poll, and any poll after a long quiet spell, takes the pair itself.
+ *
+ * The state is per-sampler, not module-global, so a test owns its own and two
+ * of them never share a window.
+ */
+export function createHostSampler(probe: HostProbe, opts: HostSamplerOptions = {}): () => Promise<HostStat> {
+  const procRoot = opts.procRoot ?? '/proc';
+  const windowMs = opts.windowMs ?? HOST_WINDOW_MS;
+  const reuseMinMs = opts.reuseMinMs ?? HOST_REUSE_MIN_MS;
+  const reuseMaxMs = opts.reuseMaxMs ?? HOST_REUSE_MAX_MS;
+  let previous: CpuSample | null = null;
+
+  const readSample = async (): Promise<CpuSample | HostStatFailure> => {
+    const r = await probe.read(`${procRoot}/stat`);
+    if (!r.ok) return r.reason;
+    const parsed = parseProcStat(r.content);
+    if (parsed === null) return 'unparsable';
+    return { ...parsed, at: probe.now() };
+  };
+
+  const readCpu = async (): Promise<HostCpu> => {
+    const first = await readSample();
+    if (typeof first === 'string') return { ok: false, why: first };
+    const prior = previous;
+    previous = first;
+    if (prior !== null) {
+      const age = first.at - prior.at;
+      if (age >= reuseMinMs && age <= reuseMaxMs) {
+        const reading = cpuBetween(prior, first);
+        if (reading !== null) return { ok: true, ...reading };
+      }
+    }
+    await probe.sleep(windowMs);
+    const second = await readSample();
+    if (typeof second === 'string') return { ok: false, why: second };
+    previous = second;
+    const reading = cpuBetween(first, second);
+    // A pair taken deliberately apart that still says nothing is a file whose
+    // counters do not advance — not a reading, and not a zero.
+    return reading === null ? { ok: false, why: 'unparsable' } : { ok: true, ...reading };
+  };
+
+  const readMem = async (): Promise<HostMem> => {
+    const r = await probe.read(`${procRoot}/meminfo`);
+    if (!r.ok) return { ok: false, why: r.reason };
+    const parsed = parseMeminfo(r.content);
+    return parsed === null ? { ok: false, why: 'unparsable' } : { ok: true, ...parsed };
+  };
+
+  return async (): Promise<HostStat> => {
+    // Memory is awaited alongside: it never sleeps, so running it concurrently
+    // with the CPU pair costs nothing and keeps one slow read from deciding the
+    // other's fate.
+    const [cpu, mem] = await Promise.all([readCpu(), readMem()]);
+    return { at: probe.now(), cpu, mem };
+  };
+}
+
 /** A whole reading that failed for one reason — the shape every adapter
  *  answers with when it never got as far as the box (`offline`, `timeout`,
  *  `unsupported`). One writer, so the two halves can never drift apart. */
