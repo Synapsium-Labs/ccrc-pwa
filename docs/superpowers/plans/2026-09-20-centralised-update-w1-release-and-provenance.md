@@ -1891,8 +1891,16 @@ In `updateEnv`, after the `python3` stub, plant the `node` shim (the real node i
 ```
 with `const REAL_NODE = realPath('node');` beside `RSYNC` at the top of the file.
 
+In `healthyBox`'s combined curl stub, inside the `local://*)` arm and BEFORE its `[ ! -f "$src" ]` check, add a fixture-driven failure for bundle URLs — the stub answers 404 for anything that is not a regular file, so a "download failed for another reason" can only be modelled by an explicit exit code:
+
+```ts
+    '    case "$url" in *.sigstore.json)',
+    '      if [ -f "$HOME/fixture-curl-exit" ]; then IFS= read -r c < "$HOME/fixture-curl-exit"; echo "curl: ($c) fixture failure for $url" >&2; exit "$c"; fi ;;',
+    '    esac',
+```
+
 Run: `cd server && ./node_modules/.bin/vitest run test/ccrc-update.test.ts`
-Expected: still green (the shim execs the real node; the extra bundle file is ignored by today's code).
+Expected: still green (the shim execs the real node; the extra bundle file is ignored by today's code; no test writes `fixture-curl-exit` yet).
 
 - [ ] **Step 2: Write the failing tests**
 
@@ -2599,13 +2607,13 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     const home = freshUpdateBox('ccrc-update-prov-net-');
     plantOldBox(home, { version: 'v1.0.0' });
     packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
-    // The stub curl exits 22 for a missing file; a directory in the bundle's
-    // place makes `cp` fail (exit 1) — the not-a-404 shape.
-    const b = join(home, 'releases', 'latest', 'download', 'ccrc-v2.0.0.tar.gz.sigstore.json');
-    rmSync(b); mkdirSync(b);
+    // The stub curl exits 22 for a missing file (curl's own 404 shape); the
+    // fixture exit models every other failure — here curl's 7, "could not
+    // connect" — which is NOT absence and which --allow-unsigned never admits.
+    writeFileSync(join(home, 'fixture-curl-exit'), '7\n');
     const r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/download failed: .*sigstore\.json \(curl exit 1, not a 404/);
+    expect(r.stderr).toMatch(/download failed: .*sigstore\.json \(curl exit 7, not a 404/);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 });
