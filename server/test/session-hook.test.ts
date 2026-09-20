@@ -9024,9 +9024,31 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:2455',
         'ccd/ccd:2793',
         'ccd/session-hook.sh:802',
-        'ccd/ccd:5725',
         'ccd/ccd:5385-5388',
         'ccd/ccd:4642-4653',
+        // RE-MEASURED AGAIN on the forked-session-transcript branch, under the
+        // SAME standing rule (S6-R11): the set is measured against the tree and
+        // never adjusted to keep a number green, and re-anchoring the citations
+        // themselves is still Task 11's. No ruling id of its own, because
+        // nothing about the rule changed. This branch's one hunk above these
+        // anchors — `+17` lines at `ccd/ccd:4921`, `_ws_status`'s new arm — moves
+        // the joined-row stale set by a SWAP, not a count: 55 -> 55. Both movers
+        // are COINCIDENCES in the class this comment already records, and each
+        // was MEASURED at both trees by byte-equality rather than inferred:
+        //   `ccd/ccd:5725` DEPARTS. Tip `:5725` is byte-identical to base
+        //     `:5708` — a comment line carrying a token its row quotes — where
+        //     base `:5725` was the bare `    #`, which carried none.
+        //   `ccd/ccd:5353-5362` ARRIVES. Tip `:5353-5362` is byte-identical to
+        //     base `:5336-5345`, the body of `_gh_rows_ok` (`:5346`), where base
+        //     `:5353-5362` was the `python3 /dev/fd/3 "$@" 3<<PY` heredoc whose
+        //     comment happened to carry one.
+        // NEITHER row was edited by this branch, and — the point — NEITHER
+        // citation named its referent at EITHER tree: `_ws_slug_residue` stands
+        // at `:6313` -> `:6331` and `cmd_ws_add`'s usage line at `:6701` ->
+        // `:6719`, so both anchors were already stale on the base and pass or
+        // fail on whatever unrelated line stands underneath them. Same class as
+        // the `:6838` repair round 3 recorded and round 4 lost again.
+        'ccd/ccd:5353-5362',
       ]);
     // AND THE REACH THIS PASS ADDS, measured by SITE — document line plus
     // reference, because the same `file:N` is cited from several paragraphs and
@@ -9138,7 +9160,14 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2220 ccd/session-hook.sh:993',
         'spec:2220 ccd/ccd:3050',
         'spec:2220 ccd/ccd:3050',
-        'spec:2222 ccd/ccd:5725',
+        // `spec:2222 ccd/ccd:5725` LEAVES this overlap list for the one reason
+        // the `|`-row set above records in full: this branch's `+17` at
+        // `ccd/ccd:4921` slid base `:5708` — a comment line carrying a token the
+        // row quotes — under the `:5725` anchor, so the row stopped failing. A
+        // coincidence, not a re-anchor; the citation still does not name
+        // `cmd_ws_add`'s usage line, which stands at `:6719`. The arriving
+        // `ccd/ccd:5353-5362` does NOT appear here, because it is reachable by
+        // no other pass. Same standing rule, no ruling id (S6-R11).
         'spec:2222 ccd/ccd:5385-5388',
       ]);
   });
