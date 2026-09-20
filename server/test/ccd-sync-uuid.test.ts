@@ -239,21 +239,73 @@ describe('_sync_uuid follows a fork', () => {
     expect(h.reg(ID, 'uuid')).toBe(C);
   });
 
-  it('a cycle stops after one lap instead of flapping the registry', () => {
-    // Review round, F1/F2. A -> B -> A, with DISTINCT sizes (mtime need not
-    // coincide at all here — only F1/F2's shared-stamp case needs that).
-    // Keyed by the stamp alone, the registry flaps forever once the chain
-    // returns to A: on a live fleet, one `_reg_set` every two ticks. Keyed by
-    // uuid+stamp, returning to a (uuid, stamp) pair already in the visited
-    // set stops the walk there. Traced by hand for this exact fixture: the
-    // fixed implementation converges by tick 6 and STAYS there — asserting on
-    // tick 7 (an odd tick, inside the old code's 4-tick flap period) is what
-    // actually discriminates a fix from a mutant that still flaps.
+  it('a hop does not inherit its predecessor’s observation', () => {
+    // Second review round finding (V4): a structural variant that keeps
+    // `_CI_LAST[id]` as the bare stamp while `_CI_DONE`/`_CI_WALK` keep the
+    // full uuid+stamp key stays GREEN on every other fixture in this file,
+    // because it only shows on the shared-stamp fixture. A and B share a
+    // stamp, so a variant that judges quiescence by the bare stamp alone
+    // sees tick 3's "B:sharedStamp" as ALREADY equal to what it recorded at
+    // tick 2 (A's bare stamp, identical) — it hops to C a tick early, at
+    // tick 3, without ever having judged B's OWN two ticks of quiescence.
+    // Measured against that variant: registry reaches C at tick 3, not 4.
+    // The fix must observe B in its own right: tick 3 records A's
+    // (uuid,stamp) hop, reads A and hops to B, still landing on B; only
+    // tick 4 re-observes B as unchanged and reads its own tail to reach C.
+    const C = 'c'.repeat(36);
+    const stamp = Date.now() / 1000 - 600;
+    row('/w', A);
+    plantAt('/w', A, marker(A, B), stamp);
+    plantAt('/w', B, marker(B, C), stamp);
+    plant('/w', C, turnLine('three'));
+    // ALL FOUR TICKS IN ONE PROCESS (the memo lives in shell variables — see
+    // `ticks`'s own comment), with the tick-3 registry value captured
+    // mid-script so both checkpoints are visible without a second process.
+    const out = h.sh(
+      `_sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; echo "AT3:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "AT4:$(_reg_get ${ID} uuid)"`,
+    );
+    const at3 = /AT3:(\S+)/.exec(out)?.[1];
+    const at4 = /AT4:(\S+)/.exec(out)?.[1];
+    expect(at3).toBe(B);
+    expect(at4).toBe(C);
+  });
+
+  it('a cycle stops without ever completing a second lap', () => {
+    // Review round, F1/F2, THEN the second review round's bounded-memo
+    // rewrite (`_CI_WALK`). A -> B -> A, with DISTINCT sizes (mtime need not
+    // coincide at all here — only the shared-stamp case above needs that).
+    //
+    // Measured trace over 12 ticks with the CURRENT (bounded-walk)
+    // implementation: `a b b b b b b b b b b b` — ONE write (A->B at tick 2),
+    // then permanent silence. `_ci_walk_add` records A on the walk the moment
+    // it is examined (tick 2); when the chain is next asked to hop B->A
+    // (tick 4), A is already on that walk, so the hop is refused BEFORE it
+    // happens — the cycle never completes a second lap back to A at all. This
+    // is a stricter stop than the first review round's global-set fix, which
+    // let the walk return to A once (two writes: A->B, then B->A) before
+    // recognising the repeat and going silent from there — both are correct
+    // (neither flaps forever), but the exact trace changed with the bounded
+    // rewrite, which is why this asserts the MEASURED value rather than the
+    // one the previous round measured.
     row('/w', A);
     plant('/w', A, `${turnLine('start-A')}${marker(A, B)}`);   // longer body
     plant('/w', B, marker(B, A));                              // shorter body
-    ticks(7);
-    expect(h.reg(ID, 'uuid')).toBe(A);
+    // Checkpoint at tick 4 — the tick where B's second hop (back to A) would
+    // fire — is the one that actually discriminates the walk guard: with it,
+    // the hop is refused and the registry stays at B; without it (the cycle
+    // flapping unboundedly, period 4), tick 4 lands on A. A LATER checkpoint
+    // alone does not discriminate reliably — this fixture's flap period is 4
+    // ticks, so an assertion at a tick that happens to fall on the same
+    // residue the flap would also produce (measured: tick 7's residue is `B`
+    // under both the fix and the walk-guard-dropped flap) passes either way
+    // and pins nothing. Both ticks are asserted in ONE process.
+    const out = h.sh(
+      `_sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; echo "AT4:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; _sync_uuid ${ID}; echo "AT8:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(/AT4:(\S+)/.exec(out)?.[1]).toBe(B);
+    expect(/AT8:(\S+)/.exec(out)?.[1]).toBe(B);
   });
 
   it('follows a chain whose CURRENT transcript sits only at the raw spelling', () => {

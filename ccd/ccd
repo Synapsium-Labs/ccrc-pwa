@@ -15518,26 +15518,59 @@ CONTINUED_IN_TAIL_BYTES=8192
 # need no registry file; a supervisor restart forgets them and costs one extra
 # read, never a wrong answer.
 #
-# REVIEW ROUND (F1/F2): keyed by the STAMP ALONE, these two collapsed two
-# different questions onto one string and both failures were measured, not
-# argued. A->B->C where A's and B's transcripts share a byte size and an
+# REVIEW ROUND (F1/F2): keyed by the STAMP ALONE, the original pair collapsed
+# two different questions onto one string and both failures were measured,
+# not argued. A->B->C where A's and B's transcripts share a byte size and an
 # mtime second: after the hop to B, B's stamp equals the one just recorded
-# for A, `_CI_READ[stamp]` already says "read", and B's own tail is never
-# examined — the walk is pinned on a dead intermediate transcript forever.
-# A->B->A with distinct sizes: the registry uuid FLAPS forever, one
-# `_reg_set` every two ticks, because nothing ever recognises "A" the second
-# time around as the same file already examined the first time. Both are
-# closed by keying on the PAIR, not the stamp alone:
-#   - `_CI_LAST[id]` holds `"$uuid:$st"` — a hop changes the uuid half, so the
-#     new file's quiescence is judged on its OWN two ticks, never inherited
-#     from the file the walk just left.
-#   - `_CI_READ["$uuid:$st"]` is a genuine visited SET of (file, content)
-#     pairs, not one slot per id — two different files that happen to share a
-#     stamp get two different keys, and returning to a file already examined
-#     (a cycle) hits the SAME key it left behind and stops there, after one
-#     lap, rather than re-reading and re-writing forever.
+# for A, the old `_CI_READ[stamp]` already said "read", and B's own tail was
+# never examined — the walk pinned itself on a dead intermediate transcript
+# forever. A->B->A with distinct sizes: the registry uuid FLAPPED forever,
+# one `_reg_set` every two ticks, because nothing recognised "A" the second
+# time around as the same file already examined the first time.
+#
+# SECOND REVIEW ROUND: the first fix closed both by making `_CI_READ` a
+# global SET keyed on `"$uuid:$st"` — correct, but unbounded, and measured to
+# grow without limit: a stamp changing every two ticks (a session that keeps
+# rotating, not merely forking once) produced ~100 entries per 200 ticks,
+# roughly 8,640/day at the 5s tick, on a box with an OOM history
+# (`ccd-graph-sweep`). Neither F1 nor F2 ever required a GLOBAL set — a
+# per-session record bounded by CHAIN LENGTH, not by TICK COUNT, closes both
+# just as well:
+#   - `_CI_LAST[id]` holds `"$uuid:$st"` observed on the PREVIOUS tick — a hop
+#     changes the uuid half, so the new file's quiescence is judged on its
+#     OWN two ticks, never inherited from the file the walk just left (F1).
+#   - `_CI_DONE[id]` holds the LAST "$uuid:$st" this id actually EXAMINED —
+#     enough to stop re-reading a file whose content has not changed since
+#     the last read; it does not need history, because cycle detection is
+#     `_CI_WALK`'s job, not this one's.
+#   - `_CI_WALK[id]` is the uuids visited on the CURRENT walk, newest last,
+#     capped at the last `_CI_WALK_CAP`. Before hopping to a candidate
+#     successor, the walk is checked: a candidate already on it stops the
+#     walk right there (F2) — no history beyond the cap survives, so this is
+#     a fixed ~600 bytes per session forever, not a growing log. A cycle
+#     longer than the cap is pathological disk data; with the cap, the worst
+#     case is re-following such a cycle once every `_CI_WALK_CAP` hops,
+#     rather than once every two ticks before this memo existed — a decision,
+#     not an accident.
 declare -A _CI_LAST=()   # id -> "$uuid:$st" observed on the PREVIOUS tick
-declare -A _CI_READ=()   # "$uuid:$st" -> 1 once that (file, content) pair has been read
+declare -A _CI_DONE=()   # id -> the LAST "$uuid:$st" actually examined
+declare -A _CI_WALK=()   # id -> uuids visited on the current walk, space-joined, newest last
+_CI_WALK_CAP=16
+
+_ci_walk_has() {   # id uuid -> 0 iff uuid is already on id's current walk
+  local id="$1" cand="$2" w
+  for w in ${_CI_WALK[$id]:-}; do [[ "$w" == "$cand" ]] && return 0; done
+  return 1
+}
+
+_ci_walk_add() {   # id uuid -> record uuid on id's walk, capped at the last _CI_WALK_CAP
+  local id="$1" u="$2"
+  _ci_walk_has "$id" "$u" && return 0
+  local -a words=(${_CI_WALK[$id]:-} "$u")
+  local n=${#words[@]}
+  (( n > _CI_WALK_CAP )) && words=("${words[@]: -$_CI_WALK_CAP}")
+  _CI_WALK["$id"]="${words[*]}"
+}
 
 # F3 (review round): resolving the transcript path costs a `_reg_get workdir`
 # fork, an `_ws_realpath` subshell-plus-stat and two munges — paid on EVERY
@@ -15545,10 +15578,16 @@ declare -A _CI_READ=()   # "$uuid:$st" -> 1 once that (file, content) pair has b
 # hops. Measured before this memo: `_follow_continued_in` added +12.8 ms per
 # session per tick (50-tick measurement, this box) against `_transcript_path`'s
 # own 15.5 ms — 83% of the cost this function exists to avoid paying every
-# five seconds. Keyed by "$id:$uuid" so a hop (a new uuid) still resolves for
-# real exactly once, and every tick after that — for either uuid — is a hash
-# lookup plus the one `stat` the quiescence gate needs anyway.
-declare -A _CI_PATH=()   # "$id:$uuid" -> the resolved transcript path, once found
+# five seconds. Keyed by "$cfg:$id:$uuid" so a hop (a new uuid) still resolves
+# for real exactly once, and every tick after that — for either uuid — is a
+# hash lookup plus the one `stat` the quiescence gate needs anyway. `cfg` is
+# in the key even though no writer of `wrapper` can flip it under a live
+# supervised session TODAY (`cmd_swap` stops the unit before the flip, which
+# kills this memo along with the process) — this function RECEIVES `cfg`
+# fresh every tick, and a memo that quietly drops a distinction its caller
+# handed it is the exact shape this codebase's "an adapter may not narrow a
+# distinction it received" rule exists to forbid, reachable or not today.
+declare -A _CI_PATH=()   # "$cfg:$id:$uuid" -> the resolved transcript path, once found
 
 _ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
   # F4 (review round): mirrors `_transcript_path`'s first two rungs ONLY — the
@@ -15619,13 +15658,14 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # read waits for the file to STOP changing: one stat per tick (once the path
   # is resolved — see `_CI_PATH` above), and one 8 KiB read per quiescence. A
   # busy session pays nothing; a frozen one pays once. A chain of forks
-  # therefore converges over a few ticks rather than in one call, and the
-  # per-(uuid,stamp) memo IS the visited set: a cycle returns to a pair it has
-  # already recorded and stops there, after one lap, rather than re-reading or
-  # flapping the registry forever (see the F1/F2 comment above `_CI_LAST`).
-  local id="$1" cfg="$2" uuid pk f st key prev next sf
+  # therefore converges over a few ticks rather than in one call: `_CI_DONE`
+  # stops a re-read of unchanged content, and `_CI_WALK` — bounded, not the
+  # tick-unbounded set the first review round measured as a leak — stops a
+  # cycle before it re-enters a uuid already on the current walk (see the
+  # F1/F2 comment above `_CI_LAST`).
+  local id="$1" cfg="$2" uuid pk f st key prev done_key next sf
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
-  pk="$id:$uuid"
+  pk="$cfg:$id:$uuid"
   f="${_CI_PATH[$pk]:-}"
   if [[ -z "$f" ]]; then
     f=$(_ci_transcript_path "$id" "$cfg" "$uuid") || return 0
@@ -15637,13 +15677,16 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   prev="${_CI_LAST[$id]:-}"
   _CI_LAST["$id"]="$key"
   [[ "$key" == "$prev" ]] || return 0                  # still growing, or just hopped — look again next tick
-  [[ -n "${_CI_READ[$key]:-}" ]] && return 0            # this exact (file, content) pair has already been read
-  _CI_READ["$key"]=1
+  done_key="${_CI_DONE[$id]:-}"
+  [[ "$key" == "$done_key" ]] && return 0              # unchanged since the last read — nothing new to examine
+  _CI_DONE["$id"]="$key"
+  _ci_walk_add "$id" "$uuid"
   next=$(_continued_in_of "$f" "$uuid")
   [[ -n "$next" ]] || return 0
+  _ci_walk_has "$id" "$next" && return 0                # already on this walk — a cycle, stop here
   sf=$(_ci_transcript_path "$id" "$cfg" "$next") || return 0   # tried both spellings, same as the current file
   [[ -s "$sf" ]] || return 0                                    # announced but not yet written
-  _CI_PATH["$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
+  _CI_PATH["$cfg:$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
   _reg_set "$id" uuid "$next"
   return 0
 }
