@@ -8,6 +8,7 @@ import type {
   AgentReady,
   AgentReq,
   CapsReq,
+  HostStatReq,
   ExecReq,
   PtyData,
   PtyExit,
@@ -28,6 +29,7 @@ import type {
   WriteB64Req,
 } from '../../shared/agent-protocol.js';
 import { parseCcdCaps } from '../../shared/agent-protocol.js';
+import type { HostStat } from '../../shared/hoststat.js';
 import { parseBuildInfo, type BuildInfo } from '../../shared/buildinfo.js';
 import { bodyDigest } from '../../shared/mark.mjs';
 import {
@@ -44,6 +46,7 @@ import {
   type PathKindResult,
   type StatResult,
 } from './fileops.js';
+import { createAgentHostSampler } from './hoststat.js';
 import { isSessionIdAllowed, spawnFleetPty, type PtyProcess, type PtySpawn } from './pty.js';
 import { openTail, type TailHandle } from './tail.js';
 import { checkPath, isExecAllowed, type WhitelistConfig } from './whitelist.js';
@@ -63,6 +66,10 @@ export interface AgentOpts {
   projectsRoot?: string;    // whitelist root for fleet project checkouts
   helloTimeoutMs?: number;  // default 3000 — override for fast tests only
   spawnPty?: PtySpawn;      // default spawnFleetPty (real node-pty) — tests inject a fake spawn
+  /** Where `hostStat` reads its two files. Default `/proc`; a test points it at
+   *  a fixture directory so the numbers it asserts are numbers it wrote. NOT a
+   *  whitelist root and not reachable from any request — see `hoststat.ts`. */
+  procRoot?: string;
 }
 
 export interface RunningAgent {
@@ -294,6 +301,9 @@ interface ConnCtx {
   ptys: Map<number, PtyEntry>;
   nextPtyId: number;
   spawnPty: PtySpawn;
+  /** The process-wide sampler, handed in by reference so every connection
+   *  shares one previous-sample window (`hoststat.ts`). */
+  hostStat: () => Promise<HostStat>;
 }
 
 async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: VerbCache): Promise<void> {
@@ -301,6 +311,14 @@ async function handleReq(ws: WebSocket, req: AgentReq, ctx: ConnCtx, verbCache: 
     case 'caps': {
       const verbs = await refreshVerbs(verbCache, ctx.cfg.home);
       send(ws, { t: 'res', id: req.id, ok: true, verbs });
+      return;
+    }
+    case 'hostStat': {
+      // No `checkPath` because there is no path: this op reads two fixed files
+      // and answers a computed reading. It never rejects — a box with no
+      // `/proc` answers a reading whose halves say WHY they are empty, which
+      // the server can render, unlike a `forbidden` it would have to guess at.
+      send(ws, ok(req.id, { stat: await ctx.hostStat() }));
       return;
     }
     case 'exec': {
@@ -506,6 +524,8 @@ function validateReq(msg: Record<string, unknown>): AgentReq | null {
     }
     case 'caps':
       return { t: 'req', id, op: 'caps' } satisfies CapsReq;
+    case 'hostStat':
+      return { t: 'req', id, op: 'hostStat' } satisfies HostStatReq;
     default:
       return null;
   }
@@ -646,7 +666,13 @@ async function refreshVerbs(cache: VerbCache, home: string): Promise<string[]> {
   return cache.verbs;
 }
 
-function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>, helloTimeoutMs: number, verbCache: VerbCache): void {
+function handleConnection(
+  ws: WebSocket,
+  opts: Required<Omit<AgentOpts, 'helloTimeoutMs'>>,
+  helloTimeoutMs: number,
+  verbCache: VerbCache,
+  hostStat: () => Promise<HostStat>,
+): void {
   let authed = false;
   const ctx: ConnCtx = {
     cfg: { home: opts.home, projectsRoot: opts.projectsRoot },
@@ -655,6 +681,7 @@ function handleConnection(ws: WebSocket, opts: Required<Omit<AgentOpts, 'helloTi
     ptys: new Map(),
     nextPtyId: 1,
     spawnPty: opts.spawnPty,
+    hostStat,
   };
 
   const helloTimer = setTimeout(() => {
@@ -767,7 +794,11 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
     home: rawOpts.home ?? os.homedir(),
     projectsRoot: resolveProjectsRoot(rawOpts.projectsRoot),
     spawnPty: rawOpts.spawnPty ?? spawnFleetPty,
+    procRoot: rawOpts.procRoot ?? '/proc',
   };
+  // ONE sampler for the process — `hoststat.ts` says why it may not be
+  // per-connection.
+  const hostStat = createAgentHostSampler(opts.procRoot);
   const helloTimeoutMs = rawOpts.helloTimeoutMs ?? DEFAULT_HELLO_TIMEOUT_MS;
   const verbCache: VerbCache = {
     // `?? []`: an unreadable ccd at boot is "no evidence" same as any other
@@ -780,7 +811,7 @@ export async function startAgent(rawOpts: AgentOpts): Promise<RunningAgent> {
 
   const httpServer: Server = createServer();
   const wss = new WebSocketServer({ server: httpServer });
-  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache));
+  wss.on('connection', (ws) => handleConnection(ws, opts, helloTimeoutMs, verbCache, hostStat));
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once('error', reject);

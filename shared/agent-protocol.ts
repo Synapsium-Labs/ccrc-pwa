@@ -100,6 +100,17 @@ export interface StatReq   { t: 'req'; id: number; op: 'stat'; path: string }
  *  something, which is the only caller this op has. */
 export interface LstatReq  { t: 'req'; id: number; op: 'lstat'; path: string }
 export interface CapsReq   { t: 'req'; id: number; op: 'caps' }
+/** The fleet box's own load — CPU per logical thread and one memory reading.
+ *  PATHLESS, and that is the whole design: `/proc` is NOT on the read
+ *  whitelist and must not be put there (`agent/src/whitelist.ts` refuses a
+ *  widened read root, and a whitelist entry would open every `/proc/<pid>`
+ *  to the PWA). The agent reads its own two fixed files, samples them a
+ *  measured interval apart and answers the computed reading, so the widest
+ *  thing this op can ever disclose is the box's load. An agent that predates
+ *  it rejects the frame in `validateReq` (`bad-request`), which the server
+ *  reads as `unsupported` — a positive answer meaning "deploy the agent",
+ *  never as a box with nothing to report. */
+export interface HostStatReq { t: 'req'; id: number; op: 'hostStat' }
 export interface WriteB64Req { t: 'req'; id: number; op: 'writeB64'; path: string; dataB64: string }
 export interface TailOpenReq { t: 'req'; id: number; op: 'tailOpen'; path: string; offset: number }
 export interface TailCloseReq{ t: 'req'; id: number; op: 'tailClose'; tailId: number }
@@ -107,7 +118,7 @@ export interface PtyOpenReq  { t: 'req'; id: number; op: 'ptyOpen'; sessionId: s
 export interface PtyInput    { t: 'pty'; ptyId: number; ev: 'input'; dataB64: string }
 export interface PtyResize   { t: 'pty'; ptyId: number; ev: 'resize'; cols: number; rows: number }
 export interface PtyClose    { t: 'pty'; ptyId: number; ev: 'close' }
-export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq;
+export type AgentReq = ExecReq|ReadReq|ReadFromReq|ReadB64Req|ReaddirReq|StatReq|LstatReq|WriteB64Req|TailOpenReq|TailCloseReq|PtyOpenReq|CapsReq|HostStatReq;
 export interface ResOk  { t: 'res'; id: number; ok: true;  [k: string]: unknown } // op-specific payload fields below
 export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 // exec → {code, stdout, stderr}; read → {data: string|null, absent?: true}; readFrom → {data: string, size: number}|{data: null, absent?: true};
@@ -118,6 +129,10 @@ export interface ResErr { t: 'res'; id: number; ok: false; err: string }
 //   silence for `regular` — the D-114 shape, in the one direction that matters here, because
 //   `regular` is the only answer that lets a caller condemn anything.
 // writeB64 → {}; tailOpen → {tailId}; ptyOpen → {ptyId}; caps → {verbs: string[]}
+// hostStat → {stat: HostStat} (`shared/hoststat.ts`). The payload carries the READING, not the two
+//   /proc files: the sampling window is a property of the box that owns the counters, and two
+//   `read` round trips would put an unmeasured interval between them. Its `cpu` and `mem` halves
+//   fail independently, each naming WHICH condition it was — the D-114 shape, one file down.
 
 /** Why a `read`/`readB64`/`readFrom`/`stat` op couldn't produce its answer —
  *  the ONE vocabulary both ends of this wire fold the op's boolean

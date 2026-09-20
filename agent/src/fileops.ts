@@ -72,12 +72,28 @@ function readRange(file: string, start: number, end: number): Promise<Buffer> {
  *  to separate a state no ccd verb can produce. */
 export type ReadResult = { data: string | null; absent: boolean };
 
-export async function readWhole(p: string): Promise<ReadResult> {
+/** The same read, keeping the distinction `ReadResult` throws away. The comment
+ *  above says `readWhole` "predates `ReadFailure` with no caller that needs the
+ *  finer distinction" — the `hostStat` op IS that caller: `/proc/stat` missing
+ *  means this box is not Linux (permanent, say so), while unreadable means a
+ *  container the operator can open up, and the widget prints a different
+ *  sentence for each. `readWhole` now DERIVES from this and keeps its exact
+ *  wire meaning, so no existing caller changes behaviour. */
+export type MeasuredReadResult =
+  | { ok: true; content: string }
+  | { ok: false; reason: ReadFailure };
+
+export async function readWholeMeasured(p: string): Promise<MeasuredReadResult> {
   try {
-    return { data: await readFile(p, 'utf8'), absent: false };
+    return { ok: true, content: await readFile(p, 'utf8') };
   } catch (e) {
-    return { data: null, absent: failureFor(e) === 'absent' };
+    return { ok: false, reason: failureFor(e) };
   }
+}
+
+export async function readWhole(p: string): Promise<ReadResult> {
+  const r = await readWholeMeasured(p);
+  return r.ok ? { data: r.content, absent: false } : { data: null, absent: r.reason === 'absent' };
 }
 
 /** Same cap as the server's post-downscale upload ceiling (`MAX_UPLOAD_BYTES`
