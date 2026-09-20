@@ -2,7 +2,7 @@
 // deploy/gen-wrappers.mjs — Task 5 of the stage-2c wrapper-generation plan.
 //
 // Reads a box's `~/.ccrc/accounts.json` (path in argv[2]) and, for every
-// `generated` account, writes the finished wrapper text — body plus
+// ccrc-owned `generated` or `codex` account, writes the finished wrapper text — body plus
 // provenance marker — into a STAGING directory (argv[4]), one file per
 // account id, at mode 0755. It then prints a manifest to STDOUT describing
 // what it found: which staged files agree with what is already installed,
@@ -40,9 +40,9 @@
 // ── THE MANIFEST GRAMMAR (plan D6) ────────────────────────────────────────
 // Tab-separated lines on stdout, in this order:
 //
-//   summary\t<total>\t<generated>\t<upstream>\t<external>
-//   wrapper\t<id>\t<classify>\t<equal>      (one per `generated` account)
-//   protected\t<id>                         (one per NON-generated account)
+//   summary\t<total>\t<generated>\t<upstream>\t<external>\t<codex>
+//   wrapper\t<id>\t<classify>\t<equal>      (one per ccrc-owned `generated` or `codex` account)
+//   protected\t<id>                         (one per `upstream` or `external` account)
 //   orphan\t<id>                            (zero or more)
 //
 // `<classify>` is one of `absent | unreadable | oversize | foreign |
@@ -53,8 +53,8 @@
 // to compare (D-81: `oversize` is never even read).
 //
 // ── `protected` — SAYING THE UNTOUCHABLE IDS OUT LOUD (D-80) ───────────────
-// One record for every account whose `exec.kind` is NOT "generated" — i.e.
-// every `upstream` and `external` account. It carries no state and asks for
+// One record for every `upstream` and `external` account. `generated` and
+// `codex` are ccrc-owned wrapper records instead. It carries no state and asks for
 // nothing to be done; it exists so that "this id is an account ccrc must not
 // touch" and "this id is not in the roster at all" are DIFFERENT THINGS ON THE
 // WIRE. Until this record existed both arrived in Task 6's bash as the same
@@ -64,7 +64,7 @@
 // external account's hand-written launcher with NO FLAGS AT ALL and exit 0.
 //
 // TWO INDEPENDENT LOCKS ON ONE DOOR, and this is the LAXER one. This file's
-// other lock is the `execKind === 'generated'` filter below, which decides
+// other lock is the ccrc-owned `generated`/`codex` filter below, which decides
 // which accounts get a `wrapper` record; `ccd/ccrc`'s reader is STRICTER than
 // both — it refuses the WHOLE RUN if any id appears in both lists, rather than
 // preferring either one, because an overlap is never a fact about the box, it
@@ -98,7 +98,7 @@
 //
 // ── TASK 6 DRIVES OFF THE MANIFEST, NEVER OFF A STAGING-DIR LISTING ───────
 // This file makes NO PROMISE that the staging directory contains nothing but
-// what this run staged. It only ever WRITES the `generated` ids it just
+// what this run staged. It only ever WRITES the ccrc-managed ids it just
 // computed; it never reads the staging directory back, and a stray file
 // dropped there before the run — a leftover from a previous invocation
 // against a different roster, or anything else a caller put there — is left
@@ -199,7 +199,9 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  *  happening to stay unmarked, which is the day this entry starts mattering
  *  and the reason it was added ahead of that day. */
 const TOOLCHAIN_EXECUTABLES = new Set(['ccd', 'ccrc', 'ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health',
-  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync']);
+  'ccd-telemetry-keepalive', 'ccd-account-auth', 'ccd-usage-sweep', 'ccd-pool-sync',
+  // GPT lane common executables are ccrc-owned before Plan 2 installs them.
+  'ccgpt', 'ccgpt-runtime']);
 
 /** Reads an existing wrapper at `path` and reports what is there against the
  *  text this run staged for it. SIX outcomes, never five: `absent` (nothing
@@ -324,14 +326,16 @@ function main(argv) {
     return 1;
   }
 
-  const generated = roster.accounts.filter((a) => a.execKind === 'generated');
+  // Both kinds are ccrc-managed wrapper records; their bodies differ only in
+  // the exec target selected by `shared/wrapper.mjs`.
+  const managed = roster.accounts.filter((a) => a.execKind === 'generated' || a.execKind === 'codex');
 
-  // Step 3: stage every generated account's finished text. Nothing is
+  // Step 3: stage every ccrc-managed account's finished text. Nothing is
   // written to stdout regardless of how this turns out — a staging failure
   // here (a bad account, or a staging directory this process cannot write
   // into) exits 1 with no manifest, same as an invalid roster above.
   const staged = new Map();
-  for (const a of generated) {
+  for (const a of managed) {
     const dest = join(stagingDir, a.id);
     try {
       const text = markGenerated(generateWrapperBody(a, roster.upstreamId));
@@ -345,9 +349,9 @@ function main(argv) {
     }
   }
 
-  // Step 4: classify every generated account against what is (or isn't) at
+  // Step 4: classify every ccrc-managed account against what is (or isn't) at
   // `<bin-dir>/<id>` today. Read-only — see the header.
-  const wrapperLines = generated.map((a) => {
+  const wrapperLines = managed.map((a) => {
     const { classify: c, equal } = classify(join(binDir, a.id), staged.get(a.id));
     return `wrapper\t${a.id}\t${c}\t${equal}`;
   });
@@ -373,7 +377,7 @@ function main(argv) {
   // — rather than derived from the `wrapper` filter or `protectedLines`
   // below, so a bug in one exclusion set cannot silently widen this one too.
   //
-  // A ccrc marker surviving on a NON-generated account's file (e.g. the
+  // A ccrc marker surviving on a protected account's file (e.g. the
   // `external` file above, still carrying the marker from when it was
   // `generated`) is deliberately NOT reported here: bash's `protected` lock
   // already refuses to ever write over it, so nothing is at risk, and
@@ -412,8 +416,10 @@ function main(argv) {
   // Step 6: build the whole manifest, then write it once. This is the line
   // that makes the header's promise true — everything above can still fail
   // and return 1 with an empty stdout; nothing below this point can fail.
+  const generatedCount = roster.accounts.filter((a) => a.execKind === 'generated').length;
   const upstreamCount = roster.accounts.filter((a) => a.execKind === 'upstream').length;
   const externalCount = roster.accounts.filter((a) => a.execKind === 'external').length;
+  const codexCount = roster.accounts.filter((a) => a.execKind === 'codex').length;
   // D-80. Walked out of `roster.accounts` on its own terms, exactly as the two
   // counts above are, and deliberately NOT computed as "the accounts with no
   // `wrapper` record" — see the header: two locks that share one derivation are
@@ -422,9 +428,9 @@ function main(argv) {
   // truncated exactly at these records would otherwise drop the whole lock
   // silently, which is the same hole the `wrapper` record count already closes.
   const protectedLines = roster.accounts
-    .filter((a) => a.execKind !== 'generated')
+    .filter((a) => a.execKind === 'upstream' || a.execKind === 'external')
     .map((a) => `protected\t${a.id}`);
-  const summaryLine = `summary\t${roster.accounts.length}\t${generated.length}\t${upstreamCount}\t${externalCount}`;
+  const summaryLine = `summary\t${roster.accounts.length}\t${generatedCount}\t${upstreamCount}\t${externalCount}\t${codexCount}`;
   const manifest = [summaryLine, ...wrapperLines, ...protectedLines, ...orphanLines].join('\n') + '\n';
 
   process.stdout.write(manifest);

@@ -60,7 +60,14 @@ interface RosterAccount {
   id: string;
   label: string;
   configDirSuffix: string;
-  exec: { kind: string; secretsFile?: string };
+  exec: {
+    kind: string;
+    secretsFile?: string;
+    provider?: string;
+    proxyPort?: number;
+    litellmPort?: number;
+    authDir?: string;
+  };
   homeAble: boolean;
   hue: string;
   telemetry: string;
@@ -68,6 +75,21 @@ interface RosterAccount {
 interface Roster { version: number; accounts: RosterAccount[] }
 
 const FIXTURE: Roster = JSON.parse(JSON.stringify(DEFAULT_TEST_ROSTER)) as Roster;
+const CODEX_ID = 'codex-a';
+const CODEX_FIXTURE: Roster = {
+  ...FIXTURE,
+  accounts: [
+    ...FIXTURE.accounts,
+    {
+      id: CODEX_ID, label: CODEX_ID, configDirSuffix: '.codex-a',
+      exec: {
+        kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+        authDir: '.local/share/ccrc/codex/codex-a',
+      },
+      homeAble: true, hue: 'amber', telemetry: 'codex',
+    },
+  ],
+};
 /** The test roster's three `generated` accounts — the only ids this verb
  *  may ever write. `claude` (upstream) and `gpt` (external) are the two it may
  *  never touch, under any flag. */
@@ -218,6 +240,16 @@ describe('ccrc wrappers: a fresh box', () => {
     // here rather than being invisible to three by-name assertions.
     expect(binEntries(home)).toEqual([...GENERATED_IDS].sort());
     expect(r.stdout).toMatch(/^summary: /m);
+  });
+
+  it('installs the codex launcher from a six-field manifest summary', () => {
+    const home = makeHome('ccrc-wrappers-codex-', { roster: CODEX_FIXTURE });
+    const r = runWrappers(home);
+    expect(r.code, `stderr:\n${r.stderr}\nstdout:\n${r.stdout}`).toBe(0);
+    expect(readFileSync(join(binOf(home), CODEX_ID), 'utf8')).toBe(bodyFor(CODEX_FIXTURE, CODEX_ID));
+    expect(statSync(join(binOf(home), CODEX_ID)).mode & 0o777).toBe(0o755);
+    expect(r.stdout).toMatch(/^WRITE codex-a: /m);
+    expect(r.stdout).toMatch(/3 generated, 1 upstream, 1 external, 1 codex/);
   });
 
   it('creates ~/.local/bin when the box has none — a missing bin dir is a fresh box, not an error', () => {
@@ -894,12 +926,11 @@ describe('ccrc wrappers: an oversize candidate (D-81)', () => {
 
 describe('ccrc wrappers: upstream and external are never touched, under any flag', () => {
   // The absolute rule (plan D3). `claude` is a ~304 MB ELF and `gpt` is
-  // somebody else's 142-line launcher; ccrc writes a wrapper only for an
-  // account whose `exec.kind` is `generated`, and there is no flag that widens
-  // that. Structurally: `deploy/gen-wrappers.mjs` emits a `wrapper` record only
-  // for a generated account, this verb iterates those records and nothing else,
-  // and it re-checks that the staged wrapper does not exec its own id (which is
-  // what a wrapper written for the upstream account would do).
+  // somebody else's 142-line launcher; ccrc writes a wrapper only for a
+  // `generated` or `codex` account, and there is no flag that widens that.
+  // Structurally: `deploy/gen-wrappers.mjs` emits a `wrapper` record only for
+  // those ccrc-owned accounts, this verb iterates those records and nothing else,
+  // and it re-checks that a staged wrapper does not recurse into itself.
   const SENTINEL_UPSTREAM = '\x7fELF ccrc-test sentinel — the real one is a 304 MB binary\n';
   const SENTINEL_EXTERNAL = bespokeLauncher('.claude-gpt');
 
@@ -1070,7 +1101,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     // manifest truncated in transit is LOUD. Without that assertion a
     // half-delivered manifest converges half a box and reports success.
     const cli = kitWith(
-      'process.stdout.write("summary\\t5\\t3\\t1\\t1\\nwrapper\\tclaude-a\\tabsent\\tno\\n");\n',
+      'process.stdout.write("summary\\t5\\t3\\t1\\t1\\t0\\nwrapper\\tclaude-a\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-truncated-');
     const r = runWrappers(home, [], cli);
@@ -1086,6 +1117,18 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     expect(binEntries(home)).toEqual([]);
   });
 
+  it('refuses a summary claiming a Codex wrapper that the manifest omits, at the truncation gate', () => {
+    const cli = kitWith(
+      'process.stdout.write("summary\\t6\\t3\\t1\\t1\\t1\\nwrapper\\tclaude-a\\tabsent\\tno\\nwrapper\\tclaude-b\\tabsent\\tno\\nwrapper\\tclaude-d\\tabsent\\tno\\nprotected\\tclaude\\nprotected\\tgpt\\n");\n',
+    );
+    const home = makeHome('ccrc-wrappers-codex-truncated-');
+    const r = runWrappers(home, [], cli);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/truncated/);
+    expect(r.stderr).toMatch(/1 codex/);
+    expect(binEntries(home)).toEqual([]);
+  });
+
   it('refuses a manifest record whose id is not an account id, before a path is built from it', () => {
     // The id off the manifest becomes a FILENAME under ~/.local/bin, and the
     // gate is on the ID rather than on the path it would produce — which is
@@ -1097,7 +1140,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     const cli = kitWith(
       'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
       + 'writeFileSync(join(process.argv[4], "claude-a.bak"), "#!/usr/bin/env bash\\nexport CLAUDE_CONFIG_DIR=\\"$HOME/.x\\"\\nexec \\"$HOME/.local/bin/claude\\" \\"$@\\"\\n");\n'
-      + 'process.stdout.write("summary\\t1\\t1\\t0\\t0\\nwrapper\\tclaude-a.bak\\tabsent\\tno\\n");\n',
+      + 'process.stdout.write("summary\\t1\\t1\\t0\\t0\\t0\\nwrapper\\tclaude-a.bak\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-badid-');
     const r = runWrappers(home, ['--force'], cli);
@@ -1106,18 +1149,16 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     expect(r.stderr).toMatch(/claude-a\.bak/);
   });
 
-  it('refuses to install a wrapper that would exec itself — the upstream account\'s own shape', () => {
-    // The structural half of "ccrc never writes the upstream account". A
-    // wrapper installed at ~/.local/bin/claude that ends
-    // `exec "$HOME/.local/bin/claude" "$@"` is a fork bomb, and it is exactly
-    // what a generator talked into staging the upstream account would produce.
+  it('refuses to install a wrapper that would recurse into its own installed path', () => {
+    // Any staged wrapper whose target equals its installed id would recurse,
+    // regardless of the roster kind that produced it.
     const staged = markGenerated(generateWrapperBody(
       { id: 'claude', configDirSuffix: '.claude', execKind: 'generated' }, UPSTREAM_ID,
     ));
     const cli = kitWith(
       'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
       + `writeFileSync(join(process.argv[4], "claude"), ${JSON.stringify(staged)});\n`
-      + 'process.stdout.write("summary\\t1\\t1\\t0\\t0\\nwrapper\\tclaude\\tabsent\\tno\\n");\n',
+      + 'process.stdout.write("summary\\t1\\t1\\t0\\t0\\t0\\nwrapper\\tclaude\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-selfexec-');
     const r = runWrappers(home, ['--force'], cli);
@@ -1144,7 +1185,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     const cli = kitWith(
       'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
       + `writeFileSync(join(process.argv[4], "gpt"), ${JSON.stringify(staged)});\n`
-      + 'process.stdout.write("summary\\t2\\t1\\t1\\t0\\nwrapper\\tgpt\\tccrc-unmodified\\tno\\nprotected\\tgpt\\n");\n',
+      + 'process.stdout.write("summary\\t2\\t1\\t1\\t0\\t0\\nwrapper\\tgpt\\tccrc-unmodified\\tno\\nprotected\\tgpt\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-protected-overlap-');
     const launcher = bespokeLauncher('.claude-gpt');
@@ -1166,7 +1207,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     // nothing. It is the same hole the wrapper-record count already closes,
     // one record type further down.
     const cli = kitWith(
-      'process.stdout.write("summary\\t5\\t0\\t1\\t1\\n");\n',
+      'process.stdout.write("summary\\t5\\t0\\t1\\t1\\t0\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-protected-truncated-');
     const r = runWrappers(home, [], cli);
@@ -1186,7 +1227,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
       'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
       + `writeFileSync(join(process.argv[4], "claude-a"), ${JSON.stringify(good)});\n`
       + `writeFileSync(join(process.argv[4], "claude-a.bak"), ${JSON.stringify(good)});\n`
-      + 'process.stdout.write("summary\\t2\\t2\\t0\\t0\\nwrapper\\tclaude-a\\tabsent\\tno\\nwrapper\\tclaude-a.bak\\tabsent\\tno\\n");\n',
+      + 'process.stdout.write("summary\\t2\\t2\\t0\\t0\\t0\\nwrapper\\tclaude-a\\tabsent\\tno\\nwrapper\\tclaude-a.bak\\tabsent\\tno\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-abort-before-write-');
     const r = runWrappers(home, [], cli);

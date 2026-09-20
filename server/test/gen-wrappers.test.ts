@@ -34,6 +34,21 @@ const CLI = path.join(ccrcRoot, 'deploy', 'gen-wrappers.mjs');
 const fixtureJson: { accounts: Array<{ id: string; configDirSuffix: string; exec: { kind: string; secretsFile?: string } }> } =
   DEFAULT_TEST_ROSTER;
 
+const codexFixtureJson = {
+  ...fixtureJson,
+  accounts: [
+    ...fixtureJson.accounts,
+    {
+      id: 'codex-a', label: 'codex-a', configDirSuffix: '.codex-a',
+      exec: {
+        kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+        authDir: '.local/share/ccrc/codex/codex-a',
+      },
+      homeAble: true, hue: 'amber', telemetry: 'codex',
+    },
+  ],
+};
+
 /**
  * `gen-wrappers.mjs`'s own `TOOLCHAIN_EXECUTABLES`, DERIVED FROM ITS SOURCE
  * (ruling T4-R3), never retyped.
@@ -134,7 +149,7 @@ describe('gen-wrappers.mjs', () => {
     expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
 
     const lines = r.stdout.trim().split('\n');
-    expect(lines[0]).toBe('summary\t5\t3\t1\t1');
+    expect(lines[0]).toBe('summary\t5\t3\t1\t1\t0');
     const wrapperLines = lines.filter((l) => l.startsWith('wrapper\t'));
     const orphanLines = lines.filter((l) => l.startsWith('orphan\t'));
     expect(wrapperLines).toHaveLength(3);
@@ -164,6 +179,30 @@ describe('gen-wrappers.mjs', () => {
       const [, , classify, equal] = line.split('\t');
       expect(classify).toBe('ccrc-unmodified');
       expect(equal).toBe('yes');
+    }
+  });
+
+  it('a codex account gets a wrapper record and is NOT protected', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(codexFixtureJson);
+    const r = run([rosterFile, binDir, stagingDir]);
+    expect(r.code, `stderr:\n${r.stderr}`).toBe(0);
+    const lines = r.stdout.trim().split('\n');
+    expect(lines.filter((l) => l.startsWith('wrapper\tcodex-a'))).toHaveLength(1);
+    expect(lines.filter((l) => l.startsWith('protected\tcodex-a'))).toHaveLength(0);
+  });
+
+  it('the summary carries a fifth count, and it counts codex lanes', () => {
+    const { rosterFile, binDir, stagingDir } = fixture(codexFixtureJson);
+    const [summary = ''] = run([rosterFile, binDir, stagingDir]).stdout.split('\n');
+    const fields = summary.split('\t');
+    expect(fields[0]).toBe('summary');
+    expect(fields).toHaveLength(6);
+    expect(Number(fields[5])).toBe(1);
+  });
+
+  it('TOOLCHAIN_EXECUTABLES names the GPT-lane binaries, so they are never orphan wrappers', () => {
+    for (const name of ['ccgpt', 'ccgpt-runtime']) {
+      expect(TOOLCHAIN_EXECUTABLES).toContain(name);
     }
   });
 
@@ -480,7 +519,7 @@ describe('gen-wrappers.mjs', () => {
     expect(r.stdout).not.toMatch(/^orphan\tnoshebang$/m);
   });
 
-  it('names every non-generated account in a `protected` record (D-80)', () => {
+  it('names every upstream and external account in a `protected` record (D-80)', () => {
     // The record exists so that "this id is an account ccrc must not touch" and
     // "this id is not in the roster at all" stop being the same thing on the
     // wire — see this file's header and `cmd_wrappers`'s. Walked out of
@@ -494,8 +533,8 @@ describe('gen-wrappers.mjs', () => {
     // And the count the bash reader asserts against holds: upstream + external.
     const summary = (r.stdout.split('\n')[0] ?? '').split('\t');
     expect(protectedLines).toHaveLength(Number(summary[3]) + Number(summary[4]));
-    // No generated account is ever in that list — the two are disjoint, and an
-    // overlap is what `ccrc wrappers` refuses the whole run over.
+    // No ccrc-owned wrapper account is ever in that list — the two are disjoint,
+    // and an overlap is what `ccrc wrappers` refuses the whole run over.
     for (const id of GENERATED_IDS) expect(r.stdout).not.toContain(`protected\t${id}`);
   });
 
@@ -578,13 +617,13 @@ describe('gen-wrappers.mjs', () => {
 // THE MANIFEST'S ARITY, which the non-empty-field test above does not cover.
 // The grammar is `deploy/gen-wrappers.mjs`'s own header — the four record
 // lines are :43-46, under the `THE MANIFEST GRAMMAR (plan D6)` banner at :40:
-//   summary\t<total>\t<generated>\t<upstream>\t<external>
+//   summary\t<total>\t<generated>\t<upstream>\t<external>\t<codex>
 //   wrapper\t<id>\t<classify>\t<equal>
 //   protected\t<id>
 //   orphan\t<id>
 describe('the manifest grammar cannot grow a column in silence', () => {
   const ARITY: Readonly<Record<string, number>> = {
-    summary: 5, wrapper: 4, protected: 2, orphan: 2,
+    summary: 6, wrapper: 4, protected: 2, orphan: 2,
   };
 
   it('every record has exactly the field count its grammar declares', () => {
@@ -621,14 +660,14 @@ describe('the manifest grammar cannot grow a column in silence', () => {
 
   it('the reader in ccd/ccrc takes at least as many variables as the widest record', () => {
     // Producer and consumer, in one assertion. `ccd/ccrc`'s manifest loop reads
-    // `local kind a b c d` — five names for a five-field `summary` — and its own
-    // comment (`ccd/ccrc:2386-2389`) says why five and not four.
+    // `local kind a b c d e` — six names for a six-field `summary` — and its own
+    // comment says why six and not five.
     //
     // A field with no variable left to hold it is NOT discarded — `IFS=$'\t'
     // read` never drops a field. It is CONCATENATED onto the last variable,
-    // tab included: measured, `IFS=$'\t' read -r kind a b c d` over
-    // `summary\t5\t3\t1\t1\tSIXTH` leaves `d` holding `1<TAB>SIXTH`, not `1`.
-    // That is exactly the corruption `ccd/ccrc:2386-2389` itself names ("the
+    // tab included: measured, `IFS=$'\t' read -r kind a b c d e` over
+    // `summary\t5\t3\t1\t1\t0\tSEVENTH` leaves `e` holding `0<TAB>SEVENTH`, not `0`.
+    // That is exactly the corruption `ccd/ccrc` itself names ("the
     // record-count assertion below would then be comparing against a string
     // that is not a number") — restated here from a real `bash -c` run, not
     // copied off the comment. "Discards" IS the right word for a narrower
@@ -638,8 +677,8 @@ describe('the manifest grammar cannot grow a column in silence', () => {
     // worse than either: it corrupts its neighbour instead of vanishing.
     //
     // This guard checks agreement between TWO lines, not just that a
-    // declaration exists: `ccd/ccrc:2390`'s `local kind a b c d` and
-    // `ccd/ccrc:2393`'s `while IFS=$'\t' read -r kind a b c d; do` are
+    // declaration exists: `ccd/ccrc`'s `local kind a b c d e` and
+    // `while IFS=$'\t' read -r kind a b c d e; do` are
     // independent pieces of bash syntax that happen to list the same names
     // today — nothing enforces that they stay in sync. Narrowing the READ
     // list alone (`read -r kind a b c` while the `local` line still says
@@ -657,10 +696,10 @@ describe('the manifest grammar cannot grow a column in silence', () => {
     const READ_RE = /^\s*while IFS=\$'\\t' read -r kind ([A-Za-z0-9_ ]+?);\s*do\s*$/m;
 
     const declMatches = [...ccrc.matchAll(new RegExp(DECL_RE.source, 'gm'))];
-    expect(declMatches, 'ccd/ccrc must declare the manifest reader exactly once, as `local kind a b c d`')
+    expect(declMatches, 'ccd/ccrc must declare the manifest reader exactly once, as `local kind a b c d e`')
       .toHaveLength(1);
     const readMatches = [...ccrc.matchAll(new RegExp(READ_RE.source, 'gm'))];
-    expect(readMatches, "ccd/ccrc must read the manifest exactly once, as `while IFS=$'\\t' read -r kind a b c d; do`")
+    expect(readMatches, "ccd/ccrc must read the manifest exactly once, as `while IFS=$'\\t' read -r kind a b c d e; do`")
       .toHaveLength(1);
 
     const declVars = declMatches[0]![1]!.trim().split(/\s+/);

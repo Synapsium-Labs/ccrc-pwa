@@ -2582,24 +2582,23 @@ _ccrc_foreign_remedy() {
 # write and neither can be regenerated from the roster. That rule is
 # STRUCTURAL here, not a test's opinion, and it is held by four things at once:
 #
-#   1. `deploy/gen-wrappers.mjs` NAMES every non-generated account out loud, in
-#      a `protected <id>` manifest record (D-80), and this function refuses the
-#      WHOLE RUN — not merely that id — if an id appears in both that list and
-#      the `wrapper` list. An overlap is never a fact about a box; it is proof
+#   1. `deploy/gen-wrappers.mjs` NAMES every `upstream` and `external` account
+#      out loud in a `protected <id>` manifest record (D-80). This function
+#      refuses the WHOLE RUN — not merely that id — if an id appears in both lists.
+#      An overlap is never a fact about a box; it is proof
 #      the generator is broken, and its other verdicts are then untrustworthy
 #      too, so there is nothing left worth converging.
 #   2. This function iterates the MANIFEST's `wrapper` records and nothing else,
-#      and `deploy/gen-wrappers.mjs` emits a `wrapper` record only for an
-#      account whose `exec.kind` is "generated" (plan D5: node stages, bash
+#      and `deploy/gen-wrappers.mjs` emits a `wrapper` record only for a
+#      ccrc-owned `generated` or `codex` account (plan D5: node stages, bash
 #      mutates). An upstream or external id therefore never reaches the loop.
 #   3. Every path this function writes to is built as `$WRAPPER_BIN_DIR/$id`
 #      from an id that was first matched against `WRAPPER_ID_RE`. There is no
 #      other write, and no removal at all beyond this function's own temp files.
 #   4. Before installing, the STAGED text is read back through
 #      `_wrap_parse_shape` and refused if its exec target is the id being
-#      installed. A wrapper at `~/.local/bin/claude` that ends
-#      `exec "$HOME/.local/bin/claude" "$@"` is a fork bomb, and it is exactly
-#      what a generator talked into staging the upstream account would produce.
+#      installed. A staged wrapper that targets its own installed path recurses
+#      into itself, regardless of the roster kind that produced it.
 #   5. THE WITNESS INDEX (D-156). Before any write, this function reads every
 #      id-shaped file already in `$WRAPPER_BIN_DIR` and records which ids they
 #      `exec` as their upstream binary. It then refuses — under every flag, per
@@ -2662,8 +2661,8 @@ _ccrc_foreign_remedy() {
 #     ordering is not a lock.
 #
 # TWO INDEPENDENT LOCKS ON ONE DOOR, and THIS side is the strict one. The
-# generator holds the same fact twice — the `execKind === 'generated'` filter
-# that produces the `wrapper` records, and the independent walk of
+# generator holds the same fact twice — the ccrc-owned `generated`/`codex`
+# filter that produces the `wrapper` records, and the independent walk of
 # `roster.accounts` that produces the `protected` records. This reader trusts
 # NEITHER over the other: it refuses on overlap rather than preferring a list,
 # and it asserts the protected count against the summary's own
@@ -2864,17 +2863,17 @@ cmd_wrappers() {
   # taking a wrapper's `classify` out of the `equal` column and overwriting a
   # file on the strength of it.
   #
-  # FIVE variables, not four: the `summary` record carries four fields after its
-  # type. Reading it into three would hand the last variable "1<TAB>1" — the
+  # SIX variables, not five: the `summary` record carries five fields after its
+  # type. Reading it into four would hand the last variable "1<TAB>0" — the
   # remainder, tabs and all — and the record-count assertion below would then be
   # comparing against a string that is not a number.
-  local kind a b c d
-  local sum_total="" sum_gen="" sum_up="" sum_ext="" saw_summary=0
+  local kind a b c d e
+  local sum_total="" sum_gen="" sum_up="" sum_ext="" sum_codex="" saw_summary=0
   local -a w_id=() w_class=() w_equal=() protected=() orphans=()
-  while IFS=$'\t' read -r kind a b c d; do
+  while IFS=$'\t' read -r kind a b c d e; do
     case "$kind" in
       '') continue ;;
-      summary)   saw_summary=1; sum_total="$a"; sum_gen="$b"; sum_up="$c"; sum_ext="$d" ;;
+      summary)   saw_summary=1; sum_total="$a"; sum_gen="$b"; sum_up="$c"; sum_ext="$d"; sum_codex="$e" ;;
       wrapper)   w_id+=("$a"); w_class+=("$b"); w_equal+=("$c") ;;
       protected) protected+=("$a") ;;
       orphan)    orphans+=("$a") ;;
@@ -2885,7 +2884,7 @@ cmd_wrappers() {
   [ "$saw_summary" -eq 1 ] \
     || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
   local f
-  for f in "$sum_gen" "$sum_up" "$sum_ext"; do
+  for f in "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex"; do
     [[ "$f" =~ ^[0-9]+$ ]] \
       || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
   done
@@ -2895,8 +2894,8 @@ cmd_wrappers() {
   # before writing a byte). This is the reader's half of that contract: a run
   # that installed the records it happened to receive would converge half a box
   # and report success.
-  [ "${#w_id[@]}" -eq "$sum_gen" ] \
-    || _ccrc_die "the manifest from $gen is truncated: its summary claims $sum_gen generated account(s) and it carries ${#w_id[@]} wrapper record(s). Nothing was written."
+  [ "${#w_id[@]}" -eq "$((sum_gen + sum_codex))" ] \
+    || _ccrc_die "the manifest from $gen is truncated: its summary claims $sum_gen generated + $sum_codex codex account(s) and it carries ${#w_id[@]} wrapper record(s). Nothing was written."
   # THE SAME GATE FOR THE `protected` LIST (D-80), and it is not symmetry for
   # its own sake: the protected records are the LAST thing before the orphans,
   # so a manifest truncated a few bytes earlier would arrive with every wrapper
@@ -2968,13 +2967,10 @@ cmd_wrappers() {
     IFS=$'\t' read -r sok starget ssuffix ssecrets < <(_wrap_parse_shape "$staging/$id")
     [ "$sok" = ok ] \
       || _ccrc_die "the text staged for \"$id\" is not the generated wrapper shape, so this verb will not install it — this is a bug in ccrc, not a fact about your box, and nothing was written"
-    # LOCK 4 (see the header). A wrapper whose exec target is its own id would
-    # exec itself forever; it is also precisely the file a generator talked into
-    # writing the UPSTREAM account would stage. It covers `upstream` only —
-    # `external` has no such self-referential property, which is why lock 1
-    # exists.
+    # LOCK 4 (see the header). A staged wrapper whose target is its own installed
+    # path would recurse into itself, regardless of the roster kind that produced it.
     [ "$starget" != "$id" ] \
-      || _ccrc_die "refusing to install \"$id\": the wrapper the roster produced would exec \$HOME/.local/bin/$id — itself. That is an upstream account's own name, and ccrc never writes an upstream or external account. Nothing was written."
+      || _ccrc_die "refusing to install \"$id\": the staged wrapper would exec \$HOME/.local/bin/$id — its own installed path — and recurse into itself. Nothing was written."
 
     s_target+=("$starget"); s_suffix+=("$ssuffix"); s_secrets+=("$ssecrets")
   done
@@ -3104,9 +3100,9 @@ cmd_wrappers() {
         for w in ${wit_by[$id]:-}; do [ "$w" = "$id" ] || wit="$wit $w"; done
         if [ -n "$wit" ]; then
           n_refused=$((n_refused + 1))
-          printf 'REFUSE %s: %s — the roster calls "%s" a generated account, but%s in %s already exec it as their upstream binary\n' \
+          printf 'REFUSE %s: %s — the roster asks ccrc to own/write a wrapper at "%s", but%s in %s already exec it as their upstream binary\n' \
             "$id" "$WRAPPER_BIN_DIR/$id" "$id" "$wit" "$WRAPPER_BIN_DIR"
-          printf '  remedy: %s\n' "set \"$id\"'s exec.kind to \"upstream\" (or \"external\") in $HOME/.ccrc/accounts.json so ccrc stops claiming that name. Moving the file aside does NOT help: what refuses this write is the OTHER files. No flag overrides this one."
+          printf '  remedy: %s\n' "correct the roster or the witness launcher; if this id is the shared target, set its exec.kind to \"upstream\" or \"external\" in $HOME/.ccrc/accounts.json. Moving the file aside does NOT help: what refuses this write is the OTHER files. No flag overrides this one."
           continue
         fi
         if [ -n "$wit_blind" ]; then
@@ -3337,8 +3333,8 @@ cmd_wrappers() {
       "$o" "$HOME/.ccrc/accounts.json" "$WRAPPER_BIN_DIR/$o"
   done
 
-  printf 'summary: %s account(s) in %s — %s generated, %s upstream, %s external (upstream and external are never written); %s %s, %s converged, %s refused, %s orphaned\n' \
-    "$sum_total" "$HOME/.ccrc/accounts.json" "$sum_gen" "$sum_up" "$sum_ext" \
+  printf 'summary: %s account(s) in %s — %s generated, %s upstream, %s external, %s codex (upstream and external are never written); %s %s, %s converged, %s refused, %s orphaned\n' \
+    "$sum_total" "$HOME/.ccrc/accounts.json" "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex" \
     "$n_written" "$([ "$dry" -eq 1 ] && printf 'would be written' || printf 'written')" \
     "$n_converged" "$n_refused" "${#orphans[@]}"
 
