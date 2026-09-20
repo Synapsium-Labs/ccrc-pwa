@@ -3141,8 +3141,8 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     writeFileSync(f, readFileSync(f, 'utf8').replace('$HOME/.cc-clips/', '$WT/.ccrc-review/'));   // the 2026-09-17 clause, put back
     let r = runDoctor(home);
     expect(r.code).toBe(1);
-    expect(r.stdout).toMatch(/^FAIL skills: 1 installed skill\(s\) differ from, or are missing in, the shipped tree: claude: ccrc-reviewer differs$/m);
-    expect(r.stdout).toMatch(/remedy: run 'ccrc update'/);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 skill\(s\) in the rostered homes differ from the shipped tree or are missing from their home: claude: ccrc-reviewer differs$/m);
+    expect(r.stdout).toMatch(/remedy: run 'ccrc doctor --fix' .*, or 'ccrc update'/);
     // R10: the remedy's second arm must converge from the TREE the check
     // measured ($HOME/ccrc/ccd/reviewer-skill, i.e. installCcrc's planted
     // BOX_TREE_DIR copy), not the .cc-sessions placed copy — that copy was
@@ -3202,7 +3202,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     // The headline says the condition the entry says: every entry here is
     // `missing`, and a headline that only knew how to say "differ" sent the
     // operator looking for a diff that does not exist.
-    expect(r.stdout).toMatch(/^FAIL skills: 1 installed skill\(s\) differ from, or are missing in, the shipped tree:/m);
+    expect(r.stdout).toMatch(/^FAIL skills: 1 skill\(s\) in the rostered homes differ from the shipped tree or are missing from their home:/m);
   });
 
   it('a second rostered home is measured too, and its config dir comes from configDirSuffix', () => {
@@ -3212,7 +3212,7 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     writeWrapper(home, 'acct-a', { cfgDir: '.acct-a' });
     mkdirSync(join(home, '.acct-a', 'skills'), { recursive: true });
     let r = runDoctor(home);
-    expect(r.stdout).toMatch(/^FAIL skills: 3 installed skill\(s\) differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing/m);
+    expect(r.stdout).toMatch(/^FAIL skills: 3 skill\(s\) in the rostered homes differ .*acct-a: ccrc-coordinator missing.*acct-a: ccrc-worker missing.*acct-a: ccrc-reviewer missing/m);
     for (const [tree, name] of [['coordinator-skill', 'ccrc-coordinator'], ['worker-skill', 'ccrc-worker'], ['reviewer-skill', 'ccrc-reviewer']] as const) {
       cpSync(join(REPO, 'ccd', tree), installed(home, '.acct-a', name), { recursive: true });
     }
@@ -3227,11 +3227,86 @@ describe('ccrc doctor: skills — every home carries the SHIPPED skills (release
     expect(r.stdout).toMatch(/^SKIP skills: this box records CCRC_ROLE=server/m);
   });
 
+  it('a server-role box skips EVERY per-account check the installer no longer converges there (D-3111)', () => {
+    // The installer and the doctor say the same thing about a server-role box:
+    // it hosts no sessions, so wrappers, credentials, agent-home memory, lane
+    // settings and pool markers are nobody's concern there — a server box's
+    // `ccrc update` (which ends with doctor) must not exit 1 over launchers
+    // and homes ccrc does not manage on it.
+    const home = healthy('ccrc-doctor-server-skips-');
+    writeCcrcEnv(home, ['CCRC_ROLE=server', 'CCRC_FLEET=local', 'CCRC_HOST=ccrc-fixture.invalid', 'CCRC_PORT=7788', ''].join('\n'));
+    const r = runDoctor(home);
+    for (const name of ['wrappers', 'accounts', 'memory', 'routing', 'pools', 'skills']) {
+      expect(r.stdout).toMatch(new RegExp(`^SKIP ${name}: this box records CCRC_ROLE=server, so it hosts no sessions`, 'm'));
+      expect(r.stdout, `${name} still printed a verdict on a server-role box`).not.toMatch(new RegExp(`^(PASS|WARN|FAIL) ${name}:`, 'm'));
+    }
+  });
+
   it('skips, never passes vacuously, when the roster names no home that exists on this box', () => {
     const home = healthy('ccrc-doctor-skills-nohome-');
     rmSync(join(home, '.claude'), { recursive: true });
     const r = runDoctor(home);
     expect(r.stdout).toMatch(/^SKIP skills: none of the roster's config directories exist/m);
+  });
+
+  it('names EVERY skill the shipped tree lacks in one FAIL, not the first it meets (R19)', () => {
+    const home = healthy('ccrc-doctor-skills-notree-two-');
+    rmSync(join(home, 'ccrc', 'ccd', 'reviewer-skill'));
+    rmSync(join(home, 'ccrc', 'ccd', 'worker-skill'));
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^FAIL skills: the shipped tree has no .*worker-skill.*, .*reviewer-skill/m);
+    expect((r.stdout.match(/^FAIL skills:/mg) ?? []).length).toBe(1);
+  });
+
+  it('a roster whose every row is unusable SKIPs in its own words — not as "no config directory exists" (R19)', () => {
+    // Two conditions used to wear one SKIP sentence: no rostered home exists
+    // on this box, and no roster row survived the reader (a malformed id or
+    // configDirSuffix). The second is the wrappers check's finding; this one
+    // now hands off by name instead of blaming directories that were never
+    // looked for.
+    const home = healthy('ccrc-doctor-skills-norows-');
+    writeRoster(home, [{ id: 'Bad Id!', configDirSuffix: '.claude', exec: { kind: 'upstream' } } as unknown as RosterEntry]);
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(/^SKIP skills: no usable account in \$HOME\/\.ccrc\/accounts\.json — the 'wrappers' check above owns that$/m);
+    expect(r.stdout).not.toMatch(/^SKIP skills: none of the roster's config directories exist/m);
+  });
+
+  it('doctor --fix CURES a stale home from the shipped tree and re-measures it: FIX line, then PASS, exit 0 (R19)', () => {
+    const home = healthy('ccrc-doctor-skills-fix-');
+    const f = join(installed(home, '.claude', 'ccrc-reviewer'), 'SKILL.md');
+    const shipped = readFileSync(join(home, 'ccrc', 'ccd', 'reviewer-skill', 'SKILL.md'), 'utf8');
+    writeFileSync(f, shipped.replace('$HOME/.cc-clips/', '$WT/.ccrc-review/'));
+    rmSync(installed(home, '.claude', 'ccrc-worker'), { recursive: true });
+    // Without --fix: the verdict stands and nothing is written.
+    let r = runDoctor(home);
+    expect(r.code).toBe(1);
+    expect(r.stdout).not.toMatch(/^FIX /m);
+    expect(readFileSync(f, 'utf8')).not.toBe(shipped);
+    // With --fix: the fixer runs the shipped tree's own installers into the
+    // rostered homes, says so, and the check is measured AGAIN — the PASS is a
+    // re-measurement, never a promise. The installers are bash scripts that
+    // call these coreutils; the contained PATH carries none of them by design,
+    // and a box's PATH carries all of them.
+    for (const t of ['rm', 'mkdir', 'mv', 'cp', 'date', 'basename']) linkReal(home, t);
+    r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.stdout).toMatch(/^FAIL skills: 2 skill\(s\) in the rostered homes/m);
+    const skillsLines = r.stdout.split('\n').filter((l) => /^(FAIL|FIX|PASS|SKIP) skills|^  remedy/.test(l)).join('\n');
+    expect(skillsLines).toMatch(/^FIX skills: re-ran the shipped tree's installers into 1 home\(s\)/m);
+    expect(r.stdout).toMatch(/^PASS skills: 1\/1 homes carry the shipped/m);
+    expect(r.code, r.stdout).toBe(0);
+    expect(readFileSync(f, 'utf8')).toBe(shipped);
+    expect(existsSync(join(installed(home, '.claude', 'ccrc-worker'), 'SKILL.md'))).toBe(true);
+    // The summary counts the RE-measured verdict: no failed line survives.
+    expect(r.stdout).toMatch(/ 0 failed$/m);
+  });
+
+  it('doctor --fix on a healthy box prints no FIX line and changes nothing; an unknown flag is still a usage refusal', () => {
+    const home = healthy('ccrc-doctor-fix-healthy-');
+    const r = runDoctor(home, ['doctor', '--fix']);
+    expect(r.code, r.stdout).toBe(0);
+    expect(r.stdout).not.toMatch(/^FIX /m);
+    const bad = runDoctor(home, ['doctor', '--repair']);
+    expect(bad.code).toBe(2);
   });
 
   it('fails when the shipped tree itself lacks a skill — nothing says what "installed" should mean', () => {

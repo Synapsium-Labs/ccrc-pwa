@@ -1460,7 +1460,9 @@ already running).
 
   version   print the build this box is running, from ~/.ccrc/build.json
   doctor    check this box's prerequisites — one PASS/WARN/FAIL line per
-            check, each non-pass followed by its remedy; exit 1 if any failed
+            check, each non-pass followed by its remedy; exit 1 if any failed.
+            --fix cures the checks that know how (skills: the shipped tree's
+            installers into every rostered home) and measures them again
   status    print what this box IS: its build stamp, its services, how many
             ccd sessions it holds, and — when it knows where its server is —
             whether the two boxes agree. Read-only; always exit 0
@@ -1547,6 +1549,8 @@ already running).
             hand-made siblings in that directory are never touched
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
+            Exit 3: the install completed but the trailing doctor failed
+            (the box IS on the new build; read its FAIL lines)
             [-f] follows, [-n LINES] limits — both pass straight through
   passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
             Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
@@ -2409,7 +2413,19 @@ cmd_status() {
 # NOT captured: bash's own "unbound variable" message is the best diagnosis of
 # that state and belongs in front of the operator.
 cmd_doctor() {
-  [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
+  # `--fix` (R19, ruled 2026-09-19, D-3113): a check that FAILS and declares a
+  # fixer (`_fix_<name>` in the check table) is CURED, then measured AGAIN —
+  # the verdict that counts is the re-measurement, never the fixer's own
+  # word. Without the flag doctor writes nothing, as it always has.
+  local fix=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --fix) fix=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
   local checks="$CCRC_HERE/ccrc-doctor-checks"
   [[ -f "$checks" ]] \
     || _ccrc_die "doctor's check table is missing: $checks — is this a complete ccrc install?"
@@ -2435,6 +2451,14 @@ cmd_doctor() {
       continue
     fi
     out="$( "_check_$name" )"; rc=$?
+    if [[ "$fix" -eq 1 && "$rc" -eq 1 ]] && declare -F "_fix_$name" >/dev/null 2>&1; then
+      # The measured FAIL is printed as measured, the fixer says what it did
+      # (its `FIX <name>:` lines), and the check runs a second time: the tally
+      # below counts the SECOND answer only.
+      [[ -z "$out" ]] || printf '%s\n' "$out"
+      "_fix_$name" || true
+      out="$( "_check_$name" )"; rc=$?
+    fi
     [[ -z "$out" ]] || printf '%s\n' "$out"
 
     # THE VERDICT LINES ARE COUNTED, NOT THE RETURN CODE, because a check may
@@ -9788,6 +9812,11 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
 }
 
 _inst_files() {   # the artifacts the box RUNS that are not on PATH
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: files: skipped — a server-role box hosts no sessions"; return 0; fi
   # Stage 1's list (`deploy.sh:374-387`): the session hook and its installer,
   # the swap-notify hook, the tmux config that carries truecolor to an attaching
   # client, and the statusline that writes `~/.cc-limits` telemetry. Every one
@@ -10415,6 +10444,11 @@ _inst_linger() {
 # means the roster's code cannot outlive the step, and the only thing that
 # crosses back is a count.
 _inst_dirs() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: dirs: skipped — a server-role box hosts no sessions"; return 0; fi
   local sh="$HOME/.ccrc/accounts.sh" n
   n="$(
     # shellcheck source=/dev/null
@@ -10614,6 +10648,11 @@ _inst_graphify_engine() {
 # byte-level) and returns non-zero having touched nothing when it refuses, so
 # there is nothing to unwind here.
 _inst_hooks() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: hooks: skipped — a server-role box hosts no sessions"; return 0; fi
   bash "$HOME/.cc-sessions/install-session-hooks.sh" \
     || _ccrc_die "install-session-hooks.sh refused — read its lines above; it never rewrites a settings.json it could not validate, so nothing was damaged"
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
@@ -10654,6 +10693,11 @@ _inst_hooks() {
 # not finish, so a refusal has damaged nothing and there is nothing to unwind —
 # and a box whose sessions cannot find their protocol is not a finished install.
 _inst_skills() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: skills: skipped — a server-role box hosts no sessions"; return 0; fi
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
   for name in coordinator-skill worker-skill reviewer-skill; do
@@ -10950,6 +10994,11 @@ _inst_graph_hooks_off() {
 # optimised away — the run still proves the roster and `$HOME/.local/bin` agree,
 # which is the state doctor's `wrappers` check judges two steps later.
 _inst_wrappers() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: wrappers: skipped — a server-role box hosts no sessions"; return 0; fi
   cmd_wrappers || _ccrc_die "wrapper convergence refused — read the lines above"
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
@@ -11131,17 +11180,37 @@ cmd_update() {
   case "$role" in server|fleet|both) ;; *) role="" ;; esac
 
   echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
+  # The completed-install record is written LAST by the spine (`_inst_installed`).
+  # Cleared here, right before the staged install, its presence afterwards
+  # means ONE thing — this run's spine ran to its end — which is what tells a
+  # non-zero exit apart below (D-3114). A box mid-update with no record reads
+  # `install: incomplete` to `update --check`, which is the truth of it.
+  rm -f "$BOX_INSTALLED_FILE"
   local inst_rc=0
   if [ -n "$role" ]; then
     bash "$UPD_TREE/ccd/ccrc" install --role "$role" || inst_rc=$?
   else
     bash "$UPD_TREE/ccd/ccrc" install || inst_rc=$?
   fi
-  [ "$inst_rc" -eq 0 ] \
-    || _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+  # ONE EXIT CODE CARRIED TWO FACTS (D-3114, measured on the first live
+  # rollout): the staged install ends with doctor, so a box that MOVED and
+  # then failed a pre-existing doctor check exited 1 exactly like a spine that
+  # died mid-way — and rollout read both as "did not move". The record splits
+  # them: present → completed, unhealthy (say so, sweep, report, exit 3);
+  # absent → died (die as before, the backup named).
+  local doctor_failed=0
+  if [ "$inst_rc" -ne 0 ]; then
+    if [ -f "$BOX_INSTALLED_FILE" ]; then
+      doctor_failed=1
+      echo "update: the staged install completed (the record is written) but its trailing doctor exited $inst_rc — this box IS on $UPD_VERSION; the FAIL lines above are the box's health, not the update's, and 'ccrc doctor' re-reads them"
+    else
+      _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+    fi
+  fi
 
   _upd_sweep
   _upd_report "$old_desc" "$old_version"
+  [ "$doctor_failed" -eq 0 ] || exit 3
 }
 
 # One warning, or silence — never a refusal and never a guess. Address
@@ -11684,6 +11753,7 @@ cmd_rollout() {
   # and the check line is looked for ANYWHERE in stdout, first match wins.
   # The refusal now fires only when no `check: ` line exists at all.
   local i out first line state box sha allcurrent=1
+  local -a states=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
     out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
@@ -11698,9 +11768,20 @@ cmd_rollout() {
     sha="${line#*sha=}"; sha="${sha%% *}"
     state="${line##*state=}"
     echo "rollout: ${labels[$i]}: $box (${sha:0:8}) → $ROLLOUT_VERSION [$state]"
+    states+=("$state")
     [ "$state" = current ] || allcurrent=0
   done
   if [ "$check" -eq 1 ]; then
+    # R17 (ruled 2026-09-19, D-3110): `--check --force` is not the refusal
+    # `update` gives the pair, and not the silent drop it used to be — it
+    # MEASURES, then says what --force would do: every box in the order it
+    # would run, with the state the check just read. The exit code stays
+    # --check's own.
+    if [ "$force" -eq 1 ]; then
+      local would=""
+      for i in "${!boxes[@]}"; do would="$would${would:+, }${labels[$i]} [${states[$i]}]"; done
+      echo "rollout: with --force, ${#boxes[@]} box(es) would run 'ccrc update --to $ROLLOUT_VERSION --force': $would — nothing was touched"
+    fi
     [ "$allcurrent" -eq 1 ] && return 0
     return 1
   fi
@@ -11710,13 +11791,20 @@ cmd_rollout() {
   fi
 
   # Steps 4–5 — each box in order; stop on the first failure.
-  local forceflag="" rc=0 untouched=""
+  local forceflag="" rc=0 untouched="" unhealthy=0
   [ "$force" -eq 1 ] && forceflag=" --force"
   for i in "${!boxes[@]}"; do
     echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$forceflag"
     "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$forceflag" 2>&1 | sed "s/^/${labels[$i]}: /"
     rc="${PIPESTATUS[0]}"
-    if [ "$rc" -ne 0 ]; then
+    # 3 from update (D-3114) = the box MOVED and its trailing doctor failed:
+    # the box's health, not the rollout's — relay it, carry on, verify, and
+    # say it again in this verb's own exit code. Anything else non-zero is a
+    # box that did not move, and the rollout stops there as before.
+    if [ "$rc" -eq 3 ]; then
+      unhealthy=1
+      echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its doctor failed — read the ${labels[$i]}: FAIL lines above; that is the box's health, not the rollout's"
+    elif [ "$rc" -ne 0 ]; then
       untouched=""
       [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
       _ccrc_die "rollout: the ${labels[$i]} box's update exited $rc — stopped here.$untouched Its lines above name the backup taken before anything changed; deploy.sh remains the fallback"
@@ -11749,6 +11837,7 @@ cmd_rollout() {
     echo "rollout: $report — NOT agreed"; return 1
   fi
   echo "rollout: $report — agreed"
+  [ "$unhealthy" -eq 0 ] || return 3
 }
 
 # ── cmd_backup — update's step 2 standalone (stage 4, Task 8; spec §7) ────

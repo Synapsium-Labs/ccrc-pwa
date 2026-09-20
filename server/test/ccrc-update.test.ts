@@ -606,6 +606,48 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(existsSync(join(backup, 'coord.db'))).toBe(true);
   });
 
+  it('a spine that COMPLETED under a failing doctor exits 3, not 1: the record is written, the report prints, and the line says the box IS on the new build (D-3114)', () => {
+    // Measured 2026-09-20 on the live server box: record written, box on the
+    // new build, four pre-existing doctor FAILs, `ccrc update` exit 1 — and
+    // rollout read that 1 as "did not move". The record is written LAST by
+    // the spine, so its presence after a non-zero staged install means the
+    // spine ran to its end and the trailing doctor is what said 1.
+    const home = freshUpdateBox('ccrc-update-doctor-failed-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    rmSync(join(home, '.gitconfig'));   // the box's own health: git_email FAILs, the spine does not
+    packRelease(home, fullTree(home, {
+      version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000',
+    }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
+    expect(r.stdout).toMatch(/^FAIL git_email: /m);
+    expect(r.stdout).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1 — this box IS on v2\.0\.0; the FAIL lines above are the box's health, not the update's/m);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\n');
+    expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
+    expect(r.stderr).not.toMatch(/the staged install \(which ends with doctor\) exited/);
+  });
+
+  it('a spine that DIED mid-way still exits 1 with the backup named — and leaves NO completed-install record (D-3114)', () => {
+    // `npm ci` failing after the tree is placed — v0.0.2's own death shape
+    // (D-3105) — kills `_inst_tree` before the stamp and long before the
+    // record. The record was cleared before the staged install ran, so the
+    // box reads `incomplete` afterwards rather than the OLD build's record.
+    const home = freshUpdateBox('ccrc-update-died-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    writeFileSync(join(home, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha: 'newsha0000000000000000000000000000000000' }), { tag: 'v2.0.0' });
+    // Ahead of the recorder npm that `runUpdate` re-plants on every call.
+    mkdirSync(join(home, 'fail-bin'), { recursive: true });
+    writeFileSync(join(home, 'fail-bin', 'npm'), '#!/bin/sh\necho "fixture npm: refusing" >&2\nexit 1\n', { mode: 0o755 });
+    const r = runUpdate(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the staged install \(which ends with doctor\) exited 1 — read its lines above\. The backup taken BEFORE it ran is complete at/);
+    expect(existsSync(join(home, '.ccrc', 'installed')), 'a died spine must leave no record — not even the old build\'s').toBe(false);
+    expect(r.stdout).not.toMatch(/^update: build: /m);
+  });
+
   it('checksum mismatch: refuses loudly and changes NOTHING — no backup, no install, ~/ccrc byte-identical', () => {
     const home = freshUpdateBox('ccrc-update-tamper-');
     plantOldBox(home, { version: 'v1.0.0' });

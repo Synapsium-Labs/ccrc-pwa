@@ -862,6 +862,26 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(r.code, r.stderr).toBe(0);
   });
 
+  it('--role server skips every per-account step — no config dir, hooks, skills, wrappers or session files are written on a box that hosts no sessions', () => {
+    // 2026-09-19, measured on the live server box: the spine converged 17
+    // accounts there — dirs, settings.json hooks (the operator's own ~/.claude
+    // included), skills, wrappers, and their statusline moved aside — while
+    // doctor's `skills` check SKIPs that role as "hosts no sessions". The
+    // installer now says the same thing the doctor says.
+    const home = freshBox('ccrc-install-server-skips-accounts-');
+    gitInit(treeRoot(home));   // a readable stamp, so the record can name a sha
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    for (const step of ['files', 'dirs', 'hooks', 'skills', 'wrappers']) {
+      expect(r.stdout).toMatch(new RegExp(`^install: ${step}: skipped — a server-role box hosts no sessions`, 'm'));
+    }
+    expect(existsSync(join(home, '.claude', 'skills', 'ccrc-worker')), 'a skill was placed on a server-role box').toBe(false);
+    expect(existsSync(join(home, '.claude', 'settings.json')), 'hooks were registered on a server-role box').toBe(false);
+    expect(existsSync(join(home, '.cc-sessions', 'session-hook.sh')), 'session files were placed on a server-role box').toBe(false);
+    // …and the record is still written LAST, so `update --check` reads a completed install.
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(true);
+  });
+
   it('does NOT demand an agent build for --role server (D-1159)', () => {
     // The gate is not decoration: a server-only box runs no agent unit, so an
     // absent agent build is not a fault there. Without this the preflight would

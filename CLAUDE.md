@@ -97,14 +97,17 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check] [--force]` — it
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
-  anyway). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
+  anyway). An update that completed under a failing doctor exits 3, not 1 — the box IS on the new build, its FAIL lines
+  are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
   left alone — `--force` reinstalls there too. **The first move onto the channel is by hand, once per box (D-3106):**
   `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
   box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
   install role `both`). Record the role, then `ssh <box> ccrc update --to vX.Y.Z`, fleet box first; from then on it is
   `rollout`. **What is
   running where:** `ccrc version` (with its `install:` line), `ccrc update --check`, `/health`'s `version`, the PWA's
-  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree). Coordinates live in `~/.ccrc/deploy.env`
+  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113). A
+  server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
+  skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
   (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
   `deploy/reference-fleet.md`, gitignored — env vars override that file and `CCRC_DEPLOY_ENV` points at another;
   `CCRC_SW_DENYLIST` for a box with co-tenants; the roster seed defaults to `deploy/accounts.default.json`).
@@ -257,7 +260,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   tip in its OWN worktree and mails one report; the coordinator rules. `REVIEWER_KICKOFF_PREFIX` prefixes its
   brief exactly as the worker's does. A skill reaches a home through `ccrc update`'s install spine (`_inst_skills`,
   every rostered home) — never assume a server-only deploy carried it; doctor's `skills` check measures every home
-  against the shipped tree.
+  against the shipped tree, and `ccrc doctor --fix` cures it from the same tree.
 
 ## Open on `main` — do NOT assume these are fixed
 `MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in
