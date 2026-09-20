@@ -346,6 +346,23 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0 --force`, `${SERVER} ccrc update --to v2.0.0 --force`]);
   });
 
+  it('--check --force measures, then says what --force WOULD do — no update argv, the check\'s own exit code (R17)', () => {
+    // The pair used to mean "measure, and silently drop the flag you also
+    // typed". Ruled 2026-09-19: it means measure, and report the act --force
+    // would take — which boxes would run `ccrc update --to <v> --force`.
+    const home = twoBoxFleet('ccrc-rollout-check-force-');
+    let r = run(home, ['--check', '--force']);
+    expect(r.code).toBe(1);                       // one box behind → --check's own verdict
+    expect(updates(home)).toEqual([]);
+    expect(r.stdout).toMatch(/^rollout: with --force, 2 box\(es\) would run 'ccrc update --to v2\.0\.0 --force': fleet \[behind\], server \[behind\] — nothing was touched$/m);
+    plantHost(home, FLEET, { role: 'fleet', version: 'v2.0.0' });
+    plantHost(home, SERVER, { role: 'server', version: 'v2.0.0' });
+    r = run(home, ['--check', '--force']);
+    expect(r.code).toBe(0);                       // every box current → 0, and STILL no update
+    expect(updates(home)).toEqual([]);
+    expect(r.stdout).toMatch(/^rollout: with --force, 2 box\(es\) would run 'ccrc update --to v2\.0\.0 --force': fleet \[current\], server \[current\] — nothing was touched$/m);
+  });
+
   it('a box whose install never completed is not "current" — it gets its update', () => {
     const home = twoBoxFleet('ccrc-rollout-incomplete-');
     plantHost(home, FLEET, { role: 'fleet', version: 'v2.0.0', installed: false });

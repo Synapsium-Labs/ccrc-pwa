@@ -2245,6 +2245,19 @@ _dr_wr_note() {
 }
 
 _check_wrappers() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip wrappers "this box records CCRC_ROLE=server, so it hosts no sessions and no launcher on it is ccrc's concern (its roster was validated when accounts.sh was generated)"
+    return 3
+  fi
   # THE LIBRARY IS A SEPARATE INSTALL ARTIFACT. `ccrc` finds its siblings
   # through `${BASH_SOURCE[0]}`, which bash does not resolve through a symlink,
   # so a link to `ccrc` on PATH does not rescue a missing one: all three files
@@ -2717,14 +2730,17 @@ _check_skills() {
     _dr_skip skills "this box records CCRC_ROLE=server, so it hosts no sessions and no account's skills directory is its concern"
     return 3
   fi
-  local tree="$BOX_TREE_DIR/ccd" name
+  local tree="$BOX_TREE_DIR/ccd" name notree=""
+  # EVERY missing one, in one line (R19, D-3112): the first-only probe sent an
+  # operator back once per missing directory.
   for name in coordinator-skill worker-skill reviewer-skill; do
-    if [ ! -d "$tree/$name" ]; then
-      _dr_fail skills "the shipped tree has no $tree/$name, so nothing on this box says what the installed skills should be" \
-        "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
-      return 1
-    fi
+    [ -d "$tree/$name" ] || notree="$notree${notree:+, }$tree/$name"
   done
+  if [ -n "$notree" ]; then
+    _dr_fail skills "the shipped tree has no $notree, so nothing on this box says what the installed skills should be" \
+      "run 'ccrc update' (or 'ccrc install' from a checkout) to place the shipped tree"
+    return 1
+  fi
   if ! command -v diff >/dev/null 2>&1; then
     _dr_warn skills "diff is not on PATH, so the installed skills could not be compared with the shipped tree" \
       "install diffutils"
@@ -2740,20 +2756,16 @@ _check_skills() {
     return 1
   fi
   local rows rc
-  rows="$(CCRC_DOCTOR_ROSTER="$roster" node -e '
-    const fs = require("fs");
-    let j;
-    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
-    catch (e) { process.exit(3); }
-    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
-    const ok = /^[a-z][a-z0-9-]{0,31}$/;
-    const dir = /^\.[A-Za-z0-9._-]{1,64}$/;
-    process.stdout.write(j.accounts
-      .filter((a) => a && typeof a === "object" && ok.test(a.id) && typeof a.configDirSuffix === "string" && dir.test(a.configDirSuffix))
-      .map((a) => a.id + "\t" + a.configDirSuffix).join("\n"));
-  ' 2>/dev/null)"; rc=$?
+  rows="$(_skills_roster_rows "$roster")"; rc=$?
   if [ "$rc" -ne 0 ]; then
     _dr_skip skills "\$HOME/.ccrc/accounts.json could not be read as a roster — the 'wrappers' check above owns that"
+    return 3
+  fi
+  # Two conditions used to share the "none of the config directories exist"
+  # SKIP below: no rostered home on this box, and NO USABLE ROW at all (R19,
+  # D-3112).
+  if [ -z "$rows" ]; then
+    _dr_skip skills "no usable account in \$HOME/.ccrc/accounts.json — the 'wrappers' check above owns that"
     return 3
   fi
   local id suffix dir homes=0 installed
@@ -2779,10 +2791,12 @@ _check_skills() {
     _dr_pass skills "$homes/$homes homes carry the shipped ccrc-coordinator, ccrc-worker and ccrc-reviewer"
     return 0
   fi
-  # THE HEADLINE SAYS BOTH CONDITIONS THE ENTRIES CAN SAY. An entry is
-  # either "<id>: <skill> differs" or "<id>: <skill> missing", and a headline
-  # naming only the first made a run whose every entry was `missing` read as
-  # a diff nobody could find.
+  # THE HEADLINE (R19, validated 2026-09-19, D-3112): an entry is "<id>: <skill>
+  # differs" (the home's copy differs from the shipped tree) or "<id>: <skill>
+  # missing" (absent from that home — the tree's own absence is the FAIL above,
+  # with its own sentence). The count is of account-and-skill pairs, so
+  # "installed skill(s)" misdescribed a missing one; this says both conditions
+  # on the side they are on.
   #
   # THE REMEDY NAMES THE SHIPPED TREE'S OWN INSTALLERS, both halves (R12).
   # R10 already moved the SOURCE to `$BOX_TREE_DIR` — the tree this check
@@ -2792,10 +2806,55 @@ _check_skills() {
   # rsyncs `ccd/` whole), so both halves can come from the one place the
   # build stamp stands behind. It also keeps `.cc-sessions/<dir>` spelled
   # exactly once in this file — `_check_pools`' own literal — which
-  # `pool-name-parity.test.ts` pins.
-  _dr_fail skills "${#stale[@]} installed skill(s) differ from, or are missing in, the shipped tree: $(_dr_join "${stale[@]}")" \
-    "run 'ccrc update' (re-places the tree and re-runs the installers) — or, when 'ccrc version' already names the intended build, converge from the tree the check just measured: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
+  # `pool-name-parity.test.ts` pins. `ccrc doctor --fix` runs exactly this
+  # remedy (`_fix_skills`, D-3113).
+  _dr_fail skills "${#stale[@]} skill(s) in the rostered homes differ from the shipped tree or are missing from their home: $(_dr_join "${stale[@]}")" \
+    "run 'ccrc doctor --fix' (the shipped tree's installers into every rostered home), or 'ccrc update' (re-places the tree and re-runs them) — or by hand: CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/coordinator-skill\" bash \"\$HOME/ccrc/ccd/install-coordinator-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/worker-skill\" bash \"\$HOME/ccrc/ccd/install-worker-skill.sh\"; CCRC_SKILL_SRC=\"\$HOME/ccrc/ccd/reviewer-skill\" bash \"\$HOME/ccrc/ccd/install-reviewer-skill.sh\""
   return 1
+}
+
+# The roster rows `_check_skills` and `_fix_skills` both read: "<id>\t<suffix>"
+# per usable account, exit 3 unreadable / 4 not a roster (the check's own
+# codes, unchanged). One reader, so the cure converges exactly the homes the
+# check measured.
+_skills_roster_rows() {   # <roster path>
+  CCRC_DOCTOR_ROSTER="$1" node -e '
+    const fs = require("fs");
+    let j;
+    try { j = JSON.parse(fs.readFileSync(process.env.CCRC_DOCTOR_ROSTER, "utf8")); }
+    catch (e) { process.exit(3); }
+    if (!j || typeof j !== "object" || !Array.isArray(j.accounts)) process.exit(4);
+    const ok = /^[a-z][a-z0-9-]{0,31}$/;
+    const dir = /^\.[A-Za-z0-9._-]{1,64}$/;
+    process.stdout.write(j.accounts
+      .filter((a) => a && typeof a === "object" && ok.test(a.id) && typeof a.configDirSuffix === "string" && dir.test(a.configDirSuffix))
+      .map((a) => a.id + "\t" + a.configDirSuffix).join("\n"));
+  ' 2>/dev/null
+}
+
+# The cure `ccrc doctor --fix` runs for `skills` (R19, ruled 2026-09-19,
+# D-3113): the shipped tree's OWN installers — the remedy the FAIL prints —
+# into every rostered home that exists on this box. Idempotent; the check then
+# measures again and the re-measurement is the verdict.
+_fix_skills() {
+  local tree="$BOX_TREE_DIR/ccd" roster="$HOME/.ccrc/accounts.json" rows id suffix dir name said n=0 list=""
+  rows="$(_skills_roster_rows "$roster")" || { echo "FIX skills: refused — \$HOME/.ccrc/accounts.json could not be read as a roster"; return 1; }
+  while IFS=$'\t' read -r id suffix; do
+    [ -n "$id" ] || continue
+    dir="$HOME/$suffix"
+    [ -d "$dir" ] || continue
+    for name in coordinator worker reviewer; do
+      # The interpreter running THIS file, not whatever `bash` PATH resolves to —
+      # doctor runs under a contained PATH in tests and under an operator's PATH
+      # on a box, and the installer is bash either way.
+      if ! said="$(CCRC_SKILL_SRC="$tree/$name-skill" "${BASH:-bash}" "$tree/install-$name-skill.sh" --homes "$dir" 2>&1)"; then
+        echo "FIX skills: refused — $tree/install-$name-skill.sh --homes $dir said: ${said##*$'\n'}"; return 1
+      fi
+    done
+    n=$((n + 1)); list="$list${list:+, }$id"
+  done <<< "$rows"
+  [ "$n" -gt 0 ] || { echo "FIX skills: nothing to cure — no rostered home exists on this box"; return 0; }
+  echo "FIX skills: re-ran the shipped tree's installers into $n home(s): $list"
 }
 
 # ── the accounts surface, by existence ────────────────────────────────────
@@ -2832,6 +2891,19 @@ _check_skills() {
 # usually has no node stub either and the sentence its operator needs is about
 # the roster.
 _check_accounts() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip accounts "this box records CCRC_ROLE=server, so it hosts no sessions and no account's credential or provider config on it is ccrc's concern"
+    return 3
+  fi
   local roster="$HOME/.ccrc/accounts.json" gen="$CCRC_HERE/../deploy/account-op.mjs"
   if [ ! -f "$roster" ] || [ ! -r "$roster" ]; then
     _dr_warn accounts "no readable account roster at \$HOME/.ccrc/accounts.json, so no account's credential or provider config was measured" \
@@ -3026,6 +3098,19 @@ _pool_has_line() {   # needle haystack -> 0 iff needle is one whole line of hays
   return 1
 }
 _check_pools() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip pools "this box records CCRC_ROLE=server, so it hosts no sessions and no pool marker on it is ccrc's concern"
+    return 3
+  fi
   # THE `pools` SEGMENT BELOW IS THE THIRD SPELLING of a name TypeScript holds
   # as `POOLS_DIR_NAME` (`server/src/pools.ts`) and `ccd/ccd` as
   # `POOLS_DIR="$REG/pools"`. It is spelled out rather than derived for the
@@ -4530,6 +4615,19 @@ _check_fleet() {
 # `.claude*` directory is the right answer — a silent blind spot for a name
 # this tool has no business knowing is worse than one more row in the census.
 _check_memory() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip memory "this box records CCRC_ROLE=server, so it hosts no sessions and no agent home's memory on it is ccrc's concern"
+    return 3
+  fi
   local h b d slug link store forked="" unreachable="" unmeasured="" line hooked rc=0
   for h in "$HOME"/.claude*/; do
     b="${h%/}"; b="${b##*/}"
@@ -4606,6 +4704,19 @@ _check_memory() {
 }
 
 _check_routing() {
+  # A server-role box hosts no sessions (D-3111): the installer converges
+  # nothing per account there, so this check measures nothing there either —
+  # the same sentence `_check_skills` has said since it shipped. `-f` before
+  # `-r` (D-3025).
+  local _srv_role=""
+  # `${BOX_ENV_FILE:-}`: this file is sourced under `set -u` by callers that
+  # are not `ccrc` (a test sources it bare and calls one check), so a bare
+  # `$BOX_ENV_FILE` here is an unbound-variable death, not a skipped gate.
+  [ -f "${BOX_ENV_FILE:-}" ] && [ -r "${BOX_ENV_FILE:-}" ] && _srv_role="$(_box_env_value "$BOX_ENV_FILE" CCRC_ROLE)"
+  if [ "$_srv_role" = server ]; then
+    _dr_skip routing "this box records CCRC_ROLE=server, so it hosts no sessions and no lane's settings.json on it is ccrc's concern"
+    return 3
+  fi
   # Routing spec 2026-09-14 §5.2 / §8: on an Anthropic lane the subagent floor
   # rides the spawn PROCESS ENV (`CLAUDE_CODE_SUBAGENT_MODEL`, composed by ccd
   # from the routing record), which a `settings.json` env key would override

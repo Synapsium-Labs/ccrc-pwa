@@ -1460,7 +1460,9 @@ already running).
 
   version   print the build this box is running, from ~/.ccrc/build.json
   doctor    check this box's prerequisites — one PASS/WARN/FAIL line per
-            check, each non-pass followed by its remedy; exit 1 if any failed
+            check, each non-pass followed by its remedy; exit 1 if any failed.
+            --fix cures the checks that know how (skills: the shipped tree's
+            installers into every rostered home) and measures them again
   status    print what this box IS: its build stamp, its services, how many
             ccd sessions it holds, and — when it knows where its server is —
             whether the two boxes agree. Read-only; always exit 0
@@ -2409,7 +2411,19 @@ cmd_status() {
 # NOT captured: bash's own "unbound variable" message is the best diagnosis of
 # that state and belongs in front of the operator.
 cmd_doctor() {
-  [[ $# -eq 0 ]] || _ccrc_usage_die "$1"
+  # `--fix` (R19, ruled 2026-09-19, D-3113): a check that FAILS and declares a
+  # fixer (`_fix_<name>` in the check table) is CURED, then measured AGAIN —
+  # the verdict that counts is the re-measurement, never the fixer's own
+  # word. Without the flag doctor writes nothing, as it always has.
+  local fix=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --fix) fix=1 ;;
+      -h|--help) usage; exit 0 ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
   local checks="$CCRC_HERE/ccrc-doctor-checks"
   [[ -f "$checks" ]] \
     || _ccrc_die "doctor's check table is missing: $checks — is this a complete ccrc install?"
@@ -2435,6 +2449,14 @@ cmd_doctor() {
       continue
     fi
     out="$( "_check_$name" )"; rc=$?
+    if [[ "$fix" -eq 1 && "$rc" -eq 1 ]] && declare -F "_fix_$name" >/dev/null 2>&1; then
+      # The measured FAIL is printed as measured, the fixer says what it did
+      # (its `FIX <name>:` lines), and the check runs a second time: the tally
+      # below counts the SECOND answer only.
+      [[ -z "$out" ]] || printf '%s\n' "$out"
+      "_fix_$name" || true
+      out="$( "_check_$name" )"; rc=$?
+    fi
     [[ -z "$out" ]] || printf '%s\n' "$out"
 
     # THE VERDICT LINES ARE COUNTED, NOT THE RETURN CODE, because a check may
@@ -9788,6 +9810,11 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
 }
 
 _inst_files() {   # the artifacts the box RUNS that are not on PATH
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: files: skipped — a server-role box hosts no sessions"; return 0; fi
   # Stage 1's list (`deploy.sh:374-387`): the session hook and its installer,
   # the swap-notify hook, the tmux config that carries truecolor to an attaching
   # client, and the statusline that writes `~/.cc-limits` telemetry. Every one
@@ -10415,6 +10442,11 @@ _inst_linger() {
 # means the roster's code cannot outlive the step, and the only thing that
 # crosses back is a count.
 _inst_dirs() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: dirs: skipped — a server-role box hosts no sessions"; return 0; fi
   local sh="$HOME/.ccrc/accounts.sh" n
   n="$(
     # shellcheck source=/dev/null
@@ -10614,6 +10646,11 @@ _inst_graphify_engine() {
 # byte-level) and returns non-zero having touched nothing when it refuses, so
 # there is nothing to unwind here.
 _inst_hooks() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: hooks: skipped — a server-role box hosts no sessions"; return 0; fi
   bash "$HOME/.cc-sessions/install-session-hooks.sh" \
     || _ccrc_die "install-session-hooks.sh refused — read its lines above; it never rewrites a settings.json it could not validate, so nothing was damaged"
   echo "install: hooks: session-hook.sh and the statusline registered in each account's settings.json"
@@ -10654,6 +10691,11 @@ _inst_hooks() {
 # not finish, so a refusal has damaged nothing and there is nothing to unwind —
 # and a box whose sessions cannot find their protocol is not a finished install.
 _inst_skills() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: skills: skipped — a server-role box hosts no sessions"; return 0; fi
   local tree="$BOX_TREE_DIR" name
   mkdir -p "$HOME/.cc-sessions" || _ccrc_die "cannot create \$HOME/.cc-sessions"
   for name in coordinator-skill worker-skill reviewer-skill; do
@@ -10950,6 +10992,11 @@ _inst_graph_hooks_off() {
 # optimised away — the run still proves the roster and `$HOME/.local/bin` agree,
 # which is the state doctor's `wrappers` check judges two steps later.
 _inst_wrappers() {
+  # A server-role box hosts no sessions, so nothing per account is its
+  # concern — the same sentence doctor's `skills` check says (D-3111).
+  # Measured 2026-09-19 on the live server box before this gate existed:
+  # 17 accounts converged there, the operator's own ~/.claude included.
+  if [ "$INST_ROLE" = server ]; then echo "install: wrappers: skipped — a server-role box hosts no sessions"; return 0; fi
   cmd_wrappers || _ccrc_die "wrapper convergence refused — read the lines above"
   echo "install: wrappers: converged (the summary line above is ccrc wrappers' own)"
 }
@@ -11684,6 +11731,7 @@ cmd_rollout() {
   # and the check line is looked for ANYWHERE in stdout, first match wins.
   # The refusal now fires only when no `check: ` line exists at all.
   local i out first line state box sha allcurrent=1
+  local -a states=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
     out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
@@ -11698,9 +11746,20 @@ cmd_rollout() {
     sha="${line#*sha=}"; sha="${sha%% *}"
     state="${line##*state=}"
     echo "rollout: ${labels[$i]}: $box (${sha:0:8}) → $ROLLOUT_VERSION [$state]"
+    states+=("$state")
     [ "$state" = current ] || allcurrent=0
   done
   if [ "$check" -eq 1 ]; then
+    # R17 (ruled 2026-09-19, D-3110): `--check --force` is not the refusal
+    # `update` gives the pair, and not the silent drop it used to be — it
+    # MEASURES, then says what --force would do: every box in the order it
+    # would run, with the state the check just read. The exit code stays
+    # --check's own.
+    if [ "$force" -eq 1 ]; then
+      local would=""
+      for i in "${!boxes[@]}"; do would="$would${would:+, }${labels[$i]} [${states[$i]}]"; done
+      echo "rollout: with --force, ${#boxes[@]} box(es) would run 'ccrc update --to $ROLLOUT_VERSION --force': $would — nothing was touched"
+    fi
     [ "$allcurrent" -eq 1 ] && return 0
     return 1
   fi
