@@ -1490,6 +1490,43 @@ general remote-shell:
   `~/.config/systemd` was added to reach it.
 - **pty**: `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>`, with
   `sessionId` sanitized to `[A-Za-z0-9_-]+` — never an arbitrary command.
+- **`hostStat`**: the one op that carries no path. It exists so the host-load
+  gauge (below) does not need `/proc` on the read whitelist — the agent reads
+  its own `/proc/stat` and `/proc/meminfo`, samples them a measured interval
+  apart and answers the computed reading. `/proc` stays unreachable through
+  `read`, which is what keeps every `/proc/<pid>/environ` on that box out of
+  the PWA's reach (`agent/test/hoststat.test.ts` pins it).
+
+### Host load: the box the sessions run on
+
+The accounts strip's last instrument is not an account. `GET /api/host`
+answers one reading of the box the SESSIONS run on — the fleet host in remote
+mode, this box in local mode — and the PWA draws it in two rows:
+
+- `cpu` — the whole box's average over the reading's own window, with the two
+  busiest logical threads marked as ticks on the same track. A pegged single
+  thread is invisible in a 20% average on a 16-thread box, and that is the
+  state worth catching. The row is deliberately NOT banded amber/red: a fleet
+  box at 80% CPU is a fleet box doing its job.
+- `mem` — used · cache (the part the kernel hands back) on the RAM bar,
+  banded at 75/90, with SWAP on its own violet hairline under it, scaled to
+  the swap total. Two tracks, as htop keeps Mem and Swp apart: swap is a
+  different device with its own total, and crammed into the RAM bar it would
+  land on the red segment exactly on the box closest to an OOM. Both rows are
+  a fixed height, so nothing shifts on the poll where swap first appears.
+
+It sits in its own fixed column at the right edge of the desktop bar (and as
+the last full-width row on a phone), so its position does not move as accounts
+are added, disabled or removed — and it is a SIBLING of the accounts strip,
+never a cell inside it, because that strip is one tap target onto `/accounts`.
+
+A reading that cannot be taken says WHICH condition it is, never 0%: `absent`
+(no `/proc` — not a Linux box), `unreadable` (there and denied), `unparsable`,
+`unsupported` (the agent predates the op — deploy the agent lane), `offline`
+(no agent link) and `timeout`. The two halves fail independently, so an
+unreadable `/proc/meminfo` still leaves the CPU row measured. The server
+caches the reading for 5 s and shares one in-flight request, so twenty phones
+polling together still cost the fleet box one sample.
 
 ### Degraded mode
 
