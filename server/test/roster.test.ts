@@ -359,6 +359,57 @@ describe('parseRoster', () => {
     // caught it would refuse a legal path and send the operator hunting.
     expect(() => parseRoster(withCodex({ authDir: '.ccrc-codex/auth' }))).not.toThrow();
   });
+
+  it('refuses a codex lane with no provider — the kind means the backend it speaks to', () => {
+    expect(() => parseRoster(withCodex({ provider: undefined })))
+      .toThrow(/account "codex-a" has exec\.kind "codex" and .*exec\.provider/);
+  });
+
+  it('refuses a codex lane whose provider is not openai', () => {
+    expect(() => parseRoster(withCodex({ provider: 'anthropic' })))
+      .toThrow(/exec\.provider "anthropic".*"codex".*"openai"/);
+  });
+
+  // Whole-roster, not per-account: the collision is between two entries, so it
+  // belongs beside the duplicate-configDirSuffix gate and nowhere else.
+  const twoCodex = (bExec: Record<string, unknown>) => ({
+    version: 1,
+    accounts: [
+      {
+        id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      },
+      {
+        id: 'codex-a', label: 'team·codex', configDirSuffix: '.claude-codex-a',
+        exec: {
+          kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/codex-a',
+        },
+        homeAble: true, hue: 'violet', telemetry: 'codex',
+      },
+      {
+        id: 'codex-b', label: 'alt·codex', configDirSuffix: '.claude-codex-b',
+        exec: {
+          kind: 'codex', provider: 'openai', proxyPort: 45020, litellmPort: 45021,
+          authDir: '.local/share/ccrc/codex/codex-b', ...bExec,
+        },
+        homeAble: true, hue: 'amber', telemetry: 'codex',
+      },
+    ],
+  });
+
+  it('two codex lanes with disjoint port pairs parse', () => {
+    expect(parseRoster(twoCodex({})).accounts).toHaveLength(3);
+  });
+
+  it.each([
+    ["b's proxy collides with a's proxy", { proxyPort: 45010 }],
+    ["b's proxy collides with a's litellm", { proxyPort: 45011 }],
+    ["b's litellm collides with a's proxy", { litellmPort: 45010 }],
+  ])('refuses when %s', (_why, over) => {
+    expect(() => parseRoster(twoCodex(over)))
+      .toThrow(/accounts "codex-a" and "codex-b" both use port/);
+  });
 });
 
 describe('exec.secretsFile is a path, not merely a string', () => {

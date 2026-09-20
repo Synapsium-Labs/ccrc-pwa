@@ -695,6 +695,18 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
           'to and the LiteLLM behind it are two listeners.',
       );
     }
+    const providerRaw = raw['provider'];
+    if (providerRaw !== 'openai') {
+      throw new RosterError(
+        providerRaw === undefined
+          ? `account "${id}" has exec.kind "codex" and no exec.provider.`
+          : `account "${id}" has exec.provider ${JSON.stringify(providerRaw)}, and exec.kind ` +
+            '"codex" accepts only "openai".',
+        `Set exec.provider for account "${id}" in ${ROSTER_PATH} to "openai". The kind names a ` +
+          'ChatGPT/Codex subscription lane, so the provider is not a choice — it is the one fact ' +
+          'the kind already asserts, spelled where every other kind spells it.',
+      );
+    }
     return {
       kind: 'codex',
       provider: 'openai',
@@ -1098,6 +1110,28 @@ export function parseRoster(json: unknown): Roster {
       );
     }
     seenDirs.set(a.configDirSuffix, a.id);
+  }
+
+  // THE SAME SHAPE AS `seenDirs`, and for the same reason: a collision is a
+  // fact about two entries, so it cannot be seen from inside either one.
+  // Both fields of every codex lane go into ONE map, because the hazard is a
+  // port serving two purposes, not a field colliding with its own name — a
+  // lane whose shim port is another lane's LiteLLM port is just as wrong.
+  const seenPorts = new Map<number, string>();
+  for (const a of drafts) {
+    if (a.exec.kind !== 'codex') continue;
+    for (const port of [a.exec.proxyPort, a.exec.litellmPort]) {
+      const owner = seenPorts.get(port);
+      if (owner !== undefined && owner !== a.id) {
+        throw new RosterError(
+          `accounts "${owner}" and "${a.id}" both use port ${port}.`,
+          `Give each codex lane in ${ROSTER_PATH} its own two ports. Two lanes on one port send ` +
+            "one account's requests through the other account's OAuth, and the box cannot tell " +
+            'you which turn went where afterwards.',
+        );
+      }
+      seenPorts.set(port, a.id);
+    }
   }
 
   const upstreams = drafts.filter((a) => a.exec.kind === 'upstream');
