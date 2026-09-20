@@ -31,7 +31,7 @@ Five input classes the spec implies but that no task's happy path exercises. Eac
 2. **A continuation chain that loops — A points at B, B points back at A.** Expected: the walk stops and answers a real file, never spins. (Task 2)
 3. **A successor that exists but is zero bytes** — the fork announced itself before writing anything. Expected: not followed yet. Swapping a full conversation for an empty one is worse than the freeze this fixes. (Task 2)
 4. **A last line longer than the 8 KiB tail window.** Expected: "no marker", never a truncated parse that follows a uuid assembled from half a line. (Task 1)
-5. **`retry()` on a pending that has already been marked queued.** Expected: the flag clears, so a re-sent message does not inherit the previous attempt's state. (Task 5)
+5. **Re-sending a pending that has already been marked queued.** `resolve()` — the draft-conflict re-send — is the one path with no state guard, so it is the reachable route; `retry()` acts only on `failed`, which a queued pending reaches solely by being re-sent and failing. Expected: the flag clears on both, so a re-sent message does not inherit the previous attempt's state. (Task 5)
 
 ---
 
@@ -417,7 +417,12 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
 cd server && ./node_modules/.bin/vitest run test/transcript-ladder.test.ts
 ```
 
-Expected: PASS. Then the whole server suite, because `TranscriptResolution` gained a required field and every literal that builds one must now compute it:
+Expected: PASS — after you fix the fallout. `TranscriptResolution.found` gained a REQUIRED field, so two sets of sites move:
+
+- the three `kind: 'found'` returns inside `ladder` (`resolve.ts:291`, `:297`, `:352`), which the implementation above already covers;
+- roughly fifteen `toEqual({ kind: 'found', path, rung, account })` assertions already in `transcript-ladder.test.ts`. `toEqual` is exact, so each needs `uuid` added — the requested uuid in every one of them, because none of those fixtures carries a marker. Find them with `grep -n "kind: 'found'" server/test/transcript-ladder.test.ts`.
+
+Then the whole server suite:
 
 ```bash
 cd server && ./node_modules/.bin/vitest run
@@ -698,7 +703,7 @@ cd server && ./node_modules/.bin/vitest run
 | Mutation | Must go red |
 |---|---|
 | delete the uuid clause | "re-points to a successor at the same rung" |
-| move the uuid clause below the `rungRank(next) < rungRank(cur)` line | no change (it is still reached) — confirm, then leave it first for readability |
+| move the uuid clause to the END, after `return !tailedExists` | it becomes unreachable — "re-points to a successor at the same rung" goes red, which is the point: the clause is only correct ahead of that return |
 | make the repoint send `rotated` | "sends a fresh backlog and never `rotated`" |
 
 - [ ] **Step 6: Commit**
@@ -776,17 +781,31 @@ describe('a queued send', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  // Review Focus 5.
-  it('clears the queued flag on retry', async () => {
+  // Review Focus 5. `resolve()` is the reachable route: it is the one re-send
+  // with no state guard, so it can act on a pending that is still `sending`.
+  // `retry()` guards `state !== 'failed'` and a queued pending is `sending`, so
+  // it is reached only after a re-send has failed — covered by the second case.
+  it('clears the queued flag when the pending is re-sent', async () => {
     vi.useFakeTimers();
-    const store = createSessionStore('s5', { api: failThenOk, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+    const store = createSessionStore('s5', { api: okApi, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
     await store.getState().send('hello');
     vi.advanceTimersByTime(60);
-    store.getState().discard('p1');
-    await store.getState().send('hello');
-    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
     expect(store.getState().pending[0]?.queued).toBe(true);
-    store.getState().retry(store.getState().pending[0]!.key);
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    expect(store.getState().pending[0]?.queued).toBeUndefined();
+  });
+
+  it('clears the queued flag on retry after a failed re-send', async () => {
+    vi.useFakeTimers();
+    const store = createSessionStore('s6', { api: okThenFail, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);
+    const key = store.getState().pending[0]!.key;
+    store.getState().resolve(key, 'hello', { replaceDraft: true });   // this one fails
+    await vi.runAllTicks?.();
+    expect(store.getState().pending[0]).toMatchObject({ state: 'failed', queued: true });
+    store.getState().retry(key);
     expect(store.getState().pending[0]?.queued).toBeUndefined();
   });
 });
@@ -1546,7 +1565,19 @@ _check_transcripts() {
   # `$HOME/.cc-sessions` is spelled out, not taken from another tool's variable:
   # this file is sourced under `set -u` by things that are not `ccrc`. Same rule
   # `_check_pools` states for the pools directory.
-  local reg="$HOME/.cc-sessions" u id uuid cfg wd munged f stale="" n=0
+  local reg="$HOME/.cc-sessions" sh="$HOME/.ccrc/accounts.sh" u id uuid cfg wd munged f stale="" n=0
+  # `_ccrc_cfg_dir` is NOT in this file's scope by default — it comes from the
+  # roster projection, which `_check_routing` and the `skills` check both source
+  # before they use it, each guarding with `declare -F`. Same idiom here.
+  # An unreadable projection WARNs rather than FAILs: a broken roster is the
+  # `wrappers` check's subject, and this one has simply not measured anything.
+  # shellcheck disable=SC1090
+  . "$sh" 2>/dev/null
+  if ! declare -F _ccrc_cfg_dir >/dev/null 2>&1; then
+    _dr_warn transcripts "could not read the roster projection at \$HOME/.ccrc/accounts.sh, so no session's config dir can be resolved" \
+      "re-run ccrc install to regenerate it — the wrappers check owns the roster's health"
+    return 2
+  fi
   if [ -e "$reg" ] && [ ! -x "$reg" ]; then
     _dr_fail transcripts "$reg is not a searchable directory, so no session's transcript can be reached" \
       "fix its mode (chmod 700 $reg) — until then nothing on this box can measure which session reads what"
@@ -1561,7 +1592,7 @@ _check_transcripts() {
     # This check runs OUTSIDE ccd — it is sourced under `set -u` by things that
     # are not `ccrc` — so it reads the row's own fields rather than calling
     # ccd's helpers, and it asks ccd for nothing it can read itself.
-    cfg=$(_ccrc_cfg_dir "$(cat "$reg/$id.wrapper" 2>/dev/null)") || continue
+    cfg=$(_ccrc_cfg_dir "$(cat "$reg/$id.wrapper" 2>/dev/null)" 2>/dev/null) || continue
     [ -n "$cfg" ] || continue
     wd=$(cat "$reg/$id.workdir" 2>/dev/null) || continue
     [ -n "$wd" ] || continue
