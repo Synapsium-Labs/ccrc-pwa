@@ -20,7 +20,7 @@
 - **The workflows never name the org** (`single-definition.test.ts:2795` at `7d78b376`): `release-stable.sh` reaches its repo through `gh`'s `{owner}/{repo}` placeholders and the workflows through the checkout.
 - **Tests use fixture HOMEs only, never the live `$HOME`**; every network tool is a recording stub or a poison (`curl`, `gh`, `npm`); the one real network act in this plan is Task 1's spike, which runs in the session scratchpad and is what it measures.
 - **Mutation-table discipline:** every guard ships with a test that goes red when the guard is removed. Each task's test list says which spec §18 row it pins.
-- **Deviation numbers are issued by the allocator** (`ccrc-api ledger allocate`), never looked up; the block below was minted for this plan on 2026-09-20 and is defined here in the same act. A worker that finds a new deviation and cannot reach the allocator writes `D-TBD-<slug>` and reports it.
+- **Deviation numbers are issued by the allocator** (`ccrc-api ledger allocate`), never looked up; the block below was minted for this plan on 2026-09-20 and is defined here in the same act. A worker that finds a new deviation and cannot reach the allocator writes `D-TBD-<slug>` and reports it — and never commits it: `server/test/dtbd.test.ts` refuses a concrete placeholder from landing, so a plan names a pending departure by its slug alone and mints the number when it fires.
 - **No docserver URL, hostname, username or absolute home path in any tracked file** (`topology-clean.test.ts`); the pre-push hook refuses them. Every new file — fixture bundles, the vendored root — is checked before its commit by running `test/topology-clean.test.ts`, which scans the staged tree for the residue classes by pattern (the classes are never spelled outside that file).
 - **README edits are line-neutral where `pools-prose.test.ts` holds the count** (its README passage is the pools section, not the release section — measured: `pools-prose.test.ts:107` reads README whole but asserts on the flattened pools passage; still, run it after every README edit).
 - **Node floor `>=22.13.0`** unchanged; the verifier uses nothing newer than `node:crypto`, `node:fs`, `node:module`, `node:child_process`.
@@ -28,7 +28,7 @@
 
 ## Deviations found
 
-Plan-level departures from the spec's literal text — the ten found while planning against the measured tree, and the ones each task's review found afterwards. Every number below was issued by the allocator (`ccrc-api ledger allocate`) in the same act as its definition: the planning block on 2026-09-20 (floor 3115 before it), then one small block per task as the reviews found departures; the list is the census, so a bullet is added and never a count kept here. `D-TBD-no-tag-fixture` is a named contingency a worker mints only if Task 7 Step 5 is declined.
+Plan-level departures from the spec's literal text — the ten found while planning against the measured tree, and the ones each task's review found afterwards. Every number below was issued by the allocator (`ccrc-api ledger allocate`) in the same act as its definition: the planning block on 2026-09-20 (floor 3115 before it), then one small block per task as the reviews found departures; the list is the census, so a bullet is added and never a count kept here. One contingency is named but unnumbered — the **no-tag-fixture** deviation — minted from the allocator only if Task 7 Step 5 is declined, and defined below in that same act; it is never written as a placeholder token, which `server/test/dtbd.test.ts` refuses from landing (measured: PR #161's first CI run went red on exactly that).
 
 - **D-3115** — `deploy/release-main.sh` becomes two arms, `prepare` and `publish`, instead of one script. Spec §4 says the script's `gh release create` argv "names the bundle as a third artifact", but the bundle is produced by the attest ACTION, which cannot run inside a bash script; today's single-shot script publishes before any attest step could run. `prepare` derives the next tag, tags **locally only** and builds; the workflow attests; `publish` copies the bundle to its release name, pushes the tag and publishes all three artifacts `--prerelease`. Nothing reaches origin before `publish`'s push, so a failed attest step leaves origin untouched and a re-run derives the same number — the property the original trap protected, kept across the split.
 - **D-3116** — `verify-provenance.mjs` accepts `--blob-sha256 <hex>` beside `--blob <file>` on the `sigstore` backend. A release tarball measures 3.2 MB (v0.0.8, measured 2026-09-20), so the checked-in fixtures are bundles plus digests, never tarballs; `ccrc update` always passes `--blob`. The `gh` backend takes `--blob` only — it hashes the file itself.
@@ -1365,7 +1365,7 @@ git push --atomic origin main v0.1.0
 gh run watch "$(gh run list -w release -e push --limit 1 --json databaseId --jq '.[0].databaseId')"
 gh release view v0.1.0 --json isPrerelease,assets --jq '.isPrerelease, (.assets[] | .name)'
 ```
-Expected: a prerelease `v0.1.0` with three assets, and `release-main`'s run for that push says "already tagged v0.1.0; release.yml owns it". This is a product decision (the version line goes to 0.1) and a direct push to `main`; it is the operator's, not the worker's. If they decline, Task 8's `release.yml` case is written against a bundle obtained later and the plan records it as `D-TBD-no-tag-fixture` with the case marked pending — never `it.skip` (a skipped case is not a pin).
+Expected: a prerelease `v0.1.0` with three assets, and `release-main`'s run for that push says "already tagged v0.1.0; release.yml owns it". This is a product decision (the version line goes to 0.1) and a direct push to `main`; it is the operator's, not the worker's. If they decline, Task 8's `release.yml` case is written against a bundle obtained later and the plan records it as the no-tag-fixture deviation — a number minted from the allocator at that moment and defined under Deviations found, never a placeholder token — with the case marked pending; never `it.skip` (a skipped case is not a pin).
 
 ---
 
@@ -1397,7 +1397,7 @@ Expected: three lines added under `dependencies`; both files green. (These are t
 
 - [ ] **Step 2: Take the fixtures from the real releases**
 
-`MAIN_TAG` is Task 7 Step 3's tag; `TAG_TAG` is `v0.1.0` from Step 5 (or absent — then the `release-tag` files are not created and the two cases that need them are written but their `it` calls wrapped in a `describe` guarded by `existsSync(RELEASE_TAG_META)`, with the guard's ABSENCE recorded as the pending deviation D-TBD-no-tag-fixture; never `it.skip`).
+`MAIN_TAG` is Task 7 Step 3's tag; `TAG_TAG` is `v0.1.0` from Step 5 (or absent — then the `release-tag` files are not created and the two cases that need them are written but their `it` calls wrapped in a `describe` guarded by `existsSync(RELEASE_TAG_META)`, with the guard's ABSENCE recorded as the pending no-tag-fixture deviation under its minted number; never `it.skip`).
 
 ```bash
 F=server/test/fixtures/provenance; mkdir -p "$F"
@@ -1525,7 +1525,7 @@ describe('verify-provenance.mjs: release.yml\'s identity (the hand-cut tag)', ()
   const present = existsSync(RELEASE_TAG_META);
   const tagMeta = present ? JSON.parse(readFileSync(RELEASE_TAG_META, 'utf8')) as { tag: string; sha256: string } : null;
   it('the fixture from a release.yml-cut release is present (Task 7 Step 5)', () => {
-    expect(present, 'server/test/fixtures/provenance/release-tag.* missing — see plan D-TBD-no-tag-fixture').toBe(true);
+    expect(present, 'server/test/fixtures/provenance/release-tag.* missing — see the W1 plan, Deviations found: no-tag-fixture').toBe(true);
   });
   it('verifies under …/release.yml@refs/tags/<tag>, and under no other tag', () => {
     if (tagMeta === null) return;
@@ -1813,7 +1813,7 @@ process.stdout.write(`verified ${expectSubject} sha256:${digest} as ${accepted} 
 - [ ] **Step 6: Run it to verify it passes**
 
 Run: `cd server && ./node_modules/.bin/vitest run test/verify-provenance.test.ts`
-Expected: PASS, 16 cases (15 if the release-tag fixture is absent — then exactly one red, the presence case, and D-TBD-no-tag-fixture is written in this plan before the PR opens). If the sigstore cases refuse with a threshold or trust-material message, compare against the spike's Step 4 output: the code above is the spike's code with the identity loop; a difference between them is the bug.
+Expected: PASS, 16 cases (15 if the release-tag fixture is absent — then exactly one red, the presence case, and the no-tag-fixture deviation is minted and written into this plan's Deviations found before the PR opens). If the sigstore cases refuse with a threshold or trust-material message, compare against the spike's Step 4 output: the code above is the spike's code with the identity loop; a difference between them is the bug.
 
 - [ ] **Step 7: Mutation check (§18 rows 10 and 11)**
 
@@ -2848,7 +2848,7 @@ Expected: all green. Then the full server suite in foreground shards per the rep
 
 - [ ] **Step 4: Push, PR, merge, and the first promotion of a W1 node-side build**
 
-`git push`; `gh pr create` with a body naming the spec, this plan, D-3116, D-3117, D-3123, D-3119 (and D-TBD-no-tag-fixture if it was written), ending with the session's attribution line. The operator merges. Watch `release-main` cut the prerelease with its bundle (Task 7 Step 3's commands); record the tag as `NODE_TAG`.
+`git push`; `gh pr create` with a body naming the spec, this plan, D-3116, D-3117, D-3123, D-3119 (and the no-tag-fixture deviation's number if it was minted), ending with the session's attribution line. The operator merges. Watch `release-main` cut the prerelease with its bundle (Task 7 Step 3's commands); record the tag as `NODE_TAG`.
 
 - [ ] **Step 5: Roll it out — and read the first result correctly**
 
