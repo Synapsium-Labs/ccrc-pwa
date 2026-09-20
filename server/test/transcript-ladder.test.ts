@@ -925,3 +925,27 @@ describe('continuation follow', () => {
     expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
   });
 });
+
+describe('TranscriptResolver and the fork', () => {
+  it('re-ladders when the answered file gains a marker under an open stream', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one'));
+    const to = plantChain(b, B, turn('two'));
+    const r = new TranscriptResolver(localIO);
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+    appendFileSync(own, marker(A, B), 'utf8');
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
+  });
+
+  it('still serves the memo when nothing changed', async () => {
+    const b = box();
+    plantChain(b, A, turn('one'));
+    let stats = 0;
+    const counting: FleetIO = { ...localIO, stat: async (p) => { stats += 1; return localIO.stat(p); } };
+    const r = new TranscriptResolver(counting);
+    await r.resolve(chainOpts(b, A));
+    const afterFirst = stats;
+    await r.resolve(chainOpts(b, A));
+    expect(stats - afterFirst).toBe(1);   // one revalidating stat, no ladder
+  });
+});

@@ -431,6 +431,12 @@ export const RESOLVER_BACKOFF_MS = 30_000;
  *  eviction past this cap keeps that a bounded cost. */
 export const MEMO_MAX = 256;
 
+/** A file's identity for "has this changed since I read it". `FleetIO.stat`
+ *  carries no inode on this seam, and `collapseHits` already treats
+ *  `(size, mtimeMs)` as identity for the same reason. */
+const stampOf = (st: { size: number; mtimeMs: number } | null): string | null =>
+  st === null ? null : `${st.size}:${st.mtimeMs}`;
+
 /**
  * The ladder, memoized (§5.4). One instance per `SessionStream` and one for the
  * watcher's name sweep.
@@ -461,7 +467,9 @@ export const MEMO_MAX = 256;
  * is the ring boundary this repo already draws between deciding and acting.
  */
 export class TranscriptResolver {
-  private readonly memo = new Map<string, { answer: TranscriptResolution; at: number }>();
+  private readonly memo = new Map<
+    string, { answer: TranscriptResolution; at: number; stamp: string | null }
+  >();
   private readonly backoffMs: number;
   private readonly now: () => number;
 
@@ -489,24 +497,32 @@ export class TranscriptResolver {
     const held = this.memo.get(key);
     if (held !== undefined && !this.staleByBackoff(held)) {
       const st = await this.io.stat(held.answer.path);
-      // A `found` stays true while its file exists; a `fallback` stays true
-      // while its path still does NOT.
-      const stillTrue = held.answer.kind === 'found' ? st !== null : st === null;
+      // A `found` stays true while its file exists AND has not changed since we
+      // read it. Existence alone is not enough any more: a transcript that gains
+      // a `continued-in` marker still exists, and a memo that asked only about
+      // existence would serve the pre-fork answer for the life of the stream —
+      // which is exactly the freeze this work is for, moved one layer in.
+      // A `fallback` stays true while its path still does NOT exist.
+      const stillTrue = held.answer.kind === 'found'
+        ? st !== null && stampOf(st) === held.stamp
+        : st === null;
       if (stillTrue) return held.answer;
     }
     const answer = await resolveTranscript(this.io, o);
-    this.remember(key, answer);
+    this.remember(key, answer, answer.kind === 'found' ? await this.io.stat(answer.path) : null);
     return answer;
   }
 
-  private staleByBackoff(e: { answer: TranscriptResolution; at: number }): boolean {
+  private staleByBackoff(e: { answer: TranscriptResolution; at: number; stamp: string | null }): boolean {
     const keepsLooking = e.answer.kind === 'fallback' || e.answer.rung === 'foreign-glob';
     return keepsLooking && this.now() - e.at >= this.backoffMs;
   }
 
-  private remember(key: string, answer: TranscriptResolution): void {
+  private remember(
+    key: string, answer: TranscriptResolution, st: { size: number; mtimeMs: number } | null,
+  ): void {
     this.memo.delete(key);                       // re-insert so Map order is recency
-    this.memo.set(key, { answer, at: this.now() });
+    this.memo.set(key, { answer, at: this.now(), stamp: stampOf(st) });
     while (this.memo.size > MEMO_MAX) {
       const oldest = this.memo.keys().next();
       if (oldest.done === true) break;
