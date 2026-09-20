@@ -7,16 +7,17 @@
 // `unlistableIO` shape from `sessionws.test.ts`) cover the seams disk cannot.
 import { describe, it, expect } from 'vitest';
 import {
-  existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, utimesSync,
-  writeFileSync,
+  appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync,
+  utimesSync, writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { localIO, type FleetIO } from '../src/io.js';
 import {
-  collapseHits, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS, RUNG_ORDER,
-  rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
+  collapseHits, MAX_CONTINUATION_HOPS, MEMO_MAX, pickNewest, resolveTranscript, RESOLVER_BACKOFF_MS,
+  RUNG_ORDER, rungRank, transcriptPath, TranscriptResolver, type GlobHit, type ResolveOpts,
 } from '../src/transcript/resolve.js';
+import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const UUID = 'u'.repeat(36);
@@ -75,7 +76,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     const f = plant(transcriptPath(b.cfg, b.livePhys, UUID), 1000);
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: f, rung: 'live-resolved', account: null });
+      { kind: 'found', path: f, rung: 'live-resolved', account: null, uuid: UUID });
   });
 
   it('rung 2: the RAW munge of the directory given wins when only IT exists', async () => {
@@ -84,7 +85,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     const f = plant(transcriptPath(b.cfg, b.liveLink, UUID), 1000);
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: f, rung: 'live-raw', account: null });
+      { kind: 'found', path: f, rung: 'live-raw', account: null, uuid: UUID });
   });
 
   it('rung 3: the RESOLVED munge of the REGISTRY workdir rescues a live session whose cwd moved (M4)', async () => {
@@ -95,7 +96,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     const f = plant(transcriptPath(b.cfg, b.regPhys, UUID), 1000);
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: f, rung: 'registry-resolved', account: null });
+      { kind: 'found', path: f, rung: 'registry-resolved', account: null, uuid: UUID });
   });
 
   it('rung 4: the RAW munge of the registry workdir, when nothing above it exists', async () => {
@@ -104,7 +105,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     const f = plant(transcriptPath(b.cfg, b.regLink, UUID), 1000);
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: f, rung: 'registry-raw', account: null });
+      { kind: 'found', path: f, rung: 'registry-raw', account: null, uuid: UUID });
   });
 
   it('rung 1 beats rung 2 when BOTH exist — evaluation order, not just presence, decides (review round 1, Critical)', async () => {
@@ -122,7 +123,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const resolved = plant(transcriptPath(b.cfg, b.livePhys, UUID), 1000, 'resolved\n');
     plant(transcriptPath(b.cfg, b.liveLink, UUID), 1000, 'raw\n');
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: resolved, rung: 'live-resolved', account: null });
+      { kind: 'found', path: resolved, rung: 'live-resolved', account: null, uuid: UUID });
   });
 
   it('rung 2 beats rung 3 when BOTH exist — the live rungs exhaust before crossing to the registry workdir (review round 1, Critical)', async () => {
@@ -138,7 +139,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const liveRaw = plant(transcriptPath(b.cfg, b.liveLink, UUID), 1000, 'live raw\n');
     plant(transcriptPath(b.cfg, b.regPhys, UUID), 1000, 'registry resolved\n');
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: liveRaw, rung: 'live-raw', account: null });
+      { kind: 'found', path: liveRaw, rung: 'live-raw', account: null, uuid: UUID });
   });
 
   it('rung 3 beats rung 4 when BOTH exist — resolved wins within the registry pair too (review round 1, Critical)', async () => {
@@ -149,7 +150,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const resolved = plant(transcriptPath(b.cfg, b.regPhys, UUID), 1000, 'resolved\n');
     plant(transcriptPath(b.cfg, b.regLink, UUID), 1000, 'raw\n');
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: resolved, rung: 'registry-resolved', account: null });
+      { kind: 'found', path: resolved, rung: 'registry-resolved', account: null, uuid: UUID });
   });
 
   it('rung 5: the uuid glob finds a transcript that moved inside its own account', async () => {
@@ -158,7 +159,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const b = box();
     const f = plant(stranded(b.cfg), 1000);
     expect(await resolveTranscript(localIO, opts(b))).toEqual(
-      { kind: 'found', path: f, rung: 'uuid-glob', account: null });
+      { kind: 'found', path: f, rung: 'uuid-glob', account: null, uuid: UUID });
   });
 
   it('rung 5 picks the NEWEST of several own-account matches', async () => {
@@ -168,7 +169,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     plant(path.join(b.cfg, 'projects', '-old', `${UUID}.jsonl`), 1000, 'old\n');
     const fresh = plant(path.join(b.cfg, 'projects', '-new', `${UUID}.jsonl`), 9000, 'fresher\n');
     const r = await resolveTranscript(localIO, opts(b));
-    expect(r).toEqual({ kind: 'found', path: fresh, rung: 'uuid-glob', account: null });
+    expect(r).toEqual({ kind: 'found', path: fresh, rung: 'uuid-glob', account: null, uuid: UUID });
   });
 
   it('rung 6: a foreign account is used ONLY when 1-5 all miss, and names the account holding it', async () => {
@@ -185,7 +186,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const r = await resolveTranscript(localIO, opts(b, {
       foreign: [{ account: 'claude2', configDir: personal }, { account: 'claude-corp', configDir: corp }],
     }));
-    expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'claude-corp' });
+    expect(r).toEqual({ kind: 'found', path: newest, rung: 'foreign-glob', account: 'claude-corp', uuid: UUID });
   });
 
   it('an own-account answer beats a NEWER foreign one — rung 6 is never reached while rung 5 hits', async () => {
@@ -199,7 +200,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const r = await resolveTranscript(localIO, opts(b, {
       foreign: [{ account: 'claude2', configDir: personal }],
     }));
-    expect(r).toEqual({ kind: 'found', path: own, rung: 'uuid-glob', account: null });
+    expect(r).toEqual({ kind: 'found', path: own, rung: 'uuid-glob', account: null, uuid: UUID });
   });
 
   it('two foreign copies with the SAME bytes and mtime collapse to one, and the roster-first account is the survivor', async () => {
@@ -221,7 +222,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const r = await resolveTranscript(localIO, opts(b, {
       foreign: [{ account: 'first', configDir: first }, { account: 'second', configDir: second }],
     }));
-    expect(r).toEqual({ kind: 'found', path: a, rung: 'foreign-glob', account: 'first' });
+    expect(r).toEqual({ kind: 'found', path: a, rung: 'foreign-glob', account: 'first', uuid: UUID });
   });
 
   it('roster DECLARATION ORDER, not the alphabet, decides a foreign mtime tie (final review, Minor #5)', async () => {
@@ -241,7 +242,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const r = await resolveTranscript(localIO, opts(b, {
       foreign: [{ account: 'zeta', configDir: zeta }, { account: 'alpha', configDir: alpha }],
     }));
-    expect(r).toEqual({ kind: 'found', path: wanted, rung: 'foreign-glob', account: 'zeta' });
+    expect(r).toEqual({ kind: 'found', path: wanted, rung: 'foreign-glob', account: 'zeta', uuid: UUID });
   });
 
   it('rung 7: nothing anywhere is a COMPLETE fallback at the raw munge of the directory given', async () => {
@@ -335,7 +336,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
         { account: 'claude-corp', configDir: path.join(b.root, '.claude-corp') },
       ],
     }));
-    expect(r).toEqual({ kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp' });
+    expect(r).toEqual({ kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp', uuid: UUID });
   });
 
   it("a foreign hit is refused when the OWN account's glob could not run — incomplete beats a foreign answer (review round 1, Important #2, the ruling)", async () => {
@@ -380,7 +381,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const r = await resolveTranscript(localIO, opts(b, {
       foreign: [{ account: 'claude2', configDir: personal }],
     }));
-    expect(r).toEqual({ kind: 'found', path: foreignHit, rung: 'foreign-glob', account: 'claude2' });
+    expect(r).toEqual({ kind: 'found', path: foreignHit, rung: 'foreign-glob', account: 'claude2', uuid: UUID });
   });
 
   it('a genuine outage — BOTH the projects readdir and the account-root stat fail — still refuses rung 6 (review round 2, item 2, the constructed failure case)', async () => {
@@ -416,7 +417,7 @@ describe('resolveTranscript — the ladder, rung by rung (spec §5.1)', () => {
     const remoteish: FleetIO = { ...localIO, realpath: async () => null };
     const phys = plant(transcriptPath(b.cfg, b.livePhys, UUID), 1000);
     const r = await resolveTranscript(remoteish, opts(b));
-    expect(r).toEqual({ kind: 'found', path: phys, rung: 'uuid-glob', account: null });
+    expect(r).toEqual({ kind: 'found', path: phys, rung: 'uuid-glob', account: null, uuid: UUID });
   });
 });
 
@@ -437,7 +438,7 @@ describe('rung order and candidate collapse (spec §5.1)', () => {
     expect(RUNG_ORDER).toEqual([
       'live-resolved', 'live-raw', 'registry-resolved', 'registry-raw', 'uuid-glob', 'foreign-glob',
     ]);
-    const ranks = RUNG_ORDER.map((rung) => rungRank({ kind: 'found', path: '/p', rung, account: null }));
+    const ranks = RUNG_ORDER.map((rung) => rungRank({ kind: 'found', path: '/p', rung, account: null, uuid: UUID }));
     expect(ranks).toEqual([0, 1, 2, 3, 4, 5]);
     expect(rungRank({ kind: 'fallback', path: '/p', complete: true })).toBe(RUNG_ORDER.length);
   });
@@ -549,7 +550,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     const o: ResolveOpts = { configDir: cfg, dir, registryWorkdir: dir, uuid: UUID };
 
     const first = await r.resolve(o);
-    expect(first).toEqual({ kind: 'found', path: f, rung: 'uuid-glob', account: null });
+    expect(first).toEqual({ kind: 'found', path: f, rung: 'uuid-glob', account: null, uuid: UUID });
     // One exact candidate + one readdir + one stat per listed project dir.
     expect(n.readdir).toBe(1);
     const afterFirst = n.stat;
@@ -633,7 +634,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     expect(n.readdir).toBe(readdirs);
 
     clock += 1;                              // elapsed === backoffMs exactly
-    expect(await r.resolve(o)).toEqual({ kind: 'found', path: f, rung: 'uuid-glob', account: null });
+    expect(await r.resolve(o)).toEqual({ kind: 'found', path: f, rung: 'uuid-glob', account: null, uuid: UUID });
     expect(n.readdir).toBe(readdirs + 1);
   });
 
@@ -689,7 +690,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
       foreign: [{ account: 'claude-corp', configDir: foreignCfg }],
     };
     expect(await r.resolve(o)).toEqual(
-      { kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp' });
+      { kind: 'found', path: held, rung: 'foreign-glob', account: 'claude-corp', uuid: UUID });
     const readdirs = n.readdir;
 
     // The swap lands and carries the history home. The foreign copy is NOT
@@ -701,7 +702,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     expect(n.readdir).toBe(readdirs);
 
     clock += 1;
-    expect(await r.resolve(o)).toEqual({ kind: 'found', path: home, rung: 'live-raw', account: null });
+    expect(await r.resolve(o)).toEqual({ kind: 'found', path: home, rung: 'live-raw', account: null, uuid: UUID });
     expect(existsSync(held)).toBe(true);            // and the foreign copy never went anywhere
   });
 
@@ -716,7 +717,7 @@ describe('TranscriptResolver — the memo (spec §5.4)', () => {
     const raw = transcriptPath(cfg, dir, UUID);
     expect((await r.resolve(o)).kind).toBe('fallback');
     plant(raw, 1000);
-    expect(await r.resolve(o)).toEqual({ kind: 'found', path: raw, rung: 'live-raw', account: null });
+    expect(await r.resolve(o)).toEqual({ kind: 'found', path: raw, rung: 'live-raw', account: null, uuid: UUID });
   });
 
   it('the memo is bounded — a rotating uuid cannot grow it without limit, and eviction is oldest-first (review round 1, Minor)', async () => {
@@ -802,5 +803,103 @@ describe('the memo key is written as an ESCAPE, never a literal NUL byte (final 
     walk(path.join(root, 'src'));
     walk(path.join(root, 'test'));
     expect(offenders).toEqual([]);
+  });
+});
+
+/** Write `<cfg>/projects/<munge(dir)>/<uuid>.jsonl` with the given body.
+ *  Named `plantChain`, distinct from this file's own `plant(file, mtimeSec,
+ *  body)` above — same idea, uuid-addressed instead of path-addressed, which
+ *  is what every fixture in this section needs. */
+const plantChain = (b: Box, uuid: string, body: string): string => {
+  const p = transcriptPath(b.cfg, b.livePhys, uuid);
+  mkdirSync(path.dirname(p), { recursive: true });
+  writeFileSync(p, body, 'utf8');
+  return p;
+};
+const marker = (from: string, to: string): string =>
+  `${JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to })}\n`;
+const turn = (text: string): string =>
+  `${JSON.stringify({ type: 'user', uuid: text, message: { role: 'user', content: text } })}\n`;
+
+const chainOpts = (b: Box, uuid: string): ResolveOpts =>
+  ({ configDir: b.cfg, dir: b.livePhys, registryWorkdir: b.livePhys, uuid });
+
+const A = 'a'.repeat(36), B = 'b'.repeat(36), C = 'c'.repeat(36);
+
+describe('continuation follow', () => {
+  it('answers the successor path and uuid when the requested file is superseded', async () => {
+    const b = box();
+    plantChain(b, A, turn('one') + marker(A, B));
+    const to = plantChain(b, B, turn('two'));
+    const r = await resolveTranscript(localIO, chainOpts(b, A));
+    expect(r).toMatchObject({ kind: 'found', path: to, uuid: B });
+  });
+
+  it('carries the requested uuid when nothing was followed', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one'));
+    const r = await resolveTranscript(localIO, chainOpts(b, A));
+    expect(r).toMatchObject({ kind: 'found', path: own, uuid: A });
+  });
+
+  it('walks a two-hop chain to its end', async () => {
+    const b = box();
+    plantChain(b, A, marker(A, B));
+    plantChain(b, B, marker(B, C));
+    const to = plantChain(b, C, turn('three'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: to, uuid: C });
+  });
+
+  // Review Focus 2: a cycle must stop at a real file, not spin.
+  it('stops on a chain that loops back', async () => {
+    const b = box();
+    const first = plantChain(b, A, turn('one') + marker(A, B));
+    plantChain(b, B, turn('two') + marker(B, A));
+    const r = await resolveTranscript(localIO, chainOpts(b, A));
+    expect(r.kind).toBe('found');
+    expect([first, transcriptPath(b.cfg, b.livePhys, B)]).toContain((r as { path: string }).path);
+  });
+
+  it('stops at the hop bound and answers the last good file', async () => {
+    const b = box();
+    const ids = Array.from({ length: MAX_CONTINUATION_HOPS + 3 }, (_, i) => String(i).repeat(36).slice(0, 36));
+    for (let i = 0; i < ids.length - 1; i += 1) plantChain(b, ids[i]!, marker(ids[i]!, ids[i + 1]!));
+    plantChain(b, ids[ids.length - 1]!, turn('end'));
+    const r = await resolveTranscript(localIO, chainOpts(b, ids[0]!));
+    expect(r.kind).toBe('found');
+    expect((r as { uuid: string }).uuid).not.toBe(ids[0]);
+  });
+
+  // Review Focus 3: an announced-but-empty successor is not an improvement.
+  it('does not follow to a zero-byte successor', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    plantChain(b, B, '');
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+  });
+
+  it('does not follow a marker whose successor does not exist', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+  });
+
+  it('leaves a fallback alone — there is no file to read a marker from', async () => {
+    const b = box();
+    expect((await resolveTranscript(localIO, chainOpts(b, A))).kind).toBe('fallback');
+  });
+
+  // Review Focus 4: a last line bigger than the window is not a marker. The
+  // tail starts mid-line, the JSON parse fails, and the answer is the honest
+  // "no marker" — never a uuid assembled from half a record.
+  it('answers no marker when the last line exceeds the tail window', async () => {
+    const b = box();
+    const fat = JSON.stringify({
+      type: 'continued-in', sessionId: A, continuedInSessionId: B,
+      pad: 'x'.repeat(CONTINUATION_TAIL_BYTES * 2),
+    });
+    const own = plantChain(b, A, turn('one') + `${fat}\n`);
+    plantChain(b, B, turn('two'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
   });
 });

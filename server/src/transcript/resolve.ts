@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from '../io.js';
 import { mungePath } from '../munge.js';
+import { continuationOf, CONTINUATION_TAIL_BYTES } from './parse.js';
 
 /**
  * Transcript file for a session: `<configDir>/projects/<munge(dir)>/<uuid>.jsonl`.
@@ -63,7 +64,14 @@ export const RUNG_ORDER: readonly TranscriptRung[] = [
  */
 export type TranscriptResolution =
   | { readonly kind: 'found'; readonly path: string; readonly rung: TranscriptRung;
-      readonly account: string | null }
+      readonly account: string | null;
+      /** The uuid the answered PATH holds — equal to the requested uuid unless
+       *  a `continued-in` pointer was followed. It travels in the outcome
+       *  because a caller parsing it back out of the path's basename would be
+       *  an adapter re-deriving a distinction it was already handed, and
+       *  because `shouldRepoint` needs it: supersession is not a better
+       *  address for the same thing, it is a different thing. */
+      readonly uuid: string }
   | { readonly kind: 'fallback'; readonly path: string; readonly complete: boolean };
 
 /** Ladder position, for §5.3's "strictly better" comparison. A fallback ranks
@@ -261,7 +269,7 @@ async function globByUuid(
  * `checkPath`'s `.claude*` glob already permits, so the uuid search works
  * remotely with NO widening of the agent read whitelist.
  */
-export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
+async function ladder(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
   const exact: { rung: TranscriptRung; path: string }[] = [];
   const add = (rung: TranscriptRung, p: string): void => {
     // Dedupe keeps the FIRST rung to claim a path, which is what makes a dead
@@ -288,13 +296,13 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
 
   for (const c of exact) {
     if ((await io.stat(c.path)) !== null) {
-      return { kind: 'found', path: c.path, rung: c.rung, account: null };
+      return { kind: 'found', path: c.path, rung: c.rung, account: null, uuid: o.uuid };
     }
   }
 
   const own = await globByUuid(io, o.configDir, o.uuid, null, 0, null);
   const bestOwn = pickNewest(own.hits);
-  if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null };
+  if (bestOwn !== null) return { kind: 'found', path: bestOwn.path, rung: 'uuid-glob', account: null, uuid: o.uuid };
 
   // RULING (review round 1, Important #2; cost claim corrected in round 2,
   // item 1): rung 6 requires rung 5 to have actually RUN, not merely to have
@@ -349,10 +357,68 @@ export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<Tr
   }
   const bestForeign = pickNewest(pooled);
   if (bestForeign !== null) {
-    return { kind: 'found', path: bestForeign.path, rung: 'foreign-glob', account: bestForeign.account };
+    return {
+      kind: 'found', path: bestForeign.path, rung: 'foreign-glob', account: bestForeign.account, uuid: o.uuid,
+    };
   }
 
   return { kind: 'fallback', path: transcriptPath(o.configDir, o.dir, o.uuid), complete };
+}
+
+/** How many `continued-in` hops one resolution may walk. A fork of a fork is
+ *  real; a chain this long is a disk telling a story, and the walk stops
+ *  rather than believing it. */
+export const MAX_CONTINUATION_HOPS = 4;
+
+/** The successor named by the last line of `file`, or null. */
+async function continuationAt(io: FleetIO, file: string, uuid: string): Promise<string | null> {
+  const st = await io.statMeasured(file);
+  if (!st.ok || st.size === 0) return null;
+  const start = Math.max(0, st.size - CONTINUATION_TAIL_BYTES);
+  const res = await io.readFileFrom(file, start);
+  if (res === null) return null;
+  const lines = res.data.split('\n').filter((l) => l.trim() !== '');
+  // A window that starts mid-file starts mid-line, and its FIRST line is the
+  // only one that can be partial; the marker is the LAST line, so a truncated
+  // head costs nothing. A last line longer than the window parses as garbage
+  // and answers null, which is the honest "no marker" rather than a uuid
+  // assembled from half a record.
+  const last = lines[lines.length - 1];
+  return last === undefined ? null : continuationOf(last, uuid);
+}
+
+/**
+ * The transcript a reader should open, following Claude Code's own
+ * `continued-in` pointer to the end of the chain.
+ *
+ * THE FOLLOW LIVES HERE, not in the stream. `SessionStream`'s two-second tick
+ * compares the registry's uuid against the one it is tailing; a stream that
+ * switched uuid on its own would be flapped back by the next tick. Resolution
+ * is the one place that answers "which file", so it is the one place that can
+ * answer it with the fork included.
+ *
+ * FOLLOWING MAY ONLY EVER IMPROVE THE ANSWER. A successor that does not
+ * resolve, or resolves to an empty file (the fork announced itself before
+ * writing anything), is not followed: swapping a full conversation for an
+ * empty one is worse than the staleness this fixes. A visited set and a hop
+ * bound stop a chain that loops or that goes on too long, and the walk keeps
+ * the last GOOD answer rather than unwinding to a fallback.
+ */
+export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
+  let best = await ladder(io, o);
+  const visited = new Set<string>([o.uuid]);
+  for (let hop = 0; hop < MAX_CONTINUATION_HOPS; hop += 1) {
+    if (best.kind !== 'found') return best;
+    const next = await continuationAt(io, best.path, best.uuid);
+    if (next === null || visited.has(next)) return best;
+    visited.add(next);
+    const onward = await ladder(io, { ...o, uuid: next });
+    if (onward.kind !== 'found') return best;
+    const st = await io.stat(onward.path);
+    if (st === null || st.size === 0) return best;
+    best = onward;
+  }
+  return best;
 }
 
 /** How long a "keep looking" answer — a fallback, or a foreign-account hit —

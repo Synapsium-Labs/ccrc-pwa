@@ -171,7 +171,7 @@ describe('dialog frame gate', () => {
 // file still exist?) is the ONE fact the caller measures and passes in.
 describe('shouldRepoint (spec §5.3)', () => {
   const found = (rung: TranscriptRung, p: string): TranscriptResolution =>
-    ({ kind: 'found', path: p, rung, account: null });
+    ({ kind: 'found', path: p, rung, account: null, uuid: 'u'.repeat(36) });
 
   it('re-points to a strictly better rung even while the tailed file still exists', () => {
     // THE case the uuid-only gate could never see: a swap lands, the exact
@@ -497,12 +497,17 @@ describe('dialog enrichment', () => {
   it('reads the transcript for a menu once, not once per poll', async () => {
     // The enrichment is a latch: a 256 KB tail read every 2 s for an answer that
     // cannot change the frame (nextDialogFrame would suppress it) is pure cost.
+    // +1 (Task 2): `resolveTranscript`'s own continuation check reads this same
+    // file's tail once, at the single full ladder run `TranscriptResolver`
+    // performs for the life of this stream — a second, distinct reason to call
+    // `readFileFrom` on `file`, which this harness's `askReads` counter (by
+    // design) cannot tell apart from an ask read.
     const t = fixture('transcript-ask-2col.jsonl');
     const { askReads } = await streamWith({
       pane: fixture('ask-2col-chat-about.txt'),
       transcriptSequence: [t, t, t],
     });
-    expect(askReads).toBe(1);
+    expect(askReads).toBe(2);
   });
 
   it('stops re-reading the transcript for a menu it cannot explain', async () => {
@@ -510,12 +515,14 @@ describe('dialog enrichment', () => {
     // /model, trust-folder — and they sit on screen until a human answers. An
     // unchanged transcript cannot start explaining one, so re-reading its 256 KB
     // tail every 2 s (over the agent RPC, in remote-fleet mode) buys nothing.
+    // +1 (Task 2): see the previous test — the resolver's own one-time
+    // continuation check.
     const t = fixture('transcript-ask-2col.jsonl');
     const { askReads } = await streamWith({
       pane: fixture('model-confirm.txt'),
       transcriptSequence: [t, t, t],
     });
-    expect(askReads).toBe(1);
+    expect(askReads).toBe(2);
   });
 
   it('re-enriches a menu that flapped off-screen and came back', async () => {
@@ -544,7 +551,8 @@ describe('dialog enrichment', () => {
     const dialogs = frames.filter((f) => f.type === 'dialog');
     expect(dialogs[1]!.dialog.ask?.options).toHaveLength(3);
     // Two appearances, two reads — and the fourth poll re-latches, not re-reads.
-    expect(askReads).toBe(2);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(3);
   });
 
   it('re-enriches a menu that came back through an unparsed capture', async () => {
@@ -566,7 +574,8 @@ describe('dialog enrichment', () => {
     expect(dialogs[1]!.dialog.parsed).toBe(false); // the half-drawn capture itself
     expect(dialogs[2]!.dialog.ask?.options).toHaveLength(3);
     // Two parsed appearances, two reads — the unparsed one is never read for.
-    expect(askReads).toBe(2);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(3);
   });
 
   it('leaves a /model-style confirm unenriched', async () => {
@@ -576,7 +585,8 @@ describe('dialog enrichment', () => {
     const d = frames.find((f) => f.type === 'dialog')!.dialog;
     // It looked and alignAsk declined — not "never looked". Without the read the
     // assertion below holds for any build, enrichment ripped out included.
-    expect(askReads).toBe(1);
+    // +1 (Task 2): the resolver's own one-time continuation check on `file`.
+    expect(askReads).toBe(2);
     expect(d.ask).toBeUndefined();
     expect(d.options.map((o: { label: string }) => o.label)).toEqual(['Yes, switch to Fable 5', 'No, go back']);
   });

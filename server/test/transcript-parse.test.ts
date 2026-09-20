@@ -57,7 +57,7 @@ describe('resolveTranscript — the symlink-munge mismatch it was born fixing', 
       const real = transcriptPath(cfg, realDir, 'u-1');
       plant(real);
       expect(await at(cfg, linkDir, 'u-1')).toEqual(
-        { kind: 'found', path: real, rung: 'live-resolved', account: null });
+        { kind: 'found', path: real, rung: 'live-resolved', account: null, uuid: 'u-1' });
     } finally { rmSync(root, { recursive: true, force: true }); }
   });
 
