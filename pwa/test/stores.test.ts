@@ -674,25 +674,23 @@ describe('a queued send', () => {
     expect(store.getState().pending[0]?.queued).toBeUndefined();
   });
 
-  // MEASURED, not assumed: `resolve()` clears `queued` synchronously, in the
-  // same set() call that flips the pending back to 'sending' — before its
-  // dispatch() has even had a chance to reject. So by the time a re-send
-  // fails and the pending reaches 'failed', `queued` is already gone; `retry`
-  // (reachable only on a 'failed' pending) never finds it `true` to clear.
-  // The brief's own review-focus comment anticipated exactly this — "if you
-  // find the second one unreachable too, report it rather than deleting it" —
-  // and it is: `retry`'s own `queued: undefined` is provably a no-op on every
-  // path a 'failed' pending can be reached by, since nothing that sets
-  // `state: 'failed'` (this dispatch failure included) ever sets `queued:
-  // true` alongside it. See task-5-report.md for the mutation-table
-  // consequence (dropping `queued: undefined` from `retry` does NOT go red).
-  it('the queued flag is already cleared by the time a re-send fails, so retry has nothing left to clear', async () => {
+  it('a failed pending never carries the queued flag', async () => {
+    // WHY THIS EXISTS INSTEAD OF A MUTATION ROW. `retry` resets `queued`
+    // alongside the failure fields, and that reset is UNREACHABLE: `resolve`
+    // clears the flag synchronously before its dispatch can fail, and `send`
+    // arms no timer until the api has accepted, so nothing produces a pending
+    // that is both `failed` and `queued`. Measured: deleting the reset reds
+    // nothing. So the invariant that makes the reset unnecessary is pinned
+    // here instead — if a later change makes `failed` + `queued` reachable,
+    // this goes red and the reset earns its place back.
     vi.useFakeTimers();
     const prompt = vi.fn()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new ApiError(500, { ok: false, error: 'tmux-error' }));
     const store = createSessionStore('s6', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 5_000 });
 
+    // Arrange: send, advance past confirmTimeoutMs so the pending is queued,
+    // then resolve() it against an api call that rejects.
     await store.getState().send('hello');
     vi.advanceTimersByTime(60);
     const key = store.getState().pending[0]!.key;
@@ -703,11 +701,10 @@ describe('a queued send', () => {
     // cannot use once `vi.useFakeTimers()` is active — flush the rejection's
     // microtask instead.
     await vi.advanceTimersByTimeAsync(0);
-    expect(store.getState().pending[0]?.state).toBe('failed');
-    expect(store.getState().pending[0]?.queued).toBeUndefined();
 
-    store.getState().retry(key);
+    expect(store.getState().pending[0]).toMatchObject({ state: 'failed' });
     expect(store.getState().pending[0]?.queued).toBeUndefined();
+    expect(store.getState().pending.every((p) => !(p.state === 'failed' && p.queued === true))).toBe(true);
   });
 });
 
