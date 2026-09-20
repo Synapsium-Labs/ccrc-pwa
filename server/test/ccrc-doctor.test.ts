@@ -2274,6 +2274,213 @@ describe('ccrc doctor: pool-sync', () => {
   });
 });
 
+// ── transcripts: the operator's signal for a forked-session marker ────────
+// Task 8 of the 2026-09-20-forked-session-transcript plan. Claude Code forks
+// a live session into a background PTY under a new sessionId and writes a
+// `continued-in` pointer as the last line of the transcript it abandons; a
+// registry `ccd` has not yet followed still names that abandoned file, and
+// the operator's chat freezes silently. This check counts how many registry
+// sessions are in that state; it must read 0 on a converged box.
+//
+// `healthy()` owns no `$HOME/.cc-sessions` at all (no test in this file needs
+// a registry), which is exactly the "nothing to measure" shape this check's
+// vacuous PASS is for — and it never writes `~/.ccrc/accounts.sh` either, so
+// a fixture that plants real sessions must seed both itself.
+const TRANSCRIPT_ROSTER = { version: 1, accounts: [
+  { id: 'claude', label: 'claude', configDirSuffix: '.claude', exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic' },
+] };
+
+/** Compact JSON, exactly the shape `_dr_continued_in` and `_continued_in_of`
+ *  both key on — `JSON.stringify` with no replacer/space produces no space
+ *  after `:`, which is the literal both bash readers match. */
+const continuedInLine = (from: string, to: string): string =>
+  `${JSON.stringify({ type: 'continued-in', sessionId: from, continuedInSessionId: to })}\n`;
+const turnLine = (text: string): string =>
+  `${JSON.stringify({ type: 'user', message: { role: 'user', content: text } })}\n`;
+
+/** One registry row, in the three flat files `_check_transcripts` reads
+ *  itself (`<id>.uuid`, `<id>.wrapper`, `<id>.workdir`) — no ccd invoked, this
+ *  check is deliberately readable with nothing but `cat`. */
+function writeTranscriptSession(home: string, id: string, wrapper: string, workdir: string, uuid: string): void {
+  const reg = join(home, '.cc-sessions');
+  mkdirSync(reg, { recursive: true });
+  writeFileSync(join(reg, `${id}.uuid`), `${uuid}\n`);
+  writeFileSync(join(reg, `${id}.wrapper`), `${wrapper}\n`);
+  writeFileSync(join(reg, `${id}.workdir`), `${workdir}\n`);
+}
+
+/** The transcript file itself, munged the same way `ccd/ccd`'s `_munge_wd`
+ *  and `server/src/munge.ts`'s `mungePath` both do — `tr './_' '---'` over the
+ *  workdir. `forRawSpelling` writes under the UNRESOLVED munge (what a
+ *  symlinked workdir sometimes writes under on the real fleet box, per
+ *  `ccd-sync-uuid.test.ts`'s "follows a chain whose CURRENT transcript sits
+ *  only at the raw spelling"); the default writes under the plain munge,
+ *  which is both spellings at once whenever `workdir` carries no symlink. */
+function writeTranscript(
+  home: string, cfgSuffix: string, workdir: string, uuid: string, body: string,
+): string {
+  const munged = workdir.replace(/[/._]/g, '-');
+  const dir = join(home, cfgSuffix, 'projects', munged);
+  mkdirSync(dir, { recursive: true });
+  const f = join(dir, `${uuid}.jsonl`);
+  writeFileSync(f, body, 'utf8');
+  return f;
+}
+
+describe('ccrc doctor: transcripts', () => {
+  it('passes on a registry whose sessions all read a live transcript', () => {
+    const home = healthy('ccrc-doctor-transcripts-pass-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    // `_dr_continued_in` shells one real `tail -c` per examined transcript —
+    // the one external process its pure-bash rewrite could not avoid (there
+    // is no bash-only way to read a file's last N bytes). `healthy()`'s
+    // contained PATH holds nothing but explicitly-fixtured binaries, so a
+    // real `tail` has to be asked for by name, the same way it asks for
+    // `realpath`, `jq` and `git` elsewhere in this file.
+    linkReal(home, 'tail');
+    const wdA = join(home, 'projects', 'demo-a');
+    const wdB = join(home, 'projects', 'demo-b');
+    mkdirSync(wdA, { recursive: true });
+    mkdirSync(wdB, { recursive: true });
+    const uuidA = 'a'.repeat(36), uuidB = 'b'.repeat(36);
+    writeTranscriptSession(home, 'sess-a', 'claude', wdA, uuidA);
+    writeTranscriptSession(home, 'sess-b', 'claude', wdB, uuidB);
+    writeTranscript(home, '.claude', wdA, uuidA, turnLine('hello'));
+    writeTranscript(home, '.claude', wdB, uuidB, turnLine('hi'));
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^PASS transcripts: 2 session\(s\)/);
+    // No overall-`.code` assertion here, deliberately: `seedAccountsSh`
+    // hands `healthy()` a real account it was built without, so per-account
+    // checks this test does not touch (`graphify`'s skill stamp, `memory`'s
+    // session-hook reachability) now have a subject they were not
+    // provisioned for and FAIL on their own account — collateral of seeding
+    // a roster, not a finding about `transcripts`. `describe('ccrc doctor:
+    // routing …')` establishes the same precedent for the same reason: once
+    // a fixture adds a roster `healthy()` did not ship, only the ONE check's
+    // own verdict line is asserted, never the whole run's exit code.
+  });
+
+  it('warns and names the session reading a superseded transcript', () => {
+    const home = healthy('ccrc-doctor-transcripts-warn-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');   // see the "passes on a registry…" test above
+    const wdLive = join(home, 'projects', 'live-one');
+    const wdFrozen = join(home, 'projects', 'frozen-one');
+    mkdirSync(wdLive, { recursive: true });
+    mkdirSync(wdFrozen, { recursive: true });
+    const uuidLive = 'c'.repeat(36), uuidOld = 'd'.repeat(36), uuidNew = 'e'.repeat(36);
+    writeTranscriptSession(home, 'sess-live', 'claude', wdLive, uuidLive);
+    writeTranscriptSession(home, 'sess-frozen', 'claude', wdFrozen, uuidOld);
+    writeTranscript(home, '.claude', wdLive, uuidLive, turnLine('still going'));
+    writeTranscript(home, '.claude', wdFrozen, uuidOld,
+      `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^WARN transcripts: /);
+    expect(line).toContain('sess-frozen');
+    expect(line, 'the live session must not be named').not.toContain('sess-live');
+    expect(out).toMatch(/remedy: .+supervise tick/);
+    // No overall-`.code` assertion — see the same note on the test above.
+  });
+
+  it('passes vacuously on a box with no sessions', () => {
+    // The doctor's own healthy fixture has no `$HOME/.cc-sessions` at all — a
+    // SKIP there is a check that cannot be counted (`_check_routing`'s rule:
+    // it must state its own PASS in the same words a populated registry
+    // would use, just with the count at zero).
+    const home = healthy('ccrc-doctor-transcripts-vacuous-');
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^PASS transcripts: 0 session\(s\)/);
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  it.skipIf(process.getuid?.() === 0)('fails when the registry cannot be searched', () => {
+    const home = healthy('ccrc-doctor-transcripts-unsearchable-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    const reg = join(home, '.cc-sessions');
+    mkdirSync(reg, { recursive: true });
+    writeFileSync(join(reg, 'sess-a.uuid'), `${'f'.repeat(36)}\n`);
+    chmodSync(reg, 0o000);
+    try {
+      const out = runDoctor(home).stdout;
+      const line = lineFor(out, 'transcripts');
+      expect(line, out).toMatch(/^FAIL transcripts: /);
+      expect(line).toContain('not a searchable directory');
+      expect(out).toContain('remedy: fix its mode');
+      expect(runDoctor(home).code).toBe(1);   // a FAIL always fails the overall run
+    } finally {
+      chmodSync(reg, 0o755);
+    }
+  });
+
+  it('warns when the roster projection cannot be read but sessions exist to measure', () => {
+    // The reordering that keeps the vacuous-PASS case above vacuous: an
+    // unreadable/absent roster is only this check's business once there is
+    // at least one session for `_ccrc_cfg_dir` to have resolved. `healthy()`
+    // itself never writes `~/.ccrc/accounts.sh` — this test plants a session
+    // WITHOUT seeding one, which is the one shape that must still WARN.
+    const home = healthy('ccrc-doctor-transcripts-no-roster-');
+    writeTranscriptSession(home, 'sess-a', 'claude', join(home, 'projects', 'demo'), 'a'.repeat(36));
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^WARN transcripts: /);
+    expect(line).toContain('roster projection');
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  it('finds the transcript through the RAW spelling when the workdir is reached through a symlink and the resolved munge has nothing (cross-task hazard, Task 6 review)', () => {
+    // `_transcript_path` and `_ci_transcript_path` (ccd/ccd) both try the
+    // REALPATH-resolved munge FIRST and the raw munge SECOND, because Claude
+    // Code munges its own physical cwd while the registry keeps the path ccd
+    // wrote. A doctor that only tried the raw spelling — or only the resolved
+    // one — would measure a file ccd does not, on a box shaped like this one.
+    const home = healthy('ccrc-doctor-transcripts-raw-spelling-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');   // see the "passes on a registry…" test above
+    const real = join(home, 'volume', 'demo');
+    const link = join(home, 'projects-link');
+    mkdirSync(real, { recursive: true });
+    symlinkSync(join(home, 'volume'), link);
+    const wd = join(link, 'demo');   // resolves to <home>/volume/demo
+    const uuidOld = 'a'.repeat(36), uuidNew = 'b'.repeat(36);
+    writeTranscriptSession(home, 'sess-raw', 'claude', wd, uuidOld);
+    // Written under the RAW (unresolved) munge only — nothing exists at the
+    // resolved (`volume/demo`) spelling at all.
+    writeTranscript(home, '.claude', wd, uuidOld,
+      `${turnLine('before the fork')}${continuedInLine(uuidOld, uuidNew)}`);
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^WARN transcripts: /);
+    expect(line).toContain('sess-raw');
+  });
+
+  it('refuses a marker whose sessionId is present but not a valid 36-character value — absence permits, a malformed author does not', () => {
+    // The review-round finding `_continued_in_of` (ccd/ccd) was fixed for:
+    // extracting `claims` straight through `grep -oE` with no presence check
+    // first cannot tell "absent" from "present but malformed" — both leave
+    // the extraction empty, and absence-permits would then wave a garbled
+    // authorship claim through as if nobody had claimed it. This plants a
+    // `sessionId` that is present and short, so a naive reader treats it as
+    // absent and (wrongly) still follows the pointer; the fixed reader must
+    // refuse the whole marker instead, leaving this session a PASS.
+    const home = healthy('ccrc-doctor-transcripts-malformed-author-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');   // see the "passes on a registry…" test above
+    const wd = join(home, 'projects', 'demo-malformed');
+    mkdirSync(wd, { recursive: true });
+    const uuidOld = 'a'.repeat(36), uuidNew = 'b'.repeat(36);
+    writeTranscriptSession(home, 'sess-malformed', 'claude', wd, uuidOld);
+    const badMarker = `${JSON.stringify({ type: 'continued-in', sessionId: 'not-a-real-uuid', continuedInSessionId: uuidNew })}\n`;
+    writeTranscript(home, '.claude', wd, uuidOld, `${turnLine('before')}${badMarker}`);
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^PASS transcripts: 1 session\(s\)/);
+    expect(out, 'the malformed author must not be waved through as stale').not.toMatch(/^WARN transcripts: /m);
+  });
+});
+
 // ── the box's own config file ─────────────────────────────────────────────
 // Stage 2d, Task 2, and the one check whose FAIL is a REPRODUCTION: a
 // `CCRC_FLEET=remote` with no agent URL or token makes the server print one
