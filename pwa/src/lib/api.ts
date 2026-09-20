@@ -3,6 +3,7 @@
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountsResponse, CatchUp, ClaimSummary, CoordCaps, CoordCapsView, FleetHealth, FleetSession, LifecycleQueryResult, LoginRequest, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ReapResult, RouteField, RouteFields, RunSummary, SlashCommand, StagedClip, WsAudit } from '../../../shared/api';
+import type { HostStat } from '../../../shared/hoststat';
 import { raiseAuthLostFrom } from './auth';
 
 export class ApiError extends Error {
@@ -475,6 +476,13 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
 
     fleet: () => getJson<{ sessions: FleetSession[]; stale?: boolean; downSince?: number | null }>('/api/fleet'),
     fleetHealth: () => getJson<FleetHealth>('/api/fleet/health'),
+    // The load on the box the sessions run on. `HostStat`, imported rather
+    // than restated for the reason `accounts` below spells out: a hand-written
+    // twin of a server shape is how a client goes on declaring a field the
+    // server stopped sending. Never rejects for a box that cannot be measured
+    // — the failure is INSIDE the reading, so the widget renders it instead of
+    // guessing from a caught exception.
+    host: () => getJson<HostStat>('/api/host'),
     rebootFleet: () => post('/api/fleet/reboot'),
     // `AccountsResponse`, not a restatement of it: this shape used to be
     // hand-written here, in the handler and in the route test, and the roster

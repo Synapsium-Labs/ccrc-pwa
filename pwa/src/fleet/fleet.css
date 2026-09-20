@@ -860,6 +860,140 @@
 .acct-pct { color: var(--ink-secondary); text-align: right; min-width: 2.6em; }
 .acct-reset { color: var(--ink-tertiary); white-space: nowrap; }
 
+.acct-pct[data-dim='true'] { color: var(--ink-tertiary); }
+
+/* ── host gauge ───────────────────────────────────────────────────
+   The load on the box the SESSIONS run on, built from the accounts strip's
+   own row chrome (.acct-row/.acct-meter/.acct-pct) so the two read as one
+   instrument panel — but NOT inside .accounts-strip, which is a single
+   role="link" onto /accounts and has nothing to say about this box.
+
+   On the phone this is the last, full-width element under the strip; on
+   desktop shell.css pins it to a fixed column at the right edge. Both are
+   the same decision: a position that does not move when an account is added
+   or removed, so the eye goes to one place. */
+.host-gauge {
+  display: grid;
+  gap: 1px;
+  padding: 3px var(--sp-2) 4px;
+  background: var(--bg-surface);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  margin-bottom: var(--sp-2);
+}
+.host-gauge .host-label {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-semibold);
+  line-height: 1.25;
+  /* Cyan, not an account hue drawn from the roster: this tile is not an
+     account, and the one colour no wrapper can be assigned is the one that
+     says so. */
+  color: var(--acct-cyan);
+}
+/* The meter positions its own segments, unlike .acct-fill's single flow
+   child: memory is two segments and cpu carries two ticks. */
+.host-gauge .host-meter { position: relative; }
+.host-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  border-radius: var(--r-full);
+  /* CPU's default: the "working" green, never a limit band. A busy fleet box
+     is a fleet box doing its job — see HostGauge.tsx. */
+  background: var(--status-busy);
+  transition: width var(--dur-base) var(--ease-swift);
+}
+/* Memory, and only memory, is banded — 75/90, not the account ladder's
+   50/75 (HostGauge.tsx's `memBand` carries the reason). */
+.host-fill[data-band='ok']   { background: var(--limit-ok); }
+.host-fill[data-band='warn'] { background: var(--limit-warn); }
+.host-fill[data-band='crit'] { background: var(--limit-critical); }
+/* Cache: present, but the part the kernel hands back under pressure, so it
+   reads as filled-but-not-spent.
+   ONE PILL IN TWO TONES, not two pills: `.host-fill`'s own full radius would
+   put a rounded cap in the MIDDLE of the bar where `used` meets `cache`, and
+   the track's dark corners would show through the notch. So the mem fill
+   carries no radius of its own, the track's `overflow: hidden` rounds the
+   left end, and the right-hand cap goes on whichever segment is last. (A 1px
+   divider stood here for one round and read as a gap punched in the bar
+   rather than as two readings.) */
+.host-fill--mem { border-radius: 0; }
+.host-fill--mem[data-tail='true'],
+.host-seg-cache {
+  border-radius: 0 var(--r-full) var(--r-full) 0;
+}
+.host-seg-cache {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: var(--ink-tertiary);
+}
+/* MEMORY IS TWO TRACKS, not one track with swap crammed into it: RAM on top,
+   swap on a hairline under it. Swap is a different device with its own total,
+   so it cannot share RAM's scale — and pinned into RAM's track it would land
+   ON the red segment exactly on the box that is closest to an OOM, drawing
+   the worst reading in the fleet as a collision.
+
+   Fixed rows, always both: 5 + 2 + 3 = 10px, inside the 15px the percentage
+   cell already gives this row, so the tile does not grow and nothing shifts
+   on the poll where swap first appears. */
+.host-mem {
+  display: grid;
+  grid-template-rows: 5px 3px;
+  gap: 2px;
+  align-content: center;
+  min-width: 0;
+}
+/* Rendered only when some swap is in use — a box that never swaps shows one
+   bar, not one bar and an empty promise of another. */
+.host-swap {
+  position: relative;
+  display: block;
+  border-radius: var(--r-full);
+  background: var(--bg-well);
+  overflow: hidden;
+}
+.host-swap-fill {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  min-width: 2px;
+  border-radius: var(--r-full);
+  background: var(--acct-violet);
+  transition: width var(--dur-base) var(--ease-swift);
+}
+/* The two hottest threads, on the cpu track. They can only ever fall on the
+   empty part of it: no average outruns its own maximum. */
+.host-tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--ink-primary);
+}
+.host-tick[data-rank='second'] { background: var(--ink-secondary); }
+/* AFTER the rank rule on purpose — equal specificity, so source order is what
+   makes a pegged second thread amber rather than quiet grey. */
+.host-tick[data-hot='true'] { background: var(--status-attention); }
+.host-gauge .host-trail { color: var(--ink-tertiary); white-space: nowrap; }
+.host-gauge .host-stale {
+  font-family: var(--font-mono);
+  font-size: var(--text-2xs);
+  color: var(--ink-tertiary);
+}
+/* A frozen reading must not keep reading as live pressure — the same
+   treatment, for the same reason, that a disabled account lane's meter gets
+   (`.accounts-row[data-disabled='true'] .acct-fill`, further down this file).
+   Greying the fills rather than fading the tile keeps every label at its
+   measured contrast. */
+.host-gauge[data-stale='true'] .host-fill,
+.host-gauge[data-stale='true'] .host-seg-cache,
+.host-gauge[data-stale='true'] .host-swap-fill,
+.host-gauge[data-stale='true'] .host-tick { background: var(--edge-subtle); }
+
 /* ── session line ─────────────────────────────────────────────────
    One session inside a project card, two lines: label (full row width) on
    top, state/tally/warn/account underneath as a quiet flex row. Fighting

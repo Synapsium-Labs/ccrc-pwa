@@ -587,6 +587,29 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  // ── the host gauge ──────────────────────────────────────────────────────
+  // Four rules on the host tile. Their selectors DO name a painted ancestor
+  // (`.host-gauge` paints --bg-surface in fleet.css), but that is the PHONE
+  // ground; on desktop shell.css repaints the same tile --bg-raised, which is
+  // the darker of the two in the light theme and the lighter in the dark one.
+  // Registered against --bg-raised on purpose: measuring the looser ground
+  // would be measuring the case that cannot fail.
+  'fleet.css .host-gauge .host-label': {
+    under: ['var(--bg-raised)'],
+    why: 'the tile\'s name. `.host-gauge` paints --bg-surface (fleet.css) and `.shell-accounts .host-gauge` repaints it --bg-raised (shell.css) for the desktop top bar; --bg-raised is the worse of the two grounds and is what this measures',
+  },
+  'fleet.css .host-gauge .host-trail': {
+    under: ['var(--bg-raised)'],
+    why: 'the trailing readout (the hottest threads, the swap figure, or the word for a condition that has no reading). Same tile and same two grounds as .host-label above',
+  },
+  'fleet.css .host-gauge .host-stale': {
+    under: ['var(--bg-raised)'],
+    why: 'the "2m old" marker on a reading that stopped arriving. Same tile and same two grounds as .host-label above',
+  },
+  'fleet.css .acct-pct[data-dim=\'true\']': {
+    under: ['var(--bg-raised)'],
+    why: 'the em-dash a host row shows when its half has no reading. Rendered only inside .host-gauge (HostGauge.tsx), so it takes that tile\'s grounds; --bg-raised is the worse of the two',
+  },
   'fleet.css .route-field-label': {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
