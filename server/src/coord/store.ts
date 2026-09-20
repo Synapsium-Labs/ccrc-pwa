@@ -8,6 +8,11 @@ import { decideAllocation } from './ledger.js';
 // nothing else, so the shape it returns is the policy's to define.
 import type { CoordPlacementStamp } from './placement.js';
 import type { LedgerLog } from './ledgerlog.js';
+import type { PoolEdgeLog } from './pooledgelog.js';
+// `bodyDigest` comes from `shared/mark.mjs` — `server.ts:30` imports it as
+// `'../../shared/mark.mjs'`; from `server/src/coord/` the path is one level
+// deeper.
+import { bodyDigest } from '../../../shared/mark.mjs';
 import {
   CLEAR_REFUSED_STRANDS_TEXT,
   holdReasonVerdict,
@@ -44,6 +49,7 @@ import {
   type RouteFields, type RoutingEvent,
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
+  type SetAccountPoolsRefuseCode,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -127,6 +133,23 @@ export type AdvanceResult =
   | { ok: true; from: RunState; to: RunState }
   | { ok: false; error: 'bad-transition'; from: RunState; to: RunState }
   | { ok: false; error: 'unknown-run' };
+
+/** `setAccountPools`'s answer (T6-R4, fix round 1; `error`'s vocabulary moved
+ *  to `shared/api.ts`'s `SetAccountPoolsRefuseCode` in fix round 2 — see C1
+ *  below). Wave 1 allows at most one pool per account —
+ *  `pool_edges_one_per_account`'s own partial-unique shape — and a caller
+ *  that asks for more gets this NAMED refusal instead of the raw `UNIQUE
+ *  constraint failed` the store used to let escape.
+ *
+ *  C2 (fix round 2): the type system will NOT stop a caller from discarding
+ *  this return value outright. Reading `.epoch` without narrowing `.ok` is a
+ *  compile error, but `store.setAccountPools(input, log);` with the result
+ *  unbound compiles clean and silent — a refusal then reads as a success at
+ *  the call site, because nothing ran. THE RESULT MUST BE BOUND AND ITS `.ok`
+ *  DISCRIMINATED before any effect is drawn from a call to this method. */
+export type SetAccountPoolsResult =
+  | { ok: true; epoch: number }
+  | { ok: false; error: SetAccountPoolsRefuseCode; pools: readonly string[] };
 
 /** The reclaim's three answers. `kind`, not `error`, because these are not
  *  `advance`'s arms and folding them into `AdvanceResult` would put two
@@ -5283,5 +5306,102 @@ export class CoordStore {
       "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
+  }
+
+  // ── pool edges ────────────────────────────────────────────────────────
+  //
+  // Account-pool membership. `setAccountPools` copies `allocateDeviations`'s
+  // sequence exactly: the journal is appended INSIDE the transaction, BEFORE
+  // the commit, and recovery takes MAX(file, db) so an epoch is SKIPPED,
+  // NEVER REISSUED. See `pooledgelog.ts` for why a reissue is the one
+  // outcome this whole design exists to prevent.
+
+  /** T6-R4 (fix round 1): a NAMED refusal rather than the raw `UNIQUE
+   *  constraint failed` `pool_edges_one_per_account` used to throw — that
+   *  raw throw happened AFTER `log.append` had already committed a journal
+   *  line for a membership the store went on to reject, and reached an
+   *  uncaught caller as a bare exception (a 500, once a route calls this).
+   *  Shaped like `AdvanceResult`/`OpenRunResult` above: a route checks `.ok`
+   *  and answers structured, not a 500.
+   *
+   *  C2 (fix round 2, measured): the caller MUST bind the result and branch
+   *  on `.ok` before acting on it — discarding the call entirely compiles
+   *  clean and silent, and a refusal then reads as a success at the call
+   *  site, because the type system enforces the narrowing only if a caller
+   *  reads `.epoch` at all. */
+  setAccountPools(input: {
+    accountId: string; pools: readonly string[]; addedBy: string | null; now?: number;
+  }, log: PoolEdgeLog): SetAccountPoolsResult {
+    // Wave 1 is one-pool-per-account (`pool_edges_one_per_account`, migration
+    // 13). Refused HERE — before `log.maxEpoch()`/`log.append()` ever run —
+    // so a refused write leaves no journal line asserting a membership the
+    // store never accepted, and never opens a transaction it would only roll
+    // back.
+    if (input.pools.length > 1) {
+      return { ok: false, error: 'multi-pool-not-supported', pools: input.pools };
+    }
+    const now = input.now ?? Date.now();
+    return tx(this.db, () => {
+      const dbMax = (this.db.prepare('SELECT epoch AS e FROM pool_epoch WHERE id = 1')
+        .get() as { e: number }).e;
+      const fileMax = log.maxEpoch();
+      const epoch = (fileMax === null ? dbMax : Math.max(dbMax, fileMax)) + 1;
+      log.append([{ epoch, accountId: input.accountId, pools: input.pools,
+                    addedBy: input.addedBy, at: now }]);
+      this.db.prepare("DELETE FROM pool_edges WHERE subjectKind = 'account' AND subjectId = ?")
+        .run(input.accountId);
+      for (const p of input.pools) {
+        this.db.prepare(
+          'INSERT INTO pool_edges (subjectKind, subjectId, pool, addedAt, addedBy) ' +
+          "VALUES ('account', ?, ?, ?, ?)",
+        ).run(input.accountId, p, now, input.addedBy);
+      }
+      const digest = this.poolEdgeDigest();
+      this.db.prepare('UPDATE pool_epoch SET epoch = ?, issuedAt = ?, digest = ? WHERE id = 1')
+        .run(epoch, now, digest);
+      return { ok: true as const, epoch };
+    });
+  }
+
+  accountPoolEdges(): Map<string, string[]> {
+    const rows = this.db.prepare(
+      "SELECT subjectId, pool FROM pool_edges WHERE subjectKind = 'account' ORDER BY subjectId, pool",
+    ).all() as { subjectId: string; pool: string }[];
+    const out = new Map<string, string[]>();
+    for (const r of rows) {
+      const cur = out.get(r.subjectId);
+      if (cur === undefined) out.set(r.subjectId, [r.pool]); else cur.push(r.pool);
+    }
+    return out;
+  }
+
+  poolEpoch(): { epoch: number; issuedAt: number; digest: string } {
+    return this.db.prepare('SELECT epoch, issuedAt, digest FROM pool_epoch WHERE id = 1')
+      .get() as { epoch: number; issuedAt: number; digest: string };
+  }
+
+  /** T6-R3 (fix round 1): derived FROM `accountPoolEdges()` rather than a
+   *  second copy of its SELECT/WHERE/ORDER BY/cast — two copies is an
+   *  ORDER BY that can drift out of step with nothing positioned to notice
+   *  (F3: nothing asserted this digest at all before this round).
+   *  `accountPoolEdges()`'s rows already arrive sorted by `subjectId, pool`,
+   *  and `Map` iterates in insertion order, so the concatenation below stays
+   *  exactly as sorted as the direct query was.
+   *
+   *  Purely content-derived: two epochs over identical membership collide on
+   *  the same digest. Intended — the digest fingerprints WHAT is tagged, not
+   *  WHEN — but stated here since nothing said it before this round.
+   *
+   *  PROVENANCE, NOT A MECHANISM (item 8): nothing reads `pool_epoch.digest`
+   *  back out — `poolEpoch()`'s callers all consume `epoch`/`issuedAt` — so
+   *  do not go looking for a consumer. It is written so a later debugging
+   *  session can tell two epochs' membership apart (or confirm they match)
+   *  without re-deriving this exact concatenation by hand. */
+  private poolEdgeDigest(): string {
+    const lines: string[] = [];
+    for (const [subjectId, pools] of this.accountPoolEdges()) {
+      for (const pool of pools) lines.push(`${subjectId} ${pool}`);
+    }
+    return bodyDigest(lines.join('\n'));
   }
 }

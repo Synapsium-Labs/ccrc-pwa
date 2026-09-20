@@ -571,6 +571,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-surface)'],
     why: 'the stranded count sits inside .proj-card-toggle, whose transparent background leaves the project card\'s --bg-surface behind it. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
+  "fleet.css .acct-pool-chip[data-pool='untagged']": {
+    under: ['var(--bg-surface)'],
+    why: "the account-pool chip's untagged-colour override (Task 9, account-pool-membership wave 1, review round 1 C1) sits in .accounts-row-head, inside .accounts-row, which paints background: var(--bg-surface) (fleet.css). Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same ground .proj-card-pool itself already uses for the sibling project chip, and the same ink/ground pair that entry already proves passing.",
+  },
+  "fleet.css .acct-pool-chip[data-pool='stale']": {
+    under: ['var(--bg-surface)'],
+    why: "the account-pool chip's stale-state attention colour (Task 9). Same ground as the untagged variant above — .accounts-row paints var(--bg-surface) and this selector names no painted ancestor either.",
+  },
   'fleet.css .acct-pool': {
     under: ['var(--bg-sheet)'],
     why: '.sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
@@ -590,6 +598,10 @@ export const INHERITED_GROUNDS = {
   'fleet.css .route-field-label': {
     under: ['var(--bg-sheet)'],
     why: 'the new-session sheet\'s routing row (routing spec, slice 4, Task 6) sits directly in .sheet-panel, same as .pool-note above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
+  },
+  'fleet.css .pool-new-label': {
+    under: ['var(--bg-sheet)'],
+    why: 'AccountPoolSheet\'s free-text field label (Task 9, account-pool-membership wave 1) sits directly in .sheet-panel, same as .pool-note/.route-field-label above. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone',
   },
   'chat.css .code-block-lang': {
     under: ['var(--well-bar-bg)'],
@@ -707,6 +719,14 @@ export const INHERITED_GROUNDS = {
     under: ['var(--bg-page)'],
     why: "the programme header above each grouped list, same ground as the chip row above it — the mail screen's own body background",
   },
+  'fleet.css .sheet-copy-notice': {
+    under: ['var(--bg-sheet)'],
+    why: "item 3 (I1, wave-1 fix round A)'s \"nothing enforces this account pool tag yet\" disclosure, rendered inside AccountPoolSheet's <Sheet>, whose .sheet-panel paints background: var(--bg-sheet) at primitives.css:141. This selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same shape as chat.css's .opt-inert on the identical .sheet-panel ground.",
+  },
+  'fleet.css .pool-epoch-lag': {
+    under: ['var(--bg-page)'],
+    why: "the account-pool epoch/observed staleness indicator (Task 9, account-pool-membership wave 1) sits in .fleet-head-right on the fleet screen's header. .fleet, .fleet-head and .fleet-head-right all paint no background of their own, so the real ground is body's --bg-page (styles/base.css:111) — same reasoning and same ground as .mail-chip/.mail-group-head above, which sit on the sibling .mail-screen's unpainted body. Its selector names no ancestor, so no route could ground it. Review round 1, C2: this was first added to GRANDFATHERED_UNCOVERED on the mistaken claim that nothing at this header level paints a background — INHERITED_GROUNDS already grounds three OTHER rules in this exact file against --bg-page for exactly this reason, and --ink-tertiary over --bg-page measures 6.23 dark / 5.25 light, clearing the 4.5 floor in both themes.",
+  },
   'chat.css .opt-inert': {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, Task 4: the model/effort picker's 'inert on this lane' marker, rendered inside <Sheet>'s .sheet-panel (Sheet.tsx:59), which paints background: var(--bg-sheet) (primitives.css:141) with no colour of its own. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone — same shape as fleet.css's .pool-note/.route-field-label on the same .sheet-panel ground. Registered rather than left in the uncovered census: the ground is recoverable by reading the component, so calling it unmeasurable would be false.",
@@ -714,6 +734,14 @@ export const INHERITED_GROUNDS = {
   'chat.css .opt-degraded': {
     under: ['var(--bg-sheet)'],
     why: "routing slice 6, whole-branch review M1: the model picker's 'serving <class> (share ceiling)' note, rendered in the same .opt row as .opt-inert above and therefore on the same .sheet-panel ground. Registered for the same reason and by the same argument: its selector names no painted ancestor, so the auditor cannot recover the ground from CSS alone, but a reader of PickSheet.tsx can — leaving it in the uncovered census would call a knowable ground unmeasurable.",
+  },
+  'fleet.css .build-line': {
+    under: ['var(--bg-page)'],
+    why: "release/rollout Task 7: the foot-of-screen build stamp is rendered as the last child of FleetScreen's own <main class=\"fleet\"> (FleetScreen.tsx), and .fleet (fleet.css:10) sets only sizing/padding — no background of its own — so the pixels behind it are the app shell's --bg-page. Its selector names no painted ancestor, so the auditor cannot recover that ground from CSS alone.",
+  },
+  'fleet.css .build-line-side--warn': {
+    under: ['var(--bg-page)'],
+    why: "the amber variant of the same build-line span (unversioned/dirty/unknown side), on the same .fleet ground as the base rule above. Registered separately because it overrides `color` directly, the same reason .task-card-status--ok/--bad are registered beside their base chip rather than assumed to inherit its measurement.",
   },
 };
 

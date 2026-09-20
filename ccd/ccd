@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=8ad00a676f3b8338eb713a10044ffaabb3462fdf116affe02f00a75923512893
+# ccrc:generated 1 sha256=db1ad23f015556ac8d26fb0d6d3d0f972c6d3ed09ddcd6a806b959ece8ec0f8f
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -1249,6 +1249,16 @@ COMPACT_THRESHOLD=50            # own context % at/above which an idle session a
                                 # (routing spec §5.1; slice 6, Task 5) — the DEFAULT, not the only one
 COMPACT_COOLDOWN=1800           # min seconds between auto-compacts of one session (also bounds the post-swap window)
 COMPACT_QUIET=60                # seconds a session must be idle before an auto-compact fires (let the dust settle)
+COMPACT_TURN_TAIL_LINES=200     # D-3104 — physical transcript lines `_transcript_last_turn_ts` reads for the
+                                # no-turn guard. Its OWN window, not `REDRIVE_TAIL_LINES`: a
+                                # `/compact` writes FOUR rows of its own (the `isCompactSummary`
+                                # row plus the three local-command rows) and the redrive
+                                # detector's 60 lines are sized for a stall two turns deep, not
+                                # for "reach back PAST a compaction to the last real turn" on a
+                                # transcript whose tail is thick with attachment and system rows.
+                                # Too small and the scan answers "no real turn in the window",
+                                # which this guard FAILS OPEN on — the pre-D-3103 behaviour, never
+                                # a false refusal.
 COMPACT_LANDING_WALL=80         # D-2014 — the ctx % at/above which the post-swap suppression stops
                                 # earning its veto.
                                 #
@@ -2084,6 +2094,373 @@ _codex_lanes() {
 # untagged — today's behaviour, with no `command not found` on stderr and no
 # rc 127 leaking into a `$(…)` capture.
 _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 0; }
+# Item 5 (I3, wave-1 fix round A) — whether THIS box has a control plane BY
+# CONFIGURATION, measured the ONLY honest way: is `ccd-pool-sync.timer`'s
+# unit file actually installed. NEVER `$REG/pool-epoch`'s own absence — that
+# is the condition `_acct_pool_state` (below) must still tell apart from
+# THIS one, because they call for opposite answers. `ccrc:10131-10132`
+# (`_inst_units`) derives the timer's install from `[ "$INST_ROLE" = fleet ]`
+# alone (T4-R1's own ruling: copying a sibling unit's `!= server` gate would
+# leave the single-box DEFAULT role arming a timer whose binary can never
+# succeed there — `ccd-pool-sync:52` refuses outright without
+# `$HOME/.ccrc/agent.env`, which only `--role fleet`'s install ever writes).
+# `INST_ROLE` itself is an installer-local variable inside a DIFFERENT
+# script (`ccrc`), unreadable from here, so this re-measures the INSTALLED
+# ARTIFACT that decision left on disk instead — the identical filesystem
+# fact `ccrc-doctor-checks`' `_check_services` reads to build its own
+# `installed` census (`CCRC_UNIT_DIR`/`_dr_unit_file`, doctor item 4's own
+# fix, same round). The darwin arm reuses `_svc_plist`/`_svc_label` (above)
+# rather than restating their translation; the linux arm matches
+# `_check_services`' own path because there is no `_svc_*` helper for a
+# plain systemd unit FILE's location (only for its ACTIVE state).
+_pool_sync_installed() {
+  if [ "${CCD_OS:-linux}" = darwin ]; then
+    [ -f "$(_svc_plist ccd-pool-sync.timer)" ]
+  else
+    [ -f "$HOME/.config/systemd/user/ccd-pool-sync.timer" ]
+  fi
+}
+# THE ACCOUNT SIDE'S STATE, and the reason it is not `_acct_pool`'s shape.
+#
+# `_acct_pool` answers a NAME or empty, and empty means untagged — which was
+# honest while the only carrier was the roster, a file that is either present
+# or the box has no accounts at all. The projection is different: it can be
+# ABSENT (this node has never synced), STALE (the control plane has been
+# unreachable longer than the lease) or MALFORMED, and all three mean NOBODY
+# DECIDES. Folding any of them into "untagged" would silently lift every
+# account constraint on the box, which is the fail-OPEN direction and the one
+# outcome the whole design exists to prevent (spec §5.4).
+#
+# FIVE WORDS, NOT FOUR. `stale` does not fold into `unreadable`: both mean
+# nobody decides, but one's remedy is file permissions and the other's is the
+# control-plane link, and the die message a human reads has to say which.
+# An adapter may not narrow a distinction it received.
+#
+# A THIRD REMEDY NOW SHARES `unreadable`'s WORD, SINCE T1-R4 (fix round 3):
+# an empty or absent id also answers `unreadable`, and its fix is neither
+# file permissions nor the control-plane link — it is "fix the caller, the
+# subject is unnameable." Nothing here is fail-open (every caller still
+# routes `unreadable` to refuse, the same as the other two causes), but an
+# operator reading `unreadable` off a die message and reaching for `chmod`
+# will find a perfectly readable file when the real fault was upstream.
+#
+# NO PROCESS-LOCAL MEMOISATION, ON PURPOSE (fix round 1, T1-R1 — this reader
+# cached through a load flag and an associative array for one review round;
+# both are gone). The reviewer measured why: `_pool_ok`'s ONLY caller shape
+# for the account side is `ap=$(_acct_pool "$1")` (`_pool_ok`, below) — a
+# COMMAND SUBSTITUTION, which forks a SUBSHELL. A cache built inside that
+# subshell dies with it; the parent's own "loaded" flag never moves off 0,
+# so every call would still pay the full read AND carry dead state nobody
+# ever reads back. Priming the cache with a direct, non-subshell call first
+# would be worse, not better: `_pool_ok` is reachable from
+# `_auto_swap_check`, itself polled every tick from inside `cmd_supervise` —
+# a loop that supervises one session for DAYS — so a `now` and a `lease`
+# frozen at the first call would never notice the lease expiring or a
+# resynced projection landing. Reading and parsing the file on every call is
+# the correct cost, not a compromise; I3 below is what keeps that cost
+# bounded.
+_acct_pool_state() {   # account-id -> "named <n>" | untagged | unreadable | malformed | stale ; always rc 0
+  # THIS FUNCTION'S OWN REASON FOR THE SHADOW (fix round 1, M1) — the earlier
+  # comment here credited it with a trailing strip this function never had,
+  # and with keeping `_pool_name_valid`'s locale honest, which that function
+  # already does for itself (`local LC_ALL=C` at :1588, independent of
+  # whatever the caller set — a false comment is worse than none). What IS
+  # locale-sensitive here: the bounded read below uses `-n 65536` as a BYTE
+  # cap, the same reason `_project_pool_state` gives for its own `-n 64`
+  # (D-2520) — under a multi-byte locale `-n` counts CHARACTERS, not bytes,
+  # and the cap's whole job (I3) is bounding what one `cmd_supervise` tick
+  # reads off disk regardless of what is in it.
+  local LC_ALL=C
+  # FIRST PREDICATE, deliberately — mirrors `_project_pool_state`'s own
+  # first line (:1675) in POSITION and fixes fix round 1's I5 (without this,
+  # indexing an unset `$1` printed `bad array subscript` to stderr and fell
+  # through regardless — and in a `$( )` capture that stderr leaks straight
+  # into the supervisor's own output) — but NOT in VERDICT (T1-R4, fix round
+  # 3). The sibling answers `untagged` here because a registry row with no
+  # `.project` field genuinely, positively carries no project — that is what
+  # the absence MEANS. An account this function cannot even NAME is a
+  # different thing entirely: UNMEASURABLE, not untagged. Measured against
+  # an EXPIRED document on disk: an absent id answered `untagged` while a
+  # real id on the very same document answered `stale` — the clearest
+  # violation there is of "no input yields a positive word without a
+  # document that says so." `unreadable` is the fail-SHUT direction (routes
+  # to undecidable -> refuse in every caller) and reuses the existing
+  # five-word vocabulary rather than inventing a sixth word for what is
+  # really a caller bug, not a fact about the document.
+  [[ -n "${1-}" ]] || { echo unreadable; return 0; }
+  local id="$1" f="$REG/pool-epoch" line k v p epoch='' issued='' lease='' now body=''
+  local found='' numRe='^(0|[1-9][0-9]*)$'
+  # SEEN, NOT EMPTY (fix round 3) — three separate booleans, one per numeric
+  # field, replacing the old "the variable is still empty" proxy for "not
+  # seen yet". That proxy had a hole: a line spelled `lease` alone, or
+  # `lease ` (key, separator, nothing) — a MALFORMED row, not a legal
+  # zero — sets `$lease` to the empty string, which reads IDENTICALLY to
+  # "never saw a lease line" to `[[ -z "$lease" ]]`. A second, real `lease
+  # <n>` line then passed the (broken) dup check and silently overwrote it:
+  # two defects in one hole — a duplicate that should refuse now silently
+  # wins, AND a malformed empty row that should refuse is silently
+  # discarded, the C1/C4 class one more field over. Measured: `lease
+  # \nlease 9999999999\n…` answered `named pool-a`. Bounded: it cannot
+  # resurrect an expired document, because a non-empty REAL value still
+  # trips its own dup guard the same way.
+  local epochSeen='' issuedSeen='' leaseSeen='' endSeen=''
+  local -A seen=()
+  # ABSENCE PROVEN AT EVERY LEVEL IT IS CLAIMED, exactly as
+  # `_project_pool_state` does it one directory down.
+  [[ -d "$REG" && -x "$REG" ]] || { echo unreadable; return 0; }
+  # Item 5 (I3, wave-1 fix round A) — ABSENCE OF THE FILE ITSELF, split from
+  # every other reason this function answers `unreadable`, is the ONE
+  # branch a non-fleet box's missing control plane changes: `--role both`/
+  # `--role server` (the single-box default) never gets `ccd-pool-sync.timer`
+  # installed at all (`ccrc:10131-10132`, T4-R1), so THIS node's absence is
+  # not "has not synced yet" — it is "was never asked to", the fail-shut
+  # answer `main` never gave before this feature existed. Falls back to the
+  # DECLARED tag (`_acct_pool`), exactly as `main` did, ONLY for that box; a
+  # FLEET box (`_pool_sync_installed`) still fails shut on the identical
+  # absence, because THERE it means "has never synced" — the fact
+  # `_acct_pool_state`'s own five-word vocabulary exists to distinguish from
+  # every declared-tag guess. The `-r`/malformed/permission checks just below
+  # are UNCHANGED and still fail shut regardless of role: an unreadable or
+  # torn document is never "this box was never asked", on either box.
+  if [[ ! -e "$f" && ! -L "$f" ]] && ! _pool_sync_installed; then
+    local declared; declared="$(_acct_pool "$id")"
+    if [[ -n "$declared" ]]; then echo "named $declared"; else echo untagged; fi
+    return 0
+  fi
+  [[ -e "$f" || -L "$f" ]]     || { echo unreadable; return 0; }
+  [[ -f "$f" && -r "$f" ]]     || { echo unreadable; return 0; }
+  # BOUNDED, NUL-AWARE, NO SUBSHELL — the same move `_project_pool_state`
+  # makes (:1736-1793), adapted for a MULTI-LINE document instead of one
+  # token: `read -d ''` treats NUL as the field terminator, so a NUL found
+  # before EOF (fix round 1's I2 — `acct acct-a pool\0-a` fabricates the
+  # token `pool-a`, which appears NOWHERE in the file, because bash drops
+  # the NUL when the string is later used — this read is what actually SEES
+  # it) and the `-n` cap being reached before EOF (I3 — this file is one
+  # symlink away from an unbounded one, exactly like `pools/<project>`, and
+  # the wave-1 measurement clocked an unbounded read at 17.9s/33MB RSS for
+  # ONE call on the supervisor's 5-second tick) report the SAME exit status:
+  # 0, "stopped short of EOF" — both illegal, both answered `malformed`,
+  # neither ever `untagged`. 65536 (64 KiB) is chosen the same way the
+  # sibling chose 64: a legal row is `acct <=32-char id> <=32-char pool>\n`,
+  # under 70 bytes, so 64 KiB holds 900+ accounts — an order of magnitude
+  # past any fleet this file is sized for — while still refusing a
+  # multi-megabyte runaway file outright. M6 — THE CAP IS STRICT, not
+  # inclusive: `-n 65536` means a document of EXACTLY 65536 bytes also
+  # "stops short of EOF" (measured) and is refused along with everything
+  # larger, so the true accepted range is bytes 0..65535, under 64 KiB, not
+  # up to and including it.
+  if { IFS= read -r -d '' -n 65536 body; } 2>/dev/null < "$f"; then
+    echo malformed; return 0
+  fi
+  # I6, DISCLOSED — same choice the sibling makes at :1794-1797, for the
+  # same reason: `read -d ''` returns 1 (the "proceed" branch above) both
+  # for a clean EOF with no NUL and for a read that FAILED before reaching
+  # EOF or the cap, and bash's `read` builtin exposes no way to tell those
+  # apart. Closing it would need a mechanism this builtin does not have; a
+  # failure here reads as "a small, clean document" and is parsed as one.
+  # Unlike the OLD shape (`done < "$f" ... || unreadable`), this is not
+  # merely UNCHECKED — `$?` from the read above IS the check — it is the
+  # one ambiguity that checking it cannot resolve, named rather than hidden.
+  # NARROWED, THOUGH NOT CLOSED, BY THE TERMINATOR CHECK BELOW: a genuine
+  # I/O failure mid-read leaves `$body` holding whatever prefix survived,
+  # and that prefix is now refused UNLESS it happens to end in a complete
+  # `...\nend` — a coincidence, not a case this reader can rule out, but one
+  # a real I/O error landing exactly on a field boundary is vanishingly
+  # unlikely to produce.
+  #
+  # M5 / T1-R3 — THE PARK THIS FUNCTION USED TO HAVE, NOW A GUARD, NOT A
+  # DISCLOSURE. Round 1's I6 named ONE outcome a truncated read could
+  # produce (`untagged`, the queried id simply absent from whatever prefix
+  # survived) and missed the WORSE one round 2 measured: `acct acct-a
+  # pool-alp` with no trailing newline — a row torn mid-write — answered
+  # the POSITIVE `named pool-alp`, a pool the file never finished spelling,
+  # with PLACEMENT proceeding onto it. That is the sibling's OWN second,
+  # worse park (:1803-1812, "the answer is the POSITIVE `named <prefix>`
+  # … PLACEMENT PROCEEDS"), which is exactly why ITS discipline is "TWO
+  # ARMS, TWO PARKS — do not conflate them" — this function had conflated
+  # them into one named word.
+  #
+  # T1-R3 closes both STRUCTURALLY instead of naming a second park: the
+  # wire format now ends every document with a literal `end` line (Task
+  # 3's emitter writes it the same round this reader starts requiring it),
+  # and ANY document whose last line is not exactly `end` is refused before
+  # a single field is parsed. A line-oriented reader has no other way to
+  # tell a torn final row from a complete one. Zero `acct` lines is still
+  # legal, so the minimum well-formed document is four lines: epoch,
+  # issued, lease, end. STRUCTURAL, not per-field: checked once against the
+  # RAW bounded body, so a torn document — whether the tear lands mid-`acct`
+  # row (round 2's worse park) or mid `epoch`/`issued`/`lease` (round 1's
+  # named one) — is refused the same way, before the per-line parser below
+  # ever runs. The terminator counts toward the 64 KiB budget: it was
+  # already inside the bounded read above, not appended after it.
+  #
+  # ONE trailing newline is tolerated (the writer's own convention, matching
+  # every other line in this format) but not required — a `$body` ending in
+  # `...end` with no final `\n` is accepted for the same reason the
+  # per-line loop below already tolerates a final line with none. A SECOND
+  # trailing newline (content after the terminator, even if blank) is
+  # refused: the last LINE must be `end`, and an empty final line is not it.
+  local tail="$body"
+  [[ "$tail" == *$'\n' ]] && tail="${tail%$'\n'}"
+  [[ "${tail##*$'\n'}" == end ]] || { echo malformed; return 0; }
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    # C1 — an indented line is a line this reader cannot KEY AT ALL, not a
+    # blank one, and must not fall into the blank-line no-op. `k` is
+    # computed FIRST (harmless even for a genuinely blank line — it just
+    # comes out empty) so the skip decision below can be made on `$line`
+    # itself, the RAW input, rather than on the derived `$k`: those two are
+    # NOT the same test. ` acct acct-a pool-a` (one leading space) is not an
+    # empty line, but `k=${line%% *}` on it still yields the empty string —
+    # the pattern " *" matches the WHOLE line as its own longest suffix —
+    # and the old code tested `$k` for this decision, so it read that empty
+    # key as the blank-line marker and silently dropped the row, leaving
+    # `acct-a` `untagged`: the fail-OPEN direction the whole design exists
+    # to prevent. Testing `$line` instead means a non-blank line that still
+    # keys empty falls through to the `case` below unskipped, where the
+    # `*)` wildcard — there is no `''` arm — refuses it as `malformed`,
+    # exactly like any other key this reader does not recognise.
+    k=${line%% *}
+    [[ -z "$line" ]] && continue
+    v=${line#* }
+    case "$k" in
+      epoch)  # M7 — a SECOND `epoch` line is the same self-contradiction
+              # M3 catches for `acct` rows: nothing says which value is
+              # true. The dedicated `epochSeen` flag (not `-z "$epoch"`,
+              # fix round 3 — see the comment on the flags above) is set
+              # unconditionally, regardless of what `$v` turns out to be.
+              [[ -z "$epochSeen" ]] || { echo malformed; return 0; }
+              epochSeen=1
+              epoch=$v ;;
+      # R3's wire format carries an `issued` line (the projection's own
+      # issuedAt) between `epoch` and `lease`; this reader has no use for it
+      # in any decision, but fix round 1's M2 asks the same question of it
+      # that `epoch` already answers — validated numeric below, not merely
+      # accepted — so a torn or hand-edited `issued` field poisons the
+      # document exactly like a torn `epoch` does, rather than passing
+      # silently because nothing downstream happened to read it.
+      issued) [[ -z "$issuedSeen" ]] || { echo malformed; return 0; }
+              issuedSeen=1
+              issued=$v ;;
+      lease)  [[ -z "$leaseSeen" ]] || { echo malformed; return 0; }
+              leaseSeen=1
+              lease=$v ;;
+      acct)   # I4 — a row missing its pool field (`acct acct-a`, or a bare
+              # `acct` with nothing after it at all) leaves `v` as a SINGLE
+              # token: `${v#* }` with no space to strip returns the string
+              # unchanged, so the old code handed `_pool_name_valid` the
+              # ACCOUNT ID itself (or the literal word `acct`) as if it
+              # were the pool name — both happen to be legal-looking tokens,
+              # so a truncated row fabricated a tag. Require a SECOND field
+              # to exist before ever splitting on it.
+              [[ "$v" == *' '* ]] || { echo malformed; return 0; }
+              p=${v#* }; v=${v%% *}
+              # C2 / C4 — the id field was validated against NO grammar at
+              # all: `acct␣␣pool-a` (two spaces) leaves `v` EMPTY after the
+              # split above (`${v%% *}` on a value that is itself all
+              # leading whitespace strips the whole thing), and
+              # `seen[$v]=1`/`${seen[$v]+x}` with an empty subscript is
+              # `bad array subscript` — a hard bash error that unwinds the
+              # WHOLE FUNCTION, breaking the "always rc 0" contract outright
+              # (measured: empty stdout, rc 1). An off-grammar but non-empty
+              # id (a tab, `ACCT-A`, a quoted or globby id) had NO check at
+              # all and silently discarded the row, reading the account
+              # `untagged` — C1's exact defect, one field to the right, and
+              # a direct contradiction of the very next comment below, which
+              # already treats the POOL half of this same row as
+              # poison-the-document. `^[A-Za-z0-9._-]{1,64}$` — MUST agree
+              # with Task 3's `ccd-pool-sync` writer, which validates an
+              # account id against this identical pattern before it ever
+              # renders a line (`re.match(r"^[A-Za-z0-9._-]{1,64}$", k)`) —
+              # a disagreement between the two would mean one side emits
+              # rows the other refuses. `{1,64}` requires AT LEAST one
+              # character, so this one check closes C2 (empty id) as a
+              # special case of C4 (off-grammar id) rather than needing a
+              # second, separate emptiness check — verified: `[[ "" =~
+              # ^[A-Za-z0-9._-]{1,64}$ ]]` is false.
+              [[ "$v" =~ ^[A-Za-z0-9._-]{1,64}$ ]] || { echo malformed; return 0; }
+              # A name off the grammar poisons the WHOLE document: a reader
+              # that skipped the bad row would serve the rest under a tag it
+              # could not validate.
+              _pool_name_valid "$p" || { echo malformed; return 0; }
+              # M3 — a SECOND `acct` row for an id already seen makes the
+              # document self-contradictory (nothing says which row is
+              # true, so honouring either — first-win or last-win — would
+              # fabricate an agreement the file never actually stated) and
+              # poisons the whole document exactly like an unparseable row
+              # does, even when the two rows happen to agree: the CONTRACT
+              # this file is built to ("one row per account") is what
+              # broke, not merely this one account's answer.
+              [[ -z "${seen[$v]+x}" ]] || { echo malformed; return 0; }
+              seen[$v]=1
+              [[ "$v" == "$id" ]] && found=$p ;;
+      end)    # T1-R3 — the terminator, position AND cardinality both
+              # pinned (security-scanner addendum). The up-front structural
+              # check above already proved the RAW body's last line is
+              # exactly `end`, which rules out a torn final row, but NOT a
+              # SECOND `end` earlier in the document — `epoch…/end/acct
+              # acct-a pool-a/end` is two documents concatenated (or a torn
+              # write landing inside a previous one), and the structural
+              # check alone cannot see it: it only ever looks at the last
+              # line. `endSeen` is that count: a bare, otherwise-legal
+              # `end`-KEYED line is refused the second time it appears,
+              # wherever it is.
+              #
+              # NO SEPARATE `[[ "$v" == end ]]` CHECK — deliberately, not an
+              # oversight: it was added for `end 1` / `end ` (the
+              # terminator takes no argument) and proved fully redundant by
+              # exhaustive case split, the same shape as fix round 1's C1
+              # (`-n "$k"` dropped once `*)` already covered it). A line
+              # keying as `end` is EITHER the document's true last line —
+              # already caught above if its value is not exactly `end` —
+              # OR it is not, in which case a GENUINE bare `end` must still
+              # exist as the true last line for the structural check to
+              # have passed at all, and THAT is the line `endSeen` refuses
+              # as the second `end`-keyed line. There is no placement of an
+              # `end`-with-a-value row this reaches without one of those two
+              # guards already deciding it.
+              [[ -z "$endSeen" ]] || { echo malformed; return 0; }
+              endSeen=1 ;;
+      *)      echo malformed; return 0 ;;
+    esac
+  done <<< "$body"
+  # No epoch (or, since M2, issued/lease) line is not an empty document — it
+  # is a document this reader does not recognise, and recognising it
+  # partially is how a stale format gets served as fact.
+  #
+  # C3 — `^[0-9]+$` PERMITS A LEADING ZERO, and `(( ))` treats a leading-zero
+  # operand as OCTAL: a document saying `lease 0000000009` (expired in 1970)
+  # threw `value too great for base` on the digit `9` and then, because that
+  # arithmetic error does not abort this function the way an array-subscript
+  # error does, fell straight through past the stale gate to `named <n>` —
+  # serving an expired tag as current. Fixed IN THE GRAMMAR, not only the
+  # arithmetic: `%d` is what the (future) writer emits, and `%d` can never
+  # produce a leading zero, so `^(0|[1-9][0-9]*)$` — zero, or a non-zero
+  # digit followed by any digits — IS the true grammar for all three numeric
+  # fields, spelled ONCE and reused, rather than duplicated three times only
+  # to drift. `10#` at the one place a value reaches `(( ))` is defence IN
+  # DEPTH, not the primary fix: it forces base-10 even if some future caller
+  # of `lease` bypassed this validation.
+  [[ "$epoch"  =~ $numRe ]] || { echo malformed; return 0; }
+  [[ "$issued" =~ $numRe ]] || { echo malformed; return 0; }
+  [[ "$lease"  =~ $numRe ]] || { echo malformed; return 0; }
+  # CLOCK SKEW, NAMED (item 10): `$lease` is an ABSOLUTE unix-seconds
+  # timestamp the SERVER box issued (`server.ts`'s `nowS + POOL_LEASE_MS`),
+  # compared here against THIS (fleet) box's own `date +%s` — nothing
+  # resynchronises the two clocks in between. Skew between the two boxes
+  # therefore shifts the whole staleness dial directly: a fleet box running
+  # fast calls the projection stale early, one running slow keeps serving it
+  # past the server's own idea of the lease. Not this function's to fix —
+  # NTP-typical skew is noise against the default 15-minute lease — but
+  # nothing said so before this comment.
+  now=$(date +%s)
+  (( now > 10#$lease )) && { echo stale; return 0; }
+  # An account the document does not name is UNTAGGED, not unknown: the
+  # document is complete by construction (the control plane always emits every
+  # edge it holds), so silence about an account is a positive statement that
+  # it carries no pool. This is the one fold that is honest here.
+  [[ -n "$found" ]] || { echo untagged; return 0; }
+  echo "named $found"
+}
 # THE RULE, spelled once in this language: an account may serve a project iff
 # the account is untagged, or the project is untagged, or the names are equal.
 #
@@ -2095,10 +2472,14 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # (`server/test/fixtures/poolRule.ts`) in both languages.
 #
 # THE THIRD CODE IS CONSUMED TODAY, not merely kept for a later wave.
-# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 18 matching LINES now, 12 of
-# them call sites — the other six are prose, this sentence's own quoting of
+# Measured: `grep -c '_pool_ok ' ccd/ccd` finds 16 matching LINES now, 12 of
+# them call sites — the other four are prose, this sentence's own quoting of
 # the pattern among them — not the two this comment used to name as the whole
-# of them. (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
+# of them. (18/12 before fix round 1, which deleted two prose mentions along
+# with the falsified paragraphs that carried them: `cmd_ws_add`'s
+# unreachable-equivalence claim and this header's own sentence about that
+# builder folding rc 1 into rc 2. The call-site half did not move, which is
+# again the half that would have meant something.) (17/11 before C1, 18/11 after it, 19/11 after the #69 review round,
 # 17/11 after round 3, which rewrapped one prose mention and replaced another
 # with a grep anchor, and 18/12 at routing slice 4, whose `_place_for_class`
 # asks the pool rule before it counts a class's unservable lanes — the
@@ -2121,11 +2502,14 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # this exit code three ways now, refusing or acting on an undecidable tag
 # differently from a mismatch. The two ORIGINAL callers still fold rc 1
 # into rc 2 exactly as before, for the reason already given:
-# `_ws_least_loaded` writes `_pool_ok "$w" "$pps" || continue`, and
-# `cmd_ws_add`'s reason builder uses `elif ! _pool_ok …`, and what
+# `_ws_least_loaded` writes `_pool_ok "$w" "$pps" || continue`, and what
 # preserves the distinction at THAT seam is `cmd_ws_add` separately
 # re-reading the STATE WORD (`pps=$(_project_pool_state "$project")`), not
-# this exit code. Do not "simplify" the exit code to a boolean: several
+# this exit code. ONE OF THE TWO STOPPED FOLDING (fix round 1):
+# `cmd_ws_add`'s reason builder now takes the exit code into a variable and
+# branches three ways, because the account side made rc 2 reachable there
+# with a perfectly readable project tag and the folded arm printed a
+# mismatch token for it. Do not "simplify" the exit code to a boolean: several
 # callers now read rc 2 on its own, so collapsing it would be an adapter
 # narrowing a distinction it received, not a cleanup with nothing riding
 # on it.
@@ -2133,14 +2517,118 @@ _acct_pool() { declare -F _ccrc_pool >/dev/null 2>&1 && _ccrc_pool "$1"; return 
 # THE STATE IS PASSED IN, not read here: callers obtain it ONCE per decision
 # (`pps=$(_project_pool_state "$project")`) and pass the word, so a loop over
 # five candidates costs one `cat`, not five.
-_pool_ok() {   # wrapper pool-state -> 0 serve | 1 mismatch | 2 undecidable
-  local ap pp; ap=$(_acct_pool "$1")
+#
+# WAVE 1 TASK 2 — the account arm now reads `_acct_pool_state`, not
+# `_acct_pool`. The old `ap=$(_acct_pool "$1")` treated every account this
+# side could not see the same way it treated a genuinely untagged one — a
+# bare name or empty, with no way to tell "the roster says nothing" from "the
+# control plane's projection has never synced". `_acct_pool_state` answers
+# with STATE (spec §5.7): `unreadable`/`stale`/`malformed` now reach rc 2
+# (nobody decides) instead of silently folding into "unconstrained, serve".
+#
+# THE PROJECT SIDE DECIDES FIRST, and the order is the whole blast-radius
+# argument (spec §5.8). An untagged project is unconstrained, so it must
+# serve WITHOUT consulting the account side at all — otherwise a control
+# plane that has been down longer than the lease would stop placement into
+# every project on the box, instead of only the ones somebody deliberately
+# tagged. Moving this below the account read is the difference between an
+# outage nobody notices and a fleet-wide stop.
+#
+# TWO FACTS OUT ALONGSIDE THE EXIT CODE (fix round 1, I1/I2) — `POOL_OK_SIDE`
+# and `POOL_OK_STATE`, set on EVERY call before anything returns.
+#
+# WHY THEY ARE NEEDED. The exit code is three-valued and the WORLD behind it is
+# not: rc 2 now stands for FIVE distinguishable conditions — the project tag
+# `unreadable` or `malformed`, and the account projection `unreadable`, `stale`
+# or `malformed` — and every renderer in this file used to spell exactly one of
+# them ("pool tag for <p> is <pps> … fix or clear it"). On a cold node with a
+# perfectly readable project tag that sentence blamed a healthy file and told
+# the operator to clear it. rc 1 had the twin defect one carrier over: the
+# refusal text read the DECLARED roster (`_acct_pool`) while the PROJECTION is
+# what decided, so a roster/projection skew printed "claude is in pool 'pool-a'
+# and project 'demo' is in pool 'pool-a'" and refused it as a mismatch. An
+# adapter may not narrow a distinction it received; these two variables are how
+# the distinction leaves this function.
+#
+#   POOL_OK_SIDE   project | account — WHICH SIDE produced the answer.
+#   POOL_OK_STATE  that side's own state word, verbatim: `untagged`,
+#                  `named <n>`, `unreadable`, `malformed` or (account only)
+#                  `stale`. For rc 1 it is the account's PROJECTED
+#                  `named <n>` — the name that actually decided.
+#
+# GLOBALS, NOT STDOUT, and the precedent is `_session_probe` below: `$( )`
+# would fork a subshell and eat them. MEASURED rather than assumed, because
+# this only works if no call site captures the call — all 12 invoke it
+# rc-style (`; prc=$?`, `|| continue`, `if ! …`), so the writes land in the
+# caller's own scope. Two consequences a future caller must respect: a caller
+# that runs OTHER functions between the call and the render must SNAPSHOT them
+# first (`cmd_swap` does, because `_crosspool_valid` and `_strand_mark` run in
+# between), and a caller must never read them without having called first —
+# hence the unconditional reset on entry, so a rc-0 return can never leave the
+# previous call's words standing.
+#
+# FOUR MORE FUNCTIONS CLOBBER THESE GLOBALS WHEN CALLED DIRECTLY, beside
+# `cmd_swap` above: `_strand_why`, `_ws_least_loaded`, `_swap_target` and
+# `_place_for_class` each call `_pool_ok` themselves. They are safe today only
+# because every one of their eight call sites (`_place_for_class` x2,
+# `_ws_least_loaded` x4, `_swap_target` x1, `_strand_why` x1) is `$( )`
+# -substituted — a subshell, so the clobber dies with the subshell and never
+# reaches the caller's own `POOL_OK_SIDE`/`POOL_OK_STATE`. That is fragile,
+# not structural: this file already has precedent for de-substituting such a
+# call (`_place_for_class`'s `PLACE_DEGRADED_TO`, printed on a second line to
+# survive the subshell) — the day one of these four is called bare instead of
+# captured, the next `_pool_ok` render silently reads the wrong call's answer.
+_pool_ok() {   # account-id pool-state -> 0 serve | 1 mismatch | 2 undecidable
+  local ap pp
+  POOL_OK_SIDE=''; POOL_OK_STATE=''
   case "$2" in
-    untagged)  return 0 ;;
+    untagged)  POOL_OK_SIDE=project; POOL_OK_STATE=untagged; return 0 ;;
     "named "*) pp=${2#named } ;;
-    *)         return 2 ;;                     # unreadable | malformed: nobody decides
+    *)         POOL_OK_SIDE=project; POOL_OK_STATE="$2"; return 2 ;;   # unreadable | malformed: nobody decides
   esac
-  [[ -z "$ap" || "$ap" == "$pp" ]]
+  ap=$(_acct_pool_state "$1")
+  # FROM HERE THE ANSWER IS THE ACCOUNT SIDE'S, whatever it turns out to be —
+  # the project side already answered `named <n>`, which is a readable tag and
+  # never a reason to refuse on its own.
+  POOL_OK_SIDE=account; POOL_OK_STATE="$ap"
+  case "$ap" in
+    untagged)  return 0 ;;
+    "named "*) ap=${ap#named } ;;
+    *)         return 2 ;;                     # unreadable | stale | malformed: nobody decides
+  esac
+  [[ "$ap" == "$pp" ]]
+}
+# ── THE TWO NON-SERVE SENTENCES, EACH SPELLED ONCE ──────────────────────────
+# Both take their facts as ARGUMENTS rather than reading `POOL_OK_SIDE` /
+# `POOL_OK_STATE` themselves, for the reason the variables' own header gives:
+# a caller that runs something else in between must pass its SNAPSHOT, and a
+# renderer that silently read whatever the globals hold now would be the same
+# stale-fact defect one level up.
+_pool_undecidable_why() {   # side state project account-id -> the rc-2 sentence
+  # FIVE CONDITIONS, FIVE REMEDIES, and saying which is the whole obligation:
+  # "both mean nobody decides, but one's remedy is file permissions and the
+  # other's is the control-plane link, and the die message and the chip each
+  # need to say which" (spec §5.7). The account arms each state POSITIVELY that
+  # the project tag is fine, because the sentence they replace said the
+  # opposite and an operator acted on it.
+  local side="$1" state="$2" project="$3" acct="$4"
+  if [[ "$side" == project ]]; then
+    echo "pool tag for $project is $state: $POOLS_DIR/$project — fix or clear it"
+    return 0
+  fi
+  case "$state" in
+    stale)     echo "the pool projection for $acct is stale: $REG/pool-epoch is past its lease — the remedy is the control-plane link (the pool sync), not this file; project '$project' is tagged and its tag reads fine" ;;
+    malformed) echo "the pool projection for $acct is malformed: $REG/pool-epoch is off the grammar — re-sync or remove it; project '$project' is tagged and its tag reads fine" ;;
+    *)         echo "the pool projection for $acct is $state: $REG/pool-epoch is absent or unreadable — this node may never have synced; check that and the file's permissions; project '$project' is tagged and its tag reads fine" ;;
+  esac
+}
+_pool_mismatch_why() {   # account-id account-state project project-pool-state -> the rc-1 clause
+  # NAMES THE CARRIER THAT DECIDED. `_acct_pool` — the DECLARED roster read —
+  # is what stood here, and it is spec §5.6's LOWEST precedence: the
+  # projection outranks it, so the two disagree exactly when this sentence
+  # matters most, and the old text then named two identical pools and called
+  # them a mismatch.
+  echo "$1 is in pool '${2#named }' (measured from the projection, $REG/pool-epoch — not the declared roster) and project '$3' is in pool '${4#named }'"
 }
 _id()    { echo "$1-$2"; }                                  # wrapper project -> id
 _tmux()  { echo "cc-$1"; }                                  # id -> tmux name
@@ -2397,8 +2885,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 154
-# invocations across 130 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 155
+# invocations across 131 non-comment lines.
 #
 # THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
 # archive fields, so the next reader is not hunting a refactor for the +2.
@@ -2439,7 +2927,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # `.project` reads), 135 at the #70 merge (`1714038a`, main's compactor sites —
 # round 3 came FIRST and the merge pushed it back up, which the round-5 ordering
 # reversed), 133 at round 4 (`c3e69b41`), 132 at round 5 (`47824849`), 133 at
-# the #73 merge (`f065c8bb`). Every earlier move left a stale cardinal
+# the #73 merge (`f065c8bb`), 155 at `ws/autoswitcher-and-compaction-issues`
+# (D-3103's `lastcompact` read in `_compact_no_turns`). Every earlier move left a stale cardinal
 # somewhere in this block. Four of them stood in the paragraphs directly above,
 # where a reader hits them first, and they read as the live figure. "Re-measure
 # it" was a REQUEST; `ccd-reg-get-census.test.ts` reads this sentence's own two
@@ -5624,14 +6113,14 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # lock" on two different inodes — reopening the double compare-and-set this
 # branch's lock migration closed.
 #
-# NOT reachable this way, and this set IS the boundary — TEN dot-prefixed
-# artifacts live under `$REG`; the five above are reachable, these five are
+# NOT reachable this way, and this set IS the boundary — ELEVEN dot-prefixed
+# artifacts live under `$REG`; the five above are reachable, these six are
 # not. THE CARDINAL IS MEASURED NOW, and it had to be: this paragraph said
 # EIGHT about a tree that already held nine, because `.account-placement.lock`
 # landed with `ccrc account` and nothing here reds when prose drifts.
 # `ccd-account-auth.test.ts`'s "the dot-prefixed registry inventory is a
 # census, not a memory" derives the number from the shipped bash and refuses
-# a paragraph that disagrees with it. The five:
+# a paragraph that disagrees with it. The six:
 # `$REG/.lifecycle/` (the lifecycle journal — a dotted DIRECTORY for
 # exactly this reason; see the LC-BEGIN block, and note that its generations,
 # `errors` and `.rotate.lock` are counted WITH it, as `.reaped/`'s tombstones
@@ -5642,8 +6131,12 @@ _ws_slug_valid() { [[ "$1" =~ ^[a-z0-9][a-z0-9-]{1,30}$ ]]; }
 # DIRECTORY for the same reason `.lifecycle/` is one, and unreachable for
 # `.reaped/`'s reason rather than the second-dot one below; its per-id
 # `<id>.json`, its `.<id>.<pid>.tmp` staging files and its `<id>.run/` FIFOs
-# are counted WITH it); `_reg_set`'s own tmps; and session-hook.sh's
-# `.$id.$$.hookstate.tmp` — the last two ARE candidate glob matches when
+# are counted WITH it); `_reg_set`'s own tmps; `ccd-pool-sync`'s
+# `$REG/.pool-epoch.$$.tmp` staging file, written by the same tmp-then-rename
+# idiom outside `_reg_set` itself, before it renames into the dot-FREE
+# `$REG/pool-epoch` — the projection's published name carries no dot, only
+# its transient staging copy does; and session-hook.sh's
+# `.$id.$$.hookstate.tmp` — the last three ARE candidate glob matches when
 # `<id>` is the aliasing id, but their suffix after the match carries a
 # SECOND dot, which is exactly what `_reg_purge`'s own `*.*` skip excludes.
 #
@@ -6311,7 +6804,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
     # an EMPTY reason list. Both are harmless because this path is already
     # refusing either way — the second read only picks the WORDING of a
     # refusal that has already happened, never whether one happens.
-    local w why="" pps ppn=""
+    local w why="" pps ppn="" prc
     pps=$(_project_pool_state "$project")
     case "$pps" in "named "*) ppn=${pps#named } ;; esac
     if [[ "$pps" != untagged && -z "$ppn" ]]; then
@@ -6323,23 +6816,47 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         # account rather than the last one that would have.
         if   [[ ! -x "$WRAPPER_DIR/$w" ]]; then why+=" $w:missing"
         elif ! _lane_enabled "$w";       then why+=" $w:disabled"
-        # `pps` is `untagged` or `named …` in this branch, so `_pool_ok` can
-        # only answer 0 or 1 here, and an account reported with `pool=` is
-        # always a TAGGED one — the empty answer never reaches this string.
+        # BOTH NON-SERVE CODES REACH THIS ARM NOW, AND IT TELLS THEM APART
+        # (fix round 1, I1/I2). What stood here read: "`pps` is `untagged` or
+        # `named …` in this branch, so [the rule] can only answer 0 or 1 here,
+        # and an account reported with `pool=` is always a TAGGED one — the
+        # empty answer never reaches this string." BOTH HALVES ARE FALSE since
+        # the account side started reading `_acct_pool_state`, and both were
+        # measured false, not reasoned about: rc 2 arrives here with a
+        # perfectly readable project tag whenever the projection is absent
+        # (a node that never synced), past its lease, or off the grammar; and
+        # the name this arm printed came from `_acct_pool`, the DECLARED
+        # roster, while the PROJECTION is what decided — a skew printed
+        # `claude:pool=pool-a` as the reason `claude` cannot serve a `pool-a`
+        # project. The rc test (rather than `!`) is what buys the split, the
+        # same idiom and the same reason as the `_class_gate` arm below.
         #
-        # THE QUOTING HERE IS UNREACHABLE-EQUIVALENT, NOT UNTESTED — do not
-        # read a missing mutation kill as missing coverage, and do not
-        # "simplify" these quotes away because of it. Measured: unquoting
-        # `_pool_ok $w $pps` at this call site alone leaves the suite
-        # 121/121 green. The reason is `_account_ok` (`[[ -x wrapper ]] &&
-        # _lane_enabled`) is exactly what the two `elif` arms above already
-        # mirror, so only a genuinely wrong-pool account ever reaches this
-        # third arm — and there, rc 1 (mismatch) and the word-split rc 2
-        # (undecidable, from an unquoted multi-word `$pps`) both fall into
-        # this SAME `elif ! …` branch and print the SAME string. Site 1
-        # (`_ws_least_loaded`'s loop) is the one an unquoted `$2` actually
-        # changes, and stays quoted for the reason stated there.
-        elif ! _pool_ok "$w" "$pps";     then why+=" $w:pool=$(_acct_pool "$w")"
+        # THE UNDECIDABLE TOKEN NAMES THE DOCUMENT, NOT THE LANE. All three of
+        # the account side's undecidable words are properties of the one shared
+        # `pool-epoch` file, so `projection=<word>` is the SAME fact for every
+        # lane in this loop and its remedy is that file, never this lane —
+        # unlike `pool=`, which really is per-lane. It is still emitted
+        # per-lane here, deliberately: this loop's contract is one token per
+        # account naming its own first failing predicate, and hoisting a
+        # single token out of it would be a second shape for callers to parse.
+        # `_strand_why`, whose contract is the opposite, hoists.
+        #
+        # THE QUOTING HERE IS NO LONGER UNREACHABLE-EQUIVALENT — corrected in
+        # the same round, because the paragraph that stood here told a future
+        # author not to expect a mutation kill. Unquoting `$pps` word-splits
+        # `named pool-b` so that `$2` is the bare word `named`, which is
+        # neither `untagged` nor `named `* and so takes the PROJECT arm's
+        # `*)` — rc 2, and now a visibly different token
+        # (`projection=named`) rather than the same mismatch string the two
+        # codes used to share. Measured, not argued: unquoting both arguments
+        # at this one call site is 3 failed / 44 passed in
+        # `ccd-pool-ok.test.ts`, the three being "names the pool, each
+        # accounts own first failing predicate, and the remedies" and the two
+        # projection cases beside it.
+        elif _pool_ok "$w" "$pps"; prc=$?; [[ "$prc" -ne 0 ]]; then
+          if [[ "$prc" -eq 2 ]]; then why+=" $w:projection=$POOL_OK_STATE"
+          else                        why+=" $w:pool=${POOL_OK_STATE#named }"
+          fi
         # RC 1 ONLY, and the `$?` test rather than `!` is what makes that true.
         # `_class_gate` answers 1 for a lane MEASURED unable to serve the class
         # and 2 for one nobody measured — and an unmeasured lane is PLACEABLE,
@@ -6366,7 +6883,16 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
         fi
       done
     fi
-    die "no account available for placement${ppn:+ in pool $ppn} —${why}; enable one (rm $REG/<w>-disabled)${ppn:+, tag an account into pool $ppn in ~/.ccrc/accounts.json and redeploy the agent lane, or untag the project (ccd project-pool --project $project --clear)} and retry — nothing was touched"
+    # THE POOL REMEDY NAMES BOTH CARRIERS (fix round 1, I2). It used to name
+    # only the DECLARED one — "tag an account into pool <n> in
+    # ~/.ccrc/accounts.json and redeploy the agent lane" — which is where an
+    # operator edits the fact but is no longer what DECIDES it: the account
+    # side of the rule reads the projection, so an account already tagged in
+    # `accounts.json` keeps refusing until the projection carries the same
+    # edge, and this sentence sent the operator to tag an account that is
+    # already tagged. The declared step is kept (it is still the edit that
+    # starts the chain) with the step that ends it said after it.
+    die "no account available for placement${ppn:+ in pool $ppn} —${why}; enable one (rm $REG/<w>-disabled)${ppn:+, tag an account into pool $ppn in ~/.ccrc/accounts.json and redeploy the agent lane, then let the projection ($REG/pool-epoch) carry the same edge — that is what decides — or untag the project (ccd project-pool --project $project --clear)} and retry — nothing was touched"
   fi
 
   # PER PROJECT, and it spans slug selection through the last registry write —
@@ -7795,6 +8321,17 @@ EOF
   # ask for a live change; one that does not writes the record and lets the next
   # settle apply it.
   echo route-apply-v1
+  # account-pools — this ccd honours account-side pool membership: `_pool_ok`
+  # (above) reads `_acct_pool_state`'s five-word projection, not merely the
+  # declared roster name, so an account-side `unreadable`/`stale`/`malformed`
+  # now refuses into a tagged project instead of silently serving it. Spec
+  # §5.9 originally sourced this from "the verb's presence in `ccd caps`", but
+  # ruling R2 removed the verb the design assumed — there is no `ccd
+  # account-pools` to dispatch, only a decision `_pool_ok` already makes on
+  # every call. Same channel, same argument, as `pools-v1` above: a CAPABILITY
+  # token, not a dispatchable verb, so `PoolsEnforcement.accountPools` can
+  # answer `enforced` only against a box that actually took this deploy.
+  echo account-pools
   # The capability token for wave 2 of the terminal-drawer program, and it is
   # the proof of BOTH halves of that wave rather than of the verb alone: the
   # `win-size` verb and `_pane_measurable`'s stand-down at every typing site
@@ -8715,6 +9252,21 @@ cmd_project_pool() {   # ccd project-pool --project <p> --pool <name> | --projec
     # warning honest means counting home-able members separately — a behaviour
     # change with its own red-first test, deliberately NOT folded into the
     # merge that found it.
+    #
+    # THE CARRIER THIS CENSUS READS IS THE DECLARED ONE (item 6, carried
+    # Task-2 M5): `_acct_pool` is the roster read, not `_acct_pool_state`'s
+    # projection. Defensible — this fires at tag time, an honest claim about
+    # the roster — but say so, since every other pool-aware reader in this
+    # file now prefers the projection and a future author may assume this
+    # one does too.
+    #
+    # AND ON A TWO-BOX FLEET IT IS THE ONE REMAINING LIVE READER OF THAT
+    # DECLARED CARRIER (item 7, pre-existing, outside this wave's diff): it
+    # walks THIS (the fleet) box's `accounts.sh`, while placement now follows
+    # the SERVER box's roster copy through `$REG/pool-epoch` (spec §5.6 rule
+    # 1). A roster edit that has reached the server but not yet synced to
+    # this box's `accounts.sh` makes this warning and placement disagree —
+    # noted here, not restructured.
     local w hit=0
     for w in "${CCRC_ACCOUNTS[@]}"; do
       [[ "$(_acct_pool "$w")" == "$pool" ]] && { hit=1; break; }
@@ -15736,14 +16288,36 @@ _swap_target() {   # id cur home [force] [hrc] -> destination on stdout; rc 0 = 
       # touches `.home`, so `cross_home` keeps validating until something else
       # changes `home`. (`_crosspool_tick` is what then removes an invalid
       # marker and logs `crosspool-ended`.)
-      # rc 2 IS UNREACHABLE HERE BY CONSTRUCTION, and that is a derivation worth
-      # writing down rather than a guard worth adding (#69 review, S1).
-      # `_pool_ok`'s undecidable arm keys ONLY on `$2`, and `$pps` is read once
-      # per call to this function — so once the `-eq 2` return above has fired,
-      # this loop can only ever see rc 0 or 1. A guard here would be one no case
-      # could red. But it IS the second half of the same fold: delete the return
-      # above and `|| continue` silently skips every candidate, producing rc 1
-      # and the identical fabricated strand. Measured.
+      # rc 2 IS UNREACHABLE HERE, and that is a derivation worth writing down
+      # rather than a guard worth adding (#69 review, S1) — but NOT for the
+      # reason this paragraph gave until fix round 1 (I3). It said "the
+      # undecidable arm keys ONLY on `$2`, and `$pps` is read once per call",
+      # which stopped being true the moment the account side started reading
+      # `_acct_pool_state`: the rule now answers 2 on `$1` too, for a
+      # projection that is absent, past its lease, or off the grammar. The
+      # CONCLUSION survives, by a different argument, and the premise is
+      # replaced rather than patched because a comment is what a future author
+      # deletes a guard on the strength of.
+      #
+      # THE ARGUMENT THAT ACTUALLY HOLDS: every one of the account side's
+      # three undecidable words is a property of the ONE shared `pool-epoch`
+      # document, never of the account asked about — so it is the same answer
+      # for `$cur` as for every candidate here, and the `-eq 2` return above
+      # (which asks about `$cur`, and asks first) has already fired on it. The
+      # one id-specific way that arm answers `unreadable` is an EMPTY id, and
+      # an empty `$cur` takes that same return; `_pool_for`'s own output can
+      # never word-split into an empty candidate.
+      #
+      # ONE WINDOW IS LEFT OPEN, and it is the lease, not the argument: the
+      # document can expire BETWEEN the `-eq 2` return above and this loop, at
+      # which point `|| continue` skips a candidate for a condition that is
+      # not that candidate's fault. It is bounded by one 5-second tick and the
+      # next tick answers 4 outright; it is named here rather than guarded so
+      # that "unreachable" is not read as "impossible".
+      #
+      # The `|| continue` below is still the second half of the same fold:
+      # delete the return above and it silently skips every candidate,
+      # producing rc 1 and the identical fabricated strand. Measured.
       _pool_ok "$cand" "$pps" || continue
       _account_ok "$cand" || continue
       _avail "$cand" || continue
@@ -16043,6 +16617,19 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # GUARD stays outside the cache and is re-asked on every positive: caching a
   # transcript must never let a swap carry away what a human started typing.
   local id="$1" pane="$2" f last now scan scan_ts scan_verdict verdict=0
+  # WHICH DETECTOR FIRED, SAID BY THE FUNCTION THAT KNOWS (D-3101). The
+  # `auto-rescue` line used to re-ask `_pane_hard_blocked` to decide whether to
+  # write ` via=transcript`, which was sound only while this function had exactly
+  # two rungs and one of them WAS that call. With `_pane_limit_banner` between
+  # them a re-asked classifier answers "not the pane" for a verdict the pane in
+  # fact produced, and the log would say `via=transcript` about a banner that was
+  # on screen. So the verdict carries its own provenance: `pane`, `banner` or
+  # `transcript`, set on each success and cleared on every path that answers no.
+  # A global rather than a second stdout token because this function is a
+  # PREDICATE — `KS_WHY`/`KS_DETAIL` and `PROBE_VERDICT` are the same shape, for
+  # the same reason — and because a `$( )` call site would lose a well-known
+  # variable to the subshell.
+  HARD_BLOCK_VIA=""
   # DEFENCE IN DEPTH, AND IT DECIDES NOTHING TODAY — measured, not assumed.
   # Both paths into this function are already below `_auto_swap_check`'s own
   # guard: its direct call, and `_tick_strand_undecidable`, whose only two call
@@ -16054,7 +16641,15 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
   # pane. rc 1 is "not hard blocked", which is what "no verdict" has to look
   # like to a boolean caller.
   _pane_measurable "$id" || return 1   # unmeasurable -> NO VERDICT (§6.3): the rescue this feeds is a restart that types
-  _pane_hard_blocked "$pane" && return 0
+  _pane_hard_blocked "$pane" && { HARD_BLOCK_VIA=pane; return 0; }
+  # THE SECOND PANE RUNG (D-3100), and it is a PANE rung rather than a third
+  # arm below the transcript deliberately: a banner Claude Code is rendering on
+  # screen right now is the same condition `_pane_hard_blocked` answers, merely
+  # spelled the way this year's build spells it. Putting it here means it shares
+  # the pane arm's cost (a `grep` over eight lines), its immediacy (no 30-second
+  # cache) and its contract. Below `_pane_hard_blocked` so that a pane matching
+  # both still reports the older, more specific detector.
+  _pane_limit_banner "$pane" && { HARD_BLOCK_VIA=banner; return 0; }
   grep -q "esc to interrupt" <<<"$pane" && return 1
   now=$(date +%s); last=$(_reg_get "$id" stalepress)
   [[ "$last" =~ ^[0-9]+$ && $((now - last)) -lt "$STALE_RESUME_GRACE" ]] && return 1
@@ -16070,7 +16665,12 @@ _session_hard_blocked() {   # id pane-text -> success iff the pane says stuck, O
     _reg_set "$id" tscan "$now $verdict" 2>/dev/null || true
   fi
   [[ "$verdict" -eq 1 ]] || return 1
-  ! _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)"
+  # SPELLED OUT rather than left as the function's trailing exit status, because
+  # the provenance has to be stamped on the success side only: `! cmd` as a tail
+  # says the same thing about the rc and gives nowhere to write the word.
+  _pane_box_has_content "$(tmux capture-pane -t "$(_tmux "$id")" -p -e 2>/dev/null)" && return 1
+  HARD_BLOCK_VIA=transcript
+  return 0
 }
 
 _pane_limit_stale() {   # pane text -> success iff Claude Code slept through its own reset and is asking for Enter (D-2360).
@@ -16119,6 +16719,56 @@ _pane_hard_blocked() {   # pane text -> success iff the session is stuck regardl
   # screen appears during an intentional login, not a failure — evacuating out from under an
   # operator mid-login would be wrong (see _pane_login_screen, which owns that screen instead).
   grep -qiE "limit reached|reached your .*limit|out of (usage|credits)|monthly spend limit|hit your .*spend|API Error: 429|Too Many Requests|rate limit(ed| exceeded| reached)?|Invalid API key|Please run /login" <<<"$1"
+}
+
+_pane_limit_banner() {   # pane text -> success iff the pane carries Claude Code's CURRENT limit banner (D-3100).
+  # THE WORDING MOVED AND THE DETECTOR DID NOT. `_pane_hard_blocked`'s alternation
+  # was written against the banners of its day and matches none of the three
+  # commonest ones this fleet actually renders. Measured 2026-09-19 against the
+  # `isApiErrorMessage` rows on disk across every wrapper HOME — these are the
+  # live texts, not remembered ones:
+  #
+  #   "You've hit your session limit · resets 9:10pm (UTC)"        -> NO MATCH
+  #   "You've hit your weekly limit · resets Sep 21, 7am (UTC)"    -> NO MATCH
+  #   "You've hit your limit · resets Sep 17, 9pm (UTC)"           -> NO MATCH
+  #   "You've hit your monthly spend limit · raise it at claude.ai/..." -> matches,
+  #       and only through `monthly spend limit`/`hit your .*spend`
+  #
+  # So the pane arm has been blind to the session, weekly and bare limits, and
+  # every rescue from one of those shapes has had to come from D-2363's
+  # transcript fallback instead — which is exactly what the fleet log shows: the
+  # one rescue of this shape on 2026-09-19 is logged
+  # `auto-rescue <row>: <lane> (blocked) -> gpt [home=…] via=transcript`, i.e. by
+  # the fallback, on a pane that had been showing the answer. That fallback is cached for
+  # `TRANSCRIPT_ARM_INTERVAL`, needs the banner to still be the NEWEST real row,
+  # and stands down entirely over a human's draft — three ways to miss a session
+  # the pane was showing the answer on the whole time.
+  #
+  # A SEPARATE FUNCTION, AND THAT IS D-2364 BEING KEPT RATHER THAN REVERSED.
+  # D-2364 ruled that `_pane_hard_blocked` is NOT widened, because `_spawn_settle`
+  # turns that same regex into rc 5 ("blocked on the new account") on every
+  # landing, and whether Claude Code re-renders the previous assistant message on
+  # a `--resume` landing was unmeasured. That ruling still holds and that function
+  # is untouched: `_spawn_settle` and `_redrive_after_spawn` keep exactly the
+  # vocabulary they had. This predicate has ONE caller —
+  # `_session_hard_blocked` — whose two callers are the rescue arm and the strand
+  # half, and the rescue arm sits below `SWAP_COOLDOWN`, which a landing has just
+  # stamped, so a re-render cannot reach a relocation through it.
+  #
+  # THE SEPARATOR IS PART OF THE PATTERN, and it is what keeps this from being a
+  # prose detector. Every banner in the family is `You've hit your <what> limit ·
+  # <what to do>`; requiring the `·` means an assistant SAYING the words in a
+  # sentence does not swap its own session out. A wording change that drops the
+  # separator fails CLOSED — no keystroke, no relocation, today's behaviour — which
+  # is `_pane_limit_stale`'s own rule and the lesson of 2026-09-08's trust dialog.
+  #
+  # WHAT IT DOES NOT PROTECT is a draft in the input box: this is a pane rung, so
+  # it shares `_pane_hard_blocked`'s shipped contract that a VISIBLE banner swaps,
+  # draft or not. That is deliberate rather than overlooked — one condition must
+  # not have two behaviours depending on which of two equally-visible banners the
+  # build happens to render — and it is the transcript arm, not this one, that
+  # owes a human's unsent sentence its stand-down.
+  grep -qiE "hit your ([a-z0-9]+ )*limit ·" <<<"$1"
 }
 
 # ONE MAPPING FROM THE UNDECIDABLE FIELD TO THE OPERATOR'S SENTENCE (#69 review
@@ -16176,6 +16826,83 @@ _undecidable_cause() {   # word id project -> the operator-facing sentence for t
     classwindow) printf '%s' "the per-class window for the session's class could not be measured on the lanes that could take it ($REG/usage/sweep/latest.json for fable, $LIMITS_DIR/<lane>.json otherwise), so no destination could be computed" ;;
     *)         printf '%s' "the tick declined to decide on a condition this build does not name ($1), so no destination could be computed" ;;
   esac
+}
+
+# ── THE MANUAL-SWAP PIN (D-3097) ─────────────────────────────────────────────
+#
+# THE DEFECT, MEASURED. `ccd swap` moves `wrapper` and never touches `home`, and
+# the affinity arm's whole job is "return home the instant home has room again".
+# So every manual swap is REVERSED by the first tick past `SWAP_COOLDOWN`, and
+# the operator watches their own choice evaporate 15 minutes later. From this
+# fleet's `$REG/swap.log`, 2026-09-19, one session and one afternoon:
+#
+#   14:30:22 swap      <row>: <home-lane> -> gpt   (the operator)
+#   15:25:47 auto-home <row>: gpt -> <home-lane>   (the tick)
+#   15:36:54 swap      <row>: <home-lane> -> gpt   (the operator, again)
+#   15:51:56 auto-home <row>: gpt -> <home-lane>   (15m 02s later — one tick
+#                                                   past SWAP_COOLDOWN)
+#   16:28:53 swap      <row>: <home-lane> -> gpt   (the operator, a third time)
+#   17:01:11 auto-home <row>: gpt -> <home-lane>
+#
+# `ccd prefer` is the verb that moves `home`, and it is SHELL-ONLY — no
+# exec-whitelist entry, no `CCD_ARGV` builder, so no PWA tap can reach it (its
+# own header says so). An operator on a phone therefore had no way at all to make
+# a swap stick.
+#
+# A PIN, NOT A RE-HOME (operator ruling, 2026-09-19). Rewriting `.home` to the
+# target would also make the session RETURN to that account after every future
+# rescue, and would destroy the home it had with no way back. The pin is the
+# conservative half of that: `$REG/<id>.swappin` names the account an operator
+# chose BY HAND, the affinity arm stands down while the row is still sitting on
+# it, and `home` is untouched — so the moment anything else moves the row (a
+# limit rescue, a pool retag, another swap) the pin stops naming the current
+# account and ordinary affinity resumes from wherever the row now is.
+#
+# THE RESCUE ARM IS NOT GATED BY IT, and that is the whole reason the pin is
+# checked where it is rather than at the top of the tick. A hard-blocked session
+# must still be evacuated: a pin is a preference about a HEALTHY session's
+# placement, never a reason to leave a limited one wedged. `_auto_swap_check`'s
+# own header makes the same split for the hold file, which sits on the next line.
+#
+# NO EPOCH, SO NO EXPIRY AND NO ARITHMETIC. The file holds one account name. A
+# pin does not time out, because "the operator picked this account" does not
+# become less true after an hour; it ends when the row is no longer on that
+# account, which is a MEASUREMENT (`_swap_pin_tick`) rather than a clock.
+_swap_pin_tick() {   # id measured-wrapper — THE PIN FOLLOWS THE TRUTH (D-3099)
+  # `_strand_mark`/`_compact_note`'s rule, applied to a marker that names an
+  # ACCOUNT rather than a reason: a pin still on disk after the row has moved
+  # off the pinned account is a claim about the present that is no longer true,
+  # and the next reader would have to re-derive that for itself.
+  #
+  # AN UNREADABLE PIN IS NOT DELETED. `_crosspool_tick`'s lesson, booked in
+  # `_auto_swap_check`'s own comments: deleting a deliberate operator marker on
+  # a read that FAILED is a destructive act on a false reason. Absent is not
+  # unreadable; only a pin this tick could read and that names another account
+  # is removed.
+  local id="$1" w="$2" pin rc
+  [[ -e "$REG/$id.swappin" ]] || return 0
+  pin=$(_reg_read "$id" swappin); rc=$?
+  [[ "$rc" -eq 0 ]] || return 0
+  [[ "$pin" == "$w" ]] && return 0
+  rm -f -- "$REG/$id.swappin"
+  rm -f -- "$REG/$id.swappinnote"
+  echo "$(date '+%F %T') pin-ended $id: pinned to $pin, now on $w" >> "$REG/swap.log"
+  return 0
+}
+
+_swap_pinned() {   # id measured-wrapper -> 0 iff a manual-swap pin stands for THIS account (D-3097)
+  # DOUBT READS AS PINNED, which is the opposite fail direction from most of this
+  # file and is taken from the line this predicate sits beside: the hold file is
+  # read with `-e` not `-f` precisely so that "an unreadable hold defers too".
+  # Both answers are about the same question — may this tick relocate a healthy
+  # session for cosmetic reasons — and the cost of standing down wrongly is one
+  # session left where it already was, against an operator's deliberate choice
+  # being undone by a file nobody could read.
+  local pin rc
+  [[ -e "$REG/$1.swappin" ]] || return 1
+  pin=$(_reg_read "$1" swappin); rc=$?
+  [[ "$rc" -eq 0 ]] || return 0
+  [[ "$pin" == "$2" ]]
 }
 
 _auto_swap_check() {   # id — called each supervise tick. HOME-account affinity:
@@ -16256,6 +16983,12 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # middle, is what defeated the debounce; the tick now takes ONE verdict once
   # every read has answered, and this one only records the answer.
   if [[ "$hrc" -eq 2 ]]; then home=""; else hrc=0; fi
+  # THE PIN IS RECONCILED HERE (D-3099), at the first line where this row's
+  # account has been MEASURED and before any gate below can return: a pin that
+  # no longer names `$wrapper` is ended immediately rather than at whichever
+  # later tick happens to reach the affinity arm, so `pin-ended` lands beside
+  # the `auto-rescue` that caused it instead of fifteen minutes after it.
+  _swap_pin_tick "$id" "$wrapper"
   # ── POOLS (§5.5.4) ───────────────────────────────────────────────────────
   # THIS READ happens once, here, and BEFORE the cooldown gates below — that
   # is not the same claim as "once per tick": `_project_pool_state` runs
@@ -16664,7 +17397,13 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
     _is_valid_wrapper "$wrapper" && ! _is_anthropic_backend "$wrapper" \
       && printf '{"five":100,"seven":0,"ts":%s}' "$now" > "$LIMITS_DIR/$wrapper.json"
     _reg_set "$id" lastswap "$now"
-    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$(_pane_hard_blocked "$pane" || printf ' via=transcript')" >> "$REG/swap.log"
+    # `via=` NAMES THE DETECTOR THAT ACTUALLY FIRED (D-3101) — read off the
+    # verdict rather than recomputed from a classifier that cannot see all three
+    # rungs. `pane` stays silent, so every line this fleet's log already carries
+    # keeps its exact shape; `via=transcript` is unchanged; `via=banner` is the
+    # new word, and an operator seeing it knows the pane said so in this year's
+    # wording rather than the transcript having been scanned for it.
+    echo "$(date '+%F %T') auto-rescue $id: $wrapper (blocked) -> $target [home=$home]$([[ "${HARD_BLOCK_VIA:-}" == pane ]] || printf ' via=%s' "${HARD_BLOCK_VIA:-unknown}")" >> "$REG/swap.log"
     _dispatch_swap "$id" "$target"
     return 0
   fi
@@ -16680,6 +17419,25 @@ _auto_swap_check() {   # id — called each supervise tick. HOME-account affinit
   # exactly what stops a human noticing quickly. Cosmetic relocation yes,
   # rescue no. The rescue arm above is untouched and must stay untouched.
   #
+  # THE MANUAL-SWAP PIN, IMMEDIATELY ABOVE THE HOLD (D-3097, D-3098). Same
+  # placement argument, one sentence longer: everything below this line is the
+  # cosmetic half, and a pin says an operator has already answered the question
+  # this half exists to ask. The rescue arm above is untouched — a pinned session
+  # that hits a limit is still evacuated, and `_swap_pin_tick` ends the pin on the
+  # next tick because the row is no longer on the pinned account.
+  #
+  # SAID, NOT SILENT, and floored (D-3098). This runs every 5 seconds per session
+  # and `$REG/swap.log` is a file a human reads, so it borrows `_route_note_floored`
+  # — one line per session per `ROUTE_NOTE_FLOOR`, the anchor in the row's own
+  # `swappinnote` field, which `_swap_pin_tick` clears with the pin so the NEXT
+  # pin gets to speak straight away rather than inheriting this one's floor.
+  # Without a line here the operator sees a session that simply never returns
+  # home and nothing anywhere says why.
+  if _swap_pinned "$id" "$wrapper"; then
+    _route_note_floored "$id" swappinnote \
+      || echo "$(date '+%F %T') pin-hold $id: pinned to $wrapper by hand; the return-home/ceiling arm stands down (a limit still evacuates)" >> "$REG/swap.log"
+    return 0
+  fi
   # `-e` not `-f`, matching the four existing hold readers: an unreadable hold
   # defers too, because doubt reads as HELD.
   [[ -e "$REG/$id.hold" ]] && return 0
@@ -17392,6 +18150,20 @@ _auto_compact_check() {   # id — at a clean idle turn boundary, /compact a ses
   (( fromswap )) && [[ "$pct" -lt "$COMPACT_LANDING_WALL" ]] \
     && { _compact_note "$id" post-swap "ctx ${pct}% < ${COMPACT_LANDING_WALL}% within ${COMPACT_COOLDOWN}s of a swap"; return 0; }
   _idle_for_keystroke "$id" "$pane" "ctx ${pct}%" || { _compact_note "$id" "$KS_WHY" "$KS_DETAIL"; return 0; }
+  # D-3103 — NOTHING HAS HAPPENED SINCE THE LAST COMPACTION. The last gate, and it
+  # is last on purpose: `_compact_no_turns` resolves a transcript path and scans
+  # its tail through python, which the final D-2444 review measured at an order of
+  # magnitude more than the pane classifier, so it is paid only by a session that
+  # has passed EVERY cheaper test and is one line away from having `/compact`
+  # typed into it. A below-threshold, mid-turn or busy session never reaches it.
+  #
+  # ITS OWN REASON, NOT `post-swap`'s. Both refuse an over-threshold session, and
+  # an operator handles them differently: `post-swap` says "wait, the landing has
+  # probably already compacted this", and this one says "this session has not
+  # spoken since the last time we compacted it, so there is nothing new to
+  # summarise and the compaction would only summarise a summary". The detail
+  # carries the measured age of the newest real turn.
+  _compact_no_turns "$id" && { _compact_note "$id" no-turns-since-compact "ctx ${pct}%; $COMPACT_TURN_DETAIL"; return 0; }
   # `wrapper` is read again here rather than carried out of the predicate: it is the log line
   # below that wants it, and a predicate that answered a second value through a global would be
   # a wider contract than "is this pane typeable" for one string.
@@ -18194,6 +18966,48 @@ _pane_box_has_content() {   # ANSI (`capture-pane -e`) pane-text -> 0 iff any re
   '
 }
 
+_pane_external_import_gate() {   # pane text -> 0 iff Claude Code's external-CLAUDE.md-import dialog is UP (D-3108)
+  # THE DIALOG, measured off the shipped bundle (Claude Code 2.1.278) rather
+  # than remembered: title `Allow external CLAUDE.md file imports?`, body "This
+  # project's CLAUDE.md imports files outside the current working directory.
+  # Never allow this for third-party repositories.", and two options —
+  # `Yes, allow external imports` / `No, disable external imports` — rendered
+  # with `cancelFirst: true, focus: "cancel"`, so THE CURSOR STARTS ON NO.
+  #
+  # WHY IT IS AN ACCOUNT-SWITCH PROBLEM, AND WHERE THE STATE LIVES. The answer
+  # is recorded as `hasClaudeMdExternalIncludesApproved` (with
+  # `hasClaudeMdExternalIncludesWarningShown` beside it) on the PROJECT entry
+  # inside `$CLAUDE_CONFIG_DIR/.claude.json` — one file per lane. `cmd_swap`
+  # carries the transcript, the sidecars and `tasks/<uuid>`; it does not carry
+  # this, and it must not: that file is Claude Code's, not ccrc's, and the
+  # standing ruling is that a ccrc integration lives in artifacts ccrc owns
+  # outright. So the destination lane has never approved this project, the
+  # dialog is raised on the landing, and the session sits on it until a human
+  # arrives. Measured on this fleet 2026-09-19: the lanes whose config dir
+  # carries a user `CLAUDE.md` with an `@` import hold 0 approvals across 11-14
+  # projects each, while two lanes that answered it long ago hold 56.
+  #
+  # THE SENTENCE ALONE NEVER FIRES, and that is the whole reason this is a
+  # function rather than a `grep` in the loop. The two 2.1.198 gates already
+  # pair their title with the `Enter to confirm` footer so the same words inside
+  # a RESTORED TRANSCRIPT cannot synthesize a keystroke — and this title is
+  # worse than theirs, because a session working on `ccd` has this very
+  # paragraph on screen. So the gate is the LIVE SELECTOR: the title, AND a
+  # cursor line sitting on one of the dialog's OWN two options. Prose cannot
+  # produce that pair; only the dialog can.
+  #
+  # The cursor is read exactly as `_answer_two_option_dialog` reads it — the
+  # LAST `❯` line, falling back to a bare `>` at line start for a terminal that
+  # renders the glyph differently — because the two must agree about which line
+  # is the cursor or this predicate would admit a dialog that helper then
+  # answers blind.
+  local pane="$1" cursor
+  grep -q "Allow external CLAUDE.md file imports" <<<"$pane" || return 1
+  cursor=$(printf '%s\n' "$pane" | LC_ALL=C grep -F $'\xe2\x9d\xaf' | tail -1)
+  [[ -z "$cursor" ]] && cursor=$(printf '%s\n' "$pane" | grep -E '^[[:space:]]*>' | tail -1)
+  [[ "$cursor" == *"allow external imports"* || "$cursor" == *"disable external imports"* ]]
+}
+
 # Auth screens must never receive synthesized keystrokes: on a numbered login
 # menu a stray Enter selects whatever the cursor is on.
 _pane_login_screen() {
@@ -18320,6 +19134,33 @@ _accept_first_run_prompts() {   # tmuxname [fromswap] — clear startup gates, t
     # `_tmux` built it from.
     [[ "$i" == 1 ]] && ! _pane_measurable "${1#cc-}" && return 6
     pane=$(tmux capture-pane -t "$t" -p 2>/dev/null)
+    # THE EXTERNAL-IMPORT GATE, AND IT IS ASKED ABOVE THE READY MARKERS (D-3107).
+    # Every other gate below is a full-screen startup dialog that hides the
+    # footer, so the marker check cannot reach them; this one is raised while
+    # `CLAUDE.md` is being loaded and a pane can carry it WITH chrome the marker
+    # regex matches. Below the markers it would be unreachable exactly when it
+    # fires, and the settle would report a ready TUI over a modal nobody
+    # answered — the shape this fix exists to remove, with the settle's own
+    # verdict now lying about it too.
+    #
+    # ANSWERED `YES`, DELIBERATELY, and the dialog's own warning is the reason
+    # this is safe rather than in spite of it: it says "Never allow this for
+    # third-party repositories", and every pane this function touches is a
+    # workspace `ccd` itself created from the operator's own repo. The posture
+    # is also already the fleet's — `skipDangerousModePermissionPrompt` is set
+    # in every lane's settings.json, and the two arms below auto-accept the
+    # trust-folder and Bypass-Permissions dialogs, both strictly more dangerous
+    # than this one. NO KILL-SWITCH, for the same reason those two have none:
+    # one shape for one class of gate.
+    #
+    # `_answer_two_option_dialog` reads WHICH LINE CARRIES THE CURSOR rather
+    # than trusting an ordinal, which matters more here than anywhere else in
+    # this loop: this dialog ships `cancelFirst: true, focus: "cancel"`, so a
+    # bare Enter is `No, disable external imports` — the operator's own imports
+    # silently switched off for that project, on that lane, permanently.
+    if _pane_external_import_gate "$pane"; then
+      _answer_two_option_dialog "$pane" "$t" "allow external imports"; sleep 2; continue
+    fi
     # ready markers: any of these means the TUI is up. NB the RC indicator sometimes renders
     # as bare "/rc" (not "/rc active"), so the permission-mode footer is the reliable signal —
     # without it supervise sits here for the full window and never reaches its watch loop.
@@ -19238,6 +20079,133 @@ print(f"{reset}\t{kind if isinstance(kind, str) else chr(0)}".rstrip(chr(0)))
   return 2
 }
 
+_transcript_last_turn_ts() {   # transcript-path -> 0 + the newest REAL turn's epoch seconds | 1 no real turn in the window | 2 unreadable (D-3102)
+  # WHAT A TURN IS, HERE. `_transcript_limit_banner`'s chatter rule, plus the two
+  # rows a COMPACTION writes that its rule does not name — because that rule was
+  # written for "did the session move on after a banner", where a compaction
+  # cannot have intervened, and this one is asked EXACTLY ACROSS a compaction.
+  # Measured on a live transcript (2026-09-18 02:30 -> 02:34): one `ccd`
+  # `/compact` appends FOUR `type:"user"` rows and nothing else —
+  #
+  #   1. the summary itself, `isCompactSummary:true` ("This session is being
+  #      continued from a previous conversation…"), timestamped at the moment the
+  #      summary LANDED, ~4 minutes AFTER ccd typed the keys;
+  #   2. `isMeta:true`, content `<local-command-caveat>…`;
+  #   3. content `<command-name>/compact</command-name>…`;
+  #   4. content `<local-command-stdout>[Compacted…`.
+  #
+  # Rows 2-4 are already the three chatter prefixes. Row 1 is not, and it is the
+  # one that matters: it carries a timestamp LATER than `lastcompact`, so a
+  # reader that counted it would see "a turn happened since the compaction" on
+  # every single compacted session and the guard above would never fire once.
+  # `isCompactSummary` is the field that names it, and `isMeta` is dropped with
+  # it — an injected context row is not a turn a human or the model took.
+  #
+  # NEWEST WINS AND NOTHING RESETS. Unlike the banner reader, which asks "is the
+  # banner still the LAST word" and therefore clears its candidate on any later
+  # real row, this one asks only "when did anything real last happen", so a real
+  # row simply replaces the answer. There is no state to lose.
+  #
+  # `-f && -r`, never `-r` alone — D-2347's class, the same one the banner reader
+  # carries: `-r` is true for a FIFO and for an unbounded character device, and
+  # `tail` on either blocks for ever inside the 5-second tick (D-2370).
+  #
+  # THE TIMESTAMP IS PARSED, NOT TRUSTED. Claude Code writes RFC3339 in UTC with
+  # a literal `Z`; anything this cannot read is skipped as if the row carried no
+  # timestamp at all, so a malformed row can only make the answer OLDER (fail
+  # open at the caller), never newer.
+  local f="$1" rows rc
+  [[ -f "$f" && -r "$f" ]] || return 2
+  rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2
+  command -v python3 >/dev/null 2>&1 || return 2
+  printf '%s\n' "$rows" | LC_ALL=C.UTF-8 python3 -c '
+import calendar, json, sys, time
+
+newest = None
+for raw in sys.stdin:
+    try:
+        row = json.loads(raw)
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        continue
+    if not isinstance(row, dict):
+        continue
+    if row.get("type") not in ("user", "assistant"):
+        continue
+    if row.get("isCompactSummary") is True or row.get("isMeta") is True:
+        continue
+    message = row.get("message")
+    content = message.get("content") if isinstance(message, dict) else None
+    if row.get("type") == "user" and isinstance(content, str) and content.startswith(
+        ("<local-command-caveat>", "<command-name>", "<local-command-stdout>")
+    ):
+        continue
+    stamp = row.get("timestamp")
+    if not isinstance(stamp, str) or len(stamp) < 19:
+        continue
+    try:
+        epoch = calendar.timegm(time.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        continue
+    if newest is None or epoch > newest:
+        newest = epoch
+
+if newest is None:
+    raise SystemExit(1)
+print(newest)
+' 2>/dev/null
+  rc=$?
+  [[ "$rc" -le 1 ]] && return "$rc"
+  return 2
+}
+
+COMPACT_TURN_DETAIL=""
+_compact_no_turns() {   # id -> 0 iff the transcript PROVES no real turn since `lastcompact` (D-3103)
+  # THE DEFECT, MEASURED BEFORE IT WAS NAMED. `_auto_compact_check` decided on
+  # two numbers — the `lastcompact` cooldown and `ctx%` against the threshold —
+  # and neither of them is a fact about whether the CONVERSATION changed. A
+  # session whose post-compaction floor sits at or above its own threshold
+  # therefore re-compacts every `COMPACT_COOLDOWN` for ever, summarising a
+  # summary it has already summarised. On this fleet's `$REG/swap.log`,
+  # 2026-09-19: of 622 `auto-compact` lines, 163 came within 40 minutes of the
+  # previous compaction OF THE SAME SESSION, and all 163 read the IDENTICAL
+  # `ctx%` as the line before them — ONE workspace alone took 25 consecutive
+  # compactions at exactly 1800-second spacing, every one reading `ctx 51%`, from
+  # 20:39 on 2026-09-10 to 08:40 the next morning. An identical percentage is the
+  # signature: nothing had changed, and compacting changed nothing.
+  #
+  # FAIL OPEN, AND THAT IS THE WHOLE SHAPE OF THIS GUARD. It answers 0 only on a
+  # POSITIVE measurement that nothing happened; every other condition — no
+  # `lastcompact` to be unchanged since, a transcript this box cannot name or
+  # read, a tail window holding no real turn, python absent — answers 1 and the
+  # compactor behaves exactly as it did before D-3103. A new guard that silences
+  # the compactor on an unreadable transcript would trade a wasteful compaction
+  # for a session that never compacts at all, which is the #67 R1 shape
+  # `_auto_swap_check`'s own header forbids: a fix for one defect must not open a
+  # live one beside it.
+  #
+  # THE EPOCH COMPARISON IS `-le`, NOT `-lt`. `lastcompact` is stamped the
+  # instant BEFORE the send-keys, and a turn that began in the same second is a
+  # turn this guard has no business refusing — but it is also indistinguishable
+  # from the compaction's own second at one-second resolution, and the two
+  # readings differ by a single wasted tick in one direction and a lost
+  # compaction in the other. Equal reads as "nothing since"; the next tick
+  # re-measures.
+  COMPACT_TURN_DETAIL=""
+  local id="$1" last f ts
+  last=$(_reg_get "$id" lastcompact)
+  [[ -n "$last" ]] || return 1
+  f=$(_transcript_path "$id") || return 1
+  ts=$(_transcript_last_turn_ts "$f") || return 1
+  # THE DIGIT TESTS ARE FIRST AND INSIDE THE SAME `[[ ]]` as the arithmetic —
+  # D-299's shape, and BOTH operands need one: `last` is a registry field (torn
+  # or hand-edited is the threat model) and `ts` is this box's own python
+  # stdout, which is a pipeline that can answer anything at all if it is ever
+  # replaced. `ccd-arith-containment.test.ts`'s SITES table pins this line.
+  [[ "$last" =~ ^[0-9]+$ && "$ts" =~ ^[0-9]+$ && "$ts" -le "$last" ]] || return 1
+  COMPACT_TURN_DETAIL="newest turn $((last - ts))s before the last compaction"
+  return 0
+}
+
 _redrive_standdown_log() {   # id fromswap rc transcript-path — D-2265: the ONE lane built to
   # catch the redrive flag itself failing (rc 1 the pair is not on disk, rc 2 the transcript is
   # unreadable) used to stand `_redrive_after_spawn` down with zero swap.log evidence. Logged ONLY
@@ -19655,14 +20623,20 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
   # `wrapper` is no longer the caller's argument, so a refusal here would
   # refuse a REVIVAL of a session a retag put in the wrong pool — which
   # ruling 5 moves at the next idle boundary instead. At most a warning.
-  local pps prc
+  local pps prc pside pstate
   pps=$(_project_pool_state "$project")
   _pool_ok "$wrapper" "$pps"; prc=$?
+  # SNAPSHOT THE TWO FACTS IMMEDIATELY (fix round 1, I1/I2) — see the header at
+  # the rule itself. Nothing runs between here and the two `die`s below today,
+  # so reading the globals directly would be correct today and one inserted
+  # call away from being silently wrong; the snapshot is what makes "which side
+  # was undecidable" a fact about THIS call rather than about the last one.
+  local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   if [[ -z "$regw" ]]; then
     [[ "$prc" -eq 2 ]] \
-      && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+      && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$wrapper"); nothing was touched"
     [[ "$prc" -eq 1 && -z "$cross" ]] \
-      && die "pool-mismatch: $wrapper is in pool '$(_acct_pool "$wrapper")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd start --cross-pool $wrapper $project"
+      && die "pool-mismatch: $(_pool_mismatch_why "$wrapper" "$pstate" "$project" "$pps") — to cross on purpose: ccd start --cross-pool $wrapper $project"
   elif [[ "$prjrc" -eq 2 ]] && ! _pool_untaggable; then
     # SAID, NOT DECIDED. `$pps` is `untagged` here because the field could not be
     # read, not because the project carries no tag, so the mismatch arm below
@@ -20655,7 +21629,7 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   # NOT AGREE" block is about candidate SET. Neither refutes the other, and they
   # are stated in two places because they are two different questions: which
   # accounts a walk considers, and in which order it rejects them.
-  local id="$1" p="$2" pps cand ap cur out=""
+  local id="$1" p="$2" pps cand ap cur out="" prc
   pps=$(_project_pool_state "$p")
   # Undecidable is NOT a per-candidate fact: nobody decides, so annotating five
   # accounts would invent five reasons for one condition. One token, with the
@@ -20665,18 +21639,44 @@ _strand_why() {   # id project -> one line naming why no candidate could take th
   cur=$(_reg_get "$id" wrapper)
   for cand in $(_pool_for "$id"); do
     [[ "$cand" == "$cur" ]] && continue
-    if ! _pool_ok "$cand" "$pps"; then
-      # ADDED (final whole-branch review, M-3): `:-none` cannot print here
-      # today — `_pool_ok` returns 1 (this branch) only when `ap` is
-      # NON-EMPTY (its own body: `[[ -z "$ap" || "$ap" == "$pp" ]]`), and
-      # `pps` this deep is always `untagged`/`named …`, never the case that
-      # returns 2. Kept anyway as a belt on this call site's OWN guarantee,
-      # not because the fallback is reachable now — a future change to
-      # `_pool_ok`'s or `_acct_pool`'s contract at this exact point should
-      # degrade to an honest `:pool=none` rather than an empty, easy-to-miss
-      # `:pool=` in an operator-facing banner. No behaviour change: this is
-      # a comment only.
-      ap=$(_acct_pool "$cand"); out+=" $cand:pool=${ap:-none}"
+    _pool_ok "$cand" "$pps"; prc=$?
+    if [[ "$prc" -eq 2 ]]; then
+      # THE SAME RULE THE PROJECT ARM ABOVE OBEYS, now that the ACCOUNT side
+      # can answer undecidable too (fix round 1, I2). The paragraph five lines
+      # up — "Undecidable is NOT a per-candidate fact … annotating five
+      # accounts would invent five reasons for one condition" — was written
+      # about the project tag and was being VIOLATED by this loop the moment
+      # the account arm gained its own undecidable states: `! [the rule]`
+      # takes rc 2 as true, so all five candidates fell into the branch below
+      # and each printed a `pool=` token for one shared condition.
+      #
+      # ONE CONDITION, because every one of the account side's undecidable
+      # words is a property of the ONE shared document, never of the
+      # candidate: absent or unreadable, past its lease, or off the grammar.
+      # So this hoists exactly as the project arm does — one token, with the
+      # path, and the remedy is that file or the control-plane link, not an
+      # account. (`cmd_ws_add`'s reason builder makes the opposite choice for
+      # the opposite contract: its list is one token per account and it says
+      # so.) The project tag is READABLE here, which is why this token names
+      # the projection instead: the arm above already returned for the other
+      # case, so `$pps` cannot be the cause.
+      echo "projection:$POOL_OK_STATE $REG/pool-epoch"; return 0
+    elif [[ "$prc" -eq 1 ]]; then
+      # THE PROJECTED NAME, NOT THE DECLARED ONE (fix round 1, I2). This read
+      # `_acct_pool` — spec §5.6's LOWEST-precedence carrier — while the
+      # projection is what returned rc 1, so a roster/projection skew named
+      # the pool the account is NOT being judged by.
+      #
+      # `:-none` STILL CANNOT PRINT, and the derivation is new, because the
+      # one this replaces cited a body that no longer exists (`[[ -z "$ap" ||
+      # "$ap" == "$pp" ]]`). rc 1 is now the fall-through of the account
+      # `case`, reachable only on its `"named "*` arm, and `_pool_name_valid`
+      # refuses an empty name — so `${POOL_OK_STATE#named }` is non-empty
+      # whenever this branch runs. Kept as a belt on that guarantee, not
+      # because the fallback is reachable: a future contract change here
+      # should degrade to an honest `:pool=none` rather than an empty,
+      # easy-to-miss `:pool=` in an operator-facing banner.
+      ap=${POOL_OK_STATE#named }; out+=" $cand:pool=${ap:-none}"
     elif ! _account_ok "$cand"; then
       if [[ -x "$WRAPPER_DIR/$cand" ]]; then out+=" $cand:disabled"; else out+=" $cand:missing"; fi
     elif ! _avail "$cand"; then
@@ -21328,7 +22328,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # carrying this sentence, a shell gets stderr, and the transient unit's
   # stderr lands in swap.log. Below the detach arm it would refuse in a process
   # nobody is waiting for.
-  local project pps prc prjrc crossing=""
+  local project pps prc prjrc crossing="" pside pstate
   # THE PROJECT FIELD IS MEASURED HERE TOO (#69 review round 4, B3). Round 3
   # converted the tick's two reads and left the VERBS, and the verbs are the half
   # a PWA tap reaches. `_reg_get` folds ABSENT, EMPTY and UNREADABLE into `""`,
@@ -21361,11 +22361,17 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
   pps=$(_project_pool_state "$project")
   _pool_ok "$target" "$pps"; prc=$?
+  # THE SNAPSHOT IS LOAD-BEARING HERE, not a convention (fix round 1, I1/I2).
+  # `_crosspool_valid` and `_strand_mark` both run between this call and the
+  # mismatch `die` below; neither consults the pool rule today, and "today" is
+  # exactly the word that makes reading the globals down there a latent
+  # stale-fact defect. Taken here, one line after the call that filled them.
+  pside="$POOL_OK_SIDE"; pstate="$POOL_OK_STATE"
   # UNDECIDABLE REFUSES EVEN WITH THE FLAG. `--cross-pool` says "cross from
   # pool X to pool Y on purpose"; when the tag cannot be read there is no X to
   # name, so there is no decision to override.
   [[ "$prc" -eq 2 ]] \
-    && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$target"); nothing was touched"
   if [[ "$prc" -eq 1 ]]; then
     # `if` TAKES rc 2 AS FALSE, AND THAT IS THE RIGHT ANSWER HERE (C1) — but it
     # is right for a reason, not by luck, so it is said out loud. This is the
@@ -21398,7 +22404,7 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
       # P-8, not a stale supervisor.
       [[ "${CCD_SWAP_AUTO:-}" == 1 ]] && _strand_mark "$id" "$cur" "$project" \
         "$target refused as a cross-pool crossing nobody asked for — likely a supervisor still running a pre-deploy ccd; the remedy is the claude-session@* unit sweep"
-      die "pool-mismatch: $target is in pool '$(_acct_pool "$target")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd swap --cross-pool $id $target"
+      die "pool-mismatch: $(_pool_mismatch_why "$target" "$pstate" "$project" "$pps") — to cross on purpose: ccd swap --cross-pool $id $target"
     fi
   fi
   # Invoked from inside the session being swapped (Claude's own Bash tool)? The swap kills
@@ -21560,6 +22566,20 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   fi
   _reg_set "$id" wrapper "$target"
   _reg_set "$id" lastswap "$(date +%s)"
+  # THE PIN, WRITTEN BY THE OPERATOR PATH ONLY (D-3097). `CCD_SWAP_AUTO=1` is
+  # `_dispatch_swap`'s own discriminator — the one thing that tells the tick's
+  # automatic rescue from a human, a `swap-self` or a PWA tap — and it is already
+  # read once in this function, at the cross-pool refusal above. An automatic
+  # move must not mint a pin (the tick would then refuse to bring the session
+  # home, which is the opposite of what a rescue means) and it CLEARS one,
+  # immediately, because the row has just left the account the pin named. The
+  # tick's `_swap_pin_tick` would reach the same conclusion on its next pass;
+  # doing it here means the two surfaces never disagree even for one tick.
+  if [[ "${CCD_SWAP_AUTO:-}" == 1 ]]; then
+    [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
+  else
+    _reg_set "$id" swappin "$target"
+  fi
   # `cmd_ensure` runs in this same process at ccd:12815, but only when
   # `systemctl --user start` FAILS — the `||` fallback — and it writes its own
   # line WHEN IT FIRES. Two acts, two events, two tx-free records: the same
@@ -21584,7 +22604,15 @@ cmd_swap() {   # [--force] [--cross-pool] id target-wrapper — move a session t
   # they crossed twice.
   if [[ -n "$crossing" ]]; then
     _crosspool_mark "$id" "${pps#named }" "$target"
-    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=$(_acct_pool "$target")]" >> "$REG/swap.log"
+    # `target-pool` IS THE SNAPSHOT, NOT A FRESH DECLARED READ (fix round 1 —
+    # the same carrier correction as the refusals above, applied to the one
+    # renderer of this fact the review did not enumerate). Two reasons the
+    # `$(_acct_pool "$target")` that stood here was wrong: it named spec
+    # §5.6's lowest-precedence carrier while the projection is what ruled this
+    # a crossing at all, and it re-read minutes later — the carry can take
+    # them — so the line recorded a pool that need not be the one the
+    # decision was made against. `$pstate` is that decision's own word.
+    echo "$(date '+%F %T') cross-pool $id: $cur -> $target [project=$project pool=${pps#named } target-pool=${pstate#named }]" >> "$REG/swap.log"
   fi
   echo "$(date '+%F %T') swap $id: $cur -> $target (uuid $uuid)" >> "$REG/swap.log"
   _reg_set "$id" supervised "$(date +%s)"   # the carry may have taken minutes
@@ -21652,12 +22680,20 @@ cmd_prefer() {   # [--cross-pool] id wrapper — set a session's HOME account (a
     && die "the project field for $id could not be read: $REG/$id.project — fix or clear it; nothing was touched"
   pps=$(_project_pool_state "$project")
   _pool_ok "$w" "$pps"; prc=$?
+  # SNAPSHOT, for the reason `cmd_start`'s own snapshot states.
+  local pside="$POOL_OK_SIDE" pstate="$POOL_OK_STATE"
   [[ "$prc" -eq 2 ]] \
-    && die "pool tag for $project is $pps: $POOLS_DIR/$project — fix or clear it; nothing was touched"
+    && die "$(_pool_undecidable_why "$pside" "$pstate" "$project" "$w"); nothing was touched"
   [[ "$prc" -eq 1 && -z "$cross" ]] \
-    && die "pool-mismatch: $w is in pool '$(_acct_pool "$w")' and project '$project' is in pool '${pps#named }' — to cross on purpose: ccd prefer --cross-pool $id $w"
+    && die "pool-mismatch: $(_pool_mismatch_why "$w" "$pstate" "$project" "$pps") — to cross on purpose: ccd prefer --cross-pool $id $w"
   old=$(_home_for "$id")
   _reg_set "$id" home "$w"
+  # AN EXPLICIT HOME SUPERSEDES A PIN (D-3099). The pin exists because `swap`
+  # could not say "and keep it there"; `prefer` says exactly that, in the field
+  # the affinity arm actually reads, so leaving a pin standing beside it would
+  # give one session two answers to the same question — and the pin's would win,
+  # silently suppressing the return-home the operator just asked for.
+  [[ -e "$REG/$id.swappin" ]] && rm -f -- "$REG/$id.swappin" "$REG/$id.swappinnote"
   local lc_cross=()
   [[ "$prc" -eq 1 && -n "$cross" ]] \
     && { lc_cross=(dec.crosspool 1); _crosspool_mark "$id" "${pps#named }" "$w"; }

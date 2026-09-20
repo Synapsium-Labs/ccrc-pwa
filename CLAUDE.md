@@ -88,19 +88,32 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   (server-only). Reason: `server/src/coord/db.ts` imports `node:sqlite` unconditionally; below 22.13 the server
   fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
   engines — never lower them to make it green.**
-- **Deploy** (mechanics in README "Deploy"): `bash deploy/deploy.sh` (server), `bash deploy/deploy.sh agent <host>`.
-  **Coordinates live in `~/.ccrc/deploy.env`** — machine-local, outside every checkout
-  (`CCRC_BOX`, `CCRC_SSH_KEY`, `CCRC_SSH_PORT`, `CCRC_AGENT_BOX` for the agent lane when no `<host>` is
-  passed, and `CCRC_SW_DENYLIST` for a box with co-tenants; this
-  fleet's real values: `deploy/reference-fleet.md`, gitignored). deploy.sh has
-  **no default target** and refuses with exit 2 rather than guessing — the agent lane **never** falls back
-  to `CCRC_BOX` (the SERVER box on a two-box fleet); env vars override the file and
-  `CCRC_DEPLOY_ENV` points at another. Pinned by `server/test/deploy-coordinates.test.ts` (5/5 red without the
-  guard). The roster seed defaults to `deploy/accounts.default.json`, never the reference fleet's roster.
-  The one rule that shapes your own work: a change touching `ccd/`, `session-hook.sh`, or `ccd/coordinator-skill/`
-  is **AGENT-FIRST** — it ships to the fleet host before the server (the server reads what the hook writes; the
-  agent caches `ccd caps` at boot). Executables land via `install_atomic`; the server lane's final gate is
-  `/health` reporting the shipped sha.
+- **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
+  `main` becomes a GitHub Release within about a minute (`.github/workflows/release-main.yml` → `deploy/release-main.sh`
+  → `build-release.sh`; patch-per-merge, a hand-pushed `vX.Y.0` tag for a minor rides `release.yml`). Moving the fleet
+  is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check] [--force]` — it
+  preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
+  fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
+  anyway). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
+  left alone — `--force` reinstalls there too. **The first move onto the channel is by hand, once per box (D-3106):**
+  `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
+  box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
+  install role `both`). Record the role, then `ssh <box> ccrc update --to vX.Y.Z`, fleet box first; from then on it is
+  `rollout`. **What is
+  running where:** `ccrc version` (with its `install:` line), `ccrc update --check`, `/health`'s `version`, the PWA's
+  `BuildLine`, and doctor's `skills` check (every home vs the shipped tree). Coordinates live in `~/.ccrc/deploy.env`
+  (`CCRC_BOX`, `CCRC_AGENT_BOX` — never defaulted from `CCRC_BOX` — `CCRC_SSH_KEY`, `CCRC_SSH_PORT`; real values:
+  `deploy/reference-fleet.md`, gitignored — env vars override that file and `CCRC_DEPLOY_ENV` points at another;
+  `CCRC_SW_DENYLIST` for a box with co-tenants; the roster seed defaults to `deploy/accounts.default.json`).
+  **`deploy/deploy.sh` is the FALLBACK, not the path:** it pushes a working tree, writes NO `~/.ccrc/installed`
+  record — so `ccrc version` reports `install: incomplete` and `update --check` reports `incomplete`, or
+  `unversioned` when the stamp carries no `version` at all — ships skills on its agent arm only, and still refuses
+  with exit 2 without a target (`server/test/deploy-coordinates.test.ts` pins that refusal). It DOES stamp
+  `version`, but only when a release tag points at the built commit (`stamp_build`'s `git tag --points-at HEAD`),
+  which auto-tagging makes the ordinary case on `main`; the PWA shows a box amber for a MISSING `version`, which
+  is what an untagged working-tree deploy leaves. The ordering rule survives as `rollout`'s default: fleet box first
+  because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
+  wave's server arm is a reader-widening.
 
 ## Conventions that shape every change
 - **Rings / bounded contexts** (`docs/…-architecture-ddd-clean-solid.md`): ring membership is a property of a
@@ -163,6 +176,19 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   rc 0 — and an undecidable tag never folds into `untagged`. `--cross-pool` is NOT `--force` (transcript
   loss); `.crosspool`/`.stranded`/`.strandnotify` purge with the row. Fixtures are `pool-a`/`pool-b`; real
   pool names are operator DATA that NOTHING scans for — `topology-clean` has no pool class — so keep them out by hand.
+  **The account side is CENTRAL and LEASED.** An account's pool now lives in `pool_edges` in
+  `~/.ccrc/coord.db` (authoritative, journalled to `~/.ccrc/pool-edges.log`) and reaches the fleet as
+  `$REG/pool-epoch`, pulled by `ccd-pool-sync.timer`; `accounts.json`'s `pool` is RETAINED as the
+  lowest-precedence declared default — retiring it would make an old `ccd` read every account untagged,
+  fail-OPEN. **`ccd`'s placement now has a freshness dependency it never had, on a FLEET box only
+  (item 5):** `_project_pool_state`'s absent file means "nobody tagged anything"; `_acct_pool_state`'s
+  absent file means "I have not synced" and answers `unreadable` → undecidable → refuse into a
+  tagged project — `stale` and `unreadable` are two words with two remedies, never folded. A box
+  with `ccd-pool-sync.timer` never installed (`--role both`/`--role server`, the single-box
+  default) has none of this: absence falls back to the DECLARED tag, exactly as `main` did.
+  The server never nudges; convergence is the timer's pull alone, bounded by `OnUnitActiveSec=60s`.
+  `GET /api/pools/epoch` answers the RESOLVED pool (central if present, else declared), so `ccd`,
+  the server's forecast and its refusal all agree on the CARRIER, not the VERDICT (§5.7).
 
 ## Coordination (Build 7) invariants a coder must NOT break
 - `~/.ccrc/coord.db`: `node:sqlite` `DatabaseSync`, WAL, `user_version` migrations that **refuse to start rather
@@ -226,7 +252,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   `server/test/reviewer-skill.test.ts`; no `references/` of its own). A review run (design 2026-09-14) is
   dispatched by the coordinator on a verified wave-done; the reviewer reads the worker branch at one measured
   tip in its OWN worktree and mails one report; the coordinator rules. `REVIEWER_KICKOFF_PREFIX` prefixes its
-  brief exactly as the worker's does.
+  brief exactly as the worker's does. A skill reaches a home through `ccrc update`'s install spine (`_inst_skills`,
+  every rostered home) — never assume a server-only deploy carried it; doctor's `skills` check measures every home
+  against the shipped tree.
 
 ## Open on `main` — do NOT assume these are fixed
 `MailDeliveryState` terminality: as of **2026-09-02 (wave 8)** every `UPDATE mail_deliveries` in

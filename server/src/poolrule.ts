@@ -1,5 +1,5 @@
-import { poolRule } from '../../shared/poolrule.js';
-import type { PoolVerdict } from '../../shared/poolrule.js';
+import { poolRule, declaredAccountPool } from '../../shared/poolrule.js';
+import type { AccountPoolWire, PoolVerdict } from '../../shared/poolrule.js';
 import type { ProjectPlacement, ProjectPoolWire } from '../../shared/api.js';
 import type { AccountDef, Roster } from '../../shared/roster.js';
 
@@ -33,21 +33,93 @@ import type { AccountDef, Roster } from '../../shared/roster.js';
  */
 export type RosterVerdict = PoolVerdict | { ok: true; why: 'account-not-in-roster' };
 
+/** Build the wire shape for a CENTRAL edge — the one place `{ state: 'tagged',
+ *  origin: 'central' }` is spelled, shared by every reader of `pool_edges`
+ *  below so they cannot disagree about what a central row means. `pools` is
+ *  asserted non-empty by every caller before this runs (T5-R2's tuple type
+ *  makes an empty array a compile error at the point of construction, so the
+ *  cast here is not smuggling one past the type). */
+function centralAccountPool(pools: readonly string[]): AccountPoolWire {
+  return { state: 'tagged', pools: pools as readonly [string, ...string[]], origin: 'central' };
+}
+
+/**
+ * The pool this ACCOUNT is in, RESOLVED — central beats declared beats
+ * untagged (design §5.6, T7-R2, D-3076). Distinct question
+ * from {@link poolVerdict}:
+ * this names a pool, `poolVerdict` names a VERDICT against one project's tag.
+ * `GET /api/accounts`'s wire uses this so the PWA can render (and reason
+ * about crossings from) the same precedence the server enforces, rather than
+ * re-deriving it from the declared `RosterWire.pool` field alone — the defect
+ * T7-R2 found live in `NewSessionSheet.tsx` before this field existed.
+ *
+ * `GET /api/pools/epoch` (ruling T7-R4) is the SECOND caller, and the reason
+ * `account` is `AccountDef | undefined` rather than required: that document
+ * carries every id with a CENTRAL edge, which can name a wrapper this box's
+ * roster does not have (spec §3.3, O4) — there is no `AccountDef` to pass for
+ * one of those. `id` is a separate parameter, not read off `account.id`, for
+ * exactly that case; when `account` is present its `.id` must equal `id`, but
+ * nothing here asserts that — the caller owns pairing them correctly.
+ */
+export function resolvedAccountPool(
+  id: string, account: AccountDef | undefined, edges: ReadonlyMap<string, readonly string[]>,
+): AccountPoolWire {
+  const central = edges.get(id);
+  if (central !== undefined && central.length > 0) return centralAccountPool(central);
+  return declaredAccountPool(account?.pool ?? null);
+}
+
 /**
  * May `wrapper` serve a project whose tag reads `pool`?
  *
  * EVERY ANSWER COMES OUT OF `poolRule`, including the not-in-roster one: the
- * miss is handled by asking the rule with a `null` account pool and then
- * RELABELLING only its `ok` arm. That is what keeps the precedence intact —
+ * miss is handled by asking the rule with `declaredAccountPool(null)` — an
+ * untagged account, adapted — and then RELABELLING only its `ok` arm. That is
+ * what keeps the precedence intact —
  * an `unreadable`/`malformed` tag is undecidable for everyone, roster member
  * or not, so it must still answer `pool-undecidable` here (spec §5.2's "nobody
  * decides"). A `null` account pool can never produce `pool-mismatch`, so the
  * relabel provably cannot swallow a refusal.
+ *
+ * `edges` is REQUIRED, not optional (T5-R4, account-pool-membership wave 1
+ * task 7). An optional parameter would let a caller that HAS the central
+ * `pool_edges` rows silently fall back to the declared roster tag by simply
+ * forgetting to pass them — a fail-open that compiles clean. Making it
+ * required turns every call site into a compile error that forces its author
+ * to answer "do I have the central edges here?" A caller that genuinely has
+ * none passes `new Map()` and says why in a comment at the call site.
+ *
+ * NOT WRITTEN AS `poolRule(resolvedAccountPool(wrapper, account, edges), pool)`
+ * — precedence is spelled TWICE across this file (see `GET /api/pools/epoch`'s
+ * own correction, `server.ts`, review round 4 P2), kept equal by test
+ * coverage rather than by construction. THE REASON THIS DOCSTRING GAVE FOR
+ * THAT (review round 4, P3 — the old reason, struck): it said
+ * `resolvedAccountPool` "requires an already-known `AccountDef`", which
+ * stopped being true the round `resolvedAccountPool` widened to `account:
+ * AccountDef | undefined`. The obstruction is gone — `resolvedAccountPool
+ * (wrapper, roster.byId.get(wrapper), edges)` would now answer the SAME wire
+ * value this function's own central branch computes inline, including for a
+ * wrapper the roster does not have (both fall through to
+ * `declaredAccountPool(null)`, i.e. untagged). Unifying the two is now a
+ * CHOICE, not a forced duplication — left as one for the task that owns this
+ * file's next behavioural change, not decided in a prose-only round.
  */
-export function poolVerdict(roster: Roster, wrapper: string, pool: ProjectPoolWire): RosterVerdict {
+export function poolVerdict(
+  roster: Roster, wrapper: string, pool: ProjectPoolWire,
+  edges: ReadonlyMap<string, readonly string[]>,
+): RosterVerdict {
+  // PRECEDENCE, in the one place that can enforce it: projected beats
+  // declared beats untagged (design §5.6). A central edge is authoritative —
+  // it came from `pool_edges`, which is the only writer — so it is consulted
+  // before the roster's retained default, and the roster is not read at all
+  // when one exists.
+  const central = edges.get(wrapper);
+  if (central !== undefined && central.length > 0) {
+    return poolRule(centralAccountPool(central), pool);
+  }
   const account = roster.byId.get(wrapper);
-  if (account !== undefined) return poolRule(account.pool, pool);
-  const v = poolRule(null, pool);
+  if (account !== undefined) return poolRule(declaredAccountPool(account.pool), pool);
+  const v = poolRule(declaredAccountPool(null), pool);
   return v.ok ? { ok: true, why: 'account-not-in-roster' } : v;
 }
 
@@ -58,22 +130,51 @@ export function poolVerdict(roster: Roster, wrapper: string, pool: ProjectPoolWi
  * EMPTY for an undecidable tag, and that is not the same fact as "every lane
  * is disabled": callers must ask {@link poolUndecidable} first if they need to
  * tell the two apart (`projectPlacement` in `limits.ts` does).
+ *
+ * `edges` is REQUIRED (T7-R1, account-pool-membership wave 1,
+ * D-3075), on `poolVerdict`'s exact reasoning: an
+ * optional parameter lets a caller that HAS central edges silently fall back
+ * to declared-only by forgetting to pass them, which is the fail-open T5-R4
+ * was written to close at every call site, not only `refusePool`'s.
+ *
+ * WIRED THROUGH FOR REAL (ruling T7-R3, reversing T7-R1's deferral): this
+ * function's ONE call site, `projectHome` (`limits.ts`), now passes a live
+ * `edges` from its own caller — `server.ts`'s `GET /api/projects` and `GET
+ * /api/accounts` both read `deps.coord?.accountPoolEdges() ?? new Map()` —
+ * so the RANKING forecast (`ProjectRow.placement`, `AccountsResponse.projected`)
+ * and the REFUSAL pre-check (`refusePool`) now agree: an account centrally
+ * tagged into a different pool than its declared default can no longer be
+ * forecast eligible for a project `POST /api/sessions` would then refuse.
+ * `test/projected-home.test.ts`'s fixture-driven parity harness against
+ * `_ws_least_loaded` is the one caller that still passes `NO_EDGES`
+ * deliberately. NOT because bash's positional is declared-only — it is not:
+ * `_ws_least_loaded` reads the CENTRAL projection (`_pool_ok` ->
+ * `_acct_pool_state` -> `$REG/pool-epoch`), via a file that harness plants
+ * itself. The reason is spec §5.7: this server's own forecast, wired with
+ * real edges, reads coord.db DIRECTLY and never consults a projection file
+ * — so there is no shipped central carrier on the TypeScript side for that
+ * harness to feed, only a declared one. That harness's cases agree with
+ * bash because the SAME fixture data is written into both sides' carriers,
+ * not because either side reads the other's.
  */
-export function poolEligible(roster: Roster, pool: ProjectPoolWire): AccountDef[] {
-  return roster.homeAble.filter((a) => poolRule(a.pool, pool).ok);
+export function poolEligible(
+  roster: Roster, pool: ProjectPoolWire, edges: ReadonlyMap<string, readonly string[]>,
+): AccountDef[] {
+  return roster.homeAble.filter((a) => poolRule(resolvedAccountPool(a.id, a, edges), pool).ok);
 }
 
 /**
  * Are we in the state where NOBODY decides — `unreadable` or `malformed`?
  *
  * DERIVED FROM THE RULE, not from a second list of state tokens: an untagged
- * account is the most permissive input there is, so `poolRule(null, pool)`
- * refuses exactly when the tag itself is undecidable. A hand-written
+ * account is the most permissive input there is, so
+ * `poolRule(declaredAccountPool(null), pool)` refuses exactly when the tag
+ * itself is undecidable. A hand-written
  * `state === 'unreadable' || state === 'malformed'` here would be the second
  * copy that drifts the day a fifth state is added.
  */
 export function poolUndecidable(pool: ProjectPoolWire): boolean {
-  return !poolRule(null, pool).ok;
+  return !poolRule(declaredAccountPool(null), pool).ok;
 }
 
 /**

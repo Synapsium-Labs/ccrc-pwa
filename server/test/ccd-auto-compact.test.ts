@@ -36,7 +36,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { makeCcdHarness, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
+import { execFileSync } from 'node:child_process';
+import { makeCcdHarness, CCD, type CcdHarness, WIDE_PANE } from './ccdWsHelpers.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-auto-compact-'); });
@@ -115,6 +116,9 @@ const MODEST = '▓ ctx ███░░░░░░░ 55%\n❯ ';
 const BELOW_DEFAULT = '▓ ctx ██░░░░░░░░ 45%\n❯ ';
 const LEAN = '▓ ctx █░░░░░░░░░ 12%\n❯ ';
 const NO_CTX = '? for shortcuts\n❯ ';
+/** Older than COMPACT_COOLDOWN and than SWAP_COOLDOWN's post-swap window, so a
+ *  planted `lastcompact` opens the cooldown gate instead of closing it. */
+const COOLDOWN_PAST = 2000;
 
 // ── D-2013, the pane read ─────────────────────────────────────────────────
 
@@ -608,5 +612,232 @@ describe('routing slice 6: `compact` is this session’s threshold, absent means
     tick('▓ ctx █████████░ 91%\n❯ ');
     expect(sendKeys()).toEqual([]);
     expect(h.reg(ID, 'lastcompact')).toBeNull();
+  });
+});
+
+// ── D-3102 / D-3103 / D-3104 — the compactor stops summarising its own summary ──
+//
+// THE DEFECT, MEASURED ON THE FLEET BEFORE IT WAS NAMED. `_auto_compact_check`
+// decided on exactly two numbers — the `lastcompact` cooldown and `ctx%` against
+// the threshold — and neither of them is a fact about whether the CONVERSATION
+// changed. A session whose post-compaction floor sits at or above its own
+// threshold therefore re-compacts every `COMPACT_COOLDOWN`, for ever,
+// summarising a summary it has already summarised and throwing away real
+// context each time.
+//
+// From `$REG/swap.log` on the fleet host, read 2026-09-19: of 622 `auto-compact`
+// lines, 163 came within 40 minutes of the previous compaction OF THE SAME
+// SESSION — and all 163 read the IDENTICAL `ctx%` as the line before them. The
+// identical percentage is the signature: nothing had changed, and compacting
+// changed nothing. ONE workspace alone took 25 consecutive compactions at
+// exactly 1800-second spacing, every one reading `ctx 51%`, from 20:39 on
+// 2026-09-10 to 08:40 the next morning.
+//
+// THE GUARD FAILS OPEN, and that is its whole shape. It refuses only on a
+// POSITIVE measurement that nothing happened; an unreadable or unresolvable
+// transcript, a window with no real turn in it, or a session that has never been
+// compacted all behave exactly as they did before. A guard that silenced the
+// compactor on a transcript it could not read would trade a wasteful compaction
+// for a session that never compacts at all — the #67 R1 shape this file's own
+// subject forbids.
+
+describe('D-3102/D-3103: a session with no turn since its last compaction is not compacted again', () => {
+  const UUID = '11111111-1111-4111-8111-111111111111';
+  const ISO = (epoch: number): string => new Date(epoch * 1000).toISOString();
+
+  /** The four rows ONE `/compact` appends, measured on a live transcript
+   *  (2026-09-18 02:30 -> 02:34): the summary itself, then the caveat, the
+   *  command and its stdout. The summary lands
+   *  MINUTES AFTER ccd typed the keys, which is precisely why a reader that
+   *  counted it would see "a turn happened since the compaction" on every
+   *  compacted session and this guard would never fire once. */
+  const compactionRows = (at: number): string[] => [
+    JSON.stringify({ type: 'user', isCompactSummary: true, uuid: 'cs', timestamp: ISO(at + 240),
+      message: { role: 'user', content: 'This session is being continued from a previous conversation…' } }),
+    JSON.stringify({ type: 'user', isMeta: true, uuid: 'cv', timestamp: ISO(at),
+      message: { role: 'user', content: '<local-command-caveat>Caveat: …</local-command-caveat>' } }),
+    JSON.stringify({ type: 'user', uuid: 'cn', timestamp: ISO(at),
+      message: { role: 'user', content: '<command-name>/compact</command-name>' } }),
+    JSON.stringify({ type: 'user', uuid: 'so', timestamp: ISO(at + 241),
+      message: { role: 'user', content: '<local-command-stdout>Compacted (ctrl+o to see full summary)</local-command-stdout>' } }),
+  ];
+  const turn = (at: number, who: 'user' | 'assistant' = 'assistant'): string =>
+    JSON.stringify({ type: who, uuid: `t${at}`, timestamp: ISO(at),
+      message: { role: who, content: [{ type: 'text', text: 'real work' }] } });
+
+  const transcript = (lines: string[]): string => {
+    const p = h.sh(`_reg_set ${ID} uuid ${UUID}; _transcript_path ${ID}`);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, lines.join('\n') + '\n');
+    return p;
+  };
+  const NOW = (): number => Math.floor(Date.now() / 1000);
+
+  it('CONTROL: the same session with a real turn AFTER the compaction still compacts', () => {
+    // The positive control this whole describe rests on. Every refusal below is
+    // an assertion that `/compact` did NOT fire, and a fixture in which it could
+    // not have fired anyway would make all of them vacuously green.
+    const now = NOW();
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} lastcompact ${now - COOLDOWN_PAST}`);
+    transcript([...compactionRows(now - COOLDOWN_PAST), turn(now - 120)]);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(reason()).toBeNull();
+  });
+
+  it('the compaction’s OWN four rows are not a turn: it refuses and says why', () => {
+    // The case the fleet log is full of. Note the `isCompactSummary` row is
+    // stamped FOUR MINUTES AFTER `lastcompact` — later than the compaction it
+    // belongs to — so a reader keyed on timestamps alone would call it a turn.
+    const now = NOW();
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} lastcompact ${now - COOLDOWN_PAST}`);
+    transcript([turn(now - COOLDOWN_PAST - 600), ...compactionRows(now - COOLDOWN_PAST)]);
+    tick(MODEST);
+    expect(sendKeys(), 'the compactor summarised a summary').toEqual([]);
+    expect(reason()).toBe('no-turns-since-compact');
+    expect(skipLines().join('\n')).toMatch(
+      /compact-skip demo-quiet-mesa: no-turns-since-compact \(ctx 55%; newest turn \d+s before the last compaction\)/);
+    // And the cooldown stamp is NOT re-armed by a refusal: `lastcompact` still
+    // anchors the compaction that actually happened, so the detail's measured
+    // age keeps meaning what it says.
+    expect(h.reg(ID, 'lastcompact')).toBe(String(now - COOLDOWN_PAST));
+  });
+
+  it('a session that has NEVER been compacted is never refused by this guard', () => {
+    // There is no compaction for the transcript to be unchanged since. Fail
+    // open, and the same for every other unmeasurable condition below.
+    const now = NOW();
+    seed(); sessionJson('idle', 600);
+    transcript([turn(now - 9000)]);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+  });
+
+  it('an ABSENT transcript fails open — a guard that cannot measure must not silence the compactor', () => {
+    const now = NOW();
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} lastcompact ${now - COOLDOWN_PAST}`);
+    h.sh(`_reg_set ${ID} uuid ${UUID}`);   // path resolves, file does not exist
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+    expect(reason()).toBeNull();
+  });
+
+  it('a transcript window holding no real turn at all fails open too', () => {
+    // "No real turn in the window" is not "no real turn happened" — the tail is
+    // bounded, and the honest answer to a question the window cannot reach is
+    // the behaviour this guard is an exception to, not a refusal.
+    const now = NOW();
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} lastcompact ${now - COOLDOWN_PAST}`);
+    transcript(compactionRows(now - COOLDOWN_PAST));
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+  });
+
+  it('a HUMAN message after the compaction is a turn', () => {
+    const now = NOW();
+    seed(); sessionJson('idle', 600);
+    h.sh(`_reg_set ${ID} lastcompact ${now - COOLDOWN_PAST}`);
+    transcript([...compactionRows(now - COOLDOWN_PAST), turn(now - 300, 'user')]);
+    tick(MODEST);
+    expect(sendKeys().join('\n')).toContain('/compact');
+  });
+
+  it('the guard is the LAST gate: a busy session reports not-idle, never this reason', () => {
+    // Ordering is the contract. `_compact_no_turns` resolves a path and scans a
+    // transcript through python — the expensive read D-2444 measured at an order
+    // of magnitude over the pane classifier — so it must be paid only by a
+    // session that has passed every cheaper test. A `not-idle` row here proves
+    // the scan was never reached.
+    const now = NOW();
+    seed(); sessionJson('busy', 600);
+    h.sh(`_reg_set ${ID} lastcompact ${now - COOLDOWN_PAST}`);
+    transcript([turn(now - 9000), ...compactionRows(now - COOLDOWN_PAST)]);
+    tick(MODEST);
+    expect(reason()).toBe('not-idle');
+  });
+});
+
+describe('_transcript_last_turn_ts (D-3102, D-3104)', () => {
+  const ISO = (epoch: number): string => new Date(epoch * 1000).toISOString();
+  const row = (over: Record<string, unknown>): string => JSON.stringify({
+    type: 'assistant', uuid: 'x', timestamp: ISO(1789000000),
+    message: { role: 'assistant', content: [{ type: 'text', text: 'hi' }] }, ...over,
+  });
+  const write = (lines: string[]): string => {
+    const p = path.join(h.home, 't.jsonl');
+    fs.writeFileSync(p, lines.join('\n') + '\n');
+    return p;
+  };
+  const read = (p: string): string =>
+    h.sh(`out=$(_transcript_last_turn_ts ${JSON.stringify(p)}); printf '%s:%s' "$?" "$out"`);
+
+  it('answers the NEWEST real turn, not the last line', () => {
+    // Unlike the banner reader, which asks "is the banner still the last word"
+    // and clears its candidate on any later row, this one asks "when did
+    // anything real last happen" — so a later chatter row cannot retract it.
+    expect(read(write([
+      row({ timestamp: ISO(1789000000) }),
+      row({ timestamp: ISO(1789000900) }),
+      row({ type: 'user', message: { role: 'user', content: '<command-name>/compact</command-name>' }, timestamp: ISO(1789001800) }),
+    ]))).toBe('0:1789000900');
+  });
+  it('skips the compact summary — the row that would defeat the whole guard', () => {
+    expect(read(write([
+      row({ timestamp: ISO(1789000000) }),
+      row({ type: 'user', isCompactSummary: true, message: { role: 'user', content: 'This session is being continued…' }, timestamp: ISO(1789002000) }),
+    ]))).toBe('0:1789000000');
+  });
+  it('skips an isMeta row — injected context is not a turn somebody took', () => {
+    expect(read(write([
+      row({ timestamp: ISO(1789000000) }),
+      row({ type: 'user', isMeta: true, message: { role: 'user', content: 'Continue from where you left off.' }, timestamp: ISO(1789002000) }),
+    ]))).toBe('0:1789000000');
+  });
+  it('skips system rows, which are not turns either', () => {
+    expect(read(write([
+      row({ timestamp: ISO(1789000000) }),
+      JSON.stringify({ type: 'system', timestamp: ISO(1789002000), content: 'Remote Control disconnected' }),
+    ]))).toBe('0:1789000000');
+  });
+  it('a row with a malformed timestamp can only make the answer OLDER, never newer', () => {
+    expect(read(write([
+      row({ timestamp: ISO(1789000000) }),
+      row({ timestamp: 'not-a-time' }),
+    ]))).toBe('0:1789000000');
+  });
+  it('an unparseable line is skipped rather than trusted', () => {
+    expect(read(write([row({ timestamp: ISO(1789000000) }), '{"type":"assistant","mess']))).toBe('0:1789000000');
+  });
+  it('no real turn in the window: rc 1', () => {
+    expect(read(write([
+      row({ type: 'user', message: { role: 'user', content: '<local-command-stdout>ok</local-command-stdout>' } }),
+    ]))).toBe('1:');
+  });
+  it('no file: rc 2', () => {
+    expect(read(path.join(h.home, 'nope.jsonl'))).toBe('2:');
+  });
+  it('a directory: rc 2 — `-f` is what refuses it (D-2370)', () => {
+    const d = path.join(h.home, 'dir.jsonl'); fs.mkdirSync(d);
+    expect(read(d)).toBe('2:');
+  });
+  it('a FIFO: rc 2 without blocking — `-r` alone would open it and wait for ever (D-2370)', () => {
+    const f = path.join(h.home, 'fifo.jsonl'); execFileSync('mkfifo', [f]);
+    expect(h.sh(`perl -e 'alarm shift; exec @ARGV' 5 bash -c "$(declare -f _transcript_last_turn_ts); COMPACT_TURN_TAIL_LINES=$COMPACT_TURN_TAIL_LINES; _transcript_last_turn_ts \\"\\$1\\"" _ ${JSON.stringify(f)} >/dev/null 2>&1; echo "rc=$?"`))
+      .toBe('rc=2');
+  });
+  it('its window is its OWN, not the redrive detector’s', () => {
+    // A `/compact` writes four rows of its own and the tail is thick with
+    // attachment and system rows; 60 lines is sized for a stall two turns deep,
+    // not for reaching back past a compaction. Too small and the scan answers
+    // "no real turn", which the caller FAILS OPEN on — the pre-D-3103
+    // behaviour, never a false refusal, but also never the fix.
+    const src = fs.readFileSync(CCD, 'utf8');
+    expect(src).toContain('rows=$(tail -n "$COMPACT_TURN_TAIL_LINES" "$f" 2>/dev/null) || return 2');
+    expect(Number(h.sh('echo "$COMPACT_TURN_TAIL_LINES"'))).toBeGreaterThan(
+      Number(h.sh('echo "$REDRIVE_TAIL_LINES"')));
   });
 });

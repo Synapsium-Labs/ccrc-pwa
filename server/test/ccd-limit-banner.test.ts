@@ -308,3 +308,143 @@ describe('the transcript verdict is cached per session (D-2444)', () => {
     expect(reads()).toHaveLength(1);
   });
 });
+
+// ── D-3100 / D-3101 — the pane arm learns THIS YEAR'S banner ───────────────
+//
+// THE FALSIFICATION FIRST. `_pane_hard_blocked`'s alternation was written
+// against the banners of its day. Measured 2026-09-19 against every
+// `isApiErrorMessage` row on disk across the fleet's wrapper HOMEs, these are
+// the texts Claude Code actually renders — and three of the four match nothing
+// in it, so the primary, every-tick pane detector has been blind to the session,
+// weekly and bare limits, leaving D-2363's cached, newest-row-only, draft-
+// deferring transcript fallback as the ONLY thing standing between a limited
+// session and a human. The fleet log says the same: the only rescue of this
+// shape on 2026-09-19 is logged ` … (blocked) -> … via=transcript`, i.e. by the
+// fallback, on a pane that had been showing the answer all along.
+//
+// D-2364 IS KEPT, NOT REVERSED. It ruled that `_pane_hard_blocked` is not
+// widened, because `_spawn_settle` turns that same regex into rc 5 on every
+// landing. That function is untouched; the new wording lives in its own
+// predicate with ONE caller, `_session_hard_blocked`. The cases below assert
+// both halves — the new rung fires, and the old regex still does not.
+
+describe('_pane_limit_banner: the wordings this fleet actually renders (D-3100)', () => {
+  /** Every string here was read off an `isApiErrorMessage` row on this fleet's
+   *  disk, not composed for the test. `monthly spend` is the one the OLD regex
+   *  already caught, and it is kept in the table so the table shows the split
+   *  rather than asserting it in prose. */
+  const MEASURED: [text: string, oldArmMatches: boolean][] = [
+    ["You've hit your session limit · resets 9:10pm (UTC)", false],
+    ["You've hit your weekly limit · resets Sep 21, 7am (UTC)", false],
+    ["You've hit your limit · resets Sep 17, 9pm (UTC)", false],
+    ["You've hit your monthly spend limit · raise it at claude.ai/settings/usage", true],
+  ];
+  const paneArm = (fn: string, text: string): string =>
+    h.sh(`${fn} ${JSON.stringify(text)}; echo "rc=$?"`);
+
+  for (const [text, oldArmMatches] of MEASURED) {
+    it(`matches ${JSON.stringify(text.slice(0, 34))}…`, () => {
+      expect(paneArm('_pane_limit_banner', text)).toBe('rc=0');
+    });
+    it(`_pane_hard_blocked is UNCHANGED for it (rc ${oldArmMatches ? 0 : 1}) — D-2364 kept`, () => {
+      // The whole reason the new wording is a separate function. `_spawn_settle`
+      // and `_redrive_after_spawn` read this one and turn a match into rc 5
+      // ("blocked on the new account") on every landing; widening it is the
+      // thing D-2364 declined, and this row is what refuses the future edit
+      // that does it anyway.
+      expect(paneArm('_pane_hard_blocked', text)).toBe(`rc=${oldArmMatches ? 0 : 1}`);
+    });
+  }
+
+  it('the separator is part of the pattern: an assistant SAYING the words does not match', () => {
+    // Without the `·` this is a prose detector, and the session most likely to
+    // print the sentence is the one working on this code. A wording change that
+    // drops the separator fails CLOSED — no keystroke, no relocation, exactly
+    // today's behaviour — which is `_pane_limit_stale`'s own rule.
+    expect(paneArm('_pane_limit_banner',
+      'I think you hit your weekly limit earlier, so the rescue never fired.')).toBe('rc=1');
+  });
+
+  it('the auto-continue banner still matches the OLD arm, so nothing regressed there', () => {
+    // "Usage limit reached · continuing automatically at 9:10pm · esc to cancel"
+    // is the shape that DID work, and it is why the fleet ever swapped at all.
+    expect(paneArm('_pane_hard_blocked',
+      'Usage limit reached · continuing automatically at 9:10pm · esc to cancel')).toBe('rc=0');
+  });
+});
+
+describe('the banner rung rescues, and the log names WHICH detector fired (D-3100, D-3101)', () => {
+  const PROMPT = '? for shortcuts\n❯ ';
+  const NEW_BANNER = "You've hit your session limit · resets 9:10pm (UTC)\n❯ ";
+  const STUBS = (pane: string, target = 'claude2'): string => `
+    tmux() { echo "tmux $*" >> "$HOME/ccd-calls"; ${WIDE_PANE} case "\${1:-}" in
+      capture-pane) printf '%s\\n' ${JSON.stringify(pane)} ;; list-panes) echo 4242 ;; esac; return 0; };
+    _pane_box_draft() { printf '%s' "\${BOX_DRAFT:-}"; };
+    _swap_target() { echo ${target}; }; _avail() { return 0; };
+    _dispatch_swap() { echo "dispatch $1 -> $2" >> "$HOME/ccd-calls"; };`;
+  const dispatches = (): string[] => h.calls().filter((l) => l.startsWith('dispatch '));
+  const swapLog = (): string => {
+    const f = path.join(h.home, '.cc-sessions', 'swap.log');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
+  };
+
+  it("a pane showing \"You've hit your session limit ·\" is rescued, and the line says via=banner", () => {
+    // The transcript deliberately holds an ORDINARY assistant turn, so the
+    // transcript arm answers "not blocked". Without the new rung nothing here
+    // fires at all — which is the defect, and this case is its measurement.
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`${STUBS(NEW_BANNER)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+    expect(swapLog()).toMatch(/auto-rescue myid: claude \(blocked\) -> claude2 \[home=claude\] via=banner/);
+  });
+
+  it('the rescue does not wait out the transcript cache — the pane decides this tick', () => {
+    // A cached NEGATIVE transcript verdict (`tscan "<now> 0"`) is exactly the
+    // state a session lands in seconds before its limit arrives. The transcript
+    // arm would say nothing for up to TRANSCRIPT_ARM_INTERVAL; the pane rung
+    // sits above the cache and is not subject to it.
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`_reg_set ${ID} tscan "$(date +%s) 0"`);
+    h.sh(`${STUBS(NEW_BANNER)} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([`dispatch ${ID} -> claude2`]);
+  });
+
+  it('a banner pane with no destination strands the row, like every other hard block', () => {
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`${STUBS(NEW_BANNER, '')} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`))).toBe(true);
+  });
+
+  it('the strand half reads the same verdict — one detector, two callers', () => {
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`${STUBS(NEW_BANNER)} _tick_strand_undecidable ${ID} wrapper claude`);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${ID}.stranded`))).toBe(true);
+  });
+
+  it('control: a prose mention of the words rescues nothing', () => {
+    seed(); writeTranscript([L.assistant()]);
+    h.sh(`${STUBS('we hit your weekly limit yesterday\n❯ ')} _auto_swap_check ${ID}`);
+    expect(dispatches()).toEqual([]);
+  });
+
+  it('the provenance is READ off the verdict, not re-asked of a classifier that cannot see all three rungs', () => {
+    // D-3101. The old line called `_pane_hard_blocked` a second time to decide
+    // whether to write ` via=transcript`. That was sound while this function had
+    // two rungs and one of them WAS that call; with three it would say
+    // `via=transcript` about a banner that was on screen the whole time.
+    seed(); writeTranscript([L.assistant()]);
+    expect(h.sh(`${STUBS(NEW_BANNER)} _session_hard_blocked ${ID} ${JSON.stringify(NEW_BANNER)}; echo "$?:$HARD_BLOCK_VIA"`))
+      .toBe('0:banner');
+    expect(h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} 'API Error: 429'; echo "$?:$HARD_BLOCK_VIA"`))
+      .toBe('0:pane');
+    h.sh(`_reg_set ${ID} tscan ""`);
+    writeTranscript([L.banner()]);
+    expect(h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "$?:$HARD_BLOCK_VIA"`))
+      .toBe('0:transcript');
+    h.sh(`_reg_set ${ID} tscan ""`);
+    writeTranscript([L.assistant()]);
+    expect(h.sh(`${STUBS(PROMPT)} _session_hard_blocked ${ID} ${JSON.stringify(PROMPT)}; echo "$?:$HARD_BLOCK_VIA"`))
+      .toBe('1:');
+  });
+});

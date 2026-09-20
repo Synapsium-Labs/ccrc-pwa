@@ -60,6 +60,60 @@ export interface FleetState {
    *  why `server/test/` (typechecked by `typecheck-tests.test.ts`, not by the
    *  build) is part of the enumeration rather than collateral damage. */
   build: BuildInfo | null;
+  /** The epoch of the pool projection the fleet host reported it actually has
+   *  (`AgentReady.observedEpoch`), or `undefined` when we have no evidence —
+   *  local mode, an older agent that predates the field, or a link that has
+   *  never gone ready. THREE conditions, not two, and unlike `rosterFp`/
+   *  `build` the absent case is NOT collapsed into `null`: `null` here means
+   *  the fleet host has synced never (a fact about the node), `undefined`
+   *  means this build cannot tell us (a fact about the wire) — folding them
+   *  would report a downgraded fleet host as "still catching up" instead of
+   *  "no longer answering".
+   *
+   *  NO LONGER THE `pools` WIRE'S SOURCE (item 1, wave-1 fix round A): this
+   *  member is still populated by `remote/client.ts`'s `onReady` on every
+   *  handshake, but a handshake-cadence sample cannot stand in for a 60s
+   *  fact, so `server/src/pools.ts`'s `readObservedEpochFromRegistry` — a
+   *  fresh `$REG/pool-epoch` read on every watcher tick / request — feeds the
+   *  wire instead. This field has no consumer of its own today.
+   *
+   *  OPTIONAL here, deliberately unlike `rosterFp`/`build`'s "REQUIRED, not
+   *  optional" stance above — measured before choosing: making this field
+   *  required breaks ~20 pre-existing `FleetState`/`Deps` fixtures across
+   *  server/test/ with no relation to pool membership (`typecheck-tests.test.ts`
+   *  catches every one). Task 8's own scope is the agent's ready handshake,
+   *  not a fleet-wide fixture sweep that belongs to whichever task actually
+   *  consumes this field; an omitted key here reads as `undefined` on access,
+   *  which is the correct, honest answer for every one of those untouched
+   *  fixtures — they truly have no evidence about pool epochs.
+   *
+   *  WHAT THIS GIVES UP (review T8-R1, F6): `build`'s own comment above calls
+   *  being required "the whole mechanism" — turning a new construction site
+   *  that forgets this field into a COMPILE error. This field has no such
+   *  mechanism; the substitute is a RUNTIME one, `remote-connect.test.ts`'s
+   *  whole-object `toEqual` assertion in "reaches connected:true with
+   *  downSince:null after a good handshake" (`connectFleet — connection
+   *  lifecycle` describe block), which fails on any key `onReady` populates
+   *  that the expected literal there omits. That covers the one construction
+   *  site that actually matters — `FleetClient.state`, the object `onReady`
+   *  mutates — but it is a test that can be deleted or narrowed without a
+   *  compiler noticing, unlike a required field. Naming it here so a future
+   *  editor does not delete it without knowing it was carrying that load.
+   *
+   *  `server/src/index.ts`'s local-mode `fleetState` literal (not typed
+   *  against `FleetState` directly, so nothing there forces the question
+   *  either) OMITS this key too — unlike `rosterFp`/`build`, which it sets to
+   *  an explicit `null` "BY MEASUREMENT, not by omission" because in local
+   *  mode there is no second box, so comparing this box against itself would
+   *  be the one answer the banner must not show. `observedEpoch` is not a
+   *  cross-box COMPARISON — it is a fact about what epoch THIS node holds —
+   *  so that argument does not transfer, and nothing in local mode today
+   *  reads this box's own `~/.cc-sessions/pool-epoch` to populate it. The
+   *  omission there is honest (no evidence gathered), but it is an honest gap,
+   *  not a considered "not applicable" the way `rosterFp`/`build`'s explicit
+   *  `null` is — worth knowing before treating local mode's silence here as
+   *  a decision. */
+  observedEpoch?: number | null;
 }
 
 export interface FleetSnapshot { sessions: FleetSession[]; savedAt: number }

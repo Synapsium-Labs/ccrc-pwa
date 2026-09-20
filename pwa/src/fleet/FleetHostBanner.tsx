@@ -14,17 +14,25 @@
 //    is a deploy or an edit on one of the two boxes, neither of which the PWA
 //    can or should do. `'unknown'` renders nothing — an older agent reports no
 //    digest, and a banner that fires when nothing is wrong stops being read.
+//  - BUILD SKEWED (amber): the host is up, but the two boxes' `build.json`
+//    stamps disagree (`buildAgreement`, server/src/fleetstate.ts). Names both
+//    versions (or shas, for an unversioned deploy.sh stamp) when the server
+//    reports them. No action button: the fix is `ccrc rollout`/`ccrc update`,
+//    run from a terminal. `'unknown'` remains silent, same rule as the two
+//    above.
 //  - POOLS UNAVAILABLE (amber): the host is up, but its ccd has no project-pool
 //    capability. No action button: the remedy is an agent-lane deploy.
 //    `'unknown'` remains silent.
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetHealth } from '../../../shared/api';
+import type { BuildInfo } from '../../../shared/buildinfo';
 import { api, apiErrorText } from '../lib/api';
 import { toast } from '../components/Toast';
 import { QuickConfirm } from '../components/QuickConfirm';
 import { useNow } from '../lib/useNow';
 import { elapsedWords } from '../lib/elapsed';
+import { useFleetHealth } from './useFleetHealth';
 import './fleet.css';
 
 const POLL_MS = 15_000;
@@ -35,23 +43,15 @@ const POLL_MS = 15_000;
 const elapsedSince = (downSince: number, nowMs: number): string =>
   `${elapsedWords(nowMs - downSince)} ago`;
 
-export function FleetHostBanner(): ReactNode {
-  const [health, setHealth] = useState<FleetHealth | null>(null);
+export function FleetHostBanner({ health: injected }: { health?: FleetHealth | null } = {}): ReactNode {
+  // Polls only when nothing was injected: FleetScreen polls once for this
+  // banner and BuildLine together; the standalone shape (tests, other
+  // screens) still self-polls.
+  const polled = useFleetHealth(injected === undefined ? POLL_MS : 0);
+  const health = injected === undefined ? polled : injected;
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [rebooting, setRebooting] = useState(false);
   const now = useNow(30_000);
-
-  useEffect(() => {
-    let live = true;
-    let issued = 0;
-    const load = (): void => {
-      const mine = ++issued;
-      void api.fleetHealth().then((h) => { if (live && mine === issued) setHealth(h); }).catch(() => {});
-    };
-    load();
-    const t = setInterval(load, POLL_MS);
-    return () => { live = false; clearInterval(t); };
-  }, []);
 
   // Roster divergence is orthogonal to reachability and is checked FIRST: a
   // fleet host that is up and answering is exactly the state in which the two
@@ -65,6 +65,24 @@ export function FleetHostBanner(): ReactNode {
         <span className="fleet-host-banner-msg">
           This server and the fleet host are projecting different account rosters. Redeploy both
           boxes; if it persists, reconcile <code>~/.ccrc/accounts.json</code> on each.
+        </span>
+      </div>
+    );
+  }
+
+  // A build skew ranks below roster divergence (silent damage already
+  // happening beats a version mismatch) and above the pools-unavailable arm
+  // (a feature absent from the host is a smaller worry than two boxes
+  // running different code).
+  if (health && health.mode === 'remote' && health.connected && health.build === 'skewed') {
+    const name = (b: BuildInfo | null | undefined): string =>
+      b ? `${b.version ?? 'unversioned'} (${b.sha.slice(0, 8)})` : '—';
+    const fleet = health.builds ? ` fleet ${name(health.builds.fleet)} · server ${name(health.builds.own)}.` : '';
+    return (
+      <div className="fleet-host-banner fleet-host-banner--warn" role="status">
+        <span className="fleet-host-banner-msg">
+          The two boxes run different builds.{fleet} Run <code>ccrc rollout</code> from the deploying
+          machine, or <code>ccrc update</code> on the lagging box, fleet box first.
         </span>
       </div>
     );

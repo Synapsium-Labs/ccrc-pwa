@@ -70,17 +70,24 @@ describe('GET /api/fleet/health', () => {
     await app.close();
   });
 
+  it('never emits `builds` in local mode — there is no second box to show', async () => {
+    const app = await buildServer(testDeps());
+    const body = (await app.inject({ method: 'GET', url: '/api/fleet/health' })).json() as Record<string, unknown>;
+    expect('builds' in body).toBe(false);
+    await app.close();
+  });
+
   it('remote mode + connected fleetState reports connected', async () => {
     const app = await buildServer(remoteDeps({}, { connected: true, downSince: null, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: true, downSince: null, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
     await app.close();
   });
 
   it('remote mode + disconnected fleetState surfaces connected:false and downSince', async () => {
     const app = await buildServer(remoteDeps({}, { connected: false, downSince: 1700000000000, ccdVerbs: null, rosterFp: null, build: null }));
     const res = await app.inject({ method: 'GET', url: '/api/fleet/health' });
-    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown' });
+    expect(res.json()).toEqual({ mode: 'remote', connected: false, downSince: 1700000000000, roster: 'unknown', build: 'unknown', projectPools: 'unknown', builds: { own: null, fleet: null } });
     await app.close();
   });
 
@@ -168,8 +175,11 @@ describe('GET /api/fleet — degraded mode', () => {
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
     // its meaning. `listed: false` is the truthful answer for a fixture whose
     // registry root does not list: nobody decides, and that is not `untagged`.
+    // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
+    // was planted in this fixture's home, a real ENOENT `readObservedEpochFromRegistry`
+    // measures and reports honestly, independent of the root listing above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -222,8 +232,10 @@ describe('GET /api/fleet — degraded mode', () => {
     // so the DEGRADED arm's own case — which asserts the key is ABSENT — keeps
     // its meaning. `listed: false` is the truthful answer for a fixture whose
     // registry root does not list: nobody decides, and that is not `untagged`.
+    // `observedEpoch: null` (item 1, wave-1 fix round A) — see the sibling
+    // case above.
     expect(res.json()).toEqual({
-      sessions: [], pools: { listed: false, enforcement: 'unknown' },
+      sessions: [], pools: { listed: false, enforcement: 'unknown', observedEpoch: null, accountPools: 'unknown' },
     });
     await app.close();
   });
@@ -383,8 +395,11 @@ describe('/api/fleet/health: the lifecycle block (build 9)', () => {
     writeFileSync(path.join(home, '.cc-sessions', 'pools', 'demo'), 'pool-a');
     const app = await buildServer(testDeps(home));
     const res = await app.inject({ method: 'GET', url: '/api/fleet' });
+    // `observedEpoch: null` (item 1, wave-1 fix round A): no `$REG/pool-epoch`
+    // was planted in this fixture's home.
     expect(res.json().pools).toEqual({
       listed: true, byProject: { demo: { state: 'tagged', name: 'pool-a' } }, enforcement: 'unknown',
+      observedEpoch: null, accountPools: 'unknown',
     });
     await app.close();
   });

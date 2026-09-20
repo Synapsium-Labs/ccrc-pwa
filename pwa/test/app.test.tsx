@@ -26,7 +26,7 @@ const s = (over: Partial<FleetSession> = {}): FleetSession => ({
 afterEach(() => {
   cleanup();
   navigate('/');
-  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false }));
+  act(() => useFleetStore.setState({ sessions: [], conn: 'connecting', notices: [], blocked: false, pools: null }));
 });
 
 describe('App /archive route', () => {
@@ -119,6 +119,43 @@ describe('App /runs route', () => {
     render(<App />);
     expect(screen.getByRole('heading', { name: /^runs$/i })).toBeInTheDocument();
     expect(document.querySelector('.app-shell')).toHaveAttribute('data-view', 'session');
+  });
+});
+
+// T9-R2 (coordinator ruling closing a Task 9 review gap): FleetScreen's
+// `epoch`/`observedEpoch` props were fully tested but had no real producer —
+// app.tsx is the ONLY place `<FleetScreen>` is rendered, and it passed
+// neither. This proves the wiring off the fleet store's `pools` frame (the
+// one carrier — no second poll), not the indicator's own render logic
+// (fleet-screen.test.tsx already covers that).
+describe('App wires the pools frame\'s epoch/observedEpoch into FleetScreen (T9-R2)', () => {
+  it('renders the staleness chip once the store has a pools frame naming both, and they differ', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: 3 },
+    }));
+    render(<App />);
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed 3');
+  });
+
+  it('renders nothing before any pools frame has arrived — pools stays null', () => {
+    render(<App />);
+    expect(screen.queryByTestId('pool-epoch-lag')).not.toBeInTheDocument();
+  });
+
+  it('renders "never synced" for observedEpoch:null, never a fabricated number', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', epoch: 5, observedEpoch: null },
+    }));
+    render(<App />);
+    expect(screen.getByTestId('pool-epoch-lag')).toHaveTextContent('epoch 5 / observed never synced');
+  });
+
+  it('renders nothing when epoch is absent, even though observedEpoch is a real number', () => {
+    act(() => useFleetStore.setState({
+      pools: { listed: false, enforcement: 'unknown', observedEpoch: 9 },
+    }));
+    render(<App />);
+    expect(screen.queryByTestId('pool-epoch-lag')).not.toBeInTheDocument();
   });
 });
 

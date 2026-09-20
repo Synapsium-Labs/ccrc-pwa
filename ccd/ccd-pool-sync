@@ -1,0 +1,388 @@
+#!/usr/bin/env bash
+set +x   # FIRST LINE OF CODE, and it is a SECRETS control — the box token below.
+# ccd-pool-sync — pull account-pool membership from the control plane.
+#
+# WHY THIS IS A SIBLING EXECUTABLE AND NOT A `ccd` VERB. `ccd/ccd` makes ZERO
+# outbound network calls, and `ccd-account-health` states the doctrine: an HTTP
+# client inside `ccd` would be a new dependency class for every
+# session-supervising path on the box. The design's own rule agrees — `ccd`
+# reads one LOCAL file at placement time and never the network (spec §5.7).
+# So the sync lives here and `ccd` only ever reads what this leaves behind.
+#
+# THE PROJECTION IS A CACHE WITH A GENERATION, NEVER A SOURCE. coord.db on the
+# server box is authoritative; this file is what a node believes right now.
+#
+# ABSENCE AND EMPTINESS ARE DIFFERENT ANSWERS, and keeping them apart is the
+# whole fail-shut. A document with an `epoch` line and no `acct` lines means
+# SYNCED, NOTHING TAGGED. No document at all means NEVER SYNCED, which
+# `_acct_pool_state` reads as `unreadable` -> undecidable -> refuse into a
+# tagged project. That is the cold-node case and the EKS default path.
+#
+# WRITE NOTHING UNLESS THE WHOLE ANSWER ARRIVED. A stale document inside its
+# lease is better than no document; a half-written one is worse than both. So
+# every failure arm exits WITHOUT touching the file, and the write itself is
+# tmp-then-rename.
+#
+# PORTABILITY: no bare `timeout` (curl's own `--max-time` is the deadline), no
+# `stat -c`. `macos-platform.test.ts` is the gate, and it scans this file
+# WHOLE — it carries none of ccd's `# ── THE PLATFORM LAYER` sentinels, so
+# there is no exempt region here the way there is in ccd/ccrc. That is why the
+# final install below is NOT `_plat_mv_notdir`'s own `$(uname -s)` branch
+# (which spells `mv -fT` on its non-Darwin arm — GNU-only, and a bare literal
+# hit under that scan): it is `ccrc-models-probe`'s `_probe_mv_notdir` pattern
+# instead — guard the real-directory case by hand, then hand the rename to
+# python3's `os.rename`, ONE rename(2) syscall on every POSIX platform. That
+# call replaces a symlink-to-directory atomically rather than following it
+# (the trap a bare `mv -f` falls into — measured in ccrc-models-probe's own
+# header) and raises `IsADirectoryError` on a real directory, so the two
+# outcomes agree with `_plat_mv_notdir` (ccd/ccd:152-160) on both its arms
+# without a platform branch of its own.
+set -uo pipefail
+
+REG="$HOME/.cc-sessions"
+AGENT_ENV="$HOME/.ccrc/agent.env"
+TOKEN_FILE="$HOME/.cc-secrets/ccrc-mail.token"
+TIMEOUT="${CCRC_POOL_SYNC_TIMEOUT:-20}"
+say() { printf 'ccd-pool-sync: %s\n' "$1" >&2; }
+
+command -v curl >/dev/null 2>&1 || { say "curl is not on PATH — nothing was synced"; exit 1; }
+command -v python3 >/dev/null 2>&1 || { say "python3 is not on PATH — nothing was synced"; exit 1; }
+
+# GREP, never source: agent.env is 0600 and carries this box's agent bearer.
+[[ -r "$AGENT_ENV" ]] || { say "cannot read $AGENT_ENV"; exit 1; }
+url=$(grep -E '^[[:space:]]*CCRC_SERVER_URL=' "$AGENT_ENV" | tail -n1 | cut -d= -f2- | tr -d '[:space:]')
+[[ -n "$url" ]] || { say "CCRC_SERVER_URL is not set in $AGENT_ENV"; exit 1; }
+# C1 (fix round 1): `ccrc install --role fleet` writes either spelling, and
+# the installer's own prompt (ccd/ccrc:9267) offers `ws://…` FIRST — so
+# without this, the box's own suggested value makes curl refuse the protocol
+# outright (measured: `curl: (1) Protocol "ws" not supported`) and every sync
+# after that is a silent no-op. Copied verbatim from `ccd/ccrc-api:206-207`
+# (`server_url()`), including the trailing-slash trim: a trailing `/` on
+# `$url` would build `.../api//api/pools/epoch`, a different route.
+url="${url/#ws:/http:}"; url="${url/#wss:/https:}"
+url="${url%/}"
+# Minor (fix round 1, my call): this is now the THIRD hand-copy of
+# ccrc-api's URL+token dance (ccd-account-health, ccrc-api itself, this
+# file), and C1 above is the concrete cost of that shape — a fix landing in
+# one copy and not the other two. Not extracting a shared helper in this
+# round: all three are standalone executables specifically so ccd itself
+# never grows a network dependency (this file's own header), so a shared
+# helper would need to be a FOURTH sourced-or-copied file with the same
+# "installed as a copy, cannot source a sibling" constraint ccd/ccrc already
+# carry for the platform block (macos-platform.test.ts pins that reasoning) —
+# real design work, not a fix-round patch, and touching two files this round
+# doesn't own is more blast radius than three findings warrant. Flagging for
+# a follow-up rather than doing it here.
+[[ -r "$TOKEN_FILE" ]] || { say "no readable box token at \$HOME/.cc-secrets/ccrc-mail.token"; exit 1; }
+# The value line, never the `#` comment preamble the file wraps it in.
+tok=$(grep -vE '^[[:space:]]*(#|$)' "$TOKEN_FILE" | head -n1 | tr -d '[:space:]')
+[[ -n "$tok" ]] || { say "the box token file has no value line"; exit 1; }
+
+# Body and status in ONE capture, so there is no response file on disk.
+# `-K -` reads the header from stdin: never argv, never environ.
+out="$(printf 'header = "x-ccrc-mail-token: %s"\n' "$tok" \
+  | curl -sS -K - -o - -w '\n%{http_code}' \
+    --max-time "$TIMEOUT" "$url/api/pools/epoch" 2>/dev/null)"; rc=$?
+tok=""
+if [ "$rc" -ne 0 ]; then
+  # Minor (fix round 1, my call): curl's own stderr is discarded above
+  # (2>/dev/null, so nothing from the response body's transport ever mixes
+  # into a decision this script makes) — which is right, but it left an
+  # operator debugging a dead timer with only a bare exit code, and C1's
+  # whole failure mode WAS a curl exit code (1, unsupported protocol) naming
+  # nothing on its own. Map the common ones to a sentence; anything else
+  # still says the number rather than inventing a wrong guess.
+  case "$rc" in
+    1)  say "unmeasured — curl exited 1 (unsupported protocol — check CCRC_SERVER_URL's scheme in $AGENT_ENV)" ;;
+    6)  say "unmeasured — curl exited 6 (could not resolve host in $url)" ;;
+    7)  say "unmeasured — curl exited 7 (could not connect)" ;;
+    28) say "unmeasured — curl exited 28 (timed out after ${TIMEOUT}s)" ;;
+    *)  say "unmeasured — curl exited $rc" ;;
+  esac
+  exit 1
+fi
+status="${out##*$'\n'}"
+body="${out%$'\n'*}"
+[ "$status" = 200 ] || { say "unmeasured — HTTP $status"; exit 1; }
+
+# THE RENDER IS PYTHON'S, THE VALIDATION IS TOO. A shell-side JSON read here
+# would be the `grep -oE` idiom applied to a nested object, which is what this
+# format exists to spare `ccd` from. Anything off-shape exits non-zero and
+# WRITES NOTHING, so a control plane answering rubbish cannot unconstrain a box.
+#
+# Ruling T1-R3 (mid-flight, after this file's first landing): the document
+# gains a terminator line, the last line exactly `end`. The reader is
+# line-oriented and cannot tell a complete final row from a torn one — a
+# document truncated right after its last `acct` line answers `named <pool>`
+# for that account, a POSITIVE verdict a reader whose own writer is trusted
+# rather than proven cannot close from its own side. Zero `acct` lines is
+# still legal, so the minimum document is `epoch`/`issued`/`lease`/`end`, four
+# lines. `end` is appended to `lines` UNCONDITIONALLY, after every `acct` row
+# (or none), so it lands last regardless of how many accounts were tagged.
+#
+# Also fixed here: at most ONE `acct` row per id. `_acct_pool_state` answers
+# `malformed` for a duplicate id even when the two rows agree, so a control
+# plane that ever attaches two pools to one account must not make this writer
+# render two `acct <id> <pool>` lines for it — that would render a document
+# every fleet node then refuses, 20 undecidable placements for one wrong
+# answer instead of one refusal here where the diagnostic actually is. Wave 1
+# enforces one pool per account server-side, so this is not reachable today;
+# guarded anyway, loudly, because a silent multi-pool render would fail far
+# from its own cause.
+# T3-R1 (fix round 1): RENDER FIRST, THEN VALIDATE THE WHOLE RENDERED
+# DOCUMENT AGAINST THE GRAMMAR, THEN STAGE — a second, independent pass over
+# the OUTPUT TEXT, not a trust that the per-field checks above already cover
+# it. Measured, pre-fix, three ways the per-field checks alone let through:
+# `epoch -1` rendered `epoch -1` (int() takes a negative; %d renders the
+# sign; the reader's `^(0|[1-9][0-9]*)$` refuses it AFTER a good in-lease
+# document was already destroyed to install it); 1200 accounts rendered an
+# 80438-byte file (over the reader's strict `-n 65536` cap, refused the same
+# destructive way); `"pools":"p"` (a bare string, not a list) iterated
+# CHARACTER BY CHARACTER in the `for p in pools` loop, rendering `acct
+# acct-a p` — a tag the control plane never stated, and the reader had no way
+# to tell from a real one. Three different shapes, one root cause: nothing
+# checked the ASSEMBLED text, only the fields going into it. The one thing a
+# per-field check structurally cannot do is see the byte-cap, so a
+# whole-document pass is the only check whose coverage does not depend on
+# remembering to add a case — this DOES restate the grammar in a second
+# language, deliberately: the reader is bash, this is python, there was never
+# going to be one copy, and the writer re-deriving its own reader's grammar
+# and checking the text it is about to install against it is the same
+# "measure, don't echo" discipline the rest of this system already uses.
+rendered=$(printf '%s' "$body" | LC_ALL=C.UTF-8 python3 -c '
+import json, re, sys
+ID = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+NAME = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+NUM = r"(?:0|[1-9][0-9]*)"
+# The reader'"'"'s FULL line grammar, restated: every rendered line must be
+# one of these five shapes, and the check below runs over the JOINED TEXT,
+# split back into lines, not over the `lines` list this script itself built
+# — the point is not trusting the builder, it is checking its output.
+LINE = re.compile(r"^(?:epoch %s|issued %s|lease %s|acct [A-Za-z0-9._-]{1,64} [a-z][a-z0-9-]{0,31}|end)$" % (NUM, NUM, NUM))
+
+def whole_num(name, v):
+    # Cheap input check for a better diagnostic than the whole-document pass
+    # below would give: `type(v) is int` (not `isinstance`) excludes BOTH a
+    # JSON float (int() truncates 43.5 to 43 silently, accepting a value the
+    # control plane never actually sent) and a JSON bool (isinstance(True,
+    # int) is True in Python; `type(True) is int` is not).
+    if type(v) is not int or v < 0:
+        # M1 (fix wave E, item 3rd instance of this class): `v` is
+        # UNVALIDATED here — this branch fires PRECISELY BECAUSE it failed
+        # the check above — same shape as the account-id and pools sites
+        # above, and the same remedy: `trunc_repr` already exists in this
+        # file and already closed those two. Measured against the real
+        # extracted python block: a 1 MB `epoch`/`leaseUntil` used to write
+        # ~1,000,044/~1,000,049 bytes to stderr on every failing 60s tick.
+        raise ValueError("%s must be a non-negative integer, got %s" % (name, trunc_repr(v)))
+    return v
+
+def trunc_repr(v, cap=200):
+    # Fix round 3: a diagnostic exists to be READ, and this one is read off
+    # a journal line on a timer, not a terminal a human sized. `%r` on the
+    # FULL offending value (a control plane could send a pools field that is
+    # a multi-megabyte string, not merely a wrong-shaped one) would put that
+    # whole value into the journal on every failing tick. Bounded the same
+    # way the whole-document pass bounds the rendered document, at a size
+    # meant for a human glance, not for round-tripping the value back out.
+    r = repr(v)
+    return r if len(r) <= cap else r[:cap] + "...(truncated, %d bytes total)" % len(r)
+
+try:
+    d = json.load(sys.stdin)
+    e = whole_num("epoch", d["epoch"])
+    i = whole_num("issuedAt", d["issuedAt"])
+    l = whole_num("leaseUntil", d["leaseUntil"])
+    accts = d["accounts"]
+    if not isinstance(accts, dict): raise ValueError("accounts")
+    lines = ["epoch %d" % e, "issued %d" % i, "lease %d" % l]
+    for k in sorted(accts):
+        # THESE TWO CHECKS ARE THE ONLY THING BETWEEN THE CONTROL PLANE AND
+        # ROW INJECTION. The wire format is line-oriented with NO escaping —
+        # `"\n".join(lines)` trusts every element of `lines` to already be
+        # exactly one safe line. An id or pool value carrying a raw space
+        # would fabricate an extra FIELD on its row; one carrying a raw
+        # newline would fabricate an extra ROW the reader cannot tell from a
+        # real one (an `acct evil-account pool-b` smuggled in this way reads,
+        # to `_acct_pool_state`, as a legitimate line naming a real account).
+        # `.fullmatch`, not `.match` — measured: `re.match(r"...$", "pool-a\n")`
+        # answers True, because Python `$` (no re.MULTILINE) matches not only
+        # true end-of-string but also the position just before a SINGLE
+        # trailing newline. `.match` would let a value of exactly
+        # "<valid-chars>\n" through the character class uncaught; `.fullmatch`
+        # requires the ENTIRE string to lie inside it, closing that quirk (and
+        # was verified against it directly, not assumed from the docs) without
+        # changing what a clean id/pool name matches.
+        #
+        # ONE MUTATION SURVIVOR, disclosed and measured (fix round 2, scope
+        # corrected in fix round 3 — see the paragraph after this one):
+        # `NAME.fullmatch` -> `NAME.match` on the pool check further down
+        # stays GREEN against every test in this suite. Traced by hand and
+        # confirmed by running it: the one value shape `.match` lets through
+        # that `.fullmatch` refuses is "<valid-chars> plus exactly one
+        # trailing newline, nothing else" — and because every `p` that
+        # passes the pool check is appended to `lines` immediately (no code
+        # path validates a pool value without also rendering it in the same
+        # step), that value always reaches `"\n".join(lines)`, and the
+        # embedded newline always fragments the resulting element into two
+        # lines once the document is split back apart, one of them an empty
+        # string (from the resulting double newline) that matches no grammar
+        # alternative — so the whole-document pass independently refuses it
+        # either way. `NAME.fullmatch` and the whole-document pass are
+        # MUTUALLY REDUNDANT against every input shape this suite can
+        # produce for THAT narrow case.
+        #
+        # `ID.fullmatch` -> `ID.match` is a DIFFERENT case, and the fix
+        # round 2 disclosure here was WRONG to lump it in as unpinnable —
+        # corrected in fix round 3, after the coordinator measured the
+        # divergence directly rather than trusting either side'"'"'s
+        # characterisation of it. The id check runs ONCE PER ACCOUNT,
+        # independent of whether `pools` for that account ever renders a
+        # line at all — `accts[k].get("pools", [])` explicitly anticipates
+        # an empty or absent list, which is contract-reachable, not
+        # hypothetical. When `pools` is `[]`, nothing is ever spliced into
+        # `lines` for that account, so the whole-document pass never gets a
+        # malformed line to see: a document simply missing that account
+        # renders as perfectly well-formed. Measured directly against
+        # `{"acct-a\n": {"pools": []}}`: the shipped script refuses it
+        # (the diagnostic names the id, via `.fullmatch`); the `.match` mutant
+        # instead INSTALLS `"epoch 1\nissued 1\nlease 9999999999\nend\n"` —
+        # a document that silently drops the malformed account rather than
+        # refusing the whole response. Against a real fleet node this can
+        # overwrite an in-lease document that said `named <pool>` for that
+        # very account with one where the account now reads `untagged` —
+        # unconstrained. Fail-open, not fail-shut. Pinned below by a
+        # dedicated test: `ID.fullmatch` IS load-bearing on its own here and
+        # stays a plain guard, not a disclosed survivor.
+        #
+        # REAL FINDING, not a survivor (fix round 2, coordinator-caught): a
+        # value shaped as "<valid-chars> <valid-chars>\n<valid-chars>" (an
+        # embedded newline with ORDINARY text, not merely a trailing one, on
+        # each side) can render as TWO WELL-FORMED `acct <id> <pool>` lines
+        # once split — e.g. `k = "acct-a pool-b\nacct evil-account"` with
+        # `pools: ["pool-a"]` renders `"acct acct-a pool-b\nacct evil-account
+        # pool-a"`, which splits into `"acct acct-a pool-b"` (harmless) and
+        # `"acct evil-account pool-a"` — a FORGED row for an account the
+        # control plane never named, and both halves indistinguishable from
+        # real rows to the whole-document pass, which only checks each split
+        # line'"'"'s OWN grammar and cannot see that it used to be one field.
+        # THIS is the case where `ID.fullmatch`/`NAME.fullmatch` are the
+        # SOLE defense — deleting either check ENTIRELY (not merely
+        # weakening it to `.match`) reds the corresponding test, measured.
+        if not ID.fullmatch(k):
+            # C-B (fix wave B, item 13): `k` is UNVALIDATED here — this is
+            # the branch that fires precisely because it failed `ID.fullmatch`
+            # — so an untrusted 1 MB id would otherwise write a
+            # ~1,000,114-byte journal line every failing tick. `trunc_repr`
+            # already exists in this file for exactly this; the id is one of
+            # the two values this script exists to distrust.
+            raise ValueError("account id %s" % trunc_repr(k))
+        acct = accts[k]
+        if not isinstance(acct, dict): raise ValueError("account %r must be an object" % k)
+        pools = acct.get("pools", [])
+        if not isinstance(pools, list):
+            raise ValueError("account %r pools must be a list, got %s" % (k, trunc_repr(pools)))
+        if len(pools) > 1:
+            raise ValueError("account %r carries %d pools, at most one is supported" % (k, len(pools)))
+        for p in pools:
+            # MUTATION SURVIVOR, disclosed and measured, and unpinnable BY
+            # CONSTRUCTION against any input this script can ever receive
+            # (fix round 2): `isinstance(p, str)` can be deleted here with
+            # the suite green, including against a dedicated test supplying
+            # `"pools": [123]`. Reason: `json.load` can only ever produce
+            # str, int, float, bool, None, list or dict for `p` — never
+            # bytes — and `NAME.fullmatch(p)` on any of the non-str shapes
+            # raises `TypeError: expected string or bytes-like object`
+            # itself, which the outer `except Exception` catches exactly
+            # like the `ValueError` this line raises on purpose. So for
+            # EVERY value JSON can decode, `NAME.fullmatch(p)` alone already
+            # refuses a non-string `p` — `isinstance(p, str)` changes the
+            # exception TYPE and the diagnostic TEXT (a clean "pool 123"
+            # instead of a raw TypeError string), never the outcome (exit
+            # non-zero, nothing written). Kept for the diagnostic, not
+            # because it is load-bearing for safety.
+            if not isinstance(p, str) or not NAME.fullmatch(p):
+                # C-B (fix wave B, item 13): `p` is UNVALIDATED here, same
+                # shape as the account id above — an untrusted 1 MB pool
+                # value would otherwise write a ~1,000,114-byte journal line
+                # every failing tick. `trunc_repr` on an int still prints the
+                # same "pool 123" the comment above promises; only a
+                # runaway string is bounded.
+                raise ValueError("pool %s" % trunc_repr(p))
+            lines.append("acct %s %s" % (k, p))
+    lines.append("end")
+    doc = "\n".join(lines) + "\n"
+
+    # THE WHOLE-DOCUMENT PASS. Runs over `doc` — the actual bytes about to be
+    # staged — not over `lines`, so a defect in how `lines` was assembled
+    # (not merely in what went into each element) is still caught here.
+    encoded = doc.encode("utf-8")
+    if len(encoded) >= 65536:
+        raise ValueError("rendered document is %d bytes, at or over the reader'"'"'s 65536-byte cap" % len(encoded))
+    body_lines = doc.split("\n")
+    if body_lines and body_lines[-1] == "":
+        body_lines = body_lines[:-1]   # doc always ends in exactly one \n
+    # MUTATION SURVIVOR, disclosed and measured (fix round 3, previously
+    # undisclosed and sitting inside the NEXT comment'"'"'s block where a
+    # reader would wrongly assume it was already covered): this check can
+    # also be deleted with the suite green, on the same 12 payloads probed
+    # for the loop below and for the same reason — `lines.append("end")`
+    # above runs UNCONDITIONALLY, so every document this renderer ever
+    # builds already ends with "end" by construction, and there is no path
+    # through this function that reaches here without it. Kept as the same
+    # kind of backstop as the loop immediately below: against a future
+    # change to the builder that stops guaranteeing the terminator, which by
+    # definition has no test yet. This comment and the one on the loop below
+    # are two SEPARATE disclosures, each naming its own check, not one
+    # disclosure covering both by proximity.
+    if not body_lines or body_lines[-1] != "end":
+        raise ValueError("rendered document'"'"'s last line is not exactly \"end\"")
+    # MUTATION SURVIVOR, disclosed and measured, and unpinnable BY
+    # CONSTRUCTION for the reason that matters most (fix round 2): this
+    # `for` loop can be deleted entirely with the suite green — every
+    # negative/float/bool epoch-issued-lease case this suite exercises is
+    # already refused earlier by `whole_num()`, and every id/pool-grammar
+    # case is already refused earlier by `ID.fullmatch`/`NAME.fullmatch`.
+    # It is not dead code: it is a BACKSTOP against a field added to this
+    # renderer LATER without its own validation — a bug that, by
+    # definition, has no test yet, because nobody has written the bug. A
+    # test proving this loop catches the fields defined so far is a test proving the
+    # field-level checks are duplicated, not a test proving the backstop
+    # works; the backstop'"'"'s actual job is unpinnable by the same
+    # construction that makes it worth keeping. "Defence in depth" alone
+    # would not justify shipping an unpinned guard — this reason does.
+    for ln in body_lines:
+        if not LINE.fullmatch(ln):
+            raise ValueError("rendered line is off-grammar: %r" % ln)
+
+    sys.stdout.write(doc)
+except Exception as ex:
+    # Fix round 3: a trailing newline, previously missing — without it the
+    # next line'"'"'s own `say "unmeasured -- ..."` (bash side, below) runs
+    # into this one on the SAME journal line, e.g. "pool 123ccd-pool-sync:
+    # unmeasured -- ...". These failures only ever surface as journal lines
+    # off a timer, so a diagnostic nobody can read is worth as little as no
+    # diagnostic at all.
+    sys.stderr.write(str(ex) + "\n"); sys.exit(1)
+') || { say "unmeasured — the control plane answered a document this reader does not recognise"; exit 1; }
+
+mkdir -p -- "$REG" || { say "could not create $REG"; exit 1; }
+# Tmp then rename. A SIGKILL between the two leaks one dot-leading tmp, the
+# disclosed price `_reg_set` also discloses, and every reader skips
+# dot-leading entries. `2>/dev/null` BEFORE `>` so the OPEN's own failure is
+# caught too, not just printf's runtime write errors. `'%s\n'`, not `'%s'`:
+# `$( )` above already stripped `$rendered`'s own trailing newline, and
+# writing it back with `%s` alone would install a document one newline short
+# of `_acct_pool_state`'s own `while read -r line || [[ -n "$line" ]]` —
+# still parseable, but not byte-identical to what a hand-built fixture or a
+# byte-count check expects, so the newline is put back explicitly rather than
+# left to chance.
+tmp="$REG/.pool-epoch.$$.tmp"
+printf '%s\n' "$rendered" 2>/dev/null > "$tmp" \
+  || { rm -f -- "$tmp"; say "could not stage the projection — it is UNCHANGED"; exit 1; }
+if [ ! -L "$REG/pool-epoch" ] && [ -d "$REG/pool-epoch" ]; then
+  rm -f -- "$tmp"; say "a directory sits at $REG/pool-epoch"; exit 1
+fi
+python3 -c 'import os, sys; os.rename(sys.argv[1], sys.argv[2])' "$tmp" "$REG/pool-epoch" \
+  || { rm -f -- "$tmp"; say "could not install the projection"; exit 1; }
+exit 0

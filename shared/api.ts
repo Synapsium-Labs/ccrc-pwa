@@ -1,12 +1,16 @@
 // Shared API types — single source of truth between ccrc-server and the PWA.
 //
-// The one import in this file, and the only kind it may ever have: a TYPE from
-// a sibling in `shared/`, which erases at build time. `shared/` is L0 (the
-// architecture doc) — it bundles into the PWA, so it imports no runtime module
-// and nothing from `node:*`. `Hue` belongs to the roster's own file because
-// `parseRoster` is what validates and auto-assigns it; `RosterWire` below only
-// carries it.
+// The only kind of import this file may ever have: a TYPE from a sibling in
+// `shared/`, which erases at build time. `shared/` is L0 (the architecture
+// doc) — it bundles into the PWA, so it imports no runtime module and nothing
+// from `node:*`. `Hue` belongs to the roster's own file because `parseRoster`
+// is what validates and auto-assigns it; `RosterWire` below only carries it.
+// `AccountPoolWire` and `BuildInfo` belong to their decision/parser files for
+// the parallel reason: this file carries their shapes but does not redefine
+// them.
 import type { Hue } from './roster.js';
+import type { AccountPoolWire } from './poolrule.js';
+import type { BuildInfo } from './buildinfo.js';
 
 export type SessionStatus = 'busy' | 'idle' | 'dead';
 
@@ -1976,8 +1980,47 @@ export type PoolsEnforcement = 'enforced' | 'unavailable' | 'unknown';
  * `divergence` frame already makes for itself.
  */
 export type ProjectPoolsWire =
-  | { listed: true; byProject: Record<string, ProjectPoolWire>; enforcement: PoolsEnforcement }
-  | { listed: false; enforcement: PoolsEnforcement };
+  | {
+      listed: true; byProject: Record<string, ProjectPoolWire>; enforcement: PoolsEnforcement;
+      /** Whether the fleet's `ccd` honours ACCOUNT pools — the same three-state
+       *  version-skew channel as `enforcement`, sourced from `_acct_pool_state`'s
+       *  presence in `ccd caps`. ABSENT on an older server, which reads `unknown`. */
+      accountPools?: PoolsEnforcement;
+      /** T9-R2: the control plane's current account-pool epoch
+       *  (`CoordStore.poolEpoch()`, `server/src/coord/store.ts`; the same
+       *  number `GET /api/pools/epoch` answers), carried on THIS frame
+       *  instead of a second poll — Task 9's staleness indicator reads it
+       *  alongside `observedEpoch` below. ABSENT when this server has no
+       *  coordinator wired (`deps.coord` unset, e.g. local mode) — never a
+       *  fabricated `0`, though `0` is itself a legitimate epoch (the
+       *  migration-seeded default) and must survive as a real value. */
+      epoch?: number;
+      /** What THIS connected fleet node reported it actually holds
+       *  (`FleetState.observedEpoch`, `server/src/fleetstate.ts`, populated
+       *  from the agent's `ready` handshake, `server/src/remote/client.ts`).
+       *  THREE answers, and no reader may fold one into another: ABSENT (the
+       *  key itself missing) means "this build/agent cannot tell you" — an
+       *  older agent that predates the field, or no `FleetState` at all;
+       *  `null` means the node has never synced; a number is the epoch it
+       *  holds, INCLUDING `0`. `epoch === observedEpoch` is a staleness
+       *  signal only ("the fleet has pulled since the last central change"),
+       *  never a health one — a node past its lease still reports a number
+       *  while `ccd` refuses every tagged placement, and since a
+       *  DECLARED-only pool change moves the document without moving
+       *  `epoch`, equality does not even mean the document matches. See
+       *  `FleetState.observedEpoch`'s own docstring. */
+      observedEpoch?: number | null;
+    }
+  | {
+      listed: false; enforcement: PoolsEnforcement;
+      /** See the `listed: true` arm's `accountPools` — same field, same fold. */
+      accountPools?: PoolsEnforcement;
+      /** See the `listed: true` arm's `epoch` — same field, same fold. */
+      epoch?: number;
+      /** See the `listed: true` arm's `observedEpoch` — same field, same
+       *  three-valued fold. */
+      observedEpoch?: number | null;
+    };
 
 /** Fold one skill's answer across every rostered HOME. A proven absence
  *  anywhere dominates; a home we could not read downgrades a clean sweep to an
@@ -3138,6 +3181,16 @@ export interface FleetHealth {
    */
   build?: BuildAgreement;
   /**
+   * The EVIDENCE beside the decision (release/rollout design §6): what THIS
+   * box's stamp says and what the fleet host's stamp said on its last
+   * `ready`, each `null` when that side has no readable stamp. `build`
+   * above still decides — a reader renders `skewed`/`agreed`/`unknown`
+   * from it and uses these only to SAY which versions are involved
+   * (`version` is optional per `BuildInfo`; a deploy.sh stamp has none).
+   * Remote mode only, optional so an older server's response still parses.
+   */
+  builds?: { own: BuildInfo | null; fleet: BuildInfo | null };
+  /**
    * Whether the fleet host's deployed `ccd` HONOURS project pools — the verb
    * `ccd project-pool` present in its `caps` list (account pools, spec §5.11).
    * One `ccd` inode ships the verb and every reader, so the verb's presence IS
@@ -3480,6 +3533,24 @@ export interface RosterWire {
    *  compiler is the only thing that can catch a field-by-field rebuild
    *  dropping one. */
   pool: string | null;
+  /** The RESOLVED membership — central beats declared beats untagged (design
+   *  §5.6), folded in SERVER-SIDE (account-pool-membership wave 1, T7-R2, D-3076).
+   *  `pool` above is the declared carrier alone; this is what `POST
+   *  /api/sessions`/`POST /api/sessions/:id/swap`'s `refusePool` pre-check
+   *  actually decides from — a UI that computed its own crossing warning from
+   *  `pool` (the declared field) would contradict the server the moment a
+   *  central `pool_edges` row exists for this account. THE SERVER HOLDS BOTH
+   *  CARRIERS; A READER SHOULD HOLD ONE — `resolvedAccountPool`
+   *  (`server/src/poolrule.ts`) is the one function that folds the precedence,
+   *  shared with `poolVerdict`'s own central-edge branch so the two can never
+   *  disagree about what a central row means.
+   *
+   *  ADDITIVE, `FLEET_PROTO` not bumped, on `hidden`'s exact terms: OPTIONAL
+   *  so an older server's payload (this field absent) still type-checks, and
+   *  a reader falls back to the declared `pool` field only when this key is
+   *  absent — never when its `state` merely disagrees with `pool`, which is
+   *  the live, correct case this field exists to carry. */
+  resolvedPool?: AccountPoolWire;
 }
 
 /**
@@ -5988,6 +6059,34 @@ export const RUN_ROUTE_REFUSE_CODES = [
 export type RunRouteRefuseCode = (typeof RUN_ROUTE_REFUSE_CODES)[number];
 export function isRunRouteRefuseCode(v: unknown): v is RunRouteRefuseCode {
   return typeof v === 'string' && (RUN_ROUTE_REFUSE_CODES as readonly string[]).includes(v);
+}
+
+/** Account-pool membership (design 2026-09-18 §5.2), task 6 fix round 2 — the
+ *  NINTH refusal vocabulary `mail-routes.test.ts`'s scanner checks together
+ *  and never merges into `RunRefuseCode` or any sibling, on the standing rule
+ *  every union above states: `CoordStore.setAccountPools` (`store.ts`) refuses
+ *  synchronously to its caller — nothing is recorded, nothing replays — so its
+ *  one member is neither a mail rejection nor a run refusal. Declared here,
+ *  not as a bare string literal in `server/src/coord/store.ts`, for the exact
+ *  reason `PROGRAM_KICKOFF_SUBJECT`'s docstring gives a few screens up: no
+ *  hyphenated literal under `server/src/coord` for that scanner to arbitrate.
+ *  A single-member `as const` array today because wave 1 has exactly one
+ *  refusal; the array (not a bare string type) is what lets a second member
+ *  join later without this becoming a second hand-written union.
+ *
+ *    multi-pool-not-supported — the caller asked to tag an account into more
+ *                                than one pool. Refused before `PoolEdgeLog`'s
+ *                                `maxEpoch()`/`append()` ever run, so a
+ *                                refused write leaves no journal line and
+ *                                opens no transaction. `pool_edges_one_per_
+ *                                account`'s own partial unique index is the
+ *                                same rule enforced a second way, in SQL,
+ *                                should a caller ever reach the store some
+ *                                other route than this method. */
+export const SET_ACCOUNT_POOLS_REFUSE_CODES = ['multi-pool-not-supported'] as const;
+export type SetAccountPoolsRefuseCode = (typeof SET_ACCOUNT_POOLS_REFUSE_CODES)[number];
+export function isSetAccountPoolsRefuseCode(v: unknown): v is SetAccountPoolsRefuseCode {
+  return typeof v === 'string' && (SET_ACCOUNT_POOLS_REFUSE_CODES as readonly string[]).includes(v);
 }
 
 /** How long a `planned` run may carry a `dispatchStartedAt` before the

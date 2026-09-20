@@ -13,10 +13,11 @@ import { CLASSES, type ModelClass } from '../../../shared/models';
 import { Sheet } from '../components/Sheet';
 import { Skeleton } from '../components/Skeleton';
 import { toast } from '../components/Toast';
-import { accountLabel, accountPool } from '../lib/accounts';
+import { accountLabel, accountPool, accountPoolState } from '../lib/accounts';
 import { api, apiErrorText } from '../lib/api';
 import { effortOptions, modelOptions } from '../lib/models';
 import { poolSide } from '../lib/pools';
+import { declaredAccountPool } from '../../../shared/poolrule';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import {
   AccountRow,
@@ -183,7 +184,15 @@ export function NewSessionSheet({
   // At step 2 the account is fixed, so split the projects that account may take.
   // An absent or undecidable project pool is offered plainly; only a measured
   // mismatch requires disclosure and an explicit crossing override.
-  const wrapperPool = wrapper === null ? null : accountPool(roster, wrapper);
+  //
+  // Item 6 (I4, wave-1 fix round A): `poolSide` now takes the account's full
+  // `AccountPoolWire`, not a name — `accountPoolState` (not `accountPool`)
+  // is what keeps an `unreadable`/`malformed`/`stale` account from arriving
+  // here already narrowed to `null` and reading as `untagged` -> eligible.
+  // No wrapper picked yet is `declaredAccountPool(null)`, the same untagged
+  // probe `splitByPool` uses — "nobody chosen" and "chosen but untagged"
+  // both mean "nothing to constrain by" for this split.
+  const wrapperPool = wrapper === null ? declaredAccountPool(null) : accountPoolState(roster, wrapper);
   const poolClass = (candidate: ProjectRow) => poolSide(wrapperPool, candidate.pool ?? null);
   const isCrossing = (candidate: ProjectRow): boolean => poolClass(candidate) === 'crossing';
   const inPool = matching.filter((candidate) => poolClass(candidate) !== 'crossing');
