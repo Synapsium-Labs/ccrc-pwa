@@ -403,6 +403,20 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
   let keySeq = 0;
   const timers = new Map<string, ReturnType<typeof setTimeout>>();
 
+  /** Arm a deadline for `key`, disarming whatever this key had before.
+   *
+   *  A bare `timers.set` replaces the MAP ENTRY and leaves the old
+   *  `setTimeout` running — and that stray timer still holds this key, so when
+   *  it fires it deletes a pending that a re-send has since put back in
+   *  flight. That is the "my message vanished while waiting" defect arriving
+   *  through the rescue path, which is why both arming sites go through here
+   *  rather than remembering to clear first. */
+  const arm = (key: string, ms: number, fn: () => void): void => {
+    const prev = timers.get(key);
+    if (prev !== undefined) clearTimeout(prev);
+    timers.set(key, setTimeout(fn, ms));
+  };
+
   const store = create<SessionState>()((set, get) => {
     // Api accepted the prompt but no echo event arrived, even after the long
     // QUEUED horizon: retire it. Abandoning the pending abandons its object
@@ -422,14 +436,13 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
     // possibly echo inside `confirmTimeoutMs`) — then arm STAGE TWO, the long
     // retirement deadline above.
     const markQueued = (key: string): void => {
-      timers.delete(key);
       set((s) => {
         const p = s.pending.find((x) => x.key === key);
         if (!p || p.state !== 'sending') return {};
         return { pending: s.pending.map((x) => (x.key === key ? { ...x, queued: true } : x)) };
       });
       if (get().pending.some((x) => x.key === key && x.state === 'sending')) {
-        timers.set(key, setTimeout(() => expireConfirmed(key), queuedTimeoutMs));
+        arm(key, queuedTimeoutMs, () => expireConfirmed(key));
       }
     };
 
@@ -440,7 +453,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
     ): Promise<void> => {
       try {
         await apiImpl.prompt(id, text, opts);
-        timers.set(key, setTimeout(() => markQueued(key), confirmTimeoutMs));
+        arm(key, confirmTimeoutMs, () => markQueued(key));
       } catch (e) {
         const { error, code, draft, submittable } = failureOf(e);
         set((s) => ({

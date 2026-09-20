@@ -706,6 +706,30 @@ describe('a queued send', () => {
     expect(store.getState().pending[0]?.queued).toBeUndefined();
     expect(store.getState().pending.every((p) => !(p.state === 'failed' && p.queued === true))).toBe(true);
   });
+
+  // Review finding (Critical, reproduced): a bare `timers.set` replaces the
+  // MAP ENTRY but leaves the previous cycle's `setTimeout` running. A re-send
+  // through `resolve()`/`retry()` used to arm a fresh deadline without
+  // disarming the superseded one — so the OLD deadline still fired, found the
+  // freshly re-sent pending back in `state: 'sending'`, and deleted it. The
+  // operator's message vanishes while waiting — the defect this task exists
+  // to remove, arriving through the rescue path. `arm()` fixes it by clearing
+  // whatever timer a key already held before installing the new one.
+  it('a re-send disarms the deadline its previous attempt left behind', async () => {
+    vi.useFakeTimers();
+    const prompt = vi.fn().mockResolvedValue(undefined);
+    const store = createSessionStore('s8', { api: { prompt }, confirmTimeoutMs: 50, queuedTimeoutMs: 100 });
+    await store.getState().send('hello');
+    vi.advanceTimersByTime(60);                    // queued; the long deadline is armed
+    const key = store.getState().pending[0]!.key;
+    store.getState().resolve(key, 'hello again', { replaceDraft: true });
+    await Promise.resolve();                       // let the re-dispatch settle
+    vi.advanceTimersByTime(120);                   // past the SUPERSEDED deadline
+    // The old cycle's timer must not delete a pending that is legitimately in
+    // flight again — that is the very defect this task exists to remove,
+    // arriving through the rescue path.
+    expect(store.getState().pending).toHaveLength(1);
+  });
 });
 
 // — session store: connection —
