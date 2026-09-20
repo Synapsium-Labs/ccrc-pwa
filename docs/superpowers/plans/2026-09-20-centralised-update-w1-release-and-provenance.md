@@ -45,6 +45,9 @@ Plan-level departures from the spec's literal text — the ten found while plann
 - **D-3127** — `release.yml`'s "Name the provenance bundle" step gains a guard before the `cp` the brief's Step 5 text specified bare: `[ -f "release-out/ccrc-$GITHUB_REF_NAME.tar.gz" ]`, refusing (`exit 1`) when the tarball `build-release.sh` actually named (from `git tag --points-at HEAD`) disagrees with `$GITHUB_REF_NAME`. A commit carrying two release-shaped tags — a hand-cut `v0.1.0` landing on a commit `release-main` already auto-tagged `v0.0.9` — would otherwise ship a bundle named after the tag that triggered the run beside a tarball named after a different tag, with nothing to catch the mismatch. If this refusal is itself wrong, the cost is a hand-cut tag on a doubly-tagged commit failing its run (a re-runnable, release-less tag, the same shape as any other failed `release.yml` run) instead of publishing — the safe direction, never a silent bad pairing.
 - **D-3128** — Task 4's brief had `deploy/release-stable.sh`'s already-stable path (`isPrerelease=false`) print `already stable <tag>` and exit 0 with no read-back at all; it now reads latest there too, and — when latest names another tag — issues the single `--latest` edit and re-reads before returning, converging to stable-and-latest rather than stopping at stable-only. The brief's own "re-run" remedy on a failed `--latest` edit was unreachable: a re-run hits exactly that early return, printing `already stable` and exiting 0 without ever finishing the promotion, so "stable and latest" and "stable but latest still points elsewhere" collapsed into the same exit 0 — and `latest/download` is what a node's update resolves against. Idempotent now means converging to the promoted state, matching D-3127's direction (every mismatch between what a tag names and what governs resolution gets a guard, not a silent pass-through). If this is wrong, the cost is an extra `gh api`/`gh release edit` round-trip on an already-converged release — cheap — traded against the alternative, a `stable` push that reports success while a node's update still resolves the previous release.
 - **D-3129** — `deploy/release-stable.sh`'s tag lookup (`git tag --points-at HEAD | grep -E "$SHAPE" | head -n1`) picked the lexicographically first release-shaped tag when HEAD carries more than one, the exact doubly-tagged-commit shape D-3127 names (a hand-cut `v0.1.0` on a commit `release-main` already auto-tagged `v0.0.9`) — silently promoting `v0.0.9` and making it latest, exit 0, with the intended `v0.1.0` release left an un-promoted prerelease. It now collects every release-shaped tag at HEAD and refuses (exit 2, naming all of them) unless there is exactly one; a promotion names one release, and guessing is worse than asking the operator to delete the tag that isn't the release. If this is wrong, the cost is a doubly-tagged `stable` push refusing outright (re-runnable once the extra tag is deleted) instead of promoting a guessed-at release — the safe direction, never a silent wrong promotion.
+- **D-3130** — Task 7 Step 4: the ruleset spec §4 and this plan prescribed for `stable` carried `required_linear_history` ("the rule that forbids merge commits"). GitHub evaluates that rule over every commit a push brings to the ref, and a branch creation brings `main`'s whole history, which holds 190 merge commits — the first promotion was refused (`GH013 … This branch must not contain merge commits`, naming `f6fb08f2`), and any later fast-forward carrying a merge-committed PR would be refused the same way. Ruleset 23740920 now carries `non_fast_forward` + `deletion` only, which is what "fast-forward-only" means; the property the rule was meant to buy — nothing but a released `main` commit is ever promoted — is held by `deploy/release-stable.sh` refusing any HEAD without exactly one release tag (a merge commit carries none). README, the script's header and the workflow's comment are corrected in the same commit, and the Task 4–6 snapshots in this plan with them. Cost if wrong: a merge commit pushed straight at `stable` is refused by the script (exit 2, no promotion) instead of by GitHub — the same outcome one hop later.
+- **D-3131** — Task 8 pins `@sigstore/verify@^3.1`, `@sigstore/bundle@^4.0` and `@sigstore/protobuf-specs@^0.5` instead of the newest majors this plan named (verify 4.1.2 / bundle 5.0.0 / protobuf-specs 0.5.2): the v4/v5 majors declare `engines.node ^22.22.2 || ^24.15.0`, and the fleet box runs node 24.14.1 (so does the box this plan is executed from); the repo floor stays `>=22.13.0`. The implementer measures v3's export names (`Verifier`, `toSignedEntity`, `toTrustMaterial` were measured on 4.1.2, not on 3.x) instead of trusting this plan's. Cost if wrong: an older major whose API differs from the spike's — measured at Task 8, never assumed.
+- **D-3132** — the no-tag-fixture deviation, minted at Task 8's dispatch: the `release-tag.*` fixture is absent because Task 7 Step 5 (the operator's `v0.1.0` atomic push) is undecided — not declined — at the moment Task 8 is written. The two `release.yml`-identity cases are written and wrapped in a `describe` guarded by `existsSync(RELEASE_TAG_META)`; never `it.skip`. The plan's presence case (`expect(present…).toBe(true)`, red-by-design while the fixture is absent) is replaced, because a red case in `test (server)` is a red required check and `main`'s protection enforces it for admins too — PR 2 could never merge: the case now passes trivially when the fixture is present and, when it is absent, asserts that THIS plan's text names `D-3132` beside the fixture's filename, so the absence is green only while it is recorded, and deleting the record reds the tree. When a `release.yml`-signed bundle exists (`v0.1.0` or any later hand-cut tag), the fixture is added and the guard lifts by itself. Cost if wrong: two cases that assert nothing until the fixture lands, visible as a deviation rather than as a red.
 
 ## Spike record (Task 1 fills this in; nothing below is assumed)
 
@@ -1065,10 +1068,10 @@ Expected: FAIL — `copyFileSync` throws, `deploy/release-stable.sh` does not ex
 # strings claiming one version, and the promoted one is the one nobody ran.
 #
 # THE TAG AT HEAD IS THE WHOLE INPUT. `stable` is fast-forward-only (its
-# ruleset requires linear history), so its HEAD is always a commit that was
-# on main and was released there by release-main.sh; a merge commit carries
-# no release tag and is refused here (exit 2) — "promote a tree nobody
-# built" is unexpressible. The ruleset is the other half of the enforcement.
+# ruleset refuses force pushes and deletion — not merge commits: main's own
+# history carries them, D-3130), so what lands here is a commit that was on
+# main; a merge commit carries no release tag and is refused here (exit 2) —
+# "promote a tree nobody built" is unexpressible. THIS script is that guard.
 #
 # TWO EDITS, NOT ONE: the REST doc says drafts and prereleases cannot be set
 # as latest, and one PATCH carrying both fields would be validated against a
@@ -1198,8 +1201,8 @@ Expected: FAIL — ENOENT.
 # 2026-09-20 §4, decision 3). Thin: deploy/release-stable.sh owns the tag
 # lookup, the two flag flips and the read-back, and is tested locally
 # (server/test/release-stable.test.ts). No build step, no node — nothing
-# here can produce bytes. The branch's ruleset (linear history, no force
-# push) is the other half: a merge commit never reaches this HEAD.
+# here can produce bytes. The branch's ruleset (no force push, no deletion;
+# D-3130) keeps it fast-forward; the script refuses an untagged merge HEAD.
 name: release-stable
 
 on:
@@ -1270,8 +1273,8 @@ that carries the tag as `version`. Designs: `2026-09-18-release-rollout-design.m
 **Channels: every release is born `dev`; `stable` is a promotion.** A release's `prerelease` flag IS
 its channel — `dev` while set, `stable` once cleared — and its bytes never change. Promotion is a
 fast-forward push of a released commit to the `stable` branch (`git push origin <tag>^{commit}:refs/heads/stable`
-from any checkout with the tag fetched; the branch's ruleset requires linear history and refuses force
-pushes, so a merge commit cannot land there), which runs `release-stable.yml` → `deploy/release-stable.sh`:
+from any checkout with the tag fetched; the branch's ruleset refuses force pushes and deletion (D-3130) and
+the script refuses an untagged merge HEAD), which runs `release-stable.yml` → `deploy/release-stable.sh`:
 `gh release edit <tag> --prerelease=false`, then `--latest`, then a read-back of `releases/latest`.
 Never a build — a rebuild would be a different `build.json`, a different digest, bytes nobody ran.
 Demotion is `gh release edit <tag> --prerelease` by hand, and moves no box: a node keeps what it runs
@@ -1337,14 +1340,14 @@ Expected: `true`, and three assets — `ccrc-<tag>.tar.gz`, `SHA256SUMS`, `ccrc-
 
 - [ ] **Step 4: Create `stable` and its ruleset (operator; admin on the repo)**
 
-The branch must be created at a commit whose tree CONTAINS `release-stable.yml` — the merge commit of PR 1 is the first such commit, and it is also the commit `MAIN_TAG` released, so this first push is also the first promotion:
+The branch must be created at a commit whose tree CONTAINS `release-stable.yml` — the merge commit of PR 1 is the first such commit, and it is also the commit `MAIN_TAG` released, so this first push is also the first promotion. The ruleset carries no `required_linear_history` (D-3130):
 
 ```bash
 git fetch origin --tags
 gh api -X POST 'repos/{owner}/{repo}/rulesets' --input - <<'JSON'
-{"name":"stable: linear history, no force push, no deletion","target":"branch","enforcement":"active",
+{"name":"stable: no force push, no deletion","target":"branch","enforcement":"active",
  "conditions":{"ref_name":{"include":["refs/heads/stable"],"exclude":[]}},
- "rules":[{"type":"required_linear_history"},{"type":"non_fast_forward"},{"type":"deletion"}]}
+ "rules":[{"type":"non_fast_forward"},{"type":"deletion"}]}
 JSON
 git push origin "$MAIN_TAG^{commit}:refs/heads/stable"
 gh run watch "$(gh run list -b stable -w release-stable --limit 1 --json databaseId --jq '.[0].databaseId')"

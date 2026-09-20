@@ -439,9 +439,9 @@ that carries the tag as `version` (`ccrc version` prints it; `/health` emits a s
 **Channels: every release is born `dev`; `stable` is a promotion.** A release's `prerelease` flag IS
 its channel — `dev` while set, `stable` once cleared — and its bytes never change. Promotion is a
 fast-forward push of a released commit to the `stable` branch (`git push origin <tag>^{commit}:refs/heads/stable`
-from any checkout with the tag fetched; the branch's ruleset requires linear history and refuses force
-pushes, so a merge commit cannot land there, and the script itself refuses a HEAD carrying more than
-one release tag), which runs `release-stable.yml` → `deploy/release-stable.sh`: `gh release edit <tag>
+from any checkout with the tag fetched; the branch's ruleset refuses force pushes and deletion, and
+the script refuses a HEAD that carries no release tag or more than one — a merge commit carries none, so
+it cannot be promoted; D-3130 says why there is no linear-history rule), which runs `release-stable.yml` → `deploy/release-stable.sh`: `gh release edit <tag>
 --prerelease=false`, then `--latest`, then a read-back of `releases/latest` — an already-stable release
 still gets that read-back, and one more `--latest`, when latest names another tag. Never a build — a
 rebuild would be a different `build.json`, a different digest, bytes nobody ran. Demotion is `gh

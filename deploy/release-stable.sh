@@ -6,10 +6,10 @@
 # strings claiming one version, and the promoted one is the one nobody ran.
 #
 # THE TAG AT HEAD IS THE WHOLE INPUT. `stable` is fast-forward-only (its
-# ruleset requires linear history), so its HEAD is always a commit that was
-# on main and was released there by release-main.sh; a merge commit carries
-# no release tag and is refused here (exit 2) — "promote a tree nobody
-# built" is unexpressible. The ruleset is the other half of the enforcement.
+# ruleset refuses force pushes and deletion — not merge commits: main's own
+# history carries them, D-3130), so what lands here is a commit that was on
+# main; a merge commit carries no release tag and is refused here (exit 2) —
+# "promote a tree nobody built" is unexpressible. THIS script is that guard.
 # D-3129: HEAD may carry MORE THAN ONE release-shaped tag (e.g. an
 # auto-tagged patch sitting on the same commit as a hand-cut minor) — a
 # `head -n1` over `git tag --points-at HEAD` would silently promote
