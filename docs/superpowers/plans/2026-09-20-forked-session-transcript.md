@@ -499,7 +499,33 @@ describe('TranscriptResolver and the fork', () => {
     const r = new TranscriptResolver(localIO);
     expect(await r.resolve(opts(b, A))).toMatchObject({ path: own, uuid: A });
     appendFileSync(own, marker(A, B), 'utf8');
+    // ONE POLL IS NOT ENOUGH, deliberately: the poll that SEES the change only
+    // records it. A file still being written cannot carry a terminal marker,
+    // and re-reading it every tick is a bill `watch.ts` already pays once.
+    expect(await r.resolve(opts(b, A))).toMatchObject({ path: own, uuid: A });
     expect(await r.resolve(opts(b, A))).toMatchObject({ path: to, uuid: B });
+  });
+
+  it('never re-ladders a transcript that is still growing', async () => {
+    const b = box();
+    const own = plant(b, A, turn('one'));
+    plant(b, B, turn('two'));
+    let reads = 0;
+    const counting: FleetIO = {
+      ...localIO,
+      readFileFrom: async (p, o) => { reads += 1; return localIO.readFileFrom(p, o); },
+    };
+    const r = new TranscriptResolver(counting);
+    await r.resolve(opts(b, A));
+    const afterFirst = reads;
+    for (let i = 0; i < 5; i += 1) {
+      appendFileSync(own, turn(`more ${i}`), 'utf8');
+      await r.resolve(opts(b, A));
+    }
+    // Five polls, five growth events, zero extra tail reads — the file never
+    // stood still, so the ladder never re-ran. This is the invariant
+    // `name-sweep.test.ts`'s stat gate measures from the other side.
+    expect(reads).toBe(afterFirst);
   });
 
   it('still serves the memo when nothing changed', async () => {
@@ -542,20 +568,50 @@ In `resolve`, replace the revalidation block:
     const held = this.memo.get(key);
     if (held !== undefined && !this.staleByBackoff(held)) {
       const st = await this.io.stat(held.answer.path);
-      // A `found` stays true while its file exists AND has not changed since we
-      // read it. Existence alone is not enough any more: a transcript that gains
-      // a `continued-in` marker still exists, and a memo that asked only about
-      // existence would serve the pre-fork answer for the life of the stream —
-      // which is exactly the freeze this work is for, moved one layer in.
-      // A `fallback` stays true while its path still does NOT exist.
-      const stillTrue = held.answer.kind === 'found'
-        ? st !== null && stampOf(st) === held.stamp
-        : st === null;
-      if (stillTrue) return held.answer;
+      // THREE STATES, NOT TWO — and the third is what keeps this class cheap.
+      //
+      // Existence alone was never the question: a transcript that gains a
+      // `continued-in` marker still exists, and a memo that asked only about
+      // existence served the pre-fork answer for the life of the stream, which
+      // is the freeze this work is for moved one layer in.
+      //
+      // But "changed" is not the question either. A transcript that is being
+      // WRITTEN cannot carry a terminal marker — the marker is the last line a
+      // file ever gets — so re-laddering a growing file buys a tail read that
+      // can learn nothing. It is not free: `watch.ts`'s name sweep already pays
+      // its own read for a grown transcript through `claimTitleRead`, so this
+      // class re-reading the same file doubles that bill on every tick of every
+      // busy session. Measured: it broke `name-sweep.test.ts`'s own stat-gate
+      // tests, 4 reads where the invariant pins 3.
+      //
+      // So: unchanged since the answer -> serve it (the quiet case, one stat).
+      // Changed and still changing -> serve it and remember what was seen (the
+      // busy case, one stat). Changed and now STILL -> re-ladder, because a
+      // file that stopped is a file that may have been superseded. A fork is
+      // therefore followed on the second poll after it happens, not the first;
+      // four seconds against a chat that used to freeze for ever.
+      //
+      // A `fallback` is unchanged: it stays true while its path still does NOT
+      // exist.
+      if (held.answer.kind === 'fallback') {
+        if (st === null) return held.answer;
+      } else if (st !== null) {
+        const cur = stampOf(st);
+        if (cur === held.stamp) return held.answer;
+        if (cur !== held.seen) { held.seen = cur; return held.answer; }
+      }
     }
     const answer = await resolveTranscript(this.io, o);
     this.remember(key, answer, answer.kind === 'found' ? await this.io.stat(answer.path) : null);
     return answer;
+```
+
+The memo entry carries both stamps and `seen` is mutable:
+
+```ts
+  private readonly memo = new Map<
+    string, { answer: TranscriptResolution; at: number; readonly stamp: string | null; seen: string | null }
+  >();
 ```
 
 With, at module scope:
@@ -575,7 +631,8 @@ and `remember` taking the stamp:
     key: string, answer: TranscriptResolution, st: { size: number; mtimeMs: number } | null,
   ): void {
     this.memo.delete(key);                       // re-insert so Map order is recency
-    this.memo.set(key, { answer, at: this.now(), stamp: stampOf(st) });
+    const stamp = stampOf(st);
+    this.memo.set(key, { answer, at: this.now(), stamp, seen: stamp });
     while (this.memo.size > MEMO_MAX) {
       const oldest = this.memo.keys().next();
       if (oldest.done === true) break;
@@ -590,15 +647,18 @@ and `remember` taking the stamp:
 
 ```bash
 cd server && ./node_modules/.bin/vitest run test/transcript-ladder.test.ts
-cd server && ./node_modules/.bin/vitest run
+cd server && ./node_modules/.bin/vitest run test/name-sweep.test.ts
 ```
+
+`name-sweep.test.ts` is not optional here and it is the suite this task can break: `sweepNames` resolves the transcript AND runs its own `claimTitleRead` stat gate, so a resolver that re-reads a grown file doubles a read the sweep already pays. Its "the stat gate" block is the pin.
 
 - [ ] **Step 5: Measure the mutation table**
 
 | Mutation | Must go red |
 |---|---|
-| revert `stillTrue` to `st !== null` | "re-ladders when the answered file gains a marker" |
-| always re-ladder (drop the memo hit) | "still serves the memo when nothing changed" |
+| drop the `cur === held.stamp` arm | "still serves the memo when nothing changed" |
+| drop the `cur !== held.seen` arm (re-ladder on any change) | "never re-ladders a transcript that is still growing", and `name-sweep.test.ts`'s three stat-gate tests |
+| revalidate on existence alone (`st !== null`) | "re-ladders when the answered file gains a marker" |
 
 - [ ] **Step 6: Commit**
 

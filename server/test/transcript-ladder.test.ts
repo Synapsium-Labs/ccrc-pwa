@@ -934,6 +934,10 @@ describe('TranscriptResolver and the fork', () => {
     const r = new TranscriptResolver(localIO);
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
     appendFileSync(own, marker(A, B), 'utf8');
+    // ONE POLL IS NOT ENOUGH, deliberately: the poll that SEES the change only
+    // records it. A file still being written cannot carry a terminal marker,
+    // and re-reading it every tick is a bill `watch.ts` already pays once.
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
   });
 
@@ -947,5 +951,27 @@ describe('TranscriptResolver and the fork', () => {
     const afterFirst = stats;
     await r.resolve(chainOpts(b, A));
     expect(stats - afterFirst).toBe(1);   // one revalidating stat, no ladder
+  });
+
+  it('never re-ladders a transcript that is still growing', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one'));
+    plantChain(b, B, turn('two'));
+    let reads = 0;
+    const counting: FleetIO = {
+      ...localIO,
+      readFileFrom: async (p, o) => { reads += 1; return localIO.readFileFrom(p, o); },
+    };
+    const r = new TranscriptResolver(counting);
+    await r.resolve(chainOpts(b, A));
+    const afterFirst = reads;
+    for (let i = 0; i < 5; i += 1) {
+      appendFileSync(own, turn(`more ${i}`), 'utf8');
+      await r.resolve(chainOpts(b, A));
+    }
+    // Five polls, five growth events, zero extra tail reads — the file never
+    // stood still, so the ladder never re-ran. This is the invariant
+    // `name-sweep.test.ts`'s stat gate measures from the other side.
+    expect(reads).toBe(afterFirst);
   });
 });
