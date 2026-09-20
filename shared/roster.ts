@@ -601,8 +601,8 @@ function parseAuthDir(raw: unknown, id: string): string {
     );
   }
   if (
-    raw === '' || raw.startsWith('/') || raw.endsWith('/')
-    || raw.includes('..') || !SECRETS_SAFE_RE.test(raw)
+    raw === '' || raw === '.' || raw.startsWith('./') || raw.includes('/./')
+    || raw.startsWith('/') || raw.endsWith('/') || raw.includes('..') || !SECRETS_SAFE_RE.test(raw)
   ) {
     throw new RosterError(
       `account "${id}" has an invalid exec.authDir ${JSON.stringify(raw)}.`,

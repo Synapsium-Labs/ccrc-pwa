@@ -342,6 +342,14 @@ describe('parseRoster', () => {
     expect(() => parseRoster(withCodex(over))).toThrow(/exec\.authDir/);
   });
 
+  it.each([
+    ['a bare no-op segment', '.'],
+    ['a leading no-op segment', './.ccrc/auth'],
+    ['an interior no-op segment', '.local/./share/codex'],
+  ])('refuses an authDir with %s', (_why, authDir) => {
+    expect(() => parseRoster(withCodex({ authDir }))).toThrow(/invalid exec\.authDir/);
+  });
+
   // The one refusal that is not a path-safety rule. `ccrc uninstall --purge`
   // empties ~/.ccrc except `memory`; a credential ccrc never obtained must not
   // be destroyable by ccrc's own uninstall, so the roster refuses to put one
