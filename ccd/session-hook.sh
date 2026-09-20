@@ -2788,6 +2788,10 @@ if [[ -z "$id" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
     break
   done
 fi
+# NOT A GUARD: the regex on the next line already rejects the empty string
+# (`+` requires at least one character), so this line can never be the one
+# that reds a mutation — dropping it changes nothing measurable. Kept anyway,
+# for a reader who should not have to derive "no id" from a character class.
 [[ -n "$id" ]] || exit 0
 [[ "$id" =~ ^[A-Za-z0-9._-]+$ ]] || exit 0
 [[ -d "$REG" ]] || exit 0

@@ -684,7 +684,15 @@ describe('a session with no pane', () => {
   it('writes nothing when no registry row names its session id', () => {
     planted('demo-quiet-basin', 'uuid-someone-else');
     run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
-    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(false);
+    // NOT just the named row: attribute-on-CLAUDE_CODE_SESSION_ID-alone (drop
+    // the registry match) would leave `demo-quiet-basin.hookstate.json`
+    // absent while still writing SOME row's state file, named after the raw
+    // session id itself — a stranger attributed to a wrong row instead of to
+    // nobody. Scanning the whole registry for any `.hookstate.json` at all is
+    // what actually pins "attribution stays POSITIVE and measured" rather
+    // than merely "this one row stays untouched".
+    const wroteAnyHookstate = fs.readdirSync(REG()).some((n) => n.endsWith('.hookstate.json'));
+    expect(wroteAnyHookstate, 'no row anywhere was attributed').toBe(false);
   });
 
   it('writes nothing when it has no session id to be attributed by', () => {
