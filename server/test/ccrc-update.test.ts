@@ -56,6 +56,7 @@ function realPath(name: string): string {
 }
 const BASH = realPath('bash');
 const RSYNC = realPath('rsync');
+const REAL_NODE = realPath('node');
 
 interface Result { code: number; stdout: string; stderr: string }
 
@@ -110,6 +111,9 @@ function healthyBox(home: string): void {
     'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
     'case "$url" in',
     '  local://*)',
+    '    case "$url" in *.sigstore.json)',
+    '      if [ -f "$HOME/fixture-curl-exit" ]; then IFS= read -r c < "$HOME/fixture-curl-exit"; echo "curl: ($c) fixture failure for $url" >&2; exit "$c"; fi ;;',
+    '    esac',
     '    src="${url#local://}"',
     '    if [ ! -f "$src" ]; then',
     '      echo "curl: (22) The requested URL returned error: 404 for $url" >&2',
@@ -268,6 +272,24 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'fi',
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
+  // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
+  // `deploy/verify-provenance.mjs` under `node`. This shim answers THAT
+  // invocation from a fixture file (exit code; argv recorded) and execs the
+  // real node for everything else, so the path the verb resolved is a
+  // MEASURED fact — `$CCRC_HERE/../deploy/…` of the ccrc under test, never
+  // the staged tree — and the real verifier (verify-provenance.test.ts's
+  // subject) is not re-run here.
+  plant('node', [
+    '#!/bin/sh',
+    'case "$1 $2" in',
+    '  *verify-provenance.mjs*)',
+    '    printf \'%s\\n\' "$*" >> "$HOME/verify-argv"',
+    '    code=0; [ -f "$HOME/fixture-verify-exit" ] && IFS= read -r code < "$HOME/fixture-verify-exit"',
+    '    [ "$code" = 0 ] && echo "verified fixture (sigstore)" || echo "verify-provenance: fixture refusal" >&2',
+    '    exit "$code" ;;',
+    'esac',
+    `exec ${REAL_NODE} "$@"`,
+  ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
@@ -417,6 +439,7 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
   mkdirSync(join(tree, 'ccd'), { recursive: true });
   writeFileSync(join(tree, 'ccd', 'ccrc'),
     '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/staged-ccrc-argv"\n'
+    + 'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/staged-ccrc-env"\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -431,7 +454,7 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
  *  honest, per-file digest not); `tamper` appends to the tarball after the
  *  sums were written (outer checksum dishonest). */
 function packRelease(home: string, tree: string,
-  opts: { tag: string; latest?: boolean; tamper?: boolean; corruptInner?: string } = { tag: 'v9.9.9' }): void {
+  opts: { tag: string; latest?: boolean; tamper?: boolean; corruptInner?: string; asName?: string; bundle?: boolean } = { tag: 'v9.9.9' }): void {
   if (opts.corruptInner !== undefined) {
     appendFileSync(join(tree, opts.corruptInner), '\n// corrupted after the MANIFEST was written\n');
   }
@@ -439,7 +462,9 @@ function packRelease(home: string, tree: string,
     ? join(home, 'releases', 'download', opts.tag)
     : join(home, 'releases', 'latest', 'download');
   mkdirSync(relDir, { recursive: true });
-  const name = `ccrc-${opts.tag}.tar.gz`;
+  // `asName` lets SHA256SUMS under one tag's directory name ANOTHER tag's
+  // tarball — the re-served-release shape Task 9's binding refuses.
+  const name = opts.asName ?? `ccrc-${opts.tag}.tar.gz`;
   const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', tree, '.'], { encoding: 'utf8' });
   if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
   // PLATFORM-CHOSEN, exactly as writeManifest above chooses (and for the
@@ -455,6 +480,10 @@ function packRelease(home: string, tree: string,
   { cwd: relDir, encoding: 'utf8' });
   if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
   if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
+  // The provenance bundle (design §5): present by default — the `node` shim
+  // in updateEnv decides whether it "verifies"; `bundle: false` models a
+  // release older than provenance, the one shape --allow-unsigned admits.
+  if (opts.bundle !== false) writeFileSync(join(relDir, `${name}.sigstore.json`), `{"fixture":"bundle for ${name}"}\n`);
 }
 
 /** Runs `ccrc update` — the CHECKOUT's ccrc (the code under test), against
@@ -1223,5 +1252,39 @@ describe('ccrc update: the "already there" gate (spec §5)', () => {
     const r = runUpdate(home);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+});
+
+describe('ccrc update: the tag is bound (design §5, decision 4)', () => {
+  it('--to v0.0.9 against a SHA256SUMS naming ccrc-v0.0.3.tar.gz refuses BEFORE any backup, tag to tag (§18 "the tag is bound before backup")', () => {
+    const home = freshUpdateBox('ccrc-update-bind-sums-');
+    plantOldBox(home, { version: 'v0.0.1' });
+    packRelease(home, stubTree(home, { version: 'v0.0.3' }), { tag: 'v0.0.9', latest: false, asName: 'ccrc-v0.0.3.tar.gz' });
+    const r = runUpdate(home, ['--to', 'v0.0.9']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the release at v0\.0\.9 names a ccrc-v0\.0\.3\.tar\.gz \(version v0\.0\.3, not v0\.0\.9\) — refusing/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v0.0.9/SHA256SUMS`]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('--to v0.0.9 against a SHA256SUMS naming ccrc-v0.0.9.tar.gz proceeds — the comparison never strips a side', () => {
+    const home = freshUpdateBox('ccrc-update-bind-ok-');
+    plantOldBox(home, { version: 'v0.0.1' });
+    packRelease(home, stubTree(home, { version: 'v0.0.9' }), { tag: 'v0.0.9', latest: false });
+    const r = runUpdate(home, ['--to', 'v0.0.9']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+  });
+
+  it('an extracted build.json whose version is not the resolved one refuses; nothing installed (§18 "the extracted version is bound")', () => {
+    const home = freshUpdateBox('ccrc-update-bind-stamp-');
+    plantOldBox(home, { version: 'v0.0.1' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.1' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the extracted tree's build\.json says version 'v2\.0\.1' but the release was resolved as v2\.0\.0 — refusing/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 });

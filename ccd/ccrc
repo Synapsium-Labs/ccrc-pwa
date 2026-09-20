@@ -11297,6 +11297,16 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   esac
   UPD_VERSION="${UPD_TARNAME#ccrc-}"
   UPD_VERSION="${UPD_VERSION%.tar.gz}"
+  # THE TAG IS BOUND (design 2026-09-20 §5, refusal 1). SHA256SUMS is under
+  # the publisher's control and is not an attestation subject; whatever it
+  # named used to be what got installed. With --to, the name it gives must
+  # BE the tag that was asked for — tag to tag, the un-stripped comparison
+  # `_upd_converged` already makes; stripping one side would refuse every
+  # correct release (§18). Before any backup: nothing is staged yet but the
+  # sums file.
+  if [ -n "$to" ] && [ "$UPD_VERSION" != "$to" ]; then
+    _ccrc_die "the release at $to names a $UPD_TARNAME (version $UPD_VERSION, not $to) — refusing; nothing on this box was changed"
+  fi
 }
 
 # `_upd_fetch` — the tarball itself, verified twice and extracted. Reads
@@ -11317,6 +11327,20 @@ _upd_fetch() {
     || _ccrc_die "the release ships no MANIFEST — refusing to install a set nothing can verify"
   ( cd "$UPD_TREE" && _plat_sha256_check MANIFEST >/dev/null 2>&1 ) \
     || _ccrc_die "MANIFEST verification FAILED after extraction — a file in the release set does not match its recorded digest; refusing to install"
+  # THE EXTRACTED VERSION IS BOUND (design §5, refusal 2): the set's own
+  # build.json must say the version the release was resolved as. One parser
+  # (`_box_build_fields`), pointed at the staged stamp; BOX_BUILD saved and
+  # restored around it exactly as `_upd_converged` does, so the caller is
+  # never left holding the staged tree's fields.
+  local -a keep=(${BOX_BUILD[@]+"${BOX_BUILD[@]}"})
+  local staged_version="" prc=0
+  _box_build_fields "$UPD_TREE/build.json" || prc=$?
+  [ "$prc" -eq 0 ] && staged_version="${BOX_BUILD[4]}"
+  BOX_BUILD=(${keep[@]+"${keep[@]}"})
+  [ "$prc" -eq 0 ] \
+    || _ccrc_die "the extracted tree's build.json is unreadable or malformed (rc $prc) — refusing to install a set that cannot say what it is; nothing outside the staging dir was touched"
+  [ "$staged_version" = "$UPD_VERSION" ] \
+    || _ccrc_die "the extracted tree's build.json says version '${staged_version:-none}' but the release was resolved as $UPD_VERSION — refusing to install a set that is not what it claims; nothing outside the staging dir was touched"
   echo "update: verified $UPD_TARNAME (transport checksum, then the per-file MANIFEST)"
 }
 
