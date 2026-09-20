@@ -419,16 +419,19 @@ describe('build-release.sh: install-time hooks ship with their scripts (D-3105)'
 });
 
 /** What BOTH build workflows must say to attest (design 2026-09-20 §4): the
- *  pinned action, the tarball glob as subject, and the permission set the
- *  action's README documents at that ref — `contents: write` because the
- *  release itself needs it. `id-token` was FORBIDDEN by the stage-4 pin
+ *  pinned action, the tarball glob as subject, and the permission set
+ *  `actions/attest`'s README documents for this exact no-registry-push usage
+ *  (its "Provenance Attestation (Default)" example) — `attest-build-provenance
+ *  @v4`'s own README documents neither permissions nor inputs/outputs, it
+ *  only redirects to `actions/attest` (D-3126) — `contents: write` because
+ *  the release itself needs it. `id-token` was FORBIDDEN by the stage-4 pin
  *  (a key nobody asked for); it is now the signing identity, asked for in
  *  the diff. Nothing else. */
 function expectAttestingWorkflow(src: string, name: string): void {
   expect(src, `${name}: the attest step, pinned by tag, subject = the tarball glob`)
     .toMatch(/^      - uses: actions\/attest-build-provenance@v4\n        id: attest\n(?:        if: .*\n)?        with:\n          subject-path: release-out\/ccrc-\*\.tar\.gz$/m);
   expect(src, `${name}: exactly the documented permission set`)
-    .toMatch(/^    permissions:\n      contents: write\n      id-token: write\n      attestations: write$/m);
+    .toMatch(/^    permissions:\n      contents: write\n      id-token: write\n      attestations: write(?!\n      [a-z-]+:)$/m);
   expect(src, `${name}: no other permission`).not.toMatch(/(packages|pull-requests|actions|deployments|issues):/);
 }
 
@@ -454,13 +457,26 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
   it('attests the tarball after the build and before the publish, names the bundle, publishes a PRERELEASE with all three (design 2026-09-20 §4; D-3118)', () => {
     const src = wf();
     expectAttestingWorkflow(src, 'release.yml');
-    expect(src).toContain('cp "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"');
+    // The attest step here carries no `if:` — release.yml's HEAD is always
+    // freshly tagged (unlike release-main.yml's prepare/publish split), so
+    // there is never a "nothing was built" case to skip (D-3122 is the
+    // other file's problem).
+    expect(src, 'release.yml: the attest step must carry no if:')
+      .not.toMatch(/^      - uses: actions\/attest-build-provenance@v4\n        id: attest\n        if:/m);
+    // D-3127: the guard before the copy — the tag that triggered this run,
+    // the tarball build-release.sh actually named, and the bundle must all
+    // agree, or a doubly-tagged HEAD ships a bundle no tarball matches.
+    expect(src).toContain('[ -f "release-out/ccrc-$GITHUB_REF_NAME.tar.gz" ]');
+    expect(src).toContain('cp -- "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"');
     expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
     expect(src).toContain('gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
-    const build = src.indexOf('bash deploy/build-release.sh');
-    const attest = src.indexOf('actions/attest-build-provenance');
-    const publish = src.indexOf('gh release create');
+    // Located by the STEP LINE itself, not a bare substring a nearby comment
+    // could also contain (the collision that forced Task 3's own comments to
+    // be reworded around a literal-substring version of this same check).
+    const build = src.search(/^        run: bash deploy\/build-release\.sh /m);
+    const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
+    const publish = src.search(/^        run: gh release create /m);
     expect(build).toBeGreaterThan(-1);
     expect(attest).toBeGreaterThan(build);
     expect(publish).toBeGreaterThan(attest);
@@ -495,9 +511,9 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
     expect(src).toContain("if: hashFiles('release-out/ccrc-*.tar.gz') != ''");
     expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
-    const prepare = src.indexOf('release-main.sh prepare');
-    const attest = src.indexOf('actions/attest-build-provenance');
-    const publish = src.indexOf('release-main.sh publish');
+    const prepare = src.search(/^        run: bash deploy\/release-main\.sh prepare /m);
+    const attest = src.search(/^      - uses: actions\/attest-build-provenance@v4$/m);
+    const publish = src.search(/^        run: bash deploy\/release-main\.sh publish /m);
     expect(prepare).toBeGreaterThan(-1);
     expect(attest).toBeGreaterThan(prepare);
     expect(publish).toBeGreaterThan(attest);

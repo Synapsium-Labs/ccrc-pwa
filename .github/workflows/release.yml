@@ -23,9 +23,11 @@ jobs:
     # The job holds an open contents:write token for as long as it runs. 30.
     timeout-minutes: 30
     # contents: write — the release the last step creates. id-token: write
-    # and attestations: write — the pinned attest action's documented
-    # permission set at that ref; the OIDC token is the signing identity, no
-    # key kept.
+    # and attestations: write — the permission set `actions/attest`'s README
+    # documents for this exact no-registry-push usage; `attest-build-
+    # provenance@v4` itself is a thin wrapper whose own README documents no
+    # permissions or inputs, only a redirect to `actions/attest` (D-3126).
+    # The OIDC token is the signing identity, no key kept.
     permissions:
       contents: write
       id-token: write
@@ -63,11 +65,25 @@ jobs:
           subject-path: release-out/ccrc-*.tar.gz
 
       # The bundle rides the release under the one name every `ccrc update`
-      # fetches (`<tarball>.sigstore.json`), so the publish glob carries it.
+      # fetches (`<tarball>.sigstore.json`), so the publish glob carries it —
+      # but only once the tag, the tarball and the bundle all agree (D-3127).
+      # build-release.sh names the tarball from `git tag --points-at HEAD`,
+      # independently of $GITHUB_REF_NAME; a HEAD carrying a second
+      # release-shaped tag (a hand-cut v0.1.0 landing on a commit
+      # release-main already auto-tagged v0.0.9) would otherwise let this
+      # step copy the bundle to a name no tarball in release-out/ matches.
+      # build-release.sh itself is untouched by this wave, so the refusal
+      # lives here, beside the copy it protects: no tarball named after this
+      # run's tag means refuse rather than publish a mismatched release. The
+      # refusal leaves a tag with no release — re-runnable after the
+      # operator removes the extra tag — the same shape as any other failed
+      # release.yml run.
       - name: Name the provenance bundle
         env:
           CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
-        run: cp "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"
+        run: |
+          [ -f "release-out/ccrc-$GITHUB_REF_NAME.tar.gz" ] || { echo "release.yml: the build named its artifact after another release tag at HEAD (this commit carries more than one); refusing to publish $GITHUB_REF_NAME — delete the extra tag, or cut the minor on a commit release-main did not auto-tag" >&2; exit 1; }
+          cp -- "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"
 
       # All three artifacts ride the glob. --verify-tag: the release is cut
       # only for a tag that exists on the remote. --prerelease: born on dev.
