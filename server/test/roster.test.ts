@@ -300,6 +300,35 @@ describe('parseRoster', () => {
     expect(() => parseRoster(withCodex({ kind: 'wrapper' })))
       .toThrow(/"upstream", "generated", "external" or "codex"/);
   });
+
+  // Each refusal is measured by NAME, not by "it throws": the remedy has to
+  // say which of the five things went wrong, because the operator's next
+  // action differs for each.
+  it.each([
+    ['a missing proxyPort', { proxyPort: undefined }, /missing or invalid exec\.proxyPort/],
+    ['a missing litellmPort', { litellmPort: undefined }, /missing or invalid exec\.litellmPort/],
+    ['a non-integer port', { proxyPort: 45010.5 }, /missing or invalid exec\.proxyPort/],
+    ['a string port', { proxyPort: '45010' }, /missing or invalid exec\.proxyPort/],
+    ['a privileged port', { proxyPort: 80 }, /out of range/],
+    ['a port above the TCP range', { litellmPort: 70000 }, /out of range/],
+  ])('refuses %s', (_why, over, re) => {
+    expect(() => parseRoster(withCodex(over))).toThrow(re);
+  });
+
+  it('refuses one port used twice in the same lane — the shim and LiteLLM need two', () => {
+    expect(() => parseRoster(withCodex({ litellmPort: 45010 })))
+      .toThrow(/exec\.proxyPort and exec\.litellmPort are both 45010/);
+  });
+
+  it('the remedy for an out-of-range port names the range, so the fix needs no second lookup', () => {
+    try {
+      parseRoster(withCodex({ proxyPort: 80 }));
+      throw new Error('expected a refusal');
+    } catch (e) {
+      expect((e as RosterError).remedy).toMatch(/1024/);
+      expect((e as RosterError).remedy).toMatch(/65535/);
+    }
+  });
 });
 
 describe('exec.secretsFile is a path, not merely a string', () => {

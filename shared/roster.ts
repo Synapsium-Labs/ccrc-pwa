@@ -557,6 +557,33 @@ function parseModels(raw: unknown, id: string, provider: ProviderId): ApiKeyMode
   };
 }
 
+/** The unprivileged TCP range. A lane's tiers are started by a user systemd
+ *  manager or a plain `nohup`, neither of which can bind below 1024, so a
+ *  privileged port is not a preference here — it is a lane that cannot start,
+ *  and saying so at parse time is the difference between one refusal and a
+ *  tier that flaps on `Restart=always`. */
+const PORT_MIN = 1024;
+const PORT_MAX = 65535;
+
+function parseLanePort(raw: unknown, id: string, field: 'proxyPort' | 'litellmPort'): number {
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    throw new RosterError(
+      `account "${id}" has a missing or invalid exec.${field}: it must be a whole number.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to a free TCP port between ` +
+        `${PORT_MIN} and ${PORT_MAX}. It cannot be defaulted: two lanes sharing a port send one ` +
+        "account's traffic through the other account's subscription.",
+    );
+  }
+  if (raw < PORT_MIN || raw > PORT_MAX) {
+    throw new RosterError(
+      `account "${id}" has an exec.${field} of ${raw}, which is out of range.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to a free TCP port between ` +
+        `${PORT_MIN} and ${PORT_MAX} — below ${PORT_MIN} needs privileges this lane never has.`,
+    );
+  }
+  return raw;
+}
+
 /**
  * @param assumedProvider collects the ids of `generated` accounts that named no
  *   provider, so `parseRoster` can warn ONCE for the whole file instead of once
@@ -620,13 +647,20 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
   if (kind === 'upstream') return { kind: 'upstream', ...withSecrets };
 
   if (kind === 'codex') {
-    // Field gates arrive in Tasks 2-4; this arm exists first so the union has a
-    // constructor and every later gate has one place to refuse from.
+    const proxyPort = parseLanePort(raw['proxyPort'], id, 'proxyPort');
+    const litellmPort = parseLanePort(raw['litellmPort'], id, 'litellmPort');
+    if (proxyPort === litellmPort) {
+      throw new RosterError(
+        `account "${id}"'s exec.proxyPort and exec.litellmPort are both ${proxyPort}.`,
+        `Give account "${id}" two different ports in ${ROSTER_PATH}: the shim Claude Code talks ` +
+          'to and the LiteLLM behind it are two listeners.',
+      );
+    }
     return {
       kind: 'codex',
       provider: 'openai',
-      proxyPort: raw['proxyPort'] as number,
-      litellmPort: raw['litellmPort'] as number,
+      proxyPort,
+      litellmPort,
       authDir: raw['authDir'] as string,
       ...withSecrets,
     };
