@@ -15639,9 +15639,36 @@ _ci_walk_add() {   # id uuid -> record uuid on id's walk, capped at the last _CI
 # the walk, so both of this memo's writers — the hop and the reset — evict
 # what they leave behind; a memo-size check that both hops AND rotates is
 # what actually exercises this, not one that only does either alone.
-declare -A _CI_PATH=()   # "$cfg:$id:$uuid" -> the resolved transcript path, once found
+# FIFTH REVIEW ROUND (F7): what this memo HOLDS changed, and the reason is
+# that the old shape memoized SUCCESSES ONLY. A row whose transcript is at
+# neither spelling stored nothing, so every tick re-paid the whole
+# resolution — a `$( )` fork for the call itself, `_reg_get`'s own fork and
+# `_ws_realpath`'s subshell — which is exactly the per-tick cost the memo was
+# introduced to remove, re-entered through the one door it left open. A
+# frozen session with no transcript at either spelling is not rare: it is the
+# shape a box sits in between a `/clear` and Claude Code's first write, and
+# the shape a swapped-away session sits in permanently.
+#
+# A VERDICT MEMO IS REFUSED, and this is the whole design decision. "There is
+# no file here" is not a durable fact: the session writes its first line a
+# second later, and a memo that remembered the verdict would never look
+# again — the chain would stop being followed for every session started under
+# a running supervisor. So what is memoized is the part that really is stable
+# for a live session (the two ADDRESSES its transcript can occupy: the
+# `_ws_realpath`-resolved munge and the raw one), and the part that is not
+# stable — whether a file is THERE — is re-measured on every tick with a
+# `[[ -f ]]` builtin that forks nothing.
+#
+# ABSENT AND PRESENT STAY TWO ANSWERS, never one value. Three states are
+# distinguishable here, and no caller has to conflate any two: no entry at
+# all (never resolved — the workdir could not even be read), an entry whose
+# addresses hold no file (MEASURED absent, and re-measured every tick), and
+# an entry one of whose addresses is a file (present, and which one). That is
+# the same "no overloaded null at a seam" rule the server side of this fix
+# states for `TranscriptResolution`.
+declare -A _CI_PATH=()   # "$cfg:$id:$uuid" -> the addresses uuid's transcript can occupy, best first, one per line
 
-_ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
+_ci_addrs() {   # id cfg uuid -> the addresses uuid's transcript can occupy, best first, one per line
   # F4 (review round): mirrors `_transcript_path`'s first two rungs ONLY — the
   # resolved (realpath) munge, then the RAW munge, because the raw spelling is
   # sometimes the one Claude Code actually wrote under, measured on this very
@@ -15650,18 +15677,49 @@ _ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried b
   # session at archive/reap time, and a chain hop is either live at one of the
   # two ordinary spellings or it has nothing to follow yet — a scan would cost
   # exactly the fork-per-tick this memo exists to avoid.
+  #
+  # The two spellings are emitted as ONE line each, and the second only when
+  # it genuinely differs: a workdir with no symlink in it munges identically
+  # both ways, and a caller walking one address instead of two is the same
+  # four-to-two collapse the server's own ladder makes for a dead session.
   local id="$1" cfg="$2" uuid="$3" wd raw munged
   wd=$(_reg_get "$id" workdir); [[ -n "$wd" ]] || return 1
   raw=$(_munge_wd "$wd")
   wd=$(_ws_realpath "$wd")
   munged=$(_munge_wd "$wd")
-  if [[ -f "$cfg/projects/$munged/$uuid.jsonl" ]]; then
-    printf '%s/projects/%s/%s.jsonl' "$cfg" "$munged" "$uuid"; return 0
-  fi
-  if [[ -f "$cfg/projects/$raw/$uuid.jsonl" ]]; then
-    printf '%s/projects/%s/%s.jsonl' "$cfg" "$raw" "$uuid"; return 0
-  fi
+  printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"
+  [[ "$raw" == "$munged" ]] || printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$raw" "$uuid"
+}
+
+_CI_F=""   # `_ci_extant`'s out-parameter — see why it is not stdout, below
+
+_ci_extant() {   # addresses (one per line, on $1) -> rc 0 and _CI_F set to the first that is a regular file
+  # IT ANSWERS IN A VARIABLE, NOT ON STDOUT, and that is the entire point of
+  # F7's fix. A `$( )` capture is a FORK, so a helper that printed its answer
+  # would put back, once per tick, the very cost the memo above exists to
+  # remove — the memo would save the resolution and the reader would spend it
+  # again. `_CI_F` is the same out-parameter idiom this file already uses
+  # where a hot path cannot afford a subshell.
+  #
+  # A here-string, never a pipeline: a `while read` on the right of a `|` runs
+  # in a SUBSHELL, so nothing it assigned would survive the loop. `<<<` keeps
+  # the loop in this shell and forks nothing.
+  local a
+  _CI_F=""
+  while IFS= read -r a; do
+    [[ -n "$a" && -f "$a" ]] && { _CI_F="$a"; return 0; }
+  done <<< "$1"
   return 1
+}
+
+_ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
+  # The PRINTING form, for the two callers that are not on a per-tick path
+  # (the hop's successor lookup and `_ci_pane_superseded`) and that are
+  # already inside a `$( )` of their own.
+  local addrs
+  addrs=$(_ci_addrs "$1" "$2" "$3") || return 1
+  _ci_extant "$addrs" || return 1
+  printf '%s' "$_CI_F"
 }
 
 _continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line, or nothing
@@ -15714,7 +15772,7 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # stops a re-read of unchanged content, and `_CI_ORIGIN`/`_CI_WALK` stop a
   # cycle — unconditionally through the origin, or through the capped walk
   # for a shorter local repeat (see the comment above `_CI_LAST`).
-  local id="$1" cfg="$2" uuid pk f st key prev done_key next sf
+  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
   # WALK-START DETECTION (M1, third review round). A registry uuid that does
   # not match what this function itself last placed there — a hop's
@@ -15735,12 +15793,19 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
     _CI_EXPECT["$id"]="$uuid"
   fi
   pk="$cfg:$id:$uuid"
-  f="${_CI_PATH[$pk]:-}"
-  if [[ -z "$f" ]]; then
-    f=$(_ci_transcript_path "$id" "$cfg" "$uuid") || return 0
-    _CI_PATH["$pk"]="$f"
+  # F7 (fifth review round): the MISS is memoized too, as the addresses this
+  # uuid's transcript can occupy — see `_CI_PATH`'s own header. A row with no
+  # transcript at either spelling used to re-resolve from scratch on every
+  # tick, for ever; it now pays one resolution and then a `[[ -f ]]` builtin,
+  # and it still HEALS the moment the file appears, because what is
+  # remembered is where to look rather than what was found.
+  addrs="${_CI_PATH[$pk]:-}"
+  if [[ -z "$addrs" ]]; then
+    addrs=$(_ci_addrs "$id" "$cfg" "$uuid") || return 0
+    _CI_PATH["$pk"]="$addrs"
   fi
-  [[ -f "$f" ]] || return 0
+  _ci_extant "$addrs" || return 0
+  f="$_CI_F"
   st=$(stat -c '%s:%Y' -- "$f" 2>/dev/null) || return 0
   key="$uuid:$st"
   prev="${_CI_LAST[$id]:-}"
@@ -15760,6 +15825,28 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   _CI_PATH["$cfg:$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
   _CI_EXPECT["$id"]="$next"   # our own hop's destination — recognised as a continuation, not a new walk
   _reg_set "$id" uuid "$next"
+  return 0
+}
+
+# F3 (whole-branch review): ONE entry per id, and it never grows. The pane
+# `sessionId` this function has MEASURED as naming a superseded transcript.
+#
+# THE VERDICT IS MONOTONE, which is why remembering it is sound where
+# remembering `_ci_transcript_path`'s miss is not: a `continued-in` marker is
+# the LAST line a transcript ever gets, so a file that carries one is a file
+# that will never be appended to again, and "superseded" can never become
+# false. Only the TRUE verdict is kept — a live transcript can gain a marker
+# at any moment, so a remembered FALSE would be a memo of something still
+# changing. Keyed by id and holding the uuid, so a pane that genuinely
+# rotates replaces the entry instead of adding one.
+declare -A _CI_PANE_DEAD=()   # id -> the pane sessionId last MEASURED as superseded
+
+_ci_pane_superseded() {   # id cfg sid -> 0 iff sid's OWN transcript ends in a continued-in marker
+  local id="$1" cfg="$2" sid="$3" f
+  [[ "${_CI_PANE_DEAD[$id]:-}" == "$sid" ]] && return 0
+  f=$(_ci_transcript_path "$id" "$cfg" "$sid") || return 1
+  [[ -n "$(_continued_in_of "$f" "$sid")" ]] || return 1
+  _CI_PANE_DEAD["$id"]="$sid"
   return 0
 }
 
@@ -15795,19 +15882,46 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # that has never been walked, so it still wins immediately: the pane keeps
   # its authority for the thing it is actually authoritative about.
   #
-  # SELF-HEALING AFTER A RESTART, STATED RATHER THAN DISCOVERED LATER: `ccd
-  # supervise` is one long-lived process per session, so `_CI_WALK` is empty
-  # right after a restart. A stale pane can therefore drag the registry back
-  # ONCE in that window — every uuid reads as "never walked" until the chain
-  # has walked it again — and the chain then re-follows from the empty memo
-  # and converges a second time. Bounded, not silent: one wrong tick per
-  # restart, not forever.
+  # A RESTART NO LONGER COSTS A WRONG TICK (F3, whole-branch review — and this
+  # paragraph used to claim the opposite, "one wrong tick per restart, not
+  # forever", which was the argument and not the measurement). The walk lives
+  # in PROCESS memory, and `ccrc update`'s step-4 sweep restarts every
+  # supervisor on a fleet rollout, so the box lands in exactly this state: the
+  # pane still publishes the pre-fork uuid A while the registry holds C, and
+  # every memo is empty, so A reads as "never walked" and the first tick used
+  # to write A straight back. Re-convergence then cost about two ticks per hop
+  # — and in that window a `--resume` time-travels, which is the very defect
+  # this whole lane exists to remove, fired on every rollout.
+  #
+  # THE THIRD CONDITION IS A MEASUREMENT, NOT A MEMORY: a `sessionId` whose
+  # own transcript ends in a `continued-in` marker has been superseded by
+  # Claude Code's own statement about itself, and a superseded id is NEVER new
+  # information, whatever this process happens to remember. So it is refused
+  # on the disk's evidence rather than on the walk's. It is the LAST condition
+  # deliberately: `&&` short-circuits, so a healthy tick — the pane agreeing
+  # with the registry, which is every tick of every unforked session — never
+  # reaches it and pays nothing at all.
+  #
+  # AND THE WALK'S ORIGIN IS REFUSED TOO (F5). `_ci_walk_has` reads a list
+  # capped at `_CI_WALK_CAP`, so on a chain LONGER than the cap the walk's own
+  # first uuid is the first thing evicted — and that is precisely the uuid a
+  # permanently stale pane keeps publishing. Measured on a 22-hop chain: 37
+  # registry writes in 70 ticks, the walk restarting from the top each time
+  # the pane dragged it back. `_CI_ORIGIN` is never evicted, so naming it here
+  # restores the unconditional guarantee the comment above already claimed.
+  # It is not redundant with the marker test either: the two answer different
+  # questions, and the marker test needs the old transcript to still be
+  # READABLE — a chain head that has since been archived or reaped away has no
+  # marker to read, and then the origin is the only thing left refusing it.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
   pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
     sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
-    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && ! _ci_walk_has "$id" "$sid"; then
+    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] \
+       && [[ "$sid" != "${_CI_ORIGIN[$id]:-}" ]] \
+       && ! _ci_walk_has "$id" "$sid" \
+       && ! _ci_pane_superseded "$id" "$cfg" "$sid"; then
       _reg_set "$id" uuid "$sid"
     fi
   fi

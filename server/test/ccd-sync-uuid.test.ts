@@ -198,14 +198,26 @@ describe('_sync_uuid follows a fork', () => {
   });
 
   it('the pane’s stale sessionId does not undo a chain the follow just wrote', () => {
-    // THE ONLY FIXTURE THAT DISCRIMINATES ORDER, and it is the production one:
-    // a forked session's pane process carries on publishing the PRE-FORK id
-    // while the fork runs under a new one, and NEVER stops — Claude Code does
-    // not rewrite the pane's own sessions file after a fork, so `sid` reads
-    // A on every tick, for ever. Pane read first, chain second is still the
-    // right order (it catches a real `/clear`), but the pane read is a no-op
-    // ONLY BEFORE the chain has moved; after that it is stale BY DEFINITION —
-    // that is what a fork is.
+    // THE PRODUCTION FIXTURE — but no longer an ORDERING fixture, and the
+    // sentence that stood here said it was. What it claimed ("THE ONLY
+    // FIXTURE THAT DISCRIMINATES ORDER, and it is the production one") was
+    // falsified by a later measurement: with the pane-novelty guard in place,
+    // BOTH orderings — pane read first then the chain, or the chain first
+    // then the pane read — settle identically in every state tried here, so
+    // swapping the two statements in `_sync_uuid` leaves this suite green.
+    // The ordering is REDUNDANT; the guard is what holds this property, and
+    // the whole-branch review's F3 is the proof of how load-bearing that
+    // guard is (a restart empties the walk, and only the marker test then
+    // stops the pane dragging the registry back). Pane read first is kept
+    // because it reads better — a `/clear` is the ordinary case — not
+    // because anything depends on it.
+    //
+    // The shape itself is still exactly production: a forked session's pane
+    // process carries on publishing the PRE-FORK id while the fork runs under
+    // a new one, and NEVER stops — Claude Code does not rewrite the pane's
+    // own sessions file after a fork, so `sid` reads A on every tick, for
+    // ever. The pane read is a no-op ONLY BEFORE the chain has moved; after
+    // that it is stale BY DEFINITION — that is what a fork is.
     //
     // FIFTH REVIEW ROUND: the two-tick version of this test PASSED while the
     // property its own name claims was false from tick 3 onward — measured:
@@ -433,6 +445,134 @@ describe('_sync_uuid follows a fork', () => {
     expect(/SETTLED:(\S+)/.exec(out)?.[1]).toBe(CH);
     expect(/AFTER_CHURN:(\S+)/.exec(out)?.[1]).toBe(CH);
     expect(/FINAL:(\S+)/.exec(out)?.[1]).toBe(CH);
+  });
+
+  it('a row with no transcript at EITHER spelling resolves ONCE, and still heals when the file appears', () => {
+    // Whole-branch review, F7. `_ci_transcript_path` memoized SUCCESSES only,
+    // so a row whose transcript is at neither spelling stored nothing and
+    // re-paid the whole resolution every five seconds, for ever — a `$( )`
+    // fork for the call, `_reg_get`'s own `cat` fork (`ccd/ccd`'s `_reg_get`
+    // is a `cat`) and `_ws_realpath`'s subshell. That is not an exotic state:
+    // it is every session between a `/clear` and Claude Code's first write.
+    //
+    // THE COUNTER IS THE MEASUREMENT. `_ci_addrs` is the expensive half —
+    // registry read, realpath walk, two munges — so wrapping it counts
+    // resolutions directly rather than trusting a comment about forks.
+    // MEASURED against the pre-fix code: 6 calls for 6 ticks. With the memo:
+    // 1, and the remaining ticks are `[[ -f ]]` builtins on remembered
+    // addresses.
+    //
+    // IT COUNTS INTO A FILE, not a shell variable, and that is not a style
+    // choice: every caller reads this function through `addrs=$( … )`, and a
+    // command substitution is a SUBSHELL — a `CALLS=$((CALLS+1))` inside it
+    // increments a copy that dies with the fork, and the counter reads 0 on
+    // the real code and on every mutant alike (measured while building this
+    // test: a fixture that could not fail for the reason it names).
+    //
+    // AND THE SECOND HALF IS WHY A VERDICT MEMO WAS REFUSED: remembering
+    // "absent" would be remembering something that stops being true a second
+    // later. The same script plants A's transcript mid-run and the chain must
+    // still follow it — absence is re-measured every tick; only the ADDRESSES
+    // are remembered.
+    row('/w', A);
+    const dir = projectDir('/w');
+    const mkA = marker(A, B).trimEnd();
+    const tB = turnLine('two').trimEnd();
+    const log = path.join(h.home, 'addrs-calls');
+    const wrap = `eval "_ci_addrs_orig() $(declare -f _ci_addrs | tail -n +2)"; `
+      + `_ci_addrs() { echo x >> "${log}"; _ci_addrs_orig "$@"; }; `;
+    const out = h.sh(
+      wrap
+      + `${Array.from({ length: 6 }, () => `_sync_uuid ${ID}`).join('; ')}; `
+      + `echo "CALLS:$(wc -l < "${log}" 2>/dev/null || echo 0)"; `
+      + `mkdir -p "${dir}"; printf '%s\\n' '${mkA}' > "${dir}/${A}.jsonl"; `
+      + `printf '%s\\n' '${tB}' > "${dir}/${B}.jsonl"; `
+      + `${Array.from({ length: 3 }, () => `_sync_uuid ${ID}`).join('; ')}; echo "HEALED:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(/CALLS:\s*(\d+)/.exec(out)?.[1]).toBe('1');        // one resolution, not six
+    expect(/HEALED:(\S+)/.exec(out)?.[1]).toBe(B);            // and the miss never became permanent
+  });
+
+  it('a supervisor RESTART does not let the stale pane regress the registry — not even for one tick', () => {
+    // Whole-branch review, F3. `ccrc update`'s step-4 sweep restarts every
+    // `claude-session@*` supervisor on a fleet rollout, and every memo in
+    // this file lives in shell variables — so the box lands with the registry
+    // already at C, the pane still publishing the pre-fork A, and NOTHING
+    // remembered. The walk memo cannot help: A reads as "never walked"
+    // because the walk is empty.
+    //
+    // A SEPARATE `h.sh` INVOCATION IS THE RESTART. That is the whole fixture:
+    // this file's own `ticks()` helper exists because two `h.sh` calls are two
+    // processes, and here that is the point rather than the hazard.
+    //
+    // MEASURED before the fix: T1 reads `aaa…` — the first tick writes A back
+    // and `--resume` time-travels until the chain re-converges, about two
+    // ticks per hop, on every rollout. With the fix the registry never leaves
+    // C, because A's own transcript ends in a marker naming C and a
+    // superseded id is never new information.
+    const C = 'c'.repeat(36);
+    row('/w', C);                                        // the chain had already converged
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);  // …and A says so itself
+    plant('/w', C, turnLine('two'));
+    const cfg = h.sh(`_cfg_dir ${W}`);
+    const sdir = path.join(cfg, 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(path.join(sdir, '4242.json'), JSON.stringify({ sessionId: A, status: 'idle' }));
+    const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
+    const out = h.sh(
+      `${tmuxStub} _sync_uuid ${ID}; echo "T1:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "T2:$(_reg_get ${ID} uuid)"; `
+      + `_sync_uuid ${ID}; echo "T3:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(/T1:(\S+)/.exec(out)?.[1]).toBe(C);   // THE assertion: not even the first tick
+    expect(/T2:(\S+)/.exec(out)?.[1]).toBe(C);
+    expect(/T3:(\S+)/.exec(out)?.[1]).toBe(C);
+  });
+
+  it('a chain LONGER than the walk cap cannot be dragged back to its origin by a stale pane', () => {
+    // Whole-branch review, F5 (parked at the previous round's fix cap, then
+    // promoted). `_ci_walk_has` reads a list capped at `_CI_WALK_CAP` = 16,
+    // and the walk's ORIGIN is the first uuid evicted from it — which is
+    // exactly the uuid a permanently stale pane keeps publishing. So a chain
+    // longer than the cap oscillates: measured 37 registry writes in 70 ticks
+    // on a 22-hop chain.
+    //
+    // THE FIXTURE DELETES THE ORIGIN'S TRANSCRIPT, and that is what makes it
+    // discriminate the ORIGIN guard rather than F3's marker test. With u0's
+    // file still on disk the marker test alone refuses the write, and this
+    // test would pass with `_CI_ORIGIN` never consulted. A chain head that
+    // has been archived or reaped away — an ordinary fate for a superseded
+    // transcript — has no marker left to read, and then the origin is the one
+    // thing that still refuses. The deletion happens after the walk has
+    // already left u0, so it takes nothing else away.
+    //
+    // MEASURED without the origin guard: at the tick where the 17th distinct
+    // uuid is examined, u0 falls off the capped walk, the pane writes it back,
+    // the walk-start reset points everything at u0 — and the chain then
+    // STOPS DEAD, because u0's transcript is gone and there is no marker to
+    // follow. Final registry: u0, the pre-fork id, for ever. With the guard:
+    // u21, the end of the chain.
+    const N = 22;
+    const uuids = Array.from({ length: N }, (_, i) => `${i.toString(16).padStart(2, '0')}${'0'.repeat(34)}`);
+    row('/w', uuids[0]!);
+    for (let i = 0; i < N - 1; i++) plant('/w', uuids[i]!, marker(uuids[i]!, uuids[i + 1]!));
+    plant('/w', uuids[N - 1]!, turnLine('end'));
+    const originFile = path.join(projectDir('/w'), `${uuids[0]}.jsonl`);
+    const cfg = h.sh(`_cfg_dir ${W}`);
+    const sdir = path.join(cfg, 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(path.join(sdir, '4242.json'), JSON.stringify({ sessionId: uuids[0], status: 'idle' }));
+    const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
+    // Six ticks (three hops) of head start, then the chain head is removed,
+    // then 70 more — comfortably past the 44 a 22-node chain needs and past
+    // the ~35th tick where the cap evicts u0.
+    const out = h.sh(
+      `${tmuxStub} ${Array.from({ length: 6 }, () => `_sync_uuid ${ID}`).join('; ')}; `
+      + `rm -f "${originFile}"; `
+      + `${Array.from({ length: 70 }, () => `_sync_uuid ${ID}`).join('; ')}; `
+      + `echo "FINAL:$(_reg_get ${ID} uuid)"`,
+    );
+    expect(/FINAL:(\S+)/.exec(out)?.[1]).toBe(uuids[N - 1]);
   });
 
   it('_CI_PATH stays at one entry across BOTH a hop and a genuine rotation', () => {
