@@ -30,8 +30,13 @@ function git(root: string, ...args: string[]): string {
   return r.stdout.trim();
 }
 
-/** The smallest tree build-release.sh's `git archive` pathspec accepts. */
+/** The smallest tree build-release.sh's `git archive` pathspec accepts.
+ *  `.gitignore` mirrors the real repo's (node_modules, the three dist dirs) —
+ *  without it, a build's untracked output would read as a dirty tree on a
+ *  second `prepare` against the same checkout, exactly as it would NOT in
+ *  the real, gitignored repo. */
 const FILES: Record<string, string> = {
+  '.gitignore': 'node_modules\nserver/dist/\nserver/dist-pwa/\nagent/dist/\n',
   'install.sh': '#!/usr/bin/env bash\necho fixture\n',
   'ccd/ccrc': '#!/usr/bin/env bash\necho fixture\n',
   'shared/package.json': '{ "type": "module" }\n',
@@ -109,11 +114,18 @@ function plantBin(home: string, ghExit = 0): string {
 }
 
 interface Result { code: number; stdout: string; stderr: string }
-function run(root: string, home: string, args: string[] = [], ghExit = 0): Result {
+function run(root: string, home: string, args: string[] = [], ghExit = 0,
+  extraEnv: NodeJS.ProcessEnv = {}): Result {
   const bin = plantBin(home, ghExit);
   const r = spawnSync('bash', [join(root, 'deploy', 'release-main.sh'), ...args],
-    { env: { ...process.env, ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: root, encoding: 'utf8' });
+    { env: { ...process.env, ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}`, ...extraEnv }, cwd: root, encoding: 'utf8' });
   return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+}
+/** What the attest step leaves behind: any file — the script copies it, never reads it. */
+function plantBundle(home: string): string {
+  const p = join(home, 'attest-bundle.json');
+  writeFileSync(p, '{"fixture":"sigstore bundle"}\n');
+  return p;
 }
 const originTags = (home: string): string[] =>
   spawnSync('git', ['-C', join(home, 'origin.git'), 'tag'], { encoding: 'utf8' }).stdout.split('\n').filter((l) => l !== '');
@@ -123,7 +135,7 @@ describe('release-main.sh: refusals before anything is written', () => {
     const home = mkTmp('ccrc-relmain-dirty-');
     const root = fixture(home, { tags: ['v0.0.1'] });
     writeFileSync(join(root, 'straggler.txt'), 'untracked\n');
-    const r = run(root, home);
+    const r = run(root, home, ['prepare']);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/refusing a dirty tree/);
     expect(originTags(home)).toEqual(['v0.0.1']);
@@ -137,7 +149,7 @@ describe('release-main.sh: refusals before anything is written', () => {
   it('an unknown argument is a usage error, exit 2', () => {
     const home = mkTmp('ccrc-relmain-usage-');
     const root = fixture(home);
-    const r = run(root, home, ['--bogus']);
+    const r = run(root, home, ['prepare', '--bogus']);
     expect(r.code).toBe(2);
     expect(r.stderr).toMatch(/unknown argument: --bogus/);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
@@ -146,7 +158,7 @@ describe('release-main.sh: refusals before anything is written', () => {
   it('a HEAD that already carries a vX.Y.Z tag exits 0 and does nothing — release.yml owns it', () => {
     const home = mkTmp('ccrc-relmain-tagged-');
     const root = fixture(home, { tags: ['v0.0.1'], tagHead: 'v1.0.0' });
-    const r = run(root, home);
+    const r = run(root, home, ['prepare']);
     expect(r.code).toBe(0);
     expect(r.stdout).toMatch(/already tagged v1\.0\.0; release\.yml owns it/);
     expect(originTags(home).sort()).toEqual(['v0.0.1', 'v1.0.0']);
@@ -162,7 +174,7 @@ describe('release-main.sh: refusals before anything is written', () => {
     // exactly the "tag-stale checkout" this guard exists for.
     const originSha = git(root, 'rev-parse', 'HEAD');
     spawnSync('git', ['-C', join(home, 'origin.git'), 'tag', 'v0.0.2', originSha], { env: { ...process.env, ...GIT_ENV } });
-    const r = run(root, home, ['--out', join(home, 'out')]);
+    const r = run(root, home, ['prepare', '--out', join(home, 'out')]);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/origin already holds v0\.0\.2/);
     expect(existsSync(join(home, 'gh-argv'))).toBe(false);
@@ -170,48 +182,119 @@ describe('release-main.sh: refusals before anything is written', () => {
   });
 });
 
-describe('release-main.sh: derive, push, build, publish', () => {
+describe('release-main.sh: prepare (tag locally, build) then publish (push, three artifacts, --prerelease)', () => {
   it.each([
     [['v0.0.1'], 'v0.0.2'],
-    [['v1.9.9', 'v1.9.10'], 'v1.9.11'],   // sort -V, not lexical: v1.9.10 > v1.9.9
-    // Non-release tags are ignored — and every one of these is a tag the
-    // `v*` glob on line 53 ALREADY lets through, so the only thing that can
-    // reject them is `grep -E "$SHAPE"`. The old row used `wip` and
-    // `backup/x`, which the glob excludes on its own: it would have stayed
-    // green with `$SHAPE` deleted, pinning nothing.
+    [['v1.9.9', 'v1.9.10'], 'v1.9.11'],
     [['v0.0.1', 'vnext', 'v1.2', 'v1.2.3-rc1'], 'v0.0.2'],
     [[], 'v0.0.1'],
-  ])('highest %j → next %s', (tags, next) => {
+  ])('highest %j → next %s: prepare tags locally, publish pushes and publishes', (tags, next) => {
     const home = mkTmp('ccrc-relmain-derive-');
     const root = fixture(home, { tags });
-    const r = run(root, home, ['--out', join(home, 'out')]);
-    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(originTags(home)).toContain(next);
+    const out = join(home, 'out');
+    const p = run(root, home, ['prepare', '--out', out]);
+    expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
+    // Prepared: the tag is local, origin has NOT seen it, nothing was published.
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe(next);
-    const gh = readFileSync(join(home, 'gh-argv'), 'utf8').trim();
-    expect(gh).toBe(`release create ${next} ${join(home, 'out')}/ccrc-${next}.tar.gz ${join(home, 'out')}/SHA256SUMS --verify-tag`);
-    // The artifact really is build-release.sh's: the stamp names the tag.
-    expect(existsSync(join(home, 'out', `ccrc-${next}.tar.gz`))).toBe(true);
-    // Exactly one push reaches origin — the tag, once (R4).
+    expect(originTags(home)).not.toContain(next);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(readFileSync(join(out, 'release-main.state'), 'utf8')).toBe(`built true\ntag ${next}\n`);
+    expect(existsSync(join(out, `ccrc-${next}.tar.gz`))).toBe(true);
+    const bundle = plantBundle(home);
+    const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: bundle });
+    expect(q.code, `stderr: ${q.stderr}\nstdout: ${q.stdout}`).toBe(0);
+    expect(originTags(home)).toContain(next);
     expect(readFileSync(join(home, 'origin-pushes'), 'utf8')).toBe(`refs/tags/${next}\n`);
+    // All three artifacts NAMED, the flag trailing (the stub records `$*` as one line).
+    expect(readFileSync(join(home, 'gh-argv'), 'utf8').trim())
+      .toBe(`release create ${next} ${out}/ccrc-${next}.tar.gz ${out}/SHA256SUMS ${out}/ccrc-${next}.tar.gz.sigstore.json --verify-tag --prerelease`);
+    expect(existsSync(join(out, `ccrc-${next}.tar.gz.sigstore.json`))).toBe(true);
+    expect(q.stdout).toMatch(/published v[0-9.]+ as a prerelease/);
   });
 
-  it('pushes the tag to origin BEFORE publishing — gh --verify-tag needs it there', () => {
+  it('publish pushes the tag BEFORE gh runs — --verify-tag needs it on origin', () => {
     const home = mkTmp('ccrc-relmain-order-');
     const root = fixture(home, { tags: ['v0.0.1'] });
-    const r = run(root, home, ['--out', join(home, 'out')]);
-    expect(r.code, r.stderr).toBe(0);
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const q = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: plantBundle(home) });
+    expect(q.code, q.stderr).toBe(0);
     expect(readFileSync(join(home, 'origin-tags-at-gh'), 'utf8').split('\n')).toContain('v0.0.2');
+  });
+
+  it('publish without a bundle refuses, pushes nothing, keeps the local tag for a retry', () => {
+    const home = mkTmp('ccrc-relmain-nobundle-');
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const q = run(root, home, ['publish', '--out', out]);
+    expect(q.code).toBe(1);
+    expect(q.stderr).toMatch(/no provenance bundle .* refusing to publish an unattested release; nothing was pushed/);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('v0.0.2');
+    // CCRC_BUNDLE_PATH naming a file that does not exist is the same refusal.
+    const q2 = run(root, home, ['publish', '--out', out], 0, { CCRC_BUNDLE_PATH: join(home, 'missing.json') });
+    expect(q2.code).toBe(1);
+    expect(q2.stderr).toMatch(/CCRC_BUNDLE_PATH names no file/);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+  });
+
+  it('publish without a prepared state is a usage error, exit 2, nothing touched', () => {
+    const home = mkTmp('ccrc-relmain-nostate-');
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    const q = run(root, home, ['publish', '--out', join(home, 'out')]);
+    expect(q.code).toBe(2);
+    expect(q.stderr).toMatch(/run 'release-main.sh prepare' first/);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
   });
 
   it('a failed publish deletes the pushed tag from origin, so no release-less tag remains', () => {
     const home = mkTmp('ccrc-relmain-cleanup-');
     const root = fixture(home, { tags: ['v0.0.1'] });
-    const r = run(root, home, ['--out', join(home, 'out')], 1);
-    expect(r.code).toBe(1);
-    expect(r.stderr).toMatch(/deleting tag v0\.0\.2 from origin/);
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const q = run(root, home, ['publish', '--out', out], 1, { CCRC_BUNDLE_PATH: plantBundle(home) });
+    expect(q.code).toBe(1);
+    expect(q.stderr).toMatch(/deleting tag v0\.0\.2 from origin/);
     expect(originTags(home)).toEqual(['v0.0.1']);
     expect(git(root, 'tag', '--points-at', 'HEAD')).toBe('');
+  });
+
+  it('an already-tagged HEAD: prepare records built false and publish does nothing — release.yml owns it', () => {
+    const home = mkTmp('ccrc-relmain-tagged-');
+    const root = fixture(home, { tags: ['v0.0.1'], tagHead: 'v1.0.0' });
+    const out = join(home, 'out');
+    const p = run(root, home, ['prepare', '--out', out]);
+    expect(p.code).toBe(0);
+    expect(p.stdout).toMatch(/already tagged v1\.0\.0; release\.yml owns it/);
+    expect(readFileSync(join(out, 'release-main.state'), 'utf8')).toBe('built false\ntag v1.0.0\n');
+    expect(existsSync(join(home, 'npm-argv'))).toBe(false);
+    const q = run(root, home, ['publish', '--out', out]);
+    expect(q.code).toBe(0);
+    expect(q.stdout).toMatch(/nothing to publish — v1\.0\.0 was already tagged at checkout; release\.yml owns it/);
+    expect(existsSync(join(home, 'gh-argv'))).toBe(false);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+  });
+
+  it('a leftover LOCAL tag from an earlier prepare is named, not mistaken for release.yml\'s', () => {
+    const home = mkTmp('ccrc-relmain-leftover-');
+    const root = fixture(home, { tags: ['v0.0.1'] });
+    const out = join(home, 'out');
+    expect(run(root, home, ['prepare', '--out', out]).code).toBe(0);
+    const p = run(root, home, ['prepare', '--out', out]);
+    expect(p.code).toBe(1);
+    expect(p.stderr).toMatch(/HEAD carries v0\.0\.2 which origin does not hold — a previous prepare's local tag/);
+    expect(existsSync(join(home, 'origin-pushes'))).toBe(false);
+  });
+
+  it('an arm is required, and only one', () => {
+    const home = mkTmp('ccrc-relmain-arm-');
+    const root = fixture(home);
+    expect(run(root, home, []).code).toBe(2);
+    expect(run(root, home, ['prepare', 'publish']).code).toBe(2);
   });
 });
 
@@ -223,7 +306,7 @@ describe('release-main.sh: source pins', () => {
     expect(src()).toContain('deploy/build-release.sh" --out "$OUT_DIR"');
     expect(src()).not.toMatch(/npm ci|npm run/);
   });
-  it('names both artifacts to gh rather than globbing — a glob\'s order follows the locale', () => {
-    expect(src()).toContain('"$OUT_DIR/ccrc-$NEXT.tar.gz" "$OUT_DIR/SHA256SUMS" --verify-tag');
+  it('names all three artifacts to gh rather than globbing, and publishes a PRERELEASE (design §4, §18 rows 1 and 7)', () => {
+    expect(src()).toContain('"$tarball" "$sums" "$bundle" --verify-tag --prerelease');
   });
 });
