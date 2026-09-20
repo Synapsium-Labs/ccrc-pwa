@@ -13,7 +13,7 @@ export interface RosterJsonAccount {
   label: string;
   configDirSuffix: string;
   homeAble: boolean;
-  telemetry: 'anthropic' | 'none';
+  telemetry: 'anthropic' | 'codex' | 'none';
   hue: Hue;
   /** The account's pool, or `null` for untagged — `AccountDef.pool`
    *  (`shared/roster.ts`) one-for-one, including that a JSON `null` is
@@ -31,6 +31,11 @@ export interface RosterJsonAccount {
    *  whenever `execKind` is not `'generated'`", which the code never did
    *  (D-1855). */
   secretsFile: string | undefined;
+  /** Present only when `execKind === 'codex'`: the lane's two listener ports
+   *  and OAuth directory, copied exactly from its validated exec topology. */
+  proxyPort?: number;
+  litellmPort?: number;
+  authDir?: string;
 }
 
 /**
