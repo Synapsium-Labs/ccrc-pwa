@@ -744,16 +744,26 @@ export function nextDialogFrame(
 
 /**
  * §5.3's re-point decision, pure: re-point when the answer CHANGED and either
- * the new rung is strictly better or the file being tailed is gone.
+ * it names a different transcript session, the new rung is strictly better, or
+ * the file being tailed is gone.
  *
  * "Better" is §5.1's rung order, which is why the rung travels in the union
  * rather than being recomputed here. A same-rung, same-path answer changes
- * nothing — the common case every tick — and a worse rung never drags a healthy
- * stream off an exact-address transcript that still exists.
+ * nothing — the common case every tick.
+ *
+ * THE UUID CLAUSE IS NOT A RUNG QUESTION. A transcript that Claude Code
+ * superseded (`continued-in`) resolves at the SAME rung, to a DIFFERENT path,
+ * while the old file is still on disk — frozen, not deleted — so all three of
+ * the original clauses decline it and the stream would tail a dead file for
+ * ever. Supersession is not a better ADDRESS for the same thing; it is a
+ * different thing, and rung order was never asked to rank it. A fallback
+ * carries no uuid and needs none: it always ranks last, so a fallback on
+ * either side is already decided by rank.
  */
 export function shouldRepoint(
   cur: TranscriptResolution, next: TranscriptResolution, tailedExists: boolean,
 ): boolean {
+  if (cur.kind === 'found' && next.kind === 'found' && cur.uuid !== next.uuid) return true;
   if (cur.path === next.path && rungRank(cur) === rungRank(next)) return false;
   if (rungRank(next) < rungRank(cur)) return true;
   return !tailedExists;
