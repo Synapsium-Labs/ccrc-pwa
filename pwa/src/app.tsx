@@ -14,6 +14,7 @@ import { BlockScreen } from './components/BlockScreen';
 import { LoginScreen } from './components/LoginScreen';
 import { ToastHost } from './components/Toast';
 import { AccountsStrip } from './fleet/AccountsStrip';
+import { HostGauge } from './fleet/HostGauge';
 import { useAuthLost } from './lib/auth';
 import { navigate, usePath } from './lib/router';
 import { useMediaQuery } from './lib/useMediaQuery';
@@ -106,7 +107,16 @@ export function App(): ReactNode {
       <div className="app-shell" data-view={sessionId || archive || accounts || mail || runs ? 'session' : 'fleet'}>
         {desktop && (
           <div className="shell-accounts">
-            <AccountsStrip />
+            {/* TWO COLUMNS, and the host gauge owns the right one outright
+                (shell.css `.accounts-bar`). It is a SIBLING of the strip, never
+                a cell inside it: `.accounts-strip` is one role="link" onto
+                /accounts, so a tap on the host tile from inside it would open a
+                screen that says nothing about this box — and its position would
+                then depend on how many accounts the roster happens to carry. */}
+            <div className="accounts-bar">
+              <AccountsStrip />
+              <div className="host-col"><HostGauge /></div>
+            </div>
           </div>
         )}
         <aside className="shell-nav">

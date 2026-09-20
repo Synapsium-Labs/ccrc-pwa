@@ -128,6 +128,54 @@
     height: 5px;
   }
 
+  /* THE BAR IS TWO COLUMNS, and the second one is fixed. The accounts grid
+     takes whatever is left and reflows as lanes come and go (auto-fit, above);
+     the host gauge does not move when it does. That is the whole point of the
+     column: an operator glancing at box load looks at the right edge, not at
+     wherever the fifth tile happened to land this week. When the accounts wrap
+     to a second row the column stays put at the top right — `align-items:
+     start`, not a stretched tile with its two rows floating in the middle. */
+  .shell-accounts .accounts-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: var(--sp-3);
+    align-items: start;
+  }
+  /* The divider lives on the COLUMN, not on the tile: it separates the two
+     kinds of instrument, and a border on the tile would just look like a
+     thicker tile. */
+  .shell-accounts .host-col {
+    padding-left: var(--sp-3);
+    border-left: 1px solid var(--edge-subtle);
+  }
+  /* Same chrome as an account gauge at this width — label beside the rows,
+     raised fill — so the panel reads as one row of instruments. 264px is what
+     the two rows need with the trailing readouts intact; it is fixed rather
+     than fluid because a gauge that changes width as accounts come and go is
+     the thing this column exists to prevent. */
+  .shell-accounts .host-gauge {
+    width: 264px;
+    display: flex;
+    align-items: center;
+    gap: var(--sp-3);
+    margin: 0;
+    padding: 2px var(--sp-3);
+    background: var(--bg-raised);
+  }
+  .shell-accounts .host-gauge .host-label {
+    flex: none;
+    font-size: var(--text-xs);
+  }
+  .shell-accounts .host-gauge .acct-rows {
+    flex: 1;
+    min-width: 0;
+  }
+  /* The stale marker is the one thing that does not fit the flex row: it sits
+     under the rows rather than beside them, so it never squeezes a meter. */
+  .shell-accounts .host-gauge .host-stale {
+    flex: none;
+  }
+
   .shell-nav {
     position: relative;
     grid-column: 1;

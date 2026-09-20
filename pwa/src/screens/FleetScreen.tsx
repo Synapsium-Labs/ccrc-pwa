@@ -10,6 +10,7 @@ import { toast } from '../components/Toast';
 import { NewSessionSheet } from '../fleet/NewSessionSheet';
 import { PoolSheet } from '../fleet/PoolSheet';
 import { AccountsStrip } from '../fleet/AccountsStrip';
+import { HostGauge } from '../fleet/HostGauge';
 import { FleetHostBanner } from '../fleet/FleetHostBanner';
 import { SubstrateBanner } from '../fleet/SubstrateBanner';
 import { MailBadge } from '../fleet/MailBadge';
@@ -556,6 +557,14 @@ export function FleetScreen({
           above, D-161); the rule that a door must never render nothing is
           unchanged. */}
       {showAccounts && <AccountsStrip />}
+      {/* The host gauge rides the same flag, for one reason and not the
+          strip's: `showAccounts` is which SURFACE owns the instruments — the
+          desktop top bar (app.tsx, where this tile has its own right-hand
+          column) or this list. Mounted unconditionally it would render twice
+          on desktop, once in each. Here it is the last, full-width row under
+          the strip: a fixed place that does not move as accounts come and
+          go. */}
+      {showAccounts && <HostGauge />}
 
       {/* The passphrase-only notice (D-161) — renders ITSELF or nothing, from
           the box's own posture, so it is mounted unconditionally here for the

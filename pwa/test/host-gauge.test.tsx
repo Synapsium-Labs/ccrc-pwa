@@ -23,7 +23,7 @@ const reading = (over: Partial<HostStat> = {}): HostStat => ({
 
 const stub = (stat: HostStat): void => { vi.spyOn(api, 'host').mockResolvedValue(stat); };
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); navigate('/'); });
 
 describe('HostGauge readings', () => {
   it('draws the average, the two hottest threads and the memory split', async () => {
@@ -184,5 +184,65 @@ describe('HostGauge when there is no reading', () => {
     vi.spyOn(document, 'visibilityState', 'get').mockReturnValue('visible');
     await act(async () => { document.dispatchEvent(new Event('visibilitychange')); });
     expect(spy).toHaveBeenCalledTimes(1);
+  });
+});
+
+import { App } from '../src/app';
+import { navigate } from '../src/lib/router';
+
+const shellCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'styles', 'shell.css'), 'utf8');
+
+const desktop = (): void => {
+  vi.stubGlobal('matchMedia', (q: string) => ({
+    matches: q.includes('min-width'),
+    media: q, onchange: null, addListener: () => {}, removeListener: () => {},
+    addEventListener: () => {}, removeEventListener: () => {}, dispatchEvent: () => false,
+  }));
+};
+
+/** The tile carries no role and no aria-label by design (HostGauge.tsx says
+ *  why), so it is found the way the stylesheet finds it. */
+const findGauge = async (): Promise<HTMLElement> => {
+  await screen.findByText('host');
+  const el = document.querySelector('.host-gauge');
+  expect(el).not.toBeNull();
+  return el as HTMLElement;
+};
+
+describe('where the gauge sits', () => {
+  it('is NOT inside the accounts strip — that whole grid is one link to /accounts', async () => {
+    stub(reading());
+    render(<App />);
+    const gauge = await findGauge();
+    expect(gauge.closest('[role="link"]')).toBeNull();
+    expect(gauge.closest('.accounts-strip')).toBeNull();
+  });
+
+  it('rides the desktop top bar in its OWN column, beside the strip rather than inside it', async () => {
+    desktop();
+    stub(reading());
+    render(<App />);
+    const gauge = await findGauge();
+    expect(gauge.closest('.host-col')).not.toBeNull();
+    expect(gauge.closest('.accounts-bar')).not.toBeNull();
+    expect(gauge.closest('.accounts-strip')).toBeNull();
+    // Exactly one — the mobile mount and the top bar are alternatives, never
+    // both, or the box would be polled twice and drawn twice.
+    expect(document.querySelectorAll('.host-gauge')).toHaveLength(1);
+  });
+
+  it('keeps a fixed column at the right edge, so its place does not depend on how many accounts there are', () => {
+    // The requirement in one line of CSS: the bar is `1fr auto`, the accounts
+    // take the elastic column and the gauge's own column is a fixed width. A
+    // mutant that drops the width, or folds the gauge back into the accounts
+    // grid, moves the tile every time a lane is added or disabled.
+    expect(declValue(ruleIn(shellCss, '.shell-accounts .accounts-bar'), 'grid-template-columns'))
+      .toBe('minmax(0,1fr)auto');   // declValue normalises whitespace
+    expect(declValue(ruleIn(shellCss, '.shell-accounts .host-gauge'), 'width')).toBe('264px');
+    // The accounts grid keeps its own auto-fit reflow — the two columns are
+    // independent, which is what makes the gauge's position stable while the
+    // strip's contents move.
+    expect(declValue(ruleIn(shellCss, '.shell-accounts .accounts-strip'), 'grid-template-columns'))
+      .toContain('auto-fit');
   });
 });
