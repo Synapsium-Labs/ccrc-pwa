@@ -1052,7 +1052,7 @@ The registry uuid is the authority — it is what `--resume` reads after a resta
 - Consumes: `_cfg_dir`, `_reg_get`, `_reg_set`, `_ws_realpath` (all existing in `ccd/ccd`).
 - Produces: `_continued_in_of <file> <uuid>` printing a successor uuid or nothing; `_sync_uuid` unchanged in signature.
 
-**Refinement of the spec, recorded as `D-TBD-ccd-one-hop`:** the spec says `ccd` walks the chain with a hop bound and a visited set. `ccd` follows **one hop per supervise tick** instead. The read budget below is what forces it — each hop's quiescence has to be observed before its file may be read — and the effect is the same: the chain converges over a few ticks, the per-stamp memo IS the visited set, and a cycle cannot be re-read because its stamps are already in it. The ledger allocator (`POST /api/ledger/deviations`) answered 401 from this box, which holds no box token, so this carries a `D-TBD-` slug and must be reported rather than guessed at.
+**Refinement of the spec, recorded as `D-3164`:** the spec says `ccd` walks the chain with a hop bound and a visited set. `ccd` follows **one hop per supervise tick** instead. The read budget below is what forces it — each hop's quiescence has to be observed before its file may be read — and the effect is the same: the chain converges over a few ticks, the per-stamp memo IS the visited set, and a cycle cannot be re-read because its stamps are already in it. The ledger allocator (`POST /api/ledger/deviations`) answered 401 from this box, which holds no box token, so this carries a `D-TBD-` slug and must be reported rather than guessed at.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1286,7 +1286,7 @@ _continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
-  # WHY ONE HOP AND WHY GATED (D-TBD-ccd-one-hop). `_transcript_path` costs
+  # WHY ONE HOP AND WHY GATED (D-3164). `_transcript_path` costs
   # ~36 ms — D-2444 measured it at ~14x the pane classifier and stopped paying
   # it every five seconds across the fleet — so this stats the direct address
   # instead and reads nothing at all in the common case. The marker can only be
@@ -1733,15 +1733,21 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ## Deviations found
 
-| id | what |
-|---|---|
-| `D-TBD-ccd-one-hop` | The spec has `ccd` walk the continuation chain with a hop bound and a visited set within one call; Task 6 follows **one hop per supervise tick** instead, because each hop's quiescence must be observed before its file may be read. Same end state, and the per-stamp memo is the visited set. |
-| `D-TBD-ccd-tail-once` | The brief's own `_continued_in_of` piped `tail -c` into `grep` into a second `tail -1`, which invokes `tail` TWICE per examination and so fails the read-budget test the same task ships. The last non-empty line is taken with bash parameter expansion instead — one `tail` per quiescence, which is what the budget actually promises. Found by the Task 6 implementer while measuring. |
-| `D-TBD-ccd-pane-first` | The mutation "move `_follow_continued_in` above the pane read" went red nowhere, because no fixture combined a live pane-pid answer with a live continuation chain. It is not cosmetic: with the chain first, a pane still publishing the OLD id overwrites the successor the chain just wrote, every tick, and the registry never converges. Pinned by a fixture where the pane's sessions file still names the pre-fork uuid. |
-| `D-TBD-dispatch-stale-timer` | Pre-existing, found by Task 5's review and reproduced empirically: `dispatch` replaces the `timers` MAP ENTRY without clearing the old `setTimeout`, so a re-send through `resolve`/`retry` leaves the superseded cycle's deadline armed and it later deletes a pending that is legitimately back in flight — the "message vanishes while waiting" defect through the rescue path. The five-second horizon made it rare, not absent. Fixed by one `arm()` helper both arming sites go through. |
-| `D-TBD-clearconfirmed-timer` | Pre-existing: `clearConfirmed` drops a pending without cancelling its timer. Harmless at five seconds, a real per-message leak at the ten-minute horizon Task 5 introduces, and the timer is now the thing that ends the bubble — so Task 5 makes `clearConfirmed` report the keys it dropped and cancels them. |
+(Numbers are ISSUED by the allocator and defined here in the same act — the block `D-3164`…`D-3168` was minted for this project on 2026-09-20. Bullets, not a table: `deviation-refs.test.ts`'s high-water reads a definition line, and a table cell is not one.)
 
-**Both carry `D-TBD-` slugs and must be reported, not guessed at.** `POST /api/ledger/deviations` is the only thing that may mint a number, and it answered 401 from this box — no box token lives at `~/.ccrc/mail.token` or `~/.cc-secrets/ccrc-mail.token` here. Allocate and DEFINE in the same act from a box that holds one, before the branch is merged.
+- **D-3164** — The spec has `ccd` walk the continuation chain with a hop bound and a visited set within one call; Task 6 follows **one hop per supervise tick** instead, because each hop's quiescence must be observed before its file may be read. Same end state, and the per-stamp memo is the visited set.
+- **D-3165** — The brief's own `_continued_in_of` piped `tail -c` into `grep` into a second `tail -1`, which invokes `tail` TWICE per examination and so fails the read-budget test the same task ships. The last non-empty line is taken with bash parameter expansion instead — one `tail` per quiescence, which is what the budget actually promises. Found by the Task 6 implementer while measuring.
+- **D-3166** — The mutation "move `_follow_continued_in` above the pane read" went red nowhere, because no fixture combined a live pane-pid answer with a live continuation chain. It is not cosmetic: with the chain first, a pane still publishing the OLD id overwrites the successor the chain just wrote, every tick, and the registry never converges. Pinned by a fixture where the pane's sessions file still names the pre-fork uuid.
+- **D-3167** — Pre-existing, found by Task 5's review and reproduced empirically: `dispatch` replaces the `timers` MAP ENTRY without clearing the old `setTimeout`, so a re-send through `resolve`/`retry` leaves the superseded cycle's deadline armed and it later deletes a pending that is legitimately back in flight — the "message vanishes while waiting" defect through the rescue path. The five-second horizon made it rare, not absent. Fixed by one `arm()` helper both arming sites go through.
+- **D-3168** — Pre-existing: `clearConfirmed` drops a pending without cancelling its timer. Harmless at five seconds, a real per-message leak at the ten-minute horizon Task 5 introduces, and the timer is now the thing that ends the bubble — so Task 5 makes `clearConfirmed` report the keys it dropped and cancels them.
+
+**All five were ISSUED, never guessed at.** `POST /api/ledger/deviations` minted the contiguous block `D-3164`…`D-3168` for this project on 2026-09-20, and the table above DEFINES each in the same act — allocate-and-define, as D13 requires.
+
+The route had answered 401 until then, and the reason is worth keeping, because the next box to hit it will read the same 401 and reach the same wrong conclusion this plan did. **Nothing was missing from another box.** The box token is minted LOCALLY (`openssl rand -hex 32`), one per box, and none existed here: the server reads `~/.ccrc/mail.token`, `ccrc-api` reads `~/.cc-secrets/ccrc-mail.token`, and on a `--role both` box those two paths must hold the SAME secret. `ccrc-api` also refuses rather than guessing a host, so `~/.ccrc/agent.env` has to name `CCRC_SERVER_URL`. The server reads the token once at boot, so it takes a restart to see one.
+
+The floor this block was cut from is **3164**, and it read **1847** until the box's own main checkout was pulled. That is not a broken ledger: `sweepLedgerFloor` seeds from the working tree at `projectsRoot/<project>`, that checkout stood two weeks behind `origin/main`, and its highest `D-<n>` was exactly the 1797 the 50-number gap sat on top of. A stale checkout is a low floor, and a low floor is the one thing that can re-issue a number.
+
+**There is no project-wide registry and none is needed.** Each fleet's server holds its own — `deploy/ccrc-agent.env.example` says "this fleet's ccrc server", and the project's other contributor confirmed the same independently. What catches two branches that each took the same number is `server/test/deviation-refs.test.ts`, which compares this branch against `origin/main` WITHOUT merging, before the merge that would otherwise decide it. Take numbers late and merge promptly; that, not a shared allocator, is the anti-collision mechanism.
 
 ## Rollout
 

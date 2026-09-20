@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=9c6dfec45e40c31f3d7d73d86c72bc2c3f4e0638d55be6976de4eecdb65820ad
+# ccrc:generated 1 sha256=05ca00eedb363b515555f235f7622d53cd93acdafb4e09709813b2a7ea8e8343
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -15727,7 +15727,7 @@ _continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line
   # is data off a disk other processes write. `sessionId` is checked when
   # present and ignored when absent (absence-permits); a successor that is not
   # a uuid, or is this file's own uuid, is refused.
-  # D-TBD-ccd-tail-once: the last-line pick below is done in bash rather than
+  # D-3165: the last-line pick below is done in bash rather than
   # through a second `| tail -1` in the pipeline — that second call is what a
   # stub-based count of "one tail per quiescence" would otherwise see, even
   # though it never touches the disk a second time. One external `tail`, one
@@ -15763,7 +15763,7 @@ _continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
-  # WHY ONE HOP AND WHY GATED (D-TBD-ccd-one-hop). The marker can only be the
+  # WHY ONE HOP AND WHY GATED (D-3164). The marker can only be the
   # final line of a file that will never be appended to again, so the tail
   # read waits for the file to STOP changing: one stat per tick (once the path
   # is resolved — see `_CI_PATH` above), and one 8 KiB read per quiescence. A
