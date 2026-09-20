@@ -16,6 +16,7 @@
 // has crept into tracked source.
 import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync, statSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { CONTINUATION_TAIL_BYTES } from '../src/transcript/parse.js';
@@ -105,10 +106,29 @@ describe('continued-in parity', () => {
     expect(hits.sort()).toEqual(['server/src/transcript/parse.ts']);
   });
 
-  it('exactly three readers exist: ccd/ccd and ccd/ccrc-doctor-checks are the only bash files carrying it', () => {
-    for (const p of ['ccd/ccrc-adopt', 'ccd/ccrc-wrapper-shape']) {
-      const text = readFileSync(path.join(ccrcRoot, p), 'utf8');
-      expect(text, `${p} must not grow a fourth copy of the marker`).not.toContain('continuedInSessionId');
+  // `git ls-files`, not a hand-listed pair — `ccd/` holds ~39 tracked files
+  // (`ccrc-api`, `session-hook.sh`, `ccd-pool-sync`, `ccrc`, the skill
+  // trees, …) and a fixed two-file guess is the exact "hand-maintained list
+  // of files to scan" defect this test otherwise exists to refuse one level
+  // up: a fourth copy landing in any OTHER file under `ccd/` — `session-
+  // hook.sh` is the obvious candidate, since it is the other writer/reader
+  // in this area of the marker's own neighbourhood — would leave this test
+  // green while defeating the guarantee its name makes. Scoped to TRACKED
+  // files (`git ls-files`) rather than every path on disk, matching the
+  // TypeScript scan's own scope: build artefacts and scratch files are not
+  // readers, tracked source is.
+  function trackedFiles(dir: string): string[] {
+    const out = execFileSync('git', ['-C', ccrcRoot, 'ls-files', '--', dir], { encoding: 'utf8' });
+    return out.split('\n').filter(Boolean).map((f) => path.join(ccrcRoot, f));
+  }
+
+  it('exactly three readers exist: ccd/ccd and ccd/ccrc-doctor-checks are the only tracked files under ccd/ carrying it', () => {
+    const hits: string[] = [];
+    for (const f of trackedFiles('ccd')) {
+      let text: string;
+      try { text = readFileSync(f, 'utf8'); } catch { continue; }
+      if (text.includes('continuedInSessionId')) hits.push(path.relative(ccrcRoot, f));
     }
+    expect(hits.sort()).toEqual(['ccd/ccd', 'ccd/ccrc-doctor-checks']);
   });
 });
