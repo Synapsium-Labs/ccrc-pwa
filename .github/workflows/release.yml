@@ -1,11 +1,16 @@
-# The release pipeline's delivery layer, kept THIN by design (stage 4 spec
-# §2): everything a release artifact promises — the refusals, the layout, the
-# MANIFEST, the checksums — is promised by deploy/build-release.sh, which runs
-# and is TESTED locally (server/test/build-release.test.ts). This file only
-# gives the script a clean tagged checkout and hands its output to a GitHub
-# Release. No logic lives in YAML that the script doesn't own; the pins in
-# build-release.test.ts hold this file to that ("release.yml: the thin
-# workflow" — trigger set, single build path, both artifacts uploaded).
+# The release pipeline's delivery layer for a HAND-CUT tag, kept THIN by
+# design (stage 4 spec §2): everything a release artifact promises — the
+# refusals, the layout, the MANIFEST, the checksums — is promised by
+# deploy/build-release.sh, which runs and is TESTED locally
+# (server/test/build-release.test.ts). This file gives the script a clean
+# tagged checkout, attests what it built, and hands the output to a GitHub
+# Release. The pins in build-release.test.ts hold it to that.
+#
+# Design 2026-09-20 §4: the attest step's identity here is
+# …/release.yml@refs/tags/<tag> — `on: push: tags` makes the OIDC ref the
+# tag, never main — the second of the two identities `ccrc update` accepts;
+# and the release is born a PRERELEASE (decision 2): every release enters
+# on `dev`, and `stable` is a promotion (deploy/release-stable.sh).
 name: release
 
 on:
@@ -15,27 +20,28 @@ on:
 jobs:
   release:
     runs-on: ubuntu-latest
-    # The one job in this repo that can WRITE (a GitHub Release), so a wedge
-    # here holds an open contents:write token for as long as it runs. 30.
+    # The job holds an open contents:write token for as long as it runs. 30.
     timeout-minutes: 30
+    # contents: write — the release the last step creates. id-token: write
+    # and attestations: write — the pinned attest action's documented
+    # permission set at that ref; the OIDC token is the signing identity, no
+    # key kept.
     permissions:
-      # `gh release create` writes to the repo's releases; everything else
-      # stays read-only.
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
           # Full depth: build-release.sh names the artifact by `git tag
-          # --points-at HEAD` and refuses an untagged HEAD — the tag ref (and
-          # any history a future stamper walks) must actually be present, not
-          # a shallow single-commit fetch.
+          # --points-at HEAD` and refuses an untagged HEAD — the tag ref must
+          # actually be present, not a shallow single-commit fetch.
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
         with:
           # The engines floor itself (>=22.13.0, node:sqlite) — read from the
-          # one place it is declared, so the release builder can never drift
-          # below the floor the packages pin (server/test/node-floor.test.ts).
+          # one place it is declared (server/test/node-floor.test.ts).
           node-version-file: server/package.json
           cache: npm
           cache-dependency-path: |
@@ -49,10 +55,23 @@ jobs:
       - name: Build the release artifact
         run: bash deploy/build-release.sh --out release-out
 
-      # Both artifacts — the tarball AND SHA256SUMS — ride the glob.
-      # --verify-tag: the release is cut only for a tag that exists on the
-      # remote, never a ref name conjured some other way.
+      # Keyless provenance over the tarball, signed by this workflow's
+      # identity at the pushed tag.
+      - uses: actions/attest-build-provenance@v4
+        id: attest
+        with:
+          subject-path: release-out/ccrc-*.tar.gz
+
+      # The bundle rides the release under the one name every `ccrc update`
+      # fetches (`<tarball>.sigstore.json`), so the publish glob carries it.
+      - name: Name the provenance bundle
+        env:
+          CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"
+
+      # All three artifacts ride the glob. --verify-tag: the release is cut
+      # only for a tag that exists on the remote. --prerelease: born on dev.
       - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease

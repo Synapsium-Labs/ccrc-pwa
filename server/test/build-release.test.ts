@@ -418,6 +418,20 @@ describe('build-release.sh: install-time hooks ship with their scripts (D-3105)'
   });
 });
 
+/** What BOTH build workflows must say to attest (design 2026-09-20 §4): the
+ *  pinned action, the tarball glob as subject, and the permission set the
+ *  action's README documents at that ref — `contents: write` because the
+ *  release itself needs it. `id-token` was FORBIDDEN by the stage-4 pin
+ *  (a key nobody asked for); it is now the signing identity, asked for in
+ *  the diff. Nothing else. */
+function expectAttestingWorkflow(src: string, name: string): void {
+  expect(src, `${name}: the attest step, pinned by tag, subject = the tarball glob`)
+    .toMatch(/^      - uses: actions\/attest-build-provenance@v4\n        id: attest\n(?:        if: .*\n)?        with:\n          subject-path: release-out\/ccrc-\*\.tar\.gz$/m);
+  expect(src, `${name}: exactly the documented permission set`)
+    .toMatch(/^    permissions:\n      contents: write\n      id-token: write\n      attestations: write$/m);
+  expect(src, `${name}: no other permission`).not.toMatch(/(packages|pull-requests|actions|deployments|issues):/);
+}
+
 describe('release.yml: the thin workflow, pinned to the script', () => {
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
@@ -425,9 +439,6 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
   it('triggers on v* tag pushes and on NOTHING else', () => {
     const src = wf();
     expect(src).toMatch(/^on:\n  push:\n    tags: \['v\*'\]$/m);
-    // The full trigger vocabulary that would widen when a release fires:
-    // ci.yml's own workflow_dispatch escape hatch is deliberately absent —
-    // a re-cut is `git tag -f` + push, so the artifact always matches a tag.
     for (const trigger of ['branches:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
       expect(src, `release.yml must not also trigger on ${trigger}`).not.toContain(trigger);
     }
@@ -436,22 +447,27 @@ describe('release.yml: the thin workflow, pinned to the script', () => {
   it('invokes build-release.sh and owns no second build path', () => {
     const src = wf();
     expect(src).toContain('bash deploy/build-release.sh --out release-out');
-    // The script runs `npm ci`/`npm run build` itself, per package. A copy of
-    // either in the YAML is a second build path — the drift this pin forbids.
     expect(src, 'the YAML must not run npm itself').not.toMatch(/npm ci|npm run/);
     expect(src, 'the YAML must not invoke a compiler').not.toMatch(/\btsc\b|\bvite\b/);
   });
 
-  it('uploads both artifacts to the tag\'s release, token from the workflow', () => {
+  it('attests the tarball after the build and before the publish, names the bundle, publishes a PRERELEASE with all three (design 2026-09-20 §4; D-3118)', () => {
     const src = wf();
-    // `release-out/*` is the script's whole --out dir: ccrc-<tag>.tar.gz AND
-    // SHA256SUMS — naming one file here would silently drop the other.
-    expect(src).toContain('gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag');
+    expectAttestingWorkflow(src, 'release.yml');
+    expect(src).toContain('cp "$CCRC_BUNDLE_PATH" "release-out/ccrc-$GITHUB_REF_NAME.tar.gz.sigstore.json"');
+    expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
+    expect(src).toContain('gh release create "$GITHUB_REF_NAME" release-out/* --verify-tag --prerelease');
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
+    const build = src.indexOf('bash deploy/build-release.sh');
+    const attest = src.indexOf('actions/attest-build-provenance');
+    const publish = src.indexOf('gh release create');
+    expect(build).toBeGreaterThan(-1);
+    expect(attest).toBeGreaterThan(build);
+    expect(publish).toBeGreaterThan(attest);
   });
 });
 
-describe('release-main.yml: the thin main-push workflow, pinned to its script (spec §3)', () => {
+describe('release-main.yml: the thin main-push workflow, pinned to its script (spec 2026-09-18 §3, 2026-09-20 §4)', () => {
   const WORKFLOW = join(REPO, '.github', 'workflows', 'release-main.yml');
   const wf = (): string => readFileSync(WORKFLOW, 'utf8');
 
@@ -464,26 +480,29 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   });
 
   it('serialises: one concurrency group, never cancelling an in-flight release', () => {
-    const src = wf();
-    expect(src).toMatch(/^concurrency:\n  group: release-main\n  cancel-in-progress: false$/m);
-  });
-
-  it('asks for contents: write and nothing else', () => {
-    const src = wf();
-    expect(src).toMatch(/^    permissions:\n      contents: write$/m);
-    expect(src).not.toMatch(/(id-token|packages|pull-requests|actions):/);
+    expect(wf()).toMatch(/^concurrency:\n  group: release-main\n  cancel-in-progress: false$/m);
   });
 
   it('checks out at full depth — the tags it derives from must be present', () => {
     expect(wf()).toMatch(/fetch-depth: 0/);
   });
 
-  it('invokes release-main.sh and owns no second build or publish path', () => {
+  it('runs prepare, attests, then publish — the bundle path handed to the script, the attest step skipped when nothing was built (D-3122)', () => {
     const src = wf();
-    expect(src).toContain('bash deploy/release-main.sh --out release-out');
+    expectAttestingWorkflow(src, 'release-main.yml');
+    expect(src).toContain('bash deploy/release-main.sh prepare --out release-out');
+    expect(src).toContain('bash deploy/release-main.sh publish --out release-out');
+    expect(src).toContain("if: hashFiles('release-out/ccrc-*.tar.gz') != ''");
+    expect(src).toContain('CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}');
+    expect(src).toContain('GH_TOKEN: ${{ github.token }}');
+    const prepare = src.indexOf('release-main.sh prepare');
+    const attest = src.indexOf('actions/attest-build-provenance');
+    const publish = src.indexOf('release-main.sh publish');
+    expect(prepare).toBeGreaterThan(-1);
+    expect(attest).toBeGreaterThan(prepare);
+    expect(publish).toBeGreaterThan(attest);
     expect(src, 'the YAML must not build').not.toMatch(/npm ci|npm run|build-release\.sh/);
     expect(src, 'the YAML must not publish — the script owns the publish and its cleanup').not.toMatch(/gh release/);
-    expect(src).toContain('GH_TOKEN: ${{ github.token }}');
   });
 });
 

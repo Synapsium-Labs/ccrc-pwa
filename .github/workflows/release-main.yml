@@ -1,8 +1,10 @@
-# Every merge to main becomes a release (spec 2026-09-18 §3). Thin by design,
-# like release.yml: deploy/release-main.sh owns the derivation, the tag push,
-# the build and the publish, and is tested locally (server/test/release-main
-# .test.ts). No logic lives here that the script does not own — pinned in
-# server/test/build-release.test.ts.
+# Every merge to main becomes a PRERELEASE carrying a provenance bundle
+# (designs 2026-09-18 §3 and 2026-09-20 §4). Thin by design, like release.yml:
+# deploy/release-main.sh owns the derivation, the local tag, the build, the
+# push and the publish — in TWO ARMS, so the attest ACTION can run between
+# them — and both arms are tested locally (server/test/release-main.test.ts).
+# The one expression this file decides, the attest step's `if:`, is pinned
+# in server/test/build-release.test.ts.
 #
 # Deliberately NOT gated on ci.yml: the PR's required checks are the gate,
 # before the merge; main's post-merge matrix is a 45-minute re-check that the
@@ -14,8 +16,9 @@ on:
     branches: [main]
 
 # Two close merges serialise, so the second derives its tag after the first
-# has pushed. Never cancel: a cancelled run mid-publish is the release-less
-# tag the script's trap exists to prevent.
+# has pushed. Never cancel: nothing reaches origin before the publish arm's
+# push, but a run cancelled mid-publish is the release-less tag the script's
+# trap exists to prevent.
 concurrency:
   group: release-main
   cancel-in-progress: false
@@ -26,11 +29,16 @@ jobs:
     # The job holds an open contents:write token while it runs. 30, like
     # release.yml — the one measured run took 41 s.
     timeout-minutes: 30
-    # Just enough for the tag push and the release the script creates;
-    # everything else stays read-only. ci.yml's stated stance is that a
-    # writing job asks for it in the diff — this is that ask.
+    # contents: write — the tag push and the release. id-token: write and
+    # attestations: write — the pinned attest action's documented permission
+    # set at that ref: the OIDC token IS the signing identity, so there is
+    # no key to keep and no secret in this repo. Everything else stays
+    # read-only; ci.yml's stance is that a writing job asks in the diff —
+    # this is that ask.
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
@@ -48,9 +56,28 @@ jobs:
             agent/package-lock.json
             pwa/package-lock.json
 
-      # The script owns everything after checkout: refuses dirty/tagged,
-      # derives, pushes the tag, builds, publishes, cleans up on failure.
-      - name: Tag, build and publish the release
+      # Arm 1: refuses dirty/tagged, derives, tags LOCALLY, builds. Nothing
+      # reaches origin here.
+      - name: Derive the next tag and build the artifact
+        run: bash deploy/release-main.sh prepare --out release-out
+
+      # Keyless provenance (design 2026-09-20 §4, §5): THIS workflow's OIDC
+      # identity at refs/heads/main signs the tarball's digest; the bundle
+      # is published beside the tarball and every `ccrc update` verifies it
+      # against exactly this identity (…/release-main.yml@refs/heads/main).
+      # Skipped when prepare built nothing — an already-tagged HEAD is
+      # release.yml's — because the action refuses an empty subject glob;
+      # `hashFiles` is '' when nothing matches.
+      - uses: actions/attest-build-provenance@v4
+        id: attest
+        if: hashFiles('release-out/ccrc-*.tar.gz') != ''
+        with:
+          subject-path: release-out/ccrc-*.tar.gz
+
+      # Arm 2: copies the bundle to its release name, pushes the tag, publishes
+      # all three artifacts as a prerelease, deletes the tag on failure.
+      - name: Push the tag and publish the prerelease
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash deploy/release-main.sh --out release-out
+          CCRC_BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: bash deploy/release-main.sh publish --out release-out
