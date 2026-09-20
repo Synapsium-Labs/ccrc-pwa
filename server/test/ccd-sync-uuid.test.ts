@@ -5,8 +5,9 @@
 // follows the transcript's own `continued-in` pointer as well.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
-import { mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, utimesSync, existsSync, readFileSync, symlinkSync } from 'node:fs';
 import path from 'node:path';
+import { mungePath } from '../src/munge.js';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('sync-uuid'); });
@@ -70,6 +71,21 @@ function plant(workdir: string, uuid: string, body: string): string {
 const ticks = (n: number): string =>
   h.sh(Array.from({ length: n }, () => `_sync_uuid ${ID}`).join('; '));
 
+/** Like `plant`, but the mtime is given rather than derived from "now" — the
+ *  only way to make two DIFFERENT files answer the exact same
+ *  `stat -c '%s:%Y'` stamp deterministically (two independent `plant()` calls
+ *  each computing "600s ago" a few milliseconds apart could straddle a second
+ *  boundary and land on different integer mtimes by accident). Review round
+ *  F1/F2's shared-stamp fixture needs that coincidence GUARANTEED, not likely. */
+function plantAt(workdir: string, uuid: string, body: string, mtimeSec: number): string {
+  const d = projectDir(workdir);
+  mkdirSync(d, { recursive: true });
+  const f = path.join(d, `${uuid}.jsonl`);
+  writeFileSync(f, body, 'utf8');
+  utimesSync(f, mtimeSec, mtimeSec);
+  return f;
+}
+
 describe('_continued_in_of', () => {
   it('prints the successor named by the last line', () => {
     const f = plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
@@ -83,6 +99,19 @@ describe('_continued_in_of', () => {
 
   it('prints nothing for a marker another session wrote', () => {
     const f = plant('/w', A, marker('c'.repeat(36), B));
+    expect(h.sh(`_continued_in_of ${f} ${A}`)).toBe('');
+  });
+
+  it('refuses a marker whose sessionId is present but not a valid 36-char uuid', () => {
+    // Review round finding: PRESENCE must be VALID, not just present.
+    // `"sessionId":"not-a-uuid"` used to extract to the SAME empty string a
+    // genuinely absent field produces, and absence-permits then waved the
+    // marker through — accepting an author claim this file cannot even
+    // parse. The TypeScript reader refuses any author that is not this
+    // file's own uuid; a malformed field must refuse too, not fall back to
+    // "nobody claimed it".
+    const body = `${JSON.stringify({ type: 'continued-in', sessionId: 'not-a-uuid', continuedInSessionId: B })}\n`;
+    const f = plant('/w', A, body);
     expect(h.sh(`_continued_in_of ${f} ${A}`)).toBe('');
   });
 
@@ -187,5 +216,70 @@ describe('_sync_uuid follows a fork', () => {
     const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
     h.sh(`${tmuxStub} _sync_uuid ${ID}; _sync_uuid ${ID}`);
     expect(h.reg(ID, 'uuid')).toBe(C);
+  });
+
+  it('advances past an intermediate transcript that shares a stamp with its predecessor', () => {
+    // Review round, F1/F2. A -> B -> C where A's and B's transcripts have the
+    // IDENTICAL size and mtime — guaranteed here by `plantAt`'s shared stamp
+    // and by `marker(...)` always producing the same byte length regardless
+    // of which fixed-length uuids it carries. Keyed by the stamp ALONE, the
+    // walk would find "already read" true for B the instant it hops there
+    // (B's stamp equals the one just recorded for A) and never read B's own
+    // tail — pinned on a dead intermediate transcript forever. Keyed by
+    // uuid+stamp, B's arrival is judged on its own two ticks.
+    const C = 'c'.repeat(36);
+    const stamp = Date.now() / 1000 - 600;
+    const bodyA = marker(A, B);
+    const bodyB = marker(B, C);
+    row('/w', A);
+    plantAt('/w', A, bodyA, stamp);
+    plantAt('/w', B, bodyB, stamp);
+    plant('/w', C, turnLine('three'));
+    ticks(4);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+  });
+
+  it('a cycle stops after one lap instead of flapping the registry', () => {
+    // Review round, F1/F2. A -> B -> A, with DISTINCT sizes (mtime need not
+    // coincide at all here — only F1/F2's shared-stamp case needs that).
+    // Keyed by the stamp alone, the registry flaps forever once the chain
+    // returns to A: on a live fleet, one `_reg_set` every two ticks. Keyed by
+    // uuid+stamp, returning to a (uuid, stamp) pair already in the visited
+    // set stops the walk there. Traced by hand for this exact fixture: the
+    // fixed implementation converges by tick 6 and STAYS there — asserting on
+    // tick 7 (an odd tick, inside the old code's 4-tick flap period) is what
+    // actually discriminates a fix from a mutant that still flaps.
+    row('/w', A);
+    plant('/w', A, `${turnLine('start-A')}${marker(A, B)}`);   // longer body
+    plant('/w', B, marker(B, A));                              // shorter body
+    ticks(7);
+    expect(h.reg(ID, 'uuid')).toBe(A);
+  });
+
+  it('follows a chain whose CURRENT transcript sits only at the raw spelling', () => {
+    // Review round, F4. A workdir reached through a symlink writes its
+    // transcript under the RAW (unresolved) munge on this very box —
+    // `_transcript_path`'s own rung 2 (`ccd-archive.test.ts`'s "falls to the
+    // RAW munge" case, same idiom). `_follow_continued_in` must try the same
+    // two spellings for the CURRENT file or a session in this shape is never
+    // followed at all — silently, since the pane-pid path cannot see a fork
+    // either.
+    const real = path.join(h.home, 'volume', 'demo');
+    const link = path.join(h.home, 'projects-link');
+    mkdirSync(real, { recursive: true });
+    mkdirSync(path.dirname(link), { recursive: true });
+    symlinkSync(path.join(h.home, 'volume'), link);
+    const wd = path.join(link, 'demo');
+    row(wd, A);
+    const cfg = h.sh(`_cfg_dir ${W}`);
+    const rawDir = path.join(cfg, 'projects', mungePath(wd));
+    mkdirSync(rawDir, { recursive: true });
+    const f = path.join(rawDir, `${A}.jsonl`);
+    writeFileSync(f, `${turnLine('one')}${marker(A, B)}`, 'utf8');
+    const old = Date.now() / 1000 - 600;
+    utimesSync(f, old, old);
+    plant(wd, B, turnLine('two'));   // the ordinary (resolved) spelling
+    ticks(2);
+    expect(h.reg(ID, 'uuid')).toBe(B);
   });
 });

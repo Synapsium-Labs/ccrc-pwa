@@ -4923,7 +4923,16 @@ _munge_wd() {   # workdir -> the project directory name Claude Code writes under
   # and `_follow_continued_in` both ask this question and must not answer it
   # twice: a session whose transcript is looked up under one spelling and
   # followed under another is a session this fix cannot see.
-  printf '%s' "$1" | tr './_' '---'
+  #
+  # PURE BASH (F3, review round: `_follow_continued_in` costs 83% of the
+  # `_transcript_path` call it exists to avoid, measured at +12.8 ms/tick
+  # across ~20 sessions). A `tr` pipeline forks and execs twice per call; this
+  # substitution forks nothing. Both `.` and `/` must be BACKSLASH-ESCAPED
+  # inside the bracket expression — measured: `${1//[./_]/-}` (unescaped)
+  # matches nothing at all on this bash, `_` alone needs no escape, but a
+  # bracket expression opening on an unescaped `.` or containing an unescaped
+  # `/` is parsed differently and the substitution silently no-ops.
+  printf '%s' "${1//[.\/_]/-}"
 }
 
 _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
@@ -5794,9 +5803,10 @@ if mode == 'state':
     #
     # A DEDICATED lock file, never a registry FIELD — wave 2. `flock` attaches to
     # an open file description (an INODE), and `_reg_set "$id" uuid` is written from
-    # three call sites — `cmd_ws_add`, `_sync_uuid`, `cmd_start`. The write on the
-    # ORDINARY SUPERVISE PATH is `_sync_uuid`, which `cmd_supervise`'s loop calls
-    # every tick; the other two, `cmd_ws_add` and `cmd_start`, run once each. Every
+    # four call sites — `cmd_ws_add`, `_sync_uuid`, `_follow_continued_in`, `cmd_start`
+    # (Task 6 added the third). The writes on the ORDINARY SUPERVISE PATH are
+    # `_sync_uuid` and `_follow_continued_in`, both of which `cmd_supervise`'s loop
+    # calls every tick; the other two, `cmd_ws_add` and `cmd_start`, run once each. Every
     # such write RENAMES a new inode over `.uuid`. Two `ccd pr-state` runs straddling
     # that rewrite would take LOCK_EX on two different inodes and both enter the
     # compare-and-set below: the duplicate append and lost update this lock prevents.
@@ -15503,62 +15513,137 @@ _cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wra
 # three disagree about what the last line even is.
 CONTINUED_IN_TAIL_BYTES=8192
 
-# Stamps, per session id, for the read budget below. `ccd supervise` is one
+# Memos, per session id, for the read budget below. `ccd supervise` is one
 # long-lived process per session, so these are already per-session state and
 # need no registry file; a supervisor restart forgets them and costs one extra
 # read, never a wrong answer.
-declare -A _CI_LAST=()   # id -> the stamp seen on the PREVIOUS tick
-declare -A _CI_READ=()   # id -> the stamp whose tail has already been read
+#
+# REVIEW ROUND (F1/F2): keyed by the STAMP ALONE, these two collapsed two
+# different questions onto one string and both failures were measured, not
+# argued. A->B->C where A's and B's transcripts share a byte size and an
+# mtime second: after the hop to B, B's stamp equals the one just recorded
+# for A, `_CI_READ[stamp]` already says "read", and B's own tail is never
+# examined — the walk is pinned on a dead intermediate transcript forever.
+# A->B->A with distinct sizes: the registry uuid FLAPS forever, one
+# `_reg_set` every two ticks, because nothing ever recognises "A" the second
+# time around as the same file already examined the first time. Both are
+# closed by keying on the PAIR, not the stamp alone:
+#   - `_CI_LAST[id]` holds `"$uuid:$st"` — a hop changes the uuid half, so the
+#     new file's quiescence is judged on its OWN two ticks, never inherited
+#     from the file the walk just left.
+#   - `_CI_READ["$uuid:$st"]` is a genuine visited SET of (file, content)
+#     pairs, not one slot per id — two different files that happen to share a
+#     stamp get two different keys, and returning to a file already examined
+#     (a cycle) hits the SAME key it left behind and stops there, after one
+#     lap, rather than re-reading and re-writing forever.
+declare -A _CI_LAST=()   # id -> "$uuid:$st" observed on the PREVIOUS tick
+declare -A _CI_READ=()   # "$uuid:$st" -> 1 once that (file, content) pair has been read
+
+# F3 (review round): resolving the transcript path costs a `_reg_get workdir`
+# fork, an `_ws_realpath` subshell-plus-stat and two munges — paid on EVERY
+# tick even though a live session's workdir and uuid do not change between
+# hops. Measured before this memo: `_follow_continued_in` added +12.8 ms per
+# session per tick (50-tick measurement, this box) against `_transcript_path`'s
+# own 15.5 ms — 83% of the cost this function exists to avoid paying every
+# five seconds. Keyed by "$id:$uuid" so a hop (a new uuid) still resolves for
+# real exactly once, and every tick after that — for either uuid — is a hash
+# lookup plus the one `stat` the quiescence gate needs anyway.
+declare -A _CI_PATH=()   # "$id:$uuid" -> the resolved transcript path, once found
+
+_ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
+  # F4 (review round): mirrors `_transcript_path`'s first two rungs ONLY — the
+  # resolved (realpath) munge, then the RAW munge, because the raw spelling is
+  # sometimes the one Claude Code actually wrote under, measured on this very
+  # box. `_transcript_path`'s third rung (newest-by-mtime scan across every
+  # project dir) is deliberately not repeated here: that rung is for a STOPPED
+  # session at archive/reap time, and a chain hop is either live at one of the
+  # two ordinary spellings or it has nothing to follow yet — a scan would cost
+  # exactly the fork-per-tick this memo exists to avoid.
+  local id="$1" cfg="$2" uuid="$3" wd raw munged
+  wd=$(_reg_get "$id" workdir); [[ -n "$wd" ]] || return 1
+  raw=$(_munge_wd "$wd")
+  wd=$(_ws_realpath "$wd")
+  munged=$(_munge_wd "$wd")
+  if [[ -f "$cfg/projects/$munged/$uuid.jsonl" ]]; then
+    printf '%s/projects/%s/%s.jsonl' "$cfg" "$munged" "$uuid"; return 0
+  fi
+  if [[ -f "$cfg/projects/$raw/$uuid.jsonl" ]]; then
+    printf '%s/projects/%s/%s.jsonl' "$cfg" "$raw" "$uuid"; return 0
+  fi
+  return 1
+}
 
 _continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line, or nothing
   # Claude Code's own statement about itself, checked field by field because it
   # is data off a disk other processes write. `sessionId` is checked when
   # present and ignored when absent (absence-permits); a successor that is not
   # a uuid, or is this file's own uuid, is refused.
-  # D-TBD-ccd-one-hop's read-budget test counts every invocation of the `tail`
-  # binary, so the last-line pick below is done in bash rather than through a
-  # second `| tail -1` in the pipeline — that second call is what a stub-based
-  # count of "one tail per quiescence" would otherwise see, even though it
-  # never touches the disk a second time. One external `tail`, one 8 KiB read.
+  # D-TBD-ccd-tail-once: the last-line pick below is done in bash rather than
+  # through a second `| tail -1` in the pipeline — that second call is what a
+  # stub-based count of "one tail per quiescence" would otherwise see, even
+  # though it never touches the disk a second time. One external `tail`, one
+  # 8 KiB read.
+  #
+  # COMPACT JSON ONLY, DELIBERATELY (review round). `*'"type":"continued-in"'*`
+  # would miss `{"type": "continued-in"}` (a space after the colon) — this is
+  # fail-CLOSED for ccd, not a defect: it just declines to follow, the same
+  # answer as no marker at all. The server's own reader (`continuationOf`,
+  # `shared`/TypeScript) does real `JSON.parse` and is the tolerant one of the
+  # three readers `continued-in-parity.test.ts` holds equal on the WINDOW, not
+  # on parse leniency. Claude Code writes compact JSON today; building a JSON
+  # parser in bash to hedge against a format it does not write is not this
+  # function's job.
   local f="$1" uuid="$2" window lines last claims next
   window=$(tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null) || return 0
   lines=$(printf '%s' "$window" | grep -v '^[[:space:]]*$')
   last="${lines##*$'\n'}"
   [[ "$last" == *'"type":"continued-in"'* ]] || return 0
-  claims=$(printf '%s' "$last" | grep -oE '"sessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
-  [[ -z "$claims" || "$claims" == "$uuid" ]] || return 0
+  # ABSENCE permits; PRESENCE must be VALID. A `sessionId` field that is there
+  # but whose value is not 36 hex-or-dash characters used to extract as the
+  # same empty string a genuinely ABSENT field produces, and absence-permits
+  # then waved the marker through — the TypeScript reader refuses any author
+  # that is not this file's own uuid, so a malformed field must refuse here
+  # too, not fall back to "nobody claimed it" (review round finding).
+  if [[ "$last" == *'"sessionId":"'* ]]; then
+    claims=$(printf '%s' "$last" | grep -oE '"sessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+    [[ -n "$claims" && "$claims" == "$uuid" ]] || return 0
+  fi
   next=$(printf '%s' "$last" | grep -oE '"continuedInSessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
   [[ -n "$next" && "$next" != "$uuid" ]] || return 0
   printf '%s' "$next"
 }
 
 _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
-  # WHY ONE HOP AND WHY GATED (D-TBD-ccd-one-hop). `_transcript_path` costs
-  # ~36 ms — D-2444 measured it at ~14x the pane classifier and stopped paying
-  # it every five seconds across the fleet — so this stats the direct address
-  # instead and reads nothing at all in the common case. The marker can only be
-  # the final line of a file that will never be appended to again, so the tail
-  # read waits for the file to STOP changing: one stat per tick, and one 8 KiB
-  # read per quiescence. A busy session pays nothing; a frozen one pays once.
-  # A chain of forks therefore converges over a few ticks rather than in one
-  # call, and the per-stamp memo IS the visited set — a cycle cannot be
-  # re-read, because its stamps are already in it.
-  local id="$1" cfg="$2" wd uuid munged f st prev next
-  wd=$(_reg_get "$id" workdir); [[ -n "$wd" ]] || return 0
+  # WHY ONE HOP AND WHY GATED (D-TBD-ccd-one-hop). The marker can only be the
+  # final line of a file that will never be appended to again, so the tail
+  # read waits for the file to STOP changing: one stat per tick (once the path
+  # is resolved — see `_CI_PATH` above), and one 8 KiB read per quiescence. A
+  # busy session pays nothing; a frozen one pays once. A chain of forks
+  # therefore converges over a few ticks rather than in one call, and the
+  # per-(uuid,stamp) memo IS the visited set: a cycle returns to a pair it has
+  # already recorded and stops there, after one lap, rather than re-reading or
+  # flapping the registry forever (see the F1/F2 comment above `_CI_LAST`).
+  local id="$1" cfg="$2" uuid pk f st key prev next sf
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
-  wd=$(_ws_realpath "$wd")
-  munged=$(_munge_wd "$wd")
-  f="$cfg/projects/$munged/$uuid.jsonl"
+  pk="$id:$uuid"
+  f="${_CI_PATH[$pk]:-}"
+  if [[ -z "$f" ]]; then
+    f=$(_ci_transcript_path "$id" "$cfg" "$uuid") || return 0
+    _CI_PATH["$pk"]="$f"
+  fi
   [[ -f "$f" ]] || return 0
   st=$(stat -c '%s:%Y' -- "$f" 2>/dev/null) || return 0
+  key="$uuid:$st"
   prev="${_CI_LAST[$id]:-}"
-  _CI_LAST["$id"]="$st"
-  [[ "$st" == "$prev" ]] || return 0                 # still growing — look again next tick
-  [[ "$st" == "${_CI_READ[$id]:-}" ]] && return 0    # this exact file has already been read
-  _CI_READ["$id"]="$st"
+  _CI_LAST["$id"]="$key"
+  [[ "$key" == "$prev" ]] || return 0                  # still growing, or just hopped — look again next tick
+  [[ -n "${_CI_READ[$key]:-}" ]] && return 0            # this exact (file, content) pair has already been read
+  _CI_READ["$key"]=1
   next=$(_continued_in_of "$f" "$uuid")
   [[ -n "$next" ]] || return 0
-  [[ -s "$cfg/projects/$munged/$next.jsonl" ]] || return 0   # announced but not yet written
+  sf=$(_ci_transcript_path "$id" "$cfg" "$next") || return 0   # tried both spellings, same as the current file
+  [[ -s "$sf" ]] || return 0                                    # announced but not yet written
+  _CI_PATH["$id:$next"]="$sf"   # the next tick's resolution, paid here instead of there
   _reg_set "$id" uuid "$next"
   return 0
 }
