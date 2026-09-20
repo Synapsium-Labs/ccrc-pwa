@@ -1057,6 +1057,85 @@ describe('the stream follows a changed answer (spec §5.3)', () => {
     }
   });
 
+  it('the registry catching up with a fork it already followed sends a backlog and NEVER `rotated` ' +
+     '(whole-branch review, F2)', async () => {
+    // THE SECOND HALF OF THE FORK, and the half the fixture above cannot
+    // see. `tick`'s first branch compares the REGISTRY uuid, not the resolved
+    // one — and `ccd`'s `_sync_uuid` advances the registry ONE HOP PER
+    // QUIESCENCE, so every hop of a chain lands in that branch, seconds after
+    // the resolver already followed it. Each landing used to send `rotated`,
+    // which mints a "Session context reset" divider the following backlog
+    // keeps on top: one to three false reset dividers over a two-hop chain,
+    // printed at exactly the moment the operator's conversation was
+    // recovered.
+    //
+    // The fixture above never moves the registry, which is why this was
+    // missed. Here the registry moves AFTER the follow has already landed —
+    // the production order once the `ccd` lane ships.
+    const home = mkTmp('ccrc-repoint-caughtup-');
+    seedRoster(home);
+    seed(home);
+    const tailed = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_A}.jsonl`);
+    const successor = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      expect(frames.find((f) => f.type === 'backlog').file).toBe(tailed);
+
+      appendFileSync(tailed, marker(UUID_A, UUID_B), 'utf8');
+      writeFileSync(successor, turn('after the fork'));
+      await pollOnce(stream);   // sees the growth, records it
+      await pollOnce(stream);   // the file stood still: re-ladders and follows
+      expect(frames.find((f) => f.type === 'backlog' && f.file === successor)).toBeDefined();
+      expect(streamUuid(stream)).toBe(UUID_A);   // the REGISTRY has not moved yet
+      frames.length = 0;
+
+      // `ccd` finally walks the same pointer into the registry.
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+
+      expect(streamUuid(stream)).toBe(UUID_B);
+      const types = frames.map((f) => f.type);
+      expect(types).toContain('backlog');
+      expect(types).not.toContain('rotated');   // nothing was reset — no divider
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: successor, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('a registry uuid that moves to a DIFFERENT file is still a rotation — the suppression is scoped to the ' +
+     'transcript, not to the uuid', async () => {
+    // The other side of F2's mutation. A blanket suppression would swallow
+    // the `/clear` rotation this branch has always reported, so the
+    // discriminator is asserted from both directions: same file, no frame;
+    // different file, `rotated`.
+    const home = mkTmp('ccrc-repoint-rotation-');
+    seedRoster(home);
+    seed(home);
+    const fresh = path.join(home, '.claude-a', 'projects', MUNGED, `${UUID_B}.jsonl`);
+    writeFileSync(fresh, userLine('c1', 'cleared'));
+
+    const deps = mkLadderDeps(home, localIO);
+    const frames: any[] = [];
+    const stream = new SessionStream(deps, new Bus(), ID, (m) => frames.push(m));
+    try {
+      await stream.start();
+      frames.length = 0;
+      writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), UUID_B);
+      await pollOnce(stream);
+      expect(frames.filter((f) => f.type === 'rotated')).toEqual([{ type: 'rotated', uuid: UUID_B }]);
+      expect(frames.find((f) => f.type === 'backlog')).toMatchObject({ file: fresh, uuid: UUID_B });
+    } finally {
+      stream.stop();
+      rmSync(home, { recursive: true, force: true });
+    }
+  });
+
   it('an unchanged answer re-points NOTHING — same tailer instance, no frames', async () => {
     // Kills the mutant that re-resolves and re-points unconditionally: this is
     // what every tick of every healthy session does, ~43,000 times a day.
