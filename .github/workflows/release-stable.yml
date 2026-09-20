@@ -1,0 +1,34 @@
+# A push to `stable` promotes the release already cut for its HEAD (design
+# 2026-09-20 §4, decision 3). Thin: deploy/release-stable.sh owns the tag
+# lookup, the two flag flips and the read-back, and is tested locally
+# (server/test/release-stable.test.ts). No build step, no node — nothing
+# here can produce bytes. The branch's ruleset (linear history, no force
+# push) is the other half: a merge commit never reaches this HEAD.
+name: release-stable
+
+on:
+  push:
+    branches: [stable]
+
+concurrency:
+  group: release-stable
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # The script's own `gh` call edits the release's flags; nothing else.
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The script names the release by `git tag --points-at HEAD`; the
+          # tag must be present, not a shallow single-commit fetch.
+          fetch-depth: 0
+
+      - name: Promote the release tagged at HEAD
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash deploy/release-stable.sh

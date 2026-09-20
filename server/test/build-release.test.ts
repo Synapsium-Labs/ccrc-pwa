@@ -522,6 +522,38 @@ describe('release-main.yml: the thin main-push workflow, pinned to its script (s
   });
 });
 
+describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4)', () => {
+  const WORKFLOW = join(REPO, '.github', 'workflows', 'release-stable.yml');
+  const wf = (): string => readFileSync(WORKFLOW, 'utf8');
+
+  it('triggers on stable pushes and on NOTHING else', () => {
+    const src = wf();
+    expect(src).toMatch(/^on:\n  push:\n    branches: \[stable\]$/m);
+    for (const trigger of ['tags:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
+      expect(src, `release-stable.yml must not also trigger on ${trigger}`).not.toContain(trigger);
+    }
+  });
+
+  it('serialises under its own group, never cancelling', () => {
+    expect(wf()).toMatch(/^concurrency:\n  group: release-stable\n  cancel-in-progress: false$/m);
+  });
+
+  it('asks for contents: write and nothing else — it flips flags, it signs nothing', () => {
+    const src = wf();
+    expect(src).toMatch(/^    permissions:\n      contents: write$/m);
+    expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests|actions):/);
+  });
+
+  it('checks out at full depth and invokes release-stable.sh — no build command, no gh release create', () => {
+    const src = wf();
+    expect(src).toMatch(/fetch-depth: 0/);
+    expect(src).toContain('run: bash deploy/release-stable.sh');
+    expect(src).toContain('GH_TOKEN: ${{ github.token }}');
+    expect(src).not.toMatch(/npm ci|npm run|build-release\.sh|release-main\.sh|gh release|setup-node|attest/);
+    expect(src).toMatch(/timeout-minutes: 10/);
+  });
+});
+
 describe('build-release.sh: source pins', () => {
   // A casual edit that drops one of these flags makes every artifact's bytes
   // depend on who built it and when — silently, since nothing else fails.
