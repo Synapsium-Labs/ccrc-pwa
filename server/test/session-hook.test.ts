@@ -661,6 +661,57 @@ describe('the fleet gate and failure polarity', () => {
   });
 });
 
+// ── The fork fallback: attribution with no pane at all ─────────────────────
+// Claude Code can fork a live session into a daemon-hosted background PTY with
+// no TMUX and no TMUX_PANE. The pane path stays first and unchanged; this is
+// the second source, read only when the first has nothing to ask.
+describe('a session with no pane', () => {
+  const REG = (): string => path.join(home, '.cc-sessions');
+  const hookstate = (id: string): unknown =>
+    JSON.parse(fs.readFileSync(path.join(REG(), `${id}.hookstate.json`), 'utf8'));
+  const planted = (id: string, uuid: string): void =>
+    fs.writeFileSync(path.join(REG(), `${id}.uuid`), uuid);
+
+  it('writes hookstate when the registry names its session id as its own', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
+  // The guard, stated in the other direction. This is what the TMUX_PANE check
+  // was protecting: a Claude session on this box that ccd does not own must
+  // still be attributed to nobody.
+  it('writes nothing when no registry row names its session id', () => {
+    planted('demo-quiet-basin', 'uuid-someone-else');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(false);
+  });
+
+  it('writes nothing when it has no session id to be attributed by', () => {
+    planted('demo-quiet-basin', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '', CLAUDE_CODE_SESSION_ID: '' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(false);
+  });
+
+  it('still prefers the pane when there is one', () => {
+    // Two rows: the pane names one, the session id matches the OTHER. The pane
+    // wins, so the fallback can never quietly re-attribute a live session.
+    planted('demo-quiet-basin', 'uuid-pane');
+    planted('other-row', 'uuid-1');
+    run({ hook_event_name: 'UserPromptSubmit' });
+    expect(fs.existsSync(path.join(REG(), 'demo-quiet-basin.hookstate.json'))).toBe(true);
+    expect(fs.existsSync(path.join(REG(), 'other-row.hookstate.json'))).toBe(false);
+  });
+
+  it('is silent on both streams, and exits 0, with no pane and no match', () => {
+    // The file's own header contract. `runFull` is this suite's stdout+stderr
+    // runner, which asserts exit 0 once (see its own comment) rather than the
+    // implicit throw-on-nonzero-exit `run` relies on.
+    expect(runFull({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' }))
+      .toMatchObject({ stdout: '', stderr: '' });
+  });
+});
+
 // ── R4: the read side, MEASURED ───────────────────────────────────────────
 // D-1243 shipped an instruction and no number. The whole argument for retiring
 // the account-wide block is that its effect measured zero, and the only way
