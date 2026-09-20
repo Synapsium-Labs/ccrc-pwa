@@ -4,6 +4,7 @@ import { readBuildInfo, type BuildInfo } from './buildinfo.js';
 import { realRunner, Tmux } from './exec.js';
 import { ccdRunner } from './lifecycle.js';
 import { localIO } from './io.js';
+import { cachedHostStat, localHostStat, remoteHostStat } from './hoststat.js';
 import { attachPty } from './pty.js';
 import { Bus } from './bus.js';
 import { FleetWatcher } from './watch.js';
@@ -85,6 +86,10 @@ if (cfg.fleetMode === 'remote') {
     cfg, build, runCcd: ccdRunner(fleet.runner, cfg), tmux: new Tmux(fleet.runner), io: fleet.io,
     spawnPty: fleet.spawnPty, fleetState: fleet.state, push, notifyLog, presence, queue, mailToken, coord,
     refreshCaps: makeRefreshCaps(fleet.client, fleet.state),
+    // The FLEET box's load, asked of the agent — never this box's. In remote
+    // mode this process runs somewhere the sessions do not, and its own
+    // /proc would be a reading about the wrong machine.
+    hostStat: cachedHostStat(remoteHostStat(fleet.client)),
   };
 } else {
   // Fix round 3 (task 14, Important #3): real evidence, not an absent
@@ -123,6 +128,10 @@ if (cfg.fleetMode === 'remote') {
   deps = {
     cfg, build, runCcd: ccdRunner(realRunner, cfg), tmux: new Tmux(realRunner), io: localIO,
     spawnPty: attachPty, push, notifyLog, presence, queue, mailToken, coord,
+    // Local mode drives ccd on this same box, so the sessions run here and
+    // this box's own /proc IS the answer — the same sampler, a different
+    // reader.
+    hostStat: cachedHostStat(localHostStat(localIO)),
     // `connected`/`downSince` are inert for local mode — every reader of
     // them is gated on `cfg.fleetMode === 'remote'` first (server.ts,
     // watch.ts) — so `true`/`null` are placeholders, never read as a claim

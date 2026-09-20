@@ -50,6 +50,8 @@ import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
 import { Presence } from './presence.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
+import { type HostStatPort } from './hoststat.js';
+import { hostStatFailed, type HostStat } from '../../shared/hoststat.js';
 import { registerCoordRoutes } from './coord/routes.js';
 import { queueProgramKickoff } from './coord/kickoff.js';
 import { toRunSummary, type AskRow, type AskTakeResult, type CoordStore } from './coord/store.js';
@@ -234,6 +236,13 @@ export interface Deps {
    *  never runs, which is what a box with no coordination configured should
    *  do. */
   coord?: CoordStore;
+  /** Host load for the box the SESSIONS run on — the agent's box in remote
+   *  mode, this one in local mode (`hoststat.ts` builds both). Optional the
+   *  way `push` is: a `Deps` assembled some other way (a test) simply has no
+   *  reading, and `GET /api/host` says `unsupported` rather than inventing
+   *  one. It is NOT optional in the sense of degradable — `index.ts` always
+   *  sets it, in both modes. */
+  hostStat?: HostStatPort;
 }
 
 /** dist-pwa/ lives at the server package root (next to dist/); walk up from this
@@ -1112,6 +1121,28 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       // dev box permanently unable to see its own mirror stall.
       ...(lifecycle ? { lifecycle } : {}),
     };
+  });
+
+  /**
+   * The load on the box the sessions run on. ONE tile in the PWA's strip, so
+   * one route and one reading.
+   *
+   * NOT box-token gated and not exempt from the session gate: it is an
+   * ordinary PWA-surface READ, so with `CCRC_AUTH` armed it sits behind the
+   * session gate like `/api/fleet`, and with auth off it is as open as the
+   * rest of the console on a loopback port.
+   *
+   * Never 5xx, and never an empty body: a reading whose halves say WHY they
+   * are empty is the answer here (`HostStatFailure`), because "the agent is
+   * too old" and "this box has no /proc" are things the operator needs to
+   * READ, not a spinner that never resolves. The cache and the single-flight
+   * share live in `cachedHostStat`, one layer down, so twenty phones polling
+   * together still cost the fleet box one sample.
+   */
+  app.get('/api/host', async (): Promise<HostStat> => {
+    const port = deps.hostStat;
+    if (port === undefined) return hostStatFailed('unsupported', Date.now());
+    return port.read();
   });
 
   // Fleet-host reboot: guarded to remote mode with Hetzner creds configured.
