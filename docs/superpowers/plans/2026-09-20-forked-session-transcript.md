@@ -1020,7 +1020,7 @@ cd pwa && ./node_modules/.bin/vitest run
 | restore `expireConfirmed` as the stage-one callback | "marks the pending queued instead of deleting it" |
 | drop the stage-two timer in `markQueued` | "still retires the bubble at the long deadline" |
 | drop the `clearTimeout` loop at the `clearConfirmed` call site | "cancels the long deadline when the echo lands" |
-| drop `queued: undefined` from `retry` | "clears the queued flag on retry" |
+| drop `queued: undefined` from `retry` | NOTHING — measured. `resolve` clears the flag synchronously before its dispatch can fail, and `send` arms no timer until the api has accepted, so no path produces a pending that is both `failed` and `queued`, and `retry`'s own reset is unreachable. The reset stays, for consistency with the sibling resets beside it, but the row is replaced by a test that pins the invariant making it unnecessary: "a failed pending never carries the queued flag". If a later change makes that state reachable, the test reds and the reset earns its place back. |
 
 - [ ] **Step 6: Commit**
 
