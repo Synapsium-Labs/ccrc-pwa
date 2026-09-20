@@ -528,7 +528,11 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
 
   it('triggers on stable pushes and on NOTHING else', () => {
     const src = wf();
-    expect(src).toMatch(/^on:\n  push:\n    branches: \[stable\]$/m);
+    // Anchored to the block's own terminator (`concurrency:`), not just the
+    // `branches:` line — a `repository_dispatch:`/`merge_group:` key added
+    // after `branches: [stable]`, or a `paths:` filter under `push:`, would
+    // stay green against a shorter pin.
+    expect(src).toMatch(/^on:\n  push:\n    branches: \[stable\]\n\nconcurrency:$/m);
     for (const trigger of ['tags:', 'pull_request', 'schedule:', 'workflow_dispatch', 'workflow_call']) {
       expect(src, `release-stable.yml must not also trigger on ${trigger}`).not.toContain(trigger);
     }
@@ -540,17 +544,25 @@ describe('release-stable.yml: the thin promotion workflow (design 2026-09-20 §4
 
   it('asks for contents: write and nothing else — it flips flags, it signs nothing', () => {
     const src = wf();
-    expect(src).toMatch(/^    permissions:\n      contents: write$/m);
+    // The lookahead (as `expectAttestingWorkflow` above uses) forbids ANY
+    // further permission line, not just the five named below — a
+    // `deployments: write` added here would stay green against a bare
+    // substring pin.
+    expect(src).toMatch(/^    permissions:\n      contents: write(?!\n      [a-z-]+:)$/m);
     expect(src).not.toMatch(/(id-token|attestations|packages|pull-requests|actions):/);
   });
 
   it('checks out at full depth and invokes release-stable.sh — no build command, no gh release create', () => {
     const src = wf();
-    expect(src).toMatch(/fetch-depth: 0/);
-    expect(src).toContain('run: bash deploy/release-stable.sh');
+    // Line-anchored, not bare substrings: `release-stable.sh --force` (the
+    // script refuses any argument) would satisfy a `.toContain`, and
+    // `fetch-depth: 0`/`timeout-minutes: 10` could sit anywhere, including a
+    // comment, without a line anchor.
+    expect(src).toMatch(/^          fetch-depth: 0$/m);
+    expect(src).toMatch(/^        run: bash deploy\/release-stable\.sh$/m);
     expect(src).toContain('GH_TOKEN: ${{ github.token }}');
     expect(src).not.toMatch(/npm ci|npm run|build-release\.sh|release-main\.sh|gh release|setup-node|attest/);
-    expect(src).toMatch(/timeout-minutes: 10/);
+    expect(src).toMatch(/^    timeout-minutes: 10$/m);
   });
 });
 
