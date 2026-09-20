@@ -3593,8 +3593,25 @@ _dr_continued_in() {   # file uuid -> 0 when the file's last line supersedes it
 }
 
 _check_transcripts() {
+  # MEASURED AND SKIPPED ARE COUNTED SEPARATELY (whole-branch review, F4), and
+  # the verdict says both. The earlier shape counted a row into `$n` the
+  # moment its uuid was read and then `continue`d past it whenever the
+  # transcript was at neither of the two DIRECT spellings — so that row was
+  # reported inside "every registry uuid names a transcript Claude Code has
+  # not superseded" while nothing had looked at it at all.
+  #
+  # AND THAT MISS IS ROUTINE, not exotic: the server's own ladder carries a
+  # uuid-glob rung and a foreign-account rung precisely because a session that
+  # has been swapped between accounts, or whose project directory was
+  # re-munged, keeps its transcript somewhere neither direct spelling names
+  # (`server/src/transcript/resolve.ts`, §5.1 rungs 5 and 6). This check
+  # deliberately does not repeat those rungs — a per-account `projects/*` scan
+  # on every doctor run is not what this file is for — so the honest answer is
+  # to say it did not look, not to fold the row into a clean count.
+  # Reassuring an operator about rows nobody measured is the same
+  # failure mode this check was already rewritten once to avoid.
   local reg="$HOME/.cc-sessions" sh="$HOME/.ccrc/accounts.sh"
-  local u id uuid cfg wd raw rwd munged f stale="" n=0 any=0
+  local u id uuid cfg wd raw rwd munged f stale="" n=0 skipped=0 scope="" any=0
 
   # `$REG` UNSEARCHABLE IS A FAIL, in `_check_pools`' own words for the same
   # fact: nothing under it — no session's transcript included — can be
@@ -3657,16 +3674,19 @@ _check_transcripts() {
     # with no fork and no subshell.
     id="${u##*/}"; id="${id%.uuid}"
     uuid=""; IFS= read -r uuid < "$u" 2>/dev/null
-    [ -n "$uuid" ] || continue
-    n=$((n + 1))
+    # EVERY `continue` FROM HERE ON IS A SKIP, counted as one. A row whose
+    # uuid, wrapper mapping, workdir or transcript could not be read is a row
+    # this check did not measure, and `$n` is incremented only where the
+    # measurement actually happens, at the bottom of the loop.
+    [ -n "$uuid" ] || { skipped=$((skipped + 1)); continue; }
     # This check runs OUTSIDE ccd — it is sourced under `set -u` by things
     # that are not `ccrc` — so it reads the row's own fields rather than
     # calling ccd's helpers, and it asks ccd for nothing it can read itself.
     wrapper=""; IFS= read -r wrapper < "$reg/$id.wrapper" 2>/dev/null
-    cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || continue
-    [ -n "$cfg" ] || continue
+    cfg=$(_ccrc_cfg_dir "$wrapper" 2>/dev/null) || { skipped=$((skipped + 1)); continue; }
+    [ -n "$cfg" ] || { skipped=$((skipped + 1)); continue; }
     wd=""; IFS= read -r wd < "$reg/$id.workdir" 2>/dev/null
-    [ -n "$wd" ] || continue
+    [ -n "$wd" ] || { skipped=$((skipped + 1)); continue; }
     # BOTH SPELLINGS, RESOLVED FIRST — a cross-task hazard Task 6's own review
     # caught: `ccd`'s readers (`_transcript_path`, `_ci_transcript_path`) try
     # the REALPATH-resolved munge before the raw one, because Claude Code
@@ -3690,15 +3710,32 @@ _check_transcripts() {
     munged="${rwd//[.\/_]/-}"
     f="$cfg/projects/$munged/$uuid.jsonl"
     [ -f "$f" ] || f="$cfg/projects/$raw/$uuid.jsonl"
-    [ -f "$f" ] || continue
+    # THE SKIP THIS FINDING IS REALLY ABOUT: neither direct spelling holds a
+    # file, and this check does not walk the server's glob rungs, so it has
+    # measured nothing about this session.
+    [ -f "$f" ] || { skipped=$((skipped + 1)); continue; }
+    n=$((n + 1))
     if _dr_continued_in "$f" "$uuid"; then stale="$stale $id"; fi
   done
+  # ONE SCOPE PHRASE, SHARED BY BOTH VERDICTS, so the two can never drift into
+  # describing the same run differently. It names the skipped rows only when
+  # there are some: a fully-measured box reads exactly as it always did.
+  scope="$n session(s) measured"
+  if [ "$skipped" -gt 0 ]; then scope="$scope, $skipped not measured"; fi
   if [ -n "$stale" ]; then
     # shellcheck disable=SC2086 -- the ids are registry basenames, matched by
     # ccd's own `^[A-Za-z0-9._-]+$` shape, so the split is the interface.
-    _dr_warn transcripts "$(_dr_join $stale) read a transcript Claude Code has superseded ($n session(s) measured)" \
+    _dr_warn transcripts "$(_dr_join $stale) read a transcript Claude Code has superseded ($scope)" \
       "a session that forked in the last few seconds is a real transient and clears itself on the next supervise tick; if it persists, this box's ccd is not following the pointer — check ccrc version and roll the fleet box forward"
     return 2
+  fi
+  if [ "$skipped" -gt 0 ]; then
+    # A RUN WITH SKIPPED ROWS MAY NOT CLAIM EVERY UUID IS HEALTHY. It passes —
+    # nothing it looked at was superseded — but the sentence says what it
+    # looked at, and says the rest was not looked at rather than leaving the
+    # operator to read a clean count as a clean box.
+    _dr_pass transcripts "$scope: every uuid MEASURED names a transcript Claude Code has not superseded, and nothing is claimed about the other $skipped — their transcript is at neither direct spelling here (routine after an account swap; the chat itself still finds it, through rungs this check does not walk)"
+    return 0
   fi
   _dr_pass transcripts "$n session(s): every registry uuid names a transcript Claude Code has not superseded"
   return 0

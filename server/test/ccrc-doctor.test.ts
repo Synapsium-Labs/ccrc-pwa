@@ -2456,6 +2456,46 @@ describe('ccrc doctor: transcripts', () => {
     expect(line).toContain('sess-raw');
   });
 
+  it('says how many rows it could NOT look at, and never counts them clean (whole-branch review, F4)', () => {
+    // The check tries the two DIRECT spellings and `continue`d on a miss —
+    // while still counting that row into the number it then reported as
+    // "every registry uuid names a transcript Claude Code has not
+    // superseded". A swapped session's row therefore read as healthy with
+    // nothing having measured it, which is why the server's own ladder has a
+    // uuid-glob rung and a foreign-account rung at all: that miss is routine.
+    //
+    // Fixture: one row that CAN be measured and is clean, and one whose
+    // transcript exists at NEITHER spelling — planted under a project
+    // directory no munge of its workdir produces, the same "stranded" idiom
+    // `transcript-ladder.test.ts` uses for the glob rungs. The verdict must
+    // name both counts.
+    const home = healthy('ccrc-doctor-transcripts-skipped-');
+    seedAccountsSh(home, TRANSCRIPT_ROSTER);
+    linkReal(home, 'tail');   // see the "passes on a registry…" test above
+    const wdOk = join(home, 'projects', 'measurable');
+    const wdSwapped = join(home, 'projects', 'swapped-away');
+    mkdirSync(wdOk, { recursive: true });
+    mkdirSync(wdSwapped, { recursive: true });
+    const uuidOk = 'a'.repeat(36), uuidSwapped = 'b'.repeat(36);
+    writeTranscriptSession(home, 'sess-ok', 'claude', wdOk, uuidOk);
+    writeTranscriptSession(home, 'sess-swapped', 'claude', wdSwapped, uuidSwapped);
+    writeTranscript(home, '.claude', wdOk, uuidOk, turnLine('hello'));
+    // The swapped row's transcript, at an address neither spelling names.
+    const stranded = join(home, '.claude', 'projects', '-a-directory-no-munge-produces');
+    mkdirSync(stranded, { recursive: true });
+    writeFileSync(join(stranded, `${uuidSwapped}.jsonl`), turnLine('carried elsewhere'), 'utf8');
+
+    const out = runDoctor(home).stdout;
+    const line = lineFor(out, 'transcripts');
+    expect(line, out).toMatch(/^PASS transcripts: /);
+    expect(line, 'the measured count').toContain('1 session(s) measured');
+    expect(line, 'and the count it could not look at').toContain('1 not measured');
+    // The overclaim this finding is about: a run with skipped rows must not
+    // say EVERY registry uuid is healthy, in those words.
+    expect(line, 'never the unqualified claim')
+      .not.toContain('every registry uuid names a transcript Claude Code has not superseded');
+  });
+
   it('refuses a marker whose sessionId is present but not a valid 36-character value — absence permits, a malformed author does not', () => {
     // The review-round finding `_continued_in_of` (ccd/ccd) was fixed for:
     // extracting `claims` straight through `grep -oE` with no presence check
