@@ -2780,11 +2780,30 @@ fi
 # of the tmux server. `ccd`'s `_sync_uuid` is the ONLY writer of `$REG/*.uuid`;
 # this loop only reads it — ~20 small files, and only on the path with no pane,
 # so the hot (paned) path above pays nothing new.
+#
+# BUILTINS, NOT `cat`/`basename` (whole-branch review, F8). The first draft
+# forked `cat` once per registry row plus a `basename` on the match — about 21
+# forks per hook event — and this path is the hot path of exactly the FORKED
+# sessions this change exists to serve: a fork has no TMUX_PANE, so every one
+# of its tool calls arrives here. `ccrc-doctor-checks` argues the identical
+# substitution at length for its own registry walk ("`${u##*/}` / `${id%.uuid}`
+# is `basename "$u" .uuid` with no fork; `read -r var < file` is `cat file`
+# with no fork and no subshell"), and the same reasoning applies twice over
+# here, because a doctor run happens when an operator asks and this happens on
+# every tool call in every forked session on the box.
+#
+# `read` returns non-zero on a file with no trailing newline while still
+# assigning what it read, which is why its status is deliberately not tested:
+# `$ruuid` is COMPARED, and an unreadable or empty file compares unequal and
+# is skipped exactly as before. This file runs under `set -uo pipefail` and
+# NOT `set -e`, so that non-zero status ends nothing.
 if [[ -z "$id" && -n "${CLAUDE_CODE_SESSION_ID:-}" && -d "$REG" ]]; then
+  ruuid=""
   for u in "$REG"/*.uuid; do
     [[ -e "$u" ]] || continue
-    [[ "$(cat "$u" 2>/dev/null)" == "$CLAUDE_CODE_SESSION_ID" ]] || continue
-    id=$(basename "$u" .uuid)
+    ruuid=""; IFS= read -r ruuid < "$u" 2>/dev/null
+    [[ "$ruuid" == "$CLAUDE_CODE_SESSION_ID" ]] || continue
+    id="${u##*/}"; id="${id%.uuid}"
     break
   done
 fi

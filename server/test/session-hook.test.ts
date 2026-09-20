@@ -695,6 +695,20 @@ describe('a session with no pane', () => {
     expect(wroteAnyHookstate, 'no row anywhere was attributed').toBe(false);
   });
 
+  it('matches a registry uuid file that carries a trailing newline — which every real one does', () => {
+    // Whole-branch review, F8: this loop now reads each row with `read -r var
+    // < file` instead of `$(cat file)`, to stop forking ~21 times per hook
+    // event on the hot path of exactly the forked sessions it serves. The one
+    // real behavioural risk of that substitution is the newline: a command
+    // substitution strips trailing newlines, and `ccd`'s own writers end every
+    // registry field with one, so a reader that kept the newline would match
+    // NOTHING on a real box while this suite — whose `planted` writes no
+    // newline — stayed green. `read -r` strips it too, and this pins that.
+    fs.writeFileSync(path.join(REG(), 'demo-quiet-basin.uuid'), 'uuid-1\n');
+    run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '' });
+    expect(hookstate('demo-quiet-basin')).toMatchObject({ sessionId: 'uuid-1', state: 'working' });
+  });
+
   it('writes nothing when it has no session id to be attributed by', () => {
     planted('demo-quiet-basin', 'uuid-1');
     run({ hook_event_name: 'UserPromptSubmit' }, { TMUX_PANE: '', CLAUDE_CODE_SESSION_ID: '' });
