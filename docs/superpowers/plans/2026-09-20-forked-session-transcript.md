@@ -261,13 +261,24 @@ describe('continuation follow', () => {
   });
 
   // Review Focus 2: a cycle must stop at a real file, not spin.
+  //
+  // THE CYCLE IS ODD-LENGTH AND THE ASSERTION NAMES THE EXACT FILE, and both
+  // halves are load-bearing. A two-node cycle walked with the visited set
+  // removed bounces A->B->A->B for the whole hop bound and lands back on A —
+  // the same answer a correct implementation gives immediately — so a
+  // two-node fixture, or an assertion that accepts either file, cannot tell
+  // "stopped because the cycle was caught" from "stopped because the bound ran
+  // out on the same file". Measured: that weaker fixture stayed green with the
+  // visited check deleted.
   it('stops on a chain that loops back', async () => {
     const b = box();
-    const first = plant(b, A, turn('one') + marker(A, B));
-    plant(b, B, turn('two') + marker(B, A));
-    const r = await resolveTranscript(localIO, opts(b, A));
-    expect(r.kind).toBe('found');
-    expect([first, transcriptPath(b.cfg, b.livePhys, B)]).toContain((r as { path: string }).path);
+    plant(b, A, turn('one') + marker(A, B));
+    plant(b, B, turn('two') + marker(B, C));
+    const third = plant(b, C, turn('three') + marker(C, A));
+    // A -> B -> C, and C names A, which is visited: the walk stops at C.
+    // Without the visited set the bound alone lets it run A->B->C->A->B.
+    expect(await resolveTranscript(localIO, opts(b, A)))
+      .toMatchObject({ kind: 'found', path: third, uuid: C });
   });
 
   it('stops at the hop bound and answers the last good file', async () => {
@@ -276,8 +287,11 @@ describe('continuation follow', () => {
     for (let i = 0; i < ids.length - 1; i += 1) plant(b, ids[i]!, marker(ids[i]!, ids[i + 1]!));
     plant(b, ids[ids.length - 1]!, turn('end'));
     const r = await resolveTranscript(localIO, opts(b, ids[0]!));
-    expect(r.kind).toBe('found');
-    expect((r as { uuid: string }).uuid).not.toBe(ids[0]);
+    // EXACTLY the bound: four hops from ids[0] lands on ids[4], and the chain
+    // deliberately runs further so a raised bound lands somewhere else.
+    // Asserting merely "not ids[0]" holds for ANY bound and pins nothing —
+    // measured: that assertion stayed green with the bound raised to 400.
+    expect(r).toMatchObject({ kind: 'found', uuid: ids[MAX_CONTINUATION_HOPS] });
   });
 
   // Review Focus 3: an announced-but-empty successor is not an improvement.
