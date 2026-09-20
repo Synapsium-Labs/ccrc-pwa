@@ -167,4 +167,25 @@ describe('_sync_uuid follows a fork', () => {
     h.sh(`${tmuxStub} _sync_uuid ${ID}`);
     expect(h.reg(ID, 'uuid')).toBe(C);
   });
+
+  it('the pane’s stale sessionId does not undo a chain the follow just wrote', () => {
+    // THE ONLY FIXTURE THAT DISCRIMINATES ORDER, and it is the production one:
+    // a forked session's pane process carries on publishing the PRE-FORK id
+    // while the fork runs under a new one. Pane read first, chain second, and
+    // the pane read is a harmless no-op. Reverse them and the pane drags the
+    // registry back off the successor on every tick — the follow writes, the
+    // pane undoes, for ever. Every other fixture in this file answers the same
+    // uuid under both orders, which is why nothing pinned this until now.
+    const C = 'c'.repeat(36);
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
+    plant('/w', C, turnLine('two'));
+    const cfg = h.sh(`_cfg_dir ${W}`);
+    const sdir = path.join(cfg, 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(path.join(sdir, '4242.json'), JSON.stringify({ sessionId: A, status: 'idle' }));
+    const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
+    h.sh(`${tmuxStub} _sync_uuid ${ID}; _sync_uuid ${ID}`);
+    expect(h.reg(ID, 'uuid')).toBe(C);
+  });
 });
