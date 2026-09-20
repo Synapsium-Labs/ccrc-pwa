@@ -8147,9 +8147,37 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //       that SAME clause for an unrelated reason, so sub-rule A now
       //       exempts it. Still stale in fact, and still counted by the
       //       **Files:** pass, which takes no exemption.
+      // RE-MEASURED AGAIN on the workspace-cleanup fix (`ws-add` learns the
+      //   `node_modules`/`cdk.out` excludes, `ccd/ccd:6971-6992`): 148 -> 147.
+      //   ONE cause — +22 lines inserted at `:6971`, above every `ccd/ccd`
+      //   anchor this corpus holds — and the composition was MEASURED by
+      //   running this same audit against a tree carrying `origin/main`'s
+      //   `ccd/ccd` and `README.md` and diffing the two failure lists, not by
+      //   reasoning from the delta. TWO LEAVE and ONE ENTERS, net -1:
+      //     spec:2125 `ccd/ccd:13567` and spec:2230 `ccd/ccd:13567` leave, and
+      //       NEITHER is a repair. `:13567` is a bare `#` at the base; the
+      //       shift slid `cmd_ws_reap`'s prologue line naming `_reg_purge
+      //       "$id"` underneath it, and `_reg_purge` is a token BOTH rows
+      //       quote, so the PRIMARY quotation match (`toks.some((t) =>
+      //       occurs(t, cited))`) passes them before any sub-rule is reached.
+      //       Still stale in fact; Task 11 still owns the re-anchor.
+      //     spec:1310 `ccd/ccd:19109` ENTERS, and it is this branch's own new
+      //       rot: `:19109` is `tmux has-session -t "$t" … || return 3` at the
+      //       base and a comment line here. Its document is FROZEN, so it is
+      //       parked in this census rather than repaired — which is what this
+      //       number is for.
+      //   README is the one document that is repaired instead of counted, and
+      //   BOTH its `ccd/ccd` anchors rotted on this shift, so both were
+      //   RE-ANCHORED BY CONTENT: `:19736-19738` -> `:19758-19760` (`genrc ==
+      //   1`) and `:20948` -> `:20970` (`cmd_ensure`'s `_reg_generation_init
+      //   "$id"`), each located by matching the bytes its own sentence quotes
+      //   and each byte-identical at the two trees. The second was invisible
+      //   to this suite — sub-rule A held it green through `cmd_ensure`'s
+      //   funcBody — so a green README pass is not evidence that README is
+      //   clean after a shift; the anchors have to be walked by hand.
       // RE-MEASURED against the tree, never adjusted to keep a number green;
       // Task 11 still owns re-anchoring the citations themselves.
-      'ccd/ccd': 148,
+      'ccd/ccd': 147,
       'ccd/session-hook.sh': 21,
       'ccd/compact-card.mjs': 4,
       'server/test/ccd-ws-reap.test.ts': 2,
@@ -8305,7 +8333,11 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // `:7500`/`:7513`, +86, each located by exact content match rather than by
     // adding the delta). Taking the sum first would have banked a 200 for a
     // tree that was about to stop existing.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(196);
+    // 196 -> 195 on the workspace-cleanup fix, and it is the census's own
+    // arithmetic rather than a second measurement: `ccd/ccd` 148 -> 147 and
+    // nothing else moved. The one cause, the two departures and the single
+    // arrival are argued once, beside the map above.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
@@ -8835,6 +8867,18 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // re-anchored. `:19131` starts failing for the mirror reason, below BOTH
     // hunks (a cumulative `+35`). Nothing here is a repair and no rule changed; Task 11 still owns
     // re-anchoring the citations themselves. No D-number, on S6-R11's ground.
+    // RE-MEASURED on the workspace-cleanup fix (`ws-add` learns the
+    // `node_modules`/`cdk.out` excludes, `ccd/ccd:6971-6992`): 55 -> 53. ONE
+    // cause, the +22 lines inserted at `:6971`, and TWO DEPARTURES WITH
+    // NOTHING ENTERING — `:13567` and `:13650-13652`. Neither is a repair,
+    // and this pass takes NO exemptions at all (its own docstring above says
+    // so), so both leave by the ordinary question: the shift slid content
+    // naming a token the row already quotes under each anchor — `_reg_purge`
+    // under `:13567`, `_ws_reap_locked`'s opening lines under
+    // `:13650-13652` — where the base held a bare `#` and prose respectively.
+    // Both are still stale in fact and Task 11 still owns re-anchoring them.
+    // Values taken from the instrument, in its order. No D-number, on
+    // S6-R11's ground.
     expect(r.failures.map(refKey), 'a `|` row stopped naming what the ROW quotes — re-measure')
       .toEqual([
         // RE-DERIVED on the merge with `f06abdce` (round 7). Both sides of that
@@ -8912,7 +8956,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
         'ccd/ccd:13561',
-        'ccd/ccd:13567',
         'ccd/ccd:13673',
         'ccd/ccd:13560-13562',
         'ccd/ccd:19109',
@@ -8921,7 +8964,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'ccd/ccd:19131',
         'ccd/ccd:11669',
         'ccd/ccd:11670',
-        'ccd/ccd:13650-13652',
         'ccd/ccd:12032-12034',
         'ccd/ccd:5810-5811',
         'ccd/ccd:12032-12034',
@@ -8990,6 +9032,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // ccd/ccd:19131` enters and `spec:2210 ccd/ccd:13573-13575` and
     // `spec:2222 ccd/ccd:5385-5388` leave, the same three movers, at the same
     // spec lines. No ruling id and no rule change.
+    // 37 -> 36 on the workspace-cleanup fix: the site-keyed view of the
+    // departures the `|`-row set above records. Only `spec:2125
+    // ccd/ccd:13567` is in this intersection, so only it leaves here; same
+    // one cause, nothing entering, no repair and no rule change.
     expect(r.failures.map(site).filter((k) => seen.has(k)),
       'the rows this pass reads that another pass already reaches').toEqual([
       // RE-MEASURED at the tree this ships in (fix round 4). The citation
@@ -9038,7 +9084,6 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
         'spec:2125 ccd/ccd:7568',
         'spec:2125 ccd/ccd:11025',
         'spec:2125 ccd/ccd:13561',
-        'spec:2125 ccd/ccd:13567',
         'spec:2125 ccd/ccd:13673',
         'spec:2125 ccd/ccd:13560-13562',
         'spec:2125 ccd/ccd:19109',

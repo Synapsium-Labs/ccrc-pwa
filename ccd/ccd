@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=db1ad23f015556ac8d26fb0d6d3d0f972c6d3ed09ddcd6a806b959ece8ec0f8f
+# ccrc:generated 1 sha256=1838c05617db34000ae02286b5210bf7cdc0353f54e62be8e04add71274ec2b8
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6968,6 +6968,28 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   # .graphifyignore can never make a workspace unremovable.
   grep -qxF 'graphify-out/' "$common/info/exclude" 2>/dev/null || echo 'graphify-out/' >> "$common/info/exclude"
   grep -qxF '.graphifyignore' "$common/info/exclude" 2>/dev/null || echo '.graphifyignore' >> "$common/info/exclude"
+  # Regenerable build output a project's own tooling writes straight into the
+  # workspace (`npm install`, `cdk synth`) is W-pattern by location — it dies
+  # with the workspace for free — but only once git agrees it is nobody's
+  # uncommitted work. A project's committed .gitignore is not that guarantee:
+  # it is VERSIONED, so a workspace branched before a pattern was added never
+  # sees it, and measured live on this fleet, a `node_modules/` line with a
+  # trailing slash does not match a SYMLINK named node_modules even when it
+  # points at a directory (git's own documented rule for a directory-only
+  # pattern) — exactly the shape used to skip a fresh `npm install` per
+  # workspace. Measured 2026-09-20, 10 of this box's 136 live workspaces sat
+  # permanently `dirty-tree`-refused by `ws-rm` on precisely that, every one
+  # of them reporting `?? tools/data-room/node_modules`.
+  #
+  # Both properties of the two lines below are load-bearing, and the measured
+  # shape is why. NO TRAILING SLASH, so a symlink matches at all — that is the
+  # whole defect. UNANCHORED (a bare name, no other slash), so the match does
+  # not depend on depth: not one of those ten carried the artifact at the
+  # workspace root, and every `cdk.out` on this box stands at `cdk.out`,
+  # `infra/cdk.out` or `infrastructure/cdk.out`. A leading-slash or
+  # root-relative spelling would have caught none of them.
+  grep -qxF 'node_modules' "$common/info/exclude" 2>/dev/null || echo 'node_modules' >> "$common/info/exclude"
+  grep -qxF 'cdk.out' "$common/info/exclude" 2>/dev/null || echo 'cdk.out' >> "$common/info/exclude"
 
   local id="$project-$slug"
   # ── D-2605: ROW GENERATION IS MINTED HERE, BEFORE ANY ROW FIELD ─────────

@@ -9118,6 +9118,7 @@ cmd_install() {
   _inst_graph_always_on_off
   _inst_graph_noise
   _inst_graph_excludes
+  _inst_ws_build_excludes
   _inst_graph_hooks_off
   _inst_wrappers
   _inst_installed
@@ -10916,6 +10917,40 @@ _inst_graph_excludes() {
     done
   done
   echo "install: graphify: exclude lines converged (graphify-out/, .graphifyignore; $n new)"
+}
+
+# ── _inst_ws_build_excludes — converge node_modules/cdk.out excludes ──────
+# Same walk as `_inst_graph_excludes`, same reason it exists: `ws-add`
+# (ccd:6971-6992) writes these two lines into every NEW workspace's common
+# info/exclude, but a workspace created before this shipped — or a project
+# checkout nobody has ever run `ws-add` against yet — never gets them, and
+# `info/exclude` is local, un-versioned git config: nothing about pulling
+# main or checking out a newer commit backfills it. This is the retrofit,
+# mirrored rather than shared with ccd/ccd's copy for the same reason
+# `_inst_graph_excludes` is not shared with its own ccd/ccd twin — `ccrc` and
+# `ccd` are two runnable files, not a library and a caller.
+#
+# NO TRAILING SLASH on either line — ccd:6971-6990 states the reason in full:
+# a directory-only pattern does not match a SYMLINK, and this fleet has live
+# workspaces where `node_modules` is exactly that, a symlink to a shared
+# cache, left permanently `dirty-tree`-refused by `ws-rm` until this ran.
+_inst_ws_build_excludes() {
+  [ "$INST_ROLE" = server ] && return 0
+  local roots=("$HOME/projects" "$HOME/worktrees") root d common n=0
+  for root in "${roots[@]}"; do
+    [ -d "$root" ] || continue
+    for d in "$root"/*/ "$root"/*/*/; do
+      [ -d "$d" ] || continue
+      git -C "$d" rev-parse --is-inside-work-tree >/dev/null 2>&1 || continue
+      common=$(git -C "$d" rev-parse --path-format=absolute --git-common-dir) || continue
+      mkdir -p "$common/info"
+      grep -qxF 'node_modules' "$common/info/exclude" 2>/dev/null \
+        || { echo 'node_modules' >> "$common/info/exclude"; n=$((n+1)); }
+      grep -qxF 'cdk.out' "$common/info/exclude" 2>/dev/null \
+        || echo 'cdk.out' >> "$common/info/exclude"
+    done
+  done
+  echo "install: workspace: build-artifact excludes converged (node_modules, cdk.out; $n new)"
 }
 
 # ── _inst_graph_hooks_off — remove the legacy graphify git hooks (O6b) ────
