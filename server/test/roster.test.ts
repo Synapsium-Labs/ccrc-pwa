@@ -329,6 +329,36 @@ describe('parseRoster', () => {
       expect((e as RosterError).remedy).toMatch(/65535/);
     }
   });
+
+  it.each([
+    ['an absent authDir', { authDir: undefined }],
+    ['a non-string authDir', { authDir: 7 }],
+    ['an empty authDir', { authDir: '' }],
+    ['an absolute authDir', { authDir: '/etc/codex' }],
+    ['an authDir escaping $HOME', { authDir: '../elsewhere/auth' }],
+    ['an authDir with a trailing slash', { authDir: '.local/share/x/' }],
+    ['an authDir with a shell metacharacter', { authDir: '.local/$(id)' }],
+  ])('refuses %s', (_why, over) => {
+    expect(() => parseRoster(withCodex(over))).toThrow(/exec\.authDir/);
+  });
+
+  // The one refusal that is not a path-safety rule. `ccrc uninstall --purge`
+  // empties ~/.ccrc except `memory`; a credential ccrc never obtained must not
+  // be destroyable by ccrc's own uninstall, so the roster refuses to put one
+  // there rather than documenting that it would be unwise.
+  it.each([
+    ['.ccrc/codex/codex-a/auth'],
+    ['.ccrc/auth'],
+  ])('refuses an authDir under ~/.ccrc (%s) — purge empties that tree', (dir) => {
+    expect(() => parseRoster(withCodex({ authDir: dir })))
+      .toThrow(/under \$HOME\/\.ccrc/);
+  });
+
+  it('a directory merely NAMED like .ccrc is not refused', () => {
+    // `.ccrc-backups` is a real sibling on a live box; a prefix test that
+    // caught it would refuse a legal path and send the operator hunting.
+    expect(() => parseRoster(withCodex({ authDir: '.ccrc-codex/auth' }))).not.toThrow();
+  });
 });
 
 describe('exec.secretsFile is a path, not merely a string', () => {

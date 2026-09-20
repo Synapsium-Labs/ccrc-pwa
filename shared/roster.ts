@@ -584,6 +584,45 @@ function parseLanePort(raw: unknown, id: string, field: 'proxyPort' | 'litellmPo
   return raw;
 }
 
+/** `exec.authDir` — the directory holding a codex lane's OAuth. Gated exactly
+ *  as `exec.secretsFile` is (same charset, same four path refusals), plus one
+ *  rule of its own: it may not sit under `~/.ccrc`. `_uninst_purge` empties
+ *  that tree except `memory`, and this credential is one ccrc never obtained —
+ *  a refusal here makes "uninstall cannot destroy it" structural rather than
+ *  documented. The test compares against `.ccrc/` WITH the separator, so a
+ *  sibling like `.ccrc-backups` is untouched. */
+function parseAuthDir(raw: unknown, id: string): string {
+  if (typeof raw !== 'string') {
+    throw new RosterError(
+      `account "${id}" has a missing or non-string exec.authDir.`,
+      `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to the directory holding that ` +
+        'lane\'s ChatGPT OAuth, as a path relative to $HOME (e.g. ' +
+        `".local/share/ccrc/codex/${id}"). ccrc records the path and never reads what is in it.`,
+    );
+  }
+  if (
+    raw === '' || raw.startsWith('/') || raw.endsWith('/')
+    || raw.includes('..') || !SECRETS_SAFE_RE.test(raw)
+  ) {
+    throw new RosterError(
+      `account "${id}" has an invalid exec.authDir ${JSON.stringify(raw)}.`,
+      `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to a path relative to $HOME using ` +
+        'only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", ' +
+        'never ending in "/".',
+    );
+  }
+  if (raw === '.ccrc' || raw.startsWith('.ccrc/')) {
+    throw new RosterError(
+      `account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(raw)}).`,
+      `Move account "${id}"'s OAuth directory outside $HOME/.ccrc (e.g. ` +
+        `".local/share/ccrc/codex/${id}") and set exec.authDir in ${ROSTER_PATH} to the new ` +
+        'path. `ccrc uninstall --purge` empties $HOME/.ccrc, and a credential ccrc never ' +
+        'obtained must not be destroyable by ccrc.',
+    );
+  }
+  return raw;
+}
+
 /**
  * @param assumedProvider collects the ids of `generated` accounts that named no
  *   provider, so `parseRoster` can warn ONCE for the whole file instead of once
@@ -661,7 +700,7 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
       provider: 'openai',
       proxyPort,
       litellmPort,
-      authDir: raw['authDir'] as string,
+      authDir: parseAuthDir(raw['authDir'], id),
       ...withSecrets,
     };
   }
