@@ -1549,6 +1549,8 @@ already running).
             hand-made siblings in that directory are never touched
   logs      this box's service journal: journalctl --user -u ccrc.service
             (or ccrc-agent.service when ccrc.env records CCRC_ROLE=fleet).
+            Exit 3: the install completed but the trailing doctor failed
+            (the box IS on the new build; read its FAIL lines)
             [-f] follows, [-n LINES] limits — both pass straight through
   passwd    set (or rotate) this box's PWA passphrase in ~/.ccrc/auth.scrypt.
             Prompts twice on a tty; the gate also needs CCRC_AUTH=on in this
@@ -11178,17 +11180,37 @@ cmd_update() {
   case "$role" in server|fleet|both) ;; *) role="" ;; esac
 
   echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
+  # The completed-install record is written LAST by the spine (`_inst_installed`).
+  # Cleared here, right before the staged install, its presence afterwards
+  # means ONE thing — this run's spine ran to its end — which is what tells a
+  # non-zero exit apart below (D-3114). A box mid-update with no record reads
+  # `install: incomplete` to `update --check`, which is the truth of it.
+  rm -f "$BOX_INSTALLED_FILE"
   local inst_rc=0
   if [ -n "$role" ]; then
     bash "$UPD_TREE/ccd/ccrc" install --role "$role" || inst_rc=$?
   else
     bash "$UPD_TREE/ccd/ccrc" install || inst_rc=$?
   fi
-  [ "$inst_rc" -eq 0 ] \
-    || _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+  # ONE EXIT CODE CARRIED TWO FACTS (D-3114, measured on the first live
+  # rollout): the staged install ends with doctor, so a box that MOVED and
+  # then failed a pre-existing doctor check exited 1 exactly like a spine that
+  # died mid-way — and rollout read both as "did not move". The record splits
+  # them: present → completed, unhealthy (say so, sweep, report, exit 3);
+  # absent → died (die as before, the backup named).
+  local doctor_failed=0
+  if [ "$inst_rc" -ne 0 ]; then
+    if [ -f "$BOX_INSTALLED_FILE" ]; then
+      doctor_failed=1
+      echo "update: the staged install completed (the record is written) but its trailing doctor exited $inst_rc — this box IS on $UPD_VERSION; the FAIL lines above are the box's health, not the update's, and 'ccrc doctor' re-reads them"
+    else
+      _ccrc_die "the staged install (which ends with doctor) exited $inst_rc — read its lines above. The backup taken BEFORE it ran is complete at $UPD_BACKUP_DIR"
+    fi
+  fi
 
   _upd_sweep
   _upd_report "$old_desc" "$old_version"
+  [ "$doctor_failed" -eq 0 ] || exit 3
 }
 
 # One warning, or silence — never a refusal and never a guess. Address
@@ -11769,13 +11791,20 @@ cmd_rollout() {
   fi
 
   # Steps 4–5 — each box in order; stop on the first failure.
-  local forceflag="" rc=0 untouched=""
+  local forceflag="" rc=0 untouched="" unhealthy=0
   [ "$force" -eq 1 ] && forceflag=" --force"
   for i in "${!boxes[@]}"; do
     echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$forceflag"
     "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$forceflag" 2>&1 | sed "s/^/${labels[$i]}: /"
     rc="${PIPESTATUS[0]}"
-    if [ "$rc" -ne 0 ]; then
+    # 3 from update (D-3114) = the box MOVED and its trailing doctor failed:
+    # the box's health, not the rollout's — relay it, carry on, verify, and
+    # say it again in this verb's own exit code. Anything else non-zero is a
+    # box that did not move, and the rollout stops there as before.
+    if [ "$rc" -eq 3 ]; then
+      unhealthy=1
+      echo "rollout: ${labels[$i]}: moved to $ROLLOUT_VERSION, but its doctor failed — read the ${labels[$i]}: FAIL lines above; that is the box's health, not the rollout's"
+    elif [ "$rc" -ne 0 ]; then
       untouched=""
       [ "$i" -eq 0 ] && [ "${#boxes[@]}" -eq 2 ] && untouched=" The ${labels[1]} box was not touched."
       _ccrc_die "rollout: the ${labels[$i]} box's update exited $rc — stopped here.$untouched Its lines above name the backup taken before anything changed; deploy.sh remains the fallback"
@@ -11808,6 +11837,7 @@ cmd_rollout() {
     echo "rollout: $report — NOT agreed"; return 1
   fi
   echo "rollout: $report — agreed"
+  [ "$unhealthy" -eq 0 ] || return 3
 }
 
 # ── cmd_backup — update's step 2 standalone (stage 4, Task 8; spec §7) ────

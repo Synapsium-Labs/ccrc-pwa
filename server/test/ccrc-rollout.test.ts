@@ -81,7 +81,9 @@ function plantBox(home: string): void {
     '  "ccrc update --to "*)',
     '    IFS= read -r rc < "$d/update-exit"',
     '    echo "update: fixture ran on $host: $cmd"',
-    `    if [ "$rc" -eq 0 ]; then set -- $cmd; echo "$4" > "$d/version"; echo "${SHA_NEW}" > "$d/sha"; fi`,
+    // 0 = moved; 3 = moved, but the box's trailing doctor failed (D-3114): the
+    // box IS on the new build either way, so the fixture bumps it either way.
+    `    if [ "$rc" -eq 0 ] || [ "$rc" -eq 3 ]; then set -- $cmd; echo "$4" > "$d/version"; echo "${SHA_NEW}" > "$d/sha"; fi`,
     '    exit "$rc" ;;',
     '  "ccrc version") echo "ccrc $sha (release, built 2026-09-18T00:00:00Z)"; [ -n "$ver" ] && echo "version $ver"; exit 0 ;;',
     '  *"/health"*)',
@@ -318,6 +320,28 @@ describe('ccrc rollout: pin, measure, update in order, verify', () => {
     expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
     expect(r.stderr).toMatch(/the fleet box's update exited 1 — stopped here\. The server box was not touched/);
     expect(r.stdout).toMatch(/^fleet: update: fixture ran on user@fleet-host/m);   // streamed, prefixed
+  });
+
+  it('a box that MOVED but whose trailing doctor failed (update exit 3) does not stop the rollout: the next box runs, both are verified, exit 3 names it (D-3114)', () => {
+    // Measured 2026-09-20 on the live fleet: the server box wrote its record
+    // and was on the new build, its doctor FAILed on four pre-existing box
+    // facts, `ccrc update` exited 1, and rollout said "stopped here … deploy.sh
+    // remains the fallback" over a box that had moved. Exit 3 from update is
+    // "moved, unhealthy"; rollout relays it and carries on.
+    const home = twoBoxFleet('ccrc-rollout-doctor-failed-');
+    plantHost(home, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 3 });
+    const r = run(home);
+    expect(r.code, r.stderr).toBe(3);
+    expect(updates(home)).toEqual([`${FLEET} ccrc update --to v2.0.0`, `${SERVER} ccrc update --to v2.0.0`]);
+    expect(r.stdout).toMatch(/^rollout: fleet: moved to v2\.0\.0, but its doctor failed — read the fleet: FAIL lines above; that is the box's health, not the rollout's$/m);
+    expect(r.stdout).toMatch(/^rollout: fleet v2\.0\.0 \(newsha00\) · server v2\.0\.0 \(newsha00\)/m);   // step 6 still ran
+    expect(r.stderr).not.toMatch(/stopped here/);
+    // A box that DIED (exit 1) still stops the rollout, as before.
+    const home2 = twoBoxFleet('ccrc-rollout-died-');
+    plantHost(home2, FLEET, { role: 'fleet', version: 'v1.0.0', updateExit: 1 });
+    const r2 = run(home2);
+    expect(r2.code).toBe(1);
+    expect(updates(home2)).toEqual([`${FLEET} ccrc update --to v2.0.0`]);
   });
 
   it('--check measures and stops: no update argv; exit 1 while any box is behind, 0 when all current', () => {

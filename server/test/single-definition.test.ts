@@ -1500,6 +1500,11 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || rec=""',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
+      // cmd_update (D-3114): cleared right before the staged install, so its
+      // presence afterwards means this run's spine completed — the one fact
+      // that tells "moved, unhealthy" (exit 3) from "died" (exit 1).
+      'rm -f "$BOX_INSTALLED_FILE"',
+      'if [ -f "$BOX_INSTALLED_FILE" ]; then',
       '[ -f "$BOX_INSTALLED_FILE" ] || return 1',
       'IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1',
       'rm -f -- "$BOX_INSTALLED_FILE" \\',
