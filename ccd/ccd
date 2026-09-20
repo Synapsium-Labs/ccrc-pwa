@@ -4918,6 +4918,14 @@ _ws_status() {   # id -> busy|idle on stdout; NON-ZERO when it cannot be read.
   echo idle
 }
 
+_munge_wd() {   # workdir -> the project directory name Claude Code writes under
+  # The same munge `server/src/munge.ts` applies, spelled once. `_transcript_path`
+  # and `_follow_continued_in` both ask this question and must not answer it
+  # twice: a session whose transcript is looked up under one spelling and
+  # followed under another is a session this fix cannot see.
+  printf '%s' "$1" | tr './_' '---'
+}
+
 _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   # <cfg>/projects/<workdir with / . _ all mapped to ->/<uuid>.jsonl — the same
   # munge server/src/munge.ts applies. Recorded so a reap never has to be
@@ -4949,9 +4957,9 @@ _transcript_path() {   # id -> the Claude Code transcript for its CURRENT uuid
   wrapper=$(_reg_get "$id" wrapper); workdir=$(_reg_get "$id" workdir); uuid=$(_reg_get "$id" uuid)
   cfg=$(_cfg_dir "$wrapper")
   [[ -n "$cfg" && -n "$workdir" && -n "$uuid" ]] || return 1
-  raw=$(printf '%s' "$workdir" | tr './_' '---')
+  raw=$(_munge_wd "$workdir")
   workdir=$(_ws_realpath "$workdir")
-  munged=$(printf '%s' "$workdir" | tr './_' '---')
+  munged=$(_munge_wd "$workdir")
   if [[ -f "$cfg/projects/$munged/$uuid.jsonl" ]]; then
     printf '%s/projects/%s/%s.jsonl\n' "$cfg" "$munged" "$uuid"; return 0
   fi
@@ -15489,18 +15497,93 @@ _cfg_dir() { _ccrc_cfg_dir "$1"; }   # wrapper -> the CLAUDE_CONFIG_DIR that wra
 # call sites moving to `_ccrc_cfg_dir` directly: `_cfg_dir` is ccd's own name
 # for the question, and one seam is easier to re-point than six.
 
+# The tail window every reader of the marker uses. Held equal to the server's
+# CONTINUATION_TAIL_BYTES (`server/src/transcript/parse.ts`) by
+# `server/test/continued-in-parity.test.ts` — three readers, one window, or the
+# three disagree about what the last line even is.
+CONTINUED_IN_TAIL_BYTES=8192
+
+# Stamps, per session id, for the read budget below. `ccd supervise` is one
+# long-lived process per session, so these are already per-session state and
+# need no registry file; a supervisor restart forgets them and costs one extra
+# read, never a wrong answer.
+declare -A _CI_LAST=()   # id -> the stamp seen on the PREVIOUS tick
+declare -A _CI_READ=()   # id -> the stamp whose tail has already been read
+
+_continued_in_of() {   # file uuid -> the successor uuid on the file's LAST line, or nothing
+  # Claude Code's own statement about itself, checked field by field because it
+  # is data off a disk other processes write. `sessionId` is checked when
+  # present and ignored when absent (absence-permits); a successor that is not
+  # a uuid, or is this file's own uuid, is refused.
+  # D-TBD-ccd-one-hop's read-budget test counts every invocation of the `tail`
+  # binary, so the last-line pick below is done in bash rather than through a
+  # second `| tail -1` in the pipeline — that second call is what a stub-based
+  # count of "one tail per quiescence" would otherwise see, even though it
+  # never touches the disk a second time. One external `tail`, one 8 KiB read.
+  local f="$1" uuid="$2" window lines last claims next
+  window=$(tail -c "$CONTINUED_IN_TAIL_BYTES" -- "$f" 2>/dev/null) || return 0
+  lines=$(printf '%s' "$window" | grep -v '^[[:space:]]*$')
+  last="${lines##*$'\n'}"
+  [[ "$last" == *'"type":"continued-in"'* ]] || return 0
+  claims=$(printf '%s' "$last" | grep -oE '"sessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+  [[ -z "$claims" || "$claims" == "$uuid" ]] || return 0
+  next=$(printf '%s' "$last" | grep -oE '"continuedInSessionId":"[0-9a-f-]{36}"' | head -1 | cut -d'"' -f4)
+  [[ -n "$next" && "$next" != "$uuid" ]] || return 0
+  printf '%s' "$next"
+}
+
+_follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated read budget
+  # WHY ONE HOP AND WHY GATED (D-TBD-ccd-one-hop). `_transcript_path` costs
+  # ~36 ms — D-2444 measured it at ~14x the pane classifier and stopped paying
+  # it every five seconds across the fleet — so this stats the direct address
+  # instead and reads nothing at all in the common case. The marker can only be
+  # the final line of a file that will never be appended to again, so the tail
+  # read waits for the file to STOP changing: one stat per tick, and one 8 KiB
+  # read per quiescence. A busy session pays nothing; a frozen one pays once.
+  # A chain of forks therefore converges over a few ticks rather than in one
+  # call, and the per-stamp memo IS the visited set — a cycle cannot be
+  # re-read, because its stamps are already in it.
+  local id="$1" cfg="$2" wd uuid munged f st prev next
+  wd=$(_reg_get "$id" workdir); [[ -n "$wd" ]] || return 0
+  uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
+  wd=$(_ws_realpath "$wd")
+  munged=$(_munge_wd "$wd")
+  f="$cfg/projects/$munged/$uuid.jsonl"
+  [[ -f "$f" ]] || return 0
+  st=$(stat -c '%s:%Y' -- "$f" 2>/dev/null) || return 0
+  prev="${_CI_LAST[$id]:-}"
+  _CI_LAST["$id"]="$st"
+  [[ "$st" == "$prev" ]] || return 0                 # still growing — look again next tick
+  [[ "$st" == "${_CI_READ[$id]:-}" ]] && return 0    # this exact file has already been read
+  _CI_READ["$id"]="$st"
+  next=$(_continued_in_of "$f" "$uuid")
+  [[ -n "$next" ]] || return 0
+  [[ -s "$cfg/projects/$munged/$next.jsonl" ]] || return 0   # announced but not yet written
+  _reg_set "$id" uuid "$next"
+  return 0
+}
+
 _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the registry.
   # Claude Code rotates the active session uuid during normal operation (/clear, compaction),
   # so a uuid pinned at start goes stale, and a later --resume of it time-travels the session
   # back to the last point that old uuid was active (observed 2026-07-02: days-to-weeks jumps).
   # The live process publishes its current sessionId at <config>/sessions/<pid>.json; keeping
   # the registry in step means resurrection resumes where the session actually was.
+  #
+  # TWO SOURCES, IN THIS ORDER. The pane pid's sessions file is what catches a
+  # `/clear` rotation and stays first. The transcript's own `continued-in`
+  # pointer is what catches a FORK — Claude Code 2.1.278 forks a live session
+  # into a daemon-hosted bg PTY under a new sessionId and leaves the pane
+  # process publishing the old one, so the pane file cannot see it, and the
+  # registry then names a transcript nobody will ever write to again.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
   pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
-  [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]] || return 0
-  sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
-  [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && _reg_set "$id" uuid "$sid"
+  if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
+    sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
+    [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && _reg_set "$id" uuid "$sid"
+  fi
+  _follow_continued_in "$id" "$cfg"
   return 0
 }
 
