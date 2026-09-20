@@ -5,6 +5,8 @@
 // between the widget and a fabricated zero. The distinction these tests exist to
 // protect: NOT MEASURED is not 0%.
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import {
   createHostSampler,
   cpuBetween,
@@ -251,5 +253,25 @@ describe('createHostSampler', () => {
     const { probe, reads } = fakeProbe({});
     await createHostSampler(probe, { procRoot: '/fixture/proc' })();
     expect(new Set(reads)).toEqual(new Set(['/fixture/proc/stat', '/fixture/proc/meminfo']));
+  });
+});
+
+describe('shared/hoststat.ts is L0', () => {
+  // A GUARD WITH A MECHANISM, not a comment. `shared/` is the tree the PWA
+  // bundles, so a `node:*` import here is a broken bundle rather than a style
+  // violation — and the obvious "simplification" for this file in particular is
+  // a `node:fs` default reader, which is exactly why the injection exists. The
+  // shape is `peers-claims-l0.test.ts`'s, which pins `shared/api.ts` the same
+  // way and does not reach this file.
+  const src = readFileSync(path.resolve(import.meta.dirname, '../../shared/hoststat.ts'), 'utf8');
+  const imports = src.split('\n').filter((l) => l.startsWith('import'));
+
+  it('imports exactly one thing, and it is a TYPE from a shared sibling', () => {
+    expect(imports).toEqual(["import type { ReadFailure } from './agent-protocol.js';"]);
+  });
+
+  it('reaches for no runtime module at all — no node:*, no package, no server or pwa path', () => {
+    expect(src).not.toMatch(/from '(node:|[a-z@])/);
+    expect(src).not.toMatch(/\brequire\(|\bawait import\(/);
   });
 });

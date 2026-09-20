@@ -165,6 +165,18 @@ describe('HostGauge when there is no reading', () => {
     expect(screen.getAllByText('—').length).toBeGreaterThan(0);   // still the placeholder, not a crash
   });
 
+  it('survives a measured cpu half carrying no per-thread list', async () => {
+    // The tile's own second line of defence behind the server's shape check:
+    // `isReading` accepts a half that says `ok: true`, and `CpuRow` reads
+    // `perCpu.length` immediately. There is no error boundary anywhere in this
+    // app, so a throw here unmounts the ROOT — the whole console goes blank,
+    // which is worse than the one row this tile was asked to draw.
+    stub({ at: Date.now(), cpu: { ok: true, total: 34, windowMs: 6000 }, mem: { ok: false, why: 'absent' } } as unknown as HostStat);
+    render(<HostGauge />);
+    expect(await screen.findByText('34%')).toBeTruthy();
+    expect(document.querySelectorAll('.host-tick')).toHaveLength(0);
+  });
+
   it('greys a reading that has stopped arriving instead of letting it read as live', async () => {
     stub(reading({ at: Date.now() - 5 * 60_000 }));
     render(<HostGauge />);

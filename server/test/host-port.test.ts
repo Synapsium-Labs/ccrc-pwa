@@ -3,7 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { HostStat } from '../../shared/hoststat.js';
-import { cachedHostStat, localHostStat, remoteHostStat } from '../src/hoststat.js';
+import { HOST_REQUEST_TIMEOUT_MS, cachedHostStat, localHostStat, remoteHostStat } from '../src/hoststat.js';
 import { localIO } from '../src/io.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -64,8 +64,18 @@ describe('localHostStat', () => {
 
 describe('remoteHostStat', () => {
   // A stand-in for FleetClient: only `request` is reached from this adapter.
+  const asked: { timeoutMs?: number } = {};
   const clientThat = (answer: () => Promise<unknown>) =>
-    ({ request: async () => answer() } as unknown as Parameters<typeof remoteHostStat>[0]);
+    ({ request: async (_req: unknown, timeoutMs?: number) => { asked.timeoutMs = timeoutMs; return answer(); } } as unknown as Parameters<typeof remoteHostStat>[0]);
+
+  it('asks with a budget well under the client default — four seconds, not fifteen', async () => {
+    // A guard with no test is a comment: delete the second argument to
+    // `client.request` and every poll against a wedged agent would wait out
+    // FleetClient's 15s default instead, with the whole branch still green.
+    await remoteHostStat(clientThat(async () => ({ stat: reading(1) }))).read();
+    expect(asked.timeoutMs).toBe(HOST_REQUEST_TIMEOUT_MS);
+    expect(HOST_REQUEST_TIMEOUT_MS).toBe(4_000);
+  });
 
   it('carries the agent\'s reading through, restamped with this box\'s clock', async () => {
     const before = Date.now();
@@ -91,7 +101,16 @@ describe('remoteHostStat', () => {
   // REVIEW FOCUS 5: version skew. A frame that arrives well-formed and carries
   // a garbled payload must not reach the PWA as a half-built reading.
   it('refuses a payload it cannot recognise rather than passing a half-built reading on', async () => {
-    for (const payload of [{}, { stat: null }, { stat: { at: 'now', cpu: {}, mem: {} } }, { stat: { at: 1, cpu: { ok: true }, mem: { ok: true } } }]) {
+    for (const payload of [
+      {}, { stat: null }, { stat: { at: 'now', cpu: {}, mem: {} } }, { stat: { at: 1, cpu: { ok: true }, mem: { ok: true } } },
+      // The one that gets PAST a guard checking only `total`/`windowMs`: a
+      // well-formed frame from a peer that renamed or dropped `perCpu`. The
+      // tile reads `cpu.perCpu.length` the moment it renders, so letting this
+      // through is the blank console the guard exists to prevent.
+      { stat: { at: 1, cpu: { ok: true, total: 12, windowMs: 6000 }, mem: { ok: true, totalKb: 1, usedKb: 1, cacheKb: 0 } } },
+      // …and the same hole one level in: a list whose entries are not loads.
+      { stat: { at: 1, cpu: { ok: true, total: 12, windowMs: 6000, perCpu: [{ id: 0 }] }, mem: { ok: true, totalKb: 1, usedKb: 1, cacheKb: 0 } } },
+    ]) {
       const stat = await remoteHostStat(clientThat(async () => payload)).read();
       expect(stat.cpu.ok === false && stat.cpu.why).toBe('unparsable');
     }

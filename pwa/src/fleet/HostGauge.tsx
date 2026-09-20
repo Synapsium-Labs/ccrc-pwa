@@ -161,13 +161,22 @@ function CpuRow({ stat }: { stat: HostStat }): ReactNode {
   if (!cpu.ok) {
     return <Row label="cpu" cell={track(null)} pct="—" trail={failureWord(cpu.why)} title={failureSentence(cpu.why)} dim />;
   }
+  // `Array.isArray` for the same reason the shape check above exists at all:
+  // `isReading` proves a measured half says `ok: true`, not that it carries a
+  // per-thread list, and this line reads `.length` the instant it renders.
+  // There is no error boundary in this app, so a throw here unmounts the ROOT
+  // and the whole console goes blank — one empty row is the smaller loss.
+  // The server's own guard (`isCpuHalf`, server/src/hoststat.ts) refuses such
+  // a payload one layer up; this is the layer that does not depend on that one
+  // having been deployed.
+  const perCpu = Array.isArray(cpu.perCpu) ? cpu.perCpu : [];
   // Two ticks, and only when there is more than one thread to distinguish: on
   // a single-CPU box the hottest thread IS the average, and a tick sitting on
   // the fill's own edge would be noise dressed as information.
-  const hot = cpu.perCpu.length > 1 ? hottestCpus(cpu.perCpu, 2) : [];
+  const hot = perCpu.length > 1 ? hottestCpus(perCpu, 2) : [];
   const title = [
     `cpu ${Math.round(cpu.total)}% over ${(cpu.windowMs / 1000).toFixed(1)}s`,
-    cpu.perCpu.length > 0 ? `${cpu.perCpu.length} threads` : null,
+    perCpu.length > 0 ? `${perCpu.length} threads` : null,
     hot.length > 0 ? `hottest ${hot.map((h) => `#${h.id} ${Math.round(h.pct)}%`).join(', ')}` : null,
   ].filter((p) => p !== null).join(' · ');
   return (

@@ -45,6 +45,15 @@ get wrong when editing `src/whitelist.ts`.
   and the fleet projects root.
 - `ptyOpen` only ever spawns `tmux attach -t cc-<sessionId>` with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
+- **`hostStat` is the one op that reads a file the read whitelist does not cover, and it takes NO PATH.** It
+  answers the box's own load — `<procRoot>/stat` and `<procRoot>/meminfo`, sampled a measured interval apart and
+  returned as a computed reading (`agent/src/hoststat.ts`, algorithm in `shared/hoststat.ts`). Both paths are
+  fixed in code; `validateReq` rebuilds the frame from the op alone, so a `path` a caller smuggles in is dropped
+  before any handler sees it, and `procRoot` is a test-fixture option that `startAgent` defaults to `/proc` and
+  nothing outside a test ever sets. **This op exists so that `/proc` need NEVER go on the read whitelist** — an
+  entry there would hand the PWA every `/proc/<pid>/environ` on this box along with the CPU numbers. If you are
+  here to widen the read roots, that is the case this op already answers; `agent/test/hoststat.test.ts` pins
+  `/proc` as `forbidden` through `read` and goes red if it stops being.
 - The agent has **no HTTP routes** (its `createServer` carries only a WS upgrade), so the deploy's
   `verify-service.sh` (MainPID stability across a window > `RestartSec`) is its only post-restart check — it
   catches the `refuseToBoot` crash-loop that a `systemctl restart` exit-0 would otherwise hide.

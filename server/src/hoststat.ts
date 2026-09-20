@@ -13,6 +13,7 @@
 import {
   createHostSampler,
   hostStatFailed,
+  type CpuLoad,
   type HostStat,
   type HostStatFailure,
 } from '../../shared/hoststat.js';
@@ -63,7 +64,27 @@ function isHostStat(v: unknown): v is HostStat {
   if (typeof v !== 'object' || v === null) return false;
   const { at, cpu, mem } = v as { at?: unknown; cpu?: unknown; mem?: unknown };
   if (typeof at !== 'number') return false;
-  return isHalf(cpu, ['total', 'windowMs']) && isHalf(mem, ['totalKb', 'usedKb', 'cacheKb']);
+  return isCpuHalf(cpu) && isHalf(mem, ['totalKb', 'usedKb', 'cacheKb', 'availableKb', 'swapTotalKb', 'swapUsedKb']);
+}
+
+/** The CPU half, whose `perCpu` list is checked ELEMENT BY ELEMENT rather than
+ *  merely for presence. A guard that asked only for `total` and `windowMs` let
+ *  a peer that renamed or dropped `perCpu` through as a WELL-FORMED reading,
+ *  and the tile reads `cpu.perCpu.length` the moment it renders a measured
+ *  half — so the frame that got past the shape check was the one that blanked
+ *  the console, which is the exact failure this check exists to prevent
+ *  (whole-branch review, 2026-09-20). Element by element because a list of the
+ *  wrong things is no better: `hottestCpus` sorts on `pct`, and an entry
+ *  without one sorts as NaN and draws a tick at `NaN%`. */
+function isCpuHalf(v: unknown): boolean {
+  if (!isHalf(v, ['total', 'windowMs'])) return false;
+  const half = v as Record<string, unknown>;
+  if (half.ok === false) return true;
+  const perCpu = half.perCpu;
+  return Array.isArray(perCpu) && perCpu.every((c) => (
+    typeof c === 'object' && c !== null
+    && typeof (c as CpuLoad).id === 'number' && typeof (c as CpuLoad).pct === 'number'
+  ));
 }
 
 function isHalf(v: unknown, numbers: readonly string[]): boolean {
