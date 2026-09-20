@@ -15627,9 +15627,18 @@ _ci_walk_add() {   # id uuid -> record uuid on id's walk, capped at the last _CI
 # all — bounded by chain length like the others, which is within the second
 # round's own ruling, but nothing was ever dropped from it either. There is
 # no reason to keep a resolved path for a uuid the walk has already left, so
-# a hop now drops the entry for the uuid it hops OFF in the same breath it
-# adds the one for the uuid it hops TO — O(1) per id, like `_CI_LAST` and
-# `_CI_DONE`, not O(chain length).
+# a hop drops the entry for the uuid it hops OFF in the same breath it adds
+# the one for the uuid it hops TO — O(1) per id ON THE HOP PATH, like
+# `_CI_LAST` and `_CI_DONE`.
+#
+# FOURTH REVIEW ROUND CORRECTION: that sentence used to claim O(1) per id
+# unconditionally, and the ROTATION path (a genuine external uuid change —
+# see the walk-start reset above) was measurably not: it left the prior
+# uuid's entry behind on every reset, 50 entries per id measured after 50
+# rotations. The reset now drops it too, in the same statement it clears
+# the walk, so both of this memo's writers — the hop and the reset — evict
+# what they leave behind; a memo-size check that both hops AND rotates is
+# what actually exercises this, not one that only does either alone.
 declare -A _CI_PATH=()   # "$cfg:$id:$uuid" -> the resolved transcript path, once found
 
 _ci_transcript_path() {   # id cfg uuid -> the live transcript for uuid, tried both spellings, or nothing
@@ -15715,6 +15724,12 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # old walk's origin could keep gating hops on a chain it has nothing to do
   # with.
   if [[ "$uuid" != "${_CI_EXPECT[$id]:-}" ]]; then
+    # FOURTH REVIEW ROUND: this reset used to leave the PRIOR uuid's
+    # `_CI_PATH` entry behind forever — measured at 50 entries per id after
+    # 50 external rotations, the same class of "O(1) claimed, not measured"
+    # defect M1 was raised for. The hop path already drops its own old entry
+    # (below); this is the other place a uuid falls out of the walk.
+    [[ -n "${_CI_EXPECT[$id]:-}" ]] && unset "_CI_PATH[$cfg:$id:${_CI_EXPECT[$id]}]"
     _CI_ORIGIN["$id"]="$uuid"
     _CI_WALK["$id"]=""
     _CI_EXPECT["$id"]="$uuid"
@@ -15761,12 +15776,40 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
   # into a daemon-hosted bg PTY under a new sessionId and leaves the pane
   # process publishing the old one, so the pane file cannot see it, and the
   # registry then names a transcript nobody will ever write to again.
+  #
+  # FIFTH REVIEW ROUND: "the pane read is first and harmless" was argued, not
+  # measured, and the measurement broke it. On the production-shaped fixture
+  # — pane still publishing the pre-fork uuid A, A's transcript pointing to
+  # C, exactly what a fork IS — the chain writes C at tick 2, and at tick 3
+  # THIS block sees `sid`=A, compares it against the registry's C, finds them
+  # different, and writes A straight back. Forever: `_CI_DONE` already holds
+  # A's stamp, so A's marker is never read again and the registry never
+  # recovers. The pane read is a no-op only BEFORE the chain has moved; after
+  # that it is stale BY DEFINITION — that is what a fork is — and
+  # unconditional pane authority drags the registry back for ever.
+  #
+  # THE FIX: the pane's `sessionId` is authoritative only when it is NEW
+  # INFORMATION. A uuid this walk has already visited (`_ci_walk_has`) is not
+  # new information — it is the stale id the fork left behind — so it no
+  # longer overwrites the registry. A genuine `/clear` rotation mints a uuid
+  # that has never been walked, so it still wins immediately: the pane keeps
+  # its authority for the thing it is actually authoritative about.
+  #
+  # SELF-HEALING AFTER A RESTART, STATED RATHER THAN DISCOVERED LATER: `ccd
+  # supervise` is one long-lived process per session, so `_CI_WALK` is empty
+  # right after a restart. A stale pane can therefore drag the registry back
+  # ONCE in that window — every uuid reads as "never walked" until the chain
+  # has walked it again — and the chain then re-follows from the empty memo
+  # and converges a second time. Bounded, not silent: one wrong tick per
+  # restart, not forever.
   local id="$1" cfg pid sid
   cfg=$(_cfg_dir "$(_reg_get "$id" wrapper)"); [[ -n "$cfg" ]] || return 0
   pid=$(tmux list-panes -t "$(_tmux "$id")" -F '#{pane_pid}' 2>/dev/null | head -1)
   if [[ -n "$pid" && -f "$cfg/sessions/$pid.json" ]]; then
     sid=$(grep -oE '"sessionId":"[0-9a-f-]{36}"' "$cfg/sessions/$pid.json" | head -1 | cut -d'"' -f4)
-    [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && _reg_set "$id" uuid "$sid"
+    if [[ -n "$sid" && "$sid" != "$(_reg_get "$id" uuid)" ]] && ! _ci_walk_has "$id" "$sid"; then
+      _reg_set "$id" uuid "$sid"
+    fi
   fi
   _follow_continued_in "$id" "$cfg"
   return 0

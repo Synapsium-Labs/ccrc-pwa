@@ -200,11 +200,24 @@ describe('_sync_uuid follows a fork', () => {
   it('the pane’s stale sessionId does not undo a chain the follow just wrote', () => {
     // THE ONLY FIXTURE THAT DISCRIMINATES ORDER, and it is the production one:
     // a forked session's pane process carries on publishing the PRE-FORK id
-    // while the fork runs under a new one. Pane read first, chain second, and
-    // the pane read is a harmless no-op. Reverse them and the pane drags the
-    // registry back off the successor on every tick — the follow writes, the
-    // pane undoes, for ever. Every other fixture in this file answers the same
-    // uuid under both orders, which is why nothing pinned this until now.
+    // while the fork runs under a new one, and NEVER stops — Claude Code does
+    // not rewrite the pane's own sessions file after a fork, so `sid` reads
+    // A on every tick, for ever. Pane read first, chain second is still the
+    // right order (it catches a real `/clear`), but the pane read is a no-op
+    // ONLY BEFORE the chain has moved; after that it is stale BY DEFINITION —
+    // that is what a fork is.
+    //
+    // FIFTH REVIEW ROUND: the two-tick version of this test PASSED while the
+    // property its own name claims was false from tick 3 onward — measured:
+    // `A C A A A A A A A A` with the pane's write left unconditional. The
+    // fix makes the pane's `sessionId` authoritative only when it is NEW
+    // INFORMATION: a uuid already on `_CI_WALK` (the chain has already
+    // visited it) is not new, it is the stale id the fork left behind, and
+    // no longer overwrites the registry.
+    //
+    // MEASURED with the fix, 10 ticks: `A C C C C C C C C C` — one write,
+    // then permanent silence, all ten ticks in ONE process (the walk memo
+    // lives in shell variables).
     const C = 'c'.repeat(36);
     row('/w', A);
     plant('/w', A, `${turnLine('one')}${marker(A, C)}`);
@@ -214,8 +227,15 @@ describe('_sync_uuid follows a fork', () => {
     mkdirSync(sdir, { recursive: true });
     writeFileSync(path.join(sdir, '4242.json'), JSON.stringify({ sessionId: A, status: 'idle' }));
     const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
-    h.sh(`${tmuxStub} _sync_uuid ${ID}; _sync_uuid ${ID}`);
-    expect(h.reg(ID, 'uuid')).toBe(C);
+    const out = h.sh(
+      `${tmuxStub} ${Array.from({ length: 10 }, () => `_sync_uuid ${ID}; echo "T:$(_reg_get ${ID} uuid)"`).join('; ')}`,
+    );
+    const vals = out.split('\n').filter((l) => l.startsWith('T:')).map((l) => l.slice(2));
+    expect(vals).toHaveLength(10);
+    expect(vals.every((v) => v === A || v === C)).toBe(true);
+    expect(vals[1]).toBe(C);   // still writes C at tick 2, as always
+    expect(vals[vals.length - 1]).toBe(C);   // and it is STILL C ten ticks later
+    expect(vals.slice(1)).toEqual(Array(9).fill(C));   // never reverts to A again
   });
 
   it('advances past an intermediate transcript that shares a stamp with its predecessor', () => {
@@ -413,5 +433,42 @@ describe('_sync_uuid follows a fork', () => {
     expect(/SETTLED:(\S+)/.exec(out)?.[1]).toBe(CH);
     expect(/AFTER_CHURN:(\S+)/.exec(out)?.[1]).toBe(CH);
     expect(/FINAL:(\S+)/.exec(out)?.[1]).toBe(CH);
+  });
+
+  it('_CI_PATH stays at one entry across BOTH a hop and a genuine rotation', () => {
+    // Fourth review round, M3's own follow-up: the existing memo-size check
+    // (the shared-stamp/cycle fixtures above) never rotates via the pane, so
+    // it could not see the reset path's leak — measured before this fix at
+    // 50 `_CI_PATH` entries per id after 50 external rotations, because the
+    // walk-start reset cleared origin/walk/expect but left the PRIOR uuid's
+    // resolved path behind. This fixture does both: A -> B is a real hop
+    // (via the chain), then a THIRD uuid Z — never walked, so the pane
+    // keeps its ordinary authority over it — is a genuine external
+    // rotation, exactly what a real `/clear` looks like from here.
+    // ALL OF IT IN ONE PROCESS — `_CI_PATH` lives in shell variables exactly
+    // like every other memo here, so a hop in one `h.sh` call followed by a
+    // rotation in a SECOND one would start the second call with an empty
+    // memo and could never see a leak either way. (Measured while building
+    // this test: split across two `h.sh` calls, the assertion below passes
+    // whether or not the reset-path eviction exists at all — a test that
+    // cannot fail for the reason it names, caught before it was committed.)
+    const Z = 'd'.repeat(36);
+    row('/w', A);
+    plant('/w', A, `${turnLine('one')}${marker(A, B)}`);
+    plant('/w', B, turnLine('two'));
+    plant('/w', Z, turnLine('four'));   // so Z's OWN path resolves and gets cached too
+    const cfg = h.sh(`_cfg_dir ${W}`);
+    const sdir = path.join(cfg, 'sessions');
+    mkdirSync(sdir, { recursive: true });
+    writeFileSync(path.join(sdir, '4242.json'), JSON.stringify({ sessionId: Z, status: 'idle' }));
+    const tmuxStub = `tmux() { case "$1" in list-panes) echo 4242 ;; esac; return 0; };`;
+    const out = h.sh(
+      `_sync_uuid ${ID}; _sync_uuid ${ID}; echo "AFTER_HOP:$(_reg_get ${ID} uuid)"; `
+      + `${tmuxStub} _sync_uuid ${ID}; echo "AFTER_ROTATE:$(_reg_get ${ID} uuid)"; `
+      + `echo "SIZE:\${#_CI_PATH[@]}"`,
+    );
+    expect(/AFTER_HOP:(\S+)/.exec(out)?.[1]).toBe(B);
+    expect(/AFTER_ROTATE:(\S+)/.exec(out)?.[1]).toBe(Z);   // Z was never walked, so it still wins
+    expect(/SIZE:(\d+)/.exec(out)?.[1]).toBe('1');
   });
 });
