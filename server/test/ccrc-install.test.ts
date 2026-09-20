@@ -1938,6 +1938,13 @@ describe('ccrc install: the order is stated in one place', () => {
       // No later step reads what this one writes, so the position is the
       // brief's own placement rather than a measured dependency.
       '_inst_graph_excludes',
+      // Workspace-cleanup fix. Right after `_inst_graph_excludes`, same walk
+      // and same reason: `ws-add` writes the `node_modules`/`cdk.out` exclude
+      // pair into every NEW workspace, and this is the backfill for a
+      // project or workspace `ws-add` never touched, or touched before the
+      // pair existed. Position is a grouping (both converge the same
+      // per-project info/exclude), not a measured dependency.
+      '_inst_ws_build_excludes',
       // graphify Task 10 (O3/O6b). Right after `_inst_graph_excludes`, per
       // the task brief: no later step reads what it does, so the position is
       // the brief's own placement rather than a measured dependency.
@@ -1961,6 +1968,94 @@ describe('ccrc install: the order is stated in one place', () => {
     const lines = body![1]!.split('\n').map((l) => l.trim())
       .filter((l) => l !== '' && !l.startsWith('#'));
     expect(lines[lines.length - 1]).toBe('cmd_doctor');
+  });
+});
+
+describe('ccrc install: workspace build-artifact excludes (_inst_ws_build_excludes)', () => {
+  it('converges node_modules/cdk.out into a project AND its worktree, ignoring a node_modules SYMLINK there', () => {
+    const home = freshBox('ccrc-install-ws-excl-');
+    const repoA = join(home, 'projects', 'repoA');
+    mkdirSync(repoA, { recursive: true });
+    writeFileSync(join(repoA, 'a.txt'), 'x\n');
+    gitInit(repoA);
+    const ws1 = join(home, 'worktrees', 'repoA', 'ws1');
+    mkdirSync(join(home, 'worktrees', 'repoA'), { recursive: true });
+    const wtAdd = spawnSync('git', ['-C', repoA, 'worktree', 'add', ws1, '-b', 'ws1'], { encoding: 'utf8' });
+    expect(wtAdd.status, wtAdd.stderr).toBe(0);
+
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(
+      /^install: workspace: build-artifact excludes converged \(node_modules, cdk\.out; \d+ new\)$/m);
+
+    // EXACT LINES, for the reason ccd-workspaces.test.ts states beside its own
+    // copy: a substring assertion is satisfied by the trailing-slash spelling,
+    // which IS the bug. The absence pin is the half that reds on a regression.
+    const excludeFile = join(repoA, '.git', 'info', 'exclude');
+    const excl = readFileSync(excludeFile, 'utf8').split('\n');
+    expect(excl).toContain('node_modules');
+    expect(excl).toContain('cdk.out');
+    expect(excl).not.toContain('node_modules/');
+    expect(excl).not.toContain('cdk.out/');
+
+    // The real defect (measured live on the fleet): a workspace whose
+    // node_modules is a SYMLINK to a shared cache, which a trailing-slash
+    // pattern does not match. This backfill's lines carry no trailing slash.
+    mkdirSync(join(home, 'shared-cache'));
+    symlinkSync(join(home, 'shared-cache'), join(ws1, 'node_modules'), 'dir');
+    const checkIgnore = spawnSync('git', ['-C', ws1, 'check-ignore', '-q', 'node_modules'], { encoding: 'utf8' });
+    expect(checkIgnore.status).toBe(0);
+    const status = spawnSync('git', ['-C', ws1, 'status', '--porcelain'], { encoding: 'utf8' });
+    expect(status.stdout).toBe('');
+
+    // A second run converges the same lines, not a second copy of them.
+    const first = readFileSync(excludeFile, 'utf8');
+    const r2 = runInstall(home, ['install']);
+    expect(r2.code, r2.stderr).toBe(0);
+    expect(readFileSync(excludeFile, 'utf8')).toBe(first);
+  });
+
+  it('retrofits a repository reachable only through $HOME/worktrees', () => {
+    const home = freshBox('ccrc-install-ws-excl-worktree-only-');
+    const externalRepo = join(home, 'external', 'repoB');
+    mkdirSync(externalRepo, { recursive: true });
+    writeFileSync(join(externalRepo, 'b.txt'), 'x\n');
+    gitInit(externalRepo);
+
+    const wsOnly = join(home, 'worktrees', 'repoB', 'ws-only');
+    mkdirSync(join(home, 'worktrees', 'repoB'), { recursive: true });
+    const wtAdd = spawnSync(
+      'git', ['-C', externalRepo, 'worktree', 'add', wsOnly, '-b', 'ws-only'],
+      { encoding: 'utf8' },
+    );
+    expect(wtAdd.status, wtAdd.stderr).toBe(0);
+
+    const r = runInstall(home, ['install']);
+    expect(r.code, r.stderr).toBe(0);
+
+    // The main checkout is deliberately outside $HOME/projects. Only the
+    // linked worktree makes this repository discoverable, so deleting the
+    // $HOME/worktrees scan root leaves this assertion red.
+    const excludeFile = join(externalRepo, '.git', 'info', 'exclude');
+    const excl = readFileSync(excludeFile, 'utf8').split('\n');
+    expect(excl).toContain('node_modules');
+    expect(excl).toContain('cdk.out');
+    expect(excl).not.toContain('node_modules/');
+    expect(excl).not.toContain('cdk.out/');
+  });
+
+  it('is skipped entirely on a server-role box', () => {
+    const home = freshBox('ccrc-install-ws-excl-server-');
+    const repoA = join(home, 'projects', 'repoA');
+    mkdirSync(repoA, { recursive: true });
+    writeFileSync(join(repoA, 'a.txt'), 'x\n');
+    gitInit(repoA);
+
+    const r = runInstall(home, ['install', '--role', 'server']);
+    expect(r.code, r.stderr).toBe(0);
+    const excludeFile = join(repoA, '.git', 'info', 'exclude');
+    expect(existsSync(excludeFile) && readFileSync(excludeFile, 'utf8').includes('node_modules'))
+      .toBe(false);
   });
 });
 

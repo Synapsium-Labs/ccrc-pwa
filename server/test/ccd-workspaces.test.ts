@@ -462,6 +462,41 @@ describe('ws-add', () => {
     expect(() => h.git(wt, 'check-ignore', '-q', 'graphify-out')).not.toThrow();
   });
 
+  // Measured live on the fleet: a workspace whose `node_modules` is a SYMLINK
+  // to a shared cache (an operator's way to skip a fresh `npm install` per
+  // workspace) left `ws-rm` permanently refusing with `dirty-tree`, because a
+  // directory-only gitignore pattern (`node_modules/`, trailing slash) does
+  // not match a symlink even when it points at a directory — git's own
+  // documented rule for that pattern shape. `ws-add`'s lines for this pair
+  // carry NO trailing slash for exactly that reason, so this is the case the
+  // trailing-slash graphify-out/ test above cannot cover.
+  it('ws-add excludes node_modules and cdk.out, including a node_modules SYMLINK', () => {
+    const main = makeRepo('demo');
+    sh(`${WS_ADD} CCD_WS_SLUG=quiet-mesa cmd_ws_add demo`);
+    // EXACT LINES, not `toContain`: the whole mechanism of this fix is the
+    // ABSENCE of a trailing slash, and `'node_modules/'.includes('node_modules')`
+    // is true — a regression to the directory-only spelling would satisfy a
+    // substring assertion while reintroducing the bug in full.
+    const lines = excludeOf(main).split('\n');
+    for (const line of ['node_modules', 'cdk.out']) expect(lines).toContain(line);
+    for (const line of ['node_modules/', 'cdk.out/']) expect(lines).not.toContain(line);
+    const wt = path.join(home, 'worktrees', 'demo', 'quiet-mesa');
+
+    // BOTH names get the symlink shape, not just node_modules. A real
+    // DIRECTORY is matched by the directory-only spelling too, so exercising
+    // `cdk.out` as a plain mkdir pins nothing about the slash — the behaviour
+    // would stay green on the regression the two assertions above now catch.
+    const cache = path.join(home, 'shared-build-cache');
+    fs.mkdirSync(cache);
+    for (const name of ['node_modules', 'cdk.out']) {
+      fs.symlinkSync(cache, path.join(wt, name), 'dir');
+      expect(() => h.git(wt, 'check-ignore', '-q', name)).not.toThrow();
+    }
+    // The property that actually unblocks ws-rm: git considers the tree clean
+    // with the symlinks present, not merely that check-ignore names them.
+    expect(h.git(wt, 'status', '--porcelain')).toBe('');
+  });
+
   // ...and the environment does not get to redirect that write. The test above
   // pins the normal path and can only ever pass, because it never runs under a
   // hostile environment: the line it is the control for could be reverted and it
@@ -885,6 +920,29 @@ describe('ws-rm', () => {
 
   it('refuses an unknown id', () => {
     expect(() => sh(`${RM} cmd_ws_rm nope-nothing`)).toThrow();
+  });
+
+  // The end-to-end case the "excludes node_modules and cdk.out" test above
+  // (`ws-add`) stops just short of: not merely that git considers the tree
+  // clean, but that `ws-rm` itself now actually tears the workspace down
+  // instead of refusing `dirty-tree` — the exact live-fleet failure this fix
+  // closes. Contrast with "refuses an untracked-only worktree" just above,
+  // which still refuses: the excluded name is the only thing that changed.
+  //
+  // The symlink TARGET is asserted to survive, and that is not paranoia.
+  // Measured on this fleet, the live symlinks do not point at a scratch cache
+  // at all — they point into ANOTHER WORKSPACE's tree — so a teardown that
+  // followed one would delete a second, still-live workspace's node_modules.
+  it('removes a workspace whose node_modules is a symlink, and leaves the symlink target standing', () => {
+    const wt = addOne();
+    const cache = path.join(home, 'shared-build-cache');
+    fs.mkdirSync(cache);
+    fs.writeFileSync(path.join(cache, 'keep.txt'), 'someone else needs this\n');
+    fs.symlinkSync(cache, path.join(wt, 'node_modules'), 'dir');
+    sh(`${RM} cmd_ws_rm demo-quiet-mesa`);
+    expect(fs.existsSync(wt)).toBe(false);
+    expect(reg('demo-quiet-mesa', 'uuid')).toBeNull();
+    expect(fs.readFileSync(path.join(cache, 'keep.txt'), 'utf8')).toBe('someone else needs this\n');
   });
 
   it('keeps an unmerged branch and its commit after removing a clean, ahead-of-base workspace', () => {
