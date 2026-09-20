@@ -1341,7 +1341,7 @@ _sync_uuid() {   # id — mirror the live process's CURRENT sessionId into the r
 }
 ```
 
-`_munge_wd` is the only spelling of the munge in this file after this task; confirm with `grep -n "tr './_'" ccd/ccd`, which must return exactly one line.
+`_munge_wd` is the only spelling of the munge in this file after this task, and its body is pure bash (no `tr` fork on a path walked every tick by every session): confirm with `grep -n "tr './_'" ccd/ccd`, which must return ZERO lines, and with a scan for the character class, which must appear exactly once.
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
