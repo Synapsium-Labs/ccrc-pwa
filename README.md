@@ -422,17 +422,35 @@ Design: `docs/superpowers/specs/2026-08-21-stage4-release-design.md`. Runbook st
 as above) is the two-box worked proof of the install and update verbs in this section.
 
 **The pipeline.** Every push to `main` runs `.github/workflows/release-main.yml`, thin like its
-sibling: `deploy/release-main.sh` derives the next patch tag from the highest `vX.Y.Z`, pushes it,
-runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged HEAD) and
-publishes the tarball plus `SHA256SUMS` with `gh release create --verify-tag`, deleting the tag again
-if the publish never completes. A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead and
-the next merge derives past it. The tarball is the matched set — prebuilt dists, the three
-`package.json`+lock pairs, `shared/`, `ccd/`, the deploy units and helpers, `install.sh` — with a
-`MANIFEST` of per-file sha256 digests and a shipped `build.json` that carries the tag as `version`
-(`ccrc version` prints it; `/health` emits a sibling `version`; `buildAgreement` still compares
-sha+dirty only — the sha is the truth, the tag is the label). Design: `2026-09-18-release-rollout-design.md`.
+siblings: `deploy/release-main.sh prepare` derives the next patch tag from the highest `vX.Y.Z`, tags
+it LOCALLY and runs `deploy/build-release.sh` (the one builder — refuses a dirty tree and an untagged
+HEAD); `actions/attest-build-provenance` then signs the tarball's digest with the workflow's own OIDC
+identity (keyless — the repo holds no signing secret); and `release-main.sh publish` pushes the tag and
+publishes the tarball, `SHA256SUMS` and the bundle `ccrc-<tag>.tar.gz.sigstore.json` with `gh release
+create --verify-tag --prerelease`, deleting the tag again if the publish never completes (nothing
+reaches origin before that push). A hand-pushed `vX.Y.0`/`vX.0.0` tag rides `release.yml` instead —
+same attest step, its identity at the tag — and the next merge derives past it. The tarball is the
+matched set — prebuilt dists, the three `package.json`+lock pairs, `shared/`, `ccd/`, the deploy units
+and helpers, `install.sh` — with a `MANIFEST` of per-file sha256 digests and a shipped `build.json`
+that carries the tag as `version` (`ccrc version` prints it; `/health` emits a sibling `version`;
+`buildAgreement` still compares sha+dirty only — the sha is the truth, the tag is the label). Designs:
+`2026-09-18-release-rollout-design.md`, `2026-09-20-centralised-update-management-design.md`.
 
-**Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: latest) downloads the
+**Channels: every release is born `dev`; `stable` is a promotion.** A release's `prerelease` flag IS
+its channel — `dev` while set, `stable` once cleared — and its bytes never change. Promotion is a
+fast-forward push of a released commit to the `stable` branch (`git push origin <tag>^{commit}:refs/heads/stable`
+from any checkout with the tag fetched; the branch's ruleset requires linear history and refuses force
+pushes, so a merge commit cannot land there, and the script itself refuses a HEAD carrying more than
+one release tag), which runs `release-stable.yml` → `deploy/release-stable.sh`: `gh release edit <tag>
+--prerelease=false`, then `--latest`, then a read-back of `releases/latest` — an already-stable release
+still gets that read-back, and one more `--latest`, when latest names another tag. Never a build — a
+rebuild would be a different `build.json`, a different digest, bytes nobody ran. Demotion is `gh
+release edit <tag> --prerelease` by hand, and moves no box by itself: a node keeps what it runs until
+someone runs `ccrc update`. The per-box version floor that also refuses a step backwards (design §9)
+ships in part B of this wave, not in this PR.
+
+**Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: the newest stable release —
+`latest/download` never serves a prerelease, so a `dev` build needs its tag) downloads the
 tarball and `SHA256SUMS`, verifies `sha256sum -c` **before extracting a single file**, extracts to
 a staging dir and hands off to the STAGED `ccrc install` — no build step on the box. Everything
 after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode

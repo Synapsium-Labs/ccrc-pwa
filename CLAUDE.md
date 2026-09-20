@@ -92,8 +92,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   fails to boot, not degrades. If node-floor's absolute assertion (3) is red while (1–2) are green, **RAISE
   engines — never lower them to make it green.**
 - **Deploy = release + rollout** (design `docs/superpowers/specs/2026-09-18-release-rollout-design.md`). Every merge to
-  `main` becomes a GitHub Release within about a minute (`.github/workflows/release-main.yml` → `deploy/release-main.sh`
-  → `build-release.sh`; patch-per-merge, a hand-pushed `vX.Y.0` tag for a minor rides `release.yml`). Moving the fleet
+  `main` becomes a GitHub **prerelease** within about a minute (`.github/workflows/release-main.yml` →
+  `deploy/release-main.sh prepare` → `build-release.sh` → `actions/attest-build-provenance` → `release-main.sh publish`;
+  patch-per-merge, a hand-pushed `vX.Y.0` tag for a minor rides `release.yml`; both attest the tarball keylessly and
+  publish the bundle beside it). A prerelease is the `dev` channel; **`stable` is a promotion, never a rebuild**: a
+  fast-forward push of a released commit to the `stable` branch runs `release-stable.yml` → `deploy/release-stable.sh`,
+  which flips the existing release's flag and makes it latest (design `2026-09-20-centralised-update-management-design.md`
+  §4). Demotion is `gh release edit <tag> --prerelease` by hand and moves no box. Moving the fleet
   is ONE act from a machine with ssh to both boxes: `ccrc rollout [--to vX.Y.Z] [--server-first] [--check] [--force]` — it
   preflights each box's recorded `CCRC_ROLE`, pins the version from SHA256SUMS once, runs `ccrc update --to` on the
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
