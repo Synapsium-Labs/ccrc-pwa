@@ -9,6 +9,7 @@
 // backend runs under a stub that records argv and models gh's identity
 // check as an allowlist.
 import { describe, it, expect } from 'vitest';
+import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
@@ -30,6 +31,12 @@ function pick(name: string): string {
 const OWNER = pick('CCRC_RELEASE_OWNER');
 const REPO_NAME = pick('CCRC_RELEASE_REPO');
 const ISSUER = 'https://token.actions.githubusercontent.com';
+// Coupling to note when a case here reds for a reason that isn't the
+// verifier: the fixture bundle's SAN is frozen at download time (it names
+// whatever OWNER/REPO_NAME were when `gh release download` ran), while
+// OWNER/REPO_NAME below are read live from ccd/ccrc — editing
+// CCRC_RELEASE_OWNER/CCRC_RELEASE_REPO reds the main-identity case for a
+// reason that has nothing to do with this file's verifier.
 const mainMeta = JSON.parse(readFileSync(join(FIX, 'release-main.meta.json'), 'utf8')) as { tag: string; sha256: string };
 const thirdMeta = JSON.parse(readFileSync(join(FIX, 'third-workflow.meta.json'), 'utf8')) as { owner: string; repo: string; sha256: string; identity: string };
 const RELEASE_TAG_META = join(FIX, 'release-tag.meta.json');
@@ -100,6 +107,19 @@ describe('verify-provenance.mjs: the sigstore backend, offline, against real bun
     const ok = verify(mainArgs(), { CCRC_SIGSTORE_TRUSTED_ROOT: join(REPO, 'deploy', 'sigstore-trusted-root.jsonl') });
     expect(ok.code, ok.stderr).toBe(0);
   });
+
+  it('--trusted-root is the flag form of the same override, and wins over the env var (precedence: flag ?? env ?? default)', () => {
+    const home = mkTmp('ccrc-verify-flagroot-');
+    writeFileSync(join(home, 'empty.jsonl'), '\n');
+    // The flag points at the bad root while the env var points at the good
+    // one: the flag wins, so this refuses.
+    const bad = verify([...mainArgs(), '--trusted-root', join(home, 'empty.jsonl')], { CCRC_SIGSTORE_TRUSTED_ROOT: join(REPO, 'deploy', 'sigstore-trusted-root.jsonl') });
+    expect(bad.code).toBe(1);
+    expect(bad.stderr).toMatch(/holds no trusted root/);
+    // The flag alone (no env var set) verifies normally.
+    const ok = verify([...mainArgs(), '--trusted-root', join(REPO, 'deploy', 'sigstore-trusted-root.jsonl')]);
+    expect(ok.code, ok.stderr).toBe(0);
+  });
 });
 
 describe('verify-provenance.mjs: release.yml\'s identity (the hand-cut tag)', () => {
@@ -132,7 +152,11 @@ describe('verify-provenance.mjs: release.yml\'s identity (the hand-cut tag)', ()
 
 describe('verify-provenance.mjs: the gh backend under a recording stub', () => {
   /** Models gh's identity check: exit 0 only when --cert-identity is one of
-   *  the two ccrc URIs for the tag (the fixture's allowlist), records argv. */
+   *  the two ccrc URIs for the tag (the fixture's allowlist), records argv.
+   *  On the allowed path it prints `$HOME/gh-verified.json` to stdout —
+   *  `writeVerified` below is how a case supplies that fixture — modeling
+   *  `--format json`'s output (D-3133): the verifier must read the SUBJECT
+   *  from what this stub prints, never from the bundle file on disk. */
   function plantGh(home: string, allow: string[], exit = 0): string {
     const bin = join(home, 'bin'); mkdirSync(bin, { recursive: true });
     writeFileSync(join(home, 'gh-allow'), `${allow.join('\n')}\n`);
@@ -141,25 +165,48 @@ describe('verify-provenance.mjs: the gh backend under a recording stub', () => {
       'printf \'%s\\n\' "$*" >> "$HOME/gh-argv"',
       'id=""; while [ $# -gt 0 ]; do case "$1" in --cert-identity) id="$2"; shift 2 ;; *) shift ;; esac; done',
       `[ ${exit} -eq 0 ] || exit ${exit}`,
-      'grep -qxF -- "$id" "$HOME/gh-allow" && exit 0',
+      'grep -qxF -- "$id" "$HOME/gh-allow" && { cat "$HOME/gh-verified.json"; exit 0; }',
       'echo "fixture gh: identity not in the allowlist: $id" >&2; exit 1',
     ].join('\n') + '\n', { mode: 0o755 });
     return bin;
+  }
+  /** The `--format json` fixture a plantGh success path prints: one element
+   *  per subject/digest pair, shaped exactly as gh 2.101.0 was measured to
+   *  print it (D-3133). */
+  function writeVerified(home: string, subjects: Array<{ name: string; sha256: string }>): void {
+    const doc = [{
+      attestation: {},
+      verificationResult: {
+        statement: {
+          _type: 'https://in-toto.io/Statement/v1',
+          predicateType: 'https://slsa.dev/provenance/v1',
+          subject: subjects.map((s) => ({ name: s.name, digest: { sha256: s.sha256 } })),
+        },
+        signature: { certificate: { subjectAlternativeName: '', issuer: '' } },
+        verifiedIdentity: {},
+        verifiedTimestamps: [],
+        mediaType: 'application/vnd.dev.sigstore.bundle.v0.3+json',
+      },
+    }];
+    writeFileSync(join(home, 'gh-verified.json'), JSON.stringify(doc));
   }
   const ids = (tag: string): string[] => [
     `https://github.com/${OWNER}/${REPO_NAME}/.github/workflows/release-main.yml@refs/heads/main`,
     `https://github.com/${OWNER}/${REPO_NAME}/.github/workflows/release.yml@refs/tags/${tag}`,
   ];
-  function blobFile(home: string): string { const p = join(home, 'blob'); writeFileSync(p, 'gh hashes this itself\n'); return p; }
+  const BLOB_CONTENT = 'gh hashes this itself\n';
+  const BLOB_SHA256 = createHash('sha256').update(BLOB_CONTENT).digest('hex');
+  function blobFile(home: string): string { const p = join(home, 'blob'); writeFileSync(p, BLOB_CONTENT); return p; }
 
-  it('the argv carries --cert-identity, --cert-oidc-issuer, --custom-trusted-root, --deny-self-hosted-runners, --bundle and --repo; the first identity tried is release-main\'s', () => {
+  it('the argv carries --cert-identity, --cert-oidc-issuer, --custom-trusted-root, --deny-self-hosted-runners, --format json, --bundle and --repo; the first identity tried is release-main\'s', () => {
     const home = mkTmp('ccrc-verify-gh-');
     const bin = plantGh(home, ids(mainMeta.tag));
+    writeVerified(home, [{ name: `ccrc-${mainMeta.tag}.tar.gz`, sha256: BLOB_SHA256 }]);
     const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
     expect(r.code, r.stderr).toBe(0);
     const argv = readFileSync(join(home, 'gh-argv'), 'utf8').split('\n').filter((l) => l !== '');
     expect(argv).toEqual([
-      `attestation verify ${join(home, 'blob')} --bundle ${join(FIX, 'release-main.sigstore.json')} --repo ${OWNER}/${REPO_NAME} --cert-identity ${ids(mainMeta.tag)[0]} --cert-oidc-issuer ${ISSUER} --custom-trusted-root ${join(REPO, 'deploy', 'sigstore-trusted-root.jsonl')} --deny-self-hosted-runners`,
+      `attestation verify ${join(home, 'blob')} --bundle ${join(FIX, 'release-main.sigstore.json')} --repo ${OWNER}/${REPO_NAME} --cert-identity ${ids(mainMeta.tag)[0]} --cert-oidc-issuer ${ISSUER} --custom-trusted-root ${join(REPO, 'deploy', 'sigstore-trusted-root.jsonl')} --deny-self-hosted-runners --format json`,
     ]);
     expect(r.stdout).toContain('(gh)');
   });
@@ -167,6 +214,7 @@ describe('verify-provenance.mjs: the gh backend under a recording stub', () => {
   it('the second identity is tried when the first is refused; a third workflow is never sent (§18, both backends)', () => {
     const home = mkTmp('ccrc-verify-gh2-');
     const bin = plantGh(home, [ids(mainMeta.tag)[1]!]);
+    writeVerified(home, [{ name: `ccrc-${mainMeta.tag}.tar.gz`, sha256: BLOB_SHA256 }]);
     const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
     expect(r.code, r.stderr).toBe(0);
     const argv = readFileSync(join(home, 'gh-argv'), 'utf8').split('\n').filter((l) => l !== '');
@@ -186,14 +234,69 @@ describe('verify-provenance.mjs: the gh backend under a recording stub', () => {
     expect(r.stderr).toMatch(/gh attestation verify refused for either release workflow/);
     const home2 = mkTmp('ccrc-verify-gh4-');
     const bin2 = plantGh(home2, ids('v9.9.9'));
+    // gh accepts (release-main's identity is tag-independent, so it's in
+    // this allowlist too); what it returns as verified names the REAL v0.0.9
+    // tag, not the v9.9.9 this call asks for — the subject-NAME check still
+    // refuses it, now against gh's own returned statement (D-3133).
+    writeVerified(home2, [{ name: `ccrc-${mainMeta.tag}.tar.gz`, sha256: BLOB_SHA256 }]);
     const wrongTag = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home2), '--tag', 'v9.9.9', '--owner', OWNER, '--repo', REPO_NAME], { HOME: home2 }, bin2);
     expect(wrongTag.code).toBe(1);
     expect(wrongTag.stderr).toMatch(/not ccrc-v9\.9\.9\.tar\.gz/);
   });
 
+  it('the gh arm reads the subject from what gh verified, not from the bundle file (D-3133)', () => {
+    const home = mkTmp('ccrc-verify-gh5-');
+    const bin = plantGh(home, ids(mainMeta.tag));
+    // The bundle FILE on disk is the real v0.0.9 bundle (its own statement
+    // names ccrc-<mainMeta.tag>.tar.gz); the stub's --format json fixture
+    // claims gh verified a DIFFERENT subject. The arm must trust the latter.
+    writeVerified(home, [{ name: 'ccrc-v0.0.8.tar.gz', sha256: BLOB_SHA256 }]);
+    const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(new RegExp(`the attestation's subject is ccrc-v0\\.0\\.8\\.tar\\.gz, not ccrc-${mainMeta.tag}\\.tar\\.gz`));
+  });
+
+  it('right name, another digest (D-3133)', () => {
+    const home = mkTmp('ccrc-verify-gh6-');
+    const bin = plantGh(home, ids(mainMeta.tag));
+    writeVerified(home, [{ name: `ccrc-${mainMeta.tag}.tar.gz`, sha256: '1'.repeat(64) }]);
+    const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/but the blob's is [0-9a-f]{64} — not the bytes the workflow built/);
+  });
+
+  it('unparseable --format json output is refused (D-3133)', () => {
+    const home = mkTmp('ccrc-verify-gh7-');
+    const bin = join(home, 'bin'); mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, 'gh'), [
+      '#!/bin/sh',
+      'printf \'%s\\n\' "$*" >> "$HOME/gh-argv"',
+      'echo "not json"',
+      'exit 0',
+    ].join('\n') + '\n', { mode: 0o755 });
+    const r = verify(['--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], { HOME: home }, bin);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/--format json/);
+  });
+
   it('the gh backend needs the file: --blob-sha256 is a usage error there', () => {
     const r = verify(['--backend', 'gh', ...mainArgs()]);
     expect(r.code).toBe(2);
+  });
+
+  it('gh absent from PATH refuses with the run-failure message', () => {
+    const home = mkTmp('ccrc-verify-nogh-');
+    const emptyBin = join(home, 'bin'); mkdirSync(emptyBin, { recursive: true }); // deliberately no gh here
+    // Bypass the `verify()` helper's PATH-prepend (it keeps the real PATH
+    // around it, which would still find the box's real gh): give the CHILD
+    // process a PATH with nothing in it, and launch node by its absolute
+    // path so the launch itself doesn't need PATH to find node.
+    const r = spawnSync(process.execPath, [VERIFIER, '--backend', 'gh', '--bundle', join(FIX, 'release-main.sigstore.json'), '--blob', blobFile(home), '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME], {
+      env: { ...process.env, HOME: home, PATH: emptyBin },
+      encoding: 'utf8',
+    });
+    expect(r.status).toBe(1);
+    expect(r.stderr ?? '').toMatch(/gh could not be run/);
   });
 });
 
@@ -204,6 +307,38 @@ describe('verify-provenance.mjs: usage', () => {
     expect(verify(mainArgs({ digest: 'abc' })).code).toBe(2);
     expect(verify([...mainArgs(), '--blob', VERIFIER]).code).toBe(2);
     expect(verify([...mainArgs(), '--backend', 'cosign']).code).toBe(2);
-    expect(verify(['-h']).stderr).toMatch(/^usage: node verify-provenance\.mjs/);
+    const help = verify(['-h']);
+    expect(help.code).toBe(0);
+    expect(help.stderr).toMatch(/^usage: node verify-provenance\.mjs/);
+  });
+});
+
+describe('verify-provenance.mjs: malformed or missing inputs refuse with one line, never a stack trace (D-3134)', () => {
+  it('a missing --bundle path refuses with one stderr line, no stack frame', () => {
+    const r = verify(mainArgs({ bundle: join(FIX, 'does-not-exist.sigstore.json') }));
+    expect(r.code).toBe(1);
+    expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
+    expect(r.stderr).toMatch(/^verify-provenance: /);
+    expect(r.stderr).not.toMatch(/^\s+at /m); // a real V8 stack frame, not an in-message 'at'
+  });
+
+  it('a truncated JSONL bundle refuses with one stderr line, no stack frame', () => {
+    const home = mkTmp('ccrc-verify-truncated-');
+    const real = readFileSync(join(FIX, 'third-workflow.sigstore.jsonl'), 'utf8');
+    const truncated = join(home, 'truncated.jsonl');
+    writeFileSync(truncated, real.slice(0, 100));
+    const r = verify(mainArgs({ bundle: truncated }));
+    expect(r.code).toBe(1);
+    expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
+    expect(r.stderr).toMatch(/^verify-provenance: /);
+    expect(r.stderr).not.toMatch(/^\s+at /m); // a real V8 stack frame, not an in-message 'at'
+  });
+
+  it('--trusted-root pointed at a nonexistent path refuses with one stderr line, no stack frame', () => {
+    const r = verify([...mainArgs(), '--trusted-root', '/nonexistent/path/to/root.jsonl']);
+    expect(r.code).toBe(1);
+    expect(r.stderr.split('\n').filter((l) => l !== '')).toHaveLength(1);
+    expect(r.stderr).toMatch(/^verify-provenance: /);
+    expect(r.stderr).not.toMatch(/^\s+at /m); // a real V8 stack frame, not an in-message 'at'
   });
 });

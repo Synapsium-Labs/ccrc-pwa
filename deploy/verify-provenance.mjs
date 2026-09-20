@@ -21,8 +21,10 @@
 //              file; CCRC_SIGSTORE_TRUSTED_ROOT overrides it (a by-hand
 //              refresh for a root that has gone stale). No network.
 //   gh       — `gh attestation verify` (gh >= 2.49) with the same constraints
-//              spelled on its argv. gh hashes the file itself, so this arm
-//              takes --blob only and checks the subject NAME here.
+//              spelled on its argv, plus `--format json` (D-3133). gh hashes
+//              the file itself, so this arm takes --blob only; it checks the
+//              subject NAME and digest against the statements gh itself
+//              returned as verified, never against the bundle file's own.
 //
 // --blob-sha256 exists for callers that already hold the digest (the test
 // fixtures are bundles + digests, not 3 MB tarballs); `ccrc update` always
@@ -107,7 +109,10 @@ function readBundles(file) {
   return out;
 }
 /** The in-toto statement inside a DSSE bundle — read from the raw JSON, so
- *  the check does not depend on either backend's object model. */
+ *  the check does not depend on either backend's object model. Used by the
+ *  sigstore arm only: it binds the check to the entry that verified. The gh
+ *  arm reads statements from gh's own `--format json` output instead
+ *  (D-3133) — never from the bundle file. */
 function statementOf(json) {
   const env = json.dsseEnvelope;
   if (!env || typeof env.payload !== 'string') return null;
@@ -116,73 +121,112 @@ function statementOf(json) {
   try { st = JSON.parse(Buffer.from(env.payload, 'base64').toString('utf8')); } catch { return null; }
   return Array.isArray(st.subject) ? st : null;
 }
-/** The subject NAME, and — when the caller computed it — the digest. */
-function subjectCheck(st, digest) {
-  if (st === null) refuse('the bundle carries no in-toto statement — not an attestation');
+/** The subject NAME, and — when the caller supplied it — the digest.
+ *  Returns the refusal reason, or null when the statement passes. */
+function subjectFailure(st, digest) {
+  if (st === null) return 'the bundle carries no in-toto statement — not an attestation';
   const named = st.subject.filter((s) => s && s.name === expectSubject);
   if (named.length === 0) {
-    refuse(`the attestation's subject is ${st.subject.map((s) => s?.name ?? '?').join(', ')}, not ${expectSubject} — a tarball attested under another tag`);
+    return `the attestation's subject is ${st.subject.map((s) => s?.name ?? '?').join(', ')}, not ${expectSubject} — a tarball attested under another tag`;
   }
   if (digest !== null && !named.some((s) => s.digest && s.digest.sha256 === digest)) {
-    refuse(`the attestation names ${expectSubject} with sha256 ${named[0].digest?.sha256 ?? '?'}, but the blob's is ${digest} — not the bytes the workflow built`);
+    return `the attestation names ${expectSubject} with sha256 ${named[0].digest?.sha256 ?? '?'}, but the blob's is ${digest} — not the bytes the workflow built`;
   }
+  return null;
+}
+function subjectCheck(st, digest) {
+  const why = subjectFailure(st, digest);
+  if (why !== null) refuse(why);
+}
+/** D-3133: gh's own `--format json` output, parsed once per accepted call.
+ *  Measured on gh 2.101.0 offline against the vendored root: an array with
+ *  one element per bundle entry gh verified, each
+ *  `{ attestation, verificationResult: { statement: { subject: [...] }, ... } }`.
+ *  Anything else — a parse error, a non-array, an element missing
+ *  `verificationResult.statement.subject` — is refused rather than trusted;
+ *  `--format json`'s presence below gh 2.49 is unmeasured, so this is the
+ *  honest fallback, not a weaker check. */
+function ghStatements(stdout) {
+  let parsed;
+  try { parsed = JSON.parse(stdout); } catch { parsed = null; }
+  const ok = Array.isArray(parsed) && parsed.length > 0
+    && parsed.every((e) => e && e.verificationResult && e.verificationResult.statement && Array.isArray(e.verificationResult.statement.subject));
+  if (!ok) {
+    refuse(`gh's --format json output was not understood (gh >= 2.49 with --format json is required): ${(stdout ?? '').slice(0, 120)}`);
+  }
+  return parsed.map((e) => e.verificationResult.statement);
 }
 
-const bundles = readBundles(opt.bundle);
-const digest = opt.digest ?? createHash('sha256').update(readFileSync(opt.blob)).digest('hex');
+// D-3134: everything below can throw on a missing or truncated file — the
+// realistic shape of a half-downloaded bundle from Task 12's `_upd_fetch`.
+// Funnel any such error into the one-line `verify-provenance: <why>` refusal
+// the contract promises, instead of a node stack trace; `refuse`/`usage`
+// exit directly and never throw, so this catch only ever sees a genuine
+// unhandled read/parse failure.
+try {
+  const bundles = readBundles(opt.bundle);
+  const digest = opt.digest ?? createHash('sha256').update(readFileSync(opt.blob)).digest('hex');
 
-if (backend === 'sigstore') {
-  const req = createRequire(path.join(HERE, '..', 'server', 'package.json'));
-  const { Verifier, toSignedEntity, toTrustMaterial } = req('@sigstore/verify');
-  const { bundleFromJSON } = req('@sigstore/bundle');
-  const { TrustedRoot } = req('@sigstore/protobuf-specs');
-  const roots = readFileSync(rootPath, 'utf8').split('\n').filter((l) => l.trim() !== '')
-    .map((l) => TrustedRoot.fromJSON(JSON.parse(l)));
-  if (roots.length === 0) refuse(`${rootPath} holds no trusted root`);
-  let verified = null;
-  let last = null;
-  for (const json of bundles) {
-    let entity;
-    try { entity = toSignedEntity(bundleFromJSON(json)); } catch (e) { last = e; continue; }
-    for (const root of roots) {
-      const v = new Verifier(toTrustMaterial(root), { ctlogThreshold: 1, tlogThreshold: 1, tsaThreshold: 0 });
-      for (const san of identities) {
-        try {
-          v.verify(entity, { subjectAlternativeName: san, extensions: { issuer: ISSUER } });
-          verified = { json, san };
-          break;
-        } catch (e) { last = e; }
+  if (backend === 'sigstore') {
+    const req = createRequire(path.join(HERE, '..', 'server', 'package.json'));
+    const { Verifier, toSignedEntity, toTrustMaterial } = req('@sigstore/verify');
+    const { bundleFromJSON } = req('@sigstore/bundle');
+    const { TrustedRoot } = req('@sigstore/protobuf-specs');
+    const roots = readFileSync(rootPath, 'utf8').split('\n').filter((l) => l.trim() !== '')
+      .map((l) => TrustedRoot.fromJSON(JSON.parse(l)));
+    if (roots.length === 0) refuse(`${rootPath} holds no trusted root`);
+    let verified = null;
+    let last = null;
+    for (const json of bundles) {
+      let entity;
+      try { entity = toSignedEntity(bundleFromJSON(json)); } catch (e) { last = e; continue; }
+      for (const root of roots) {
+        const v = new Verifier(toTrustMaterial(root), { ctlogThreshold: 1, tlogThreshold: 1, tsaThreshold: 0 });
+        for (const san of identities) {
+          try {
+            v.verify(entity, { subjectAlternativeName: san, extensions: { issuer: ISSUER } });
+            verified = { json, san };
+            break;
+          } catch (e) { last = e; }
+        }
+        if (verified) break;
       }
       if (verified) break;
     }
-    if (verified) break;
+    if (!verified) {
+      refuse(`no bundle verified against the trusted root for either release workflow of ${opt.owner}/${opt.repo} (last reason: ${last?.message ?? 'none'})`);
+    }
+    subjectCheck(statementOf(verified.json), digest);
+    process.stdout.write(`verified ${expectSubject} sha256:${digest} as ${verified.san} (sigstore)\n`);
+    process.exit(0);
   }
-  if (!verified) {
-    refuse(`no bundle verified against the trusted root for either release workflow of ${opt.owner}/${opt.repo} (last reason: ${last?.message ?? 'none'})`);
-  }
-  subjectCheck(statementOf(verified.json), digest);
-  process.stdout.write(`verified ${expectSubject} sha256:${digest} as ${verified.san} (sigstore)\n`);
-  process.exit(0);
-}
 
-// gh backend: one call per identity, the same constraints on the argv. gh
-// compares the blob's digest against the statement itself; the NAME is ours.
-let accepted = null;
-let lastErr = '';
-for (const san of identities) {
-  const r = spawnSync('gh', ['attestation', 'verify', opt.blob, '--bundle', opt.bundle, '--repo', `${opt.owner}/${opt.repo}`,
-    '--cert-identity', san, '--cert-oidc-issuer', ISSUER, '--custom-trusted-root', rootPath, '--deny-self-hosted-runners'],
-  { encoding: 'utf8' });
-  if (r.error) refuse(`gh could not be run (${r.error.message}) — the gh backend needs gh >= 2.49 on PATH`);
-  if (r.status === 0) { accepted = san; break; }
-  lastErr = `${r.stderr ?? ''}${r.stdout ?? ''}`.trim().split('\n').pop() ?? '';
+  // gh backend: one call per identity, the same constraints on the argv,
+  // plus --format json (D-3133). gh compares the blob's digest against the
+  // statement itself; the subject NAME and digest are checked here, but
+  // ONLY against the statements gh itself returned as verified under the
+  // accepted identity — never against the bundle file's own statements,
+  // which could carry an appended, unsigned entry naming the expected
+  // subject and defeat the tag binding.
+  let acceptedSan = null;
+  let acceptedStatements = null;
+  let lastErr = '';
+  for (const san of identities) {
+    const r = spawnSync('gh', ['attestation', 'verify', opt.blob, '--bundle', opt.bundle, '--repo', `${opt.owner}/${opt.repo}`,
+      '--cert-identity', san, '--cert-oidc-issuer', ISSUER, '--custom-trusted-root', rootPath, '--deny-self-hosted-runners', '--format', 'json'],
+    { encoding: 'utf8' });
+    if (r.error) refuse(`gh could not be run (${r.error.message}) — the gh backend needs gh >= 2.49 on PATH`);
+    if (r.status === 0) { acceptedSan = san; acceptedStatements = ghStatements(r.stdout ?? ''); break; }
+    lastErr = `${r.stderr ?? ''}${r.stdout ?? ''}`.trim().split('\n').pop() ?? '';
+  }
+  if (acceptedSan === null) {
+    refuse(`gh attestation verify refused for either release workflow of ${opt.owner}/${opt.repo} (last: ${lastErr})`);
+  }
+  const failures = acceptedStatements.map((st) => subjectFailure(st, digest));
+  if (!failures.includes(null)) {
+    refuse(failures[0]);
+  }
+  process.stdout.write(`verified ${expectSubject} sha256:${digest} as ${acceptedSan} (gh)\n`);
+} catch (e) {
+  refuse(e && e.message ? e.message : String(e));
 }
-if (accepted === null) {
-  refuse(`gh attestation verify refused for either release workflow of ${opt.owner}/${opt.repo} (last: ${lastErr})`);
-}
-const statements = bundles.map(statementOf).filter((s) => s !== null);
-if (statements.length === 0) refuse('the bundle carries no in-toto statement — not an attestation');
-if (!statements.some((st) => st.subject.some((s) => s && s.name === expectSubject))) {
-  subjectCheck(statements[0], null);
-}
-process.stdout.write(`verified ${expectSubject} sha256:${digest} as ${accepted} (gh)\n`);
