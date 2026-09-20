@@ -71,7 +71,33 @@ export type TranscriptResolution =
        *  an adapter re-deriving a distinction it was already handed, and
        *  because `shouldRepoint` needs it: supersession is not a better
        *  address for the same thing, it is a different thing. */
-      readonly uuid: string }
+      readonly uuid: string;
+      /**
+       * This file CARRIES a `continued-in` marker the walk saw and did NOT
+       * follow — the successor is absent, zero-byte, unresolvable, or already
+       * on this walk. OPTIONAL, and absence-permits: every answer that
+       * followed to the end of its chain, and every answer with no marker at
+       * all, simply omits it, so no existing reader changes.
+       *
+       * IT EXISTS FOR THE MEMO, and for one failure it alone can see.
+       * `TranscriptResolver` revalidates a `found` answer on the STAMP of the
+       * file it answered — and a file carrying a terminal marker is a file
+       * that will never change again, so the stamp check serves the pre-fork
+       * answer on every poll FOR EVER. The common shape is not exotic: the
+       * fork announces itself before writing its first line, the stream
+       * re-ladders four seconds later while the successor is still zero
+       * bytes, and the declined answer is memoized frozen for the life of the
+       * socket — and, for `watch.ts`'s name sweep, whose resolver is never
+       * rebuilt, for the life of the server process. That is the exact freeze
+       * the follow exists to heal, moved one layer in.
+       *
+       * So a declined follow is a "keep looking" answer, like a `fallback`
+       * and like a `foreign-glob` hit, and `staleByBackoff` reads it as one.
+       * It is a FACT ABOUT THE ANSWER, not a request to the memo: rule (b) —
+       * two conditions a caller handles differently must not collapse — is
+       * why it is a third field rather than a rung or a `fallback`.
+       */
+      readonly followDeclined?: true }
   | { readonly kind: 'fallback'; readonly path: string; readonly complete: boolean };
 
 /** Ladder position, for §5.3's "strictly better" comparison. A fallback ranks
@@ -403,19 +429,52 @@ async function continuationAt(io: FleetIO, file: string, uuid: string): Promise<
  * empty one is worse than the staleness this fixes. A visited set and a hop
  * bound stop a chain that loops or that goes on too long, and the walk keeps
  * the last GOOD answer rather than unwinding to a fallback.
+ *
+ * A DECLINED FOLLOW SAYS SO (`followDeclined`, see the type). Three of the
+ * four ways this walk stops short are conditions that HEAL ON DISK — the
+ * successor appears, stops being zero bytes, becomes resolvable — and the
+ * answer they produce is a file that will never change again, so a memo that
+ * revalidates on that file's stamp would pin the pre-fork answer for ever.
+ * Saying "I declined" is what lets `TranscriptResolver` treat it as a "keep
+ * looking" answer and re-run the whole ladder on its back-off.
+ *
+ * THE HOP BOUND IS DELIBERATELY NOT ONE OF THE THREE. It is not a condition
+ * that heals: re-running this walk from the same uuid over the same disk
+ * lands on the same file every time, so flagging it would buy a full ladder
+ * run every back-off and change no answer. It also never READ a marker on
+ * the file it stops at — the bound expires before that question is asked —
+ * so `followDeclined` would be claiming a measurement nobody made. A chain
+ * that long converges the other way instead: `ccd` advances the registry one
+ * hop per quiescence, and a moved registry uuid changes the memo's KEY.
+ *
+ * WHAT TRAVELS AND WHAT DOES NOT (the asymmetry `SessionStream` leans on):
+ * the answer's `uuid` and `path` are the SUCCESSOR's once a hop is taken,
+ * while the caller's own `o.uuid` — the REGISTRY's — is unchanged. The stream
+ * keeps sending the registry uuid on its `backlog`/`events` frames while
+ * `file` names the successor, so the two describe different sessions for as
+ * long as it takes `ccd` to walk the same pointer into the registry. That
+ * window is not a defect and the stream must not "fix" it by announcing a
+ * rotation when the registry finally catches up: nothing was reset, the
+ * stream was already reading the successor (`sessionws.ts`'s `tick`).
  */
 export async function resolveTranscript(io: FleetIO, o: ResolveOpts): Promise<TranscriptResolution> {
+  // A `found` answer restated as one the walk stopped short of following.
+  // `fallback` passes through untouched: there is no file to have read a
+  // marker from, which is the arm above this loop's own early return.
+  const declined = (r: TranscriptResolution): TranscriptResolution =>
+    (r.kind === 'found' ? { ...r, followDeclined: true } : r);
   let best = await ladder(io, o);
   const visited = new Set<string>([o.uuid]);
   for (let hop = 0; hop < MAX_CONTINUATION_HOPS; hop += 1) {
     if (best.kind !== 'found') return best;
     const next = await continuationAt(io, best.path, best.uuid);
-    if (next === null || visited.has(next)) return best;
+    if (next === null) return best;              // no marker at all: nothing was declined
+    if (visited.has(next)) return declined(best);
     visited.add(next);
     const onward = await ladder(io, { ...o, uuid: next });
-    if (onward.kind !== 'found') return best;
+    if (onward.kind !== 'found') return declined(best);
     const st = await io.stat(onward.path);
-    if (st === null || st.size === 0) return best;
+    if (st === null || st.size === 0) return declined(best);
     best = onward;
   }
   return best;
@@ -538,7 +597,19 @@ export class TranscriptResolver {
   }
 
   private staleByBackoff(e: { answer: TranscriptResolution; at: number; readonly stamp: string | null; seen: string | null }): boolean {
-    const keepsLooking = e.answer.kind === 'fallback' || e.answer.rung === 'foreign-glob';
+    // THREE "keep looking" answers, not two. The third is the one the stamp
+    // gate above cannot rescue: a `found` at an exact rung whose file carries
+    // a `continued-in` marker the walk DECLINED to follow. That file is
+    // terminal — it will never change again — so its stamp matches for ever
+    // and the gate hands back the pre-fork answer on every poll for the life
+    // of the stream, and for the life of the process in `watch.ts`'s name
+    // sweep, whose resolver is never rebuilt. The conditions that make the
+    // walk decline are the transient ones (the successor has not been written
+    // yet, is still zero bytes, is not resolvable yet), so re-running the
+    // ladder on the back-off is exactly the retry they need.
+    const keepsLooking = e.answer.kind === 'fallback'
+      || e.answer.rung === 'foreign-glob'
+      || e.answer.followDeclined === true;
     return keepsLooking && this.now() - e.at >= this.backoffMs;
   }
 

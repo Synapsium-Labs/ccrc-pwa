@@ -906,6 +906,43 @@ describe('continuation follow', () => {
     expect(await resolveTranscript(localIO, chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
   });
 
+  // Whole-branch review, F1. The three arms that SEE a marker and decline it
+  // must SAY so, because the memo above cannot tell them from an answer with
+  // no marker at all — and the file they answer with is terminal, so its
+  // stamp never moves again.
+  it('says `followDeclined` on every arm that sees a marker and does not follow it', async () => {
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));
+    // (1) the successor does not exist at all.
+    expect(await resolveTranscript(localIO, chainOpts(b, A)))
+      .toMatchObject({ path: own, uuid: A, followDeclined: true });
+    // (2) the successor exists but is zero bytes — announced, not yet written.
+    plantChain(b, B, '');
+    expect(await resolveTranscript(localIO, chainOpts(b, A)))
+      .toMatchObject({ path: own, uuid: A, followDeclined: true });
+    // (3) the successor is already on this walk — a cycle.
+    const c = box();
+    plantChain(c, A, turn('one') + marker(A, B));
+    const back = plantChain(c, B, turn('two') + marker(B, A));
+    expect(await resolveTranscript(localIO, chainOpts(c, A)))
+      .toMatchObject({ path: back, uuid: B, followDeclined: true });
+  });
+
+  it('a followed chain and an unmarked file both OMIT followDeclined — absence permits', async () => {
+    // The other side of the mutation: a blanket `followDeclined: true` would
+    // make every answer a "keep looking" one and put the full ladder back on
+    // every 30 s tick of every healthy session.
+    const b = box();
+    plantChain(b, A, marker(A, B));
+    plantChain(b, B, turn('two'));
+    expect(await resolveTranscript(localIO, chainOpts(b, A)))
+      .toEqual({ kind: 'found', path: transcriptPath(b.cfg, b.livePhys, B), rung: 'live-raw', account: null, uuid: B });
+    const c = box();
+    const only = plantChain(c, A, turn('one'));
+    expect(await resolveTranscript(localIO, chainOpts(c, A)))
+      .toEqual({ kind: 'found', path: only, rung: 'live-raw', account: null, uuid: A });
+  });
+
   it('leaves a fallback alone — there is no file to read a marker from', async () => {
     const b = box();
     expect((await resolveTranscript(localIO, chainOpts(b, A))).kind).toBe('fallback');
@@ -938,6 +975,33 @@ describe('TranscriptResolver and the fork', () => {
     // records it. A file still being written cannot carry a terminal marker,
     // and re-reading it every tick is a bill `watch.ts` already pays once.
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
+  });
+
+  it('a DECLINED follow is not pinned for ever — the back-off re-runs the whole ladder and finds the successor ' +
+     '(whole-branch review, F1)', async () => {
+    // THE FREEZE THIS BRANCH EXISTS TO HEAL, one layer in. A session forks;
+    // the fork has announced itself but has not written its first line when
+    // the stream re-ladders four seconds later. `resolveTranscript` declines
+    // the follow and answers the OLD file — which carries a terminal marker,
+    // so it never changes again, so the memo's stamp gate matches on every
+    // poll for the life of the socket (and, for `watch.ts`'s name sweep,
+    // the life of the server process: its resolver is never rebuilt).
+    //
+    // MEASURED with `followDeclined` dropped from `staleByBackoff`'s
+    // "keeps looking" set: the third assertion below answers `own`/A — the
+    // chat stays frozen on the pre-fork transcript for ever, exactly as it
+    // did before lane 1 existed.
+    const b = box();
+    const own = plantChain(b, A, turn('one') + marker(A, B));   // B is not there yet
+    let clock = 1_000_000;
+    const r = new TranscriptResolver(localIO, { backoffMs: 30_000, now: () => clock });
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A, followDeclined: true });
+
+    const to = plantChain(b, B, turn('two'));   // the fork writes its first line
+    clock += 29_999;
+    expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: own, uuid: A });   // inside the back-off
+    clock += 1;                                  // elapsed === backoffMs exactly
     expect(await r.resolve(chainOpts(b, A))).toMatchObject({ path: to, uuid: B });
   });
 
