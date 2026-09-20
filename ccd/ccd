@@ -2885,8 +2885,8 @@ _reg_get() { [[ -f "$REG/$1.$2" && ! -L "$REG/$1.$2" ]] || return 1; cat "$REG/$
 # THE FOLD `_reg_get` KEEPS, AND THE READ THAT DOES NOT. `_reg_get` answers `""`
 # for a field that is ABSENT, one that is UNREADABLE and one that is EMPTY — the
 # overloaded null the ring rules forbid at a seam. It stays exactly as it is,
-# and the reason is a count rather than a preference: this file makes 155
-# invocations across 131 non-comment lines.
+# and the reason is a count rather than a preference: this file makes 157
+# invocations across 133 non-comment lines.
 #
 # THE LAST MOVE WAS `_spawn_start`'s archive check (CCR-10): two reads of the
 # archive fields, so the next reader is not hunting a refactor for the +2.
@@ -15772,7 +15772,7 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   # stops a re-read of unchanged content, and `_CI_ORIGIN`/`_CI_WALK` stop a
   # cycle — unconditionally through the origin, or through the capped walk
   # for a shorter local repeat (see the comment above `_CI_LAST`).
-  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf
+  local id="$1" cfg="$2" uuid pk addrs f st key prev done_key next sf msz mmt
   uuid=$(_reg_get "$id" uuid); [[ -n "$uuid" ]] || return 0
   # WALK-START DETECTION (M1, third review round). A registry uuid that does
   # not match what this function itself last placed there — a hop's
@@ -15806,7 +15806,8 @@ _follow_continued_in() {   # id cfg — one hop per tick, on a quiescence-gated 
   fi
   _ci_extant "$addrs" || return 0
   f="$_CI_F"
-  st=$(stat -c '%s:%Y' -- "$f" 2>/dev/null) || return 0
+  msz=$(_plat_size -- "$f" 2>/dev/null) && mmt=$(_plat_mtime -- "$f" 2>/dev/null) || return 0
+  st="$msz:$mmt"
   key="$uuid:$st"
   prev="${_CI_LAST[$id]:-}"
   _CI_LAST["$id"]="$key"
