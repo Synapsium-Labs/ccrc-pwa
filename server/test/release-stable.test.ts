@@ -40,6 +40,9 @@ function fixture(home: string, opts: { tagHead?: string } = {}): string {
   writeFileSync(join(root, 'README.md'), '# fixture\n');
   copyFileSync(SCRIPT, join(root, 'deploy', 'release-stable.sh'));
   chmodSync(join(root, 'deploy', 'release-stable.sh'), 0o755);
+  // The branch name here is documentary only: the script reads the tag at
+  // HEAD, never the branch — the `stable`-must-be-fast-forward constraint
+  // is the ruleset's job, not this script's.
   git(root, 'init', '-q', '-b', 'stable');
   git(root, 'add', '-A');
   git(root, 'commit', '-q', '-m', 'released from main');
@@ -47,24 +50,31 @@ function fixture(home: string, opts: { tagHead?: string } = {}): string {
   return root;
 }
 
+interface GhOpts { view?: string; viewExit?: number; editExit?: number; latest?: string; latestAfterEdit?: string }
+
 /** The gh stub: `release view` prints `$HOME/gh-view` (the --jq output the
  *  script asked for: "<isPrerelease>\t<isDraft>") unless `$HOME/gh-view-exit`
- *  says otherwise; `release edit` exits `$HOME/gh-edit-exit` or 0; the latest
- *  read-back prints `$HOME/gh-latest`. Every argv is recorded. */
-function plantBin(home: string, opts: { view?: string; viewExit?: number; editExit?: number; latest?: string }): string {
+ *  says otherwise; `release edit` exits `$HOME/gh-edit-exit` or 0, touching
+ *  `$HOME/gh-edited` on that success path; the latest read-back prints
+ *  `$HOME/gh-latest` until an edit has landed, then `$HOME/gh-latest-after-edit`
+ *  when one was planted (D-3128: the already-stable path can read latest,
+ *  edit, then read again, and the two reads must be allowed to differ).
+ *  Every argv is recorded. */
+function plantBin(home: string, opts: GhOpts): string {
   const bin = join(home, 'bin');
   mkdirSync(bin, { recursive: true });
   writeFileSync(join(home, 'gh-view'), `${opts.view ?? 'true\tfalse'}\n`);
   if (opts.viewExit !== undefined) writeFileSync(join(home, 'gh-view-exit'), `${opts.viewExit}\n`);
   if (opts.editExit !== undefined) writeFileSync(join(home, 'gh-edit-exit'), `${opts.editExit}\n`);
   writeFileSync(join(home, 'gh-latest'), `${opts.latest ?? 'v1.2.3'}\n`);
+  if (opts.latestAfterEdit !== undefined) writeFileSync(join(home, 'gh-latest-after-edit'), `${opts.latestAfterEdit}\n`);
   writeFileSync(join(bin, 'gh'), [
     '#!/bin/sh',
     'printf \'%s\\n\' "$*" >> "$HOME/gh-argv"',
     'case "$1 $2" in',
     '  "release view") if [ -f "$HOME/gh-view-exit" ]; then read -r c < "$HOME/gh-view-exit"; exit "$c"; fi; cat "$HOME/gh-view"; exit 0 ;;',
-    '  "release edit") if [ -f "$HOME/gh-edit-exit" ]; then read -r c < "$HOME/gh-edit-exit"; exit "$c"; fi; exit 0 ;;',
-    '  "api repos/{owner}/{repo}/releases/latest") cat "$HOME/gh-latest"; exit 0 ;;',
+    '  "release edit") if [ -f "$HOME/gh-edit-exit" ]; then read -r c < "$HOME/gh-edit-exit"; exit "$c"; fi; touch "$HOME/gh-edited"; exit 0 ;;',
+    '  "api repos/{owner}/{repo}/releases/latest") if [ -f "$HOME/gh-latest-after-edit" ] && [ -f "$HOME/gh-edited" ]; then cat "$HOME/gh-latest-after-edit"; else cat "$HOME/gh-latest"; fi; exit 0 ;;',
     'esac',
     'echo "fixture gh: unexpected argv: $*" >&2; exit 90',
   ].join('\n') + '\n', { mode: 0o755 });
@@ -75,8 +85,7 @@ function plantBin(home: string, opts: { view?: string; viewExit?: number; editEx
 }
 
 interface Result { code: number; stdout: string; stderr: string }
-function run(root: string, home: string, args: string[] = [],
-  opts: { view?: string; viewExit?: number; editExit?: number; latest?: string } = {}): Result {
+function run(root: string, home: string, args: string[] = [], opts: GhOpts = {}): Result {
   const bin = plantBin(home, opts);
   const r = spawnSync('bash', [join(root, 'deploy', 'release-stable.sh'), ...args],
     { env: { ...process.env, ...GIT_ENV, HOME: home, PATH: `${bin}:${process.env.PATH ?? ''}` }, cwd: root, encoding: 'utf8' });
@@ -100,7 +109,29 @@ describe('release-stable.sh: what it refuses', () => {
     const root = fixture(home, { tagHead: 'v1.2.3' });
     const r = run(root, home, ['--bogus']);
     expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/unknown argument: --bogus/);
     expect(ghArgv(home)).toEqual([]);
+  });
+
+  it('HEAD carrying two release tags is exit 2 — a promotion names one release, not the lexicographically-first one (D-3129)', () => {
+    const home = mkTmp('ccrc-relstable-doubletag-');
+    const root = fixture(home, { tagHead: 'v0.0.9' });
+    git(root, 'tag', 'v0.1.0');
+    const r = run(root, home);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/HEAD carries more than one release tag/);
+    expect(r.stderr).toMatch(/v0\.0\.9/);
+    expect(r.stderr).toMatch(/v0\.1\.0/);
+    expect(ghArgv(home)).toEqual([]);
+  });
+
+  it('a malformed view answer (DRAFT field missing) never promotes an unmeasured draft: exit 1, no edit', () => {
+    const home = mkTmp('ccrc-relstable-malformed-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    const r = run(root, home, [], { view: 'true' });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/unexpected answer from gh release view for v1\.2\.3/);
+    expect(ghArgv(home).filter((l) => l.startsWith('release edit'))).toEqual([]);
   });
 
   it('no release behind the tag: exit 1, says release-main\'s trap should have prevented it, no edit', () => {
@@ -154,13 +185,32 @@ describe('release-stable.sh: the promotion', () => {
     expect(r.stdout.trim()).toBe('release-stable.sh: promoted v1.2.3 to stable (latest: v1.2.3)');
   });
 
-  it('already stable → exit 0, no edit (idempotent; §18 row 3)', () => {
+  it('already stable and latest already matches → exit 0, no edit, but still reads latest back (idempotent means converged, not a bare early return; §18 row 3, D-3128)', () => {
     const home = mkTmp('ccrc-relstable-idem-');
     const root = fixture(home, { tagHead: 'v1.2.3' });
     const r = run(root, home, [], { view: 'false\tfalse' });
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toMatch(/already stable v1\.2\.3/);
+    expect(r.stdout.trim()).toBe('release-stable.sh: already stable v1.2.3 (latest: v1.2.3)');
     expect(ghArgv(home).filter((l) => l.startsWith('release edit'))).toEqual([]);
+    expect(ghArgv(home)).toContain('api repos/{owner}/{repo}/releases/latest --jq .tag_name');
+  });
+
+  it('already stable but latest names another tag → finishes the promotion: one release edit --latest, then the read-back, exit 0 (D-3128)', () => {
+    const home = mkTmp('ccrc-relstable-idem-catchup-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    const r = run(root, home, [], { view: 'false\tfalse', latest: 'v1.2.4', latestAfterEdit: 'v1.2.3' });
+    expect(r.code, r.stderr).toBe(0);
+    expect(ghArgv(home).filter((l) => l.startsWith('release edit'))).toEqual(['release edit v1.2.3 --latest']);
+    expect(ghArgv(home).slice(-1)).toEqual(['api repos/{owner}/{repo}/releases/latest --jq .tag_name']);
+    expect(r.stdout).toMatch(/promoted v1\.2\.3 to stable \(latest: v1\.2\.3\)/);
+  });
+
+  it('already stable, latest names another tag, and the edit fails → exit 1, says stable but latest may still serve another tag (D-3128)', () => {
+    const home = mkTmp('ccrc-relstable-idem-editfail-');
+    const root = fixture(home, { tagHead: 'v1.2.3' });
+    const r = run(root, home, [], { view: 'false\tfalse', latest: 'v1.2.4', editExit: 1 });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v1\.2\.3 is stable, but latest\/download may still serve another tag; re-run/);
   });
 });
 
