@@ -283,15 +283,24 @@ describe('continuation follow', () => {
 
   it('stops at the hop bound and answers the last good file', async () => {
     const b = box();
-    const ids = Array.from({ length: MAX_CONTINUATION_HOPS + 3 }, (_, i) => String(i).repeat(36).slice(0, 36));
+    // THE CHAIN LENGTH IS A LITERAL, NOT MAX_CONTINUATION_HOPS + 3. Deriving it
+    // from the constant makes the fixture move whenever the constant does: at a
+    // mutated bound of 400 the id scheme `String(i).repeat(36).slice(0, 36)`
+    // collides (i = 1, 11, 111 all spell the same 36 characters), the plant loop
+    // overwrites its own earlier markers, and the walk then stops at a corrupted
+    // chain end rather than at the bound. Measured: the test still went red, but
+    // for the wrong reason — and it would break the SHIPPED test too if the
+    // bound were ever raised past 7.
+    const ids = Array.from({ length: 10 }, (_, i) => String(i).padStart(2, '0').repeat(18));
     for (let i = 0; i < ids.length - 1; i += 1) plant(b, ids[i]!, marker(ids[i]!, ids[i + 1]!));
     plant(b, ids[ids.length - 1]!, turn('end'));
     const r = await resolveTranscript(localIO, opts(b, ids[0]!));
-    // EXACTLY the bound: four hops from ids[0] lands on ids[4], and the chain
-    // deliberately runs further so a raised bound lands somewhere else.
-    // Asserting merely "not ids[0]" holds for ANY bound and pins nothing —
-    // measured: that assertion stayed green with the bound raised to 400.
-    expect(r).toMatchObject({ kind: 'found', uuid: ids[MAX_CONTINUATION_HOPS] });
+    // The bound is the contract, so it is asserted as one: four hops from
+    // ids[0] lands on ids[4], and the chain runs to ids[9] so a raised bound
+    // lands somewhere else. Asserting merely "not ids[0]" holds for ANY bound
+    // and pins nothing — measured: it stayed green at a bound of 400.
+    expect(MAX_CONTINUATION_HOPS).toBe(4);
+    expect(r).toMatchObject({ kind: 'found', uuid: ids[4] });
   });
 
   // Review Focus 3: an announced-but-empty successor is not an improvement.
