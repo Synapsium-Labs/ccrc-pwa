@@ -3,8 +3,8 @@ import { describe, it, expect, afterEach } from 'vitest';
 import { type ChildProcess } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import { connect as netConnect } from 'node:net';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { writeFileSync, mkdirSync, utimesSync } from 'node:fs';
+import { join, dirname } from 'node:path';
 import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
 import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
 import { mkTmp } from './tmpHelpers';
@@ -290,6 +290,33 @@ async function startPair(
     await new Promise((r) => setTimeout(r, 50));
   }
   throw new Error(`shim did not come up as lane ${JSON.stringify(lane)} (stderr: ${stderr || '(none)'})`);
+}
+
+/** The lane's own effort file path — `~/.ccrc/models/<id>.effort.json`, the
+ *  same path `deploy/models-op.mjs`'s `effortPath` and the materialiser
+ *  (`effortFile`, `shared/modelenv.mjs`) write, keyed by ACCOUNT id (here,
+ *  the fixture's own minted `lane`), never by model: one lane, one file,
+ *  holding every model that lane can reach. */
+function effortFilePath(home: string, lane: string): string {
+  return join(home, '.ccrc', 'models', `${lane}.effort.json`);
+}
+
+/** Writes `{"byModel": byModel}` to the lane's own effort file, creating
+ *  `~/.ccrc/models` first (`writeFileSync` does not create parent
+ *  directories). When `mtimeSeconds` is given, the file's mtime is pinned
+ *  EXACTLY via `fs.utimesSync` rather than left to whatever the write
+ *  itself produces (task-8-rulings.md §2): a same-second rewrite may not
+ *  move mtime at all on some filesystems, and both halves of the cache case
+ *  below depend on mtime being precisely what the test intends, not
+ *  incidental to when it happened to run on a box carrying ~20 live
+ *  sessions. */
+function writeEffortFile(
+  home: string, lane: string, byModel: Record<string, string>, mtimeSeconds?: number,
+): void {
+  const p = effortFilePath(home, lane);
+  mkdirSync(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify({ byModel }));
+  if (mtimeSeconds !== undefined) utimesSync(p, mtimeSeconds, mtimeSeconds);
 }
 
 describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
@@ -1744,5 +1771,267 @@ describe.skipIf(!PY)('ccgpt-proxy: 7b fix round 1 — chunked named but not fina
     expect(seen).not.toBeNull();
     const got = JSON.parse(seen!.toString('utf8'));
     expect(got.messages[0].role).toBe('user');   // folded and forwarded, not refused
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (Task 8)', () => {
+  // Case 1 (task-8-brief.md): an explicit client `output_config.effort`
+  // wins outright over the lane default, even when a default for this
+  // exact model is on file.
+  it('an explicit output_config.effort wins over the lane default', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-explicit-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'low' });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        output_config: { effort: 'high' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'high' });          // explicit, not the file's 'low'
+    expect('output_config' in seen).toBe(false);
+  });
+
+  // Case 2: with no explicit effort, the lane default for THIS request's
+  // own model applies.
+  it('applies the lane default for this model when no explicit effort is sent', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-default-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'low' });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'low' });
+  });
+
+  // Case 3 (brief): output_config and thinking are both absent from the
+  // forwarded body when an explicit effort was sent.
+  it('strips both output_config and thinking when an explicit effort is sent', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-stripped-explicit-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        output_config: { effort: 'high' },
+        thinking: { type: 'adaptive' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect('output_config' in seen).toBe(false);
+    expect('thinking' in seen).toBe(false);
+  });
+
+  // task-8-rulings.md §5: bind the `thinking` strip INDEPENDENTLY of the
+  // effort path — a body carrying `thinking` and no `output_config` at all
+  // (and no lane default either) must still come out with `thinking` gone,
+  // so a mutation that stops stripping `thinking` cannot hide behind
+  // `output_config`'s own removal.
+  it('strips thinking even when output_config is absent entirely and no lane default applies (ruling §5)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-stripped-thinking-only-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    // No effort file at all — nothing to default to, either.
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        thinking: { type: 'adaptive' },
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect('thinking' in seen).toBe(false);
+    expect('output_config' in seen).toBe(false);       // never present; trivially true
+    expect('reasoning' in seen).toBe(false);            // nothing to apply — provider default
+  });
+
+  // Case 4, REPLACED per task-8-rulings.md §1 — the brief's own second half
+  // ("rewriting identical bytes at the same mtime does not [re-read]") is
+  // UNFALSIFIABLE: identical bytes produce an identical applied default
+  // whether the cache re-read them or not, so that assertion passes under
+  // every implementation, including one with no cache at all — a control
+  // derived from the measurement, a shape this project has a standing rule
+  // against.
+  //
+  // Split into two INDEPENDENT tests, deliberately, rather than one
+  // three-step sequence: the mutation-2 measurement below (drop mtime from
+  // the cache key) must red the first and stay green on the second, and a
+  // shared sequence can't show that cleanly — under a path-only cache key,
+  // the "changed mtime" read never lands either, so a combined test's third
+  // assertion (hard-coded to the value the SECOND read would have produced)
+  // would go red too, for the wrong reason. Split, the control below
+  // establishes and re-checks its OWN baseline, so it is genuinely a no-op
+  // under both the correct implementation and the mutation — not merely
+  // lucky to still pass.
+  //
+  // Both halves depend on mtime being EXACTLY what this test intends
+  // (task-8-rulings.md §2) — `fs.utimesSync`, not a wall-clock rewrite,
+  // which may not move mtime at all inside the same second on some
+  // filesystems.
+  it('re-reads the effort file when its mtime changes (case 4, the bind)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-cache-bind-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const T1 = 1_700_000_000;
+    const T2 = 1_700_000_100;            // deliberately far apart — never ambiguous with T1
+
+    // Cold read: byModel['gpt-x'] = 'low', at T1.
+    writeEffortFile(home, lane, { 'gpt-x': 'low' }, T1);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'low' });
+
+    // NEW mtime, different bytes (byModel['gpt-x'] = 'high') — the cache
+    // must re-read.
+    writeEffortFile(home, lane, { 'gpt-x': 'high' }, T2);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'high' });
+  });
+
+  // The observable replacement for the brief's unfalsifiable half: write
+  // DIFFERENT bytes at the SAME mtime as an already-cached read, and assert
+  // the OLD default still applies. That fails if the cache key is wrong in
+  // the OTHER direction (re-reading when it must not), and pins the real,
+  // accepted consequence of keying on `(path, mtime)` — a same-mtime
+  // content change is invisible to this cache. That is sound in practice,
+  // not merely convenient: the materialiser (`effortFile`/`models-op.mjs`)
+  // writes tmp-then-rename, and a rename always moves mtime, so this shim
+  // never sees a same-mtime content change outside a test deliberately
+  // forcing one (said again, in a comment, at the Python site itself).
+  //
+  // Under mutation 2 (drop mtime from the cache key) this case stays GREEN
+  // — see the report; it is a control, not a second bind. A path-only cache
+  // never re-reads at all, so "the same-mtime rewrite is not picked up"
+  // holds trivially under that mutation too, for a different reason than
+  // it holds under the correct implementation.
+  it('does not re-read the effort file for a same-mtime content change (case 4, the control)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-cache-control-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const T = 1_700_000_000;
+
+    // Establish a cached baseline of this test's own: byModel['gpt-x'] = 'alpha'.
+    writeEffortFile(home, lane, { 'gpt-x': 'alpha' }, T);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'alpha' });
+
+    // SAME mtime, DIFFERENT bytes (byModel['gpt-x'] = 'beta') — must not be
+    // picked up; the applied default stays this test's own baseline.
+    writeEffortFile(home, lane, { 'gpt-x': 'beta' }, T);
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(seen.reasoning).toEqual({ effort: 'alpha' });   // stale — the same mtime hid the rewrite
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: the effort file itself — absent, malformed, valid (ruling §3)', () => {
+  // Ruling: this is ccrc's OWN config, not client input — a broken effort
+  // file must not break the lane. All three conditions fall through to the
+  // provider default identically; none of them is refused.
+  it('falls through to the provider default when the effort file is absent', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-absent-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    // Deliberately no ~/.ccrc/models directory at all.
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect('reasoning' in seen).toBe(false);
+  });
+
+  it('falls through to the provider default when the effort file is malformed, not raising (ruling §3)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-malformed-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const p = effortFilePath(home, lane);
+    mkdirSync(dirname(p), { recursive: true });
+    writeFileSync(p, 'this is not json at all {{{');
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);                 // our own broken config never breaks the lane
+    expect('reasoning' in seen).toBe(false);
+  });
+
+  it('applies the lane default when the effort file is valid (ruling §3)', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-valid-');
+    let seen: any = null;
+    const { lane } = await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    writeEffortFile(home, lane, { 'gpt-x': 'xhigh' });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'user', content: 'hi' }] }),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.reasoning).toEqual({ effort: 'xhigh' });
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: effort resolution is scoped to /messages, like the folds (ruling §4)', () => {
+  // Ship a case proving a non-/messages body is untouched by any of this —
+  // must not run outside the same path the folds run on, and must not open
+  // a new way for a body to be forwarded unexamined (every existing "cannot
+  // use this body" condition already has exactly one shape; this adds none).
+  it('does not touch output_config/thinking on a non-/messages path', async () => {
+    const home = mkTmp('ccgpt-proxy-effort-scoped-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payloadText = JSON.stringify({
+      model: 'gpt-x', output_config: { effort: 'high' }, thinking: { type: 'adaptive' },
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: payloadText,
+    });
+    expect(r.status).toBe(200);
+    expect(seen!.toString('utf8')).toBe(payloadText);     // byte-identical: untouched
   });
 });

@@ -55,6 +55,18 @@ as one is refused with an HTTP 400 naming what was wrong (see
 `_decode_body`) — neither a fourth D-3151 arm nor left to drop the
 connection the way a malformed chunked frame does (see `_read_chunked_body`).
 
+Once a `/messages` body is safely parsed and both system folds have run,
+`_apply_effort` resolves Codex's own `reasoning.effort`: an explicit client
+`output_config.effort` wins outright, else this lane's own per-model default
+from `~/.ccrc/models/<id>.effort.json` (materialised by `effortFile()`,
+`shared/modelenv.mjs`, reloaded here by a single-slot `(path, mtime)` cache),
+else nothing at all, and the provider's own default applies untouched.
+`output_config` and `thinking` are popped unconditionally either way, so
+neither field reaches LiteLLM's own order-dependent translation of them
+(Task 8; design doc §6.2/§6.4). A broken effort file — absent, unreadable or
+malformed — is ccrc's OWN config, not client input, so it falls through to
+"no lane default" rather than refusing an otherwise-usable client request.
+
 Every refusal in this file — the two encoding refusals above, the three
 closed D-3151 arms, and malformed chunked framing below — answers the SAME
 shape (D-3153): a JSON body `{"error": "..."}`, `Content-Type:
@@ -324,7 +336,124 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     data = _fold_midturn_system(data)
     if "system" in data:
         data = _fold_system(data)
+    data = _apply_effort(data)
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+# Effort resolution and its single-slot (path, mtime) cache (Task 8; design
+# doc §6.2/§6.4). Claude Code sends `output_config: {"effort": "..."}` and
+# `thinking: {"type": "adaptive"}` on EVERY request, under the
+# `effort-2025-11-24` beta header. Measured against the installed LiteLLM
+# (design doc §4.1): neither field is discarded by `drop_params` —
+# `output_config.effort` is LIFTED into LiteLLM's own `reasoning_effort`, and
+# `thinking` competes for that SAME key inside one LiteLLM key-iteration
+# loop, order-dependently. This shim resolves the level itself, sets Codex's
+# own `reasoning.effort` directly, and pops both client fields on every
+# `/messages` request so nothing downstream reinterprets either one.
+_EFFORT_CACHE = {"key": None, "map": {}}
+
+
+def _effort_path() -> str:
+    """`~/.ccrc/models/<id>.effort.json` for THIS lane — the same path
+    `deploy/models-op.mjs`'s `effortPath` and the materialiser
+    (`effortFile`, `shared/modelenv.mjs`) write, keyed by account id, never
+    by model: one lane, one file, holding every model that lane can reach.
+    `os.path.expanduser` resolves against the process's own `HOME` — the
+    fixture HOME under test, never the real one, exactly like every other
+    home-relative path this shim or its test harness touches."""
+    return os.path.expanduser(os.path.join("~", ".ccrc", "models", f"{ACCOUNT_ID}.effort.json"))
+
+
+def _lane_effort_map() -> dict:
+    """This lane's per-model effort defaults — the `byModel` object
+    `effortFile()` materialises, `{"<model>": "<level>", ...}` — reloaded by
+    `(path, mtime)` in a SINGLE-SLOT cache (task-8-brief.md/task-8-
+    rulings.md §1): one key, one value, sound because the materialiser
+    writes tmp-then-rename and a rename always moves mtime, so this shim
+    never sees a same-mtime content change in practice — the documented,
+    accepted consequence of keying on mtime at all, pinned observably (not
+    by an unfalsifiable "did not re-read" assertion) in
+    `ccgpt-proxy.test.ts`'s case 4 by writing DIFFERENT bytes at the SAME
+    mtime and asserting the OLD value still applies.
+
+    `st_mtime_ns`, not `st_mtime` (task-8-rulings.md §2): an integer
+    nanosecond count compares exactly, with no float-precision surprise
+    across a rewrite the test harness pins with `fs.utimesSync`.
+
+    A broken file must not break the lane (task-8-rulings.md §3): this is
+    ccrc's OWN config, not client input — every refusal Task 7a built
+    answers a client that sent something unusable, and refusing a perfectly
+    good client request because *our* config is broken would break the lane
+    for a fault the client cannot fix or even see. So:
+      - ABSENT (`os.stat` raises `OSError`, typically `FileNotFoundError`) —
+        no lane default at all; ordinary, not an error. Caught before the
+        cache is even consulted, since there is no mtime to key on.
+      - UNREADABLE or MALFORMED (`open`/`json.loads` raises `OSError` or a
+        `json.JSONDecodeError`, a `ValueError` subclass) — also no lane
+        default, for the identical reason. Deliberately NOT shaped like
+        `_UnusableBody`/`_BadEncoding`: those answer a CLIENT body this shim
+        cannot use; this is ccrc's own local file, and the client's request
+        is examined and folded exactly as always regardless of what this
+        function returns.
+    Either way this function returns `{}`, `_apply_effort` finds nothing for
+    the request's own model, and the provider default applies untouched.
+    """
+    path = _effort_path()
+    try:
+        mtime_ns = os.stat(path).st_mtime_ns
+    except OSError:
+        return {}
+    key = (path, mtime_ns)
+    if _EFFORT_CACHE["key"] == key:
+        return _EFFORT_CACHE["map"]
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+        parsed = json.loads(raw)
+        by_model = parsed.get("byModel") if isinstance(parsed, dict) else None
+        effort_map = by_model if isinstance(by_model, dict) else {}
+    except (OSError, ValueError):
+        effort_map = {}
+    _EFFORT_CACHE["key"] = key
+    _EFFORT_CACHE["map"] = effort_map
+    return effort_map
+
+
+def _apply_effort(data: dict) -> dict:
+    """Resolve `reasoning.effort` and strip both client-side effort fields,
+    IN PLACE, on an already-parsed `/messages` body. Called from
+    `_rewrite_messages_body` alone, AFTER both system folds — task-8-
+    rulings.md §4: this must run only where the folds already run, a POST
+    body on a path ending `/messages`, and nowhere else, and it introduces
+    no new "cannot use this body" condition of its own — nothing here
+    raises.
+
+    Precedence (task-8-brief.md, unchanged from production): an explicit
+    client `output_config.effort` wins outright over the lane default; with
+    none, `_lane_effort_map()`'s entry for THIS request's own `model`
+    applies; with neither, nothing is set here and the provider's own
+    default applies untouched.
+
+    `output_config` and `thinking` are popped UNCONDITIONALLY — independent
+    of whether either one actually carries a usable effort value at all
+    (task-8-rulings.md §5): a body carrying `thinking` and no `output_config`
+    whatsoever must still come out with `thinking` gone, so a mutation that
+    stops stripping `thinking` cannot hide behind the effort path.
+
+    Malformed client shapes (a non-dict `output_config`, a `model` that is
+    not a string) are tolerated, never refused — this is the SAME body the
+    two folds above already accepted; effort resolution adds no new refusal
+    surface (task-8-rulings.md §4).
+    """
+    output_config = data.pop("output_config", None)
+    data.pop("thinking", None)
+    explicit = output_config.get("effort") if isinstance(output_config, dict) else None
+    model = data.get("model")
+    lane_default = _lane_effort_map().get(model) if isinstance(model, str) else None
+    level = explicit or lane_default
+    if level:
+        data["reasoning"] = {"effort": level}
+    return data
 
 
 def _joined_header(headers, name: str) -> str:
