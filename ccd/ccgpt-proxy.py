@@ -456,8 +456,11 @@ def _read_chunked_body(rfile) -> bytes:
     request-line read: an unbounded `readline()` blocks the calling thread
     growing an ever-larger buffer for as long as the client keeps sending
     bytes with no CRLF in sight, a client-controlled memory/CPU hazard
-    distinct from the stalled-with-no-bytes-at-all one `Handler.timeout`
-    guards against below. A line this shim would ever legitimately need to
+    distinct from the stalled-with-no-bytes-at-all one that `_relay`'s
+    scoped `settimeout(30)` around the body read guards against (7b fix
+    round 1, I-1: that bound was a class-level `Handler.timeout` until it
+    was found to bound the RESPONSE write too, and no such attribute
+    exists now). A line this shim would ever legitimately need to
     read — a hex chunk-size plus a short `;`-extension, or one trailer
     header — is nowhere near that bound, so truncating there costs nothing
     real: it either still parses as a normal chunk-size/trailer, or it was
