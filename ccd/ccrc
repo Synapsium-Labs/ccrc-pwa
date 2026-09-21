@@ -7083,6 +7083,14 @@ _acct_credential() {
   [ "$ACCT_KIND" != external ] \
     || _acct_refuse 1 external-lane "account $id is an external lane: its launcher $WRAPPER_BIN_DIR/$id is somebody else's program, which ccrc records and never writes. Whatever credential that launcher reads is the launcher's to rotate, so this verb will not put a file on disk for it - even when exec.secretsFile names one. Re-auth it the way its own launcher documents. Nothing was written."
 
+  # THE SAME REFUSAL, A DIFFERENT REASON. An external lane's credential belongs
+  # to a launcher ccrc does not write. A codex lane's launcher IS ccrc's - but
+  # its credential is a ChatGPT OAuth directory a browser device flow owns, and
+  # `exec.authDir` names where it lives precisely so that ccrc can pass the path
+  # without ever opening it.
+  [ "$ACCT_KIND" != codex ] \
+    || _acct_refuse 1 codex-lane "account $id is a codex lane: its credential is the ChatGPT OAuth directory exec.authDir names, which a browser device flow writes and ccrc only ever passes the path of. This verb will not put a file on disk for it. Re-authenticate it with 'ccgpt login $id'. Nothing was written."
+
   # TOKEN LANES ONLY, and `not-managed` names the difference rather than hiding
   # it. A login lane's credential is Claude Code's own `.credentials.json`
   # inside the config dir. That is not a file this verb may replace, and it
@@ -7340,6 +7348,11 @@ _acct_remove() {
   stands="The roster no longer contains $id, but \$HOME/.ccrc/accounts.sh still projects the old roster and all account artifacts still stand. Registry fields and home cleanup are not rolled back; the config directory and transcript history remain intentionally."
   _acct_projection "$stands"
 
+  # THREE answers, not two, and each is stated rather than inherited from an
+  # `else`. `external` is somebody else's file and is KEPT. `generated` and
+  # `codex` are both ccrc's and are removed through the marker check, which is
+  # what refuses to delete a file ccrc did not write. `upstream` already refused
+  # before this point, so the second branch reaches exactly those two kinds.
   if [ "$ACCT_KIND" = external ]; then
     f="$WRAPPER_BIN_DIR/$id"
     { [ -e "$f" ] || [ -L "$f" ]; } && kept+=("$f")
@@ -7361,6 +7374,14 @@ _acct_remove() {
     removed+=("$f")
   done
 
+  # `exec.authDir` IS NOT TOUCHED HERE, deliberately. Removing an account
+  # removes what ccrc put on the box; a ChatGPT OAuth directory is not that,
+  # and destroying it would end a subscription session ccrc never started.
+  # The roster refuses an authDir under ~/.ccrc (shared/roster.ts) so that
+  # `uninstall --purge` cannot reach one either.
+  #
+  # `ACCT_SECRET_ENV` already decides optional secrets: a Codex/OpenAI lane has
+  # none, so a declared secretsFile is kept without a redundant kind predicate.
   if [ -n "$ACCT_SECRETS" ]; then
     f="$HOME/$ACCT_SECRETS"
     if [ -e "$f" ] || [ -L "$f" ]; then

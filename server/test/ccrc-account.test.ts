@@ -5054,6 +5054,14 @@ const TOKEN_LANE = {
     secretsFile: '.cc-secrets/alt-max-oauth.env' },
 };
 
+const CODEX_LANE = {
+  id: 'codex-a', label: 'codex·a', hue: 'magenta', configDirSuffix: '.claude-codex-a',
+  homeAble: true, telemetry: 'codex', exec: {
+    kind: 'codex', provider: 'openai', proxyPort: 8901, litellmPort: 8902,
+    authDir: '.local/share/ccrc/codex/codex-a', secretsFile: '.cc-secrets/codex-a.env',
+  },
+};
+
 describe('ccrc account remove', () => {
   /** A lane with every ccrc-owned artifact plus operator history and settings. */
   const seedFull = (home: string): void => {
@@ -5341,6 +5349,32 @@ describe('ccrc account remove', () => {
     expect(readFileSync(join(external, externalSecret), 'utf8'))
       .toBe('owned by the external launcher\n');
     expect(ej['kept']).toContain(join(external, externalSecret));
+  });
+
+  it('removes a codex launcher but preserves its OAuth and optional secrets', () => {
+    const home = box('ccrc-account-remove-codex-');
+    seedRosterJson(home, [UPSTREAM, CODEX_LANE, HOMEABLE('team-shared', 'blue')]);
+    for (const id of ['claude', 'team-shared']) plantLauncher(home, id);
+    const launcher = plantLauncher(home, 'codex-a', markGenerated(generateWrapperBody(
+      { id: CODEX_LANE.id, configDirSuffix: CODEX_LANE.configDirSuffix, execKind: 'codex',
+        secretsFile: CODEX_LANE.exec.secretsFile }, 'claude')));
+    const auth = join(home, CODEX_LANE.exec.authDir, 'auth.json');
+    const oauthBytes = '{"fixture":"oauth"}\n';
+    mkdirSync(path.dirname(auth), { recursive: true });
+    writeFileSync(auth, oauthBytes);
+    const secret = join(home, CODEX_LANE.exec.secretsFile);
+    const secretBytes = 'fixture optional secrets\n';
+    mkdirSync(path.dirname(secret), { recursive: true });
+    writeFileSync(secret, secretBytes);
+    plantTmux(home, []);
+
+    const r = run(home, ['account', 'remove', '--id', 'codex-a']);
+    expect(r.code, r.stderr).toBe(0);
+    const j = oneObject(r);
+    expect(existsSync(launcher)).toBe(false);
+    expect(readFileSync(auth, 'utf8')).toBe(oauthBytes);
+    expect(readFileSync(secret, 'utf8')).toBe(secretBytes);
+    expect(j['kept']).toContain(secret);
   });
 
   it('keeps a generated lane credential whose path ccrc cannot prove it derived', () => {
@@ -6542,6 +6576,20 @@ describe('ccrc account credential', () => {
     expect(String(j['detail'])).toContain('external lane');
     expect(String(j['detail'])).toContain('never writes');
     expect(r.stdout + r.stderr).not.toContain(CANARY);
+  });
+
+  it('refuses a codex lane with an OAuth-specific identity before reading credentials', () => {
+    const home = box('ccrc-account-cred-codex-');
+    seedRosterJson(home, [UPSTREAM, CODEX_LANE]);
+    const r = run(home, ['account', 'credential', '--id', 'codex-a', '--credential', '-'],
+      `${CANARY}\n`);
+    expect(r.code).toBe(1);
+    const j = oneObject(r);
+    expect(j['error']).toBe('codex-lane');
+    expect(String(j['detail'])).toContain('ChatGPT OAuth directory');
+    expect(String(j['detail'])).toContain('exec.authDir');
+    expect(r.stdout + r.stderr).not.toContain(CANARY);
+    expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
   });
 
   it('refuses a lane whose provider keeps no env var, even when it names a secretsFile', () => {
