@@ -1291,8 +1291,9 @@ class Handler(BaseHTTPRequestHandler):
         # — was built and measured, not assumed: it does turn a raw
         # `node:http` client's read into `ECONNRESET`, but `fetch()` — the
         # exact client this whole suite already uses to validate this shim,
-        # and the realistic shape of most real HTTP clients including
-        # LiteLLM's own — swallows that RST at the fetch/response-body layer
+        # and, decisively, undici itself, which is what this shim's ONE real
+        # client (Claude Code) speaks; LiteLLM is upstream of here, not a
+        # client of it — swallows that RST at the fetch/response-body layer
         # and still resolves 200 with the truncated body, no error surfaced
         # at all. So "visible to the client" is not reliably achievable at
         # THIS framing without forwarding real length information this shim
