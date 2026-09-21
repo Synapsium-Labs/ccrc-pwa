@@ -1098,3 +1098,68 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   actually differ under the implementation the plan itself specifies** — otherwise the only paths through
   are a false claim of a red never observed, or manufactured dead code kept alive solely to satisfy the
   mutation, which is what this task's first attempt produced and flagged rather than shipped quietly.
+
+- **D-3153 — Task 6 shipped a refusal shape its brief never specified, unreported, and it contradicts
+  the shape Task 7's brief prescribes for the sibling condition.** Task 6's brief asks for exactly two
+  things: decode/re-encode `gzip` and `deflate`, and one mutation. The implementer additionally shipped
+  `_BadEncoding`, a `send_error(400, …)` arm in `_relay`, and two tests for it — a defensible addition,
+  consistent with spec §6.3's "the hazard is the silent arm, not the encoding", and argued at length in
+  `_decode_body`'s docstring. It then died on a model spend limit mid-`tsc --noEmit`, leaving the work
+  uncommitted and writing no report, so the addition was never declared and no number was issued for it
+  at the time. The controller verified and committed the abandoned diff; this entry is the declaration
+  that was owed.
+
+  Why it matters beyond bookkeeping: the two refusals disagree on the wire. Task 6 answers
+  `400` with an HTML body and the exception text in the **status-line reason phrase**
+  (measured: `HTTP/1.1 400 ccgpt-proxy: invalid gzip body: …`, `Content-Type: text/html;charset=utf-8`),
+  while Task 7's brief prescribes `415` with a JSON body (`expect((await r.json()).error)`). Implemented
+  as written, one function would end the wave answering two incompatible shapes for one problem class —
+  "I cannot use this body" — and no client could parse both uniformly. Task 6's own assertions are a
+  bare `400 ≤ status < 500` range with no body check, so nothing would have gone red when it happened.
+
+  The resolution, ruled by the controller and carried into Task 7: **one refusal shape for the whole
+  file.** A single helper emits `{"error": …}` as `application/json`; `415` means "this shim does not
+  implement that content-encoding", `400` means "what you sent is malformed" — and Task 6's existing
+  arm is retrofitted to it rather than left as a second dialect. Each refusal case pins its exact status
+  code, replacing the range assertions that made the divergence invisible.
+
+  Transferable lesson: an addition beyond the brief is not the defect — Task 6's was the right call and
+  closed a carry-forward. **The defect is an addition that pre-empts a decision another task was
+  chartered to make, without saying so.** A worker that widens its own scope owes the declaration in the
+  same act, and a worker that dies before reporting leaves its controller to reconstruct what it chose
+  and why — which is only possible when the code argues for itself, as this one's docstrings did.
+
+- **D-3154 — raw-deflate (RFC 1951) request bodies are now refused rather than forwarded; the fallback
+  is declined deliberately.** `zlib.decompress(body)` accepts only the zlib-wrapped RFC 1950 form, so a
+  `Content-Encoding: deflate` body in the raw form now earns an explicit refusal (measured:
+  `400 … invalid deflate body: Error -3 … incorrect header check`). Before Task 6 the same body was
+  forwarded unrewritten through a D-3151 arm. `deflate` is famously ambiguous in the wild and the usual
+  remedy is a `zlib.decompress(body, -zlib.MAX_WBITS)` fallback.
+
+  Declined, on two grounds. First, the fallback needs a matching re-encode decision — `_encode_body`
+  emits the wrapped form, so a raw-in/wrapped-out round trip changes the encoding the forwarded
+  `Content-Encoding` header describes, and the alternative is remembering which form arrived. Second,
+  and deciding: **this shim's only client is Claude Code**, whose request bodies are plain JSON; the
+  whole gzip/deflate path is defensive. An explicit refusal that names the encoding is strictly better
+  than a silent forward here, because if a real client ever does send raw deflate we will be told,
+  rather than discovering it as a sticky replay failure. Revisit only with a measured client that sends
+  it. Cost if wrong: one refused request, named at the wire, instead of one silently-unfolded body.
+
+- **D-3155 — the request read path accepts an unbounded declared chunk size and an unbounded
+  decompressed size; both caps are deferred, accepted open.** `_read_chunked_body` honours whatever
+  chunk-size the client declares, and `_decode_body` hands a body to `gzip.decompress`/
+  `zlib.decompress` with no output ceiling, so a ~1 KB compression bomb expands unbounded in the
+  handler's memory. `readline()` on the chunk-size and trailer lines is bounded by Task 7b
+  (`readline(65537)`, the bound `BaseHTTPRequestHandler.handle_one_request` uses for the same hazard)
+  and the handler gains a socket timeout there; the two SIZE caps are what this entry holds open.
+
+  Why deferred rather than fixed: both need a number, and picking one wrong breaks the lane in the
+  direction that matters. Claude Code sends whole conversations, which grow without a documented
+  ceiling, and a cap below the largest real body turns a working lane into a refusing one — the exact
+  failure this wave's over-correction guard exists to prevent. Picking that number is a measurement of
+  real traffic, not a guess available to this wave.
+
+  Why it is tolerable meanwhile: the listener binds `127.0.0.1` only, on a single-user box, and its
+  only client is the local Claude Code process — an attacker who can send it a bomb can already run
+  code as that user. This is a robustness ceiling, not an exposed attack surface. Revisit if the lane
+  ever binds anything but loopback, at which point it stops being deferrable.
