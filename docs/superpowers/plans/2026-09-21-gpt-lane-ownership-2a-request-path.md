@@ -1011,3 +1011,21 @@ The PR body ends with `🤖 Generated with [Claude Code](https://claude.com/clau
 **Type consistency.** `pythonOrSkip`, `runPy`, `ccgptFile`, `PYSTUB_DIR` are spelled identically in Tasks 1, 2 and 10. `_fold_midturn_system` and `_fold_system` are spelled identically in Tasks 3 and 4, in that call order. `CCGPT_ACCOUNT_ID`, `CCGPT_PROXY_PORT`, `CCGPT_LITELLM_PORT` and `CCGPT_USAGE_ENDPOINT` are the only environment names this wave introduces.
 
 **Two risks this plan cannot resolve, handed to the implementer explicitly.** First, `lane.json` has no writer until Plan 2b, so Task 10's probe-model path can only be tested via a planted fixture and an absent-file refusal — the plan says so and pins the refusal rather than pretending the happy path is covered. Second, the `CCGPT_USAGE_ENDPOINT` seam is a production surface added partly for testability; Task 11 exists precisely because that trade needs its own guard, and the loopback restriction is what keeps it from being a credential-redirection hazard. If a reviewer judges the seam unacceptable, the fallback is a stub HTTP layer injected through `PYTHONPATH` — more test machinery, no production surface — and that decision belongs in Task 1's review, before eleven cases are written against it.
+
+## Deviations found
+
+Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the same act. Never invent one.
+
+- **D-3150 — Task 1 Step 5's containment mutation was inert.** The step instructed the implementer to
+  prove the closed fixture HOME by spreading `process.env` **before** `HOME`. Read literally that is
+  `{ ...process.env, HOME: opts.home }`, in which the later explicit key wins — so the child still saw
+  the fixture, the mutation could not go red, and it proved nothing. Measured by the implementer, then
+  independently re-measured by the task reviewer across all five env orderings against a real
+  interpreter. The order that actually leaks is `{ HOME: opts.home, ...process.env }`. The plan text
+  was the defect; the substitution is what the step's own stated intent required. Wherever a later
+  plan or brief repeats this idiom, the leaking order is the one that measures.
+
+  A rider worth carrying: that mutation proves containment only for the **default** call. The task
+  review then found (C1) that a caller supplying `opts.env` could revoke containment entirely, with no
+  red anywhere — which is precisely the gap a mutation over one call shape cannot see. A mutation
+  measures the axis it moves, and no other.
