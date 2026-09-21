@@ -2183,3 +2183,181 @@ describe.skipIf(!PY)('ccgpt-proxy: effort resolution is scoped to /messages, lik
     expect(seen!.toString('utf8')).toBe(payloadText);     // byte-identical: untouched
   });
 });
+
+describe.skipIf(!PY)('ccgpt-proxy: SSE responses stream through incrementally, not buffered whole (Task 9 §1)', () => {
+  // task-9 — THE MAIN EVENT (task-9-rulings.md §1). `_relay` used to read
+  // the upstream response via `resp.read(8192)`, which BLOCKS until 8 KB
+  // has accumulated or the stream ends — measured (task-7b-review.md), an
+  // 18-byte SSE event written by upstream at t=0 reached the client only at
+  // t=40.2s, when the stream itself closed; `git log -S 'resp.read(8192)'`
+  // places the defect at `85f97a4d`, this wave's own Task 2. A case that
+  // only checks the frames eventually arrive intact — the brief's own
+  // wording — WOULD PASS under that defect: content survives buffering,
+  // just late (task-9-rulings.md §1's own point, and the reason this file
+  // does not simply copy the brief's Step 1.1 verbatim).
+  //
+  // This case binds on ORDERING instead of content or a wall-clock
+  // threshold. The upstream handler writes one `data:` frame and flushes,
+  // then waits (a flag, `secondWritten`, flips only once the wait ends and
+  // the second frame is written and the response ends). The assertion is
+  // that the client's FIRST observed byte arrives while `secondWritten` is
+  // still `false`. Node is single-threaded, so this is a genuine ordering
+  // proof, not a race dressed as one: the client's `data` handler and the
+  // delayed write are both callbacks on the same event loop, and one of
+  // them runs to completion (recording its own observation) before the
+  // other can even begin — "immune to a loaded box", per the ruling, since
+  // nothing here depends on how LONG either side takes, only on which
+  // fires first. Under the restored defect (mutation 1, task-9-rulings.md
+  // "Mutations required"), the shim forwards nothing until upstream's
+  // `res.end()`, which happens strictly after `secondWritten` flips — so
+  // this case reds exactly when it should.
+  it('task-9 forwards the first SSE frame before the second is written upstream', async () => {
+    const home = mkTmp('ccgpt-proxy-sse-');
+    let secondWritten = false;
+    await startPair(home, (_req, _body, res) => {
+      res.writeHead(200, { 'content-type': 'text/event-stream' });
+      res.write('data: {"first":true}\n\n');
+      setTimeout(() => {
+        secondWritten = true;
+        res.write('data: {"second":true}\n\n');
+        res.end();
+      }, 1_000);
+    });
+
+    const firstFrameBeforeSecondWrite = await new Promise<boolean>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          host: '127.0.0.1', port: PROXY_PORT, path: '/v1/messages', method: 'POST',
+          headers: { 'content-type': 'application/json' },
+        },
+        (res) => {
+          res.once('data', () => { resolve(!secondWritten); res.resume(); });
+          res.on('error', reject);
+        },
+      );
+      req.on('error', reject);
+      req.end('{}');
+    });
+    expect(firstFrameBeforeSecondWrite).toBe(true);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: tools and tool_result content blocks forward intact (Task 9 §2)', () => {
+  it('task-9 forwards tools and a tool_result content block with both intact', async () => {
+    const home = mkTmp('ccgpt-proxy-tools-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = {
+      model: 'gpt-x',
+      tools: [{
+        name: 'get_weather', description: 'Look up the weather',
+        input_schema: { type: 'object', properties: { city: { type: 'string' } } },
+      }],
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Berlin' } }] },
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' }] },
+      ],
+    };
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.tools).toEqual(payload.tools);
+    expect(seen.messages[0].content[0]).toEqual({ type: 'tool_use', id: 'toolu_1', name: 'get_weather', input: { city: 'Berlin' } });
+    expect(seen.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
+  });
+
+  // task-9 I-1 — MEASUREMENT, not a value judgment (task-9-rulings.md §2:
+  // "do not assume it is a defect and do not 'fix' it on your own
+  // judgement"). `_fold_system` merges a non-empty top-level `system` into
+  // `messages[0]` when that message is already `role: "user"`; for a
+  // content-block-list it unconditionally PREPENDS a new `{"type": "text",
+  // ...}` block ahead of whatever content was already there
+  // (`[{"type": "text", "text": sys_text}] + content`), with no check on
+  // what the existing first block's own `type` is. So when `messages[0]`'s
+  // content begins with a `tool_result` block, the system text block lands
+  // AHEAD of it — and the Anthropic API requires `tool_result` blocks to
+  // come first in a user message. Measured and reported exactly as the
+  // shim already behaves; left alone, per the ruling, pending the
+  // controller's own reading of this measurement.
+  it('task-9 I-1 (measurement, ruling §2): the system fold prepends ahead of a leading tool_result block', async () => {
+    const home = mkTmp('ccgpt-proxy-tools-system-order-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = {
+      model: 'gpt-x',
+      system: 'be concise',
+      messages: [
+        { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' }] },
+      ],
+    };
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(payload),
+    });
+    expect(r.status).toBe(200);
+    expect(seen.system).toBeUndefined();
+    // Measured: the folded system text is content[0] and the tool_result —
+    // the block the client itself put first — is pushed to content[1].
+    expect(seen.messages[0].content[0]).toEqual({ type: 'text', text: 'be concise' });
+    expect(seen.messages[0].content[1]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded request (Task 9 §3/§4/§5)', () => {
+  // ruling §5, "do not re-pin what is already pinned": `connection` is
+  // already pinned on the RESPONSE side by "sends exactly one Connection
+  // header on the response, never a duplicate of the upstream's own" above
+  // (fix round 2, finding 2) — the REQUEST side is not independently
+  // observable (`urllib.request` forces `Connection: close` on the outgoing
+  // request regardless of what HOP_BY_HOP strips, ruling §4). And
+  // `transfer-encoding` is already pinned dropped from a real chunked
+  // `/messages` request by "decodes a chunked body, rewrites it, and
+  // forwards a correct length" above (`expect(seenTE).toBe('')`). Neither
+  // is re-pinned here.
+  //
+  // `fetch` cannot even SEND the five headers below — undici refuses to
+  // construct the request at all (measured directly against this box's
+  // Node: `InvalidArgumentError: invalid keep-alive header`, and the same
+  // shape for upgrade/te/trailer/proxy-authorization), so these go over
+  // `rawRequest`'s raw socket, exactly as this file's own chunked-framing
+  // cases already do for a shape `fetch` cannot produce.
+  it.each([
+    ['Keep-Alive', 'timeout=5'],
+    ['Upgrade', 'websocket'],
+    ['Proxy-Authorization', 'Basic dGVzdA=='],
+    ['TE', 'trailers'],
+    // task-9 M-1 (ruling §3): the header NAME under test here is `Trailer`
+    // (RFC 7230 §4.4) — `trailers` (plural, the case directly above) is a
+    // VALUE of the `TE` header (§4.3), never a header name, so this is a
+    // distinct condition, not a second spelling of the same case. This is
+    // the one row that RED before this task's HOP_BY_HOP fix (the shipped
+    // set carried `"trailers"`, which never matches a `Trailer:` header at
+    // all) and is the case named in "Mutations required" §3.
+    ['Trailer', 'X-Checksum'],
+  ] as const)('task-9 drops %s from the forwarded request', async (headerName, value) => {
+    const home = mkTmp(`ccgpt-proxy-hopbyhop-${headerName}-`);
+    let seenHeaders: Record<string, unknown> = {};
+    let seenAuth = '';
+    await startPair(home, (req, _body, res) => {
+      seenHeaders = req.headers;
+      seenAuth = String(req.headers['authorization'] ?? '');
+      res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok');
+    });
+    const { status } = await rawRequest(
+      PROXY_PORT, 'GET', '/v1/models',
+      [`${headerName}: ${value}`, 'Authorization: Bearer test-token-not-a-secret'],
+      Buffer.alloc(0),
+    );
+    expect(status).toBe(200);
+    expect(seenHeaders[headerName.toLowerCase()]).toBeUndefined();
+    // End-to-end, on the SAME request: proves the absence above is
+    // HOP_BY_HOP filtering doing its job, not an empty/dropped header set.
+    expect(seenAuth).toBe('Bearer test-token-not-a-secret');
+  });
+});

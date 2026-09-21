@@ -910,9 +910,21 @@ LANE_PATH = "/ccgpt/lane"
 # from one connection onto the next — they describe THIS hop, not the
 # message, and copying content-length/transfer-encoding across a body this
 # shim may later rewrite would describe a size that no longer matches.
+#
+# task-9 M-1 (task-9-rulings.md §3): `"trailer"`, singular — corrected from
+# `"trailers"` (plural), which this set carried before this task. Verified
+# against RFC 7230: §4.4 defines the HEADER FIELD `Trailer` ("Trailer =
+# 1#field-name"), which is hop-by-hop by the same §6.1 enumeration as
+# `Connection`/`Keep-Alive`/`TE`/etc; `"trailers"` is not a header field name
+# at all — it is the one special VALUE the `TE` header field (§4.3) can carry
+# to mean "the sender will not discard trailer fields it receives". Before
+# this fix, a request naming `Trailer: …` was NOT in this set (only the TE
+# value's spelling was), so it forwarded upstream unfiltered — advertising
+# trailer fields upstream that Task 7b's `_read_chunked_body` drains and
+# discards on the way in, a promise this shim cannot keep either direction.
 HOP_BY_HOP = {
     "host", "connection", "content-length", "transfer-encoding", "keep-alive",
-    "proxy-authenticate", "proxy-authorization", "te", "trailers", "upgrade",
+    "proxy-authenticate", "proxy-authorization", "te", "trailer", "upgrade",
     "accept-encoding",
 }
 
@@ -1156,7 +1168,38 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         try:
             while True:
-                chunk = resp.read(8192)
+                # task-9 — THE MAIN EVENT (task-9-rulings.md §1). This used to
+                # be `resp.read(8192)`, which BLOCKS until 8 KB has
+                # accumulated or the stream ends: measured, an 18-byte SSE
+                # event written by upstream at t=0 reached the client only at
+                # t=40.2s, when the stream itself closed (task-7b-review.md,
+                # "SSE / streaming" — the defect predates 7b, `git log -S
+                # 'resp.read(8192)'` -> `85f97a4d`, this wave's own Task 2). A
+                # lane that buffers a full 8 KB — or waits for EOF — before
+                # forwarding anything looks hung to someone watching a model
+                # think, while every existing suite stayed green, because
+                # every prior case asserted CONTENT ("the frames arrived
+                # intact"), and content survives buffering, just late.
+                #
+                # `read1(n)` is `io.BufferedIOBase`'s "at most one underlying
+                # system call" read: it returns whatever is ALREADY buffered
+                # (or the result of one `recv`) rather than blocking to fill
+                # `n` bytes, so a small frame reaches the client as soon as it
+                # arrives instead of waiting on seven more like it. Verified
+                # on this box's Python (3.12.3), not assumed: `http.client.
+                # HTTPResponse` (what `urlopen` hands back for a plain
+                # response, and what `urllib.error.HTTPError` delegates to
+                # via `addbase`'s `__getattr__` for the caught-HTTPError arm
+                # above) implements `read1` for both the chunked and
+                # Content-Length-bounded cases, and both `resp` shapes this
+                # method can hold were exercised directly against a live
+                # `http.server.BaseHTTPRequestHandler` before this line was
+                # written. Correctness is unchanged either way — this loop
+                # still reads until EOF and forwards every byte in order, so
+                # every existing byte-identical/refusal/encoding case is
+                # unaffected; only the TIMING of when each chunk reaches the
+                # client changes.
+                chunk = resp.read1(8192)
                 if not chunk:
                     break
                 self.wfile.write(chunk)
