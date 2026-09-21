@@ -16,6 +16,50 @@ it('this box has a usable python3', () => {
   if (process.env.CI) expect(PY).toBeTruthy();
 });
 
+// task-10 fix round 3 (task-10-fix-rulings-3.md item 2, re-review V-3): the
+// atomicity case's read-only-target discriminator holds only because
+// `euid !== 0` — root bypasses the file write bit entirely, so under root
+// the guard would prove nothing even though the subject still succeeds. It
+// used to hard-FAIL there instead of skipping, so a root CI container went
+// red for a non-defect — "a false red is worse than an unpinned claim
+// [...] it trains the next reader to ignore the suite." Computed once,
+// matching `PY`'s own shape, but DELIBERATELY not a CI hard-assert the way
+// the python sentinel above is: CI containers legitimately run as root
+// often enough that asserting non-root under CI would recreate the exact
+// false-red failure this fix removes. A genuine, visible skip is the right
+// signal in EITHER environment, not only outside CI.
+const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
+
+// task-10 fix round 3 (task-10-fix-rulings-3.md item 1, fix round 2's own
+// concern 1): the M-4 case below needs `litellm` to be genuinely
+// UNIMPORTABLE under a fixture HOME with no `PYTHONPATH`, or it is
+// vacuous. On a box where `litellm` is installed SYSTEM-WIDE rather than
+// under this operator's user-site, overriding `HOME` hides nothing — the
+// import would succeed, and the case would still pass (`CCGPT_ACCOUNT_ID`
+// is still unset either way) without ever exercising the import ORDERING
+// it exists to pin, silently. Probed once, synchronously via `runPy` —
+// matching `PY`'s own memoised-sync shape — by actually running `import
+// litellm` under the SAME containment the real M-4 case uses, rather than
+// trusting the design spec's claim about a box this one might not be.
+const NO_AMBIENT_LITELLM: boolean = (() => {
+  if (!PY) return false;
+  const home = mkTmp('ccgpt-usage-m4-precondition-');
+  const probe = join(home, 'litellm-probe.py');
+  writeFileSync(probe, 'import litellm\n');
+  const r = runPy(probe, { home }); // no PYTHONPATH: the real litellm, or nothing
+  return r.status !== 0;
+})();
+
+it('this box hides litellm from a fixture HOME with no PYTHONPATH (M-4 precondition)', () => {
+  // Unlike IS_ROOT above, this DOES hard-assert under CI: a public-repo CI
+  // image is not expected to carry litellm at all (this suite's own stub
+  // package exists precisely because the box it was written on doesn't
+  // either), so this precondition failing in CI signals a real environment
+  // change worth knowing about, not a common, legitimate state the way a
+  // root container is.
+  if (process.env.CI) expect(NO_AMBIENT_LITELLM).toBe(true);
+});
+
 // task-10-rulings.md §5: "Ports: 45020 for this suite. 45010/45011 belong to
 // the proxy suite and the two cannot run at once." A fixed port, not an
 // OS-assigned one, matching the proxy suite's own convention.
@@ -295,16 +339,13 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  it('task-10: the write is atomic — a read-only existing row is still updated', async () => {
-    // task-10-fix-rulings.md I-5: the discriminator holds ONLY because
-    // euid != 0 — root bypasses the write bit entirely, so the
-    // direct-write mutation (Step 5, #5) would go green under root with no
-    // signal that the guard proved nothing. Skip loudly rather than pass
-    // silently in that case.
-    if (process.getuid && process.getuid() === 0) {
-      expect(process.getuid()).not.toBe(0); // fails loudly and visibly, never a silent pass
-      return;
-    }
+  it.skipIf(IS_ROOT)('task-10: the write is atomic — a read-only existing row is still updated', async () => {
+    // task-10-fix-rulings.md I-5 / task-10-fix-rulings-3.md item 2: the
+    // discriminator holds only because `euid !== 0` — root bypasses the
+    // write bit entirely, so the direct-write mutation (Step 5, #5) would
+    // go green under root with no signal that the guard proved nothing.
+    // Skipped visibly (`IS_ROOT`, module scope) rather than hard-failing —
+    // failing here would red a root CI container for a non-defect.
     const home = mkTmp('ccgpt-usage-atomic-');
     const id = mintId();
     plantLane(home, id);
@@ -436,7 +477,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  it('task-10 fix round 2 (M-4): refuses on unset CCGPT_ACCOUNT_ID even with no litellm importable — never an ImportError', async () => {
+  it.skipIf(!NO_AMBIENT_LITELLM)('task-10 fix round 2 (M-4): refuses on unset CCGPT_ACCOUNT_ID even with no litellm importable — never an ImportError', async () => {
     // task-10-fix-rulings-2.md M-1: fix round 1 moved the `from litellm...`
     // import past the CCGPT_ACCOUNT_ID/CCGPT_USAGE_ENDPOINT refusals so an
     // unset id on a box with no litellm still gets the named refusal rather
@@ -446,18 +487,13 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     //
     // This case constructs the actual absence rather than merely asserting
     // it cannot be constructed: deliberately NO `PYTHONPATH` (so the litellm
-    // stub is not on `sys.path`) and NO `CCGPT_ACCOUNT_ID`. `runPyAsync`
-    // sets HOME to the fixture home (containedSpawnOptions), and Python's
-    // user-site lookup (`~/.local/lib/python3.X/site-packages`, where this
-    // BOX's ambient python3 genuinely has `litellm` installed for its real
-    // operator) follows HOME — verified empirically before relying on it:
-    // `env -i HOME=<fixture> PATH=$PATH python3 -c 'import litellm'` raises
-    // `ModuleNotFoundError` on this box, even though the same import
-    // succeeds under the operator's own real HOME. So under the fixture
-    // HOME this harness always uses, "no PYTHONPATH" reliably means "no
-    // litellm importable", on THIS box and by construction on a box with
-    // none installed anywhere (the design spec's own stated case, "ambient
-    // python3 ... has no litellm at all").
+    // stub is not on `sys.path`) and NO `CCGPT_ACCOUNT_ID`. Gated on
+    // `NO_AMBIENT_LITELLM` (task-10-fix-rulings-3.md item 1): without that
+    // gate, a box where `litellm` is importable even under a fixture HOME
+    // (installed somewhere `HOME`-independent) would make this case pass
+    // vacuously — the refusal still fires because `CCGPT_ACCOUNT_ID` is
+    // unset, but the import-ordering property it exists to pin would never
+    // actually be exercised, silently.
     const home = mkTmp('ccgpt-usage-noid-nolitellm-');
     const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
       home,
@@ -580,7 +616,13 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     // ccd/ccrc-models-probe documents as what the backend expects, plus
     // Authorization — and asserts ChatGPT-Account-Id is deliberately ABSENT
     // (see ccd/ccgpt-usage.py's own docstring for why it is dropped, not
-    // merely missing by omission).
+    // merely missing by omission). task-10-fix-rulings-3.md item 3
+    // (re-review V-1): the three Codex-CLI header VALUES are asserted
+    // exactly, not merely their presence — `ccd/ccrc-models-probe` ships
+    // these as fixed literals the backend is documented to expect from "a
+    // real Codex CLI caller", so a silently changed value is the same class
+    // of failure C-2 closed (the backend answers with no usage headers and
+    // nothing says why).
     // C-3: asserts body.model equals the PLANTED probeModel, with two
     // different planted values (below) so the match cannot be coincidental
     // — the reviewer's own mutation (hard-coding the model) left the old
@@ -597,8 +639,8 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(ep1.requests.length).toBe(1);
       const captured = ep1.requests[0];
       expect(captured.headers['originator']).toBe('codex_cli_rs');
-      expect(captured.headers['user-agent']).toMatch(/^codex_cli_rs\//);
-      expect(captured.headers['session_id']).toBeTruthy();
+      expect(captured.headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
+      expect(captured.headers['session_id']).toBe('00000000-0000-0000-0000-000000000000');
       expect(captured.headers['authorization']).toBe('Bearer stub-token-not-a-secret');
       expect(captured.headers['chatgpt-account-id']).toBeUndefined();
       expect((captured.body as { model?: unknown }).model).toBe(model1);
