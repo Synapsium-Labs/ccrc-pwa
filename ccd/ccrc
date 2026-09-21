@@ -11486,6 +11486,15 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
   read -r _sum UPD_TARNAME < "$UPD_STAGE/SHA256SUMS" \
     || _ccrc_die "SHA256SUMS is empty — refusing; nothing on this box was changed"
   UPD_TARNAME="${UPD_TARNAME#\*}"
+  # D-3148 (pre-existing, stage 4; fixed here as a revertable scope
+  # expansion): the shape check below is a glob, which a traversing name
+  # like `ccrc-x/../../../evil.tar.gz` satisfies — and the `curl -o
+  # "$UPD_STAGE/$UPD_TARNAME"` below would create or clobber that path
+  # BEFORE any checksum or provenance check runs. Refuse any `/` before the
+  # shape check even looks at it.
+  case "$UPD_TARNAME" in
+    */*) _ccrc_die "SHA256SUMS names a tarball with a path separator (got: $UPD_TARNAME) — refusing; nothing on this box was changed" ;;
+  esac
   case "$UPD_TARNAME" in
     ccrc-*.tar.gz) ;;
     *) _ccrc_die "SHA256SUMS names no ccrc tarball (got: $UPD_TARNAME) — refusing; nothing on this box was changed" ;;

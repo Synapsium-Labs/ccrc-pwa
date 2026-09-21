@@ -1624,6 +1624,34 @@ describe('ccrc update: the tag is bound (design §5, decision 4)', () => {
   });
 });
 
+// D-3148 (pre-existing, stage 4; fixed here as a revertable scope
+// expansion, its own commit): `_upd_resolve`'s shape check on the tarball
+// name SHA256SUMS carries is a glob (`ccrc-*.tar.gz`), which a traversing
+// name like `ccrc-x/../../../../evil.tar.gz` satisfies — and
+// `curl -o "$UPD_STAGE/$UPD_TARNAME"` would create or clobber that path
+// BEFORE any checksum or provenance check. Hand-crafted, not via
+// `packRelease`/`asName`, because that helper's `tar -czf`/`sha256sum`
+// pipeline would itself try to create a file at the traversing path on the
+// HOST filesystem — a fixture hazard, not the subject under test.
+describe('ccrc update: the tarball name is bounded — no path separator (D-3148)', () => {
+  it('a SHA256SUMS naming a traversing tarball path refuses before any tarball fetch, and creates nothing outside the staging dir', () => {
+    const home = freshUpdateBox('ccrc-update-tarname-traversal-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const relDir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    const traversalName = 'ccrc-x/../../../../evil.tar.gz';
+    writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${traversalName}\n`);
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/SHA256SUMS names a tarball with a path separator \(got: ccrc-x\/\.\.\/\.\.\/\.\.\/\.\.\/evil\.tar\.gz\) — refusing/);
+    // Only the SHA256SUMS fetch happened — never a fetch of the tarball itself.
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    expect(existsSync(join(home, 'evil.tar.gz'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+});
+
 describe('ccrc update: the floor, on every path (design §9, decision 8)', () => {
   const plantFloor = (home: string, v: string): void => {
     mkdirSync(join(home, '.ccrc'), { recursive: true });
