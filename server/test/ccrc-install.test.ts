@@ -1884,10 +1884,14 @@ describe('ccrc install: the order is stated in one place', () => {
       // is a grouping rather than a dependency — the three files an operator
       // owns are seeded together, and the transcript reads that way too.
       '_inst_rc',
+      // design 2026-09-20 §3: seed-once identity, with the other seed-once files
+      '_inst_node_id',
       '_inst_tree',
       '_inst_bins',
       '_inst_files',
       '_inst_stamp',
+      // §9: what THIS install can do, beside the stamp that says what it is
+      '_inst_caps',
       // Task 8. Three orderings in this half are load-bearing and each one is
       // measured by a test of its own below: the units land before anything
       // enables them, the account config dirs exist before the hooks installer
@@ -3191,7 +3195,14 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const sha = gitInit(treeRoot(home));
     const ok = runInstall(home);
     expect(ok.code, ok.stderr).toBe(0);
-    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\n`);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+    // Line 2 (design §5, D-3117): `unsigned` unless the
+    // updater asserted it verified the bundle — a plain `ccrc install` from
+    // a checkout verified nothing.
+    const verified = freshBox('ccrc-install-installed-verified-');
+    const vsha = gitInit(treeRoot(verified));
+    expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
+    expect(readFileSync(join(verified, '.ccrc', 'installed'), 'utf8')).toBe(`${vsha}\n`);
     expect(ok.stdout).toMatch(/^install: installed: [0-9a-f]{40} \(the spine completed/m);
     // Ordering: the line is printed AFTER the wrappers step's own line.
     const lines = ok.stdout.split('\n');
@@ -3816,5 +3827,102 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const execLog = read(join(home, 'ccrc-exec-log')).trim().split('\n');
     expect(execLog[0]).toBe('argv:install');
     expect(execLog[1]).toBe(`path:${join(root, 'ccd', 'ccrc')}`);
+  });
+});
+
+describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', () => {
+  const tagFixture = (home: string, tag: string): void => {
+    const r = spawnSync('git', ['-C', treeRoot(home), 'tag', tag],
+      { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`fixture git tag failed: ${r.stderr}`);
+  };
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
+
+  it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
+    const home = freshBox('ccrc-install-nodeid-');
+    gitInit(treeRoot(home));
+    const a = runInstall(home);
+    expect(a.code, a.stderr).toBe(0);
+    const id = readFileSync(join(home, '.ccrc', 'node-id'), 'utf8');
+    expect(id).toMatch(UUID);
+    expect(a.stdout).toMatch(/^install: node-id: minted [0-9a-f-]{36} /m);
+    const b = runInstall(home);
+    expect(b.code, b.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe(id);
+    expect(b.stdout).toMatch(/^install: node-id: kept /m);
+  });
+
+  it('node-id: a file that is not a uuid is refused, never overwritten — it identifies this node to the console', () => {
+    const home = freshBox('ccrc-install-nodeid-bad-');
+    gitInit(treeRoot(home));
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'node-id'), 'not-a-uuid\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/node-id exists but is not a uuid/);
+    expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
+  });
+
+  it('ccrc-caps: line 1 is the os, then W1\'s three words, nothing else (§18 "_inst_caps writes each wave\'s words")', () => {
+    const home = freshBox('ccrc-install-caps-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+    expect(statSync(join(home, '.ccrc', 'ccrc-caps')).mode & 0o777).toBe(0o644);
+  });
+
+  it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {
+    const home = freshBox('ccrc-install-floor-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    const a = runInstall(home);
+    expect(a.code, a.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v1.0.0\n');
+    expect(a.stdout).toMatch(/^install: floor: v1\.0\.0 \(none before/m);
+    // The floor line prints AFTER the installed line — it is part of the last step.
+    const lines = a.stdout.split('\n');
+    expect(lines.findIndex((l) => l.startsWith('install: floor:')))
+      .toBeGreaterThan(lines.findIndex((l) => l.startsWith('install: installed:')));
+    // A higher floor already on the box is KEPT by a lower install (a restore).
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v9.9.9\n');
+    const b = runInstall(home);
+    expect(b.code, b.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v9.9.9\n');
+    expect(b.stdout).toMatch(/^install: floor: kept at v9\.9\.9 \(v1\.0\.0 is not above it/m);
+    // A stamp with no version raises nothing.
+    const untagged = freshBox('ccrc-install-floor-untagged-');
+    gitInit(treeRoot(untagged));
+    const c = runInstall(untagged);
+    expect(c.code, c.stderr).toBe(0);
+    expect(existsSync(join(untagged, '.ccrc', 'floor'))).toBe(false);
+    expect(c.stdout).toMatch(/^install: floor: not raised — this stamp carries no version/m);
+  });
+
+  it('_ver_newer agrees with sort -V on a fixture list, and the v is stripped nowhere else', () => {
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const fn = /^_ver_newer\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _ver_newer').not.toBeNull();
+    const list = ['v0.0.1', 'v0.0.10', 'v0.0.9', 'v0.1.0', 'v1.0.0', 'v1.9.9', 'v1.9.10', 'v2.0.0', 'v10.0.0'];
+    const sorted = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V', '--', ...list], { encoding: 'utf8' }).stdout.trim().split('\n');
+    for (let i = 0; i < sorted.length; i += 1) {
+      for (let j = 0; j < sorted.length; j += 1) {
+        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8' });
+        expect(r.status, `${sorted[i]} newer than ${sorted[j]}?`).toBe(i > j ? 0 : 1);
+      }
+    }
+  });
+
+  it('ccrc version says when the install was placed unsigned', () => {
+    const home = freshBox('ccrc-install-version-unsigned-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const r = runInstall(home, ['version']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
+    const verified = freshBox('ccrc-install-version-verified-');
+    gitInit(treeRoot(verified));
+    expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
+    expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete$/m);
   });
 });

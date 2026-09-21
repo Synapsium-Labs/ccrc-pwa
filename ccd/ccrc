@@ -1126,6 +1126,23 @@ BOX_ENV_FILE="$HOME/.ccrc/ccrc.env"
 # the overloaded value this tree bans at a seam. deploy.sh never writes it.
 BOX_INSTALLED_FILE="$HOME/.ccrc/installed"
 
+# ── THE NODE'S THREE FILES (design 2026-09-20 §3, §9) ─────────────────────
+#   node-id   — this node's identity to the console: a uuid minted ONCE by
+#               `_inst_node_id` when absent, never rewritten, removed by
+#               uninstall. Nothing on the box reads it; the server does.
+#   ccrc-caps — what THIS install's ccrc can do: `os <linux|darwin>`, then
+#               one word per line, rewritten by every install (`_inst_caps`).
+#               A version number is never a capability (decision 13).
+#   floor     — the highest version this box ever COMPLETED an install of,
+#               only ever raised (`_inst_installed`); `cmd_update` refuses to
+#               go below it without --downgrade (decision 8).
+BOX_NODE_ID_FILE="$HOME/.ccrc/node-id"
+BOX_CAPS_FILE="$HOME/.ccrc/ccrc-caps"
+BOX_FLOOR_FILE="$HOME/.ccrc/floor"
+# W1's words. Each wave's spine ADDS its own here, so the file records what
+# this install can do, never what a design intends.
+CCRC_CAP_WORDS=(verify node-id floor)
+
 # ── THE EXPOSURE FILE, WHICH `expose` WRITES AND THE SERVER UNIT READS ────
 # `~/.ccrc/exposure.env` — stage 3b, spec D3. Exposure keys (CCRC_ORIGIN,
 # CCRC_RP_ID, the DuckDNS trio) get their OWN EnvironmentFile because ccrc.env
@@ -1601,6 +1618,24 @@ _models_refuse() {   # <error> <exit code> <detail…>
 # line together with the next reserved name, and not before; an uncalled
 # refusal is the same untested, uncallable code `_ccrc_say` was removed for.
 
+# ── _ver_newer <a> <b> — 0 iff a is strictly newer than b ─────────────────
+# Both in the tag form (vX.Y.Z, the canonical spelling everywhere — design
+# 2026-09-20 decision 2); the `v` is stripped HERE and nowhere else. Pure
+# bash: the report's downgrade sentence uses `sort -V`, and a test pins this
+# function to agree with it, but a comparator that runs on every update must
+# not hang on a coreutils flag. Callers validate the shape first.
+_ver_newer() {
+  local a="${1#v}" b="${2#v}" i
+  local -a A B
+  IFS=. read -r -a A <<< "$a"
+  IFS=. read -r -a B <<< "$b"
+  for i in 0 1 2; do
+    if (( 10#${A[$i]:-0} > 10#${B[$i]:-0} )); then return 0; fi
+    if (( 10#${A[$i]:-0} < 10#${B[$i]:-0} )); then return 1; fi
+  done
+  return 1
+}
+
 # cmd_version / _box_build_fields — what THIS box is running, per its own build
 # stamp, never a guess. Same three-way discipline as `ccd version`
 # (ccd/ccd:2069-2092):
@@ -1749,13 +1784,17 @@ cmd_version() {
   if [[ -n "${BOX_BUILD[4]}" ]]; then
     echo "version ${BOX_BUILD[4]}"
   fi
-  local rec=""
+  local rec="" prov="" said=""
   if [[ -f "$BOX_INSTALLED_FILE" ]]; then
-    IFS= read -r rec < "$BOX_INSTALLED_FILE" || rec=""
+    { IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"
+    # Line 2 (design 2026-09-20 §5): the tree was placed without a verified
+    # provenance bundle. Said on the install line, so the one line an
+    # operator reads for "is this box installed" also says how.
+    [[ "$prov" == unsigned ]] && said=" (unsigned — placed without a verified provenance bundle; the next verified 'ccrc update' clears this)"
     if [[ "$rec" == "${BOX_BUILD[0]}" ]]; then
-      echo "install: complete"
+      echo "install: complete$said"
     else
-      echo "install: incomplete — stamp ${BOX_BUILD[0]}, completed-install record names ${rec:-nothing}"
+      echo "install: incomplete — stamp ${BOX_BUILD[0]}, completed-install record names ${rec:-nothing}$said"
     fi
   else
     echo "install: incomplete — stamp ${BOX_BUILD[0]}, no completed-install record (ccrc install and ccrc update write one last; deploy.sh never does)"
@@ -9103,10 +9142,12 @@ cmd_install() {
   _inst_env
   _inst_agent_env
   _inst_rc
+  _inst_node_id
   _inst_tree
   _inst_bins
   _inst_files
   _inst_stamp
+  _inst_caps
   _inst_units
   _inst_enable
   _inst_linger
@@ -9419,6 +9460,28 @@ _inst_rc() {   # seed-once, the third file on the user-owned side of the rule
   printf '%s\n' "off" > "$tmp" && mv -f "$tmp" "$dest" \
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
   echo "install: remote-control: off (fresh installs default off — edit ~/.ccrc/remote-control to 'on' for claude.ai discoverability)"
+}
+
+_inst_node_id() {   # seed-once identity (design 2026-09-20 §3): minted when absent, never rewritten
+  local cur="" id tmp
+  if [ -f "$BOX_NODE_ID_FILE" ]; then
+    IFS= read -r cur < "$BOX_NODE_ID_FILE" || cur=""
+    if [[ "$cur" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]]; then
+      echo "install: node-id: kept ($cur)"
+      return 0
+    fi
+    # Never overwritten: this value keys the node's row on the console, and
+    # a re-mint would make the box a stranger to its own history.
+    _ccrc_die "$BOX_NODE_ID_FILE exists but is not a uuid (got: '${cur:-empty}') — it identifies this node to the console; fix or remove it by hand. Nothing was changed"
+  fi
+  id="$(_plat_uuid)" || _ccrc_die "could not mint a node id"
+  [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] \
+    || _ccrc_die "the platform's uuid source answered something that is not a uuid: '$id'"
+  mkdir -p "${BOX_NODE_ID_FILE%/*}" || _ccrc_die "cannot create ${BOX_NODE_ID_FILE%/*}"
+  tmp="$BOX_NODE_ID_FILE.tmp.$$"
+  printf '%s\n' "$id" > "$tmp" && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_NODE_ID_FILE" \
+    || { rm -f -- "$tmp"; _ccrc_die "writing $BOX_NODE_ID_FILE failed"; }
+  echo "install: node-id: minted $id ($BOX_NODE_ID_FILE — seed-once, never rewritten, removed by uninstall)"
 }
 
 _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
@@ -9973,6 +10036,19 @@ _inst_stamp() {   # what this box is RUNNING, stated by the box itself
   [ "$dirty" = true ] && said=", dirty"
   [ -n "$version" ] && said="$said, $version"
   echo "install: stamp: $sha ($ref$said)"
+}
+
+_inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decision 13)
+  # Words, never a version number: the server dispatches by what a node
+  # SAYS it can do, and an install that predates a word does not have it.
+  # Rewritten on every install so the file describes this tree, not a
+  # previous one; self-reported, not a security boundary.
+  local tmp="$BOX_CAPS_FILE.tmp.$$"
+  mkdir -p "${BOX_CAPS_FILE%/*}" || _ccrc_die "cannot create ${BOX_CAPS_FILE%/*}"
+  { printf 'os %s\n' "$CCD_OS"; printf '%s\n' "${CCRC_CAP_WORDS[@]}"; } > "$tmp" \
+    && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" \
+    || { rm -f -- "$tmp"; _ccrc_die "writing $BOX_CAPS_FILE failed"; }
+  echo "install: caps: ${CCRC_CAP_WORDS[*]} (os $CCD_OS; $BOX_CAPS_FILE — what this install's ccrc can do, read by the server)"
 }
 
 # ── _inst_units — the unit files, and the one this box's ROLE decides ─────
@@ -11050,9 +11126,41 @@ _inst_installed() {
     return 0
   fi
   tmp="$dest.tmp.$$"
-  printf '%s\n' "${BOX_BUILD[0]}" > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
+  # LINE 2 (design 2026-09-20 §5; plan D-3117): `unsigned`
+  # unless the updater that placed this tree VERIFIED its provenance bundle —
+  # `cmd_update` asserts CCRC_UPDATE_VERIFIED=1 in this spine's environment
+  # only after verify-provenance.mjs exited 0. A checkout-mode install, a
+  # first `install.sh --release` (trust-on-first-use), an update driven by a
+  # ccrc that predates verification, and --allow-unsigned all leave it
+  # unset — and all four are honestly unsigned. The server reads line 2 as
+  # the node's provenance; a one-line marker would claim `verified` for a
+  # tree nobody verified. Written in ONE mv: a marker is never half-true.
+  if [ "${CCRC_UPDATE_VERIFIED:-}" = 1 ]; then
+    printf '%s\n' "${BOX_BUILD[0]}" > "$tmp"
+  else
+    printf '%s\nunsigned\n' "${BOX_BUILD[0]}" > "$tmp"
+  fi
+  chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
-  echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it)"
+  echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it${CCRC_UPDATE_VERIFIED:+; provenance verified})"
+
+  # THE FLOOR (design §9): the stamped tag, when it is above the file's
+  # current line; a restore or rollback never lowers it, because nothing
+  # here can — it is only ever raised. A stamp with no version raises nothing.
+  local ver="${BOX_BUILD[4]}" cur="" ftmp
+  if [[ ! "$ver" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "install: floor: not raised — this stamp carries no version"
+    return 0
+  fi
+  if [ -f "$BOX_FLOOR_FILE" ]; then IFS= read -r cur < "$BOX_FLOOR_FILE" || cur=""; fi
+  if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! _ver_newer "$ver" "$cur"; then
+    echo "install: floor: kept at $cur ($ver is not above it — the floor only rises)"
+    return 0
+  fi
+  ftmp="$BOX_FLOOR_FILE.tmp.$$"
+  printf '%s\n' "$ver" > "$ftmp" && chmod 644 "$ftmp" && mv -f -- "$ftmp" "$BOX_FLOOR_FILE" \
+    || { rm -f -- "$ftmp"; _ccrc_die "writing $BOX_FLOOR_FILE failed"; }
+  echo "install: floor: $ver (${cur:-none} before; ccrc update refuses to go below it without --downgrade)"
 }
 
 # ── cmd_update — the box moves to a published release (stage 4, Task 6) ───
@@ -12360,6 +12468,11 @@ _uninst_tree_bins() {
     || _ccrc_die "removing $BOX_TREE_DIR failed"
   rm -f -- "$BOX_INSTALLED_FILE" \
     || _ccrc_die "removing $BOX_INSTALLED_FILE failed"
+  # The node's three files are install-state, not config (design 2026-09-20
+  # §3, §9): an uninstalled box has no identity to the console, no
+  # capabilities and no floor. `--purge` would take ~/.ccrc whole anyway.
+  rm -f -- "$BOX_NODE_ID_FILE" "$BOX_CAPS_FILE" "$BOX_FLOOR_FILE" \
+    || _ccrc_die "removing the node's identity, caps and floor files failed"
   # ONE RULE, and the `rm -f` below IS the census: every executable
   # `_inst_bins` writes into `$HOME/.local/bin` is removed here, because an
   # uninstall that removed a binary's units (above) and left the binary itself

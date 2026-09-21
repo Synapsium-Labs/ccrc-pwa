@@ -652,7 +652,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
     expect(r.stdout).toMatch(/^FAIL git_email: /m);
     expect(r.stdout).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1 — this box IS on v2\.0\.0; the FAIL lines above are the box's health, not the update's/m);
-    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\n');
+    // Line 2 (design 2026-09-20 §5, D-3117): `unsigned` until Task 12 makes
+    // `cmd_update` assert CCRC_UPDATE_VERIFIED=1 after a real verify — this
+    // run's staged install carries no such assertion yet.
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\nunsigned\n');
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
     expect(r.stderr).not.toMatch(/the staged install \(which ends with doctor\) exited/);
   });
