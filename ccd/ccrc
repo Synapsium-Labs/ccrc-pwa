@@ -2888,6 +2888,8 @@ cmd_wrappers() {
     [[ "$f" =~ ^[0-9]+$ ]] \
       || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
   done
+  [ "$sum_total" -eq "$((sum_gen + sum_up + sum_ext + sum_codex))" ] \
+    || _ccrc_die "the manifest from $gen is malformed: its total $sum_total does not equal generated + upstream + external + codex ($sum_gen + $sum_up + $sum_ext + $sum_codex) — nothing was written"
   # THE TRUNCATION GATE. bash cannot tell a complete manifest from a half-
   # delivered one by looking at what arrived (`deploy/gen-wrappers.mjs`'s header
   # says so from the writer's end, which is why it assembles the whole thing
@@ -7076,10 +7078,9 @@ _acct_credential() {
   # secretsFile was ACCEPTED AND ROTATED — measured, exit 0, `{"ok":true,…}`,
   # a live token in a 0600 file ccrc had promised never to write.
   #
-  # THIS IS `ACCT_KIND`'S FIRST AND ONLY READER. `_acct_lane` sets seven
-  # globals and three of them — `ACCT_KIND`, `ACCT_BASEURL`, `ACCT_HOMEABLE` —
-  # had no reader in bash at all; Task 32 is written against all seven. Two
-  # still have none, which is a fact about those two and not a licence.
+  # `_acct_lane` reads kind once into `ACCT_KIND`; these ordered kind gates and
+  # the later account-removal branches consume that value. The gates stay before
+  # credential input because a lane ccrc cannot write must refuse before reading it.
   [ "$ACCT_KIND" != external ] \
     || _acct_refuse 1 external-lane "account $id is an external lane: its launcher $WRAPPER_BIN_DIR/$id is somebody else's program, which ccrc records and never writes. Whatever credential that launcher reads is the launcher's to rotate, so this verb will not put a file on disk for it - even when exec.secretsFile names one. Re-auth it the way its own launcher documents. Nothing was written."
 
@@ -7089,7 +7090,7 @@ _acct_credential() {
   # `exec.authDir` names where it lives precisely so that ccrc can pass the path
   # without ever opening it.
   [ "$ACCT_KIND" != codex ] \
-    || _acct_refuse 1 codex-lane "account $id is a codex lane: its credential is the ChatGPT OAuth directory exec.authDir names, which a browser device flow writes and ccrc only ever passes the path of. This verb will not put a file on disk for it. Re-authenticate it with 'ccgpt login $id'. Nothing was written."
+    || _acct_refuse 1 codex-lane "account $id is a codex lane: its credential is the ChatGPT OAuth directory exec.authDir names, which a browser device flow writes and ccrc only ever passes the path of. This verb will not put a file on disk for it. Reauthentication is unavailable in this release and will use ccrc's Codex login flow once the runtime ships. Nothing was written."
 
   # TOKEN LANES ONLY, and `not-managed` names the difference rather than hiding
   # it. A login lane's credential is Claude Code's own `.credentials.json`

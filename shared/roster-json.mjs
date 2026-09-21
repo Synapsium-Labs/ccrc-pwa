@@ -213,6 +213,9 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
+// Mirrors `shared/roster.ts`: these dotless names are GPT-lane commands, not
+// account ids, and must be refused before a wrapper can collide with one.
+const GPT_TOOLCHAIN_ACCOUNT_IDS = new Set(['ccgpt', 'ccgpt-runtime']);
 export const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
 
 export class RosterInvalid extends Error {}
@@ -249,6 +252,11 @@ function checkAccount(raw, index) {
   if (typeof id !== 'string' || !ID_RE.test(id)) {
     bad(`${where} has an invalid id ${JSON.stringify(id)}.`,
       `Rename it to match ^[a-z][a-z0-9-]{0,31}$ — lowercase letters, digits and hyphens only.`);
+  }
+
+  if (GPT_TOOLCHAIN_ACCOUNT_IDS.has(id)) {
+    bad(`account id "${id}" collides with the GPT-lane toolchain executable of the same name.`,
+      `Choose another account ID; "${id}" is reserved for the GPT-lane toolchain.`);
   }
 
   const label = raw['label'];

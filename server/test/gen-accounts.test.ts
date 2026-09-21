@@ -55,6 +55,30 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const ccrcRoot = path.resolve(here, '..', '..');
 const CLI = path.join(ccrcRoot, 'deploy', 'gen-accounts.mjs');
 
+const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
+type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
+
+/** This deliberately drives `rosterFromJson`, not the TypeScript parser. */
+const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
+  version: 1,
+  accounts: [
+    {
+      id, label: id, configDirSuffix: `.${id}`,
+      exec: kind === 'codex'
+        ? {
+          kind, provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: `.local/share/ccrc/codex/${id}`,
+        }
+        : { kind },
+      homeAble: true, hue: 'cyan', telemetry: kind === 'codex' ? 'codex' : 'anthropic',
+    },
+    ...(kind === 'upstream' ? [] : [{
+      id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    }]),
+  ],
+});
+
 /** Runs the CLI exactly as `deploy.sh` does: a bare `node`, one path argv,
  *  output on stdout. No tsx, no loader, no build — if this ever needs one,
  *  the deploy is broken and this test is where that surfaces. */
@@ -257,6 +281,20 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
     expect(r.upstreamId).toBe('claude');
   });
 
+  it.each(['ccgpt', 'ccgpt-runtime'] as const)(
+    'rosterFromJson refuses the %s GPT-lane toolchain id for every execution kind',
+    (id) => {
+      for (const kind of TOOLCHAIN_EXEC_KINDS) {
+        expect(() => rosterFromJsonSync(toolchainCollisionRoster(id, kind)))
+          .toThrow(`account id "${id}" collides with`);
+      }
+    },
+  );
+
+  it.each(['ccd', 'ccrc', 'ccd-worker'])('rosterFromJson keeps historical id %s valid', (id) => {
+    expect(() => rosterFromJsonSync(toolchainCollisionRoster(id, 'upstream'))).not.toThrow();
+  });
+
   it('accepts and faithfully projects a codex lane with a .ccrc-codex sibling authDir without adding topology to other kinds', async () => {
     const { rosterFromJson } = await import('../../shared/roster-json.mjs');
     const r = rosterFromJson({
@@ -367,6 +405,29 @@ describe('rosterFromJson is importable, and carries the fields the wrapper write
       ],
     });
     expect(r.accounts.filter((a) => a.execKind === 'codex')).toHaveLength(2);
+  });
+
+  it('accepts both inclusive Codex port endpoints in their distinct fields', () => {
+    const r = rosterFromJsonSync({
+      version: 1,
+      accounts: [
+        {
+          id: 'up', label: 'Up', configDirSuffix: '.up', exec: { kind: 'upstream' },
+          homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+        },
+        {
+          id: 'codex-a', label: 'Codex A', configDirSuffix: '.claude-codex-a',
+          exec: {
+            kind: 'codex', provider: 'openai', proxyPort: 1024, litellmPort: 65535,
+            authDir: '.local/share/ccrc/codex/codex-a',
+          },
+          homeAble: false, hue: 'violet', telemetry: 'codex',
+        },
+      ],
+    });
+    expect(r.accounts.find((a) => a.id === 'codex-a')).toMatchObject({
+      proxyPort: 1024, litellmPort: 65535,
+    });
   });
 
   it('importing it does NOT run a CLI', async () => {

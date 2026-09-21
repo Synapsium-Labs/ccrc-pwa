@@ -10,6 +10,32 @@ const one = (over: Record<string, unknown> = {}) => ({
   }],
 });
 
+const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
+type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
+
+/** A valid roster except for an id that can collide with a GPT-lane command.
+ *  Every kind is represented because the collision is about the launcher name,
+ *  not the account's current execution contract. */
+const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
+  version: 1,
+  accounts: [
+    {
+      id, label: id, configDirSuffix: `.${id}`,
+      exec: kind === 'codex'
+        ? {
+          kind, provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: `.local/share/ccrc/codex/${id}`,
+        }
+        : { kind },
+      homeAble: true, hue: 'cyan', telemetry: kind === 'codex' ? 'codex' : 'anthropic',
+    },
+    ...(kind === 'upstream' ? [] : [{
+      id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    }]),
+  ],
+});
+
 /** A minimal valid two-account roster — one `upstream` `claude`, one
  *  `generated` `claude2` whose `exec` carries `secretsFile` when it is not
  *  `undefined`. Used by the `exec.secretsFile` gate cases below. */
@@ -35,6 +61,25 @@ describe('parseRoster', () => {
     expect(r.upstreamId).toBe('claude');
     expect(r.homeAble.map((a) => a.id)).toEqual(['claude']);
     expect(r.byId.get('claude')!.configDirSuffix).toBe('.claude');
+  });
+
+  it.each(['ccgpt', 'ccgpt-runtime'] as const)(
+    'refuses the %s GPT-lane toolchain id for every execution kind',
+    (id) => {
+      for (const kind of TOOLCHAIN_EXEC_KINDS) {
+        try {
+          parseRoster(toolchainCollisionRoster(id, kind));
+          throw new Error(`expected ${id}/${kind} to be refused`);
+        } catch (e) {
+          expect((e as RosterError).message).toContain(`account id "${id}" collides with`);
+          expect((e as RosterError).remedy).toContain('Choose another account ID');
+        }
+      }
+    },
+  );
+
+  it.each(['ccd', 'ccrc', 'ccd-worker'])('keeps historical non-GPT toolchain-looking id %s valid', (id) => {
+    expect(() => parseRoster(one({ id, configDirSuffix: `.${id}` }))).not.toThrow();
   });
 
   // The label rule is a control-character ban, NOT a printable-ASCII
@@ -328,6 +373,10 @@ describe('parseRoster', () => {
       expect((e as RosterError).remedy).toMatch(/1024/);
       expect((e as RosterError).remedy).toMatch(/65535/);
     }
+  });
+
+  it('accepts both inclusive Codex port endpoints in their distinct fields', () => {
+    expect(() => parseRoster(withCodex({ proxyPort: 1024, litellmPort: 65535 }))).not.toThrow();
   });
 
   it.each([

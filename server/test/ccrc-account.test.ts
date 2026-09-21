@@ -6588,6 +6588,9 @@ describe('ccrc account credential', () => {
     expect(j['error']).toBe('codex-lane');
     expect(String(j['detail'])).toContain('ChatGPT OAuth directory');
     expect(String(j['detail'])).toContain('exec.authDir');
+    expect(String(j['detail'])).toContain('Reauthentication is unavailable in this release');
+    expect(String(j['detail'])).toContain("ccrc's Codex login flow once the runtime ships");
+    expect(String(j['detail'])).not.toContain('ccgpt login');
     expect(r.stdout + r.stderr).not.toContain(CANARY);
     expect(existsSync(join(home, '.cc-secrets'))).toBe(false);
   });

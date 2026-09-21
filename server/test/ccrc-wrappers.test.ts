@@ -1144,6 +1144,27 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     expect(r.stderr).not.toMatch(/truncated/);
   });
 
+  it('refuses a numeric but arithmetically inconsistent summary before installing staged wrappers', () => {
+    // Every per-kind count agrees with the complete records below. Only `total`
+    // lies, so this reaches the summary identity gate rather than either
+    // truncation lock; deleting that gate installs both staged launchers.
+    const generated = bodyFor(CODEX_FIXTURE, 'claude-a');
+    const codex = bodyFor(CODEX_FIXTURE, CODEX_ID);
+    const cli = kitWith(
+      'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
+      + `writeFileSync(join(process.argv[4], "claude-a"), ${JSON.stringify(generated)});\n`
+      + `writeFileSync(join(process.argv[4], ${JSON.stringify(CODEX_ID)}), ${JSON.stringify(codex)});\n`
+      + 'process.stdout.write("summary\\t5\\t1\\t1\\t1\\t1\\nwrapper\\tclaude-a\\tabsent\\tno\\nwrapper\\tcodex-a\\tabsent\\tno\\nprotected\\tclaude\\nprotected\\tgpt\\n");\n',
+    );
+    const home = makeHome('ccrc-wrappers-summary-identity-', { roster: CODEX_FIXTURE });
+    const r = runWrappers(home, [], cli);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/is malformed/);
+    expect(r.stderr).toMatch(/nothing was written\s*$/s);
+    expect(r.stdout).not.toMatch(/^WRITE /m);
+    expect(binEntries(home)).toEqual([]);
+  });
+
   it('refuses a manifest record whose id is not an account id, before a path is built from it', () => {
     // The id off the manifest becomes a FILENAME under ~/.local/bin, and the
     // gate is on the ID rather than on the path it would produce — which is
@@ -1222,7 +1243,7 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     // nothing. It is the same hole the wrapper-record count already closes,
     // one record type further down.
     const cli = kitWith(
-      'process.stdout.write("summary\\t5\\t0\\t1\\t1\\t0\\n");\n',
+      'process.stdout.write("summary\\t2\\t0\\t1\\t1\\t0\\n");\n',
     );
     const home = makeHome('ccrc-wrappers-protected-truncated-');
     const r = runWrappers(home, [], cli);

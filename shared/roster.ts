@@ -414,6 +414,9 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
 const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
+/** Dotless GPT-lane commands also fit the account-id grammar. Reserve these two
+ *  names here, before wrapper convergence can reach its self-exec lock. */
+const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccgpt', 'ccgpt-runtime']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
   ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
@@ -810,6 +813,13 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
         'letter and contain only lowercase letters, digits and hyphens (max 32 characters).',
       `Rename the "id" of ${where} in ${ROSTER_PATH} to match ^[a-z][a-z0-9-]{0,31}$ — ` +
         'no spaces, no uppercase letters.',
+    );
+  }
+
+  if (GPT_TOOLCHAIN_ACCOUNT_IDS.has(id)) {
+    throw new RosterError(
+      `account id "${id}" collides with the GPT-lane toolchain executable of the same name.`,
+      `Choose another account ID in ${ROSTER_PATH}; "${id}" is reserved for the GPT-lane toolchain.`,
     );
   }
 
