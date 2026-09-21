@@ -39,6 +39,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   copyFileSync, cpSync, mkdirSync, readFileSync, writeFileSync, existsSync,
   statSync, lstatSync, chmodSync, readdirSync, appendFileSync, renameSync, rmSync,
+  symlinkSync,
 } from 'node:fs';
 import path, { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -56,6 +57,7 @@ function realPath(name: string): string {
 }
 const BASH = realPath('bash');
 const RSYNC = realPath('rsync');
+const REAL_NODE = realPath('node');
 
 interface Result { code: number; stdout: string; stderr: string }
 
@@ -110,6 +112,9 @@ function healthyBox(home: string): void {
     'printf \'%s\\n\' "$url" >> "$HOME/curl-argv"',
     'case "$url" in',
     '  local://*)',
+    '    case "$url" in *.sigstore.json)',
+    '      if [ -f "$HOME/fixture-curl-exit" ]; then IFS= read -r c < "$HOME/fixture-curl-exit"; echo "curl: ($c) fixture failure for $url" >&2; exit "$c"; fi ;;',
+    '    esac',
     '    src="${url#local://}"',
     '    if [ ! -f "$src" ]; then',
     '      echo "curl: (22) The requested URL returned error: 404 for $url" >&2',
@@ -268,6 +273,43 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'fi',
     'echo "fixture python3: unexpected argv: $*" >&2; exit 90',
   ].join('\n'));
+  // The verifier seam (design §5): `ccrc update` runs the INSTALLED tree's
+  // `deploy/verify-provenance.mjs` under `node`. This shim answers THAT
+  // invocation from a fixture file (exit code; argv recorded) and execs the
+  // real node for everything else, so the path the verb resolved is a
+  // MEASURED fact — `$CCRC_HERE/../deploy/…` of the ccrc under test, never
+  // the staged tree — and the real verifier (verify-provenance.test.ts's
+  // subject) is not re-run here.
+  plant('node', [
+    '#!/bin/sh',
+    'case "$1 $2" in',
+    '  *verify-provenance.mjs*)',
+    '    printf \'%s\\n\' "$*" >> "$HOME/verify-argv"',
+    // D-3141: the plan's mutation row 12 ("move the verifier call below
+    // `tar -xzf`") measures GREEN against every OTHER assertion here,
+    // because `_upd_resolve`'s EXIT trap removes the whole staging dir on
+    // every exit — success or refusal — so nothing left on disk afterward
+    // can tell "never extracted" apart from "extracted, then swept". This
+    // shim IS the verifier the tests run, so it records what IT observes
+    // AT THE MOMENT it is invoked: whether the sibling `tree/` dir beside
+    // `--blob` (`UPD_TREE`, which `_upd_fetch` only creates via
+    // `mkdir "$UPD_TREE"` right before `tar -xzf`) already exists.
+    '    blob=""; prev=""',
+    '    for a in "$@"; do',
+    '      [ "$prev" = "--blob" ] && blob="$a"',
+    '      prev="$a"',
+    '    done',
+    '    if [ -n "$blob" ] && [ -d "$(dirname "$blob")/tree" ]; then',
+    '      printf \'yes\\n\' > "$HOME/staging-at-verify"',
+    '    else',
+    '      printf \'no\\n\' > "$HOME/staging-at-verify"',
+    '    fi',
+    '    code=0; [ -f "$HOME/fixture-verify-exit" ] && IFS= read -r code < "$HOME/fixture-verify-exit"',
+    '    [ "$code" = 0 ] && echo "verified fixture (sigstore)" || echo "verify-provenance: fixture refusal" >&2',
+    '    exit "$code" ;;',
+    'esac',
+    `exec ${REAL_NODE} "$@"`,
+  ].join('\n') + '\n');
   for (const k of ['CCRC_ADDR', 'CCRC_HEALTH_TIMEOUT', 'CCRC_DOCTOR_GH_TIMEOUT',
     'CCRC_RELEASE_BASE_URL', 'CCRC_BACKUP_KEEP']) delete env[k];
   env['CCRC_VERIFY_SETTLE'] = '0';
@@ -417,6 +459,7 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
   mkdirSync(join(tree, 'ccd'), { recursive: true });
   writeFileSync(join(tree, 'ccd', 'ccrc'),
     '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/staged-ccrc-argv"\n'
+    + 'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/staged-ccrc-env"\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -431,7 +474,7 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
  *  honest, per-file digest not); `tamper` appends to the tarball after the
  *  sums were written (outer checksum dishonest). */
 function packRelease(home: string, tree: string,
-  opts: { tag: string; latest?: boolean; tamper?: boolean; corruptInner?: string } = { tag: 'v9.9.9' }): void {
+  opts: { tag: string; latest?: boolean; tamper?: boolean; corruptInner?: string; asName?: string; bundle?: boolean } = { tag: 'v9.9.9' }): void {
   if (opts.corruptInner !== undefined) {
     appendFileSync(join(tree, opts.corruptInner), '\n// corrupted after the MANIFEST was written\n');
   }
@@ -439,7 +482,9 @@ function packRelease(home: string, tree: string,
     ? join(home, 'releases', 'download', opts.tag)
     : join(home, 'releases', 'latest', 'download');
   mkdirSync(relDir, { recursive: true });
-  const name = `ccrc-${opts.tag}.tar.gz`;
+  // `asName` lets SHA256SUMS under one tag's directory name ANOTHER tag's
+  // tarball — the re-served-release shape Task 9's binding refuses.
+  const name = opts.asName ?? `ccrc-${opts.tag}.tar.gz`;
   const tarRes = spawnSync('tar', ['-czf', join(relDir, name), '-C', tree, '.'], { encoding: 'utf8' });
   if (tarRes.status !== 0) throw new Error(`fixture tar failed: ${tarRes.stderr}`);
   // PLATFORM-CHOSEN, exactly as writeManifest above chooses (and for the
@@ -455,6 +500,10 @@ function packRelease(home: string, tree: string,
   { cwd: relDir, encoding: 'utf8' });
   if (sumRes.status !== 0) throw new Error(`fixture digest failed: ${sumRes.stderr}`);
   if (opts.tamper) appendFileSync(join(relDir, name), 'one appended byte-run after the sums were written');
+  // The provenance bundle (design §5): present by default — the `node` shim
+  // in updateEnv decides whether it "verifies"; `bundle: false` models a
+  // release older than provenance, the one shape --allow-unsigned admits.
+  if (opts.bundle !== false) writeFileSync(join(relDir, `${name}.sigstore.json`), `{"fixture":"bundle for ${name}"}\n`);
 }
 
 /** Runs `ccrc update` — the CHECKOUT's ccrc (the code under test), against
@@ -577,6 +626,40 @@ describe('ccrc update: the argument surface', () => {
   });
 });
 
+// D-3140: `jq` joins the preflight's own tool list (`for t in curl tar gzip
+// node awk jq`) so a jq-less box is refused BY NAME, up front — never as
+// `_box_build_fields`'s own internal jq probe surfacing partway through a run
+// as a stamp that "does not parse".
+function pathWithoutJq(home: string): string {
+  const d = join(home, 'no-jq-bin');
+  mkdirSync(d, { recursive: true });
+  // `curl` and `node` are the fixture's OWN stubs — `updateEnv`/
+  // `replantDoctorStubs` plant them into `$HOME/.local/bin` regardless of
+  // what PATH this run ends up using (both run before `spawnSync`, inside
+  // `runUpdate`). Putting that directory FIRST means PATH resolution finds
+  // the fixture's curl (never reaches `local://`'s real-curl edge, let
+  // alone a live network address the health probe might otherwise dial)
+  // and the fixture's node (which only forwards to the real interpreter for
+  // calls the verify-provenance shim does not intercept) before any real
+  // binary — containment that does not depend on the jq guard firing first
+  // (`ccrc-install.test.ts`'s `pathWithout` idiom: fixture plants win, real
+  // tools are the fallback for what nothing here stubs). `tar`/`gzip`/`awk`
+  // have no fixture stub in this suite — those three alone are real-tool
+  // symlinks in the fallback directory.
+  for (const b of ['tar', 'gzip', 'awk']) symlinkSync(realPath(b), join(d, b));
+  return `${join(home, '.local', 'bin')}:${d}`;
+}
+
+describe('ccrc update: preflight (D-3140 — jq joins the tool list)', () => {
+  it('a jq-less box is refused by name, before anything is fetched', () => {
+    const home = freshUpdateBox('ccrc-update-nojq-');
+    const r = runUpdate(home, [], { PATH: pathWithoutJq(home) });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH — nothing on this box was changed/m);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+  });
+});
+
 describe('ccrc update: fetch + verify, then back up, then install, then report', () => {
   it('happy path: replaces ~/ccrc from the verified tree and reports both build.json versions', () => {
     const home = freshUpdateBox('ccrc-update-happy-');
@@ -587,6 +670,10 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     }), { tag: 'v2.0.0' });
     const r = runUpdate(home);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // A verified bundle (packRelease's default) makes this a ONE-line marker
+    // — provenance verified, no `unsigned` line 2 (D-3117, Task 12).
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8'))
+      .toBe('newsha0000000000000000000000000000000000\n');
     // The old tree is GONE and the staged one is in its place: the marker the
     // previous install left does not survive the rsync --delete, and the
     // shipped executables do arrive.
@@ -623,6 +710,9 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(3);
     expect(r.stdout).toMatch(/^FAIL git_email: /m);
     expect(r.stdout).toMatch(/^update: the staged install completed \(the record is written\) but its trailing doctor exited 1 — this box IS on v2\.0\.0; the FAIL lines above are the box's health, not the update's/m);
+    // Line 2 (design 2026-09-20 §5, D-3117): a verified bundle (packRelease's
+    // default) makes `cmd_update` assert CCRC_UPDATE_VERIFIED=1 for this
+    // spine, so the marker is ONE line — verified, not `unsigned` (Task 12).
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\n');
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
     expect(r.stderr).not.toMatch(/the staged install \(which ends with doctor\) exited/);
@@ -646,6 +736,26 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.stderr).toMatch(/the staged install \(which ends with doctor\) exited 1 — read its lines above\. The backup taken BEFORE it ran is complete at/);
     expect(existsSync(join(home, '.ccrc', 'installed')), 'a died spine must leave no record — not even the old build\'s').toBe(false);
     expect(r.stdout).not.toMatch(/^update: build: /m);
+  });
+
+  // D-3147: `~/.ccrc/ccrc-caps` is written only by `_inst_caps` and removed
+  // only by uninstall; `cmd_update` clears `~/.ccrc/installed` before the
+  // staged spine but must clear caps too — otherwise a staged spine that
+  // never reaches `_inst_caps` (a pre-W1 rollback spine, or one that dies
+  // before that step) leaves a stale `verify` cap sitting beside a fresh
+  // one-line marker, which spec §6 reads as `provenance: verified` for an
+  // install nobody verified. `stubTree`'s staged `ccd/ccrc` is exactly such
+  // a spine — it exits 0 without ever writing caps.
+  it('caps are cleared beside the marker before the staged spine runs, so a staged tree that never writes caps leaves none stale (D-3147)', () => {
+    const home = freshUpdateBox('ccrc-update-caps-cleared-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'ccrc-caps')),
+      'a caps file the staged spine never wrote must not survive the update').toBe(false);
   });
 
   it('checksum mismatch: refuses loudly and changes NOTHING — no backup, no install, ~/ccrc byte-identical', () => {
@@ -722,10 +832,12 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
     const r = runUpdate(home, ['--to', 'v1.0.0']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    // Both fetches went to the pinned tag's download path, in order.
+    // All three fetches went to the pinned tag's download path, in order —
+    // the bundle joins the set (design §5, Task 12).
     expect(localUrls(home)).toEqual([
       `local://${home}/releases/download/v1.0.0/SHA256SUMS`,
       `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz`,
+      `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz.sigstore.json`,
     ]);
     // The rollback report: the restore is PRINTED, never performed —
     // migrations are forward-only and an older server reads a newer coord.db.
@@ -761,6 +873,266 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.code, r.stderr).toBe(0);
     argv = readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
     expect(argv.slice(1)).toEqual(['install']);
+  });
+});
+
+describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one, decision 12)', () => {
+  const OWNER = ((): string => {
+    const m = /^CCRC_RELEASE_OWNER="([^"]+)"$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    return m![1]!;
+  })();
+  const REPO_NAME = ((): string => {
+    const m = /^CCRC_RELEASE_REPO="([^"]+)"$/m.exec(readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8'));
+    return m![1]!;
+  })();
+  const verifyArgv = (home: string): string[] => (existsSync(join(home, 'verify-argv'))
+    ? readFileSync(join(home, 'verify-argv'), 'utf8').split('\n').filter((l) => l !== '') : []);
+
+  it('the bundle is fetched after the tarball and verified by the INSTALLED tree\'s verifier, with --tag, before extraction; the spine is told (§18 "the INSTALLED verifier is used")', () => {
+    const home = freshUpdateBox('ccrc-update-prov-ok-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(localUrls(home)).toEqual([
+      `local://${home}/releases/latest/download/SHA256SUMS`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz.sigstore.json`,
+    ]);
+    const argv = verifyArgv(home);
+    expect(argv.length).toBe(1);
+    const a = argv[0]!.split(' ');
+    // `node --no-warnings <verifier> …`: the verifier is resolved beside the
+    // ccrc under test (`$CCRC_HERE/../deploy/`), never under the staging dir.
+    expect(a[0]).toBe('--no-warnings');
+    expect(a[1]).toBe(`${join(REPO, 'ccd')}/../deploy/verify-provenance.mjs`);
+    expect(a[1]!.startsWith(join(home, 'tmp'))).toBe(false);
+    const flag = (f: string): string => a[a.indexOf(f) + 1]!;
+    expect(flag('--blob')).toMatch(/\/ccrc-v2\.0\.0\.tar\.gz$/);
+    expect(flag('--bundle')).toMatch(/\/ccrc-v2\.0\.0\.tar\.gz\.sigstore\.json$/);
+    expect(flag('--tag')).toBe('v2.0.0');
+    expect(flag('--owner')).toBe(OWNER);
+    expect(flag('--repo')).toBe(REPO_NAME);
+    expect(r.stdout).toMatch(/^update: verified ccrc-v2\.0\.0\.tar\.gz \(transport checksum, provenance, then the per-file MANIFEST\)$/m);
+    expect(readFileSync(join(home, 'staged-ccrc-env'), 'utf8')).toBe('1\n');
+  });
+
+  it('D-3141: nothing is extracted before provenance is settled — the verifier itself observes no staging tree yet', () => {
+    // The plan's mutation row 12 ("move the verifier call below `tar -xzf`")
+    // measured GREEN against every assertion above: `_upd_resolve`'s EXIT
+    // trap sweeps the whole staging dir on every exit, so nothing left on
+    // disk after the fact can tell "never extracted" apart from "extracted,
+    // then swept". This pin reads what the shim itself saw AT THE MOMENT it
+    // was invoked, before any exit/sweep could happen.
+    const home = freshUpdateBox('ccrc-update-prov-staging-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staging-at-verify'), 'utf8')).toBe('no\n');
+  });
+
+  it('a FAILING bundle refuses: nothing extracted, no backup, ~/ccrc byte-identical — and --allow-unsigned does not apply (§18 "--allow-unsigned permits absence only")', () => {
+    const home = freshUpdateBox('ccrc-update-prov-fail-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '1\n');
+    let r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/provenance verification FAILED for ccrc-v2\.0\.0\.tar\.gz .* refusing to extract or install/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    r = runUpdate(home, ['--allow-unsigned']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/--allow-unsigned does not apply to a bundle that FAILS/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  // D-3142: a verifier that cannot RUN at all (a usage error, or node/the
+  // script itself missing) is a DIFFERENT fact from a verifier that ran and
+  // refused the bundle — folding both into "FAILED" tells the operator the
+  // RELEASE is bad when the box could not even perform the check, and closes
+  // --allow-unsigned's escape hatch for the wrong reason.
+  it('a verifier that exits 2 (usage error) is reported as unable to RUN, not as a bundle that FAILED (D-3142)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-vrc2-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '2\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 2\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('a verifier that exits 127 (node/the script itself missing) gets the same "could not RUN" sentence (D-3142)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-vrc127-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '127\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 127\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  // D-3144: the verifier itself now speaks exit 3 for its own
+  // dependency-load failure (a partial `npm ci` under server/node_modules)
+  // — this is the ccrc-side half of that pin: exit 3 is just one more
+  // member of the SAME non-{0,1} vocabulary 2 and 127 above already
+  // exercise, so it must fall into this `elif` arm exactly as they do,
+  // never into the `vrc -eq 1` "FAILED" arm.
+  //
+  // NOT A REGRESSION PIN FOR D-3144's OWN FIX, and it must not be relied on
+  // as one (whole-branch fix-round re-review): it drives the recording stub
+  // through `fixture-verify-exit`, never the real verify-provenance.mjs, so
+  // it exercises this `elif` arm — which D-3144 did not touch — and would
+  // stay GREEN if the verifier's dependency-load catch were reverted to
+  // exiting 1. What reds on that revert is the verifier-side case in
+  // `verify-provenance.test.ts` ('cannot load its own dependencies').
+  // This case's job is the shell-side contract: that the arm treats an
+  // unfamiliar non-{0,1} code the same way it treats the two it knows.
+  it('a verifier that exits 3 (a dependency it could not load) gets the same "could not RUN" sentence, never "FAILED" (D-3144)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-vrc3-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '3\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 3\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('an ABSENT bundle refuses without --allow-unsigned, and proceeds with it — recorded as unsigned (§18 "--allow-unsigned is recorded")', () => {
+    const home = freshUpdateBox('ccrc-update-prov-absent-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', bundle: false });
+    let r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the release ships no provenance bundle .* installs only with --allow-unsigned \(recorded on the box as unsigned\)/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(verifyArgv(home)).toEqual([]);
+    r = runUpdate(home, ['--allow-unsigned']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    // D-3143: curl -f's exit 22 means ANY HTTP status >= 400, not
+    // specifically 404 — say what was actually measured.
+    expect(r.stdout).toMatch(/^update: WARN: .*sigstore\.json is absent \(the release host answered an HTTP error — curl exit 22\) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned$/m);
+    // m9 (Ruling 32): the closing transcript line for this success path was
+    // previously unasserted — pin it distinct from the verified-bundle case's
+    // own closing line (the OK-flavour test above).
+    expect(r.stdout).toMatch(/^update: verified ccrc-v2\.0\.0\.tar\.gz \(transport checksum, then the per-file MANIFEST — provenance NOT verified, --allow-unsigned\)$/m);
+    expect(readFileSync(join(home, 'staged-ccrc-env'), 'utf8')).toBe('unset\n');
+  });
+
+  it('env -u actually strips an AMBIENT CCRC_UPDATE_VERIFIED=1 on the unsigned path — the "marker records unsigned" case, deliberately polluted (the env-u pin)', () => {
+    // Without this, `env -u CCRC_UPDATE_VERIFIED` could be deleted from
+    // `cmd_update`'s staged-install invocation and every existing test would
+    // stay green, because nothing ever POLLUTES the ambient environment
+    // before calling `runUpdate`. Here it is deliberately polluted, and the
+    // FULL-flavour marker (`.ccrc/installed`, the real spine) is what proves
+    // `env -u` actually strips it rather than relying on it never being set.
+    const home = freshUpdateBox('ccrc-update-prov-envu-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    const sha = 'newsha0000000000000000000000000000000002';
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha }), { tag: 'v2.0.0', bundle: false });
+    const r = runUpdate(home, ['--allow-unsigned'], { CCRC_UPDATE_VERIFIED: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+  });
+
+  it('FULL flavour: a verified update writes a one-line marker; an --allow-unsigned one writes `unsigned` on line 2', () => {
+    const home = freshUpdateBox('ccrc-update-prov-marker-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    const sha = 'newsha0000000000000000000000000000000001';
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha }), { tag: 'v2.0.0' });
+    let r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\n`);
+    const home2 = freshUpdateBox('ccrc-update-prov-marker-unsigned-');
+    plantOldBox(home2, { version: 'v1.0.0' });
+    plantCoordDb(home2);
+    packRelease(home2, fullTree(home2, { version: 'v2.0.0', sha }), { tag: 'v2.0.0', bundle: false });
+    r = runUpdate(home2, ['--allow-unsigned']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home2, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+  });
+
+  it('verification runs AFTER sha256sum -c (a tampered tarball never reaches the verifier) and BEFORE tar -x (§18 "verification precedes extraction")', () => {
+    const home = freshUpdateBox('ccrc-update-prov-order-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', tamper: true });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/checksum verification FAILED/);
+    expect(verifyArgv(home)).toEqual([]);
+    // The failing-verifier case above proves the other side: refused before
+    // extraction, so no staged tree, no backup, no spine.
+  });
+
+  it('a bundle download that fails for a reason other than 404 is not "absent" — refused even with --allow-unsigned', () => {
+    const home = freshUpdateBox('ccrc-update-prov-net-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // The stub curl exits 22 for a missing file (curl's own 404 shape); the
+    // fixture exit models every other failure — here curl's 7, "could not
+    // connect" — which is NOT absence and which --allow-unsigned never admits.
+    writeFileSync(join(home, 'fixture-curl-exit'), '7\n');
+    const r = runUpdate(home, ['--allow-unsigned']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/download failed: .*sigstore\.json \(curl exit 7, not a 404/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('D-3140: build.json unreadable/malformed at the staged tree ("{"), refuses with the rc-N sentence and installs nothing', () => {
+    const home = freshUpdateBox('ccrc-update-prov-buildjson-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    // Built by hand rather than via stubTree: the MANIFEST must be generated
+    // exactly ONCE, over the tree's final bytes (build-release.sh's own
+    // shape) — a malformed build.json that is still MANIFEST-honest, so the
+    // run reaches `_box_build_fields`'s parse and no earlier guard.
+    const tree = join(home, 'payload-v2.0.0-badjson');
+    mkdirSync(join(tree, 'ccd'), { recursive: true });
+    writeFileSync(join(tree, 'ccd', 'ccrc'),
+      '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/staged-ccrc-argv"\n'
+      + 'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/staged-ccrc-env"\nexit 0\n', { mode: 0o755 });
+    writeFileSync(join(tree, 'MARKER'), 'release payload\n');
+    writeFileSync(join(tree, 'build.json'), '{');
+    writeManifest(tree);
+    packRelease(home, tree, { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the extracted tree's build\.json is unreadable or malformed \(rc \d+\) — refusing to install/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+});
+
+describe('ccrc update: --check refuses --downgrade and --allow-unsigned like --force (D-3139)', () => {
+  it.each([
+    ['--downgrade'],
+    ['--allow-unsigned'],
+  ])('--check and %s are exclusive — same refusal shape as --check/--force, exit 2, nothing fetched', (flag) => {
+    const home = freshUpdateBox(`ccrc-update-check-excl-${flag.replace(/^--/, '')}-`);
+    const r = runUpdate(home, ['--check', flag]);
+    expect(r.code).toBe(2);
+    // m4 (Ruling 32): the flag name is interpolated per case — the old
+    // three-way alternation let a `--downgrade` case pass even if the code
+    // emitted "--allow-unsigned" (or vice versa), since either alternative
+    // satisfies it.
+    expect(r.stderr).toMatch(new RegExp(`update: --check and ${flag} are exclusive`));
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
   });
 });
 
@@ -1154,10 +1526,12 @@ describe('ccrc update: the "already there" gate (spec §5)', () => {
     const r = runUpdate(home);
     expect(r.code, r.stderr).toBe(0);
     expect(r.stdout).toMatch(/^update: this box already runs v2\.0\.0 \(newsha[0-9a-f]*\) and that install completed — nothing to do \(pass --force to reinstall\)$/m);
-    // Both fetches happened (the gate's exact stage reads the staged stamp)…
+    // All three fetches happened (the gate's exact stage reads the staged
+    // stamp, so fetch + verify runs before the gate returns)…
     expect(localUrls(home)).toEqual([
       `local://${home}/releases/latest/download/SHA256SUMS`,
       `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz`,
+      `local://${home}/releases/latest/download/ccrc-v2.0.0.tar.gz.sigstore.json`,
     ]);
     // …and nothing after them.
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
@@ -1223,5 +1597,185 @@ describe('ccrc update: the "already there" gate (spec §5)', () => {
     const r = runUpdate(home);
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+  });
+});
+
+describe('ccrc update: the tag is bound (design §5, decision 4)', () => {
+  it('--to v0.0.9 against a SHA256SUMS naming ccrc-v0.0.3.tar.gz refuses BEFORE any backup, tag to tag (§18 "the tag is bound before backup")', () => {
+    const home = freshUpdateBox('ccrc-update-bind-sums-');
+    plantOldBox(home, { version: 'v0.0.1' });
+    packRelease(home, stubTree(home, { version: 'v0.0.3' }), { tag: 'v0.0.9', latest: false, asName: 'ccrc-v0.0.3.tar.gz' });
+    const r = runUpdate(home, ['--to', 'v0.0.9']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the release at v0\.0\.9 names a ccrc-v0\.0\.3\.tar\.gz \(version v0\.0\.3, not v0\.0\.9\) — refusing/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v0.0.9/SHA256SUMS`]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('--to v0.0.9 against a SHA256SUMS naming ccrc-v0.0.9.tar.gz proceeds — the comparison never strips a side', () => {
+    const home = freshUpdateBox('ccrc-update-bind-ok-');
+    plantOldBox(home, { version: 'v0.0.1' });
+    packRelease(home, stubTree(home, { version: 'v0.0.9' }), { tag: 'v0.0.9', latest: false });
+    const r = runUpdate(home, ['--to', 'v0.0.9']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+  });
+
+  it('an extracted build.json whose version is not the resolved one refuses; nothing installed (§18 "the extracted version is bound")', () => {
+    const home = freshUpdateBox('ccrc-update-bind-stamp-');
+    plantOldBox(home, { version: 'v0.0.1' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.1' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the extracted tree's build\.json says version 'v2\.0\.1' but the release was resolved as v2\.0\.0 — refusing/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+});
+
+// D-3148 (pre-existing, stage 4; fixed here as a revertable scope
+// expansion, its own commit): `_upd_resolve`'s shape check on the tarball
+// name SHA256SUMS carries is a glob (`ccrc-*.tar.gz`), which a traversing
+// name like `ccrc-x/../../../../evil.tar.gz` satisfies — and
+// `curl -o "$UPD_STAGE/$UPD_TARNAME"` would create or clobber that path
+// BEFORE any checksum or provenance check. Hand-crafted, not via
+// `packRelease`/`asName`, because that helper's `tar -czf`/`sha256sum`
+// pipeline would itself try to create a file at the traversing path on the
+// HOST filesystem — a fixture hazard, not the subject under test.
+describe('ccrc update: the tarball name is bounded — no path separator (D-3148)', () => {
+  it('a SHA256SUMS naming a traversing tarball path refuses before any tarball fetch, and creates nothing outside the staging dir', () => {
+    const home = freshUpdateBox('ccrc-update-tarname-traversal-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const relDir = join(home, 'releases', 'latest', 'download');
+    mkdirSync(relDir, { recursive: true });
+    const traversalName = 'ccrc-x/../../../../evil.tar.gz';
+    writeFileSync(join(relDir, 'SHA256SUMS'), `${'a'.repeat(64)}  ${traversalName}\n`);
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/SHA256SUMS names a tarball with a path separator \(got: ccrc-x\/\.\.\/\.\.\/\.\.\/\.\.\/evil\.tar\.gz\) — refusing/);
+    // Only the SHA256SUMS fetch happened — never a fetch of the tarball itself.
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    expect(existsSync(join(home, 'evil.tar.gz'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+});
+
+describe('ccrc update: the floor, on every path (design §9, decision 8)', () => {
+  const plantFloor = (home: string, v: string): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), `${v}\n`);
+  };
+
+  it('latest/download naming a version below the floor is refused before any backup, with NO --to on the argv (§18 "the floor is checked on every path")', () => {
+    const home = freshUpdateBox('ccrc-update-floor-latest-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by latest\/download\) is below this box's floor v3\.0\.0/);
+    expect(r.stderr).toMatch(/ccrc update --to v2\.0\.0 --downgrade/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('--to below the floor is refused the same way, naming --to', () => {
+    const home = freshUpdateBox('ccrc-update-floor-to-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('--downgrade proceeds, warns, and the floor is NOT lowered (§18 "--downgrade is the only way below the floor")', () => {
+    const home = freshUpdateBox('ccrc-update-floor-downgrade-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0', '--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: WARN: v2\.0\.0 is below this box's floor v3\.0\.0 .* --downgrade was typed; the floor stays v3\.0\.0/m);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
+  });
+
+  it('at or above the floor proceeds without a word; no floor file is unconstrained', () => {
+    const home = freshUpdateBox('ccrc-update-floor-ok-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantFloor(home, 'v1.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    let r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    // Not a bare /floor/ scan: the fixture HOME's own path is
+    // `.../ccrc-update-floor-ok-<rand>/...` and appears in the ordinary
+    // "update: fetching …" lines, so that substring is always present and
+    // proves nothing. What must be ABSENT is the floor check's own voice —
+    // the WARN or refusal phrasing `_upd_floor_check` uses when it has
+    // something to say.
+    expect(r.stdout).not.toMatch(/is below this box's floor|floor is malformed/);
+    const bare = freshUpdateBox('ccrc-update-floor-none-');
+    plantOldBox(bare, { version: 'v3.0.0' });
+    packRelease(bare, stubTree(bare, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    r = runUpdate(bare);
+    expect(r.code, r.stderr).toBe(0);
+  });
+
+  it('a malformed floor file refuses and names the file — never read as "no floor"', () => {
+    const home = freshUpdateBox('ccrc-update-floor-bad-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantFloor(home, 'three');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/floor is malformed \(got: 'three'\)/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  // Task 11 Important (no D): the converged-box steady state — a box AT its
+  // own floor, updating to that SAME version — rests entirely on
+  // `_ver_newer`'s strict `>` and nothing pinned it. floor == target must
+  // proceed silently, not warn as though it were below.
+  it('the floor equal to the target proceeds without a word — not "below" (Task 11 Important)', () => {
+    const home = freshUpdateBox('ccrc-update-floor-equal-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantFloor(home, 'v2.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).not.toMatch(/is below this box's floor/);
+  });
+
+  // Task 11 minor (no D): an UNREADABLE floor (the `read` itself fails) is a
+  // different condition from a malformed one and must not collapse into it
+  // (the overloaded-null-at-a-seam ban this file's own conventions apply
+  // elsewhere). Root bypasses permission bits, so this is not measurable
+  // running as root — skipped there, and said so.
+  it.skipIf(process.getuid?.() === 0)('an unreadable floor file (permissions) dies with its own sentence, distinct from "malformed"', () => {
+    const home = freshUpdateBox('ccrc-update-floor-unreadable-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantFloor(home, 'v3.0.0');
+    chmodSync(join(home, '.ccrc', 'floor'), 0o000);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/\.ccrc\/floor is unreadable — fix its permissions by hand/);
+    expect(r.stderr).not.toMatch(/malformed/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('--check is a measurement and never consults the floor', () => {
+    const home = freshUpdateBox('ccrc-update-floor-check-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check']);
+    expect(r.stdout).toMatch(/^check: box=v3\.0\.0 sha=\S+ target=v2\.0\.0 state=behind$/m);
+    expect(r.stderr).not.toMatch(/floor/);
   });
 });

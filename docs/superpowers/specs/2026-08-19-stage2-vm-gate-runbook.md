@@ -712,7 +712,7 @@ ccrc update
 `update: fetching …` lines, then
 
 ```
-update: verified ccrc-v0.0.2.tar.gz (transport checksum, then the per-file MANIFEST)
+update: verified ccrc-v0.0.2.tar.gz (transport checksum, provenance, then the per-file MANIFEST)
 ```
 
 then `update: backup: ~/ccrc-backups/<ts> …` — the backup is complete BEFORE any install write —

@@ -1884,10 +1884,14 @@ describe('ccrc install: the order is stated in one place', () => {
       // is a grouping rather than a dependency — the three files an operator
       // owns are seeded together, and the transcript reads that way too.
       '_inst_rc',
+      // design 2026-09-20 §3: seed-once identity, with the other seed-once files
+      '_inst_node_id',
       '_inst_tree',
       '_inst_bins',
       '_inst_files',
       '_inst_stamp',
+      // §9: what THIS install can do, beside the stamp that says what it is
+      '_inst_caps',
       // Task 8. Three orderings in this half are load-bearing and each one is
       // measured by a test of its own below: the units land before anything
       // enables them, the account config dirs exist before the hooks installer
@@ -3191,7 +3195,14 @@ describe('ccrc install: the landing block, and doctor as the last word', () => {
     const sha = gitInit(treeRoot(home));
     const ok = runInstall(home);
     expect(ok.code, ok.stderr).toBe(0);
-    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\n`);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
+    // Line 2 (design §5, D-3117): `unsigned` unless the
+    // updater asserted it verified the bundle — a plain `ccrc install` from
+    // a checkout verified nothing.
+    const verified = freshBox('ccrc-install-installed-verified-');
+    const vsha = gitInit(treeRoot(verified));
+    expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
+    expect(readFileSync(join(verified, '.ccrc', 'installed'), 'utf8')).toBe(`${vsha}\n`);
     expect(ok.stdout).toMatch(/^install: installed: [0-9a-f]{40} \(the spine completed/m);
     // Ordering: the line is printed AFTER the wrappers step's own line.
     const lines = ok.stdout.split('\n');
@@ -3816,5 +3827,273 @@ describe('install.sh: the bootstrap that hands off to ccrc install', () => {
     const execLog = read(join(home, 'ccrc-exec-log')).trim().split('\n');
     expect(execLog[0]).toBe('argv:install');
     expect(execLog[1]).toBe(`path:${join(root, 'ccd', 'ccrc')}`);
+  });
+});
+
+describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', () => {
+  const tagFixture = (home: string, tag: string): void => {
+    const r = spawnSync('git', ['-C', treeRoot(home), 'tag', tag],
+      { env: { ...process.env, GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_SYSTEM: '/dev/null' }, encoding: 'utf8' });
+    if (r.status !== 0) throw new Error(`fixture git tag failed: ${r.stderr}`);
+  };
+  const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
+
+  it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
+    const home = freshBox('ccrc-install-nodeid-');
+    gitInit(treeRoot(home));
+    const a = runInstall(home);
+    expect(a.code, a.stderr).toBe(0);
+    const id = readFileSync(join(home, '.ccrc', 'node-id'), 'utf8');
+    expect(id).toMatch(UUID);
+    expect(a.stdout).toMatch(/^install: node-id: minted [0-9a-f-]{36} /m);
+    const b = runInstall(home);
+    expect(b.code, b.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe(id);
+    expect(b.stdout).toMatch(/^install: node-id: kept /m);
+  });
+
+  it('node-id: a file that is not a uuid is refused, never overwritten — it identifies this node to the console', () => {
+    const home = freshBox('ccrc-install-nodeid-bad-');
+    gitInit(treeRoot(home));
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'node-id'), 'not-a-uuid\n');
+    const r = runInstall(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/node-id exists but is not a uuid/);
+    expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
+  });
+
+  it('ccrc-caps: line 1 is the os, then W1\'s three words, nothing else (§18 "_inst_caps writes each wave\'s words")', () => {
+    const home = freshBox('ccrc-install-caps-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+    expect(statSync(join(home, '.ccrc', 'ccrc-caps')).mode & 0o777).toBe(0o644);
+  });
+
+  it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {
+    const home = freshBox('ccrc-install-floor-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    const a = runInstall(home);
+    expect(a.code, a.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v1.0.0\n');
+    expect(a.stdout).toMatch(/^install: floor: v1\.0\.0 \(none before/m);
+    // The floor line prints AFTER the installed line — it is part of the last step.
+    const lines = a.stdout.split('\n');
+    expect(lines.findIndex((l) => l.startsWith('install: floor:')))
+      .toBeGreaterThan(lines.findIndex((l) => l.startsWith('install: installed:')));
+    // A higher floor already on the box is KEPT by a lower install (a restore).
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v9.9.9\n');
+    const b = runInstall(home);
+    expect(b.code, b.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v9.9.9\n');
+    expect(b.stdout).toMatch(/^install: floor: kept at v9\.9\.9 \(v1\.0\.0 is not above it/m);
+    // A stamp with no version raises nothing.
+    const untagged = freshBox('ccrc-install-floor-untagged-');
+    gitInit(treeRoot(untagged));
+    const c = runInstall(untagged);
+    expect(c.code, c.stderr).toBe(0);
+    expect(existsSync(join(untagged, '.ccrc', 'floor'))).toBe(false);
+    expect(c.stdout).toMatch(/^install: floor: not raised — this stamp carries no version/m);
+  });
+
+  it('_ver_newer agrees with sort -V on a fixture list, and the v is stripped nowhere else', () => {
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const fn = /^_ver_newer\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _ver_newer').not.toBeNull();
+    const list = ['v0.0.1', 'v0.0.10', 'v0.0.9', 'v0.1.0', 'v1.0.0', 'v1.9.9', 'v1.9.10', 'v2.0.0', 'v10.0.0'];
+    const sorted = spawnSync('bash', ['-c', 'printf "%s\\n" "$@" | sort -V', '--', ...list], { encoding: 'utf8' }).stdout.trim().split('\n');
+    for (let i = 0; i < sorted.length; i += 1) {
+      for (let j = 0; j < sorted.length; j += 1) {
+        const r = spawnSync('bash', ['-c', `${fn![0]}\n_ver_newer "$1" "$2"`, '--', sorted[i]!, sorted[j]!], { encoding: 'utf8' });
+        expect(r.status, `${sorted[i]} newer than ${sorted[j]}?`).toBe(i > j ? 0 : 1);
+      }
+    }
+    // "the v is stripped nowhere else" (D-3136 minor 4) — MEASURED, not just
+    // claimed by the title: exactly one line of ccd/ccrc performs `#v}`
+    // stripping, and it is this function's own `local a=…/b=…` line.
+    const stripLines = src.split('\n').filter((l) => l.includes('#v}'));
+    expect(stripLines, 'a second `#v}` strip site appeared in ccd/ccrc').toEqual([
+      '  local a="${1#v}" b="${2#v}" i',
+    ]);
+  });
+
+  it('ccrc version says when the install was placed unsigned', () => {
+    const home = freshBox('ccrc-install-version-unsigned-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    const r = runInstall(home, ['version']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: complete \(unsigned — placed without a verified provenance bundle/m);
+    const verified = freshBox('ccrc-install-version-verified-');
+    gitInit(treeRoot(verified));
+    expect(runInstall(verified, ['install'], { CCRC_UPDATE_VERIFIED: '1' }).code).toBe(0);
+    expect(runInstall(verified, ['version']).stdout).toMatch(/^install: complete$/m);
+  });
+
+  it('ccrc version: the incomplete arm carries no provenance suffix — the record names a different, stale install (D-3136 minor 5)', () => {
+    const home = freshBox('ccrc-install-version-incomplete-');
+    gitInit(treeRoot(home));
+    expect(runInstall(home).code).toBe(0);
+    // The box moved on: the completed-install record still names an OLDER
+    // sha, itself unsigned — but that label describes the stale install,
+    // not the box's current (incomplete) state, so it must not be said.
+    writeFileSync(join(home, '.ccrc', 'installed'), 'stalesha00000000000000000000000000000000\nunsigned\n');
+    const r = runInstall(home, ['version']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: incomplete — stamp [0-9a-f]{40}, completed-install record names stalesha00000000000000000000000000000000$/m);
+  });
+
+  it('ccrc-caps: rewritten on every install — a stale file is replaced with current content, not merged (D-3136 minor 6)', () => {
+    const home = freshBox('ccrc-install-caps-rewrite-');
+    gitInit(treeRoot(home));
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os plan9\nverify\n');
+    expect(runInstall(home).code).toBe(0);
+    const os = process.platform === 'darwin' ? 'darwin' : 'linux';
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+  });
+
+  it('floor: a malformed ~/.ccrc/floor is left untouched, never treated as absent (D-3136)', () => {
+    const home = freshBox('ccrc-install-floor-malformed-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), 'three\n');
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('three\n');
+    expect(r.stdout).toMatch(/^install: floor: ~\/\.ccrc\/floor is malformed \(got: 'three'\) — left untouched; fix it by hand$/m);
+  });
+
+  // D-3146: `_inst_installed`'s floor block used to guard its read with `-f`
+  // alone, so a PRESENT-but-UNREADABLE floor read as `cur=""`, fell through
+  // every branch, and was silently REPLACED by the `mv -f` (which needs
+  // write permission on ~/.ccrc, not read permission on the file) —
+  // possibly with a LOWER version. Mirrors `_upd_floor_check`'s own `-r`
+  // test (Task 11, D-3136) and the idiom of the update-side unreadable-floor
+  // pin: root bypasses permission bits, so this is not measurable running
+  // as root — skipped there, and said so.
+  it.skipIf(process.getuid?.() === 0)('floor: an UNREADABLE ~/.ccrc/floor is left untouched and named by its own sentence, distinct from "malformed" (D-3146)', () => {
+    const home = freshBox('ccrc-install-floor-unreadable-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const floorFile = join(home, '.ccrc', 'floor');
+    writeFileSync(floorFile, 'v9.9.9\n');
+    chmodSync(floorFile, 0o000);
+    let r: Result;
+    try {
+      r = runInstall(home);
+    } finally {
+      chmodSync(floorFile, 0o644);   // restore so the assertion below can read it back
+    }
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: floor: ~\/\.ccrc\/floor is unreadable — left untouched; fix its permissions by hand$/m);
+    expect(r.stdout).not.toMatch(/malformed/);
+    expect(readFileSync(floorFile, 'utf8')).toBe('v9.9.9\n');
+  });
+
+  it('_inst_installed: the marker write is ONE checked group — no printf sits before an unchecked chmod (D-3135, structural)', () => {
+    // The two behavioural cases below prove exit 1 / one die line / no
+    // leftover file under two REAL failure conditions (mv blocked, open()
+    // denied) — but neither actually distinguishes the fixed code from the
+    // bug D-3135 describes: a write that CREATES the temp file and then
+    // fails partway through it (ENOSPC is the finding's own example).
+    // Reproducing that deterministically needs a size-constrained
+    // filesystem (a tiny tmpfs/loop mount), which needs a privileged mount
+    // in this harness — skipped per the finding's own "skip a shape only if
+    // root would be needed" allowance. What proves the fix instead is this
+    // structural pin: the printf(s) now sit INSIDE the group the `> "$tmp"`
+    // redirect opens, and that group is the FIRST link of the && chain —
+    // never a printf whose own exit status is discarded before a later,
+    // separately-checked `chmod`.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const fn = /^_inst_installed\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _inst_installed').not.toBeNull();
+    expect(fn![0]).toMatch(/\}\s*>\s*"\$tmp"\s*&&\s*chmod 644 "\$tmp" && mv -f "\$tmp" "\$dest"/);
+  });
+
+  it('_inst_installed: a directory at ~/.ccrc/installed blocks the mv, dies loudly, and leaves no half-record (D-3135)', () => {
+    const home = freshBox('ccrc-install-installed-mvfail-');
+    gitInit(treeRoot(home));
+    // A pre-existing DIRECTORY at the record's own path, made non-writable:
+    // the redirect that creates installed.tmp.$$ (a SIBLING path, inside
+    // ~/.ccrc itself) still succeeds, and chmod on that temp file succeeds —
+    // only the final `mv -f "$tmp" "$dest"` fails, because mv cannot add an
+    // entry to a directory it has no write permission on. This isolates the
+    // PLACEMENT half of D-3135's fix (nothing else in the spine touches
+    // BOX_INSTALLED_FILE, so no earlier step is affected).
+    mkdirSync(join(home, '.ccrc', 'installed'), { recursive: true });
+    chmodSync(join(home, '.ccrc', 'installed'), 0o555);
+    let r: Result;
+    try {
+      r = runInstall(home);
+    } finally {
+      chmodSync(join(home, '.ccrc', 'installed'), 0o755);
+    }
+    expect(r.code).toBe(1);
+    const dieLines = (r.stderr.match(/writing .*installed failed/g) ?? []).length;
+    expect(dieLines, r.stderr).toBe(1);
+    // The directory survives, empty: mv never replaced it, and the cleanup
+    // removed the temp file mv left orphaned at its original location.
+    expect(statSync(join(home, '.ccrc', 'installed')).isDirectory()).toBe(true);
+    expect(readdirSync(join(home, '.ccrc', 'installed'))).toEqual([]);
+    expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('installed.tmp.'))).toEqual([]);
+  });
+
+  it('_inst_installed: a write that fails right after creating the temp file never places a record — one redirect, not two printfs each on its own (D-3135)', () => {
+    // The "redirect denied outright" shape, measured in isolation from the
+    // rest of the spine: this harness extracts `_inst_installed` (plus the
+    // real `_ccrc_die`/`PROG` it calls) out of ccd/ccrc, exactly as the
+    // `_ver_newer` case above extracts that function, and runs it directly
+    // against a `~/.ccrc` this process cannot write into — so the failure
+    // is scoped to the function under test, not to whichever earlier
+    // `cmd_install` step would hit the same wall first in a full spine run
+    // (`_inst_accounts_sh` regenerates its file on every install and would
+    // fail before `_inst_installed` is ever reached). NOTE (measured): this
+    // shape passes against the PRE-FIX code too — when open() itself is
+    // denied, no temp file is ever created, so the OLD code's separately-
+    // checked `chmod 644 "$tmp"` fails on its own and still dies correctly.
+    // It is kept because it is the finding's own suggested shape and a real
+    // regression guard on that path; the structural case above is what
+    // actually pins the fix (D-3135's bug needs a write that CREATES the
+    // temp file and fails partway through it, which needs a size-
+    // constrained filesystem to reproduce and is skipped for that reason).
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const progLine = /^PROG=.*$/m.exec(src);
+    expect(progLine, 'ccd/ccrc has no PROG=').not.toBeNull();
+    const dieLine = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
+    expect(dieLine, 'ccd/ccrc has no _ccrc_die').not.toBeNull();
+    const fn = /^_inst_installed\(\) \{[\s\S]*?\n\}/m.exec(src);
+    expect(fn, 'ccd/ccrc has no _inst_installed').not.toBeNull();
+
+    const home = mkTmp('ccrc-inst-installed-redirect-');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    chmodSync(join(home, '.ccrc'), 0o555);
+    const harness = [
+      'set -uo pipefail',
+      progLine![0],
+      dieLine![0],
+      '_box_build_fields() { BOX_BUILD=(deadbeefdeadbeefdeadbeefdeadbeefdeadbeef main 2026-01-01T00:00:00Z false ""); return 0; }',
+      `BOX_INSTALLED_FILE="${join(home, '.ccrc', 'installed')}"`,
+      fn![0],
+      '_inst_installed',
+    ].join('\n');
+    let r: Result;
+    try {
+      const p = spawnSync('bash', ['-c', harness], { encoding: 'utf8' });
+      r = { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    } finally {
+      chmodSync(join(home, '.ccrc'), 0o755);
+    }
+    expect(r.code).toBe(1);
+    const dieLines = (r.stderr.match(/writing .*installed failed/g) ?? []).length;
+    expect(dieLines, r.stderr).toBe(1);
+    expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    // No orphaned temp file either — the redirect itself never created one.
+    expect(readdirSync(join(home, '.ccrc'))).toEqual([]);
   });
 });

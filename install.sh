@@ -103,6 +103,11 @@ if [ "$RELEASE_MODE" = true ]; then
   mkdir "$STAGING/tree"
   tar -xzf "$STAGING/$TARNAME" -C "$STAGING/tree"
   echo "install.sh: verified $TARNAME — handing off to the staged 'ccrc install'"
+  # TRUST ON FIRST USE, said out loud (design 2026-09-20 §5): this bootstrap
+  # has no installed verifier to use and must not use the one it just
+  # downloaded (self-attestation). The tree it places carries the verifier;
+  # every `ccrc update` from here verifies provenance before extracting.
+  echo "install.sh: first install trusts the release's transport checksum only; every update from here verifies provenance"
   trap - EXIT
   exec bash "$STAGING/tree/ccd/ccrc" install "$@"
 fi

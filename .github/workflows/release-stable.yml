@@ -2,8 +2,8 @@
 # 2026-09-20 §4, decision 3). Thin: deploy/release-stable.sh owns the tag
 # lookup, the two flag flips and the read-back, and is tested locally
 # (server/test/release-stable.test.ts). No build step, no node — nothing
-# here can produce bytes. The branch's ruleset (linear history, no force
-# push) is the other half: a merge commit never reaches this HEAD.
+# here can produce bytes. The branch's ruleset (no force push, no deletion;
+# D-3130) keeps it fast-forward; the script refuses an untagged merge HEAD.
 name: release-stable
 
 on:

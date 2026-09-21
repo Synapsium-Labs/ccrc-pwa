@@ -204,6 +204,9 @@ function plantInstalledBox(home: string): void {
     '{"sha":"fixturesha000000000000000000000000000000","ref":"main",'
     + '"builtAt":"2026-08-21T00:00:00Z","dirty":false}\n');
   writeFileSync(join(home, '.ccrc', 'installed'), 'fixturesha000000000000000000000000000000\n');
+  writeFileSync(join(home, '.ccrc', 'node-id'), '01234567-89ab-cdef-0123-456789abcdef\n');
+  writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
+  writeFileSync(join(home, '.ccrc', 'floor'), 'v1.0.0\n');
   writeFileSync(join(home, '.ccrc', 'accounts.json'), '{"fixture":"roster"}\n');
   writeFileSync(join(home, '.ccrc', 'accounts.sh'), [
     '# fixture projection — just enough for install-session-hooks.sh',
@@ -545,6 +548,12 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     // The completed-install record is NOT config: a box with no tree has no
     // completed install, and leaving it would let a later `ccrc update` skip.
     expect(existsSync(join(home, '.ccrc', 'installed'))).toBe(false);
+    // The node's three files are install-state, not config (design 2026-09-20
+    // §3, §9): an uninstalled box has no identity to the console, no
+    // capabilities and no floor.
+    for (const f of ['node-id', 'ccrc-caps', 'floor']) {
+      expect(existsSync(join(home, '.ccrc', f)), `${f} survived`).toBe(false);
+    }
     expect(existsSync(join(home, '.ccrc', 'accounts.json'))).toBe(true);
     expect(existsSync(join(home, '.ccrc', 'ccrc.env'))).toBe(true);
     expect(existsSync(join(home, 'worktrees', 'fixture-ws', 'work.txt'))).toBe(true);

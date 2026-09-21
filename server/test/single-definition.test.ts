@@ -1497,7 +1497,10 @@ describe('one bash spelling of ~/.ccrc/installed', () => {
     expect(code.filter((l) => l.includes('BOX_INSTALLED_FILE')).map((l) => l.trim())).toEqual([
       'BOX_INSTALLED_FILE="$HOME/.ccrc/installed"',
       'if [[ -f "$BOX_INSTALLED_FILE" ]]; then',
-      'IFS= read -r rec < "$BOX_INSTALLED_FILE" || rec=""',
+      // Task 10 (design §5): line 2 of the record now carries the
+      // unsigned/verified marker, so `cmd_version` reads both lines in one
+      // redirect rather than the record's first line alone.
+      '{ IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"',
       'local rc=0 tmp dest="$BOX_INSTALLED_FILE"',
       'if [ -f "$BOX_INSTALLED_FILE" ] && IFS= read -r rec < "$BOX_INSTALLED_FILE" && [ "$rec" = "$sha" ]; then',
       // cmd_update (D-3114): cleared right before the staged install, so its
