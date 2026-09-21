@@ -407,11 +407,15 @@ describe('step 12 (the release round-trip) quotes what the release verbs actuall
   });
 
   it("`ccrc update`'s verified line is derived from _upd_fetch's template", () => {
-    const template = 'echo "update: verified $UPD_TARNAME (transport checksum, then the per-file MANIFEST)"';
+    // D-3141..D-3143 (Tasks 8-12, centralised-update-management part B): the
+    // provenance bundle is now verified between the transport checksum and
+    // the per-file MANIFEST, and the success line says so — re-measured by
+    // content against the current source, not retyped from memory.
+    const template = 'echo "update: verified $UPD_TARNAME (transport checksum, provenance, then the per-file MANIFEST)"';
     expect(ccrcSrc).toContain(template);
     // The update in the worked example crosses to v0.0.2.
     expect(step12Section()).toContain(
-      'update: verified ccrc-v0.0.2.tar.gz (transport checksum, then the per-file MANIFEST)');
+      'update: verified ccrc-v0.0.2.tar.gz (transport checksum, provenance, then the per-file MANIFEST)');
   });
 
   it('the sweep close line is quoted verbatim — it is a constant in _upd_sweep', () => {
