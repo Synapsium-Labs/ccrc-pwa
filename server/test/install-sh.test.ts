@@ -403,6 +403,10 @@ describe('install.sh --release: fetch, verify, hand off to the staged ccrc', () 
     fixtureRelease(home);
     const r = runRelease(root, ['--release', '--role', 'fleet'], home);
     expect(r.code, `stderr: ${r.stderr}`).toBe(0);
+    // Trust-on-first-use, said out loud (design 2026-09-20 §5): there is no
+    // installed verifier yet, and the one in the tarball must not verify
+    // itself. Every update from here is verified by the tree this run placed.
+    expect(r.stdout).toMatch(/^install\.sh: first install trusts the release's transport checksum only; every update from here verifies provenance$/m);
     // The handoff: argv0 is the staged ccrc, inside OUR TMPDIR (the staging
     // tree), and the verb + passthrough args arrive verbatim.
     const argv = readFileSync(join(home, 'ccrc-argv'), 'utf8').split('\n').filter((l) => l !== '');
