@@ -1414,3 +1414,22 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   The transferable lesson is the one this wave keeps paying for in different currencies: **a guard's
   output is a claim about its own pattern as much as about the tree**, and a guard that fires correctly
   is not thereby a guard that fires *for the reason you think*.
+
+  **The same gate's residue scan then proved the point a second time, within minutes.** Its pattern
+  `^\+.*[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}` is meant to catch an email address reaching a
+  tracked byte. It fired three times, on Task 11's loopback-lookalike fixtures:
+
+      { label: 'userinfo', url: 'http://127.0.0.1@evil.test/usage' }
+      { label: 'userinfo, localhost spelling', url: 'http://localhost@evil.test/usage' }
+      { label: 'userinfo + port + prefix', url: 'https://127.0.0.1.evil.test:443@evil.test/usage' }
+
+  Those are **URL userinfo components**, not addresses, on an RFC 2606 reserved TLD, and they exist
+  precisely because userinfo is a credential-leak vector the loopback check must refuse. The regex
+  cannot tell `user@host` in a URL from `user@host` in a mailbox. Measured: **3 hits, all three of that
+  shape, none otherwise** — and `topology-clean.test.ts`, the repo's own guard and the authority here,
+  is green at 55/55.
+
+  So one wave-close gate produced **two false positives from two different loose patterns**, and in both
+  cases the honest reading needed the hits enumerated and classified rather than counted. A gate whose
+  failure mode is a false alarm trains its operator to skim it, which is the failure mode that matters:
+  the next real hit arrives in a list the reader has learned to wave through.
