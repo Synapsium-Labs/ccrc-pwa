@@ -57,15 +57,18 @@ connection the way a malformed chunked frame does (see `_read_chunked_body`).
 
 Once a `/messages` body is safely parsed and both system folds have run,
 `_apply_effort` resolves Codex's own `reasoning.effort`: an explicit client
-`output_config.effort` wins outright, else this lane's own per-model default
-from `~/.ccrc/models/<id>.effort.json` (materialised by `effortFile()`,
+`output_config.effort` — any value except `"auto"`, ccrc's own first-class
+synonym for "the lane decides", which is treated as absent (task-8 fix round 1,
+C-1) — wins outright, else this lane's own per-model default from
+`~/.ccrc/models/<id>.effort.json` (materialised by `effortFile()`,
 `shared/modelenv.mjs`, reloaded here by a single-slot `(path, mtime)` cache),
 else nothing at all, and the provider's own default applies untouched.
 `output_config` and `thinking` are popped unconditionally either way, so
 neither field reaches LiteLLM's own order-dependent translation of them
-(Task 8; design doc §6.2/§6.4). A broken effort file — absent, unreadable or
-malformed — is ccrc's OWN config, not client input, so it falls through to
-"no lane default" rather than refusing an otherwise-usable client request.
+(Task 8; ownership design §6.2, model-class-registry design §6.4). A broken
+effort file — absent, unreadable or malformed — is ccrc's OWN config, not
+client input, so it falls through to "no lane default" rather than refusing
+an otherwise-usable client request.
 
 Every refusal in this file — the two encoding refusals above, the three
 closed D-3151 arms, and malformed chunked framing below — answers the SAME
@@ -304,7 +307,10 @@ def _fold_system(data):
 
 def _rewrite_messages_body(body: bytes) -> bytes:
     """The `/messages`-path rewrite: fold mid-conversation `system` turns,
-    then the top-level `system` field, then re-encode. `ensure_ascii=False`
+    then the top-level `system` field, then resolve `_apply_effort`'s own
+    `reasoning.effort` (task-8 fix round 1, I-1 — this line used to stop at
+    "then re-encode" three steps early, 33 lines above the `_apply_effort`
+    call this function actually makes), then re-encode. `ensure_ascii=False`
     (fix round 1, M-5): the default would re-escape every non-ASCII byte the
     client sent even when nothing needed folding, and a proxy that rewrites
     more of the wire than it must is a proxy whose diffs are harder to reason
@@ -340,17 +346,28 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
-# Effort resolution and its single-slot (path, mtime) cache (Task 8; design
-# doc §6.2/§6.4). Claude Code sends `output_config: {"effort": "..."}` and
-# `thinking: {"type": "adaptive"}` on EVERY request, under the
-# `effort-2025-11-24` beta header. Measured against the installed LiteLLM
-# (design doc §4.1): neither field is discarded by `drop_params` —
-# `output_config.effort` is LIFTED into LiteLLM's own `reasoning_effort`, and
-# `thinking` competes for that SAME key inside one LiteLLM key-iteration
-# loop, order-dependently. This shim resolves the level itself, sets Codex's
-# own `reasoning.effort` directly, and pops both client fields on every
-# `/messages` request so nothing downstream reinterprets either one.
-_EFFORT_CACHE = {"key": None, "map": {}}
+# Effort resolution and its single-slot (path, mtime) cache (Task 8;
+# ownership design §6.2, model-class-registry design §6.4 — task-8 fix round 1,
+# I-2: this citation and the one below used to read "design doc §N" with no
+# document named, which silently resolves under this file's own convention
+# to the WRONG document for both). Claude Code sends `output_config:
+# {"effort": "..."}` and `thinking: {"type": "adaptive"}` on EVERY request,
+# under the `effort-2025-11-24` beta header. Measured against the installed
+# LiteLLM (model-class-registry design §1): neither field is discarded by
+# `drop_params` — `output_config.effort` is LIFTED into LiteLLM's own
+# `reasoning_effort`, and `thinking` competes for that SAME key inside one
+# LiteLLM key-iteration loop, order-dependently. This shim resolves the
+# level itself, sets Codex's own `reasoning.effort` directly, and pops both
+# client fields on every `/messages` request so nothing downstream
+# reinterprets either one.
+#
+# A single TUPLE slot, `(key, effort_map)` — not two separate dict-key
+# writes (task-8 fix round 1, M-3): this runs under `ThreadingHTTPServer`, and two
+# worker threads straddling a materialise could otherwise interleave two
+# assignments to leave a NEW key paired with an OLD map, or tear the same
+# way on read. One assignment, read and written as a whole, closes that
+# window structurally rather than narrowing it.
+_EFFORT_CACHE = (None, {})
 
 
 def _effort_path() -> str:
@@ -368,13 +385,27 @@ def _lane_effort_map() -> dict:
     """This lane's per-model effort defaults — the `byModel` object
     `effortFile()` materialises, `{"<model>": "<level>", ...}` — reloaded by
     `(path, mtime)` in a SINGLE-SLOT cache (task-8-brief.md/task-8-
-    rulings.md §1): one key, one value, sound because the materialiser
-    writes tmp-then-rename and a rename always moves mtime, so this shim
-    never sees a same-mtime content change in practice — the documented,
-    accepted consequence of keying on mtime at all, pinned observably (not
-    by an unfalsifiable "did not re-read" assertion) in
-    `ccgpt-proxy.test.ts`'s case 4 by writing DIFFERENT bytes at the SAME
-    mtime and asserting the OLD value still applies.
+    rulings.md §1): one key, one value, read and written as ONE tuple
+    assignment (`_EFFORT_CACHE = (key, effort_map)`; see the module-level
+    comment above this cache's declaration for why — task-8 fix round 1, M-3).
+
+    The cache is sound because the materialiser writes a FRESH TMP FILE —
+    which carries a NEW mtime of its own — and renames THAT over the
+    target, so the inode this shim stats is always the just-written one
+    (task-8 fix round 1, M-7: corrects this docstring's own former claim that "a
+    rename always moves mtime" — `rename(2)` itself PRESERVES the renamed
+    file's mtime; it creates nothing new. The soundness comes from the tmp
+    file being fresh, not from the rename call). So this shim never sees a
+    same-mtime content change in practice — the documented, accepted
+    consequence of keying on mtime at all, pinned observably (not by an
+    unfalsifiable "did not re-read" assertion) in `ccgpt-proxy.test.ts`'s
+    case-4 control, by writing DIFFERENT bytes at the SAME mtime and
+    asserting the OLD value still applies. That same case, under a
+    mutation that deletes the cache-hit check outright (task-8 fix round 1
+    review, mutation M7), is the ONLY one of 68 cases that reds — it is
+    the sole pin for this cache existing at all, not merely a control on
+    the opposite direction (task-8 fix round 1 correction to task-8-rulings.md
+    §1, which called it "a control, not a pin").
 
     `st_mtime_ns`, not `st_mtime` (task-8-rulings.md §2): an integer
     nanosecond count compares exactly, with no float-precision surprise
@@ -387,7 +418,8 @@ def _lane_effort_map() -> dict:
     for a fault the client cannot fix or even see. So:
       - ABSENT (`os.stat` raises `OSError`, typically `FileNotFoundError`) —
         no lane default at all; ordinary, not an error. Caught before the
-        cache is even consulted, since there is no mtime to key on.
+        cache is even consulted, since there is no mtime to key on, and the
+        cache slot is never written for this arm.
       - UNREADABLE or MALFORMED (`open`/`json.loads` raises `OSError` or a
         `json.JSONDecodeError`, a `ValueError` subclass) — also no lane
         default, for the identical reason. Deliberately NOT shaped like
@@ -395,17 +427,31 @@ def _lane_effort_map() -> dict:
         cannot use; this is ccrc's own local file, and the client's request
         is examined and folded exactly as always regardless of what this
         function returns.
-    Either way this function returns `{}`, `_apply_effort` finds nothing for
-    the request's own model, and the provider default applies untouched.
+    Either way this function returns `{}` WITHOUT writing the cache slot
+    (task-8 fix round 1, M-2 — a caching bug in the original round: a FAILURE
+    does have a real mtime to key on, unlike absence, and caching `{}`
+    under it would LATCH "no lane default" until that exact mtime changes.
+    A transient failure (EMFILE, ENOMEM) or a permission-only fix (`chmod`
+    moves ctime, not mtime) would then have no way to self-heal — nothing
+    here would ever move the file's mtime to invalidate the wrongly-cached
+    empty map. So a failing read is re-attempted on every call until it
+    either succeeds (and IS cached) or the file's own mtime changes; the
+    price is a repeated open+parse for as long as the file stays broken,
+    and that is the correct price for letting a fix take effect
+    immediately rather than waiting on an unrelated mtime bump). Either
+    way `_apply_effort` finds nothing for the request's own model, and the
+    provider default applies untouched.
     """
+    global _EFFORT_CACHE
     path = _effort_path()
     try:
         mtime_ns = os.stat(path).st_mtime_ns
     except OSError:
         return {}
     key = (path, mtime_ns)
-    if _EFFORT_CACHE["key"] == key:
-        return _EFFORT_CACHE["map"]
+    cached_key, cached_map = _EFFORT_CACHE
+    if cached_key == key:
+        return cached_map
     try:
         with open(path, "rb") as f:
             raw = f.read()
@@ -413,9 +459,9 @@ def _lane_effort_map() -> dict:
         by_model = parsed.get("byModel") if isinstance(parsed, dict) else None
         effort_map = by_model if isinstance(by_model, dict) else {}
     except (OSError, ValueError):
-        effort_map = {}
-    _EFFORT_CACHE["key"] = key
-    _EFFORT_CACHE["map"] = effort_map
+        # M-2: NOT cached — see docstring for why a failure must not latch.
+        return {}
+    _EFFORT_CACHE = (key, effort_map)
     return effort_map
 
 
@@ -434,11 +480,34 @@ def _apply_effort(data: dict) -> dict:
     applies; with neither, nothing is set here and the provider's own
     default applies untouched.
 
+    `"auto"` is treated as ABSENT, never as an explicit choice (task-8 fix round 1,
+    C-1): it is a first-class word in ccrc's OWN routing vocabulary meaning
+    "the lane decides" — `ccd/ccd`'s `ROUTE_EFFORTS`, its own exclusion from
+    the spawn argv's `--effort` (`"$reff" != auto`), and `/effort auto`'s
+    documented behaviour of clearing a saved level all agree — and the
+    model-class-registry design says so explicitly (§6.4: "when present and
+    not `auto`"; §12: "`auto` and absent → the lane default for that
+    model"). Left unhandled, the measured consequence is not merely inertness:
+    the literal string `"auto"` would be written into `reasoning.effort` and
+    forwarded, and `auto` has no entry in Codex's own level vocabulary
+    (`low|medium|high|xhigh|max`, plus `ultra` as a lane default only), so
+    the likely live outcome is a provider 400 on every turn of a session
+    using it.
+
     `output_config` and `thinking` are popped UNCONDITIONALLY — independent
     of whether either one actually carries a usable effort value at all
     (task-8-rulings.md §5): a body carrying `thinking` and no `output_config`
     whatsoever must still come out with `thinking` gone, so a mutation that
     stops stripping `thinking` cannot hide behind the effort path.
+
+    A resolved level is set as `.effort` on an EXISTING client-sent
+    `reasoning` object when there is one, never by REPLACING it wholesale
+    (task-8 fix round 1, M-4): this function's job is to decide one field, and
+    discarding a sibling key it was never asked to touch (a hypothetical
+    `reasoning.summary`, say) is exactly the kind of narrowed distinction
+    this project's own ring rules forbid an adapter from making — even
+    though no caller sends one today; unreachable is not the same as
+    permitted.
 
     Malformed client shapes (a non-dict `output_config`, a `model` that is
     not a string) are tolerated, never refused — this is the SAME body the
@@ -448,11 +517,17 @@ def _apply_effort(data: dict) -> dict:
     output_config = data.pop("output_config", None)
     data.pop("thinking", None)
     explicit = output_config.get("effort") if isinstance(output_config, dict) else None
+    if explicit == "auto":
+        explicit = None
     model = data.get("model")
     lane_default = _lane_effort_map().get(model) if isinstance(model, str) else None
     level = explicit or lane_default
     if level:
-        data["reasoning"] = {"effort": level}
+        reasoning = data.get("reasoning")
+        if not isinstance(reasoning, dict):
+            reasoning = {}
+        reasoning["effort"] = level
+        data["reasoning"] = reasoning
     return data
 
 
@@ -1011,11 +1086,18 @@ class Handler(BaseHTTPRequestHandler):
             self._lane()
             return
         # Every other path is forwarded exactly as received, except one
-        # ending `/messages`: that body is JSON, and Codex refuses a
-        # mid-conversation `role: "system"` entry inside its `messages` —
-        # _fold_midturn_system converts each one to `user`, in place, before
-        # the request ever leaves this shim. Suffix match, not the exact
-        # literal `/v1/messages` (fix round 1, M-4): spec §6.4 speaks of
+        # ending `/messages`: that body is JSON, and this shim rewrites it
+        # three ways before forwarding, all inside `_rewrite_messages_body`
+        # below — Codex refuses a mid-conversation `role: "system"` entry
+        # inside its `messages` (`_fold_midturn_system` converts each one to
+        # `user`, in place); the top-level `system` field folds into the
+        # leading turn (`_fold_system`); and Codex's own `reasoning.effort`
+        # is resolved from the client's `output_config` or this lane's own
+        # default (`_apply_effort`, task-8 fix round 1, M-5 — this comment
+        # used to name the system fold alone and under-describe the branch).
+        #
+        # Suffix match, not the exact literal `/v1/messages` (fix round 1,
+        # M-4): spec §6.4 speaks of
         # "non-/messages paths", and nothing in this repo yet pins the
         # generated launcher's base URL to an empty path component — a
         # prefixed mount (e.g. a path-carrying `ANTHROPIC_BASE_URL`) must
