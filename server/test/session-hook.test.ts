@@ -8188,7 +8188,27 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       //   Frozen, like the rest of that paragraph; the two spec anchors into the
       //   same file were re-pointed by content (`:639`→`:648`, `:561`→`:570`).
       'deploy/deploy.sh': 2,
-      'ccd/ccrc': 5,
+      // `ccd/ccrc` 5 -> 4, RE-MEASURED on the centralised-update-management
+      // branch (Tasks 9-13, part B): `ccd/ccrc` grew 12,559 -> 12,851 lines
+      // (+292, `wc -l`) and NEITHER corpus document changed (spec and plan
+      // are byte-identical to origin/main at this tree, measured), so no
+      // citation was re-pointed and nothing here is a repair. Composition
+      // measured by swapping `ccd/ccrc` for its pre-Task-9 content
+      // (`d41335b3`, the last tree this assertion passed against) and diffing
+      // the two failure lists: ONE reference stopped failing, spec `:91`'s
+      // `ccd/ccrc:9663` (one of three that sentence cites, alongside `:10990`
+      // and `:11635`, both unchanged and still failing). At the base, `:9663`
+      // fell inside `_inst_atomic`'s copy-aside-before-overwrite branch,
+      // unrelated to the clause's `install_atomic ccd/compact-card.mjs`
+      // subject. At the tip, this branch's insertions elsewhere in the file
+      // slid a comment header — `_inst_tree_copy`'s, which itself quotes
+      // "`_inst_atomic`" — underneath the same line number. A coincidence of
+      // bytes, not a referent: the clause is about a different call site
+      // entirely. RE-MEASURED against the tree, never adjusted to keep a
+      // number green; Task 11 still owns re-anchoring the citations
+      // themselves (this is the pre-existing debt census, not new debt this
+      // branch created).
+      'ccd/ccrc': 4,
       // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
       // (#137): its own additions moved this file's lines, and repairing the
       // README anchors it broke re-pointed BY CONTENT the one anchor that was
@@ -8337,7 +8357,10 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // arithmetic rather than a second measurement: `ccd/ccd` 148 -> 147 and
     // nothing else moved. The one cause, the two departures and the single
     // arrival are argued once, beside the map above.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
+    // 195 -> 194 on centralised-update-management, and it is the same
+    // arithmetic: `ccd/ccrc` 5 -> 4 (argued beside the map above, above the
+    // `'ccd/ccrc'` entry) and nothing else moved.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
