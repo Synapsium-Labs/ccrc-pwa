@@ -239,6 +239,100 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
+def _is_chunked(headers) -> bool:
+    """True iff the request declares `Transfer-Encoding: chunked` — checked
+    against the LAST comma-separated token (RFC 7230 §3.3.1: chunked, when
+    present, must be the final encoding applied), so a header naming another
+    encoding ahead of it (e.g. `gzip, chunked`) is still recognised while a
+    value that merely mentions the word elsewhere is not."""
+    te = headers.get("Transfer-Encoding", "")
+    if not te:
+        return False
+    return te.strip().split(",")[-1].strip().lower() == "chunked"
+
+
+def _read_chunked_body(rfile) -> bytes:
+    """Decode an HTTP/1.1 chunked request body (RFC 7230 §4.1) from the
+    handler's own buffered `rfile` and return the reassembled bytes.
+
+    This is the fix for the measured production defect: `_relay` used to
+    read `Content-Length` only, and a `Transfer-Encoding: chunked` request
+    carries no `Content-Length` header at all — so the prior code read zero
+    bytes and forwarded an empty body while reporting success. Chunked
+    framing is: a hex chunk-size line (optional `;`-delimited extensions,
+    ignored here — this shim does not act on any chunk extension), CRLF,
+    exactly that many body bytes, CRLF, repeated until a zero-size chunk,
+    optionally followed by trailer header lines, terminated by a blank line.
+
+    A malformed or truncated chunked body RAISES `ValueError` rather than
+    being forwarded as an empty or partial body. This is deliberately not
+    the same shape as `_rewrite_messages_body`'s three D-3151 passthrough
+    arms: those forward a body that was read COMPLETELY but could not be
+    parsed as JSON — the bytes are real and complete, and forwarding them
+    unrewritten is what D-3151 records as safe today. Here, the chunk
+    framing IS the only description of where the body ends; a body whose
+    framing cannot be trusted has no complete, trustworthy byte string to
+    forward at all, so there is no passthrough available that would not
+    silently ship truncated or misframed bytes upstream. Letting this raise
+    surfaces as a loud, visible failure (the connection drops; the box's own
+    traceback lands in the unit's journal) rather than a fourth silent
+    passthrough arm. Task 7's explicit-refusal shape (an HTTP-level
+    response) is deliberately not reproduced here for this different failure
+    surface — see the module's Task 5 note for why.
+    """
+    chunks = []
+    while True:
+        size_line = rfile.readline()
+        if not size_line:
+            raise ValueError(
+                "ccgpt-proxy: truncated chunked body: connection closed while reading a chunk-size line"
+            )
+        size_token = size_line.split(b";", 1)[0].strip()
+        try:
+            size = int(size_token, 16)
+        except ValueError:
+            raise ValueError(
+                f"ccgpt-proxy: malformed chunked body: not a hex chunk-size: {size_token!r}"
+            ) from None
+        if size < 0:
+            raise ValueError(f"ccgpt-proxy: malformed chunked body: negative chunk-size: {size_token!r}")
+        if size == 0:
+            # Terminating chunk: drain optional trailer header lines up to
+            # the blank line that closes the body (RFC 7230 §4.1.2).
+            while True:
+                trailer_line = rfile.readline()
+                if not trailer_line:
+                    raise ValueError(
+                        "ccgpt-proxy: truncated chunked body: connection closed while reading trailers"
+                    )
+                if trailer_line in (b"\r\n", b"\n"):
+                    break
+            break
+        chunk = rfile.read(size)
+        if len(chunk) != size:
+            raise ValueError("ccgpt-proxy: truncated chunked body: connection closed mid-chunk")
+        chunks.append(chunk)
+        crlf = rfile.read(2)
+        if crlf != b"\r\n":
+            raise ValueError(f"ccgpt-proxy: malformed chunked body: missing CRLF after chunk data, got {crlf!r}")
+    return b"".join(chunks)
+
+
+def _read_request_body(headers, rfile) -> bytes:
+    """The one place `_relay` decides how many body bytes to read and how.
+
+    `Transfer-Encoding: chunked` is checked first and, when present, wins
+    outright: RFC 7230 §3.3.3 item 3 treats a message that somehow declares
+    both as chunked, and the two framings describe the body length in
+    mutually exclusive ways, so there is nothing to reconcile between them.
+    Otherwise this is the original `Content-Length`-only read, unchanged.
+    """
+    if _is_chunked(headers):
+        return _read_chunked_body(rfile)
+    length = int(headers.get("Content-Length") or 0)
+    return rfile.read(length) if length else b""
+
+
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
 PROXY_PORT = _required_port("CCGPT_PROXY_PORT")
 LITELLM_PORT = _required_port("CCGPT_LITELLM_PORT")
@@ -273,8 +367,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
     def _relay(self):
-        length = int(self.headers.get("Content-Length") or 0)
-        body = self.rfile.read(length) if length else b""
+        body = _read_request_body(self.headers, self.rfile)
         path_only = self.path.split("?", 1)[0].rstrip("/")
         if path_only == LANE_PATH:
             # A body on this endpoint is unexpected but drained above so a

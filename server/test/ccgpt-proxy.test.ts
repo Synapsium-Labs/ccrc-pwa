@@ -709,3 +709,39 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
     ]);
   });
 });
+
+describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
+  // Task 5: `_relay` used to read Content-Length only. A request arriving
+  // with `Transfer-Encoding: chunked` (no Content-Length at all) forwarded
+  // with NO body — measured: the upstream received 0 bytes. Node's `fetch`
+  // sends a `ReadableStream` body chunked, which is how this case produces
+  // the shape without hand-framing; `duplex: 'half'` is what Node requires
+  // for a stream body.
+  it('decodes a chunked body, rewrites it, and forwards a correct length', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-chunked-');
+    let seen: Buffer | null = null; let seenTE = ''; let seenCL = '';
+    await startPair(home, (req, body, res) => {
+      seen = body;
+      seenTE = String(req.headers['transfer-encoding'] ?? '');
+      seenCL = String(req.headers['content-length'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = JSON.stringify({ model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }] });
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(new TextEncoder().encode(payload.slice(0, 20)));
+                 c.enqueue(new TextEncoder().encode(payload.slice(20))); c.close(); },
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: stream, duplex: 'half',
+    } as any);
+    expect(r.status).toBe(200);
+    expect(seen!.length).toBeGreaterThan(0);                    // the hole: this was 0
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect('system' in got).toBe(false);                        // it was rewritten, not just relayed
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+    expect(seenCL).toBe(String(seen!.length));                  // correct length, not the original
+    expect(seenTE).toBe('');                                    // re-framed, not re-chunked
+  });
+});
