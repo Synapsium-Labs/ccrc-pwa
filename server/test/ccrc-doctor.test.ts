@@ -333,7 +333,7 @@ interface RosterEntry {
   id: string;
   configDirSuffix?: string;
   exec: {
-    kind: 'upstream' | 'generated' | 'external';
+    kind: 'upstream' | 'generated' | 'external' | 'codex';
     secretsFile?: string;
     // The two provider fields the roster model carries. `writeRoster` spreads
     // the entry, so nothing else in this file changes — but a fixture writing a
@@ -341,12 +341,15 @@ interface RosterEntry {
     // rather than a runtime one, which is why it lands in this commit.
     provider?: string;
     baseUrl?: string;
+    proxyPort?: number;
+    litellmPort?: number;
+    authDir?: string;
   };
   /** Task: `credentials` reads it, and `healthy()`'s contract is that every
    *  check PASSES — so the fixture's one account has to be an account the check
    *  has something to measure about. `_check_wrappers`' own TSV reader ignores
    *  the field, so no existing case moves. */
-  telemetry?: 'anthropic' | 'none';
+  telemetry?: 'anthropic' | 'codex' | 'none';
 }
 
 /** The upstream account every real roster has exactly one of — `parseRoster`
@@ -1185,6 +1188,23 @@ function healthy(prefix: string): string {
   writeFileSync(join(home, '.ccrc', 'graph-sweep.json'), JSON.stringify({ passes: [{
     started: new Date().toISOString(), finished: new Date().toISOString(),
     pin: '0.9.9', status: 'ok', trees: [] }] }));
+  return home;
+}
+
+/** A healthy box plus the ccrc-owned Codex launcher contract. The topology
+ *  values are the public fixture pair, and the relative auth directory is
+ *  syntactically safe; doctor wrappers neither opens nor validates OAuth. */
+function healthyCodexBox(prefix: string): string {
+  const home = healthy(prefix);
+  writeRoster(home, [{
+    id: 'codex-a', configDirSuffix: '.claude-codex-a',
+    exec: {
+      kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+      authDir: '.local/share/ccrc/codex/codex-a',
+    },
+    telemetry: 'codex',
+  }]);
+  writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'ccgpt' });
   return home;
 }
 
@@ -3535,6 +3555,37 @@ describe('ccrc doctor: wrappers', () => {
     expect(line).toContain('accounts.json');
   });
 
+  it('a correctly installed Codex lane passes the wrappers check and reports its one lane', () => {
+    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-healthy-');
+    const r = runDoctor(home);
+    const line = lineFor(r.stdout, 'wrappers');
+    expect(line, r.stdout).toMatch(/^PASS wrappers: /);
+    expect(line).toMatch(/\(1 upstream, 0 generated, 0 external, 1 Codex\)$/);
+    expect(r.code).toBe(0);
+  });
+
+  it('a Codex launcher execing the upstream account instead of ccgpt fails and names both', () => {
+    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-target-');
+    writeWrapper(home, 'codex-a', { cfgDir: '.claude-codex-a', target: 'claude' });
+    const r = runDoctor(home);
+    expect(r.stdout).toMatch(
+      /FAIL wrappers: codex-a's wrapper execs \$HOME\/\.local\/bin\/claude, not ccgpt/);
+    expect(r.code).toBe(1);
+  });
+
+  it('an absent Codex launcher fails in the absent bucket with the ccrc-wrappers remedy', () => {
+    const home = healthyCodexBox('ccrc-doctor-wrappers-codex-absent-');
+    rmSync(join(binDir(home), 'codex-a'), { force: true });
+    const r = runDoctor(home);
+    const lines = r.stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('FAIL wrappers: '));
+    expect(i, r.stdout).toBeGreaterThan(-1);
+    expect(lines[i]).toMatch(/codex-a has no executable at \$HOME\/\.local\/bin\/codex-a/);
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: run: ccrc wrappers/);
+    expect(lines[i + 1]).toMatch(/writes every generated and Codex account's wrapper/);
+    expect(r.code).toBe(1);
+  });
+
   it('WARNS about a wrapper on disk the roster describes nowhere — reported, never resolved', () => {
     // adopt's bias rule (ccrc-adopt:41-48), carried over: the ambiguous case is
     // REPORTED. It is not a FAIL — keeping a launcher the fleet does not drive
@@ -3599,7 +3650,7 @@ describe('ccrc doctor: wrappers', () => {
       exec: { kind: 'generated', secretsFile: '.cc-secrets/acct-a.env' },
     }]);
     const r = runDoctor(home);
-    expect(r.stdout).toMatch(/FAIL wrappers: acct-a .*not the generated shape/);
+    expect(r.stdout).toMatch(/FAIL wrappers: acct-a .*not the generated wrapper shape/);
     expect(r.code).toBe(1);
   });
 
