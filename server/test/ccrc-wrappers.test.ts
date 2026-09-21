@@ -1129,6 +1129,21 @@ describe('ccrc wrappers: a manifest it cannot trust', () => {
     expect(binEntries(home)).toEqual([]);
   });
 
+  it('refuses a manifest with a nonnumeric total before writing', () => {
+    const staged = bodyFor(FIXTURE, 'claude-a');
+    const cli = kitWith(
+      'import { writeFileSync } from "node:fs";\nimport { join } from "node:path";\n'
+      + `writeFileSync(join(process.argv[4], "claude-a"), ${JSON.stringify(staged)});\n`
+      + 'process.stdout.write("summary\\tnot-a-number\\t1\\t0\\t0\\t0\\nwrapper\\tclaude-a\\tabsent\\tno\\n");\n',
+    );
+    const home = makeHome('ccrc-wrappers-nonnumeric-total-');
+    const r = runWrappers(home, [], cli);
+    expect(binEntries(home)).toEqual([]);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/summary whose counts are not all numbers/);
+    expect(r.stderr).not.toMatch(/truncated/);
+  });
+
   it('refuses a manifest record whose id is not an account id, before a path is built from it', () => {
     // The id off the manifest becomes a FILENAME under ~/.local/bin, and the
     // gate is on the ID rather than on the path it would produce — which is

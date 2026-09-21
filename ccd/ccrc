@@ -2884,7 +2884,7 @@ cmd_wrappers() {
   [ "$saw_summary" -eq 1 ] \
     || _ccrc_die "the manifest from $gen has no summary line, so there is nothing to check the wrapper records against — nothing was written"
   local f
-  for f in "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex"; do
+  for f in "$sum_total" "$sum_gen" "$sum_up" "$sum_ext" "$sum_codex"; do
     [[ "$f" =~ ^[0-9]+$ ]] \
       || _ccrc_die "the manifest from $gen has a summary whose counts are not all numbers — nothing was written"
   done
