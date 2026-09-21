@@ -1291,3 +1291,89 @@ describe('ccrc update: the tag is bound (design §5, decision 4)', () => {
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 });
+
+describe('ccrc update: the floor, on every path (design §9, decision 8)', () => {
+  const plantFloor = (home: string, v: string): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), `${v}\n`);
+  };
+
+  it('latest/download naming a version below the floor is refused before any backup, with NO --to on the argv (§18 "the floor is checked on every path")', () => {
+    const home = freshUpdateBox('ccrc-update-floor-latest-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by latest\/download\) is below this box's floor v3\.0\.0/);
+    expect(r.stderr).toMatch(/ccrc update --to v2\.0\.0 --downgrade/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+  });
+
+  it('--to below the floor is refused the same way, naming --to', () => {
+    const home = freshUpdateBox('ccrc-update-floor-to-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('--downgrade proceeds, warns, and the floor is NOT lowered (§18 "--downgrade is the only way below the floor")', () => {
+    const home = freshUpdateBox('ccrc-update-floor-downgrade-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--to', 'v2.0.0', '--downgrade']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: WARN: v2\.0\.0 is below this box's floor v3\.0\.0 .* --downgrade was typed; the floor stays v3\.0\.0/m);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
+  });
+
+  it('at or above the floor proceeds without a word; no floor file is unconstrained', () => {
+    const home = freshUpdateBox('ccrc-update-floor-ok-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantFloor(home, 'v1.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    let r = runUpdate(home);
+    expect(r.code, r.stderr).toBe(0);
+    // Not a bare /floor/ scan: the fixture HOME's own path is
+    // `.../ccrc-update-floor-ok-<rand>/...` and appears in the ordinary
+    // "update: fetching …" lines, so that substring is always present and
+    // proves nothing. What must be ABSENT is the floor check's own voice —
+    // the WARN or refusal phrasing `_upd_floor_check` uses when it has
+    // something to say.
+    expect(r.stdout).not.toMatch(/is below this box's floor|floor is malformed/);
+    const bare = freshUpdateBox('ccrc-update-floor-none-');
+    plantOldBox(bare, { version: 'v3.0.0' });
+    packRelease(bare, stubTree(bare, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    r = runUpdate(bare);
+    expect(r.code, r.stderr).toBe(0);
+  });
+
+  it('a malformed floor file refuses and names the file — never read as "no floor"', () => {
+    const home = freshUpdateBox('ccrc-update-floor-bad-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantFloor(home, 'three');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/floor is malformed \(got: 'three'\)/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('--check is a measurement and never consults the floor', () => {
+    const home = freshUpdateBox('ccrc-update-floor-check-');
+    plantOldBox(home, { version: 'v3.0.0' });
+    plantFloor(home, 'v3.0.0');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home, ['--check']);
+    expect(r.stdout).toMatch(/^check: box=v3\.0\.0 sha=\S+ target=v2\.0\.0 state=behind$/m);
+    expect(r.stderr).not.toMatch(/floor/);
+  });
+});

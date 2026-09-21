@@ -1533,11 +1533,15 @@ already running).
             verified staged tree (role-aware, from ccrc.env's CCRC_ROLE) and
             print the from -> to report. [--to vX.Y.Z] pins a version — the
             rollback path too: a downgrade prints the coord.db restore
-            commands and never auto-restores. A box already running the
-            target, whose install completed, is left alone (--force
-            reinstalls). --check only compares this box with what is
-            published (exit 0 current, 1 otherwise) and writes nothing.
-            Per box; across a fleet, 'ccrc rollout' runs it in order
+            commands and never auto-restores. A target below this box's
+            floor (~/.ccrc/floor, the highest version it completed an
+            install of — a promotion can point latest at an older tag) is
+            refused; --downgrade is the typed way below it, and the floor
+            stays. A box already running the target, whose install
+            completed, is left alone (--force reinstalls). --check only
+            compares this box with what is published (exit 0 current, 1
+            otherwise) and writes nothing. Per box; across a fleet,
+            'ccrc rollout' runs it in order
   rollout   move BOTH boxes of a fleet to one published release, in order,
             from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
             coordinates), preflights each box's recorded CCRC_ROLE, pins the
@@ -11237,7 +11241,7 @@ _inst_installed() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to="" check=0 force=0
+  local to="" check=0 force=0 downgrade=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -11247,6 +11251,7 @@ cmd_update() {
       --to=*) to="${1#--to=}" ;;
       --check) check=1 ;;
       --force) force=1 ;;
+      --downgrade) downgrade=1 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
@@ -11326,6 +11331,7 @@ cmd_update() {
 
   _upd_fleet_warn
   _upd_resolve "$to"
+  _upd_floor_check "$to" "$downgrade"
   _upd_fetch
   # THE GATE (design §5): the no-op path costs one verified download and no
   # write — no backup, no restart, no sweep. Two operators told to ship the
@@ -11497,6 +11503,28 @@ _upd_converged() {
   [ -f "$BOX_INSTALLED_FILE" ] || return 1
   IFS= read -r rec < "$BOX_INSTALLED_FILE" || return 1
   [ "$rec" = "${box[0]}" ]
+}
+
+# ── _upd_floor_check <to> <downgrade> — never below the floor by accident ─
+# (design 2026-09-20 §9, decision 8). Checked against the RESOLVED version,
+# whichever way it was resolved — `--to`, or `latest/download` — because a
+# promotion's `--latest` can point latest/download at an OLDER commit's tag by
+# a routine act, and a box on a newer build would otherwise walk down on its
+# next bare `ccrc update`. Moving down is a typed act: --downgrade. A floor
+# file that is not a tag is refused by name, never read as "no floor".
+_upd_floor_check() {
+  local to="$1" downgrade="$2" floor="" via="latest/download"
+  [ -n "$to" ] && via="--to $to"
+  [ -f "$BOX_FLOOR_FILE" ] || return 0
+  IFS= read -r floor < "$BOX_FLOOR_FILE" || floor=""
+  [[ "$floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+    || _ccrc_die "$BOX_FLOOR_FILE is malformed (got: '${floor:-empty}') — it records the highest version this box completed an install of; fix or remove it by hand. Nothing on this box was changed"
+  _ver_newer "$floor" "$UPD_VERSION" || return 0
+  if [ "$downgrade" -eq 1 ]; then
+    echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because --downgrade was typed; the floor stays $floor"
+    return 0
+  fi
+  _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of) — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
 # Deploy's backup set (deploy.sh:363-369 agent lane, :788-792 server lane),
