@@ -1259,6 +1259,16 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   `runPy` itself stays: it is correct and simpler for the many cases that need no server, and its
   docstring now carries the limitation so the next author does not rediscover it by timeout.
 
+  **A second face of the same trap, found in Task 10's fix round and worth stating separately because it
+  is invisible until you mutate:** a case may use `runPy` safely while the code is CORRECT — because the
+  publisher refuses before it ever contacts the mock — and then deadlock under the very mutation that
+  removes that refusal. The mutation makes the child reach the server, the server cannot answer, and the
+  result reads as a TIMEOUT rather than as the red the mutation was supposed to produce. So a
+  `spawnSync`-based case can pass its own mutation table by accident and report a guard as unpinned when
+  it is pinned, or as pinned when it merely hung. Three such cases were switched to `runPyAsync`. The
+  rule that follows: **if a case's mutation would make the child talk to a server, the case needs the
+  async runner even if the unmutated code never does.**
+
 - **D-3158 — `lane.json`'s probe-model field name was chosen by an implementer, with no authority to
   check it against, and Plan 2b's writer must honour it.** The spec says the probe model comes from
   `~/.ccrc/codex/<id>/lane.json` and that the file is written by the same materialiser that writes the
@@ -1310,3 +1320,27 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   copy-paste.** Two sibling claims in the same table — `_limit_has_key`'s presence test and
   `limits.ts`'s absent-versus-zero rule — were measured by the same reviewer and both HOLD, which is
   exactly why the false one was worth finding: the table's other rows earned their trust.
+
+- **D-3160 — `ChatGPT-Account-Id` is dropped from the usage probe, because deriving it requires reading
+  an OAuth file's contents.** The production reference sends five request headers beyond
+  `content-type`/`accept`: `Authorization`, `originator`, `user-agent`, `session_id` and
+  `ChatGPT-Account-Id`. Task 10's port dropped all but `Authorization`; its fix round restored the three
+  constants (Task 10 review C-2), and this entry records the fifth, which is not a constant.
+
+  The reference derives it by reading `auth.json`'s **contents**, and spec line 497 forbids exactly that:
+  *"Nothing in ccrc — doctor, installer, publisher, probe or test — ever reads the contents of an OAuth
+  file. Existence and mode only."* So the header cannot be restored the way the reference obtains it, and
+  `lane.json` — the one file the publisher is allowed to read for per-lane facts — does not carry an
+  account id and is not specified to.
+
+  **The gap this leaves, stated rather than papered over:** a ChatGPT token valid across more than one
+  workspace cannot be disambiguated by this publisher. Which workspace's usage the backend reports is
+  then the backend's choice, not ccrc's, and a lane whose token spans workspaces could publish a row
+  describing a window the operator is not actually spending against. Nothing in this repo can detect
+  that today — the row looks ordinary.
+
+  Accepted for this wave because the alternative is worse: restoring the header means reading OAuth
+  contents, which is a rule this project holds deliberately and which no telemetry convenience should
+  buy out. What would resolve it properly: `lane.json` gaining a non-secret account id written by Plan
+  2b's materialiser, which already knows the lane's identity without reading any credential. That is the
+  remedy to take if a multi-workspace token ever appears on a real lane.
