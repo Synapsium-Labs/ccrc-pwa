@@ -37,8 +37,9 @@ third in `_fold_midturn_system` for a `messages` field present but not a
 list — is CLOSED as of this task (Task 7a): each now raises `_UnusableBody`,
 caught once in `_relay`, and answered as an explicit HTTP 400 naming what
 was wrong. See the plan's `## Deviations found` for the full history of why
-those three arms were accepted for two tasks' worth of time, and
-`task-7a-rulings.md` for what retired them.
+those three arms were accepted for two tasks' worth of time, and D-3151's
+own CLOSED entry there (durable, unlike the gitignored `task-7a-rulings.md`
+this paragraph also cites) for what retired them.
 
 A `/messages` POST body carrying `Content-Encoding: gzip` or `deflate` is
 decompressed before the two folds above run and the folded result is
@@ -60,11 +61,12 @@ shape (D-3153): a JSON body `{"error": "..."}`, `Content-Type:
 application/json`, never `send_error`'s HTML body with the exception text
 folded into the status-line reason phrase. See `Handler._refuse`.
 
-Malformed or truncated `Transfer-Encoding: chunked` framing is refused with
-an HTTP 400 too, for every path, not only `/messages` — chunk framing is the
-transport's own description of where a body ends, so a body whose framing
-cannot be trusted has no complete bytes to examine, refuse specifically, or
-forward anywhere. See `_read_chunked_body`.
+Malformed or truncated `Transfer-Encoding: chunked` framing — and a
+non-numeric `Content-Length` on the non-chunked path (fix round 1, M-1) —
+is refused with an HTTP 400 too, for every path, not only `/messages`: this
+is a transport-framing failure, not a parsed-content one, so a body whose
+length cannot be trusted has no complete bytes to examine, refuse
+specifically, or forward anywhere. See `_read_request_body`.
 
 Listens on 127.0.0.1:$CCGPT_PROXY_PORT; forwards to the LiteLLM proxy at
 127.0.0.1:$CCGPT_LITELLM_PORT. No credentials are stored here — the
@@ -151,13 +153,32 @@ def _fold_midturn_system(data):
     one unfolded injection fails every later turn.
 
     Raises `_UnusableBody` — D-3151, arm 3 of 3, CLOSED — when `messages` is
-    present but not a list (e.g. a dict): there is nothing inside it to
+    PRESENT but not a list (e.g. a dict): there is nothing inside it to
     examine for a `role: "system"` entry, and forwarding it unexamined is
     exactly the sticky-replay hazard this whole task exists to close. This
     arm used to `return data` unmodified; Task 7a replaces it with an
     explicit refusal instead of a fourth branch beside it.
+
+    ABSENT or explicit `null` `messages` is NOT this arm and must not become
+    it (fix round 1, C-1): `data.get("messages")` returns `None` for both,
+    and D-3151 arm 3's own census — the plan's and the deleted comment's —
+    was always "present but not a list", never "absent". A body carrying
+    only a top-level `system` and no `messages` at all is one this shim
+    folds perfectly well (`_fold_system`'s `data.get("messages") or []`
+    turns the missing key into `[]` and inserts one leading `user` turn),
+    so refusing it is the over-refusal task-7a-rulings.md §6 (fix round 1,
+    C-1) exists to prevent — it buys nothing, since a `messages` key that is not there
+    cannot hide an unfolded mid-turn `system` entry either. `None` is
+    checked and returned on FIRST, before the `isinstance` refusal, so the
+    absent/`null` case keeps returning `data` unmodified exactly as it did
+    before this task, and only a `messages` key that is PRESENT with the
+    wrong type earns the refusal.
     """
     msgs = data.get("messages")
+    if msgs is None:
+        # Absent key or explicit `null` — not D-3151 arm 3's condition, see
+        # above. `_fold_system`'s `or []` handles this exactly as before.
+        return data
     if not isinstance(msgs, list):
         raise _UnusableBody("ccgpt-proxy: 'messages' is present but not a list")
     for m in msgs:
@@ -225,20 +246,27 @@ def _fold_system(data):
 
     `messages` absent or `null` folds to `[]` before the branch above runs,
     so a request with only a top-level `system` and no history still gets
-    one leading `user` turn, not none. A non-empty list whose first entry is
-    not a dict is genuinely malformed — nothing safe to fold into — so
-    `system` stays popped (removed either way) and `messages` is forwarded
-    untouched. This guard is written as `not isinstance(msgs, list) or
-    (msgs and not isinstance(msgs[0], dict))`, but by the time this function
-    runs its only caller (`_rewrite_messages_body`) has already run
-    `_fold_midturn_system`, which now raises `_UnusableBody` rather than
-    returning whenever `messages` is not a list — so the `not
-    isinstance(msgs, list)` half is defensive dead code from that call site,
-    same shape as `_decode_body`/`_encode_body`'s own unreachable tails
-    below, not a D-3151 arm and never was: the Tasks 5+6 review's §6 census
-    confirmed exactly three arms, and this pre-existing pair (this branch,
-    and the identical-shaped empty-`sys_text` early return above it) is not
-    among them. The `first entry not a dict` half remains live and is left
+    one leading `user` turn, not none (fix round 1, C-1: this sentence was
+    briefly false between the parent commit and this fix — see
+    `_fold_midturn_system`'s own docstring for the defect and the remedy;
+    re-verified true again here, not merely re-asserted). A non-empty list
+    whose first entry is not a dict is genuinely malformed — nothing safe
+    to fold into — so `system` stays popped (removed either way) and
+    `messages` is forwarded untouched. This guard is written as `not
+    isinstance(msgs, list) or (msgs and not isinstance(msgs[0], dict))`,
+    but by the time this function runs its only caller
+    (`_rewrite_messages_body`) has already run `_fold_midturn_system`,
+    which returns `data` unmodified for an ABSENT or `null` `messages` and
+    raises `_UnusableBody` for a PRESENT non-list `messages` (fix round 1,
+    C-1) — so `data.get("messages")` here is always either `None` or an
+    actual list by the time `msgs = data.get("messages") or []` runs,
+    never a present-but-wrong-type value, and `not isinstance(msgs, list)`
+    can never be True: defensive dead code from this call site, same shape
+    as `_decode_body`/`_encode_body`'s own unreachable tails below, not a
+    D-3151 arm and never was — the Tasks 5+6 review's §6 census confirmed
+    exactly three arms, and this pre-existing pair (this branch, and the
+    identical-shaped empty-`sys_text` early return above it) is not among
+    them. The `first entry not a dict` half remains live and is left
     exactly as it was.
     """
     sys_text = _system_to_text(data.pop("system", None))
@@ -333,7 +361,9 @@ def _read_chunked_body(rfile) -> bytes:
     byte string in hand, just not one that parsed as JSON.
 
     Caught once, at the `_read_request_body` call site in `_relay`, and
-    answered as an explicit HTTP 400 (Task 7a, task-7a-rulings.md §4) — for
+    answered as an explicit HTTP 400 (Task 7a, task-7a-rulings.md §4; the
+    durable version of this rule is spec §6.3,
+    `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md`) — for
     EVERY path, not only `/messages`, because the failure is in the
     transport, below the path: there is no body to relay anywhere, so the
     non-`/messages` passthrough guarantee has nothing to apply to here. This
@@ -391,14 +421,23 @@ def _read_request_body(headers, rfile) -> bytes:
     mutually exclusive ways, so there is nothing to reconcile between them.
     Otherwise this is the original `Content-Length`-only read, unchanged.
 
-    Can raise `ValueError` — from `_read_chunked_body` on malformed or
-    truncated chunk framing. `_relay` catches it at this function's own call
-    site and answers an explicit HTTP 400, for every path (see
-    `_read_chunked_body`'s docstring).
+    Can raise `ValueError` from EITHER of its two raisers (fix round 1,
+    M-1 — the docstring here used to name only the first): `_read_chunked_body`
+    on malformed or truncated chunk framing, and the `int()` parse below on
+    a `Content-Length` that is not a valid integer (e.g. `Content-Length:
+    abc`). `_relay` catches it at this function's own call site and answers
+    an explicit HTTP 400, for every path (see `_read_chunked_body`'s
+    docstring). The `int()` failure is wrapped with a `ccgpt-proxy:`-
+    prefixed message so it matches every other refusal in the file — a bare
+    `ValueError` from a stdlib call is otherwise the one refusal message in
+    the file that would not name the shim.
     """
     if _is_chunked(headers):
         return _read_chunked_body(rfile)
-    length = int(headers.get("Content-Length") or 0)
+    try:
+        length = int(headers.get("Content-Length") or 0)
+    except ValueError as e:
+        raise ValueError(f"ccgpt-proxy: invalid Content-Length: {e}") from None
     return rfile.read(length) if length else b""
 
 
@@ -407,7 +446,9 @@ def _content_encoding(headers) -> str:
     when absent. Case-insensitive header lookup, the same contract
     `_is_chunked` above relies on for `Transfer-Encoding`.
 
-    `_relay` treats the result three ways (task-7a-rulings.md §3): absent
+    `_relay` treats the result three ways (task-7a-rulings.md §3; spec
+    §6.3's "an encoding the shim cannot decode is answered with an
+    explicit error" is the durable version): absent
     (`''`) or `identity` means no encoding at all — folded and forwarded
     like any other unencoded body. `gzip`/`deflate` — this shim's only two
     implemented codecs, `_CODECS` below — are decoded, folded, and
@@ -564,12 +605,31 @@ class Handler(BaseHTTPRequestHandler):
         speaks JSON, and two shapes for one problem class — "I cannot use
         this body" — is a seam defect, not a style choice. Status is a
         DECISION the caller makes (415: this shim does not implement the
-        claimed content-encoding; 400: what you sent is malformed) but that
-        the upstream handler is never reached is an INVARIANT every call to
-        this method upholds: nothing routed through here has, at this
-        point, forwarded anything. Every refusal in this file — Task 6's
-        gzip/deflate decode failure and the upstream-unreachable 502
-        included — now calls this instead of `send_error`.
+        claimed content-encoding; 400: what you sent is malformed; 502: the
+        upstream is unreachable).
+
+        Fix round 1, I-1: the upstream handler being never reached is an
+        INVARIANT, but only at the BODY-REFUSAL call sites — the chunked/
+        `_UnusableBody`/`_BadEncoding`/415 sites above `_relay`'s own
+        `urlopen` call — because those are the ones this method's own
+        docstring used to (falsely) claim it upholds universally. The 502
+        upstream-unreachable call site is the DELIBERATE EXCEPTION: it
+        fires AFTER `urlopen`, i.e. after the request body WAS offered
+        upstream — measured, an upstream that reads the body and then
+        drops its socket makes `_refuse(502, …)` answer with the recording
+        sink already having seen the request. What every call to this
+        method upholds unconditionally is narrower and still real: the ONE
+        JSON refusal shape (D-3153), never `send_error`'s HTML/status-line
+        one. Every refusal in this file — Task 6's gzip/deflate decode
+        failure and the upstream-unreachable 502 included — now calls this
+        instead of `send_error`.
+        Fix round 1, M-3: a HEAD request gets headers describing the body
+        (including its real `Content-Length`) but not the body bytes
+        themselves, matching `send_error`'s own `self.command != 'HEAD'`
+        behaviour — `_refuse` used to write the body unconditionally, a
+        protocol wart on the two paths that can reach a refusal via HEAD
+        (malformed chunked framing, upstream down). Harmless in practice
+        (`Connection: close` means no desync window), but wrong.
         """
         payload = json.dumps({"error": message}).encode("utf-8")
         self.send_response(status)
@@ -577,19 +637,22 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.send_header("Connection", "close")
         self.end_headers()
-        self.wfile.write(payload)
+        if self.command != "HEAD":
+            self.wfile.write(payload)
 
     def _relay(self):
         try:
             body = _read_request_body(self.headers, self.rfile)
         except ValueError as e:
-            # Task 7a, §4: malformed or truncated chunked framing. The
-            # transport itself, not the parsed content, is what's wrong —
-            # there is no complete byte string to examine at all, so this
-            # is refused for EVERY path, not only `/messages` (the
-            # deliberate exception to the non-`/messages` passthrough
-            # guarantee below: framing that cannot be parsed cannot be
-            # forwarded anywhere, because there is no body to relay).
+            # Task 7a, §4: malformed/truncated chunked framing, OR (fix
+            # round 1, M-1) a non-numeric Content-Length — both raised by
+            # `_read_request_body`, not only the chunked one. The transport
+            # itself, not the parsed content, is what's wrong — there is no
+            # complete byte string to examine at all, so this is refused
+            # for EVERY path, not only `/messages` (the deliberate
+            # exception to the non-`/messages` passthrough guarantee below:
+            # framing that cannot be parsed cannot be forwarded anywhere,
+            # because there is no body to relay).
             self._refuse(400, str(e))
             return
         path_only = self.path.split("?", 1)[0].rstrip("/")
@@ -623,7 +686,7 @@ class Handler(BaseHTTPRequestHandler):
         # peeled off first, content encoding second, each handled once.
         #
         # An encoding this shim does not implement is refused outright
-        # (task-7a-rulings.md §3) rather than left to fall into the old
+        # (task-7a-rulings.md §3; spec §6.3) rather than left to fall into the old
         # D-3151 arm 1: absent (`''`) and `identity` are the two values
         # that mean "no encoding", checked first and folded like any other
         # unencoded body; everything else that is not a known codec —

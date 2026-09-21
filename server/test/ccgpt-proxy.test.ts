@@ -149,6 +149,46 @@ function rawChunkedPost(port: number, path: string, rawBody: Buffer): Promise<{ 
   });
 }
 
+/** General-purpose raw-socket request (fix round 1: M-1's bad
+ *  `Content-Length` and M-3's HEAD-suppression case both need a method
+ *  and/or headers `rawChunkedPost` doesn't expose — an arbitrary method,
+ *  arbitrary headers, and no forced `Transfer-Encoding: chunked`). Returns
+ *  the parsed status line's headers too, not only the body, because M-3
+ *  needs to see `Content-Length` while asserting the body bytes are empty.
+ *  Same "resolve on close, even with zero bytes" shape as `rawChunkedPost`
+ *  — a dropped connection with no response parses to `status: null` rather
+ *  than hanging on a timeout. */
+function rawRequest(
+  port: number, method: string, path: string, headers: string[], body: Buffer,
+): Promise<{ status: number | null; headers: string[]; body: string }> {
+  return new Promise((resolve, reject) => {
+    const sock = netConnect(port, '127.0.0.1', () => {
+      const head =
+        `${method} ${path} HTTP/1.1\r\n` +
+        `Host: 127.0.0.1:${port}\r\n` +
+        headers.map((h) => `${h}\r\n`).join('') +
+        `Connection: close\r\n` +
+        `\r\n`;
+      sock.write(head, 'latin1');
+      if (body.length) sock.write(body);
+      sock.end();
+    });
+    const chunks: Buffer[] = [];
+    sock.on('data', (c) => chunks.push(c));
+    sock.on('end', () => {
+      const raw = Buffer.concat(chunks).toString('latin1');
+      const sep = raw.indexOf('\r\n\r\n');
+      if (sep === -1) { resolve({ status: null, headers: [], body: '' }); return; }
+      const headLines = raw.slice(0, sep).split('\r\n');
+      const status = Number(headLines[0].split(' ')[1]);
+      resolve({ status: Number.isFinite(status) ? status : null, headers: headLines.slice(1), body: raw.slice(sep + 4) });
+    });
+    sock.on('error', reject);
+    const guard = setTimeout(() => reject(new Error('rawRequest timed out')), 5_000);
+    sock.on('close', () => clearTimeout(guard));
+  });
+}
+
 /** Starts a recording upstream plus the shim. `env` extends the child's
  *  environment for whatever ELSE a later task's case needs — it can no
  *  longer set `CCGPT_ACCOUNT_ID`, `CCGPT_PROXY_PORT` or `CCGPT_LITELLM_PORT`
@@ -636,10 +676,12 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(reached).toBe(false);
   });
 
-  // task-7a-rulings.md §6, the over-correction guard: an over-broad
-  // refusal breaking the lane is a worse failure than the one this task
-  // fixes. A malformed JSON body on a NON-`/messages` path is not this
-  // task's subject at all — it must still forward untouched and still
+  // task-7a-rulings.md §6, the over-correction guard (durable version:
+  // spec §6.4, "what does not change" — byte-identical forwarding of
+  // non-`/messages` paths): an over-broad refusal breaking the lane is a
+  // worse failure than the one this task fixes. A malformed JSON body on a
+  // NON-`/messages` path is not this task's subject at all — it must still
+  // forward untouched and still
   // reach upstream, exactly as every other non-`/messages` body always has.
   it('still forwards a malformed JSON body untouched on a non-/messages path (regression)', async () => {
     const home = mkTmp('ccgpt-proxy-nonmessages-malformed-');
@@ -756,6 +798,53 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       method: 'POST', headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: [] }),
     });
+    expect('system' in seen).toBe(false);
+    expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
+  });
+
+  // Fix round 1, C-1 (Critical): `messages` ABSENT entirely — not the same
+  // condition as `messages: []` above (a present, empty list) — used to be
+  // swallowed by `_fold_midturn_system`'s `not isinstance(msgs, list)`
+  // check (`data.get("messages")` returns `None` for an absent key) and
+  // refused 400 with a message that said "'messages' is present but not a
+  // list" about a key that was not there at all. This is the exact
+  // over-refusal task-7a-rulings.md §6 exists to prevent: the shim knows
+  // exactly how to fold this body (spec §6.1 item 2), and a `messages` key
+  // that does not exist cannot hide an unfolded mid-turn `system` entry
+  // either, so refusing it bought nothing.
+  it('folds a body with only a top-level system and no messages key at all', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-nomessages-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL' }),
+    });
+    expect(r.status).toBe(200);
+    expect('system' in seen).toBe(false);
+    expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
+  });
+
+  // The other half of C-1: an EXPLICIT `messages: null` is the same
+  // `data.get("messages") is None` condition as absent, and must fold
+  // identically, not refuse.
+  it('folds a body with a top-level system and an explicit null messages', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-nullmessages-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: null }),
+    });
+    expect(r.status).toBe(200);
     expect('system' in seen).toBe(false);
     expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
   });
@@ -927,6 +1016,55 @@ describe.skipIf(!PY)('ccgpt-proxy: malformed chunked framing is refused explicit
     const { status, body } = await rawChunkedPost(PROXY_PORT, '/v1/models', Buffer.from('a\r\nabc', 'latin1'));
     expect(status).toBe(400);
     expect(JSON.parse(body).error).toMatch(/truncated/i);
+    expect(reached).toBe(false);
+  });
+
+  // Fix round 1, M-1: `_read_request_body` raises `ValueError` from a
+  // SECOND site too, on the non-chunked path — `int(Content-Length)`. The
+  // fix wraps it with a `ccgpt-proxy:`-prefixed message (it was the only
+  // refusal in the file that didn't name the shim) and corrects the
+  // docstring's "from `_read_chunked_body`" claim, which named only the
+  // first of its two raisers.
+  it('refuses a non-numeric Content-Length with a named, ccgpt-proxy-prefixed message', async () => {
+    const home = mkTmp('ccgpt-proxy-badcl-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Content-Length: abc',
+    ], Buffer.alloc(0));
+    expect(status).toBe(400);
+    const parsed = JSON.parse(body);
+    expect(parsed.error).toMatch(/^ccgpt-proxy:/);
+    expect(parsed.error).toMatch(/content-length/i);
+    expect(reached).toBe(false);
+  });
+
+  // Fix round 1, M-3: `_refuse` used to write the JSON body unconditionally,
+  // unlike `send_error` (which suppresses the body — but not the headers
+  // describing it — for a HEAD request, per RFC 7231 §4.3.2). `do_HEAD =
+  // _relay`, so a HEAD request can reach a refusal (malformed chunked
+  // framing is the easiest to reproduce over a raw socket). Harmless in
+  // practice (`Connection: close`), but a protocol wart worth pinning.
+  it('suppresses the refusal body on a HEAD request but still sends a matching Content-Length', async () => {
+    const home = mkTmp('ccgpt-proxy-head-refuse-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    const { status, headers, body } = await rawRequest(PROXY_PORT, 'HEAD', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+    ], Buffer.from('zz\r\nhello\r\n0\r\n\r\n', 'latin1'));
+    expect(status).toBe(400);
+    const cl = headers.find((h) => /^content-length:/i.test(h));
+    expect(cl).toBeDefined();
+    expect(Number(cl!.split(':')[1].trim())).toBeGreaterThan(0);   // headers still describe the real body
+    expect(body).toBe('');                                          // but HEAD gets no body bytes
     expect(reached).toBe(false);
   });
 });
@@ -1115,11 +1253,49 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
     expect((await r.json()).error).toMatch(/gzip/i);
     expect(upstreamHit).toBe(false);
   });
+
+  // Fix round 1, I-2: arm 1 (`_rewrite_messages_body`'s malformed-JSON
+  // refusal) was previously pinned by ONLY the deep-nesting `RecursionError`
+  // case — its rarest of three triggers. An ordinary truncated/malformed
+  // JSON body had no case at all: mutating `except (TypeError, ValueError,
+  // RecursionError)` down to `except RecursionError` left the suite fully
+  // green (42/42), and under that mutation an ordinary malformed body drops
+  // the connection with no HTTP response — precisely the failure shape this
+  // whole wave exists to close.
+  //
+  // Sent gzip-WRAPPED deliberately (not plain), because this closes a
+  // second, separately-unpinned gap in the same act: task-7a-rulings.md §2's
+  // second rider (durable version: spec §6.3's gzip transport hole) said
+  // an arm-1 hit on the gzip path used to decompress,
+  // fail to parse, and RE-COMPRESS before forwarding, and that this path
+  // must disappear. It does (probed, never pinned before this case): the
+  // shim raises `_UnusableBody` before any re-encode is attempted, so the
+  // gzip round trip never happens for an unparseable body.
+  it('refuses a gzip-wrapped truncated JSON body via arm 1, never reaching upstream', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-truncatedjson-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const truncated = gzipSync(Buffer.from('{"model":"gpt-x","messages":[{'));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: truncated,
+    });
+    expect(r.status).toBe(400);
+    expect((await r.json()).error).toMatch(/malformed json/i);
+    expect(reached).toBe(false);
+  });
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: an unimplemented content-encoding earns a 415 (Task 7a §3)', () => {
-  // The brief's own case (task-7-brief.md), verbatim status and assertion
-  // shape. `br` used to fall into D-3151 arm 1 (`json.loads` on the raw
+  // The brief's own case (task-7-brief.md, embedded verbatim in the plan's
+  // "### Task 7" section, `docs/superpowers/plans/
+  // 2026-09-21-gpt-lane-ownership-2a-request-path.md`), verbatim status
+  // and assertion shape. `br` used to fall into D-3151 arm 1 (`json.loads` on the raw
   // compressed bytes fails, and the old arm forwarded them unrewritten,
   // still labelled `Content-Encoding: br` — the exact sticky-replay
   // hazard this whole wave exists to close). Now refused by name before
@@ -1141,7 +1317,8 @@ describe.skipIf(!PY)('ccgpt-proxy: an unimplemented content-encoding earns a 415
     expect(reached).toBe(false);                                // upstream never saw it
   });
 
-  // task-7a-rulings.md §3 and §6 of the paired review: `_content_encoding`
+  // task-7a-rulings.md §3 and §6 of the paired review (durable version:
+  // spec §6.3): `_content_encoding`
   // does not split on commas, so a list-form or trailing-comma
   // `Content-Encoding` never equals the bare token `"gzip"` and never hit
   // the decode branch — it fell into D-3151 arm 1 instead (measured by the
@@ -1210,5 +1387,58 @@ describe.skipIf(!PY)('ccgpt-proxy: an unimplemented content-encoding earns a 415
     expect(r.status).toBe(415);
     expect((await r.json()).error).toMatch(/content-encoding/i);
     expect(reached).toBe(false);
+  });
+
+  // Fix round 1, M-4: nothing pinned the 415 guard to the `/messages`
+  // path — measured correct today (probed at the wire by the review), but
+  // hoisting the encoding check above the path-suffix check in `_relay`
+  // left the whole suite green. Every other path is forwarded byte-for-byte
+  // regardless of `Content-Encoding` (module docstring); this binds it for
+  // an encoding this shim does not implement specifically, the case most
+  // likely to tempt a future edit into checking it too early.
+  it('does not apply the 415 guard outside the /messages path (M-4)', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-415-scoped-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from([0x1b, 0x00, 0x00, 0x00]);
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'br' },
+      body: payload,
+    });
+    expect(r.status).toBe(200);                     // forwarded, not refused
+    expect(seen!.equals(payload)).toBe(true);        // byte-identical
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: upstream unreachable answers the same refusal shape (502)', () => {
+  // Fix round 1, I-1: `_refuse`'s docstring used to claim, UNIVERSALLY,
+  // that reaching this method means upstream was never contacted — false
+  // at the 502 call site, which fires AFTER `urlopen`, i.e. the request
+  // body WAS already offered upstream by the time this refusal is chosen.
+  // Pinned here, both halves the review asked for: the 502 JSON shape
+  // itself (the one wire shape this task changed with zero coverage before
+  // this round — a silent revert to `send_error`'s HTML shape would have
+  // gone unnoticed), and that `reached` is `true`, the documented exception
+  // to the body-refusal invariant, not a violation of it.
+  it('answers the 502 upstream-unreachable refusal in the same JSON shape as every other refusal', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-upstream-down-');
+    let reached = false;
+    await startPair(home, (req, _body, _res) => {
+      reached = true;
+      req.socket.destroy();                          // upstream saw the request, then vanished
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    expect(r.status).toBe(502);
+    expect(r.headers.get('content-type')).toBe('application/json');
+    expect((await r.json()).error).toMatch(/upstream unreachable/i);
+    expect(reached).toBe(true);                       // the documented exception: upstream WAS reached
   });
 });
