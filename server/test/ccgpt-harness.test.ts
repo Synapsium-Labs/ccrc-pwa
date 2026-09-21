@@ -128,6 +128,21 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
     expect(() => ccgptFile('does-not-exist-ccgpt-probe.py')).toThrow(/does-not-exist-ccgpt-probe\.py/);
   });
 
+  // Fix round 2, finding 3: every containment guarantee above is expressed
+  // RELATIVE to `opts.home` — a call site that passes anything other than a
+  // real `mkTmp()` fixture silently points HOME/cwd at a real directory,
+  // with no error. `/etc` names a directory this box's real HOME and the
+  // repo checkout both provably are not, so it stands in for "any call site
+  // that miscomputed `home`" without asserting anything about a specific
+  // wrong value.
+  it('runPy refuses a non-fixture opts.home, naming the offending value', () => {
+    expect(() => runPy('/does-not-matter.py', { home: '/etc' })).toThrow(/\/etc/);
+  });
+
+  it('spawnPy refuses a non-fixture opts.home, naming the offending value', () => {
+    expect(() => spawnPy('/does-not-matter.py', { home: '/etc' })).toThrow(/\/etc/);
+  });
+
   // ccgpt-proxy review round 1, C-1/I-1/I-2 + Question 2's rider: a second,
   // hand-rolled python-spawn site (ccgpt-proxy.test.ts's original `startPair`)
   // reproduced this containment BY HAND and dropped the fixture HOME the
@@ -152,6 +167,36 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
       const f = join(home, 'probe.py');
       writeFileSync(f, 'print("unreached")\n');
       expect(() => spawnPy(f, { home, env: { HOME: '/etc' } })).toThrow(/HOME/);
+    });
+
+    // Fix round 2, finding 4: the hoist mutation proves `runPy` and
+    // `spawnPy` share ONE body; it does not prove `spawnPy`'s own surface —
+    // these two mirror `runPy`'s I3 (cwd) and C2 (.pyc) cases but exercise
+    // `spawnPy` DIRECTLY rather than inferring its behaviour from `runPy`'s.
+    it('runs the child with the fixture HOME as its cwd, not the repo', async () => {
+      const home = mkTmp('ccgpt-harness-spawnpy-cwd-');
+      const f = join(home, 'cwd.py');
+      writeFileSync(f, 'import os\nprint(os.getcwd())\n');
+      const { child } = spawnPy(f, { home });
+      let stdout = '';
+      child.stdout?.on('data', (c) => { stdout += c.toString(); });
+      await new Promise<void>((r) => child.once('close', () => r()));
+      expect(stdout.trim()).toBe(home);
+    });
+
+    it('never leaves a .pyc behind after importing the stub', async () => {
+      const home = mkTmp('ccgpt-harness-spawnpy-pyc-');
+      const f = join(home, 'imp.py');
+      writeFileSync(f,
+        'from litellm.llms.chatgpt.authenticator import Authenticator\n' +
+        'Authenticator().get_access_token()\n');
+      const { child } = spawnPy(f, { home, env: { PYTHONPATH: PYSTUB_DIR } });
+      await new Promise<void>((r) => child.once('close', () => r()));
+      const walk = (dir: string): string[] =>
+        readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+          e.isDirectory() ? walk(join(dir, e.name)) : [e.name]);
+      const names = walk(PYSTUB_DIR);
+      expect(names.some((n) => n === '__pycache__' || n.endsWith('.pyc'))).toBe(false);
     });
   });
 });

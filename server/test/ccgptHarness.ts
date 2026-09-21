@@ -1,10 +1,35 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
+
+// Fix round 2, finding 3: `opts.home` had zero validation — every containment
+// guarantee `runPy`/`spawnPy` make is expressed RELATIVE to this value, so a
+// call site that miscomputes it (anything other than `mkTmp()`) silently
+// points HOME, cwd and every relative write at a real directory, with no
+// error at all. `mkTmp()` (`tmpHelpers.ts`) always returns an absolute,
+// `realpathSync`-resolved path under the OS temp root — resolved for the same
+// reason `mkTmp` itself resolves it (a symlinked temp root, e.g. macOS's
+// `/var` -> `/private/var`, would make an unresolved comparison fail on a
+// platform this suite has never been wrong on before) — so requiring that
+// shape costs no legitimate caller anything.
+const TMP_ROOT = (() => {
+  try { return realpathSync(tmpdir()); } catch { return tmpdir(); }
+})();
+
+function assertFixtureHome(home: string, caller: string): void {
+  const resolved = path.resolve(home);
+  if (resolved !== TMP_ROOT && !resolved.startsWith(TMP_ROOT + path.sep)) {
+    throw new Error(
+      `${caller}: opts.home must be a fixture directory under the OS temp root ` +
+      `(${TMP_ROOT}) — got ${JSON.stringify(home)}. Use mkTmp() from tmpHelpers.ts.`,
+    );
+  }
+}
 
 /** The stub package root. On PYTHONPATH it satisfies the publisher's hard
  *  `from litellm.llms.chatgpt.authenticator import Authenticator` on a box
@@ -44,14 +69,22 @@ export function pythonOrSkip(): string | null {
   return (cachedPython = exe && existsSync(exe) ? exe : null);
 }
 
-// Shared by `runPy` and `spawnPy` (ccgpt-proxy review round 1, C-1/I-1/I-2):
-// those three findings were one defect, not three — a second, hand-rolled
-// python-spawn site in ccgpt-proxy.test.ts reproduced this containment BY
-// HAND and got it wrong (`...env` spread LAST, no `cwd`, no
-// `PYTHONDONTWRITEBYTECODE`), and then diverged a SECOND time within that
+// Shared by `runPy` and `spawnPy` (ccgpt-proxy review round 1, C-1/I-1/I-2;
+// round 2, finding 4): those three findings were one defect, not three — a
+// second, hand-rolled python-spawn site in ccgpt-proxy.test.ts reproduced
+// this containment BY HAND and got it wrong (`...env` spread LAST, no `cwd`,
+// no `PYTHONDONTWRITEBYTECODE`), and then diverged a SECOND time within that
 // same task. The fix is not to patch call sites; it is to give the contract
 // one body that every python-spawning helper in this file calls, so a caller
 // of either can no longer drift from the other.
+//
+// Round 2's re-review found `cwd` had converged in BEHAVIOUR between `runPy`
+// and `spawnPy` (both correctly passed `cwd: opts.home` to their own spawn
+// call) but not in STRUCTURE — it was still a separate literal at each call
+// site, which is exactly how the round 1 defect started. So this now returns
+// the WHOLE spawn-options pair, `{cwd, env}`, not env alone: there is one
+// place, not two, that decides where and with what environment a python
+// child runs.
 //
 // A caller-supplied `HOME` is refused rather than silently dropped (C1): a
 // caller writing `env: { HOME: someOtherPath }` has misunderstood the seam
@@ -64,35 +97,46 @@ export function pythonOrSkip(): string | null {
 // attempt to steer the child's home, and that is what throws. `caller` names
 // the throwing function in the message so a failure in either `runPy` or
 // `spawnPy` is unambiguous about its own origin.
-function containedEnv(
+function containedSpawnOptions(
   home: string,
   callerEnv: Record<string, string> | undefined,
   caller: string,
-): Record<string, string> {
+): { cwd: string; env: Record<string, string> } {
+  // Round 2, finding 3: validated FIRST, before the HOME-differs check below
+  // — a wrong `opts.home` is a defect in the call site itself, independent
+  // of whatever `opts.env` happens to contain.
+  assertFixtureHome(home, caller);
   if (callerEnv && 'HOME' in callerEnv && callerEnv.HOME !== process.env.HOME) {
     throw new Error(`${caller}: opts.env must not set HOME (the harness owns it) — got ${JSON.stringify(callerEnv.HOME)}`);
   }
   return {
-    // PATH is deliberately inherited, and this is the one exception to
-    // containment (M4): the interpreter itself, and anything the subject
-    // shells out to (git, gh, curl), are found through it, and a fixed
-    // minimal value would break a box whose python3 sits somewhere
-    // nonstandard. Everything else the child sees is either the caller's own
-    // `env` or the two keys applied after it below.
-    PATH: process.env.PATH ?? '/usr/bin:/bin',
-    ...(callerEnv ?? {}),
-    // Applied LAST, deliberately (C1): these are the containment, not a
-    // default the spread above may override. A caller writing the natural
-    // `env: { ...process.env, PYTHONPATH: PYSTUB_DIR }` still gets the
-    // fixture HOME and never touches the real `~/.cc-limits`, `~/.ccrc/coord.db`
-    // or `~/.ccrc/models/<lane>.effort.json` — the last of which a later
-    // gpt-lane task reads for real on this box.
-    HOME: home,
-    // Suppresses .pyc creation (C2's primary fix — the .gitignore entry is
-    // the belt, for a python run that bypasses this function entirely, e.g.
-    // a worker debugging by hand). Verified: the stub still imports with
-    // this set.
-    PYTHONDONTWRITEBYTECODE: '1',
+    // The fixture HOME is the child's cwd too (I3, round 1): unset, a
+    // subject writing any relative path lands in `server/` — the tracked
+    // working tree, not a fixture — which is exactly how this file's own
+    // first run left four untracked artefacts in the repo.
+    cwd: home,
+    env: {
+      // PATH is deliberately inherited, and this is the one exception to
+      // containment (M4): the interpreter itself, and anything the subject
+      // shells out to (git, gh, curl), are found through it, and a fixed
+      // minimal value would break a box whose python3 sits somewhere
+      // nonstandard. Everything else the child sees is either the caller's
+      // own `env` or the two keys applied after it below.
+      PATH: process.env.PATH ?? '/usr/bin:/bin',
+      ...(callerEnv ?? {}),
+      // Applied LAST, deliberately (C1): these are the containment, not a
+      // default the spread above may override. A caller writing the natural
+      // `env: { ...process.env, PYTHONPATH: PYSTUB_DIR }` still gets the
+      // fixture HOME and never touches the real `~/.cc-limits`, `~/.ccrc/coord.db`
+      // or `~/.ccrc/models/<lane>.effort.json` — the last of which a later
+      // gpt-lane task reads for real on this box.
+      HOME: home,
+      // Suppresses .pyc creation (C2's primary fix — the .gitignore entry is
+      // the belt, for a python run that bypasses this function entirely, e.g.
+      // a worker debugging by hand). Verified: the stub still imports with
+      // this set.
+      PYTHONDONTWRITEBYTECODE: '1',
+    },
   };
 }
 
@@ -102,16 +146,12 @@ export function runPy(
 ): { status: number | null; signal: NodeJS.Signals | null; timedOut: boolean; stdout: string; stderr: string } {
   const py = pythonOrSkip();
   if (!py) throw new Error('runPy called with no python3 — guard with pythonOrSkip() first');
-  const env = containedEnv(opts.home, opts.env, 'runPy');
+  const { cwd, env } = containedSpawnOptions(opts.home, opts.env, 'runPy');
   const r = spawnSync(py, [file, ...(opts.args ?? [])], {
     encoding: 'utf8',
     input: opts.stdin,
     timeout: opts.timeoutMs ?? 20_000,
-    // The fixture HOME is the child's cwd too (I3): unset, a subject writing
-    // any relative path lands in `server/` — the tracked working tree, not a
-    // fixture — which is exactly how this file's own first run left four
-    // untracked artefacts in the repo (see PYTHONDONTWRITEBYTECODE above).
-    cwd: opts.home,
+    cwd,
     env,
   });
   const err = r.error as NodeJS.ErrnoException | undefined;
@@ -138,9 +178,9 @@ export function runPy(
 /** Long-lived sibling of `runPy`, for a subject that must keep RUNNING — a
  *  server, not a one-shot script; `ccd/ccgpt-proxy.py` is exactly this shape.
  *  Applies the identical HOME/cwd/PYTHONDONTWRITEBYTECODE containment via the
- *  shared `containedEnv` helper above, so the contract has one body instead
- *  of a second, independently-maintained copy (ccgpt-proxy review round 1,
- *  C-1/I-1/I-2).
+ *  shared `containedSpawnOptions` helper above, so the contract has one body
+ *  instead of a second, independently-maintained copy (ccgpt-proxy review
+ *  round 1, C-1/I-1/I-2; round 2, finding 4).
  *
  *  Returns the live child. Unlike `runPy`, this function does not wait for
  *  exit or collect output — the caller owns killing the child and awaiting
@@ -153,9 +193,9 @@ export function spawnPy(
 ): { child: ChildProcess } {
   const py = pythonOrSkip();
   if (!py) throw new Error('spawnPy called with no python3 — guard with pythonOrSkip() first');
-  const env = containedEnv(opts.home, opts.env, 'spawnPy');
+  const { cwd, env } = containedSpawnOptions(opts.home, opts.env, 'spawnPy');
   const child = spawn(py, [file, ...(opts.args ?? [])], {
-    cwd: opts.home,
+    cwd,
     env,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

@@ -1,15 +1,35 @@
 // server/test/ccgpt-proxy.test.ts
 import { describe, it, expect, afterEach } from 'vitest';
 import { type ChildProcess } from 'node:child_process';
-import { createServer, type Server } from 'node:http';
+import { createServer, request as httpRequest, type Server } from 'node:http';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
 import { mkTmp } from './tmpHelpers';
 
-const LANE = 'codex-a';
 const PROXY_PORT = 45010;
 const UPSTREAM_PORT = 45011;
+
+// Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
+// what THIS call expects") is necessary but not sufficient when "what this
+// call expects" is a hardcoded shared string — the re-review demonstrated
+// that a same-lane orphan left by an EARLIER run is then silently adopted (7
+// passed where 9 should fail). "Give each case a distinct id" is a
+// convention, and conventions get skipped: Tasks 3-9 will copy the plan's own
+// two-argument `startPair(home, handler)` shape, and none of their six
+// authors will be thinking about orphan adoption. So `startPair` below MINTS
+// its own lane id and returns it — a caller cannot get this wrong because it
+// never supplies one. `process.pid` (this vitest worker) plus a
+// monotonically-increasing per-process counter is unique across every
+// invocation within one run AND across runs on one box (a different run is a
+// different pid): a leftover orphan can never coincide with the CURRENT
+// process's own pid+counter pair, no matter what string it happens to
+// answer.
+let mintedLaneCount = 0;
+function mintLane(): string {
+  mintedLaneCount += 1;
+  return `codex-a-${process.pid}-${mintedLaneCount}`;
+}
 
 // Probed once at module scope, same shape as ccgpt-harness.test.ts: a
 // missing interpreter must be a visible skip, not every case below quietly
@@ -65,12 +85,34 @@ function raceExitOrDeadline(child: ChildProcess, ms = 3_000): Promise<SpawnOutco
   ]);
 }
 
-/** Starts a recording upstream plus the shim. `env` overrides/extends the
- *  three required variables — a later task's case can omit one to test a
- *  refusal, or (as here) give the shim a lane id distinct from every other
- *  case's, which the readiness race below needs (C-2 part 2). Returns once
- *  the shim has answered /ccgpt/lane as THIS lane, or throws with the
- *  child's own captured stderr if it dies first. */
+/** A raw GET that preserves duplicate response headers exactly as received.
+ *  Fix round 2, finding 2: `fetch`'s parsed `Headers` normalises/hides
+ *  hop-by-hop duplication (the HTTP client manages `Connection` itself
+ *  rather than exposing it faithfully), so proving "exactly one `Connection`
+ *  line, not two" needs `node:http`'s `rawHeaders` — a flat [key, value,
+ *  key, value, ...] array in receipt order, duplicates included. */
+function rawGet(port: number, path: string): Promise<{ status: number | undefined; rawHeaders: string[] }> {
+  return new Promise((resolve, reject) => {
+    const req = httpRequest({ host: '127.0.0.1', port, path, method: 'GET' }, (res) => {
+      res.resume();
+      res.on('end', () => resolve({ status: res.statusCode, rawHeaders: res.rawHeaders }));
+      res.on('error', reject);
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+/** Starts a recording upstream plus the shim. `env` extends the child's
+ *  environment for whatever ELSE a later task's case needs — it can no
+ *  longer set `CCGPT_ACCOUNT_ID`, `CCGPT_PROXY_PORT` or `CCGPT_LITELLM_PORT`
+ *  (fix round 2, finding 1): those three are applied AFTER `...env`, the same
+ *  "spread last, cannot be overridden by accident" shape `containedSpawnOptions`
+ *  itself uses for HOME. The lane id specifically is MINTED here, not read
+ *  from any argument, and returned to the caller — see `mintLane` above for
+ *  why a convention was not enough. Returns once the shim has answered
+ *  /ccgpt/lane as THIS lane, or throws with the child's own captured stderr
+ *  if it dies first. */
 async function startPair(
   home: string,
   handler: (req: any, body: Buffer, res: any) => void,
@@ -83,15 +125,19 @@ async function startPair(
   });
   await new Promise<void>((r) => upstream!.listen(UPSTREAM_PORT, '127.0.0.1', () => r()));
 
-  const lane = env.CCGPT_ACCOUNT_ID ?? LANE;
+  const lane = mintLane();
   const { child } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
     home,
     env: {
       PYTHONPATH: PYSTUB_DIR,
+      ...env,
+      // Applied LAST, deliberately: a caller's own `env` — even one that
+      // (by mistake or by copying an older example) sets `CCGPT_ACCOUNT_ID`
+      // — cannot override the minted lane or the fixed port pair this file
+      // owns.
       CCGPT_ACCOUNT_ID: lane,
       CCGPT_PROXY_PORT: String(PROXY_PORT),
       CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
-      ...env,
     },
   });
   proc = child;
@@ -145,21 +191,87 @@ async function startPair(
 describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
   it('answers /ccgpt/lane with its own lane id', async () => {
     const home = mkTmp('ccgpt-proxy-lane-');
-    const lane = 'codex-a-identity';
-    await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); }, { CCGPT_ACCOUNT_ID: lane });
+    const { lane } = await startPair(home, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
     const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/ccgpt/lane`);
     expect(await r.json()).toEqual({ lane });
   });
 
+  // Fix round 2, finding 1, pin (a): the simple half of the ask — two
+  // invocations, even back to back, never mint the same lane.
+  it('mints a distinct lane id for every startPair invocation, even back to back', async () => {
+    const home1 = mkTmp('ccgpt-proxy-mint-1-');
+    const first = await startPair(home1, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    const firstLane = first.lane;
+
+    // Tear this child (and its upstream) down before starting the second —
+    // both share the same PROXY_PORT/UPSTREAM_PORT pair, and the whole point
+    // of minting is that reusing the pair back to back must still never
+    // repeat an id.
+    await new Promise<void>((resolve) => {
+      const c = first.child;
+      if (c.exitCode !== null || c.signalCode !== null) { resolve(); return; }
+      c.once('close', () => resolve());
+      c.kill('SIGKILL');
+    });
+    proc = null;
+    if (upstream) { await new Promise<void>((r) => upstream!.close(() => r())); upstream = null; }
+
+    const home2 = mkTmp('ccgpt-proxy-mint-2-');
+    const second = await startPair(home2, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    expect(second.lane).not.toBe(firstLane);
+    expect(second.lane).toMatch(/^codex-a-\d+-\d+$/);
+  });
+
+  // Fix round 2, finding 1, pin (b): the re-review's own defeat, reproduced
+  // with the REALISTIC version of the threat — not a hand-typed guess, but a
+  // genuine orphan still answering an EARLIER call's own real, legitimately
+  // minted lane id (standing in for a process the OS hasn't finished
+  // reaping — round 1 measured an 8ms port-release window on an idle box —
+  // or a supervisor that restarted it under stale state). Round 1's fix
+  // ("require the answer's lane to equal what THIS call expects") was
+  // defeated because a shared hardcoded lane made every call's "expects" the
+  // same string; minting removes that, because each call's own expectation
+  // is fresh every time, so an earlier call's real answer can never satisfy
+  // a later one's poll.
+  it('a stale orphan still answering an earlier call\'s own real lane id is never adopted by a later call', async () => {
+    const home1 = mkTmp('ccgpt-proxy-mint-orphan-1-');
+    const first = await startPair(home1, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    const earlierLane = first.lane;
+
+    await new Promise<void>((resolve) => {
+      const c = first.child;
+      if (c.exitCode !== null || c.signalCode !== null) { resolve(); return; }
+      c.once('close', () => resolve());
+      c.kill('SIGKILL');
+    });
+    proc = null;
+    if (upstream) { await new Promise<void>((r) => upstream!.close(() => r())); upstream = null; }
+
+    // Stand in for the orphan: a plain listener, still bound to the shim's
+    // own port, still answering the FIRST call's genuine lane id.
+    const orphan = createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ lane: earlierLane }));
+    });
+    await new Promise<void>((r) => orphan.listen(PROXY_PORT, '127.0.0.1', () => r()));
+    try {
+      const home2 = mkTmp('ccgpt-proxy-mint-orphan-2-');
+      await expect(
+        startPair(home2, (_req, _body, res) => { res.writeHead(200); res.end('{}'); }),
+      ).rejects.toThrow();
+    } finally {
+      await new Promise<void>((r) => orphan.close(() => r()));
+    }
+  });
+
   it('forwards a non-/messages request byte-identically and returns the upstream response unchanged', async () => {
     const home = mkTmp('ccgpt-proxy-pass-');
-    const lane = 'codex-a-passthrough';
     let seen: Buffer | null = null;
     let seenPath = '';
     await startPair(home, (req, body, res) => {
       seen = body; seenPath = req.url;
       res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
-    }, { CCGPT_ACCOUNT_ID: lane });
+    });
     // Fix round 1, M-1: real non-ASCII bytes, not the pure-ASCII string this
     // case originally sent under a "weird bytes" comment that measured
     // false. `é`/` `/`ü` each encode to 2 UTF-8 bytes, so a
@@ -211,12 +323,11 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     //     a forwarded client Host would silently misdirect a real
     //     vhost-routing upstream).
     const home = mkTmp('ccgpt-proxy-hopbyhop-');
-    const lane = 'codex-a-hopbyhop';
     let seenHeaders: Record<string, string | string[] | undefined> = {};
     await startPair(home, (req, _body, res) => {
       seenHeaders = req.headers;
       res.writeHead(200, { 'content-type': 'text/plain' }); res.end('ok');
-    }, { CCGPT_ACCOUNT_ID: lane });
+    });
     await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, {
       headers: {
         authorization: 'Bearer test-token-not-a-secret',
@@ -228,6 +339,41 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     // Hop-by-hop: the client's own value must not reach upstream.
     expect(seenHeaders['accept-encoding']).toBe('identity');
     expect(seenHeaders['host']).toBe(`127.0.0.1:${UPSTREAM_PORT}`);
+  });
+
+  // Fix round 2, finding 2 — my own error from round 1, corrected by the
+  // re-review: I argued `connection` couldn't be pinned because
+  // `urllib.request` forces `Connection: close` on the REQUEST regardless of
+  // what the shim strips (true, and still true — see the previous test's
+  // comment). What I hadn't checked is the RESPONSE: an upstream answers
+  // with its OWN `Connection` header (a real HTTP/1.1 server does this by
+  // default — measured directly against Node's own `http.createServer`,
+  // this suite's own upstream shape, which defaults to `Connection:
+  // keep-alive` and answers `Connection: close` once it sees a
+  // closed-connection request, exactly what the shim's own forced-closed
+  // request produces). If `HOP_BY_HOP` ever stopped excluding `connection`
+  // on the response-copying loop, that upstream header would be forwarded
+  // IN ADDITION to the shim's own explicit
+  // `self.send_header("Connection", "close")` a few lines later — two lines
+  // on the wire, not one. `fetch`'s parsed `Headers` hides this (the HTTP
+  // client manages `Connection` itself), so this reads `rawHeaders` via
+  // `node:http` directly, which preserves duplicates exactly as received.
+  it('sends exactly one Connection header on the response, never a duplicate of the upstream\'s own', async () => {
+    const home = mkTmp('ccgpt-proxy-connection-response-');
+    await startPair(home, (_req, _body, res) => {
+      // Deliberately NOT setting `connection` here — Node's own http server
+      // supplies a real one on its own (measured), which is exactly the
+      // realistic shape: the shim must not simply trust that upstream never
+      // sends one.
+      res.writeHead(200, { 'content-type': 'text/plain' });
+      res.end('ok');
+    });
+    const { status, rawHeaders } = await rawGet(PROXY_PORT, '/v1/models');
+    expect(status).toBe(200);
+    const connectionLines = rawHeaders
+      .filter((_, i) => i % 2 === 0)
+      .filter((key) => key.toLowerCase() === 'connection');
+    expect(connectionLines.length).toBe(1);
   });
 
   // Fix round 1, Question 2's rider: the hoisted `spawnPy` ships with its own
@@ -245,6 +391,51 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     await new Promise<void>((resolve) => child.once('close', () => resolve()));
     proc = null;
     expect(stdout.trim()).toBe(home);
+  });
+
+  // Fix round 2, finding 5 — M-5 shipped code-only in round 1. HEAD/OPTIONS
+  // used to answer a bare 501 from `BaseHTTPRequestHandler`'s own default,
+  // which made "everything else forwarded untouched" not literally true.
+  it.each(['HEAD', 'OPTIONS'] as const)('forwards a %s request instead of answering a bare 501', async (method) => {
+    const home = mkTmp(`ccgpt-proxy-verb-${method}-`);
+    let seenMethod = '';
+    await startPair(home, (req, _body, res) => {
+      seenMethod = req.method;
+      res.writeHead(204); res.end();
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`, { method });
+    expect(r.status).not.toBe(501);
+    expect(seenMethod).toBe(method);
+  });
+
+  // Fix round 2, finding 5 — M-4 shipped code-only in round 1: a bind
+  // failure now prints a named ccrc-shaped message instead of a bare
+  // socketserver traceback. Reproduced the same way C-2's foreign-listener
+  // scenario is: pre-bind the port, then start a second shim on it.
+  it('names the bind failure instead of a bare traceback when the port is already taken', async () => {
+    const home1 = mkTmp('ccgpt-proxy-bindfail-holder-');
+    const first = await startPair(home1, (_req, _body, res) => { res.writeHead(200); res.end('{}'); });
+    void first; // keep the first shim alive, still holding PROXY_PORT
+
+    const home2 = mkTmp('ccgpt-proxy-bindfail-second-');
+    const { child: second } = spawnPy(ccgptFile('ccgpt-proxy.py'), {
+      home: home2,
+      env: {
+        PYTHONPATH: PYSTUB_DIR,
+        CCGPT_ACCOUNT_ID: mintLane(),
+        CCGPT_PROXY_PORT: String(PROXY_PORT),
+        CCGPT_LITELLM_PORT: String(UPSTREAM_PORT),
+      },
+    });
+    let stderr = '';
+    second.stderr?.on('data', (c) => { stderr += c.toString(); });
+    const outcome = await raceExitOrDeadline(second);
+    expect(outcome.kind).toBe('exited');
+    expect(outcome.kind === 'exited' ? outcome.code : null).not.toBe(0);
+    expect(stderr).toMatch(/ccgpt-proxy: failed to bind 127\.0\.0\.1:\d+/);
+    expect(stderr).not.toMatch(/Traceback/);
+    // `proc`/`upstream` (module-level) still point at the FIRST shim, so
+    // `afterEach` tears that one down as usual; the second already exited.
   });
 
   // Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
