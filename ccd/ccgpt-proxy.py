@@ -32,6 +32,20 @@ on that path the shim cannot parse at all is still forwarded unrewritten
 today — three call sites, catalogued as D-3151 in the plan's `## Deviations
 found`, until Task 7 replaces them with an explicit refusal.
 
+A `/messages` POST body carrying `Content-Encoding: gzip` or `deflate` is
+decompressed before the two folds above run and the folded result is
+re-compressed in the same encoding before forwarding — the identical fold
+pipeline, never a second one built for compressed input. Any other
+encoding (absent, `identity`, or one this shim does not implement) is left
+alone, exactly as an unencoded body already was. A body that CLAIMS one of
+these two encodings but does not actually decode as one is refused
+explicitly with an HTTP 400, rather than forwarded still-compressed with
+`system` intact (the exact production hazard this closes — see
+`_decode_body`) or left to drop the connection the way a malformed chunked
+frame does (see `_read_chunked_body`); this is neither a fourth D-3151 arm
+nor that dropped-connection shape, for reasons `_decode_body`'s own
+docstring gives.
+
 Listens on 127.0.0.1:$CCGPT_PROXY_PORT; forwards to the LiteLLM proxy at
 127.0.0.1:$CCGPT_LITELLM_PORT. No credentials are stored here — the
 Authorization header passes through unexamined.
@@ -54,6 +68,8 @@ lane's gateway and bill the wrong account.
 import os
 import sys
 import json
+import gzip
+import zlib
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -333,6 +349,98 @@ def _read_request_body(headers, rfile) -> bytes:
     return rfile.read(length) if length else b""
 
 
+def _content_encoding(headers) -> str:
+    """The request's `Content-Encoding`, lower-cased and stripped — `''`
+    when absent. Case-insensitive header lookup, the same contract
+    `_is_chunked` above relies on for `Transfer-Encoding`. This shim
+    recognises exactly two values below, `gzip` and `deflate`; anything
+    else (absent, `identity`, or an encoding this shim does not implement)
+    is left for the caller to treat as unrecognised and pass the body
+    through untouched — unchanged from every `/messages` body's contract
+    before this task, just now scoped to the encodings this shim cannot
+    decode rather than to every encoding there is."""
+    return (headers.get("Content-Encoding") or "").strip().lower()
+
+
+class _BadEncoding(Exception):
+    """Raised by `_decode_body` when a request claims `Content-Encoding:
+    gzip`/`deflate` but its bytes do not actually decode as one. Caught by
+    `_relay` alone, which answers an explicit HTTP refusal — see
+    `_decode_body`'s own docstring for why that is neither a fourth
+    D-3151-style silent passthrough arm nor a second `_read_chunked_body`
+    -style dropped connection."""
+
+
+def _decode_body(body: bytes, encoding: str) -> bytes:
+    """Reverse `Content-Encoding: gzip`/`deflate` so `_rewrite_messages_body`
+    sees the same plain JSON bytes it already handles for an unencoded
+    body — one fold pipeline, not a second one built for compressed input.
+    Any OTHER encoding, including `''` (absent/identity), is returned
+    unchanged; the caller decides what to do with an encoding this
+    function does not recognise.
+
+    Raises `_BadEncoding` when the body claims one of these two encodings
+    but does not actually decode as one — a failure mode that is
+    deliberately NOT shaped like either of this shim's two existing "body
+    could not be used" outcomes:
+
+    - It is not a fourth D-3151 silent-passthrough arm. `_rewrite_messages_
+      body`'s own three arms forward a body that was read to completion and
+      simply isn't JSON once decoded; forwarding STILL-COMPRESSED,
+      unrewritten bytes here instead would repeat, byte for byte, the exact
+      production hazard this task closes — the client's original `system`
+      field would still be sitting inside them, compressed but intact.
+    - It is not `_read_chunked_body`'s let-it-raise-and-drop-the-connection
+      shape either. That shape is accepted there only because chunk framing
+      is the sole description of where the body ends, so a malformed frame
+      leaves nothing complete and trustworthy either to forward or to
+      refuse cleanly with. A gzip/deflate body, by contrast, was already
+      read to completion (via `_read_request_body`, chunked-decoded first
+      if needed) by the time this function sees it: the shim knows exactly
+      how many bytes arrived and can name the failure precisely, so there
+      is no reason to drop the connection instead of answering it.
+
+    So the caller answers an explicit HTTP-level refusal instead — spec
+    §6.3's own stated preference ("the hazard is the silent arm, not the
+    encoding") applied to a failure mode neither D-3151 nor Task 5's
+    chunked-body work anticipated.
+    """
+    if encoding == "gzip":
+        try:
+            return gzip.decompress(body)
+        except (OSError, EOFError) as e:
+            # Measured directly (not assumed): a structurally-bad gzip
+            # header, a CRC/length mismatch, or a corrupted member all raise
+            # `gzip.BadGzipFile`, an `OSError` subclass. But a body that is
+            # simply CUT SHORT — valid header, compressed data ends before
+            # the stream's own end-of-stream marker — raises `EOFError`
+            # instead, which is NOT an `OSError` subclass. Catching only
+            # `OSError` would have let that one case escape this function
+            # uncaught, propagate out of `_relay`, and drop the connection —
+            # reproducing, for a truncated gzip body specifically, the exact
+            # shape this task was told not to replicate.
+            raise _BadEncoding(f"invalid gzip body: {e}") from None
+    if encoding == "deflate":
+        try:
+            return zlib.decompress(body)
+        except zlib.error as e:
+            raise _BadEncoding(f"invalid deflate body: {e}") from None
+    return body
+
+
+def _encode_body(body: bytes, encoding: str) -> bytes:
+    """The inverse of `_decode_body`: re-apply `gzip`/`deflate` framing
+    after the fold so the forwarded body matches the `Content-Encoding`
+    header the shim still forwards unchanged (that header is not a member
+    of `HOP_BY_HOP`, below). Any other encoding is returned unchanged,
+    mirroring `_decode_body`."""
+    if encoding == "gzip":
+        return gzip.compress(body)
+    if encoding == "deflate":
+        return zlib.compress(body)
+    return body
+
+
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
 PROXY_PORT = _required_port("CCGPT_PROXY_PORT")
 LITELLM_PORT = _required_port("CCGPT_LITELLM_PORT")
@@ -385,8 +493,29 @@ class Handler(BaseHTTPRequestHandler):
         # generated launcher's base URL to an empty path component — a
         # prefixed mount (e.g. a path-carrying `ANTHROPIC_BASE_URL`) must
         # not silently bypass the fold.
+        #
+        # A gzip/deflate-encoded body on this same path is decoded first so
+        # the SAME fold pipeline (`_rewrite_messages_body`) sees plain JSON
+        # bytes exactly as it does for an unencoded body, then the folded
+        # result is re-compressed before forwarding — `Content-Encoding`
+        # itself is not in HOP_BY_HOP, so the header below still reaches
+        # upstream unchanged and must describe bytes that actually match it.
+        # `_read_request_body` above has already stripped any chunked
+        # transfer framing by this point, so a request carrying BOTH
+        # `Transfer-Encoding: chunked` and `Content-Encoding: gzip` is
+        # already down to the plain gzip bytes here — transport framing
+        # peeled off first, content encoding second, each handled once.
         if body and path_only.endswith("/messages"):
-            body = _rewrite_messages_body(body)
+            encoding = _content_encoding(self.headers)
+            if encoding in ("gzip", "deflate"):
+                try:
+                    plain = _decode_body(body, encoding)
+                except _BadEncoding as e:
+                    self.send_error(400, f"ccgpt-proxy: {e}")
+                    return
+                body = _encode_body(_rewrite_messages_body(plain), encoding)
+            else:
+                body = _rewrite_messages_body(body)
         req = urllib.request.Request(UPSTREAM + self.path, data=body or None, method=self.command)
         for key, value in self.headers.items():
             if key.lower() not in HOP_BY_HOP:

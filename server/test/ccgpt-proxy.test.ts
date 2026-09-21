@@ -4,6 +4,7 @@ import { type ChildProcess } from 'node:child_process';
 import { createServer, request as httpRequest, type Server } from 'node:http';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
 import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
 import { mkTmp } from './tmpHelpers';
 
@@ -743,5 +744,142 @@ describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
     expect(seenCL).toBe(String(seen!.length));                  // correct length, not the original
     expect(seenTE).toBe('');                                    // re-framed, not re-chunked
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
+  // Task 6: on a gzip body, the OLD code's `json.loads` raised
+  // `UnicodeDecodeError` (a `ValueError` subclass), and the
+  // `except ValueError: return body` arm forwarded the body UNREWRITTEN —
+  // the compressed bytes still contain `"system"`. Unlike the chunked
+  // defect (Task 5, which lost the body entirely), this is the ORIGINAL
+  // sticky-replay hazard reaching the Codex backend, still correctly
+  // labelled `Content-Encoding: gzip` so upstream's own decode finds
+  // `system` right there. `deflate` shares the identical shape through the
+  // same except arm.
+  const ENCODINGS: [string, (b: Buffer) => Buffer, (b: Buffer) => Buffer][] = [
+    ['gzip', gzipSync, gunzipSync],
+    ['deflate', deflateSync, inflateSync],
+  ];
+
+  it.each(ENCODINGS)('decodes a %s body, rewrites it, and re-encodes it', async (enc, pack, unpack) => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp(`ccgpt-proxy-${enc}-`);
+    let seen: Buffer | null = null; let seenEnc = '';
+    await startPair(home, (req, body, res) => {
+      seen = body; seenEnc = String(req.headers['content-encoding'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const body = pack(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': enc },
+      body,
+    });
+    expect(r.status).toBe(200);
+    expect(seenEnc).toBe(enc);                                  // re-encoded, not silently decompressed
+    const got = JSON.parse(unpack(seen!).toString('utf8'));
+    expect('system' in got).toBe(false);                        // the hole: this used to survive
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // `_is_chunked` (Task 5) deliberately checks the LAST comma-separated
+  // token of `Transfer-Encoding` per RFC 7230 §3.3.1, so `Transfer-Encoding:
+  // chunked` and `Content-Encoding: gzip` can arrive on the SAME request —
+  // transport framing (chunked) is the OUTER layer, content encoding (gzip)
+  // the INNER one. `_read_request_body` peels the chunked framing off
+  // first, handing `_relay` the complete, still gzip-compressed bytes;
+  // only then does the `/messages` branch's gzip decode run. Reversed, the
+  // chunk reader would be handed compressed bytes it cannot parse as chunk
+  // framing, or the gzip decoder would be handed a body that still has
+  // chunk framing embedded in it — either way garbage. This proves the two
+  // decodes compose correctly end to end, not just that each works alone.
+  it('decodes a gzip body sent with Transfer-Encoding: chunked, in the right order', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-chunked-');
+    let seen: Buffer | null = null; let seenEnc = ''; let seenTE = '';
+    await startPair(home, (req, body, res) => {
+      seen = body;
+      seenEnc = String(req.headers['content-encoding'] ?? '');
+      seenTE = String(req.headers['transfer-encoding'] ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const gz = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const mid = Math.floor(gz.length / 2);
+    const stream = new ReadableStream({
+      start(c) { c.enqueue(gz.subarray(0, mid)); c.enqueue(gz.subarray(mid)); c.close(); },
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: stream, duplex: 'half',
+    } as any);
+    expect(r.status).toBe(200);
+    expect(seenEnc).toBe('gzip');
+    expect(seenTE).toBe('');                                    // re-framed, not re-chunked
+    const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
+    expect('system' in got).toBe(false);
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // A body that CLAIMS `Content-Encoding: gzip` but is not actually gzip at
+  // all (bad header) must not repeat either of this shim's two other
+  // "could not use the body" shapes: forwarding it silently still-labelled
+  // gzip (a fourth D-3151-style arm, and the exact hazard this task
+  // closes — the client's real `system` would still be sitting inside
+  // those bytes), or dropping the connection the way a malformed chunked
+  // frame does (Task 5's known, carried gap). It gets an explicit 4xx
+  // instead, and the upstream must never see the request at all.
+  it('answers an explicit 4xx, never reaching upstream, when the gzip body has a bad header', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-badheader-');
+    let upstreamHit = false;
+    await startPair(home, (_req, _body, res) => {
+      upstreamHit = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: Buffer.from('this is not gzip at all'),
+    });
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(r.status).toBeLessThan(500);
+    expect(upstreamHit).toBe(false);                             // refused here, never reached upstream
+  });
+
+  // The bad-header case above exercises `gzip.BadGzipFile` (an `OSError`
+  // subclass). A body with a VALID gzip header that is simply cut short —
+  // compressed data ending before the stream's own end-of-stream marker —
+  // raises `EOFError` instead, which is NOT an `OSError` subclass. Measured
+  // directly against Python's own `gzip` module while implementing this
+  // task: an `except OSError` alone does not catch it, and an uncaught
+  // `EOFError` would propagate out of `_relay` and drop the connection —
+  // reproducing, for this one case, the exact shape the task said not to
+  // replicate. A dedicated case because the bad-header case above cannot
+  // exercise this branch at all.
+  it('answers an explicit 4xx, never reaching upstream, when the gzip body is truncated (EOFError, not OSError)', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-gzip-truncated-');
+    let upstreamHit = false;
+    await startPair(home, (_req, _body, res) => {
+      upstreamHit = true;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const full = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'user', content: 'hi' }],
+    })));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'gzip' },
+      body: full.subarray(0, Math.floor(full.length / 2)),      // valid header, cut mid-stream
+    });
+    expect(r.status).toBeGreaterThanOrEqual(400);
+    expect(r.status).toBeLessThan(500);
+    expect(upstreamHit).toBe(false);
   });
 });
