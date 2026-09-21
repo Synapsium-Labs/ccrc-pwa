@@ -1787,14 +1787,16 @@ cmd_version() {
   local rec="" prov="" said=""
   if [[ -f "$BOX_INSTALLED_FILE" ]]; then
     { IFS= read -r rec || rec=""; IFS= read -r prov || prov=""; } < "$BOX_INSTALLED_FILE"
-    # Line 2 (design 2026-09-20 §5): the tree was placed without a verified
-    # provenance bundle. Said on the install line, so the one line an
-    # operator reads for "is this box installed" also says how.
-    [[ "$prov" == unsigned ]] && said=" (unsigned — placed without a verified provenance bundle; the next verified 'ccrc update' clears this)"
     if [[ "$rec" == "${BOX_BUILD[0]}" ]]; then
+      # Line 2 (design 2026-09-20 §5), said ONLY here (D-3136 m5): the
+      # record's own sha matches what THIS box is running, so the label
+      # describes THIS install. In the mismatched branch below the record
+      # names a DIFFERENT, stale install — its provenance is not a claim
+      # about the box's current, incomplete state, so nothing is said.
+      [[ "$prov" == unsigned ]] && said=" (unsigned — placed without a verified provenance bundle; the next verified 'ccrc update' clears this)"
       echo "install: complete$said"
     else
-      echo "install: incomplete — stamp ${BOX_BUILD[0]}, completed-install record names ${rec:-nothing}$said"
+      echo "install: incomplete — stamp ${BOX_BUILD[0]}, completed-install record names ${rec:-nothing}"
     fi
   else
     echo "install: incomplete — stamp ${BOX_BUILD[0]}, no completed-install record (ccrc install and ccrc update write one last; deploy.sh never does)"
@@ -11134,15 +11136,30 @@ _inst_installed() {
   # ccrc that predates verification, and --allow-unsigned all leave it
   # unset — and all four are honestly unsigned. The server reads line 2 as
   # the node's provenance; a one-line marker would claim `verified` for a
-  # tree nobody verified. Written in ONE mv: a marker is never half-true.
-  if [ "${CCRC_UPDATE_VERIFIED:-}" = 1 ]; then
-    printf '%s\n' "${BOX_BUILD[0]}" > "$tmp"
-  else
-    printf '%s\nunsigned\n' "${BOX_BUILD[0]}" > "$tmp"
-  fi
-  chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
+  # tree nobody verified.
+  #
+  # D-3135: BOTH printfs sit inside ONE group with a single redirect at the
+  # HEAD of the && chain. Before this, the chain started at `chmod`, so the
+  # printf's own exit status was discarded — a write that failed AFTER
+  # creating the temp file (ENOSPC, say) was placed as the record anyway,
+  # and a truncated "<sha>\nunsigned\n" that lost its trailing token first
+  # left a ONE-line survivor, which line 2's own contract (§6) reads as
+  # `verified` beside a `verify` cap. Now any write failure — the redirect
+  # itself or the `mv` that places it — removes the temp file and dies
+  # before a record lands. `verified` is computed once and used for both
+  # the write and the transcript (D-3136 m3): `CCRC_UPDATE_VERIFIED` being
+  # any non-empty value other than `1` must not read as verified in one and
+  # not the other.
+  local verified=""
+  [ "${CCRC_UPDATE_VERIFIED:-}" = 1 ] && verified=1
+  { if [ -n "$verified" ]; then
+      printf '%s\n' "${BOX_BUILD[0]}"
+    else
+      printf '%s\nunsigned\n' "${BOX_BUILD[0]}"
+    fi
+  } > "$tmp" && chmod 644 "$tmp" && mv -f "$tmp" "$dest" \
     || { rm -f "$tmp"; _ccrc_die "writing $dest failed"; }
-  echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it${CCRC_UPDATE_VERIFIED:+; provenance verified})"
+  echo "install: installed: ${BOX_BUILD[0]} (the spine completed under this stamp; ccrc update --check reads it${verified:+; provenance verified})"
 
   # THE FLOOR (design §9): the stamped tag, when it is above the file's
   # current line; a restore or rollback never lowers it, because nothing
@@ -11153,6 +11170,16 @@ _inst_installed() {
     return 0
   fi
   if [ -f "$BOX_FLOOR_FILE" ]; then IFS= read -r cur < "$BOX_FLOOR_FILE" || cur=""; fi
+  # D-3136: a PRESENT but unreadable floor is a different condition from an
+  # ABSENT one and must not collapse into it — the overloaded-null-at-a-seam
+  # ban, and `_inst_node_id` already refuses rather than overwrites a
+  # non-uuid file for the identical reason. Left untouched; Task 11's
+  # update-side floor check refuses a malformed floor rather than reading
+  # it as none.
+  if [ -n "$cur" ] && [[ ! "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "install: floor: ~/.ccrc/floor is malformed (got: '$cur') — left untouched; fix it by hand"
+    return 0
+  fi
   if [[ "$cur" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && ! _ver_newer "$ver" "$cur"; then
     echo "install: floor: kept at $cur ($ver is not above it — the floor only rises)"
     return 0
