@@ -2185,43 +2185,55 @@ describe.skipIf(!PY)('ccgpt-proxy: effort resolution is scoped to /messages, lik
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: SSE responses stream through incrementally, not buffered whole (Task 9 §1)', () => {
-  // task-9 — THE MAIN EVENT (task-9-rulings.md §1). `_relay` used to read
-  // the upstream response via `resp.read(8192)`, which BLOCKS until 8 KB
-  // has accumulated or the stream ends — measured (task-7b-review.md), an
-  // 18-byte SSE event written by upstream at t=0 reached the client only at
-  // t=40.2s, when the stream itself closed; `git log -S 'resp.read(8192)'`
-  // places the defect at `85f97a4d`, this wave's own Task 2. A case that
-  // only checks the frames eventually arrive intact — the brief's own
-  // wording — WOULD PASS under that defect: content survives buffering,
-  // just late (task-9-rulings.md §1's own point, and the reason this file
-  // does not simply copy the brief's Step 1.1 verbatim).
+  // task-9 fix round 1 I-1 (task-9-fix-rulings.md, task-9-review.md I-3).
+  // `_relay` used to read the upstream response via `resp.read(8192)`,
+  // which BLOCKS until 8 KB has accumulated or the stream ends — measured
+  // (task-7b-review.md), an 18-byte SSE event written by upstream at t=0
+  // reached the client only at t=40.2s, when the stream itself closed;
+  // `git log -S 'resp.read(8192)'` places the defect at `85f97a4d`, this
+  // wave's own Task 2. A case that only checks the frames eventually arrive
+  // intact — the brief's own wording — WOULD PASS under that defect:
+  // content survives buffering, just late.
   //
-  // This case binds on ORDERING instead of content or a wall-clock
-  // threshold. The upstream handler writes one `data:` frame and flushes,
-  // then waits (a flag, `secondWritten`, flips only once the wait ends and
-  // the second frame is written and the response ends). The assertion is
-  // that the client's FIRST observed byte arrives while `secondWritten` is
-  // still `false`. Node is single-threaded, so this is a genuine ordering
-  // proof, not a race dressed as one: the client's `data` handler and the
-  // delayed write are both callbacks on the same event loop, and one of
-  // them runs to completion (recording its own observation) before the
-  // other can even begin — "immune to a loaded box", per the ruling, since
-  // nothing here depends on how LONG either side takes, only on which
-  // fires first. Under the restored defect (mutation 1, task-9-rulings.md
-  // "Mutations required"), the shim forwards nothing until upstream's
-  // `res.end()`, which happens strictly after `secondWritten` flips — so
-  // this case reds exactly when it should.
-  it('task-9 forwards the first SSE frame before the second is written upstream', async () => {
+  // The FIRST version of this case (Task 9) gated the second upstream write
+  // on a fixed 1000ms `setTimeout` and claimed that made the ordering
+  // assertion "immune to a loaded box". That claim measured FALSE: the
+  // margin was real (33-60ms against the 1000ms budget) but it was still a
+  // BUDGET, not a proof — a box loaded enough to blow past it would red a
+  // correct implementation. Node's single-threading makes the *read* of
+  // `secondWritten` atomic; it says nothing about whether the write racing
+  // against it finishes in time.
+  //
+  // This version is genuinely order-bound instead of merely timing-bound:
+  // the SECOND write is not scheduled by a timer at all, it is gated on a
+  // promise (`firstObserved`) that only resolves when the CLIENT's own
+  // `data` handler has already fired and called `observeFirst()`. So the
+  // second frame cannot exist, on the wire, before the first one has been
+  // observed — there is no window to blow through, at any load, because
+  // nothing is racing a clock. The 5s timer that remains is a deadlock
+  // escape only, for the case where nothing ever arrives (the restored
+  // defect): without it, that run would hang instead of failing. It is
+  // never the thing the passing case's timing depends on — measured at
+  // ~222ms green (no wall-clock dependence at all) versus ~1200ms for the
+  // fixed-timer version it replaces, and it still reds under the restored
+  // blocking read (mutation 1 below), at ~5.2s — the deadlock escape firing
+  // exactly as designed, not a false pass.
+  it('task-9 fix round 1 forwards the first SSE frame before the second is written upstream — order-bound, not timing-bound', async () => {
     const home = mkTmp('ccgpt-proxy-sse-');
     let secondWritten = false;
+    let observeFirst!: () => void;
+    const firstObserved = new Promise<void>((resolve) => { observeFirst = resolve; });
     await startPair(home, (_req, _body, res) => {
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write('data: {"first":true}\n\n');
-      setTimeout(() => {
+      void Promise.race([
+        firstObserved,
+        new Promise<void>((r) => setTimeout(r, 5_000)),   // deadlock escape only, never the driver
+      ]).then(() => {
         secondWritten = true;
         res.write('data: {"second":true}\n\n');
         res.end();
-      }, 1_000);
+      });
     });
 
     const firstFrameBeforeSecondWrite = await new Promise<boolean>((resolve, reject) => {
@@ -2231,7 +2243,7 @@ describe.skipIf(!PY)('ccgpt-proxy: SSE responses stream through incrementally, n
           headers: { 'content-type': 'application/json' },
         },
         (res) => {
-          res.once('data', () => { resolve(!secondWritten); res.resume(); });
+          res.once('data', () => { resolve(!secondWritten); observeFirst(); res.resume(); });
           res.on('error', reject);
         },
       );
@@ -2321,12 +2333,26 @@ describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded
   // forwards a correct length" above (`expect(seenTE).toBe('')`). Neither
   // is re-pinned here.
   //
-  // `fetch` cannot even SEND the five headers below — undici refuses to
-  // construct the request at all (measured directly against this box's
-  // Node: `InvalidArgumentError: invalid keep-alive header`, and the same
-  // shape for upgrade/te/trailer/proxy-authorization), so these go over
-  // `rawRequest`'s raw socket, exactly as this file's own chunked-framing
-  // cases already do for a shape `fetch` cannot produce.
+  // task-9 fix round 1 I-3 (task-9-fix-rulings.md, task-9-review.md I-1):
+  // the FIRST version of this comment claimed "`fetch` cannot even SEND the
+  // five headers below — undici refuses to construct the request at all".
+  // Measured false for three of five: `Proxy-Authorization`, `TE` and
+  // `Trailer` all send through `fetch` without complaint (this box's Node,
+  // v24.14.1) — upstream sees them exactly as sent. Only `Keep-Alive` and
+  // `Upgrade` are genuinely refused by undici (`InvalidArgumentError:
+  // invalid keep-alive header` / `invalid upgrade header`; `fetch` throws
+  // before the request is even constructed). The extrapolation from two
+  // measured refusals to "the same shape for" three more, unmeasured, is
+  // exactly what this repo's own convention calls out: an operation and its
+  // evidence are two separate claims.
+  //
+  // The DECISION this block makes — route all six rows below through
+  // `rawRequest`'s raw socket uniformly, rather than `fetch` for the three
+  // that would send and `rawRequest` only for the two that would not — is
+  // unaffected and stands: it is simpler as one shape than as two, and
+  // matches this file's own precedent (the chunked-framing cases already
+  // use `rawRequest` for bodies `fetch` cannot produce). Only the STATED
+  // reason was wrong.
   it.each([
     ['Keep-Alive', 'timeout=5'],
     ['Upgrade', 'websocket'],
@@ -2340,6 +2366,18 @@ describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded
     // set carried `"trailers"`, which never matches a `Trailer:` header at
     // all) and is the case named in "Mutations required" §3.
     ['Trailer', 'X-Checksum'],
+    // task-9 fix round 1 M-3 (task-9-fix-rulings.md): the one HOP_BY_HOP
+    // member none of this file's cases pinned before this round — measured,
+    // removing only `proxy-authenticate` left the whole suite green.
+    // Response-only in real HTTP (a proxy's own 407 challenge header) and a
+    // LiteLLM upstream never sends one, so the practical value is low, but
+    // §6.4's own wording is "the hop-by-hop header **set**", and this was
+    // the last unpinned member of it. Tested on the REQUEST side, like
+    // every other row here, for uniformity — `fetch` sends it without
+    // complaint (measured), but this row goes through the same `rawRequest`
+    // path as the rest rather than special-casing the one row that could
+    // use `fetch`.
+    ['Proxy-Authenticate', 'Basic realm="ccgpt"'],
   ] as const)('task-9 drops %s from the forwarded request', async (headerName, value) => {
     const home = mkTmp(`ccgpt-proxy-hopbyhop-${headerName}-`);
     let seenHeaders: Record<string, unknown> = {};
@@ -2359,5 +2397,37 @@ describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded
     // End-to-end, on the SAME request: proves the absence above is
     // HOP_BY_HOP filtering doing its job, not an empty/dropped header set.
     expect(seenAuth).toBe('Bearer test-token-not-a-secret');
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: a non-2xx upstream response relays through read1 too (task-9 fix round 1 I-4)', () => {
+  // task-9 fix round 1 I-4 (task-9-fix-rulings.md, task-9-review.md I-4).
+  // `_relay` catches `urllib.error.HTTPError` and assigns `resp = e`, so a
+  // non-2xx upstream status streams through the SAME `resp.read1(8192)`
+  // loop the 200 path uses — but `HTTPError` reaches `read1` by a DIFFERENT
+  // inheritance path (delegation through `tempfile._TemporaryFileWrapper.
+  // __getattr__`, which `urllib.response.addbase` inherits without
+  // overriding — see the `read1` comment above the loop in `ccgpt-proxy.py`
+  // for the measured mechanism), not because `HTTPError` itself is an
+  // `io.BufferedIOBase` the way a plain `HTTPResponse` is.
+  //
+  // No case in this file, before this round, ever exercised a non-2xx
+  // upstream at all — measured: replacing this except arm's body with an
+  // unconditional refusal left the suite at 81/81 green. That gap was
+  // tolerable before Task 9 (the arm forwarded whatever `resp.read(8192)`
+  // handed it, an already-exercised code shape); it is not now, because
+  // `read1` is the method THIS task introduced and this is the one path
+  // that reaches it differently. This case closes the gap and pins the
+  // status/header/body relay in one measurement.
+  it('task-9 fix round 1 relays a non-2xx upstream status, headers and body unchanged', async () => {
+    const home = mkTmp('ccgpt-proxy-httperror-relay-');
+    await startPair(home, (_req, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end('{"error":"model not found"}');
+    });
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/models`);
+    expect(r.status).toBe(404);
+    expect(r.headers.get('content-type')).toBe('application/json');
+    expect(await r.text()).toBe('{"error":"model not found"}');
   });
 });

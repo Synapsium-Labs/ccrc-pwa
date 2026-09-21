@@ -254,6 +254,15 @@ def _fold_system(data):
     block instead of stringifying. Either way the top-level instruction
     reads first, ahead of what was already in that turn.
 
+    task-9 fix round 1 M-1: that same unconditional prepend is what the
+    plan's `## Deviations found` accepts as D-3156 when the block-list
+    branch's `content` already starts with a `tool_result` block — a shape
+    the Anthropic API requires to lead a user message, so this fold pushes
+    it to index 1 instead of 0. Measured in Task 9; the entry (not this
+    docstring) carries the full argument for why that is accepted rather
+    than fixed, audited and rewritten once already — read D-3156 before
+    changing this branch, not this sentence alone.
+
     Codex refuses the FIELD, not merely a non-empty value of it, so the key
     is popped unconditionally whenever it is present. An absent, null, or
     empty `system` — or a content-block list with no usable text — folds to
@@ -906,22 +915,40 @@ UPSTREAM = f"http://127.0.0.1:{LITELLM_PORT}"
 
 LANE_PATH = "/ccgpt/lane"
 
-# Per-hop headers (RFC 7230 §6.1, plus accept-encoding) must never be copied
-# from one connection onto the next — they describe THIS hop, not the
-# message, and copying content-length/transfer-encoding across a body this
-# shim may later rewrite would describe a size that no longer matches.
+# Per-hop headers (this eight-member set, plus accept-encoding) must never
+# be copied from one connection onto the next — they describe THIS hop, not
+# the message, and copying content-length/transfer-encoding across a body
+# this shim may later rewrite would describe a size that no longer matches.
+# Shipped, `"trailers"` (plural) and all, in `85f97a4d` — this file's own
+# durable anchor for the paragraph below, alongside the scratch rulings
+# citations `.superpowers/` carries but this PUBLIC repo does not ship.
 #
-# task-9 M-1 (task-9-rulings.md §3): `"trailer"`, singular — corrected from
-# `"trailers"` (plural), which this set carried before this task. Verified
-# against RFC 7230: §4.4 defines the HEADER FIELD `Trailer` ("Trailer =
-# 1#field-name"), which is hop-by-hop by the same §6.1 enumeration as
-# `Connection`/`Keep-Alive`/`TE`/etc; `"trailers"` is not a header field name
-# at all — it is the one special VALUE the `TE` header field (§4.3) can carry
-# to mean "the sender will not discard trailer fields it receives". Before
-# this fix, a request naming `Trailer: …` was NOT in this set (only the TE
-# value's spelling was), so it forwarded upstream unfiltered — advertising
-# trailer fields upstream that Task 7b's `_read_chunked_body` drains and
-# discards on the way in, a promise this shim cannot keep either direction.
+# task-9 M-1 / task-9 fix round 1 I-2 (task-9-rulings.md §3,
+# task-9-fix-rulings.md I-2): `"trailer"`, singular — corrected from
+# `"trailers"` (plural). The EIGHT-member set itself is not an RFC 7230
+# enumeration at all — §6.1 is purely declarative, naming no fixed list; its
+# only normative instruction is to strip whatever `Connection` itself names.
+# The fixed list — Connection, Keep-Alive, Proxy-Authenticate,
+# Proxy-Authorization, TE, Trailers, Transfer-Encoding, Upgrade — is the
+# OBSOLETED RFC 2616 §13.5.1, and reading it verbatim explains the bug's own
+# provenance: that list spells the entry "Trailers" (plural), while §14.40 of
+# the SAME obsoleted document defines the header as `Trailer` (singular) —
+# an erratum in RFC 2616's own text, almost certainly where the shipped
+# token came from. RFC 7230 §4.4 gives the current, correct spelling:
+# "Trailer = 1#field-name" defines the header FIELD `Trailer`; RFC 7230 §4.3
+# is where `"trailers"` (plural) actually lives, as the one value the `TE`
+# header field can carry ("the sender will not discard trailer fields").
+# Before this fix, a request naming `Trailer: …` was NOT in this set (only
+# the TE value's spelling was), so it forwarded upstream unfiltered.
+#
+# Independently right on RFC 7230's own terms too, not merely historically:
+# §4.4 defines `Trailer` only "when a message includes a message body
+# encoded with the chunked transfer coding", and this shim always de-chunks
+# the request and re-frames it with `Content-Length` (`_read_chunked_body`,
+# `_read_request_body`) — forwarding a client's `Trailer` header upstream
+# would describe a promise about trailer fields the re-framed message cannot
+# keep, since Task 7b's `_read_chunked_body` drains and discards any
+# trailer lines on the way in regardless of what was promised.
 HOP_BY_HOP = {
     "host", "connection", "content-length", "transfer-encoding", "keep-alive",
     "proxy-authenticate", "proxy-authorization", "te", "trailer", "upgrade",
@@ -1156,6 +1183,16 @@ class Handler(BaseHTTPRequestHandler):
         try:
             resp = urllib.request.urlopen(req, timeout=900)
         except urllib.error.HTTPError as e:
+            # task-9 fix round 1 I-4 (task-9-fix-rulings.md): a non-2xx
+            # upstream status lands here, and `read1` below reaches it by a
+            # different inheritance path than the plain-response arm — see
+            # the task-9 fix round 1 I-5 comment on that loop. Before this
+            # fix round, no case
+            # in this file ever exercised a non-2xx upstream at all
+            # (measured: replacing this line's body with an unconditional
+            # refusal left the suite green); pinned now by the hop-by-hop
+            # describe block's own "relays a non-2xx upstream response,
+            # status and body" case.
             resp = e
         except (urllib.error.URLError, OSError) as e:
             self._refuse(502, f"ccgpt-proxy: upstream unreachable: {e}")
@@ -1185,18 +1222,45 @@ class Handler(BaseHTTPRequestHandler):
                 # system call" read: it returns whatever is ALREADY buffered
                 # (or the result of one `recv`) rather than blocking to fill
                 # `n` bytes, so a small frame reaches the client as soon as it
-                # arrives instead of waiting on seven more like it. Verified
-                # on this box's Python (3.12.3), not assumed: `http.client.
-                # HTTPResponse` (what `urlopen` hands back for a plain
-                # response, and what `urllib.error.HTTPError` delegates to
-                # via `addbase`'s `__getattr__` for the caught-HTTPError arm
-                # above) implements `read1` for both the chunked and
-                # Content-Length-bounded cases, and both `resp` shapes this
-                # method can hold were exercised directly against a live
-                # `http.server.BaseHTTPRequestHandler` before this line was
-                # written. Correctness is unchanged either way — this loop
-                # still reads until EOF and forwards every byte in order, so
-                # every existing byte-identical/refusal/encoding case is
+                # arrives instead of waiting on seven more like it.
+                #
+                # task-9 fix round 1 I-5 (task-9-fix-rulings.md, "read1 is
+                # safe, no guard needed — close it"): NO VERSION GUARD IS
+                # NEEDED HERE, and this is a floor fact, not a per-box
+                # observation. The stdlib docs pin it: `http.client.
+                # HTTPResponse` has implemented the full `io.BufferedIOBase`
+                # interface, `read1` included, since Python 3.5 ("Changed in
+                # version 3.5: The io.BufferedIOBase interface is now
+                # implemented and all of its reader operations are
+                # supported"). This file's own effective floor is already
+                # 3.6 — `_required_env`'s `sys.exit(f"...")` and every other
+                # f-string in it would already fail to import below that —
+                # so the reliance here sits strictly BELOW a floor this file
+                # already assumes elsewhere, not above it.
+                #
+                # Both `resp` shapes this method can hold were exercised
+                # directly against a live `http.server.BaseHTTPRequestHandler`
+                # (200 Content-Length, 200 chunked, 404 Content-Length, 500
+                # chunked) before this line was written, and both stream
+                # incrementally — but the two shapes reach `read1` by
+                # DIFFERENT paths, worth being precise about rather than
+                # loose: `urlopen`'s plain-response return IS an
+                # `HTTPResponse`, a real `io.BufferedIOBase`, directly. The
+                # caught-`HTTPError` arm above (`resp = e`) is NOT one —
+                # `urllib.error.HTTPError` inherits `urllib.response.addbase`,
+                # which inherits `tempfile._TemporaryFileWrapper` WITHOUT
+                # overriding its `__getattr__` (measured: `'__getattr__' not
+                # in urllib.response.addbase.__dict__`), and `read1` on an
+                # `HTTPError` arrives through THAT inherited delegation to
+                # the wrapped `HTTPResponse`, not from `HTTPError` itself
+                # implementing the interface. Both paths were measured to
+                # stream correctly; only the mechanism differs. See
+                # task-9 fix round 1 I-4 on the `except urllib.error.
+                # HTTPError` arm above for this arm's own case.
+                #
+                # Correctness is unchanged either way — this loop still
+                # reads until EOF and forwards every byte in order, so every
+                # existing byte-identical/refusal/encoding case is
                 # unaffected; only the TIMING of when each chunk reaches the
                 # client changes.
                 chunk = resp.read1(8192)
@@ -1206,6 +1270,42 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
         except (BrokenPipeError, ConnectionResetError):
             pass
+        # task-9 fix round 1 M-5 (task-9-fix-rulings.md): a RST mid-chunk on
+        # the UPSTREAM leg surfaces here as `ConnectionResetError`, caught
+        # above like any other — but a CLEAN FIN mid-chunk (upstream's own
+        # chunk-size line promised N bytes and the socket then closed before
+        # N arrived) raises `http.client.IncompleteRead` instead, which is
+        # NOT caught here or anywhere else in this method. That is a
+        # decision, not an oversight, made after building and measuring the
+        # alternative rather than only reasoning about it:
+        #
+        # The client-facing response is close-delimited — `Content-Length`
+        # and `Transfer-Encoding` are both `HOP_BY_HOP` — so its only
+        # "message complete" signal IS the connection closing, and a plain
+        # graceful close (what an uncaught exception gets here, since
+        # `TCPServer.shutdown_request` sends a graceful `SHUT_WR` before
+        # this method's own caller ever gets a chance to intervene) makes a
+        # truncated stream indistinguishable from a finished one. Forcing an
+        # ABORTIVE close instead — `SO_LINGER{on,0}` on `self.connection`,
+        # closed early enough to beat the framework's own graceful shutdown
+        # — was built and measured, not assumed: it does turn a raw
+        # `node:http` client's read into `ECONNRESET`, but `fetch()` — the
+        # exact client this whole suite already uses to validate this shim,
+        # and the realistic shape of most real HTTP clients including
+        # LiteLLM's own — swallows that RST at the fetch/response-body layer
+        # and still resolves 200 with the truncated body, no error surfaced
+        # at all. So "visible to the client" is not reliably achievable at
+        # THIS framing without forwarding real length information this shim
+        # does not have for a genuinely streamed response (a redesign out of
+        # this task's scope), and an uncaught `IncompleteRead` — printed by
+        # socketserver's `handle_error`, since `log_message` above is
+        # deliberately `pass` everywhere else — is left as the one honest
+        # signal this otherwise-silent shim still gives. Not a regression:
+        # the old `_read_chunked_body` raised the identical exception class
+        # for the identical condition (measured both ways in the review this
+        # ruling responds to). Do not silence this without also solving
+        # client-side visibility, or a truncated stream becomes perfectly
+        # silent on both ends.
         finally:
             resp.close()
 
