@@ -157,6 +157,32 @@ function ghStatements(stdout) {
   return parsed.map((e) => e.verificationResult.statement);
 }
 
+// D-3144: loading the sigstore deps is a DEPENDENCY problem, not a verdict on
+// the bundle — a partial `npm ci` under server/node_modules (`_inst_tree`'s
+// own comment calls this the verb's most likely failure) must not read as
+// "provenance verification FAILED" and close --allow-unsigned's escape
+// hatch for the wrong reason. Kept OUTSIDE the D-3134 catch below (and it
+// `process.exit`s directly, so even a later refactor that widened that catch
+// could not re-catch this into `refuse()`): exit 3, outside {0,1}, so
+// `_upd_fetch`'s `elif [ "$vrc" -ne 0 ]` arm reports "could not RUN the
+// installed verifier" — the sentence D-3142 wrote for precisely this shape.
+let Verifier, toSignedEntity, toTrustMaterial, bundleFromJSON, TrustedRoot;
+if (backend === 'sigstore') {
+  try {
+    const req = createRequire(path.join(HERE, '..', 'server', 'package.json'));
+    ({ Verifier, toSignedEntity, toTrustMaterial } = req('@sigstore/verify'));
+    ({ bundleFromJSON } = req('@sigstore/bundle'));
+    ({ TrustedRoot } = req('@sigstore/protobuf-specs'));
+  } catch (e) {
+    // ONE line (a MODULE_NOT_FOUND's own message embeds a "Require stack:"
+    // trailer with its own newlines — collapsed here so this stays one
+    // stderr line, per contract, instead of reading as several).
+    const why = (e && e.message ? e.message : String(e)).replace(/\s*\n\s*/g, '; ');
+    process.stderr.write(`verify-provenance: could not load the sigstore verifier's dependencies (${why}) — a local dependency problem, not a verdict on the bundle\n`);
+    process.exit(3);
+  }
+}
+
 // D-3134: everything below can throw on a missing or truncated file — the
 // realistic shape of a half-downloaded bundle from Task 12's `_upd_fetch`.
 // Funnel any such error into the one-line `verify-provenance: <why>` refusal
@@ -168,10 +194,6 @@ try {
   const digest = opt.digest ?? createHash('sha256').update(readFileSync(opt.blob)).digest('hex');
 
   if (backend === 'sigstore') {
-    const req = createRequire(path.join(HERE, '..', 'server', 'package.json'));
-    const { Verifier, toSignedEntity, toTrustMaterial } = req('@sigstore/verify');
-    const { bundleFromJSON } = req('@sigstore/bundle');
-    const { TrustedRoot } = req('@sigstore/protobuf-specs');
     const roots = readFileSync(rootPath, 'utf8').split('\n').filter((l) => l.trim() !== '')
       .map((l) => TrustedRoot.fromJSON(JSON.parse(l)));
     if (roots.length === 0) refuse(`${rootPath} holds no trusted root`);
@@ -181,7 +203,16 @@ try {
       let entity;
       try { entity = toSignedEntity(bundleFromJSON(json)); } catch (e) { last = e; continue; }
       for (const root of roots) {
-        const v = new Verifier(toTrustMaterial(root), { ctlogThreshold: 1, tlogThreshold: 1, tsaThreshold: 0 });
+        // D-3145: `tsaThreshold: 0` used to sit here. @sigstore/verify@3.1.1's
+        // constructor reads `timestampThreshold: options.timestampThreshold ??
+        // options.tsaThreshold ?? 1`, so the `0` propagated and made
+        // `verifyTimestamps` accept an empty list — which meant
+        // `verifyCertificate` ran `verifyCertificateChain` zero times,
+        // leaving the chain-to-trusted-CA and cert-validity-window checks
+        // unrun. Dropped so the library's own default (require a timestamp)
+        // applies; the intent was "do not require a TSA timestamp", not
+        // "skip the chain/validity checks".
+        const v = new Verifier(toTrustMaterial(root), { ctlogThreshold: 1, tlogThreshold: 1 });
         for (const san of identities) {
           try {
             v.verify(entity, { subjectAlternativeName: san, extensions: { issuer: ISSUER } });

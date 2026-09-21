@@ -738,6 +738,26 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(r.stdout).not.toMatch(/^update: build: /m);
   });
 
+  // D-3147: `~/.ccrc/ccrc-caps` is written only by `_inst_caps` and removed
+  // only by uninstall; `cmd_update` clears `~/.ccrc/installed` before the
+  // staged spine but must clear caps too — otherwise a staged spine that
+  // never reaches `_inst_caps` (a pre-W1 rollback spine, or one that dies
+  // before that step) leaves a stale `verify` cap sitting beside a fresh
+  // one-line marker, which spec §6 reads as `provenance: verified` for an
+  // install nobody verified. `stubTree`'s staged `ccd/ccrc` is exactly such
+  // a spine — it exits 0 without ever writing caps.
+  it('caps are cleared beside the marker before the staged spine runs, so a staged tree that never writes caps leaves none stale (D-3147)', () => {
+    const home = freshUpdateBox('ccrc-update-caps-cleared-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os linux\nverify\nnode-id\nfloor\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, '.ccrc', 'ccrc-caps')),
+      'a caps file the staged spine never wrote must not survive the update').toBe(false);
+  });
+
   it('checksum mismatch: refuses loudly and changes NOTHING — no backup, no install, ~/ccrc byte-identical', () => {
     const home = freshUpdateBox('ccrc-update-tamper-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -958,6 +978,26 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     const r = runUpdate(home);
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 127\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  // D-3144: the verifier itself now speaks exit 3 for its own
+  // dependency-load failure (a partial `npm ci` under server/node_modules)
+  // — this is the ccrc-side half of that pin: exit 3 is just one more
+  // member of the SAME non-{0,1} vocabulary 2 and 127 above already
+  // exercise, so it must fall into this `elif` arm exactly as they do,
+  // never into the `vrc -eq 1` "FAILED" arm.
+  it('a verifier that exits 3 (a dependency it could not load) gets the same "could not RUN" sentence, never "FAILED" (D-3144)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-vrc3-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '3\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 3\) — this is not a verdict on the bundle; nothing on this box was changed/);
     expect(r.stderr).not.toMatch(/provenance verification FAILED/);
     expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);

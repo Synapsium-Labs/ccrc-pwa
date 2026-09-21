@@ -11178,7 +11178,20 @@ _inst_installed() {
     echo "install: floor: not raised — this stamp carries no version"
     return 0
   fi
-  if [ -f "$BOX_FLOOR_FILE" ]; then IFS= read -r cur < "$BOX_FLOOR_FILE" || cur=""; fi
+  if [ -f "$BOX_FLOOR_FILE" ]; then
+    # D-3146: a `-f` test alone reads a PRESENT-but-UNREADABLE floor as
+    # empty, which falls through every branch below and gets silently
+    # REPLACED by the `mv -f` (that needs write permission on ~/.ccrc, not
+    # read permission on the file) — possibly with a LOWER version.
+    # Unreadable is a third word, distinct from absent and malformed
+    # (D-3136's own principle); mirror `_upd_floor_check`'s explicit `-r`
+    # test and leave the file untouched.
+    if [ ! -r "$BOX_FLOOR_FILE" ]; then
+      echo "install: floor: ~/.ccrc/floor is unreadable — left untouched; fix its permissions by hand"
+      return 0
+    fi
+    IFS= read -r cur < "$BOX_FLOOR_FILE" || cur=""
+  fi
   # D-3136: a PRESENT but unreadable floor is a different condition from an
   # ABSENT one and must not collapse into it — the overloaded-null-at-a-seam
   # ban, and `_inst_node_id` already refuses rather than overwrites a
@@ -11387,6 +11400,14 @@ cmd_update() {
   # non-zero exit apart below (D-3114). A box mid-update with no record reads
   # `install: incomplete` to `update --check`, which is the truth of it.
   rm -f "$BOX_INSTALLED_FILE"
+  # D-3147: caps cleared beside the marker. A pre-W1 staged spine writes
+  # only the one-line marker and never touches caps, so if this run's
+  # staged install does not reach `_inst_caps` (an old spine, or one that
+  # dies first), a stale `verify` cap would sit beside a fresh one-line
+  # marker — the false `provenance: verified` claim D-3117 exists to
+  # prevent, surviving in the rollback direction. An absent caps file reads
+  # as `unknown` (spec §6), which is honest.
+  rm -f "$BOX_CAPS_FILE"
   # THE SPINE IS TOLD WHETHER THIS RUN VERIFIED (design §5; plan
   # D-3117): `_inst_installed` writes the marker's second line
   # `unsigned` unless CCRC_UPDATE_VERIFIED=1 is in its environment, and only

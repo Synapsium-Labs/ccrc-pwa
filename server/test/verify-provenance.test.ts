@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
@@ -310,6 +310,35 @@ describe('verify-provenance.mjs: usage', () => {
     const help = verify(['-h']);
     expect(help.code).toBe(0);
     expect(help.stderr).toMatch(/^usage: node verify-provenance\.mjs/);
+  });
+});
+
+describe('verify-provenance.mjs: a dependency-load failure is not a bundle verdict (D-3144)', () => {
+  it('an unresolvable sigstore dependency path exits 3 with one stderr line that does not say FAILED', () => {
+    // The verifier resolves its deps via createRequire against a
+    // package.json beside its own HERE/../server — reproduce that shape in
+    // a scratch tree whose "server" has a package.json but no
+    // node_modules, so `req('@sigstore/verify')` cannot resolve, exactly
+    // the "partial npm ci under server/node_modules" case D-3144 is about.
+    // Argument validation happens before the load, and the load happens
+    // before the bundle is ever opened, so a placeholder --bundle path
+    // that does not exist is fine here.
+    const scratch = mkTmp('ccrc-verify-nodeps-');
+    const deployDir = join(scratch, 'deploy');
+    mkdirSync(deployDir, { recursive: true });
+    mkdirSync(join(scratch, 'server'), { recursive: true });
+    writeFileSync(join(scratch, 'server', 'package.json'), '{"name":"scratch-server"}\n');
+    const verifierCopy = join(deployDir, 'verify-provenance.mjs');
+    copyFileSync(VERIFIER, verifierCopy);
+    const r = spawnSync(process.execPath, [verifierCopy, '--bundle', join(scratch, 'no-such-bundle.json'),
+      '--blob-sha256', mainMeta.sha256, '--tag', mainMeta.tag, '--owner', OWNER, '--repo', REPO_NAME],
+    { encoding: 'utf8' });
+    expect(r.status).toBe(3);
+    const lines = (r.stderr ?? '').split('\n').filter((l) => l !== '');
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatch(/^verify-provenance: could not load the sigstore verifier's dependencies/);
+    expect(lines[0]).not.toMatch(/FAILED/);
+    expect(r.stdout ?? '').toBe('');
   });
 });
 

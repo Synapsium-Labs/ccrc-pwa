@@ -3968,6 +3968,34 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(r.stdout).toMatch(/^install: floor: ~\/\.ccrc\/floor is malformed \(got: 'three'\) — left untouched; fix it by hand$/m);
   });
 
+  // D-3146: `_inst_installed`'s floor block used to guard its read with `-f`
+  // alone, so a PRESENT-but-UNREADABLE floor read as `cur=""`, fell through
+  // every branch, and was silently REPLACED by the `mv -f` (which needs
+  // write permission on ~/.ccrc, not read permission on the file) —
+  // possibly with a LOWER version. Mirrors `_upd_floor_check`'s own `-r`
+  // test (Task 11, D-3136) and the idiom of the update-side unreadable-floor
+  // pin: root bypasses permission bits, so this is not measurable running
+  // as root — skipped there, and said so.
+  it.skipIf(process.getuid?.() === 0)('floor: an UNREADABLE ~/.ccrc/floor is left untouched and named by its own sentence, distinct from "malformed" (D-3146)', () => {
+    const home = freshBox('ccrc-install-floor-unreadable-');
+    gitInit(treeRoot(home));
+    tagFixture(home, 'v1.0.0');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const floorFile = join(home, '.ccrc', 'floor');
+    writeFileSync(floorFile, 'v9.9.9\n');
+    chmodSync(floorFile, 0o000);
+    let r: Result;
+    try {
+      r = runInstall(home);
+    } finally {
+      chmodSync(floorFile, 0o644);   // restore so the assertion below can read it back
+    }
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toMatch(/^install: floor: ~\/\.ccrc\/floor is unreadable — left untouched; fix its permissions by hand$/m);
+    expect(r.stdout).not.toMatch(/malformed/);
+    expect(readFileSync(floorFile, 'utf8')).toBe('v9.9.9\n');
+  });
+
   it('_inst_installed: the marker write is ONE checked group — no printf sits before an unchecked chmod (D-3135, structural)', () => {
     // The two behavioural cases below prove exit 1 / one die line / no
     // leftover file under two REAL failure conditions (mv blocked, open()

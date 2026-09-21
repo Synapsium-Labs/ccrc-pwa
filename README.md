@@ -475,8 +475,9 @@ whichever way it was resolved, and `--downgrade` is the typed way down); fetch +
 checksum, then the release's provenance bundle `ccrc-<tag>.tar.gz.sigstore.json` checked by the INSTALLED
 tree's `deploy/verify-provenance.mjs` against the vendored Sigstore root and exactly the two release
 workflows' identities — `--allow-unsigned` admits a release with NO bundle, never one that fails, and the
-box records the install as unsigned, which `ccrc version` says); extract, bind the extracted `build.json`
-to the resolved version, check the per-file `MANIFEST`; back up to `~/ccrc-backups/<ts>/` (coord.db via
+box records the install as unsigned, which `ccrc version` says); extract, check the per-file `MANIFEST`
+(the cheaper refusal, so it runs first — D-3149), then bind the extracted `build.json` to the resolved
+version; back up to `~/ccrc-backups/<ts>/` (coord.db via
 `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any install write; re-run the install spine from
 the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it
 mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
