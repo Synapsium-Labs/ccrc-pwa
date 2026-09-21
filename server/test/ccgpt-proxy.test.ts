@@ -12,7 +12,7 @@ import { mkTmp } from './tmpHelpers';
 const PROXY_PORT = 45010;
 const UPSTREAM_PORT = 45011;
 
-// task-2 Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
+// commit fe7da071 Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
 // what THIS call expects") is necessary but not sufficient when "what this
 // call expects" is a hardcoded shared string — the re-review demonstrated
 // that a same-lane orphan left by an EARLIER run is then silently adopted (7
@@ -46,7 +46,7 @@ let proc: ChildProcess | null = null;
 let upstream: Server | null = null;
 
 afterEach(async () => {
-  // task-2 Fix round 1, C-2 part 3: await the child's own `'close'` after
+  // commit b56286a4 Fix round 1, C-2 part 3: await the child's own `'close'` after
   // signalling, rather than firing SIGKILL and moving on. A fire-and-forget
   // kill let the very next case's readiness poll start while this one's
   // child (and its port) were still alive for a few more milliseconds —
@@ -68,7 +68,7 @@ type SpawnOutcome = { kind: 'exited'; code: number | null } | { kind: 'still-ser
 
 /** Bounds a wait for a spawned child's exit against a fixed deadline,
  *  producing a DISCRIMINATED outcome instead of letting a stuck child turn
- *  into vitest's own `testTimeout` (task-2 fix round 1, I-3). This repo already
+ *  into vitest's own `testTimeout` (commit b56286a4 fix round 1, I-3). This repo already
  *  fights a load-flake class where a slow box sheds tests at exactly the
  *  deadline (`vitest.config.ts`), so a red that IS a timeout cannot tell "the
  *  guard is gone" from "the box is loaded" — and a loaded box would red the
@@ -253,7 +253,7 @@ async function startPair(
 
   // Poll the lane endpoint rather than sleeping: a fixed sleep is a flake.
   //
-  // task-2 Fix round 1, C-2: this used to accept the first `r.ok`, full stop — a
+  // commit b56286a4 Fix round 1, C-2: this used to accept the first `r.ok`, full stop — a
   // port answering was treated as proof this child was alive and correct.
   // Measured by the reviewer: pre-bind an unrelated listener on 45010 and
   // the whole suite reports "4 passed" in under a second while every one of
@@ -403,7 +403,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
       seen = body; seenPath = req.url;
       res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
     });
-    // task-2 Fix round 1, M-1: real non-ASCII bytes, not the pure-ASCII string this
+    // commit b56286a4 Fix round 1, M-1: real non-ASCII bytes, not the pure-ASCII string this
     // case originally sent under a "weird bytes" comment that measured
     // false. `é`/` `/`ü` each encode to 2 UTF-8 bytes, so a
     // json.loads/json.dumps round trip inside the shim (there isn't one on
@@ -418,7 +418,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(seenPath).toBe('/v1/models');
     expect(seen!.toString('utf8')).toBe(payloadText);   // byte-identical, not re-serialised
 
-    // task-2 Fix round 1, M-6: passthrough is bidirectional — the request direction
+    // commit b56286a4 Fix round 1, M-6: passthrough is bidirectional — the request direction
     // was covered above, but the upstream's own response body and headers
     // coming back unchanged is the other half and was previously asserted
     // only by status code.
@@ -427,7 +427,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
   });
 
   it('drops hop-by-hop headers from the forwarded request while end-to-end headers survive', async () => {
-    // task-2 Fix round 1, I-4: HOP_BY_HOP is a shipped guard with no test — deleting
+    // commit b56286a4 Fix round 1, I-4: HOP_BY_HOP is a shipped guard with no test — deleting
     // the whole set, or dropping just `accept-encoding` (the member Task 6's
     // gzip/deflate handling depends on), left the suite 4/4 green.
     //
@@ -524,7 +524,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(stdout.trim()).toBe(home);
   });
 
-  // task-2 Fix round 2, finding 5 — M-5 shipped code-only in round 1. HEAD/OPTIONS
+  // commit fe7da071 Fix round 2, finding 5 — M-5 shipped code-only in round 1. HEAD/OPTIONS
   // used to answer a bare 501 from `BaseHTTPRequestHandler`'s own default,
   // which made "everything else forwarded untouched" not literally true.
   it.each(['HEAD', 'OPTIONS'] as const)('forwards a %s request instead of answering a bare 501', async (method) => {
@@ -539,9 +539,9 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(seenMethod).toBe(method);
   });
 
-  // task-2 Fix round 2, finding 5 — M-4 shipped code-only in round 1: a bind
+  // commit fe7da071 Fix round 2, finding 5 — M-4 shipped code-only in round 1: a bind
   // failure now prints a named ccrc-shaped message instead of a bare
-  // socketserver traceback. Reproduced the same way task-2 C-2's foreign-listener
+  // socketserver traceback. Reproduced the same way commit fe7da071 C-2's foreign-listener
   // scenario is: pre-bind the port, then start a second shim on it.
   it('names the bind failure instead of a bare traceback when the port is already taken', async () => {
     const home1 = mkTmp('ccgpt-proxy-bindfail-holder-');
@@ -569,7 +569,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     // `afterEach` tears that one down as usual; the second already exited.
   });
 
-  // task-2 Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
+  // commit b56286a4 Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
   // pinned; the docstring's actual claim is that all three are required.
   it.each(['CCGPT_ACCOUNT_ID', 'CCGPT_PROXY_PORT', 'CCGPT_LITELLM_PORT'] as const)(
     'refuses to start when %s is unset, naming the missing variable',
@@ -595,7 +595,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     },
   );
 
-  // task-2 Fix round 1, M-3 (first half): a non-numeric port used to escape as a
+  // commit b56286a4 Fix round 1, M-3 (first half): a non-numeric port used to escape as a
   // bare `ValueError` traceback rather than the shim's own named refusal.
   it('refuses to start with a named message when CCGPT_PROXY_PORT is not a valid port number', async () => {
     const home = mkTmp('ccgpt-proxy-badport-');
@@ -647,7 +647,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(JSON.stringify(seen).includes('"role":"system"')).toBe(false);
   });
 
-  // task-3 Fix round 1, I-1: `json.loads` on a sufficiently deep-nested body raises
+  // commit 8903d18a Fix round 1, I-1: `json.loads` on a sufficiently deep-nested body raises
   // `RecursionError`, which is a `RuntimeError` subclass — neither
   // `TypeError` nor `ValueError` — so it used to escape
   // `_rewrite_messages_body`'s except arm entirely and kill the connection
@@ -743,7 +743,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(seen!.toString('utf8')).toBe(notJson);                 // byte-identical
   });
 
-  // task-3 Fix round 1, M-4: the rewrite predicate matched only the exact literal
+  // commit 8903d18a Fix round 1, M-4: the rewrite predicate matched only the exact literal
   // `/v1/messages`, narrower than spec §6.4's "non-/messages paths" wording
   // and the reference implementation's `endswith("/messages")`. Measured by
   // the reviewer: a prefixed mount (`/gpt/v1/messages`) forwarded

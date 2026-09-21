@@ -143,7 +143,7 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
     expect(() => spawnPy('/does-not-matter.py', { home: '/etc' })).toThrow(/\/etc/);
   });
 
-  // ccgpt-proxy review round 1, task-1 C-1/I-1/I-2 + Question 2's rider: a second,
+  // ccgpt-proxy review round 1, commit b56286a4 C-1/I-1/I-2 + Question 2's rider: a second,
   // hand-rolled python-spawn site (ccgpt-proxy.test.ts's original `startPair`)
   // reproduced this containment BY HAND and dropped the fixture HOME the
   // moment a caller spread `...process.env`. `spawnPy` shares `runPy`'s own

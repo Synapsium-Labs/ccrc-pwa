@@ -3,6 +3,7 @@ import { describe, it, expect } from 'vitest';
 import { createServer, type IncomingMessage, type IncomingHttpHeaders, type ServerResponse, type Server } from 'node:http';
 import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import os from 'node:os';
 import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
 import { mkTmp } from './tmpHelpers';
 
@@ -60,6 +61,27 @@ it('this box hides litellm from a fixture HOME with no PYTHONPATH (task-10 M-4 p
   // root container is.
   if (process.env.CI) expect(NO_AMBIENT_LITELLM).toBe(true);
 });
+
+// task-12 fix round 1: the `::1` acceptance case below needs the IPv6
+// loopback interface to actually exist — `server.listen(PORT, '::1')`
+// errors on a box without one, which would red that ONE case for a
+// non-defect: `_is_loopback` never ran, nothing about the allowlist is
+// wrong, the environment just cannot exercise this spelling. Checked via
+// `os.networkInterfaces()` — a static read, no bind attempt, no socket —
+// so this computes synchronously at module scope like `IS_ROOT` above, not
+// via a spawned probe like `NO_AMBIENT_LITELLM`. Same policy as `IS_ROOT`,
+// for the same reason: DELIBERATELY not a CI hard-assert. A CI container
+// lacking IPv6 loopback is a legitimate, common state (unlike the
+// litellm-absence NO_AMBIENT_LITELLM's own precondition test DOES assert
+// on, where absence is the expected, load-bearing case for this public
+// repo) — asserting its presence under CI would recreate exactly the
+// false-red-for-a-non-defect failure task-10 fix round 3 removed. The
+// `::1` entry in `_LOOPBACK_HOSTS` is therefore pinned by this suite only
+// where IPv6 loopback exists — stated here so that limitation is visible
+// at the site, not inferred by a future reader from the skip alone.
+const HAS_IPV6_LOOPBACK = Object.values(os.networkInterfaces()).some(
+  (addrs) => addrs?.some((i) => i.family === 'IPv6' && i.internal && i.address === '::1'),
+);
 
 // task-10-rulings.md (commit af7cc0bc) §5: "Ports: 45020 for this suite. 45010/45011 belong to
 // the proxy suite and the two cannot run at once." A fixed port, not an
@@ -812,7 +834,11 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     }
   });
 
-  it('task-12: accepts a non-numeric loopback spelling — ::1', async () => {
+  it.skipIf(!HAS_IPV6_LOOPBACK)('task-12: accepts a non-numeric loopback spelling — ::1', async () => {
+    // Skipped visibly (`HAS_IPV6_LOOPBACK`, module scope, no CI hard-assert
+    // — see that const's own comment) on a box with no IPv6 loopback
+    // interface: this suite pins `::1` in `_LOOPBACK_HOSTS` only where
+    // that interface exists to prove it against.
     const home = mkTmp('ccgpt-usage-loopback-ipv6-');
     const id = mintId();
     plantLane(home, id);

@@ -130,7 +130,7 @@ def _required_port(name: str) -> int:
     """Like `_required_env`, but for a variable that must parse as a port
     number. Left unwrapped, a non-numeric value escaped as a bare
     `ValueError` traceback instead of the same named refusal every other
-    missing or invalid variable gets (task-3 fix round 1, M-3)."""
+    missing or invalid variable gets (commit 8903d18a fix round 1, M-3)."""
     raw = _required_env(name)
     try:
         return int(raw)
@@ -320,7 +320,7 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     `reasoning.effort` (task-8 fix round 1, I-1 — this line used to stop at
     "then re-encode" three steps early, 33 lines above the `_apply_effort`
     call this function actually makes), then re-encode. `ensure_ascii=False`
-    (task-4 fix round 1, M-5): the default would re-escape every non-ASCII byte the
+    (commit 8009b4f4 fix round 1, M-5): the default would re-escape every non-ASCII byte the
     client sent even when nothing needed folding, and a proxy that rewrites
     more of the wire than it must is a proxy whose diffs are harder to reason
     about — keep the forwarded body as close to what arrived as re-encoding
@@ -1138,7 +1138,7 @@ class Handler(BaseHTTPRequestHandler):
         # used to name the system fold alone and under-describe the branch).
         #
         # Suffix match, not the exact literal `/v1/messages` (fix round 1,
-        # task-3 M-4): spec §6.4 speaks of
+        # commit 8903d18a M-4): spec §6.4 speaks of
         # "non-/messages paths", and nothing in this repo yet pins the
         # generated launcher's base URL to an empty path component — a
         # prefixed mount (e.g. a path-carrying `ANTHROPIC_BASE_URL`) must
@@ -1317,7 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
     # client, the rest for the actual traffic. Without HEAD/OPTIONS here,
     # `BaseHTTPRequestHandler`'s own default answers a bare 501 for either,
     # which would make "everything else forwarded untouched" (module
-    # docstring) not literally true (task-2 fix round 1, M-5).
+    # docstring) not literally true (commit 85f97a4d fix round 1, M-5).
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _relay
 
 
@@ -1327,7 +1327,7 @@ if __name__ == "__main__":
     except OSError as e:
         # Unwrapped, a bind failure (most commonly EADDRINUSE) is a bare
         # socketserver traceback with no ccrc-shaped message (fix round 1,
-        # task-2 M-4) — easy to miss in a unit's journal next to everything else a
+        # commit b56286a4 M-4) — easy to miss in a unit's journal next to everything else a
         # crashing process prints.
         sys.exit(f"ccgpt-proxy: failed to bind 127.0.0.1:{PROXY_PORT}: {e}")
     server.serve_forever()
