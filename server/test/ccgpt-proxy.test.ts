@@ -567,3 +567,85 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(seen.messages[0].content).toBe('prefixed');
   });
 });
+
+describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
+  // Task 4 brief, Step 1. Order is the whole point: the mid-turn fold must
+  // run BEFORE the top-level fold, so a system entry sitting at messages[0]
+  // has already become `user` by the time the top-level instruction is
+  // prepended — landing the top-level instruction ABOVE it, not sandwiched
+  // beneath it or merged into it. This asserts both the outcome (the
+  // `system` key is gone) and the SEQUENCE (which turn reads first) — see
+  // Step 5's mutation for why both are needed.
+  it('folds the top-level system ABOVE a converted first turn', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: 'TOP LEVEL',
+        messages: [{ role: 'system', content: 'WAS MID TURN' }],
+      }),
+    });
+    expect('system' in seen).toBe(false);                       // the key is gone, not emptied
+    expect(seen.messages.map((m: any) => m.role)).toEqual(['user', 'user']);
+    // Order proves the sequence: the top-level instruction is FIRST.
+    expect(JSON.stringify(seen.messages[0])).toContain('TOP LEVEL');
+    expect(JSON.stringify(seen.messages[1])).toContain('WAS MID TURN');
+  });
+
+  // Binds the design decision the brief asks to be made deliberately:
+  // `system` may be absent, null, an empty string, or a content-block list
+  // with no usable text. Codex refuses the FIELD itself, not merely a
+  // non-empty value of it, so the key must still be dropped — but an empty
+  // instruction carries nothing to place ahead of the conversation, and
+  // inventing a leading empty user turn would be a message the sender never
+  // wrote.
+  it('drops an empty or null system without inventing a leading turn', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-empty-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: null,
+        messages: [{ role: 'user', content: 'only turn' }],
+      }),
+    });
+    expect('system' in seen).toBe(false);
+    expect(seen.messages).toEqual([{ role: 'user', content: 'only turn' }]);
+  });
+
+  // Both `system` content shapes fold, the same contract as a mid-turn
+  // entry's content: a plain string, or a list of Anthropic content blocks.
+  it('folds a block-shaped top-level system into a leading user turn', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-blocks-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: [{ type: 'text', text: 'BLOCK INSTRUCTION' }],
+        messages: [{ role: 'user', content: 'hi' }],
+      }),
+    });
+    expect('system' in seen).toBe(false);
+    expect(seen.messages[0]).toEqual({ role: 'user', content: 'BLOCK INSTRUCTION' });
+    expect(seen.messages[1]).toEqual({ role: 'user', content: 'hi' });
+  });
+});

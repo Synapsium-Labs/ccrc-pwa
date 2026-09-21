@@ -4,14 +4,24 @@ that fronts a ChatGPT/Codex subscription lane.
 
 Binds a port, answers its own identity, and forwards every request
 byte-for-byte — except a POST body on a path ending `/messages`, which is
-parsed as JSON and rewritten: every mid-conversation `role: "system"` entry
-inside `messages` becomes `role: "user"`, in place (`_fold_midturn_system`).
-Codex refuses a `system` entry there, and because the entry is replayed with
-the conversation history, one unfolded injection fails every later turn of
-that session. A body on that path the shim cannot parse at all is still
-forwarded unrewritten today — three call sites, catalogued as D-3151 in the
-plan's `## Deviations found`, until Task 7 replaces them with an explicit
-refusal.
+parsed as JSON and rewritten. Codex refuses a `system` entry by EITHER of the
+two doors Claude Code sends one through, and both are folded, in this order:
+
+  1. `_fold_midturn_system` — every mid-conversation `role: "system"` entry
+     inside `messages` becomes `role: "user"`, in place. Because the entry is
+     replayed with the conversation history, one unfolded injection fails
+     every later turn of that session.
+  2. `_fold_system` — the top-level Anthropic `system` field is removed and
+     its content prepended as a new leading `user` turn.
+
+Mid-turn conversion runs FIRST, deliberately: a `role: "system"` entry sitting
+at `messages[0]` has already become `user` by the time the top-level fold
+looks for where to insert, so the top-level instruction still lands ABOVE it
+as its own turn rather than a converted first turn silently ending up above
+an instruction the sender meant to come first. A body on that path the shim
+cannot parse at all is still forwarded unrewritten today — three call sites,
+catalogued as D-3151 in the plan's `## Deviations found`, until Task 7
+replaces them with an explicit refusal.
 
 Listens on 127.0.0.1:$CCGPT_PROXY_PORT; forwards to the LiteLLM proxy at
 127.0.0.1:$CCGPT_LITELLM_PORT. No credentials are stored here — the
@@ -92,13 +102,91 @@ def _fold_midturn_system(data):
     return data
 
 
+def _system_to_text(system):
+    """Flatten a top-level `system` value to plain text.
+
+    Same two shapes `_fold_midturn_system` already tolerates on a message's
+    own `content`: a plain string, or a list of Anthropic content blocks.
+    Blocks are joined in the order the sender wrote them — one instruction in
+    sequence, not concatenated ad hoc — and a non-dict entry or a block with
+    no string `text` contributes nothing rather than raising, since this
+    function's caller must never let a malformed block crash a request that
+    a well-formed one would have folded cleanly.
+    """
+    if isinstance(system, str):
+        return system
+    if isinstance(system, list):
+        parts = [
+            b.get("text", "") for b in system
+            if isinstance(b, dict) and isinstance(b.get("text"), str)
+        ]
+        return "\n\n".join(parts)
+    return ""
+
+
+def _fold_system(data):
+    """Remove the top-level `system` field and insert its folded text as a
+    NEW `user` turn immediately above the conversation's own first turn.
+
+    Must run AFTER `_fold_midturn_system` has already processed the same
+    `data` — this is not just a documentation convention, it is what this
+    function's own placement rule depends on. The insertion point is found
+    by skipping past any LEADING run of still-`role: "system"` entries:
+
+        idx = 0
+        while msgs[idx] is a dict with role == "system": idx += 1
+        insert the new turn at idx
+
+    Called in the documented order, `_fold_midturn_system` has already
+    converted every `system` entry to `user`, so no leading run can exist and
+    this always lands at index 0 — the top-level instruction is the very
+    first thing the model reads. Called BEFORE `_fold_midturn_system` (the
+    reversed order this fold must never run in), a still-unconverted leading
+    `system` entry is exactly what the loop steps over: the new turn is
+    inserted AFTER it instead of before, and when `_fold_midturn_system` runs
+    next and converts that entry to `user`, the CONVERTED FIRST TURN now
+    reads ahead of the top-level instruction — the exact silent reordering
+    the module docstring warns about, reproduced by Step 5's mutation.
+
+    This always INSERTS a new message; it never merges the folded text into
+    an existing one. The sender wrote the top-level instruction and the
+    conversation's first turn as two separate things, and combining them
+    into one message would lose that distinction.
+
+    Codex refuses the FIELD, not merely a non-empty value of it, so the key
+    is popped unconditionally whenever it is present. But an absent, null, or
+    empty `system` — or a content-block list with no usable text — folds to
+    no text at all, and no leading turn is invented for an instruction that
+    said nothing; a manufactured empty user turn would be a message the
+    sender never wrote. `messages` not being a list at this point (itself
+    only reachable if `_fold_midturn_system` already left it untouched,
+    D-3151 arm 3) is coerced to `[]` before inserting rather than left as
+    whatever non-list value was there — this shim does not invent a fourth
+    silent passthrough arm; it deterministically produces a well-shaped
+    `messages` for the one field this function owns.
+    """
+    sys_text = _system_to_text(data.pop("system", None))
+    if not sys_text:
+        return data
+    msgs = data.get("messages")
+    if not isinstance(msgs, list):
+        msgs = []
+    idx = 0
+    while idx < len(msgs) and isinstance(msgs[idx], dict) and msgs[idx].get("role") == "system":
+        idx += 1
+    msgs.insert(idx, {"role": "user", "content": sys_text})
+    data["messages"] = msgs
+    return data
+
+
 def _rewrite_messages_body(body: bytes) -> bytes:
     """The `/messages`-path rewrite: fold mid-conversation `system` turns,
-    then re-encode. `ensure_ascii=False` (fix round 1, M-5): the default
-    would re-escape every non-ASCII byte the client sent even when nothing
-    needed folding, and a proxy that rewrites more of the wire than it must
-    is a proxy whose diffs are harder to reason about — keep the forwarded
-    body as close to what arrived as re-encoding allows.
+    then the top-level `system` field, then re-encode. `ensure_ascii=False`
+    (fix round 1, M-5): the default would re-escape every non-ASCII byte the
+    client sent even when nothing needed folding, and a proxy that rewrites
+    more of the wire than it must is a proxy whose diffs are harder to reason
+    about — keep the forwarded body as close to what arrived as re-encoding
+    allows.
 
     A body that cannot be turned into a JSON object at all — malformed JSON,
     a non-object top level, or JSON nested deep enough that the decoder
@@ -122,7 +210,13 @@ def _rewrite_messages_body(body: bytes) -> bytes:
         # e.g. a bare array — carries no `messages` key and so cannot be
         # routed as an Anthropic request either; see the docstring above.
         return body
+    # Order is the whole point (module docstring): mid-turn conversion runs
+    # FIRST, so a system entry already sitting at messages[0] has become
+    # `user` by the time the top-level fold decides where to insert — the
+    # top-level instruction then lands ABOVE it, not reordered beneath it.
     data = _fold_midturn_system(data)
+    if "system" in data:
+        data = _fold_system(data)
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
