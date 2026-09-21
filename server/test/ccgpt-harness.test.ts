@@ -203,7 +203,7 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
   // task-10-fix-rulings.md's D-3157 hoist: `runPyAsync` used to live only in
   // `ccgpt-usage.test.ts`, with no containment case of its own — the review's
   // argument for hoisting it here is exactly that a local copy inherits
-  // nothing from this table. These five mirror `runPy`'s own cases above
+  // nothing from this table. These SIX mirror `runPy`'s own cases above
   // (and `spawnPy`'s, which `runPyAsync` is built on) but exercise
   // `runPyAsync` DIRECTLY rather than inferring its behaviour from either.
   describe('runPyAsync shares runPy\'s containment (not a second, hand-rolled body)', () => {

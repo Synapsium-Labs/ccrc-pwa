@@ -88,9 +88,10 @@ docstring.
 venv's own python (falling back to a bare `python3`) because the real
 `litellm` package it hard-imports is virtualenv-installed, not on the
 system interpreter. This file is a plain `#!/usr/bin/env python3` with the
-same hard top-level import, and the spec measures this box's ambient
-`python3` as carrying no `litellm` at all (design spec, "measured: this
-box's ambient python3 has no litellm"). Solving that is deferred to wave 3,
+same hard top-level import, and the design spec measures this box's ambient
+`python3` as carrying no `litellm` at all: *"Ambient `python3` is 3.12.3
+and has no `litellm` at all."* (spec, the runtime-drift table). Solving that
+is deferred to wave 3,
 which is expected to point the systemd unit's own `ExecStart` at the venv
 interpreter directly rather than teaching this file to search for one —
 recorded here so the next reader does not mistake the bare shebang for an
@@ -107,14 +108,15 @@ import urllib.request
 
 # The real production endpoint. Never dialed by this wave's own test suite —
 # every case in server/test/ccgpt-usage.test.ts binds its own loopback server
-# on this suite's fixed port (task-10-fix-rulings.md M-1, corrected from a
-# first draft that claimed this without exception — it does not, see M-7
-# below). A case that expects the subject to refuse before ever making a
-# request asserts the bound server saw ZERO requests, not merely that the
-# subject exited non-zero (M-7) — including the non-loopback-override case,
-# whose bound server is deliberately NOT what CCGPT_USAGE_ENDPOINT points at:
-# it exists solely to prove the refusal doesn't reach THIS box's own mock
-# either, not only the (unreachable-by-design) host named in the override.
+# on this suite's fixed port (task-10-fix-rulings.md M-1). What varies
+# between cases is not WHETHER a server is bound, but whether
+# CCGPT_USAGE_ENDPOINT is pointed AT it: a case that expects the subject to
+# refuse before ever making a request binds a server anyway and asserts it
+# saw ZERO requests (M-7) — never merely that the subject exited non-zero —
+# including the non-loopback-override case, whose bound server is
+# deliberately NOT what CCGPT_USAGE_ENDPOINT names: it exists solely to
+# prove the refusal doesn't reach THIS box's own mock either, not only the
+# (unreachable-by-design) host actually named in the override.
 # Task 11 (separate task, not this file's) pins this constant as the
 # compiled-in default and hardens the loopback check against look-alike
 # hosts.
@@ -341,9 +343,9 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     `redirect_request` returning `None` makes CPython's own
     `HTTPRedirectHandler` raise `HTTPError` carrying the ORIGINAL response's
     status and headers, rather than following `Location` anywhere. Covers
-    every redirect status this handler's parent class recognises (301, 302,
-    303, 307 today) through the one method they all funnel through — not a
-    per-status override.
+    every redirect status this handler's parent class recognises — 301,
+    302, 303, 307, and (CPython >= 3.11) 308 — through the one method they
+    all funnel through, not a per-status override.
 
     This publisher's endpoint has no legitimate reason to redirect at all.
     `urlopen`'s DEFAULT opener follows redirects, and the review measured
@@ -380,29 +382,35 @@ def _fetch_headers(model: str, token: str):
 
     Sent through `_OPENER`, whose `_NoRedirectHandler` refuses every
     redirect (task-10-fix-rulings.md C-1) — see that class's own docstring.
-    Sends the same five-header block the reference does, restored in fix
-    round 1 (C-2): `Authorization`, `content-type`, `accept`, plus
-    `originator`/`user-agent`/`session_id`, which `ccd/ccrc-models-probe`
-    (this repository's own in-tree reference) documents as "what the
-    backend expects from a real Codex CLI caller" — dropping them risked
+    Sends six headers total: this file's OWN `content-type`/`accept` for its
+    POST body, plus the same FOUR-header identity block the in-tree
+    reference sends (`ccd/ccrc-models-probe`'s own `headers = {...}` dict,
+    below its `account_id` read — a GET with neither `content-type` nor
+    `accept`, so those two are not part of what is "matched" here) —
+    `Authorization`, `originator`, `user-agent`, `session_id` — restored in
+    fix round 1 (C-2) after this file's port had dropped everything but
+    `Authorization`. `ccd/ccrc-models-probe` documents that block as "what
+    the backend expects from a real Codex CLI caller"; dropping it risked
     the backend answering with no usage headers at all, which is exactly
     the "ccd reads the lane as unknown" condition this file exists to
     remove.
 
-    The reference sends a SIXTH header, `ChatGPT-Account-Id`, derived by
-    reading `auth.json`'s own `account_id` field. That is dropped here,
-    deliberately, and stays dropped: spec line ~497 forbids reading OAuth
-    file CONTENTS anywhere in ccrc ("existence and mode only"), so this
-    publisher cannot derive it that way. Sourcing it from `lane.json`
-    instead was considered and rejected — `lane.json`'s own `id` is ccrc's
-    OWN lane name (e.g. `"codex-a"`), not the ChatGPT backend's per-workspace
-    account identifier, so sending it under this header would be sending
-    the WRONG value, not merely an absent one. A token scoped to a single
-    ChatGPT workspace authenticates fully without this header; a token
-    valid across multiple workspaces cannot be disambiguated by this
-    publisher today, and neither the spec nor the plan resolves that case —
-    recorded here, and in the fix round's report, rather than decided
-    silently.
+    The reference sends a FIFTH identity header beyond those four,
+    `ChatGPT-Account-Id`, derived by reading `auth.json`'s own `account_id`
+    field. That is dropped here, deliberately, and stays dropped: spec line
+    ~497 forbids reading OAuth file CONTENTS anywhere in ccrc ("existence
+    and mode only"), so this publisher cannot derive it that way.
+    `lane.json`'s own `id` is ccrc's OWN lane name (e.g. `"codex-a"`), not
+    the ChatGPT backend's per-workspace account identifier, so sending IT
+    under this header would be sending the WRONG value, not merely an
+    absent one — this is D-3160 (the plan's `## Deviations found`), whose
+    FIRST proposed remedy (a `lane.json` field the materialiser derives)
+    was itself refuted for the identical reason and has been amended: the
+    real remedy is an operator-supplied field on the account's own roster
+    entry, copied into `lane.json` by the materialiser, not yet
+    implemented. A token scoped to a single ChatGPT workspace authenticates
+    fully without this header; a token valid across multiple workspaces
+    cannot be disambiguated by this publisher until that remedy lands.
 
     Any OTHER failure — no usage header at all (auth failure, a 5xx, a
     malformed response), or any redirect status regardless of its headers

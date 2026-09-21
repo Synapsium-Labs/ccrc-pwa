@@ -139,16 +139,18 @@ function fullHeaders(status = 200): (req: IncomingMessage, res: ServerResponse) 
   };
 }
 
-/** `runPyAsync` (`ccgptHarness.ts`, hoisted here in fix round 1 —
- *  task-10-fix-rulings.md's D-3157 audit) for the cases whose mock endpoint
- *  must answer WHILE the child runs: `runPy` drives its child through
- *  `spawnSync`, which blocks the whole Node event loop, so a `node:http`
- *  server living in this same test process could never accept or answer a
- *  connection while `runPy` is blocking on it — see `runPy`'s own
- *  docstring in the harness for the measured deadlock. The three refusal
- *  cases that exit BEFORE any network attempt (absent `lane.json`, unset
- *  `CCGPT_ACCOUNT_ID`, non-loopback endpoint, not-logged-in) have no such
- *  dependency and use plain `runPy`. */
+// task-10-fix-rulings-2.md, S-5: every case in this file uses `runPyAsync`
+// EXCEPT the non-loopback-endpoint refusal below, which is the only one
+// whose bound server is never pointed at even under its own mutation (its
+// own comment explains why plain `runPy` is safe there specifically). See
+// `runPy`'s own docstring in `ccgptHarness.ts` for the same-process-mock
+// deadlock (D-3157) that rules `runPy` out for every case whose mock must
+// answer while the child runs.
+
+/** Composes the env a "happy path" or lane-scoped case passes to the
+ *  publisher: the litellm stub on `PYTHONPATH`, the lane id, and the
+ *  endpoint to poll. `extra` lets a caller add or override one key without
+ *  hand-writing the other three. */
 function publisherEnv(id: string, endpoint: string, extra: Record<string, string> = {}): Record<string, string> {
   return {
     PYTHONPATH: PYSTUB_DIR,
@@ -432,6 +434,46 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     } finally {
       await close();
     }
+  });
+
+  it('task-10 fix round 2 (M-4): refuses on unset CCGPT_ACCOUNT_ID even with no litellm importable — never an ImportError', async () => {
+    // task-10-fix-rulings-2.md M-1: fix round 1 moved the `from litellm...`
+    // import past the CCGPT_ACCOUNT_ID/CCGPT_USAGE_ENDPOINT refusals so an
+    // unset id on a box with no litellm still gets the named refusal rather
+    // than a raw ImportError — but every OTHER case in this file puts the
+    // stub package on PYTHONPATH, so that ordering was never exercised:
+    // reverting it left 15/15 green (re-review, V-2).
+    //
+    // This case constructs the actual absence rather than merely asserting
+    // it cannot be constructed: deliberately NO `PYTHONPATH` (so the litellm
+    // stub is not on `sys.path`) and NO `CCGPT_ACCOUNT_ID`. `runPyAsync`
+    // sets HOME to the fixture home (containedSpawnOptions), and Python's
+    // user-site lookup (`~/.local/lib/python3.X/site-packages`, where this
+    // BOX's ambient python3 genuinely has `litellm` installed for its real
+    // operator) follows HOME — verified empirically before relying on it:
+    // `env -i HOME=<fixture> PATH=$PATH python3 -c 'import litellm'` raises
+    // `ModuleNotFoundError` on this box, even though the same import
+    // succeeds under the operator's own real HOME. So under the fixture
+    // HOME this harness always uses, "no PYTHONPATH" reliably means "no
+    // litellm importable", on THIS box and by construction on a box with
+    // none installed anywhere (the design spec's own stated case, "ambient
+    // python3 ... has no litellm at all").
+    const home = mkTmp('ccgpt-usage-noid-nolitellm-');
+    const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
+      home,
+      env: {
+        // CCGPT_ACCOUNT_ID and PYTHONPATH both deliberately omitted.
+        CCGPT_USAGE_ENDPOINT: `http://127.0.0.1:${USAGE_PORT}`,
+      },
+    });
+    expect(r.timedOut).toBe(false);
+    expect(r.status).not.toBe(0);
+    expect(r.stderr).toMatch(/CCGPT_ACCOUNT_ID/);
+    // The regression this case exists to catch answers with a traceback
+    // naming the import machinery instead — assert its absence explicitly,
+    // not just the presence of the real message above.
+    expect(r.stderr).not.toMatch(/ImportError/);
+    expect(r.stderr).not.toMatch(/ModuleNotFoundError/);
   });
 
   it('task-10: refuses a non-loopback CCGPT_USAGE_ENDPOINT rather than falling through to it', async () => {

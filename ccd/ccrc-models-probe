@@ -173,10 +173,13 @@ token = Authenticator().get_access_token()
 # ccd/ccgpt-usage.py's own request (task-10-fix-rulings.md C-2, which
 # restored them there too) — what the backend expects from a real Codex CLI
 # caller. NOT a verbatim match, though: ccd/ccgpt-usage.py deliberately does
-# NOT send ChatGPT-Account-Id (see its own docstring for why — spec line
-# ~497 forbids reading auth.json's contents, which is how this arm derives
-# `account_id` below), so read ccd/ccgpt-usage.py directly for what it
-# actually sends rather than treating this comment as its mirror.
+# NOT send ChatGPT-Account-Id, because deriving it means reading auth.json's
+# CONTENTS (account_id, above), which spec line ~497 forbids — this arm
+# does exactly that read. That is a pre-existing violation of the same rule
+# D-3160 rests on, recorded as D-3161 (the plan's `## Deviations found`):
+# out of this plan's scope to fix, not unnoticed. Read ccd/ccgpt-usage.py
+# directly for what it actually sends rather than treating this comment as
+# its mirror.
 headers = {
     "Authorization": f"Bearer {token}",
     "originator": "codex_cli_rs",
