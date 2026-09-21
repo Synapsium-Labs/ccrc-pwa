@@ -452,8 +452,9 @@ ships in part B of this wave, not in this PR.
 **Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: the newest stable release —
 `latest/download` never serves a prerelease, so a `dev` build needs its tag) downloads the
 tarball and `SHA256SUMS`, verifies `sha256sum -c` **before extracting a single file**, extracts to
-a staging dir and hands off to the STAGED `ccrc install` — no build step on the box. Everything
-after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
+a staging dir and hands off to the STAGED `ccrc install` — no build step on the box. The first
+install trusts the transport checksum only and says so; every update from then on verifies
+provenance. Everything after `--release [tag]` passes through to that verb; `--role` rides here. Checkout mode
 (`bash install.sh` from a clone, as in "Install" above) is unchanged.
 
 **Roles.** `ccrc install --role server|fleet|both` (default `both` = the single-box shape above;
@@ -463,16 +464,24 @@ and the agent bearer token, writes `~/.ccrc/agent.env` (0600, seed-once), and in
 `ccrc-agent.service` instead of `ccrc.service`. Wiring the server box to it (`CCRC_FLEET=remote`,
 `CCRC_AGENT_URL`, `CCRC_AGENT_TOKEN`) is "Remote fleet mode" below.
 
-**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force]` — per box, explicit, never
-automatic. `--check` prints where this box stands against the published release (a fixed-shape
-`check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already running
-the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's last
-write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
-loudly: fetch + verify (transport checksum, then the per-file `MANIFEST`); back up to
-`~/ccrc-backups/<ts>/` (coord.db via `VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any
-install write; re-run the install spine from the staged tree (role-aware, atomic, seed-once files
-untouched, every rostered home's skills converged); the supervisor sweep behind its mandatory
-`KillMode=process` preflight; then the from→to report. Rolling back is `--to <the older tag>`, which
+**Update and rollout.** `ccrc update [--to vX.Y.Z] [--check] [--force] [--allow-unsigned] [--downgrade]` —
+per box, explicit, never automatic. `--check` prints where this box stands against the published release (a
+fixed-shape `check:` line, then a sentence; exit 0 only when current) and writes nothing. A box already
+running the target whose install COMPLETED — stamp sha, staged sha and `~/.ccrc/installed` (the spine's
+last write) all agreeing — is left alone; `--force` reinstalls. Otherwise the spine, each step refusing
+loudly: resolve (`SHA256SUMS`; with `--to`, the tarball it names must BE that tag), the floor
+(`~/.ccrc/floor`, the highest version this box ever completed an install of — a target below it is refused
+whichever way it was resolved, and `--downgrade` is the typed way down); fetch + verify (transport
+checksum, then the release's provenance bundle `ccrc-<tag>.tar.gz.sigstore.json` checked by the INSTALLED
+tree's `deploy/verify-provenance.mjs` against the vendored Sigstore root and exactly the two release
+workflows' identities — `--allow-unsigned` admits a release with NO bundle, never one that fails, and the
+box records the install as unsigned, which `ccrc version` says); extract, bind the extracted `build.json`
+to the resolved version, check the per-file `MANIFEST`; back up to `~/ccrc-backups/<ts>/` (coord.db via
+`VACUUM INTO`, dists, ccd, units, `~/.ccrc/memory`) before any install write; re-run the install spine from
+the staged tree (role-aware, atomic, seed-once files untouched, every rostered home's skills converged; it
+mints `~/.ccrc/node-id` once, rewrites `~/.ccrc/ccrc-caps` with what this install can do, and raises the
+floor last); the supervisor sweep behind its mandatory `KillMode=process` preflight; then the from→to report.
+Rolling back is `--to <the older tag> --downgrade`, which
 prints the coord.db restore commands rather than auto-restoring. **Across a two-box fleet, `ccrc
 rollout [--to] [--server-first] [--check] [--force]`** from a machine holding `~/.ccrc/deploy.env`
 does it in order — roles preflighted, version pinned once from SHA256SUMS, fleet box then server

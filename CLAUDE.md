@@ -104,12 +104,13 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   fleet box then the server box, stops at the first failure, and re-measures both (`--force` moves a converged fleet
   anyway). An update that completed under a failing doctor exits 3, not 1 — the box IS on the new build, its FAIL lines
   are its health — and `rollout` relays that, continues, and exits 3 itself (D-3114). Any single box is `ccrc update`; a converged box (stamp, staged sha and `~/.ccrc/installed` agreeing) is
-  left alone — `--force` reinstalls there too. **The first move onto the channel is by hand, once per box (D-3106):**
+  left alone — `--force` reinstalls there too. **The first move onto the release lane is by hand, once per box (D-3106):**
   `rollout` asks each box `ccrc update --check`, which a `ccrc` placed before 2026-09-19 does not know, and it refuses a
   box whose `~/.ccrc/ccrc.env` records no `CCRC_ROLE` (`deploy.sh` never writes one; a bare `ccrc update` there would
   install role `both`). Record the role, then `ssh <box> ccrc update --to vX.Y.Z`, fleet box first; from then on it is
   `rollout`. **What is
-  running where:** `ccrc version` (with its `install:` line), `ccrc update --check`, `/health`'s `version`, the PWA's
+  running where:** `ccrc version` (with its `install:` line — which also says `unsigned` when the tree was placed
+  without a verified bundle), `ccrc update --check`, `/health`'s `version`, the PWA's
   `BuildLine`, and doctor's `skills` check (every home vs the shipped tree; `ccrc doctor --fix` cures it, D-3113). A
   server-role box converges nothing per account — no wrappers, dirs, hooks, skills or session files — and its doctor
   skips those checks (D-3111). Coordinates live in `~/.ccrc/deploy.env`
@@ -122,7 +123,9 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   with exit 2 without a target (`server/test/deploy-coordinates.test.ts` pins that refusal). It DOES stamp
   `version`, but only when a release tag points at the built commit (`stamp_build`'s `git tag --points-at HEAD`),
   which auto-tagging makes the ordinary case on `main`; the PWA shows a box amber for a MISSING `version`, which
-  is what an untagged working-tree deploy leaves. The ordering rule survives as `rollout`'s default: fleet box first
+  is what an untagged working-tree deploy leaves. A release since W1 of the update-management design is a
+  PRERELEASE until promoted, so a bare `ccrc rollout` (which pins from `latest/download`) moves the fleet to the
+  newest STABLE; a dev build is `rollout --to vX.Y.Z`. The ordering rule survives as `rollout`'s default: fleet box first
   because the server reads what the hook writes and the agent caches `ccd caps` at boot — `--server-first` when a
   wave's server arm is a reader-widening.
 
