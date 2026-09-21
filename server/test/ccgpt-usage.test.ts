@@ -4,8 +4,8 @@ import { createServer, type IncomingMessage, type IncomingHttpHeaders, type Serv
 import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import os from 'node:os';
-import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
-import { mkTmp } from './tmpHelpers';
+import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
+import { mkTmp } from './tmpHelpers.js';
 
 // Probed once at module scope — same shape as ccgpt-harness.test.ts and
 // ccgpt-proxy.test.ts (task-10-rulings.md (commit af7cc0bc) §5): a missing interpreter must be

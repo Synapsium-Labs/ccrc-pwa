@@ -1,7 +1,7 @@
 // server/test/ccgpt-harness.test.ts
 import { describe, it, expect } from 'vitest';
-import { pythonOrSkip, runPy, runPyAsync, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
-import { mkTmp } from './tmpHelpers';
+import { pythonOrSkip, runPy, runPyAsync, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
+import { mkTmp } from './tmpHelpers.js';
 import { writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 
@@ -157,7 +157,7 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
       writeFileSync(f, 'import os\nprint(os.environ["HOME"])\n');
       const { child } = spawnPy(f, { home, env: { ...process.env, PYTHONPATH: PYSTUB_DIR } });
       let stdout = '';
-      child.stdout?.on('data', (c) => { stdout += c.toString(); });
+      child.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
       await new Promise<void>((r) => child.once('close', () => r()));
       expect(stdout.trim()).toBe(home);
     });
@@ -179,7 +179,7 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
       writeFileSync(f, 'import os\nprint(os.getcwd())\n');
       const { child } = spawnPy(f, { home });
       let stdout = '';
-      child.stdout?.on('data', (c) => { stdout += c.toString(); });
+      child.stdout?.on('data', (c: Buffer) => { stdout += c.toString(); });
       await new Promise<void>((r) => child.once('close', () => r()));
       expect(stdout.trim()).toBe(home);
     });

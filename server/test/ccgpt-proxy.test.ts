@@ -6,8 +6,8 @@ import { connect as netConnect } from 'node:net';
 import { writeFileSync, mkdirSync, utimesSync, chmodSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { gzipSync, gunzipSync, deflateSync, inflateSync } from 'node:zlib';
-import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
-import { mkTmp } from './tmpHelpers';
+import { pythonOrSkip, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
+import { mkTmp } from './tmpHelpers.js';
 
 const PROXY_PORT = 45010;
 const UPSTREAM_PORT = 45011;
@@ -134,7 +134,13 @@ function rawChunkedPost(port: number, path: string, rawBody: Buffer): Promise<{ 
       sock.end();
     });
     const chunks: Buffer[] = [];
-    sock.on('data', (c) => chunks.push(c));
+    // net.Socket's typed 'data' event is `string | NonSharedBuffer` — it only
+    // ever emits a string when `setEncoding` has been called, which neither
+    // raw-socket helper in this file does, so this is real narrowing (checked
+    // by shape) rather than a cast: the string arm is honoured, not asserted
+    // away, using the same 'latin1' byte-preserving encoding this file writes
+    // the head with.
+    sock.on('data', (c) => chunks.push(typeof c === 'string' ? Buffer.from(c, 'latin1') : c));
     sock.on('end', () => {
       const raw = Buffer.concat(chunks).toString('latin1');
       const sep = raw.indexOf('\r\n\r\n');
@@ -174,7 +180,13 @@ function rawRequest(
       sock.end();
     });
     const chunks: Buffer[] = [];
-    sock.on('data', (c) => chunks.push(c));
+    // net.Socket's typed 'data' event is `string | NonSharedBuffer` — it only
+    // ever emits a string when `setEncoding` has been called, which neither
+    // raw-socket helper in this file does, so this is real narrowing (checked
+    // by shape) rather than a cast: the string arm is honoured, not asserted
+    // away, using the same 'latin1' byte-preserving encoding this file writes
+    // the head with.
+    sock.on('data', (c) => chunks.push(typeof c === 'string' ? Buffer.from(c, 'latin1') : c));
     sock.on('end', () => {
       const raw = Buffer.concat(chunks).toString('latin1');
       const sep = raw.indexOf('\r\n\r\n');
@@ -1162,7 +1174,13 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
     const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'content-encoding': enc },
-      body,
+      // `body` is a `Buffer<ArrayBufferLike>` (gzipSync/deflateSync's return
+      // type); `fetch`'s BodyInit only accepts an ArrayBufferView pinned to a
+      // real (non-shared) ArrayBuffer. Copying into a fresh Uint8Array is
+      // honest, not a cast around the mismatch — a Node Buffer is never
+      // actually SharedArrayBuffer-backed, this just gives the type checker
+      // a view that says so.
+      body: new Uint8Array(body),
     });
     expect(r.status).toBe(200);
     expect(seenEnc).toBe(enc);                                  // re-encoded, not silently decompressed
