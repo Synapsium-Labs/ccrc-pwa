@@ -8208,7 +8208,34 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
       // number green; Task 11 still owns re-anchoring the citations
       // themselves (this is the pre-existing debt census, not new debt this
       // branch created).
-      'ccd/ccrc': 4,
+      // AND IT ROUND-TRIPS, 4 -> 5, ON THE MERGE WITH `592cb109` (#163, the
+      // Codex roster contract) — the same one reference coming back, spec
+      // `:91`'s `ccd/ccrc:9663`, and no other key moves at all. The paragraph
+      // above is the record of a measurement rather than a claim about this
+      // tree, and ITS STATED MECHANISM IS CORRECTED HERE: this branch's own
+      // later commits (D-3146/D-3147/D-3148) moved `ccd/ccrc` again after it
+      // was written, so the `_inst_tree_copy` comment header it names is not
+      // what stands at `:9663` by the branch's tip. MEASURED, not inferred.
+      //   At the pre-merge tip `76765545`, `ccd/ccrc:9663` is
+      //   `rm -f -- "$dest.tmp."*`, which sits inside `_inst_atomic()`'s body
+      //   (`:9650`-`:9664`); `_inst_atomic` is a token of the very clause that
+      //   cites it ("`_inst_atomic` in `ccrc install`"), so SUB-RULE A
+      //   exempted it and the entry read 4.
+      //   #163 adds 18 lines to `ccd/ccrc` (12,881 -> 12,899, `wc -l`) in
+      //   twenty hunks, EVERY ONE of them above `:9663` — the highest starts
+      //   at `:7417` — so those bytes now stand at `:9681` and `:9663` is
+      //   `# already use.`, a comment line outside that body. The exemption is
+      //   gone and the reference is visible to this census again.
+      // NEITHER CORPUS DOCUMENT CHANGED on this merge either: #163 touches no
+      // file in `CORPUS`, measured by name against the merge range. So nothing
+      // here is a re-point and nothing is a repair. The composition was
+      // measured by swapping `ccd/ccrc` ALONE for its `76765545` content on
+      // the merged tree and re-running this audit: the whole map reverts and
+      // this assertion passes, so the entry is the only thing the merge moves.
+      // The clause's true anchor is `_inst_atomic()`'s own definition line,
+      // `:9650` -> `:9668` here. It is inside the FROZEN spec, so it is
+      // COUNTED rather than repaired; Task 11 still owns the re-anchor.
+      'ccd/ccrc': 5,
       // `shared/api.ts` ENTRY REMOVED, 1 -> 0, by the board-placement branch
       // (#137): its own additions moved this file's lines, and repairing the
       // README anchors it broke re-pointed BY CONTENT the one anchor that was
@@ -8360,7 +8387,17 @@ describe('the compaction card — every line citation is anchored (spec §3.4)',
     // 195 -> 194 on centralised-update-management, and it is the same
     // arithmetic: `ccd/ccrc` 5 -> 4 (argued beside the map above, above the
     // `'ccd/ccrc'` entry) and nothing else moved.
-    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(194);
+    // AND 194 -> 195 AGAIN when `origin/main` at `592cb109` (#163) was merged
+    // into that branch, by the same arithmetic in the other direction:
+    // `ccd/ccrc` 4 -> 5 and nothing else moved. The number this branch ships
+    // is therefore the number it started from — not because anything was
+    // adjusted to keep it green, but because the sub-rule-A exemption that
+    // lowered it was undone by eighteen lines main added above the cited
+    // line. Both movements are argued once, beside the `'ccd/ccrc'` entry.
+    // THIS IS WHAT AN ASSERTION OVER THE MERGE COSTS: the value is a function
+    // of BRANCH x MAIN, so it can only be derived on the merged tree and only
+    // stays true until main moves again. Derive it last, then merge.
+    expect(total, 'the narrated headline is the sum of the census, and this is it').toBe(195);
     // AND EVERY FAILING CITATION POINTS INTO A FILE THIS TASK REWROTE — the
     // claim that makes the census a statement about Task 9 rather than about
     // the documents' own quality. A stale citation into an untouched file is a
