@@ -39,7 +39,11 @@
 // modules and match the spike's v4.1.2/v5.0.0 names verbatim.
 //
 // exit 0 verified (one stdout line naming the identity); 1 refused (one
-// stderr line saying why); 2 usage.
+// stderr line saying why); 2 usage; 3 the verifier could not RUN at all —
+// its own dependencies would not load (D-3144). 3 is deliberately outside
+// {0,1}: `_upd_fetch` reads 1 as a verdict ON THE BUNDLE and says so with
+// --allow-unsigned denied, which is a false claim about the release when
+// the real fault is a half-finished `npm ci` on this box.
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';

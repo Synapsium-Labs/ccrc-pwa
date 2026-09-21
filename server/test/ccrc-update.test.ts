@@ -989,6 +989,16 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
   // member of the SAME non-{0,1} vocabulary 2 and 127 above already
   // exercise, so it must fall into this `elif` arm exactly as they do,
   // never into the `vrc -eq 1` "FAILED" arm.
+  //
+  // NOT A REGRESSION PIN FOR D-3144's OWN FIX, and it must not be relied on
+  // as one (whole-branch fix-round re-review): it drives the recording stub
+  // through `fixture-verify-exit`, never the real verify-provenance.mjs, so
+  // it exercises this `elif` arm — which D-3144 did not touch — and would
+  // stay GREEN if the verifier's dependency-load catch were reverted to
+  // exiting 1. What reds on that revert is the verifier-side case in
+  // `verify-provenance.test.ts` ('cannot load its own dependencies').
+  // This case's job is the shell-side contract: that the arm treats an
+  // unfamiliar non-{0,1} code the same way it treats the two it knows.
   it('a verifier that exits 3 (a dependency it could not load) gets the same "could not RUN" sentence, never "FAILED" (D-3144)', () => {
     const home = freshUpdateBox('ccrc-update-prov-vrc3-');
     plantOldBox(home, { version: 'v1.0.0' });

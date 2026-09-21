@@ -370,4 +370,33 @@ describe('verify-provenance.mjs: malformed or missing inputs refuse with one lin
     expect(r.stderr).toMatch(/^verify-provenance: /);
     expect(r.stderr).not.toMatch(/^\s+at /m); // a real V8 stack frame, not an in-message 'at'
   });
+
+  // D-3145 is a REMOVAL, so no fixture's outcome changes and no behavioural
+  // case can red on it — `tsaThreshold: 0` propagated to the library's
+  // `timestampThreshold` and made `verifyCertificate` run its chain check
+  // ZERO times, which the bundles we ship as fixtures never depended on.
+  // A literal-absence pin is the honest instrument for "removed, and not
+  // re-introduced in some other falsy spelling": it reds on `tsaThreshold: 0`
+  // coming back, and on `: false`, `: -1` or `: undefined` equally, none of
+  // which any behavioural assertion here would notice.
+  // Scoped to the CONSTRUCTOR CALL, never the whole file: D-3145's own
+  // comment above that call names `tsaThreshold: 0` to say what used to sit
+  // there and why it was removed, so a file-wide absence scan reds on the
+  // CORRECT tree — measured, it did. A false red is worse than an unpinned
+  // claim, and it would have taught the next reader to delete the comment.
+  it('the Verifier is constructed with no tsaThreshold at all — a removal, not a re-weakening (D-3145)', () => {
+    const src = readFileSync(VERIFIER, 'utf8');
+    // Line-scoped, not paren-balanced: the first argument is itself a call
+    // (`toTrustMaterial(root)`), so a `\([^)]*\)` match stops inside it and
+    // never reaches the option object — measured, it did, and the
+    // non-vacuity assertions below caught that rather than passing blind.
+    const call = src.split('\n').filter((l) => l.includes('new Verifier('));
+    expect(call, 'exactly one Verifier construction').toHaveLength(1);
+    expect(call[0]).not.toMatch(/tsaThreshold/);
+    // Non-vacuity: the two thresholds that ARE load-bearing are passed at
+    // this same call, so this measures the option list rather than matching
+    // an empty or unrelated string.
+    expect(call[0]).toMatch(/ctlogThreshold:\s*1/);
+    expect(call[0]).toMatch(/tlogThreshold:\s*1/);
+  });
 });
