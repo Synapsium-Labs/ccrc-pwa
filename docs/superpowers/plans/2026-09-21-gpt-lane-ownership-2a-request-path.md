@@ -1029,3 +1029,33 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   review then found (C1) that a caller supplying `opts.env` could revoke containment entirely, with no
   red anywhere — which is precisely the gap a mutation over one call shape cannot see. A mutation
   measures the axis it moves, and no other.
+
+- **D-3151 — `ccgpt-proxy.py` carries three silent passthroughs on the `/messages`-suffixed rewrite
+  path, deliberately, until Task 7.** The fact: `_rewrite_messages_body`'s `except (TypeError,
+  ValueError, RecursionError)` arm, its own `not isinstance(data, dict)` arm, and
+  `_fold_midturn_system`'s `not isinstance(msgs, list)` arm each return the body (or the unmodified
+  `data`) unrewritten rather than refusing — three call sites, not one. Spec §6.3 forbids exactly this
+  shape: a body carrying a system message, forwarded unexamined, is the sticky-replay hazard this whole
+  task exists to close.
+
+  Why accepted: gzip/deflate decoding lands in Task 6 and the explicit refusal for everything else lands
+  in Task 7; until then, a body this shim cannot parse at all has to do *something*, and forwarding is
+  what keeps the lane working in the meantime.
+
+  Why safe today, measured (Task 3's fix-round review, against the real upstream LiteLLM parser rather
+  than this shim's own behaviour): every body that reaches any of the three arms is a body the upstream
+  parser also rejects — malformed JSON, truncated JSON, invalid UTF-8, and JSON nested past the
+  decoder's own limit all come back as a 400 or a decode error from LiteLLM, not a processed request.
+  The one body class the shim is silent on and upstream is not — a top-level JSON array — carries no
+  `messages` key and cannot be routed as an Anthropic request by any downstream reader, so it cannot
+  become the sticky replay hazard either. No body reaching these three arms today can realise the
+  hazard, but the argument rests on a third-party parser's behaviour, which is an unpinned claim that
+  can drift — this entry, and the corrected reasoning it now carries in the interim ruling, are what a
+  later reader should trust over a memory of the earlier premise (chunked bodies do **not** reach these
+  arms at all — `if body` is false first — that is a separate hole, and Task 5's to close).
+
+  Who removes it: Task 7, which must **replace** these three arms with an explicit refusal rather than
+  adding a fourth branch beside them. A grep for `return body` alone will not see the third arm (it
+  returns `data`), so Task 7's wave-close check needs a behavioural case — an unparseable body carrying
+  a `system`-shaped entry must leave the upstream recorder unhit — not a text scan for the current
+  wording of the silent arms.

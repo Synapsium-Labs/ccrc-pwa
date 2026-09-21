@@ -2,11 +2,16 @@
 """ccgpt-proxy — ccrc's front shim between Claude Code and the LiteLLM proxy
 that fronts a ChatGPT/Codex subscription lane.
 
-THIS IS THE MINIMAL FORM (gpt-lane-ownership plan 2a, Task 2). It binds a
-port, answers its own identity, and forwards every other request untouched.
-Later tasks in the same plan add request-body rewriting, but only on the
-`/v1/messages` path — everything else this shim ever sees stays a pure
-passthrough, forever.
+Binds a port, answers its own identity, and forwards every request
+byte-for-byte — except a POST body on a path ending `/messages`, which is
+parsed as JSON and rewritten: every mid-conversation `role: "system"` entry
+inside `messages` becomes `role: "user"`, in place (`_fold_midturn_system`).
+Codex refuses a `system` entry there, and because the entry is replayed with
+the conversation history, one unfolded injection fails every later turn of
+that session. A body on that path the shim cannot parse at all is still
+forwarded unrewritten today — three call sites, catalogued as D-3151 in the
+plan's `## Deviations found`, until Task 7 replaces them with an explicit
+refusal.
 
 Listens on 127.0.0.1:$CCGPT_PROXY_PORT; forwards to the LiteLLM proxy at
 127.0.0.1:$CCGPT_LITELLM_PORT. No credentials are stored here — the
@@ -48,6 +53,18 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _required_port(name: str) -> int:
+    """Like `_required_env`, but for a variable that must parse as a port
+    number. Left unwrapped, a non-numeric value escaped as a bare
+    `ValueError` traceback instead of the same named refusal every other
+    missing or invalid variable gets (fix round 1, M-3)."""
+    raw = _required_env(name)
+    try:
+        return int(raw)
+    except ValueError:
+        sys.exit(f"ccgpt-proxy: refusing to start — {name} is not a valid port number: {raw!r}")
+
+
 def _fold_midturn_system(data):
     """Every messages[*] with role 'system' becomes 'user', IN PLACE.
 
@@ -60,6 +77,14 @@ def _fold_midturn_system(data):
     """
     msgs = data.get("messages")
     if not isinstance(msgs, list):
+        # D-3151, arm 3 of 3: `messages` present but not a list (e.g. a
+        # dict) leaves any `role: "system"` entries inside it untouched —
+        # `data` is returned as-is and the caller re-encodes and forwards it.
+        # Safe today only because the measured fact D-3151 records: every
+        # body reaching this shape is one the real upstream parser also
+        # rejects, so it can never become the sticky replay hazard the fold
+        # exists to close. Task 7 replaces this arm; it does not add a
+        # fourth branch beside it.
         return data
     for m in msgs:
         if isinstance(m, dict) and m.get("role") == "system":
@@ -68,32 +93,37 @@ def _fold_midturn_system(data):
 
 
 def _rewrite_messages_body(body: bytes) -> bytes:
-    """The `/v1/messages` rewrite path: fold mid-conversation `system` turns,
-    then re-encode. A body that is not a JSON object — malformed, or a
-    non-object top level — has nothing safe to fold into, so it is forwarded
-    exactly as received rather than turning a passthrough path into a new way
-    for this shim to break a request the fold was never going to touch.
+    """The `/messages`-path rewrite: fold mid-conversation `system` turns,
+    then re-encode. `ensure_ascii=False` (fix round 1, M-5): the default
+    would re-escape every non-ASCII byte the client sent even when nothing
+    needed folding, and a proxy that rewrites more of the wire than it must
+    is a proxy whose diffs are harder to reason about — keep the forwarded
+    body as close to what arrived as re-encoding allows.
+
+    A body that cannot be turned into a JSON object at all — malformed JSON,
+    a non-object top level, or JSON nested deep enough that the decoder
+    itself gives up (fix round 1, I-1: `RecursionError` is a `RuntimeError`
+    subclass, not a `ValueError`, and used to escape this except arm
+    entirely, dropping the connection with no HTTP response) — has nothing
+    safe to fold into, so it is forwarded exactly as received. D-3151, arms 1
+    and 2 of 3 (the third is `_fold_midturn_system`'s own non-list arm):
+    recorded in the plan's `## Deviations found`, safe only because every
+    body reaching either arm today is one the real upstream parser also
+    rejects. Task 7 replaces both with an explicit refusal rather than
+    adding a fourth branch beside them.
     """
     try:
         data = json.loads(body)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
+        # D-3151, arm 1 of 3.
         return body
     if not isinstance(data, dict):
+        # D-3151, arm 2 of 3: valid JSON whose top level is not an object —
+        # e.g. a bare array — carries no `messages` key and so cannot be
+        # routed as an Anthropic request either; see the docstring above.
         return body
     data = _fold_midturn_system(data)
-    return json.dumps(data).encode("utf-8")
-
-
-def _required_port(name: str) -> int:
-    """Like `_required_env`, but for a variable that must parse as a port
-    number. Left unwrapped, a non-numeric value escaped as a bare
-    `ValueError` traceback instead of the same named refusal every other
-    missing or invalid variable gets (fix round 1, M-3)."""
-    raw = _required_env(name)
-    try:
-        return int(raw)
-    except ValueError:
-        sys.exit(f"ccgpt-proxy: refusing to start — {name} is not a valid port number: {raw!r}")
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
@@ -139,12 +169,17 @@ class Handler(BaseHTTPRequestHandler):
             # verb with headers) doesn't leave bytes on the wire.
             self._lane()
             return
-        # Every other path is forwarded exactly as received, except
-        # /v1/messages: that one body is JSON, and Codex refuses a
+        # Every other path is forwarded exactly as received, except one
+        # ending `/messages`: that body is JSON, and Codex refuses a
         # mid-conversation `role: "system"` entry inside its `messages` —
         # _fold_midturn_system converts each one to `user`, in place, before
-        # the request ever leaves this shim.
-        if body and path_only == "/v1/messages":
+        # the request ever leaves this shim. Suffix match, not the exact
+        # literal `/v1/messages` (fix round 1, M-4): spec §6.4 speaks of
+        # "non-/messages paths", and nothing in this repo yet pins the
+        # generated launcher's base URL to an empty path component — a
+        # prefixed mount (e.g. a path-carrying `ANTHROPIC_BASE_URL`) must
+        # not silently bypass the fold.
+        if body and path_only.endswith("/messages"):
             body = _rewrite_messages_body(body)
         req = urllib.request.Request(UPSTREAM + self.path, data=body or None, method=self.command)
         for key, value in self.headers.items():

@@ -513,7 +513,57 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(seen.messages.map((m: any) => m.role)).toEqual(['user', 'user', 'assistant', 'user']);
     expect(seen.messages[1].content).toBe('a plain string instruction');          // content untouched
     expect(seen.messages[3].content).toEqual([{ type: 'text', text: 'a block instruction' }]);
-    expect(JSON.stringify(seen).includes('"role": "system"')).toBe(false);
     expect(JSON.stringify(seen).includes('"role":"system"')).toBe(false);
+  });
+
+  // Fix round 1, I-1: `json.loads` on a sufficiently deep-nested body raises
+  // `RecursionError`, which is a `RuntimeError` subclass — neither
+  // `TypeError` nor `ValueError` — so it used to escape
+  // `_rewrite_messages_body`'s except arm entirely and kill the connection
+  // with no HTTP response at all (a full `socketserver` traceback in the
+  // unit's journal, `RemoteDisconnected` at the client). This diff
+  // introduced the regression: before it, the identical body was pure
+  // passthrough and answered 200. Depth chosen to reliably exceed Python's
+  // default recursion limit (measured: 2000 is not enough, 20000 is) without
+  // depending on the exact crossover, which is an interpreter default and
+  // therefore not something to pin exactly.
+  it('a deeply-nested body does not drop the connection — the client still gets an HTTP response', async () => {
+    const home = mkTmp('ccgpt-proxy-deepnest-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const depth = 20_000;
+    const deeplyNested = '['.repeat(depth) + ']'.repeat(depth);
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: deeplyNested,
+    });
+    expect(r.status).toBe(200);
+    // Unparseable (here: too deep to parse at all) — the arm returns the
+    // body unrewritten, so it reaches upstream exactly as sent.
+    expect(seen!.toString('utf8')).toBe(deeplyNested);
+  });
+
+  // Fix round 1, M-4: the rewrite predicate matched only the exact literal
+  // `/v1/messages`, narrower than spec §6.4's "non-/messages paths" wording
+  // and the reference implementation's `endswith("/messages")`. Measured by
+  // the reviewer: a prefixed mount (`/gpt/v1/messages`) forwarded
+  // `role:"system"` intact. Nothing in THIS repo pins the generated
+  // launcher's base URL to an empty path, so this is not merely
+  // hypothetical here.
+  it('folds a mid-conversation system turn on a prefixed /messages path too', async () => {
+    const home = mkTmp('ccgpt-proxy-mid-prefixed-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/gpt/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'prefixed' }] }),
+    });
+    expect(seen.messages[0].role).toBe('user');
+    expect(seen.messages[0].content).toBe('prefixed');
   });
 });
