@@ -1433,3 +1433,37 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   cases the honest reading needed the hits enumerated and classified rather than counted. A gate whose
   failure mode is a false alarm trains its operator to skim it, which is the failure mode that matters:
   the next real hit arrives in a list the reader has learned to wave through.
+
+- **D-3163 — every task in this wave verified types with an instrument that cannot see the directory it
+  was writing in.** Each of the twelve task-units ran `cd server && tsc --noEmit` and reported it clean.
+  Each report was honest and each command really did exit 0. **`server/`'s default tsconfig excludes
+  `test/`**, so none of those runs typechecked a single line of the three files this wave created there.
+
+  The wave-close gate's full sharded suite caught it at the last possible moment, in a guard whose own
+  name says what happened: `typecheck-tests.test.ts > every test file typechecks — **the directory the
+  gates could not see**`. Measured: **18 errors** across the three new files —
+
+  | Code | Count | What |
+  |---|---|---|
+  | `TS2835` | 6 | relative imports need explicit `.js` extensions under `node16`/`nodenext` resolution |
+  | `TS7006` | 9 | callback parameters (`c`, `code`, `signal`) implicitly `any` |
+  | `TS2345` | 2 | `string \| NonSharedBuffer` passed where `Buffer` is required |
+  | `TS2769` | 1 | `Buffer` passed as `BodyInit` to `fetch` |
+
+  by file: `ccgpt-proxy.test.ts` 12, `ccgpt-harness.test.ts` 4, `ccgpt-usage.test.ts` 2.
+
+  **The defect is the controller's, in a place that scales badly.** The `## Method` block naming
+  `tsc --noEmit` was copied verbatim into every dispatch and every fix round in this wave, so one wrong
+  instrument in one template produced twelve confident green reports about code nothing had checked. No
+  implementer could have caught it: the command they were given exits 0, and a worker verifying that the
+  verification instrument covers the files it is verifying is a level of suspicion no brief asked for.
+
+  The transferable lesson, which is not "run more checks": **a green from an instrument is a claim about
+  that instrument's SCOPE before it is a claim about the code.** The question to ask of any gate in a
+  brief is not "did it pass" but "what does it read" — and for this repo specifically, the answer for
+  `tsc --noEmit` run from `server/` is "not `server/test/`", which is why
+  `typecheck-tests.test.ts` exists at all. A brief's Method block should name that suite, not `tsc`,
+  whenever the task writes test files.
+
+  Recorded rather than quietly fixed because the same Method block will be copied into Plan 2b and Plan
+  3, and the block is the thing that needs correcting — not these eighteen errors.
