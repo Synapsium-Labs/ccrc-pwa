@@ -1060,6 +1060,21 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   a `system`-shaped entry must leave the upstream recorder unhit — not a text scan for the current
   wording of the silent arms.
 
+  **CLOSED by Task 7a (task-7a-rulings.md).** All three arms were replaced, not joined by a fourth: a new
+  `_UnusableBody` exception (`ccd/ccgpt-proxy.py`, following `_BadEncoding`'s own precedent — raised
+  where the condition is detected, caught once in `_relay`, turned into one explicit response) is now
+  raised where each of the three used to `return`. Arms 1 and 2 (`_rewrite_messages_body`'s "not valid
+  JSON at all" and "valid JSON, non-object top level") now raise it from the same `except`/`if` sites;
+  arm 3 (`_fold_midturn_system`'s `not isinstance(msgs, list)`) raises it too. `_relay` catches
+  `_UnusableBody` (and `_BadEncoding`) once and answers an HTTP 400 via the new `Handler._refuse` — the
+  one refusal shape D-3153 unifies across the file. Closure evidence is behavioural, per this entry's own
+  instruction: `server/test/ccgpt-proxy.test.ts` gained a dedicated case per arm (a deeply-nested body for
+  arm 1, a bare top-level array for arm 2, a `messages` field that is a dict for arm 3), each asserting
+  both the exact status/body **and** that the recording upstream handler was never reached — the
+  behavioural proof a `grep` for `return body` could not have produced for arm 3. A regression case
+  (non-`/messages` path, malformed JSON body) pins that the fix did not over-correct into refusing
+  traffic this task was never chartered to touch.
+
 - **D-3152 — Task 4's brief specified an unsatisfiable pair of requirements: an insert-only top-level
   `system` fold, plus a mutation proving call order is load-bearing.** The brief's Step 1 test asserted
   the top-level instruction and a converted mid-turn `system` entry as two SEPARATE messages —
