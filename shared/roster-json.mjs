@@ -79,13 +79,15 @@
 //     `process.exitCode` on import BY DESIGN as a one-shot CLI. A shared
 //     module a second caller merely imports must not inherit that exit
 //     status.
-//  3. `secretsFile` is validated on ALL THREE exec kinds, not only
-//     `generated` — and `provider`, `baseUrl` and `models` are validated and
-//     deliberately NOT returned. The two gates used to be conjoined with
-//     `kind === 'generated'` while the return spread the field unconditionally,
-//     which made this file LAXER than `parseRoster` on the exact direction its
-//     header above says cannot be tolerated (D-1855). The new fields are not
-//     returned because nothing downstream reads them: `generateAccountsSh`
+//  3. `secretsFile` is validated on ALL FOUR exec kinds, not only
+//     `generated` — including Codex, whose ccrc-owned launcher may source its
+//     optional file. `provider`, `baseUrl` and `models` are validated and
+//     deliberately NOT returned where they are legal. The two gates used to be
+//     conjoined with `kind === 'generated'` while the return spread the field
+//     unconditionally, which made this file LAXER than `parseRoster` on the
+//     exact direction its header above says cannot be tolerated (D-1855). The
+//     new fields are not returned because nothing downstream reads them:
+//     `generateAccountsSh`
 //     emits ids, home-ability, `CCRC_MEASURED`, the upstream id, config dirs,
 //     labels and hues, and `generateWrapperBody` reads `id`,
 //     `configDirSuffix`, `execKind` and `secretsFile`.
@@ -210,7 +212,10 @@ export const MODEL_ALIASES = ['opus', 'sonnet', 'haiku', 'subagent'];
  *  a real subprocess. Read both; neither alone is the census. */
 const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
-const EXEC_KINDS = new Set(['upstream', 'generated', 'external']);
+const EXEC_KINDS = new Set(['upstream', 'generated', 'external', 'codex']);
+// Mirrors `shared/roster.ts`: these dotless names are GPT-lane commands, not
+// account ids, and must be refused before a wrapper can collide with one.
+const GPT_TOOLCHAIN_ACCOUNT_IDS = new Set(['ccgpt', 'ccgpt-runtime']);
 export const HUES = new Set(['cyan', 'violet', 'blue', 'magenta', 'amber', 'green']);
 
 export class RosterInvalid extends Error {}
@@ -249,6 +254,11 @@ function checkAccount(raw, index) {
       `Rename it to match ^[a-z][a-z0-9-]{0,31}$ — lowercase letters, digits and hyphens only.`);
   }
 
+  if (GPT_TOOLCHAIN_ACCOUNT_IDS.has(id)) {
+    bad(`account id "${id}" collides with the GPT-lane toolchain executable of the same name.`,
+      `Choose another account ID; "${id}" is reserved for the GPT-lane toolchain.`);
+  }
+
   const label = raw['label'];
   if (typeof label !== 'string' || label.length === 0) {
     bad(`account "${id}" has no label.`, `Add a non-empty "label" for account "${id}".`);
@@ -281,7 +291,7 @@ function checkAccount(raw, index) {
   const exec = raw['exec'];
   if (!isPlainObject(exec) || typeof exec['kind'] !== 'string' || !EXEC_KINDS.has(exec['kind'])) {
     bad(`account "${id}" has a missing or invalid exec.kind.`,
-      `Set exec.kind for account "${id}" to "upstream", "generated" or "external".`);
+      `Set exec.kind for account "${id}" to "upstream", "generated", "external" or "codex".`);
   }
   // HOISTED (D-1855). These two gates were conjoined with
   // `exec['kind'] === 'generated'` while the return below spread
@@ -289,7 +299,8 @@ function checkAccount(raw, index) {
   // entry carrying `'/etc/shadow'` or `'../.ssh/id_ed25519'` passed validation
   // untouched and reached `deploy/gen-wrappers.mjs`'s manifest. Latent while no
   // roster put the field on a non-generated entry; `parseRoster` now makes it
-  // legal on all three kinds, which is what created the callers.
+  // legal on all four kinds, including the ccrc-owned Codex launcher, which is
+  // what created the callers.
   if (exec['secretsFile'] !== undefined && typeof exec['secretsFile'] !== 'string') {
     bad(`account "${id}" has a non-string exec.secretsFile.`,
       `Set exec.secretsFile for account "${id}" to a string path relative to $HOME, or remove it.`);
@@ -307,6 +318,46 @@ function checkAccount(raw, index) {
       + 'using only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", never ending in "/".');
   }
 
+  // Codex has its own provider contract and topology. It must not fall through
+  // to the generic non-upstream block: baseUrl and models are not legal on this kind.
+  if (exec['kind'] === 'codex') {
+    if (exec['provider'] !== 'openai') {
+      bad(`account "${id}" has exec.kind "codex" and exec.provider ${JSON.stringify(exec['provider'])}.`,
+        `Set exec.provider for account "${id}" to "openai".`);
+    }
+    for (const field of ['proxyPort', 'litellmPort']) {
+      const port = exec[field];
+      if (typeof port !== 'number' || !Number.isInteger(port)) {
+        bad(`account "${id}" has a missing or invalid exec.${field}: it must be a whole number.`,
+          `Set exec.${field} for account "${id}" to a free TCP port between 1024 and 65535.`);
+      }
+      if (port < 1024 || port > 65535) {
+        bad(`account "${id}" has an exec.${field} of ${port}, which is out of range.`,
+          `Set exec.${field} for account "${id}" to a free TCP port between 1024 and 65535.`);
+      }
+    }
+    if (exec['proxyPort'] === exec['litellmPort']) {
+      bad(`account "${id}"'s exec.proxyPort and exec.litellmPort are both ${exec['proxyPort']}.`,
+        `Give account "${id}" two different ports: the shim and the LiteLLM behind it are two listeners.`);
+    }
+    const dir = exec['authDir'];
+    if (typeof dir !== 'string') {
+      bad(`account "${id}" has a missing or non-string exec.authDir.`,
+        `Set exec.authDir for account "${id}" to the directory holding that lane's ChatGPT OAuth, relative to $HOME.`);
+    }
+    if (
+      dir === '' || dir === '.' || dir.startsWith('./') || dir.includes('/./')
+      || dir.startsWith('/') || dir.endsWith('/') || dir.includes('..') || !SECRETS_SAFE_RE.test(dir)
+    ) {
+      bad(`account "${id}" has an invalid exec.authDir ${JSON.stringify(dir)}.`,
+        `Set exec.authDir for account "${id}" to a path relative to $HOME using only letters, digits, ".", "-", "_" and "/".`);
+    }
+    if (dir === '.ccrc' || dir.startsWith('.ccrc/')) {
+      bad(`account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(dir)}).`,
+        `Move account "${id}"'s OAuth directory outside $HOME/.ccrc - 'ccrc uninstall --purge' empties that tree.`);
+    }
+  }
+
   // `provider`, `baseUrl` and `models` — validated here, returned by nothing.
   // The emitter reads none of them (`shared/generate.mjs:206-238`) and neither
   // does the wrapper writer, so returning them would be dead code in the one
@@ -318,7 +369,7 @@ function checkAccount(raw, index) {
   // direction, because none of the fields reaches `accounts.sh`. The REJECT
   // table is the only half of that harness that covers them (D-1861), and it
   // carries a row for each.
-  if (exec['kind'] !== 'upstream') {
+  if (exec['kind'] !== 'upstream' && exec['kind'] !== 'codex') {
     if (exec['provider'] !== undefined && !PROVIDER_IDS.has(exec['provider'])) {
       bad(`account "${id}" has an unknown exec.provider ${JSON.stringify(exec['provider'])}.`,
         `Set exec.provider for account "${id}" to one of ${[...PROVIDER_IDS].join(', ')}, or remove it.`);
@@ -466,10 +517,18 @@ function checkAccount(raw, index) {
   // generated from it — which is the whole reason the field is emitted at all:
   // a roster field that never reaches `accounts.sh` is a field whose cross-box
   // drift nobody can see.
+  const codexTopology = exec['kind'] === 'codex'
+    ? {
+      proxyPort: exec['proxyPort'],
+      litellmPort: exec['litellmPort'],
+      authDir: exec['authDir'],
+    }
+    : {};
   return {
     id, label, configDirSuffix: suffix, homeAble, telemetry, hue,
     execKind: exec['kind'], secretsFile: exec['secretsFile'],
     pool: pool === undefined ? null : pool,
+    ...codexTopology,
   };
 }
 
@@ -543,6 +602,21 @@ export function rosterFromJson(json) {
         `Give each account its own "configDirSuffix" (e.g. ".${a.id}"), or delete the duplicate account.`);
     }
     seenDirs.set(a.configDirSuffix, a.id);
+  }
+
+  // Both topology fields share one map: a shim port colliding with another
+  // lane's LiteLLM port is as unsafe as a same-field collision.
+  const seenPorts = new Map();
+  for (const a of accounts) {
+    if (a.execKind !== 'codex') continue;
+    for (const port of [a.proxyPort, a.litellmPort]) {
+      const owner = seenPorts.get(port);
+      if (owner !== undefined && owner !== a.id) {
+        bad(`accounts "${owner}" and "${a.id}" both use port ${port}.`,
+          'Give each codex lane its own two ports.');
+      }
+      seenPorts.set(port, a.id);
+    }
   }
 
   const upstreams = accounts.filter((a) => a.execKind === 'upstream');

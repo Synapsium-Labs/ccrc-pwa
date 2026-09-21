@@ -105,8 +105,15 @@ describe('the provider table is derived, never re-listed', () => {
   it('GENERATABLE is a filter over the table, and openai is the one that is not', () => {
     expect(GENERATABLE).toEqual(PROVIDER_IDS.filter((p) => PROVIDERS[p].generatable));
     expect([...GENERATABLE].sort()).toEqual(['anthropic', 'compatible', 'openrouter']);
-    // `openai` is somebody else's launcher: `declare`, never `add` (spec §5).
+    // `generatable` gates only `exec.kind: 'generated'`; openai is the provider
+    // of the ccrc-written Codex launcher, whose OAuth directory is `exec.authDir`.
     expect(GENERATABLE).not.toContain('openai');
+  });
+
+  it('the openai row describes a lane ccrc owns, not somebody else\'s launcher', () => {
+    expect(PROVIDERS.openai.label).not.toMatch(/external launcher/i);
+    expect(PROVIDERS.openai.credential).not.toMatch(/never by ccrc/i);
+    expect(PROVIDERS.openai.credential).toMatch(/OAuth/i);
   });
 
   it('isProviderId narrows the constant, never the input', () => {

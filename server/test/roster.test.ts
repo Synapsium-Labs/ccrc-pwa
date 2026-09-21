@@ -10,6 +10,32 @@ const one = (over: Record<string, unknown> = {}) => ({
   }],
 });
 
+const TOOLCHAIN_EXEC_KINDS = ['upstream', 'generated', 'external', 'codex'] as const;
+type ToolchainExecKind = typeof TOOLCHAIN_EXEC_KINDS[number];
+
+/** A valid roster except for an id that can collide with a GPT-lane command.
+ *  Every kind is represented because the collision is about the launcher name,
+ *  not the account's current execution contract. */
+const toolchainCollisionRoster = (id: string, kind: ToolchainExecKind) => ({
+  version: 1,
+  accounts: [
+    {
+      id, label: id, configDirSuffix: `.${id}`,
+      exec: kind === 'codex'
+        ? {
+          kind, provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: `.local/share/ccrc/codex/${id}`,
+        }
+        : { kind },
+      homeAble: true, hue: 'cyan', telemetry: kind === 'codex' ? 'codex' : 'anthropic',
+    },
+    ...(kind === 'upstream' ? [] : [{
+      id: 'claude', label: 'claude', configDirSuffix: '.claude',
+      exec: { kind: 'upstream' }, homeAble: true, hue: 'violet', telemetry: 'anthropic',
+    }]),
+  ],
+});
+
 /** A minimal valid two-account roster — one `upstream` `claude`, one
  *  `generated` `claude2` whose `exec` carries `secretsFile` when it is not
  *  `undefined`. Used by the `exec.secretsFile` gate cases below. */
@@ -35,6 +61,25 @@ describe('parseRoster', () => {
     expect(r.upstreamId).toBe('claude');
     expect(r.homeAble.map((a) => a.id)).toEqual(['claude']);
     expect(r.byId.get('claude')!.configDirSuffix).toBe('.claude');
+  });
+
+  it.each(['ccgpt', 'ccgpt-runtime'] as const)(
+    'refuses the %s GPT-lane toolchain id for every execution kind',
+    (id) => {
+      for (const kind of TOOLCHAIN_EXEC_KINDS) {
+        try {
+          parseRoster(toolchainCollisionRoster(id, kind));
+          throw new Error(`expected ${id}/${kind} to be refused`);
+        } catch (e) {
+          expect((e as RosterError).message).toContain(`account id "${id}" collides with`);
+          expect((e as RosterError).remedy).toContain('Choose another account ID');
+        }
+      }
+    },
+  );
+
+  it.each(['ccd', 'ccrc', 'ccd-worker'])('keeps historical non-GPT toolchain-looking id %s valid', (id) => {
+    expect(() => parseRoster(one({ id, configDirSuffix: `.${id}` }))).not.toThrow();
   });
 
   // The label rule is a control-character ban, NOT a printable-ASCII
@@ -254,6 +299,173 @@ describe('parseRoster', () => {
     } finally {
       warn.mockRestore();
     }
+  });
+
+  // ── the fourth exec kind (2026-09-20 GPT-lane ownership design §4.1) ──
+  /** A minimal valid roster: the mandatory `upstream`, plus one `codex` lane
+   *  whose `exec` is `over` — so each gate below names exactly one field. */
+  const withCodex = (over: Record<string, unknown> = {}) => ({
+    version: 1,
+    accounts: [
+      {
+        id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      },
+      {
+        id: 'codex-a', label: 'team·codex', configDirSuffix: '.claude-codex-a',
+        exec: {
+          kind: 'codex', provider: 'openai',
+          proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/codex-a',
+          ...over,
+        },
+        homeAble: true, hue: 'violet', telemetry: 'codex',
+      },
+    ],
+  });
+
+  it('accepts a codex lane and keeps every field of its exec', () => {
+    const r = parseRoster(withCodex());
+    const e = r.byId.get('codex-a')!.exec;
+    expect(e.kind).toBe('codex');
+    expect(e).toEqual({
+      kind: 'codex', provider: 'openai',
+      proxyPort: 45010, litellmPort: 45011,
+      authDir: '.local/share/ccrc/codex/codex-a',
+    });
+  });
+
+  it('a codex lane may carry a secretsFile, like every other kind', () => {
+    const r = parseRoster(withCodex({ secretsFile: '.cc-secrets/codex-a.env' }));
+    expect((r.byId.get('codex-a')!.exec as { secretsFile?: string }).secretsFile)
+      .toBe('.cc-secrets/codex-a.env');
+  });
+
+  it('names codex in the unknown-kind refusal, so the remedy lists every legal value', () => {
+    expect(() => parseRoster(withCodex({ kind: 'wrapper' })))
+      .toThrow(/"upstream", "generated", "external" or "codex"/);
+  });
+
+  // Each refusal is measured by NAME, not by "it throws": the remedy has to
+  // say which of the five things went wrong, because the operator's next
+  // action differs for each.
+  it.each([
+    ['a missing proxyPort', { proxyPort: undefined }, /missing or invalid exec\.proxyPort/],
+    ['a missing litellmPort', { litellmPort: undefined }, /missing or invalid exec\.litellmPort/],
+    ['a non-integer port', { proxyPort: 45010.5 }, /missing or invalid exec\.proxyPort/],
+    ['a string port', { proxyPort: '45010' }, /missing or invalid exec\.proxyPort/],
+    ['a privileged port', { proxyPort: 80 }, /out of range/],
+    ['a port above the TCP range', { litellmPort: 70000 }, /out of range/],
+  ])('refuses %s', (_why, over, re) => {
+    expect(() => parseRoster(withCodex(over))).toThrow(re);
+  });
+
+  it('refuses one port used twice in the same lane — the shim and LiteLLM need two', () => {
+    expect(() => parseRoster(withCodex({ litellmPort: 45010 })))
+      .toThrow(/exec\.proxyPort and exec\.litellmPort are both 45010/);
+  });
+
+  it('the remedy for an out-of-range port names the range, so the fix needs no second lookup', () => {
+    try {
+      parseRoster(withCodex({ proxyPort: 80 }));
+      throw new Error('expected a refusal');
+    } catch (e) {
+      expect((e as RosterError).remedy).toMatch(/1024/);
+      expect((e as RosterError).remedy).toMatch(/65535/);
+    }
+  });
+
+  it('accepts both inclusive Codex port endpoints in their distinct fields', () => {
+    expect(() => parseRoster(withCodex({ proxyPort: 1024, litellmPort: 65535 }))).not.toThrow();
+  });
+
+  it.each([
+    ['an absent authDir', { authDir: undefined }],
+    ['a non-string authDir', { authDir: 7 }],
+    ['an empty authDir', { authDir: '' }],
+    ['an absolute authDir', { authDir: '/etc/codex' }],
+    ['an authDir escaping $HOME', { authDir: '../elsewhere/auth' }],
+    ['an authDir with a trailing slash', { authDir: '.local/share/x/' }],
+    ['an authDir with a shell metacharacter', { authDir: '.local/$(id)' }],
+  ])('refuses %s', (_why, over) => {
+    expect(() => parseRoster(withCodex(over))).toThrow(/exec\.authDir/);
+  });
+
+  it.each([
+    ['a bare no-op segment', '.'],
+    ['a leading no-op segment', './.ccrc/auth'],
+    ['an interior no-op segment', '.local/./share/codex'],
+  ])('refuses an authDir with %s', (_why, authDir) => {
+    expect(() => parseRoster(withCodex({ authDir }))).toThrow(/invalid exec\.authDir/);
+  });
+
+  // The one refusal that is not a path-safety rule. `ccrc uninstall --purge`
+  // empties ~/.ccrc except `memory`; a credential ccrc never obtained must not
+  // be destroyable by ccrc's own uninstall, so the roster refuses to put one
+  // there rather than documenting that it would be unwise.
+  it.each([
+    ['.ccrc/codex/codex-a/auth'],
+    ['.ccrc/auth'],
+  ])('refuses an authDir under ~/.ccrc (%s) — purge empties that tree', (dir) => {
+    expect(() => parseRoster(withCodex({ authDir: dir })))
+      .toThrow(/under \$HOME\/\.ccrc/);
+  });
+
+  it('a directory merely NAMED like .ccrc is not refused', () => {
+    // `.ccrc-backups` is a real sibling on a live box; a prefix test that
+    // caught it would refuse a legal path and send the operator hunting.
+    expect(() => parseRoster(withCodex({ authDir: '.ccrc-codex/auth' }))).not.toThrow();
+  });
+
+  it('refuses a codex lane with no provider — the kind means the backend it speaks to', () => {
+    expect(() => parseRoster(withCodex({ provider: undefined })))
+      .toThrow(/account "codex-a" has exec\.kind "codex" and .*exec\.provider/);
+  });
+
+  it('refuses a codex lane whose provider is not openai', () => {
+    expect(() => parseRoster(withCodex({ provider: 'anthropic' })))
+      .toThrow(/exec\.provider "anthropic".*"codex".*"openai"/);
+  });
+
+  // Whole-roster, not per-account: the collision is between two entries, so it
+  // belongs beside the duplicate-configDirSuffix gate and nowhere else.
+  const twoCodex = (bExec: Record<string, unknown>) => ({
+    version: 1,
+    accounts: [
+      {
+        id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, hue: 'cyan', telemetry: 'anthropic',
+      },
+      {
+        id: 'codex-a', label: 'team·codex', configDirSuffix: '.claude-codex-a',
+        exec: {
+          kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011,
+          authDir: '.local/share/ccrc/codex/codex-a',
+        },
+        homeAble: true, hue: 'violet', telemetry: 'codex',
+      },
+      {
+        id: 'codex-b', label: 'alt·codex', configDirSuffix: '.claude-codex-b',
+        exec: {
+          kind: 'codex', provider: 'openai', proxyPort: 45020, litellmPort: 45021,
+          authDir: '.local/share/ccrc/codex/codex-b', ...bExec,
+        },
+        homeAble: true, hue: 'amber', telemetry: 'codex',
+      },
+    ],
+  });
+
+  it('two codex lanes with disjoint port pairs parse', () => {
+    expect(parseRoster(twoCodex({})).accounts).toHaveLength(3);
+  });
+
+  it.each([
+    ["b's proxy collides with a's proxy", { proxyPort: 45010 }],
+    ["b's proxy collides with a's litellm", { proxyPort: 45011 }],
+    ["b's litellm collides with a's proxy", { litellmPort: 45010 }],
+  ])('refuses when %s', (_why, over) => {
+    expect(() => parseRoster(twoCodex(over)))
+      .toThrow(/accounts "codex-a" and "codex-b" both use port/);
   });
 });
 
