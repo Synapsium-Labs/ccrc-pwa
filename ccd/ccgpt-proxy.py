@@ -12,16 +12,25 @@ two doors Claude Code sends one through, and both are folded, in this order:
      replayed with the conversation history, one unfolded injection fails
      every later turn of that session.
   2. `_fold_system` — the top-level Anthropic `system` field is removed and
-     its content prepended as a new leading `user` turn.
+     folded into the conversation's own leading turn: MERGED into an
+     existing leading `user` message when there is one, otherwise inserted
+     as a new one (spec §6.1 item 2, "folds into the leading user turn";
+     production's own hybrid, adopted here — D-3152).
 
-Mid-turn conversion runs FIRST, deliberately: a `role: "system"` entry sitting
-at `messages[0]` has already become `user` by the time the top-level fold
-looks for where to insert, so the top-level instruction still lands ABOVE it
-as its own turn rather than a converted first turn silently ending up above
-an instruction the sender meant to come first. A body on that path the shim
-cannot parse at all is still forwarded unrewritten today — three call sites,
-catalogued as D-3151 in the plan's `## Deviations found`, until Task 7
-replaces them with an explicit refusal.
+Mid-turn conversion runs FIRST, deliberately, and this is not merely a
+documentation convention — it changes which branch `_fold_system` takes. A
+`role: "system"` entry sitting at `messages[0]` has already become `user` by
+the time the top-level fold runs, so the MERGE branch fires and the
+top-level instruction lands first inside that turn. Run in the reverse
+order, `messages[0]` is still `role: "system"` when `_fold_system` looks, its
+`role == "user"` check is false, and the INSERT branch fires instead —
+structurally different output, not a cosmetic reordering. D-3152 records
+that an unconditional insert (no merge branch) was tried first and measured
+to make the two folds commute regardless of call order on every input
+tested, which is why this function does not take that simpler shape. A body
+on that path the shim cannot parse at all is still forwarded unrewritten
+today — three call sites, catalogued as D-3151 in the plan's `## Deviations
+found`, until Task 7 replaces them with an explicit refusal.
 
 Listens on 127.0.0.1:$CCGPT_PROXY_PORT; forwards to the LiteLLM proxy at
 127.0.0.1:$CCGPT_LITELLM_PORT. No credentials are stored here — the
@@ -125,56 +134,66 @@ def _system_to_text(system):
 
 
 def _fold_system(data):
-    """Remove the top-level `system` field and insert its folded text as a
-    NEW `user` turn immediately above the conversation's own first turn.
+    """Remove the top-level `system` field and fold its content into the
+    conversation's own leading turn (spec §6.1 item 2, "folds into the
+    leading user turn"; production's own hybrid, adopted here — D-3152):
+    MERGE into an existing leading `role: "user"` message when there is one,
+    otherwise INSERT a new one.
 
     Must run AFTER `_fold_midturn_system` has already processed the same
-    `data` — this is not just a documentation convention, it is what this
-    function's own placement rule depends on. The insertion point is found
-    by skipping past any LEADING run of still-`role: "system"` entries:
+    `data` — not just a documentation convention, but what decides which
+    branch fires. In the documented order, a `role: "system"` entry sitting
+    at `messages[0]` has already become `user` by the time this runs, so the
+    MERGE branch fires and the top-level text lands first, folded INTO that
+    turn. Called before `_fold_midturn_system` (the order this fold must
+    never run in), `messages[0].role` is still `"system"`, the merge
+    branch's own `role == "user"` check is false, and the INSERT branch
+    fires instead — a new leading `user` message ahead of the
+    still-`system` entry, which `_fold_midturn_system` then converts
+    afterwards. That is a structurally different forwarded body, not a
+    cosmetic reordering, which is what makes call order genuinely
+    load-bearing here (D-3152's measurement: an unconditional insert with no
+    merge branch was tried first, and made the two folds commute regardless
+    of order on every input tested — this hybrid is why that shape was
+    rejected).
 
-        idx = 0
-        while msgs[idx] is a dict with role == "system": idx += 1
-        insert the new turn at idx
-
-    Called in the documented order, `_fold_midturn_system` has already
-    converted every `system` entry to `user`, so no leading run can exist and
-    this always lands at index 0 — the top-level instruction is the very
-    first thing the model reads. Called BEFORE `_fold_midturn_system` (the
-    reversed order this fold must never run in), a still-unconverted leading
-    `system` entry is exactly what the loop steps over: the new turn is
-    inserted AFTER it instead of before, and when `_fold_midturn_system` runs
-    next and converts that entry to `user`, the CONVERTED FIRST TURN now
-    reads ahead of the top-level instruction — the exact silent reordering
-    the module docstring warns about, reproduced by Step 5's mutation.
-
-    This always INSERTS a new message; it never merges the folded text into
-    an existing one. The sender wrote the top-level instruction and the
-    conversation's first turn as two separate things, and combining them
-    into one message would lose that distinction.
+    Merging a string `content` prepends `sys_text` with a blank-line
+    separator; merging a content-block-list `content` prepends a new text
+    block instead of stringifying. Either way the top-level instruction
+    reads first, ahead of what was already in that turn.
 
     Codex refuses the FIELD, not merely a non-empty value of it, so the key
-    is popped unconditionally whenever it is present. But an absent, null, or
+    is popped unconditionally whenever it is present. An absent, null, or
     empty `system` — or a content-block list with no usable text — folds to
     no text at all, and no leading turn is invented for an instruction that
-    said nothing; a manufactured empty user turn would be a message the
-    sender never wrote. `messages` not being a list at this point (itself
-    only reachable if `_fold_midturn_system` already left it untouched,
-    D-3151 arm 3) is coerced to `[]` before inserting rather than left as
-    whatever non-list value was there — this shim does not invent a fourth
-    silent passthrough arm; it deterministically produces a well-shaped
-    `messages` for the one field this function owns.
+    said nothing.
+
+    `messages` absent or `null` folds to `[]` before the branch above runs,
+    so a request with only a top-level `system` and no history still gets
+    one leading `user` turn, not none. `messages` present but not a list, or
+    a non-empty list whose first entry is not a dict, is genuinely
+    malformed — nothing safe to fold into — so `system` stays popped
+    (removed either way) and `messages` is forwarded untouched: the same
+    D-3151-consistent contract `_fold_midturn_system`'s own non-list arm
+    already uses, not a fourth silent passthrough arm of this function's
+    own.
     """
     sys_text = _system_to_text(data.pop("system", None))
     if not sys_text:
         return data
-    msgs = data.get("messages")
-    if not isinstance(msgs, list):
-        msgs = []
-    idx = 0
-    while idx < len(msgs) and isinstance(msgs[idx], dict) and msgs[idx].get("role") == "system":
-        idx += 1
-    msgs.insert(idx, {"role": "user", "content": sys_text})
+    msgs = data.get("messages") or []
+    if not isinstance(msgs, list) or (msgs and not isinstance(msgs[0], dict)):
+        return data
+    if msgs and msgs[0].get("role") == "user":
+        content = msgs[0].get("content")
+        if isinstance(content, str):
+            msgs[0]["content"] = f"{sys_text}\n\n{content}"
+        elif isinstance(content, list):
+            msgs[0]["content"] = [{"type": "text", "text": sys_text}] + content
+        else:
+            msgs[0]["content"] = sys_text
+    else:
+        msgs.insert(0, {"role": "user", "content": sys_text})
     data["messages"] = msgs
     return data
 

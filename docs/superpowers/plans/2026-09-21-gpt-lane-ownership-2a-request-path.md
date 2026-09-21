@@ -1059,3 +1059,42 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   returns `data`), so Task 7's wave-close check needs a behavioural case — an unparseable body carrying
   a `system`-shaped entry must leave the upstream recorder unhit — not a text scan for the current
   wording of the silent arms.
+
+- **D-3152 — Task 4's brief specified an unsatisfiable pair of requirements: an insert-only top-level
+  `system` fold, plus a mutation proving call order is load-bearing.** The brief's Step 1 test asserted
+  the top-level instruction and a converted mid-turn `system` entry as two SEPARATE messages —
+  `messages[0]` carrying `TOP LEVEL`, `messages[1]` carrying `WAS MID TURN` — which only an
+  unconditional `msgs.insert(0, …)` can produce. Step 5 then demanded a mutation swapping the call
+  order (`_fold_system` before `_fold_midturn_system`) and required the order assertions to go red.
+
+  Measurement (an independent agent, `task-4-commutativity.md`, ten varied bodies against the real
+  shipped file) showed these two requirements are **mutually unsatisfiable**: an unconditional insert
+  makes `_fold_midturn_system` (an in-place, whole-list role flip) and `_fold_system` (a front-insert)
+  commute regardless of call order — 10/10 inputs byte-identical under both orderings. No order mutation
+  can ever bind against that shape.
+
+  The implementer's first attempt discovered this empirically — ran the swap against an unconditional
+  insert, observed no assertion redden, and reported it rather than claiming a red that was never
+  observed. The first attempt's own resolution (a skip-loop stepping over still-unconverted leading
+  `role: "system"` entries to manufacture order-sensitivity) was ALSO wrong: measured dead on the
+  documented call path (advance count 0 across all ten inputs; confirmed live by advancing 3 times when
+  called in the reversed order directly), i.e. correct-but-unreachable code kept alive only to satisfy a
+  mutation the plan demanded.
+
+  The resolution: adopt the production reference's own hybrid `_fold_system` — MERGE the folded
+  top-level text into an existing leading `role: "user"` message when there is one, otherwise INSERT a
+  new one (matches spec §6.1 item 2, "folds into the leading user turn"). This makes the ordering
+  genuinely load-bearing with no dead code: mid-turn-first converts a leading `system` entry to `user`
+  before `_fold_system` runs, so the merge branch fires and the top-level text lands first inside that
+  turn; reversed, `messages[0].role` is still `"system"`, the merge branch's check is false, and the
+  insert branch fires instead — a structurally different forwarded body, measured to diverge on the same
+  three of ten inputs (all with a leading mid-turn `system` entry) that the insert-only variant could
+  never distinguish. It also avoids an untestable risk this suite cannot measure: unconditional insert
+  can leave two consecutive `user` messages where production sends one, and whether the Responses
+  translation on the real Codex backend tolerates that has no answer in a suite with no Codex backend to
+  ask — production already answers it, and the answer is merge-when-possible.
+
+  Transferable lesson: **a plan that demands a mutation must first be sure the behaviour it names can
+  actually differ under the implementation the plan itself specifies** — otherwise the only paths through
+  are a false claim of a red never observed, or manufactured dead code kept alive solely to satisfy the
+  mutation, which is what this task's first attempt produced and flagged rather than shipped quietly.

@@ -569,14 +569,19 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
-  // Task 4 brief, Step 1. Order is the whole point: the mid-turn fold must
-  // run BEFORE the top-level fold, so a system entry sitting at messages[0]
-  // has already become `user` by the time the top-level instruction is
-  // prepended — landing the top-level instruction ABOVE it, not sandwiched
-  // beneath it or merged into it. This asserts both the outcome (the
-  // `system` key is gone) and the SEQUENCE (which turn reads first) — see
-  // Step 5's mutation for why both are needed.
-  it('folds the top-level system ABOVE a converted first turn', async () => {
+  // Fix round 1 (D-3152): the plan's original test asserted an INSERT-only
+  // fold — two separate messages. Measurement (task-4-commutativity.md)
+  // showed insert-only makes the two folds commute on every tested input,
+  // so no order mutation could ever bind against it. Production's real
+  // `_fold_system` MERGES into an existing leading `user` message instead of
+  // always inserting, and that merge branch is what makes order genuinely
+  // load-bearing: mid-turn conversion must run FIRST so a leading
+  // `role: "system"` entry has already become `user` by the time this fold
+  // looks — landing the top-level text first, folded INTO that turn. Run
+  // reversed, `messages[0].role` is still `"system"`, the merge branch's own
+  // check is false, and the INSERT branch fires instead — a structurally
+  // different body, not a cosmetic reordering.
+  it('merges the top-level system into a converted first turn, top-level text first', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-');
     let seen: any = null;
@@ -593,10 +598,55 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       }),
     });
     expect('system' in seen).toBe(false);                       // the key is gone, not emptied
-    expect(seen.messages.map((m: any) => m.role)).toEqual(['user', 'user']);
-    // Order proves the sequence: the top-level instruction is FIRST.
-    expect(JSON.stringify(seen.messages[0])).toContain('TOP LEVEL');
-    expect(JSON.stringify(seen.messages[1])).toContain('WAS MID TURN');
+    // ONE message, not two: the top-level text folds INTO the converted
+    // first turn rather than becoming a sibling entry.
+    expect(seen.messages.map((m: any) => m.role)).toEqual(['user']);
+    expect(seen.messages[0].content).toBe('TOP LEVEL\n\nWAS MID TURN');
+  });
+
+  // The other half of the hybrid: when the conversation's own first message
+  // is NOT already `user` (no mid-turn system entry converted it, or there
+  // simply isn't one), `_fold_system` inserts a new leading turn instead of
+  // merging into something it must not silently absorb (an `assistant`
+  // turn's own words are not the sender's system instruction).
+  it('inserts a new leading turn when the first message is not user', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-insert-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x',
+        system: 'TOP LEVEL',
+        messages: [{ role: 'assistant', content: 'hi' }],
+      }),
+    });
+    expect('system' in seen).toBe(false);
+    expect(seen.messages).toEqual([
+      { role: 'user', content: 'TOP LEVEL' },
+      { role: 'assistant', content: 'hi' },
+    ]);
+  });
+
+  // Insert branch's other trigger: no first message to merge into at all.
+  it('inserts a new leading turn when messages is empty', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-top-insert-empty-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-x', system: 'TOP LEVEL', messages: [] }),
+    });
+    expect('system' in seen).toBe(false);
+    expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
   });
 
   // Binds the design decision the brief asks to be made deliberately:
@@ -626,9 +676,12 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
     expect(seen.messages).toEqual([{ role: 'user', content: 'only turn' }]);
   });
 
-  // Both `system` content shapes fold, the same contract as a mid-turn
-  // entry's content: a plain string, or a list of Anthropic content blocks.
-  it('folds a block-shaped top-level system into a leading user turn', async () => {
+  // Both `system` content shapes fold (plain string or content-block list,
+  // the same contract as a mid-turn entry's content), and the MERGE branch
+  // itself has two content shapes on the receiving end: a string first turn
+  // (covered above) and a content-block-list first turn, covered here — the
+  // folded text becomes a new leading block rather than a string concat.
+  it('merges a block-shaped top-level system into an existing block-content leading user turn', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-top-blocks-');
     let seen: any = null;
@@ -641,11 +694,18 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
       body: JSON.stringify({
         model: 'gpt-x',
         system: [{ type: 'text', text: 'BLOCK INSTRUCTION' }],
-        messages: [{ role: 'user', content: 'hi' }],
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'existing block' }] }],
       }),
     });
     expect('system' in seen).toBe(false);
-    expect(seen.messages[0]).toEqual({ role: 'user', content: 'BLOCK INSTRUCTION' });
-    expect(seen.messages[1]).toEqual({ role: 'user', content: 'hi' });
+    expect(seen.messages).toEqual([
+      {
+        role: 'user',
+        content: [
+          { type: 'text', text: 'BLOCK INSTRUCTION' },
+          { type: 'text', text: 'existing block' },
+        ],
+      },
+    ]);
   });
 });
