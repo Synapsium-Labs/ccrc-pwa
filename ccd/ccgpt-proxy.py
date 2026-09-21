@@ -92,6 +92,7 @@ import sys
 import json
 import gzip
 import zlib
+import functools
 import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -326,13 +327,35 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 
+def _joined_header(headers, name: str) -> str:
+    """Read a header RFC 7230 §3.2.2 permits a sender to spell EITHER as one
+    comma-separated line or as several repeated lines carrying the same
+    field name (`get_all`, `Content-Encoding`), so this returns every
+    occurrence joined with a comma. `headers.get(name)` — what both
+    `_is_chunked` and `_content_encoding` used before task-7b-rulings.md §1 —
+    reads only the FIRST occurrence on an `http.client.HTTPMessage`; a
+    request splitting `Transfer-Encoding: gzip, chunked` across two lines
+    (`Transfer-Encoding: gzip` then `Transfer-Encoding: chunked`) would then
+    answer `'gzip'` alone, `chunked` never seen, and reopen exactly the
+    zero-bytes-forwarded hole Task 5 closed for the single-line spelling.
+    Absent entirely, `get_all` returns `None`, not `[]` — the `or []` here
+    keeps this function's own `''` contract for "not present" identical to
+    the single-line read it replaces."""
+    return ",".join(headers.get_all(name) or [])
+
+
 def _is_chunked(headers) -> bool:
     """True iff the request declares `Transfer-Encoding: chunked` — checked
     against the LAST comma-separated token (RFC 7230 §3.3.1: chunked, when
     present, must be the final encoding applied), so a header naming another
     encoding ahead of it (e.g. `gzip, chunked`) is still recognised while a
-    value that merely mentions the word elsewhere is not."""
-    te = headers.get("Transfer-Encoding", "")
+    value that merely mentions the word elsewhere is not. The value read is
+    every `Transfer-Encoding` LINE joined first (`_joined_header`,
+    task-7b-rulings.md §1/I4) — the same last-token check applied to a
+    header split across repeated lines, not only the single-line spelling
+    it was written against, so the two cases (one line, several lines) are
+    not two separate readings of this function's own contract."""
+    te = _joined_header(headers, "Transfer-Encoding")
     if not te:
         return False
     return te.strip().split(",")[-1].strip().lower() == "chunked"
@@ -373,10 +396,24 @@ def _read_chunked_body(rfile) -> bytes:
     shape was for a different failure surface); the controller's ruling for
     Task 7a is that giving every "cannot use this body" condition ONE
     explicit shape now includes this one too.
+
+    Both `readline()` calls below are bound at 65537 bytes (task-7b-
+    rulings.md §2/I2), matching the exact figure
+    `BaseHTTPRequestHandler.handle_one_request` already uses for its own
+    request-line read: an unbounded `readline()` blocks the calling thread
+    growing an ever-larger buffer for as long as the client keeps sending
+    bytes with no CRLF in sight, a client-controlled memory/CPU hazard
+    distinct from the stalled-with-no-bytes-at-all one `Handler.timeout`
+    guards against below. A line this shim would ever legitimately need to
+    read — a hex chunk-size plus a short `;`-extension, or one trailer
+    header — is nowhere near that bound, so truncating there costs nothing
+    real: it either still parses as a normal chunk-size/trailer, or it was
+    already garbage and now fails the existing hex/format checks below
+    instead of growing forever first.
     """
     chunks = []
     while True:
-        size_line = rfile.readline()
+        size_line = rfile.readline(65537)
         if not size_line:
             raise ValueError(
                 "ccgpt-proxy: truncated chunked body: connection closed while reading a chunk-size line"
@@ -394,7 +431,7 @@ def _read_chunked_body(rfile) -> bytes:
             # Terminating chunk: drain optional trailer header lines up to
             # the blank line that closes the body (RFC 7230 §4.1.2).
             while True:
-                trailer_line = rfile.readline()
+                trailer_line = rfile.readline(65537)
                 if not trailer_line:
                     raise ValueError(
                         "ccgpt-proxy: truncated chunked body: connection closed while reading trailers"
@@ -443,8 +480,16 @@ def _read_request_body(headers, rfile) -> bytes:
 
 def _content_encoding(headers) -> str:
     """The request's `Content-Encoding`, lower-cased and stripped — `''`
-    when absent. Case-insensitive header lookup, the same contract
-    `_is_chunked` above relies on for `Transfer-Encoding`.
+    when absent. Case-insensitive header lookup (`.lower()`, task-7b-
+    rulings.md §3/M9 — content-coding values are case-insensitive per
+    RFC 7231's Content-Coding section), the same contract `_is_chunked`
+    above relies on for `Transfer-Encoding` — and, like it, every LINE
+    named `Content-Encoding`
+    is joined first (`_joined_header`, task-7b-rulings.md §1/I4), not only
+    the first one `headers.get` alone would see, for the same reason: RFC
+    7230 §3.2.2 permits a comma-list header to be split across repeated
+    lines, and reading only the first would silently lose whatever a later
+    line named.
 
     `_relay` treats the result three ways (task-7a-rulings.md §3; spec
     §6.3's "an encoding the shim cannot decode is answered with an
@@ -454,11 +499,14 @@ def _content_encoding(headers) -> str:
     implemented codecs, `_CODECS` below — are decoded, folded, and
     re-encoded. Anything else, INCLUDING the list/trailing-comma forms
     `"gzip, br"` and `"gzip,"` (neither equals the bare token `"gzip"`, so
-    neither ever reaches the decode branch), is refused outright with an
-    HTTP 415 naming the encoding rather than forwarded unexamined — the
-    D-3151 arm-1 hole both shapes used to fall into.
+    neither ever reaches the decode branch) and a value split across
+    repeated lines that does not join back into a bare recognised token
+    (e.g. `"identity"` then `"gzip"` — two real lines joining to
+    `"identity,gzip"`, not `"gzip"`), is refused outright with an HTTP 415
+    naming the encoding rather than forwarded unexamined — the D-3151 arm-1
+    hole both shapes used to fall into.
     """
-    return (headers.get("Content-Encoding") or "").strip().lower()
+    return _joined_header(headers, "Content-Encoding").strip().lower()
 
 
 # M4 (task-7a-rulings.md §8): the encoding vocabulary this shim can
@@ -472,8 +520,22 @@ def _content_encoding(headers) -> str:
 # `single-definition.test.ts` cannot catch it (its roots are the four TS
 # trees, not `ccd/`). Both the `_relay` call site's membership check and
 # §3's 415 refusal now key off this same dict.
+#
+# gzip's entry is a `functools.partial`, not a bare function reference like
+# every other slot here (task-7b-rulings.md §5/M6-minor, addendum §2 —
+# judged deliberately, not a default): `gzip.compress` embeds the current
+# wall-clock time in its container header, so two calls on IDENTICAL bytes a
+# second apart produce different output (measured: `c550b16a` vs
+# `c650b16a`). Harmless to the upstream, which never inspects it, but this
+# shim's OWN re-encoded output is then not byte-for-byte reproducible run to
+# run — worth pinning in something whose whole job is to be legible on the
+# wire, and cheap enough (`mtime=0`) that the one-slot asymmetry it costs
+# this otherwise-uniform mapping is a fair trade. `zlib.compress` (deflate)
+# carries no such field, so it stays a bare reference; widening
+# `compresslevel` off its default was considered and rejected — it buys
+# nothing here and only adds a second knob to this same judgment call.
 _CODECS = {
-    "gzip": (gzip.decompress, gzip.compress),
+    "gzip": (gzip.decompress, functools.partial(gzip.compress, mtime=0)),
     "deflate": (zlib.decompress, zlib.compress),
 }
 
@@ -541,7 +603,7 @@ def _decode_body(body: bytes, encoding: str) -> bytes:
     """
     codec = _CODECS.get(encoding)
     if codec is None:
-        return body
+        return body  # unreachable: the sole call site (_relay) only invokes this inside `if encoding in _CODECS`
     decode, _encode = codec
     try:
         return decode(body)
@@ -557,7 +619,7 @@ def _encode_body(body: bytes, encoding: str) -> bytes:
     returned unchanged, mirroring `_decode_body`."""
     codec = _CODECS.get(encoding)
     if codec is None:
-        return body
+        return body  # unreachable: same pre-filtered call site as _decode_body's tail above
     _decode, encode = codec
     return encode(body)
 
@@ -582,6 +644,52 @@ HOP_BY_HOP = {
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+
+    # I2 (task-7b-rulings.md §2): bounds a client-facing read that would
+    # otherwise block THIS THREAD forever — a chunked upload that stalls
+    # mid-chunk, is truncated with no terminator, or declares a huge size
+    # then withholds the bytes (three of the eight malformed framings the
+    # paired review measured; all three hang, they do not drop the
+    # connection). `socketserver.StreamRequestHandler.setup` — this class's
+    # own grandparent — applies this to the CLIENT socket via
+    # `self.connection.settimeout(self.timeout)` only `if self.timeout is
+    # not None`; unset (the default), a half-open connection is reaped only
+    # by TCP keepalive, on the order of hours, holding one
+    # `ThreadingHTTPServer` thread per stalled client for that whole time.
+    #
+    # No `handle_timeout` override is added alongside this (the ruling that
+    # scoped this task suggested one; measured against this box's own
+    # `http.server` source before writing this, not assumed): that hook is
+    # `socketserver.BaseServer`'s, for a `handle_request()`-style ACCEPT
+    # timeout, not a per-connection read timeout, and this server runs
+    # `serve_forever()` — `handle_request()` is never called. The read
+    # timeout below is already handled, one level down: a blocking
+    # `rfile.read()`/`rfile.readline()` inside `_relay` (called from
+    # `do_POST` etc., itself called from `BaseHTTPRequestHandler.
+    # handle_one_request`'s own `try` block) raises `TimeoutError` once the
+    # socket's `settimeout` fires; `handle_one_request`'s own `except
+    # TimeoutError` clause (stdlib, unmodified) logs it, sets
+    # `self.close_connection = True`, and returns — the connection is
+    # closed in `finish()` exactly as a dropped connection already is for
+    # every other transport-level failure in this file, with no second
+    # mechanism needed here to produce that outcome.
+    #
+    # 30s: comfortably above any real transfer time on loopback (this
+    # shim's only client) for even a large conversation body — bandwidth
+    # there is gigabytes/sec, so a multi-MB body still arrives in
+    # milliseconds when the client is actually sending — and nowhere near
+    # the unrelated 900s `urlopen` timeout on the UPSTREAM leg in `_relay`
+    # below, which bounds a completely different wait (Codex's own response
+    # latency, not this shim's client-facing socket).
+    #
+    # DELIBERATELY UNPINNED (task-7b-rulings.md, "Mutations required" §7):
+    # measured — removing this line leaves the full suite green (55/55) —
+    # and a case that proves this guard is not the one honest way to see
+    # that: it would have to actually stall a raw socket past the bound and
+    # watch the connection close, costing >=30s of real wall-clock in every
+    # run of this file, for one line. Judged not worth it; this comment and
+    # the manual verification in the task-7b report are the record instead.
+    timeout = 30
 
     def log_message(self, *args):
         pass

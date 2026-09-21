@@ -189,6 +189,24 @@ function rawRequest(
   });
 }
 
+/** Frames arbitrary bytes as a single well-formed HTTP/1.1 chunk (RFC 7230
+ *  §4.1), for the task-7b cases that need a hand-built chunked body but,
+ *  unlike `rawChunkedPost`'s malformed-framing cases, still want it to
+ *  PARSE correctly — `fetch` cannot combine a raw-socket header shape
+ *  (split/list `Transfer-Encoding`, an extra trailer line) with a
+ *  chunked-encoded body of its own choosing, so this is sent through
+ *  `rawRequest` instead, which sends its `body` argument verbatim. `ext`,
+ *  when given, reproduces a chunk-extension (`size;ext\r\n...`, M15) —
+ *  RFC 7230 §4.1.1 syntax, ignored by every real recipient that doesn't
+ *  define it, including this shim, which is the point of M15's guard. */
+function chunkEncode(data: Buffer, ext?: string): Buffer {
+  const sizeLine = `${data.length.toString(16)}${ext ? `;${ext}` : ''}\r\n`;
+  return Buffer.concat([
+    Buffer.from(sizeLine, 'latin1'), data, Buffer.from('\r\n'),
+    Buffer.from('0\r\n\r\n'),
+  ]);
+}
+
 /** Starts a recording upstream plus the shim. `env` extends the child's
  *  environment for whatever ELSE a later task's case needs — it can no
  *  longer set `CCGPT_ACCOUNT_ID`, `CCGPT_PROXY_PORT` or `CCGPT_LITELLM_PORT`
@@ -941,7 +959,26 @@ describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
     const got = JSON.parse(seen!.toString('utf8'));
     expect('system' in got).toBe(false);                        // it was rewritten, not just relayed
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
-    expect(seenCL).toBe(String(seen!.length));                  // correct length, not the original
+    // M1 (task-7b-rulings.md §4): `expect(seenCL).toBe(String(seen!.length))`
+    // cannot fail — Node's HTTP server reads EXACTLY `Content-Length` body
+    // bytes, so `seen.length` and the received `Content-Length` are equal
+    // by construction whenever this line is even reached; the review
+    // measured both directions (inflating the header times the case out,
+    // deflating it reds on `seen` being `null`) and neither makes THIS
+    // assertion itself fire. Replaced with the rewritten payload's byte
+    // length computed INDEPENDENTLY here — not derived from `seen` — so a
+    // wrong `Content-Length` (one that doesn't match what `_rewrite_
+    // messages_body` actually produces for this exact input) has something
+    // to red against. Verified directly against this box's own
+    // `_rewrite_messages_body` while writing this case, not hand-derived:
+    // `{"model": "gpt-x", "messages": [{"role": "user", "content":
+    // "TOP\n\nMID"}]}`, 75 bytes — `json.dumps`'s default `', '`/`': '`
+    // separators (not JSON.stringify's compact ones), the top-level
+    // `system`->leading-`user`-turn merge, and `\n\n` appearing as the
+    // two-character escape `\n` twice, not a literal newline byte.
+    const expectedRewritten = '{"model": "gpt-x", "messages": [{"role": "user", "content": "TOP\\n\\nMID"}]}';
+    expect(Buffer.byteLength(expectedRewritten, 'utf8')).toBe(75);
+    expect(seenCL).toBe(String(Buffer.byteLength(expectedRewritten, 'utf8')));
     expect(seenTE).toBe('');                                    // re-framed, not re-chunked
   });
 });
@@ -1440,5 +1477,180 @@ describe.skipIf(!PY)('ccgpt-proxy: upstream unreachable answers the same refusal
     expect(r.headers.get('content-type')).toBe('application/json');
     expect((await r.json()).error).toMatch(/upstream unreachable/i);
     expect(reached).toBe(true);                       // the documented exception: upstream WAS reached
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned by nothing (Task 7b)', () => {
+  // task-7b-rulings.md §1/I4: `headers.get(name)` on an
+  // `http.client.HTTPMessage` returns only the FIRST occurrence of a
+  // header name; RFC 7230 §3.2.2 permits a comma-list header to be sent as
+  // repeated lines instead of one line, and `fetch` never emits that shape
+  // — every case in this block is a raw socket for exactly that reason.
+  it('recognizes chunked framing when Transfer-Encoding is split across two header lines (I4)', async () => {
+    const home = mkTmp('ccgpt-proxy-te-split-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    }));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: gzip',      // first line: NOT "chunked" alone
+      'Transfer-Encoding: chunked',   // second line: the flag a get()-only read would miss entirely
+    ], chunkEncode(payload));
+    expect(status).toBe(200);
+    // The invariant, not just the status (task-7b-rulings.md §1's own
+    // instruction): a get()-only read sees 'gzip' alone, _is_chunked
+    // answers False, _read_request_body falls to Content-Length (absent on
+    // a chunked request -> 0), and this reaches upstream with an EMPTY
+    // body — the Task 5 symptom verbatim, still 200 because an empty POST
+    // isn't itself an error.
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect('system' in got).toBe(false);
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // Same defect class, `_content_encoding`'s own single-line read
+  // (task-7b-rulings.md §1/I4, "same fix"). A split Content-Encoding
+  // cannot join back into a bare recognised codec token (joining always
+  // inserts a comma), so the OBSERVABLE difference this fix makes is: a
+  // get()-only read sees only 'identity' (the first line) and forwards the
+  // plain, unencoded body normally (200); the fixed read sees the full
+  // 'identity,gzip' and correctly refuses it as an encoding this shim does
+  // not implement (415) rather than silently keying off whichever line
+  // happened to arrive first.
+  it('reads Content-Encoding split across two header lines instead of only the first (I4)', async () => {
+    const home = mkTmp('ccgpt-proxy-ce-split-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const payload = Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }));
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Content-Encoding: identity',
+      'Content-Encoding: gzip',
+      `Content-Length: ${payload.length}`,
+    ], payload);
+    expect(status).toBe(415);
+    expect(JSON.parse(body).error).toMatch(/content-encoding/i);
+    expect(reached).toBe(false);
+  });
+
+  // M9 (task-7b-rulings.md §3): `_content_encoding` lower-cases before
+  // comparing against `_CODECS`'s keys and the `''`/`identity` exemption.
+  // Content-coding values are case-insensitive per RFC 7231's Content-Coding
+  // section; without
+  // `.lower()`, this mixed-case spelling would fail every membership check
+  // and earn a 415 instead of folding normally.
+  it('folds a gzip body whose Content-Encoding is spelled in mixed case (M9)', async () => {
+    const home = mkTmp('ccgpt-proxy-ce-case-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const gz = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const r = await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'content-encoding': 'GZIP' },
+      body: gz,
+    });
+    expect(r.status).toBe(200);
+    const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
+    expect('system' in got).toBe(false);
+  });
+
+  // M6 (task-7b-rulings.md §3): `_is_chunked` already reads the LAST
+  // comma-separated token (its own docstring cites RFC 7230 §3.3.1 for
+  // it), but nothing exercises a Transfer-Encoding value where the first
+  // token is something OTHER than "chunked" — every existing case sends
+  // "chunked" alone, where "first token" and "last token" are the same
+  // token and a first-token mutation would not be visible. RFC 7230
+  // §3.3.1's own worked example is exactly this shape: "gzip, chunked"
+  // meaning the entity was gzip-compressed, THEN chunk-framed.
+  it('recognizes chunked framing as the LAST token when another encoding is named first (M6)', async () => {
+    const home = mkTmp('ccgpt-proxy-te-lasttoken-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const gz = gzipSync(Buffer.from(JSON.stringify({
+      model: 'gpt-x', system: 'TOP', messages: [{ role: 'system', content: 'MID' }],
+    })));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Content-Encoding: gzip',
+      'Transfer-Encoding: gzip, chunked',   // one line, two tokens — "chunked" is last, not first
+    ], chunkEncode(gz));
+    expect(status).toBe(200);
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(gunzipSync(seen!).toString('utf8'));
+    expect('system' in got).toBe(false);
+    expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
+  });
+
+  // M15 (task-7b-rulings.md §3): the chunk-extension strip
+  // (`size_line.split(b";", 1)[0]`) is correctness-verified already (the
+  // paired review measured it working end to end) but pinned by nothing —
+  // no case sends a chunk-size line carrying one. RFC 7230 §4.1.1 permits
+  // `chunk-ext` after the size and before the CRLF; a real intermediary can
+  // add one, and this shim must ignore it rather than fail to parse the
+  // size.
+  it('strips a chunk-extension from the size line instead of failing to parse it (M15)', async () => {
+    const home = mkTmp('ccgpt-proxy-chunk-ext-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+    ], chunkEncode(payload, 'ext=1'));
+    expect(status).toBe(200);
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect(got.messages[0].role).toBe('user');
+  });
+
+  // M11 (task-7b-rulings.md §3): the trailer-drain loop is
+  // correctness-verified already (a well-formed trailer costs nothing to
+  // skip draining — nothing else in `_relay` reads `rfile` again, and the
+  // shim always answers `Connection: close`, so leftover unread bytes are
+  // never observed) but pinned by nothing. The one place removing it IS
+  // observable: a connection that closes mid-trailer. With the loop, that
+  // is caught (`rfile.readline()` returns `b''` at EOF) and refused
+  // explicitly, matching every other truncated-framing case in this file;
+  // without it, the terminating zero-size chunk alone is enough to `break`
+  // out and return the chunks already read, successfully, with the
+  // truncated trailer bytes never even inspected.
+  it('refuses a chunked body whose connection closes mid-trailer, never reaching upstream (M11)', async () => {
+    const home = mkTmp('ccgpt-proxy-trailer-trunc-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true;
+      res.writeHead(200); res.end('{}');
+    });
+    // "5\r\nhello\r\n" is one complete 5-byte chunk; "0\r\n" is the
+    // terminating chunk; "trailer-nam" is a trailer header line with
+    // neither its own CRLF nor the final blank line that would close the
+    // body — the socket half-closes right there.
+    const raw = Buffer.from('5\r\nhello\r\n0\r\ntrailer-nam', 'latin1');
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+    ], raw);
+    expect(status).toBe(400);
+    expect(JSON.parse(body).error).toMatch(/trailer/i);
+    expect(reached).toBe(false);
   });
 });
