@@ -1180,34 +1180,50 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   ever binds anything but loopback, at which point it stops being deferrable.
 
 - **D-3156 — the top-level `system` fold prepends its text AHEAD of a leading `tool_result` block, and
-  that is accepted.** Measured in Task 9 (the task was told to measure and report, not to fix): with
+  that is accepted.** Measured in Task 9, which was told to measure and report rather than fix: with
   `system: "be concise"` and `messages[0]` a `user` turn whose content list begins with a `tool_result`
   block, the forwarded body comes back with `content[0]` the folded system text and `content[1]` the
-  original `tool_result`. D-3152's hybrid fold is what puts it there — it MERGES into a leading `user`
-  turn rather than inserting a new one, and it prepends.
+  original `tool_result`. D-3152's hybrid fold is what puts the text in that turn at all — it MERGES
+  into a leading `user` turn rather than inserting a new one — and the merge prepends.
 
   Why this is worth a number: the Anthropic API requires `tool_result` blocks to come **first** in a
   user message, so on the Anthropic wire this shape is ill-formed. Nothing in this repo reads it as
-  Anthropic, and nothing in either spec mentions the constraint, so a future reader measuring the shim
-  against Anthropic's own rules would reasonably file it as a bug. This entry is the answer they should
-  find.
+  Anthropic and neither spec mentions the constraint, so a future reader measuring the shim against
+  Anthropic's own rules would reasonably file it as a bug. This entry is the answer they should find.
 
-  Why it is accepted rather than fixed, in order of weight:
+  **Why it is accepted rather than fixed**, in order of weight. This ordering was corrected after the
+  Task 9 review audited the entry's first draft; what the draft ranked first was the weakest clause in
+  it, and the correction is recorded here rather than silently applied because the draft's own argument
+  is the thing a later reader would otherwise inherit.
 
-  1. **It is production's behaviour, running against the real Codex backend on two live lanes.** D-3152
-     adopted the production reference's hybrid fold deliberately, for a reason that applies here
-     unchanged: a behavioural difference this suite cannot test — there is no Codex backend in it — is
-     not worth introducing to satisfy a rule that belongs to a different wire. The forwarded body goes
-     to LiteLLM's Anthropic→Responses translation, not to Anthropic.
-  2. **It is effectively unreachable.** `messages[0]` is the first turn of a conversation. A
-     conversation that OPENS with a tool result is not a shape Claude Code produces — a tool result is
-     always a reply to a tool use that preceded it.
-  3. **Fixing it blind is the larger risk.** The obvious repair — insert a new leading `user` turn
-     instead of merging when the content starts with `tool_result` — reintroduces exactly the
-     two-consecutive-`user`-messages question D-3152 measured as untestable here and resolved by
-     deferring to production.
+  1. **A well-formed `messages` array cannot begin with a `tool_result` at all.** The constraint is a
+     property of the wire, not an assumption about any client: a `tool_result` block must reference a
+     `tool_use` that appears EARLIER in the same array, so a `tool_result` at `messages[0]` has nothing
+     to refer to and is already ill-formed before this shim touches it. The shape the fold mishandles is
+     one that cannot legitimately arrive.
+  2. **The alternative placements are each worse for a stated reason.** Two repairs exist, and the entry
+     names both because the first draft named only the risky one and so read as though no cheap repair
+     existed:
+     - *Insert a new leading `user` turn instead of merging.* Rejected: it reintroduces the
+       two-consecutive-`user`-messages question D-3152 measured as **untestable in this suite** — there
+       is no Codex backend in it — and resolved by deferring to production.
+     - *Keep the merge, but place the text AFTER the leading `tool_result` run.* This is cheap and
+       creates no consecutive user messages, so it is the repair a reader will reach for. It is
+       rejected on D-3152's own stated intent: the fold exists so the top-level instruction **reads
+       first**, and text placed after a tool-result run no longer does. That is a real reason, but it is
+       a weaker one than (1), and if (1) ever stops holding this is the repair to take.
+  3. **D-3152 does not source the prepend to production, and this entry must not pretend it does.** What
+     D-3152 established as production's behaviour is the **branch choice** — merge into a leading `user`
+     turn versus insert a new one. It says nothing about where within that turn the text lands, and no
+     production reference exists in this tree to check the intra-turn ordering against. So the prepend is
+     **this shim's own implementation of the merge**, not an inherited behaviour, and the migration
+     argument that carries so much weight elsewhere in this plan does not reach it.
 
-  What would reopen it: a measured client that starts a conversation with a `tool_result` at
-  `messages[0]`, or a LiteLLM version whose Anthropic adapter validates block ordering and rejects it.
-  Either turns this from a documented curiosity into a live defect, and the remedy is then (3) with
-  production consulted first.
+  What would reopen it — and the likeliest trigger is not the one the first draft named. It is not a
+  conversation that *opens* with a tool result; it is an array that begins with a `tool_result` because
+  earlier turns were **dropped** — history truncation, or a compaction that cuts between a `tool_use`
+  and its result. Such an array is ill-formed on the Anthropic wire for the same reason as (1), so the
+  shim would not be the only thing objecting, but it is the path by which the shape actually reaches a
+  request. Also reopening: a LiteLLM version whose Anthropic adapter validates block ordering and
+  rejects it. Either makes this a live defect, and the remedy is then (2)'s second repair, with the
+  production reference consulted on intra-turn placement first.
