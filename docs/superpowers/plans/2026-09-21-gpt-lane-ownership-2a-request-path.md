@@ -1178,3 +1178,36 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   only client is the local Claude Code process — an attacker who can send it a bomb can already run
   code as that user. This is a robustness ceiling, not an exposed attack surface. Revisit if the lane
   ever binds anything but loopback, at which point it stops being deferrable.
+
+- **D-3156 — the top-level `system` fold prepends its text AHEAD of a leading `tool_result` block, and
+  that is accepted.** Measured in Task 9 (the task was told to measure and report, not to fix): with
+  `system: "be concise"` and `messages[0]` a `user` turn whose content list begins with a `tool_result`
+  block, the forwarded body comes back with `content[0]` the folded system text and `content[1]` the
+  original `tool_result`. D-3152's hybrid fold is what puts it there — it MERGES into a leading `user`
+  turn rather than inserting a new one, and it prepends.
+
+  Why this is worth a number: the Anthropic API requires `tool_result` blocks to come **first** in a
+  user message, so on the Anthropic wire this shape is ill-formed. Nothing in this repo reads it as
+  Anthropic, and nothing in either spec mentions the constraint, so a future reader measuring the shim
+  against Anthropic's own rules would reasonably file it as a bug. This entry is the answer they should
+  find.
+
+  Why it is accepted rather than fixed, in order of weight:
+
+  1. **It is production's behaviour, running against the real Codex backend on two live lanes.** D-3152
+     adopted the production reference's hybrid fold deliberately, for a reason that applies here
+     unchanged: a behavioural difference this suite cannot test — there is no Codex backend in it — is
+     not worth introducing to satisfy a rule that belongs to a different wire. The forwarded body goes
+     to LiteLLM's Anthropic→Responses translation, not to Anthropic.
+  2. **It is effectively unreachable.** `messages[0]` is the first turn of a conversation. A
+     conversation that OPENS with a tool result is not a shape Claude Code produces — a tool result is
+     always a reply to a tool use that preceded it.
+  3. **Fixing it blind is the larger risk.** The obvious repair — insert a new leading `user` turn
+     instead of merging when the content starts with `tool_result` — reintroduces exactly the
+     two-consecutive-`user`-messages question D-3152 measured as untestable here and resolved by
+     deferring to production.
+
+  What would reopen it: a measured client that starts a conversation with a `tool_result` at
+  `messages[0]`, or a LiteLLM version whose Anthropic adapter validates block ordering and rejects it.
+  Either turns this from a documented curiosity into a live defect, and the remedy is then (3) with
+  production consulted first.
