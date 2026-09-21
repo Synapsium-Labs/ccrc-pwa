@@ -285,6 +285,25 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     'case "$1 $2" in',
     '  *verify-provenance.mjs*)',
     '    printf \'%s\\n\' "$*" >> "$HOME/verify-argv"',
+    // D-3141: the plan's mutation row 12 ("move the verifier call below
+    // `tar -xzf`") measures GREEN against every OTHER assertion here,
+    // because `_upd_resolve`'s EXIT trap removes the whole staging dir on
+    // every exit — success or refusal — so nothing left on disk afterward
+    // can tell "never extracted" apart from "extracted, then swept". This
+    // shim IS the verifier the tests run, so it records what IT observes
+    // AT THE MOMENT it is invoked: whether the sibling `tree/` dir beside
+    // `--blob` (`UPD_TREE`, which `_upd_fetch` only creates via
+    // `mkdir "$UPD_TREE"` right before `tar -xzf`) already exists.
+    '    blob=""; prev=""',
+    '    for a in "$@"; do',
+    '      [ "$prev" = "--blob" ] && blob="$a"',
+    '      prev="$a"',
+    '    done',
+    '    if [ -n "$blob" ] && [ -d "$(dirname "$blob")/tree" ]; then',
+    '      printf \'yes\\n\' > "$HOME/staging-at-verify"',
+    '    else',
+    '      printf \'no\\n\' > "$HOME/staging-at-verify"',
+    '    fi',
     '    code=0; [ -f "$HOME/fixture-verify-exit" ] && IFS= read -r code < "$HOME/fixture-verify-exit"',
     '    [ "$code" = 0 ] && echo "verified fixture (sigstore)" || echo "verify-provenance: fixture refusal" >&2',
     '    exit "$code" ;;',
@@ -614,9 +633,21 @@ describe('ccrc update: the argument surface', () => {
 function pathWithoutJq(home: string): string {
   const d = join(home, 'no-jq-bin');
   mkdirSync(d, { recursive: true });
-  for (const b of ['curl', 'tar', 'gzip', 'awk']) symlinkSync(realPath(b), join(d, b));
-  symlinkSync(REAL_NODE, join(d, 'node'));
-  return d;
+  // `curl` and `node` are the fixture's OWN stubs — `updateEnv`/
+  // `replantDoctorStubs` plant them into `$HOME/.local/bin` regardless of
+  // what PATH this run ends up using (both run before `spawnSync`, inside
+  // `runUpdate`). Putting that directory FIRST means PATH resolution finds
+  // the fixture's curl (never reaches `local://`'s real-curl edge, let
+  // alone a live network address the health probe might otherwise dial)
+  // and the fixture's node (which only forwards to the real interpreter for
+  // calls the verify-provenance shim does not intercept) before any real
+  // binary — containment that does not depend on the jq guard firing first
+  // (`ccrc-install.test.ts`'s `pathWithout` idiom: fixture plants win, real
+  // tools are the fallback for what nothing here stubs). `tar`/`gzip`/`awk`
+  // have no fixture stub in this suite — those three alone are real-tool
+  // symlinks in the fallback directory.
+  for (const b of ['tar', 'gzip', 'awk']) symlinkSync(realPath(b), join(d, b));
+  return `${join(home, '.local', 'bin')}:${d}`;
 }
 
 describe('ccrc update: preflight (D-3140 — jq joins the tool list)', () => {
@@ -866,6 +897,21 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(readFileSync(join(home, 'staged-ccrc-env'), 'utf8')).toBe('1\n');
   });
 
+  it('D-3141: nothing is extracted before provenance is settled — the verifier itself observes no staging tree yet', () => {
+    // The plan's mutation row 12 ("move the verifier call below `tar -xzf`")
+    // measured GREEN against every assertion above: `_upd_resolve`'s EXIT
+    // trap sweeps the whole staging dir on every exit, so nothing left on
+    // disk after the fact can tell "never extracted" apart from "extracted,
+    // then swept". This pin reads what the shim itself saw AT THE MOMENT it
+    // was invoked, before any exit/sweep could happen.
+    const home = freshUpdateBox('ccrc-update-prov-staging-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'staging-at-verify'), 'utf8')).toBe('no\n');
+  });
+
   it('a FAILING bundle refuses: nothing extracted, no backup, ~/ccrc byte-identical — and --allow-unsigned does not apply (§18 "--allow-unsigned permits absence only")', () => {
     const home = freshUpdateBox('ccrc-update-prov-fail-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -884,6 +930,39 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
+  // D-3142: a verifier that cannot RUN at all (a usage error, or node/the
+  // script itself missing) is a DIFFERENT fact from a verifier that ran and
+  // refused the bundle — folding both into "FAILED" tells the operator the
+  // RELEASE is bad when the box could not even perform the check, and closes
+  // --allow-unsigned's escape hatch for the wrong reason.
+  it('a verifier that exits 2 (usage error) is reported as unable to RUN, not as a bundle that FAILED (D-3142)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-vrc2-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '2\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 2\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
+  it('a verifier that exits 127 (node/the script itself missing) gets the same "could not RUN" sentence (D-3142)', () => {
+    const home = freshUpdateBox('ccrc-update-prov-vrc127-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    const before = treeDigest(join(home, 'ccrc'));
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(home, 'fixture-verify-exit'), '127\n');
+    const r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/could not RUN the installed verifier \(.*verify-provenance\.mjs exited 127\) — this is not a verdict on the bundle; nothing on this box was changed/);
+    expect(r.stderr).not.toMatch(/provenance verification FAILED/);
+    expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+  });
+
   it('an ABSENT bundle refuses without --allow-unsigned, and proceeds with it — recorded as unsigned (§18 "--allow-unsigned is recorded")', () => {
     const home = freshUpdateBox('ccrc-update-prov-absent-');
     plantOldBox(home, { version: 'v1.0.0' });
@@ -895,8 +974,31 @@ describe('ccrc update: provenance (design §5; the verifier is the INSTALLED one
     expect(verifyArgv(home)).toEqual([]);
     r = runUpdate(home, ['--allow-unsigned']);
     expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
-    expect(r.stdout).toMatch(/^update: WARN: .*sigstore\.json is absent \(404\) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned$/m);
+    // D-3143: curl -f's exit 22 means ANY HTTP status >= 400, not
+    // specifically 404 — say what was actually measured.
+    expect(r.stdout).toMatch(/^update: WARN: .*sigstore\.json is absent \(the release host answered an HTTP error — curl exit 22\) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned$/m);
+    // m9 (Ruling 32): the closing transcript line for this success path was
+    // previously unasserted — pin it distinct from the verified-bundle case's
+    // own closing line (the OK-flavour test above).
+    expect(r.stdout).toMatch(/^update: verified ccrc-v2\.0\.0\.tar\.gz \(transport checksum, then the per-file MANIFEST — provenance NOT verified, --allow-unsigned\)$/m);
     expect(readFileSync(join(home, 'staged-ccrc-env'), 'utf8')).toBe('unset\n');
+  });
+
+  it('env -u actually strips an AMBIENT CCRC_UPDATE_VERIFIED=1 on the unsigned path — the "marker records unsigned" case, deliberately polluted (the env-u pin)', () => {
+    // Without this, `env -u CCRC_UPDATE_VERIFIED` could be deleted from
+    // `cmd_update`'s staged-install invocation and every existing test would
+    // stay green, because nothing ever POLLUTES the ambient environment
+    // before calling `runUpdate`. Here it is deliberately polluted, and the
+    // FULL-flavour marker (`.ccrc/installed`, the real spine) is what proves
+    // `env -u` actually strips it rather than relying on it never being set.
+    const home = freshUpdateBox('ccrc-update-prov-envu-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    plantCoordDb(home);
+    const sha = 'newsha0000000000000000000000000000000002';
+    packRelease(home, fullTree(home, { version: 'v2.0.0', sha }), { tag: 'v2.0.0', bundle: false });
+    const r = runUpdate(home, ['--allow-unsigned'], { CCRC_UPDATE_VERIFIED: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe(`${sha}\nunsigned\n`);
   });
 
   it('FULL flavour: a verified update writes a one-line marker; an --allow-unsigned one writes `unsigned` on line 2', () => {
@@ -975,7 +1077,11 @@ describe('ccrc update: --check refuses --downgrade and --allow-unsigned like --f
     const home = freshUpdateBox(`ccrc-update-check-excl-${flag.replace(/^--/, '')}-`);
     const r = runUpdate(home, ['--check', flag]);
     expect(r.code).toBe(2);
-    expect(r.stderr).toMatch(/update: --check and --(force|downgrade|allow-unsigned) are exclusive/);
+    // m4 (Ruling 32): the flag name is interpolated per case — the old
+    // three-way alternation let a `--downgrade` case pass even if the code
+    // emitted "--allow-unsigned" (or vice versa), since either alternative
+    // satisfies it.
+    expect(r.stderr).toMatch(new RegExp(`update: --check and ${flag} are exclusive`));
     expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
   });
 });

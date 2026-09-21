@@ -1403,6 +1403,7 @@ UPD_VERSION=""
 UPD_BACKUP_DIR=""
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
+UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
 
 # `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
 # scope for the `set -u` reason UPD_* above are: they carry state built in
@@ -11323,12 +11324,17 @@ cmd_update() {
   local t
   # awk: _upd_sweep's unit enumeration rides it — absent, the per-unit
   # preflight would silently narrow to the template probe (branch review).
-  # jq (D-3140): `_box_build_fields` already probes for it and dies by name on
-  # its own (rc 5) — but that probe sits AFTER a fetch or two in this verb's
-  # own callers (the old-identity read above, `_upd_converged`, `_upd_fetch`'s
-  # bind check), so a jq-less box used to see the fetch happen and then fail
-  # mid-run for a dependency, not a release, problem. Named here too, so the
-  # preflight's own sentence is what a jq-less box reads.
+  # jq (D-3140): this loop guards the INSTALL path only — `--check` returns
+  # above, before this loop ever runs, so a jq-less box running `--check`
+  # gets none of this line's benefit; its own identity-read
+  # (`_box_build_fields`, which `--check` also calls) already needs jq and
+  # keeps its own separate wording. On the install path, `_box_build_fields`
+  # dies by name on its own too (rc 5) — but that probe sits AFTER a fetch or
+  # two in this verb's own callers (the old-identity read below,
+  # `_upd_converged`, `_upd_fetch`'s bind check), so a jq-less box used to see
+  # the fetch happen and then fail mid-run for a dependency, not a release,
+  # problem. Named here too, so the preflight's own sentence is what a
+  # jq-less box on the install path reads.
   for t in curl tar gzip node awk jq; do
     command -v "$t" >/dev/null 2>&1 \
       || _ccrc_die "$t is required by 'ccrc update' but is not on PATH — nothing on this box was changed"
@@ -11480,10 +11486,10 @@ _upd_resolve() {   # $1 = pinned tag, or "" for the newest release
 # `_upd_fetch <allow_unsigned>` — the tarball, its bundle, verified three
 # ways, then extracted. Reads `UPD_URL_DIR`/`UPD_TARNAME`, both set by
 # `_upd_resolve`. Order (design 2026-09-20 §5): transport checksum → bundle →
-# PROVENANCE → extract → the extracted version is bound → MANIFEST. Nothing
+# PROVENANCE → extract → MANIFEST → the extracted version is bound. Nothing
 # that fails a step puts a file outside `UPD_STAGE`.
 _upd_fetch() {
-  local allow_unsigned="${1:-0}" bundle rc=0
+  local allow_unsigned="${1:-0}" bundle rc=0 verifier vrc=0
   echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME …"
   curl -fsSL -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
     || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME — nothing on this box was changed"
@@ -11505,17 +11511,40 @@ _upd_fetch() {
   echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME.sigstore.json …"
   curl -fsSL -o "$bundle" "$UPD_URL_DIR/$UPD_TARNAME.sigstore.json" || rc=$?
   if [ "$rc" -eq 0 ]; then
-    node --no-warnings "$CCRC_HERE/../deploy/verify-provenance.mjs" \
+    verifier="$CCRC_HERE/../deploy/verify-provenance.mjs"
+    vrc=0
+    node --no-warnings "$verifier" \
         --blob "$UPD_STAGE/$UPD_TARNAME" --bundle "$bundle" --tag "$UPD_VERSION" \
         --owner "$CCRC_RELEASE_OWNER" --repo "$CCRC_RELEASE_REPO" \
-      || _ccrc_die "provenance verification FAILED for $UPD_TARNAME (read verify-provenance's line above) — refusing to extract or install; --allow-unsigned does not apply to a bundle that FAILS, only to one that is absent; nothing on this box was changed"
+      || vrc=$?
+    # D-3142 (Task 12 review, Important): `deploy/verify-provenance.mjs`
+    # speaks exactly two exit codes of its own — 1 (refused, a real verdict
+    # on the bundle) and 2 (usage) — and `node` itself can add exits the
+    # verifier's own code never reaches: 1 with no verdict at all (module
+    # not found — a partial `npm ci` under server/node_modules) and 127
+    # (node or the script missing). Exit 1 is kept as the refusal below,
+    # unconditionally — a real refusal is still a real refusal, and
+    # --allow-unsigned still does not apply to it. Every OTHER non-zero exit
+    # means the verifier never RAN to a verdict at all, which is not the
+    # same fact and must not close the same escape hatch for the wrong
+    # reason.
+    if [ "$vrc" -eq 1 ]; then
+      _ccrc_die "provenance verification FAILED for $UPD_TARNAME (read verify-provenance's line above) — refusing to extract or install; --allow-unsigned does not apply to a bundle that FAILS, only to one that is absent; nothing on this box was changed"
+    elif [ "$vrc" -ne 0 ]; then
+      _ccrc_die "could not RUN the installed verifier ($verifier exited $vrc) — this is not a verdict on the bundle; nothing on this box was changed"
+    fi
     UPD_PROVENANCE=verified
   elif [ "$rc" -eq 22 ]; then
+    # D-3143 (Task 12 review, minor): curl -f's exit 22 means ANY HTTP
+    # status >= 400, not specifically 404 — a 403 or a 500 from the release
+    # host would have been mis-reported as "answered 404" on EITHER branch
+    # below (the WARN that admits it as absence, and the refusal that does
+    # not). Both say what was actually measured.
     if [ "$allow_unsigned" -eq 1 ]; then
-      echo "update: WARN: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json is absent (404) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
+      echo "update: WARN: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json is absent (the release host answered an HTTP error — curl exit 22) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
       UPD_PROVENANCE=unsigned
     else
-      _ccrc_die "the release ships no provenance bundle ($UPD_URL_DIR/$UPD_TARNAME.sigstore.json answered 404) — refusing; a release older than provenance, or a fork without the attest step, installs only with --allow-unsigned (recorded on the box as unsigned); nothing on this box was changed"
+      _ccrc_die "the release ships no provenance bundle ($UPD_URL_DIR/$UPD_TARNAME.sigstore.json answered an HTTP error — curl exit 22) — refusing; a release older than provenance, or a fork without the attest step, installs only with --allow-unsigned (recorded on the box as unsigned); nothing on this box was changed"
     fi
   else
     _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json (curl exit $rc, not a 404 — the tarball came from the same place a moment ago) — nothing on this box was changed"
