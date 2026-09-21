@@ -1341,6 +1341,45 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
 
   Accepted for this wave because the alternative is worse: restoring the header means reading OAuth
   contents, which is a rule this project holds deliberately and which no telemetry convenience should
-  buy out. What would resolve it properly: `lane.json` gaining a non-secret account id written by Plan
-  2b's materialiser, which already knows the lane's identity without reading any credential. That is the
-  remedy to take if a multi-workspace token ever appears on a real lane.
+  buy out.
+
+  **The remedy this entry first named was wrong, and the Task 10 re-review refuted it.** It said
+  `lane.json` should gain a non-secret account id "written by Plan 2b's materialiser, which already
+  knows the lane's identity without reading any credential". That equivocates on *identity*: the
+  materialiser knows **ccrc's** lane id — the roster id, which spec line 698 confirms is what a lane's
+  identity means here — while the header needs the **ChatGPT backend's** `account_id`, which exists
+  only inside `auth.json`. So that remedy resolves to committing the same spec-497 violation one layer
+  up, and it contradicts `_fetch_headers`' own docstring.
+
+  **The remedy that actually works is operator-supplied, not derived:** a field on the account's roster
+  entry in `~/.ccrc/accounts.json`, which is runtime DATA the operator already maintains (see
+  `shared/roster.ts`). Nothing reads a credential — the operator writes the workspace id they already
+  know, the materialiser copies it into `lane.json`, and the publisher sends it. Take that if a
+  multi-workspace token ever appears on a real lane; until one does, the gap above is the honest state.
+  See also **D-3161**, which records that the rule this entry rests on is already broken elsewhere in
+  the tree — that is an argument for fixing the other violation, not for adding a second.
+
+
+- **D-3161 — spec line 497's "never reads the contents of an OAuth file" is already violated by a
+  shipped ccrc file.** The rule reads: *"Nothing in ccrc — doctor, installer, publisher, probe or test —
+  ever reads the contents of an OAuth file. Existence and mode only."* It names **probe** explicitly.
+  `ccd/ccrc-models-probe` does exactly that:
+
+      account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
+
+  Found by the Task 10 re-review while auditing D-3160, which rests on that same rule. Not introduced by
+  this wave — the line predates Plan 2a — but Task 10's fix round added a comment six lines below the
+  call that *names the conflict in passing* while recording it nowhere, which is how a known violation
+  becomes an unknown one.
+
+  Recorded, not fixed, and deliberately so: `ccd/ccrc-models-probe` is outside Plan 2a's scope (this plan
+  ships two Python files and touches that one only to keep a comment true), and the fix is not a
+  one-liner — the probe needs the `account_id` for the same reason the publisher would, so removing the
+  read means answering the same question D-3160 answers, in a file this plan does not own.
+
+  **What this does NOT do is weaken D-3160.** A rule broken in one place is an argument for repairing
+  that place, not for breaking it in a second — and the publisher is the file with the better
+  alternative available, since D-3160's roster-field remedy would serve the probe too. The right
+  sequence is: adopt the roster field, then retire this read. Until then the tree contains one measured
+  violation and one documented abstention, and this entry is what stops the first from being cited as
+  precedent for undoing the second.
