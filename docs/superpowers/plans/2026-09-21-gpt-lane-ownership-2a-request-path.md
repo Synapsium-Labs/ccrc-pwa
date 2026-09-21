@@ -1383,3 +1383,34 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   sequence is: adopt the roster field, then retire this read. Until then the tree contains one measured
   violation and one documented abstention, and this entry is what stops the first from being cited as
   precedent for undoing the second.
+
+- **D-3162 — the declared cut was widened by two comment-only files, deliberately; and the wave-close
+  check that caught it has a pattern loose enough to have caught one of them by accident.** The gate
+  says this plan must have touched none of `ccd/ccd`, `ccd/ccrc`, `deploy/deploy.sh`, `deploy/systemd/`
+  or `server/test/installTreeFixture.ts`, and that any hit means "stop and report rather than widening".
+  Run at wave close, it reported two:
+
+  - **`ccd/ccd`** — one comment on `_limit_json_num`, plus the mandatory re-stamp of the generated file.
+    Ruled by the controller in Task 10's fix round: that comment named the out-of-tree producer and
+    asserted the claim **D-3159** measured as false. Leaving it would have left the repo's own
+    explanation of a rule pointing at a file this wave replaces and giving a reason that does not hold.
+  - **`ccd/ccrc-models-probe`** — one comment whose "the header block is `ccgpt-usage`'s, verbatim"
+    claim **this wave's own commit made false** (Task 10 review I-4: the name now resolves to a file in
+    this repo carrying a different block), plus a pointer to **D-3161**.
+
+  Both are comment-only; neither changes behaviour; each corrects a statement that was either measurably
+  false or made false by this wave. **The rule that justifies the widening, and the one to apply next
+  time:** a cut list stops you ADDING behaviour outside it — it does not license leaving a false
+  sentence standing in a file the cut names, because the alternative to fixing it is shipping a known
+  lie to keep a boundary tidy. Reported here rather than waved through, which is what the gate asks for.
+
+  **And the check itself is defective.** Its pattern `^(ccd/ccd|ccd/ccrc|…)` is unanchored at the end,
+  so `ccd/ccrc` matches **`ccd/ccrc-models-probe`**, `ccd/ccrc-doctor-checks` and every other
+  `ccd/ccrc*` file — none of which the cut list intends. Here it happened to flag a file that genuinely
+  was out of cut, so it looked right for the wrong reason. A later wave touching `ccd/ccrc-install.sh`
+  and nothing else would get an identical "SCOPE BREACH" and stop for no reason. Anchor the alternatives
+  (`ccd/ccrc$`, `ccd/ccd$`) when this gate is next copied into a plan.
+
+  The transferable lesson is the one this wave keeps paying for in different currencies: **a guard's
+  output is a claim about its own pattern as much as about the tree**, and a guard that fires correctly
+  is not thereby a guard that fires *for the reason you think*.
