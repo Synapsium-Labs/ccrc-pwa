@@ -1575,6 +1575,20 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
   // token and a first-token mutation would not be visible. RFC 7230
   // §3.3.1's own worked example is exactly this shape: "gzip, chunked"
   // meaning the entity was gzip-compressed, THEN chunk-framed.
+  // M-5 (task-7b-fix-rulings.md): this fixture is deliberately NOT a
+  // self-consistent HTTP message — the `Transfer-Encoding: gzip, chunked`
+  // header names a `gzip` TRANSFER-coding layer this shim never applies
+  // (or reverses; it isn't implemented at all), over a body that was
+  // gzip-compressed exactly once, at the CONTENT level, matching the
+  // separate `Content-Encoding: gzip` header instead. Left this way on
+  // purpose rather than "fixed": the property this case exists to pin is
+  // that `_is_chunked` reads the LAST Transfer-Encoding token and ignores
+  // every token ahead of it — it does not, and must not, try to interpret
+  // or apply any of those earlier tokens, `gzip` among them. Building a
+  // truly self-consistent message would require this shim to actually
+  // decode a `gzip` TRANSFER-coding, which does not exist anywhere in this
+  // file and is out of scope; the unapplied token is exactly as
+  // uninterpreted here as it is on the wire.
   it('recognizes chunked framing as the LAST token when another encoding is named first (M6)', async () => {
     const home = mkTmp('ccgpt-proxy-te-lasttoken-');
     let seen: Buffer | null = null;
@@ -1652,5 +1666,83 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     expect(status).toBe(400);
     expect(JSON.parse(body).error).toMatch(/trailer/i);
     expect(reached).toBe(false);
+  });
+});
+
+describe.skipIf(!PY)('ccgpt-proxy: 7b fix round 1 — chunked named but not final earns 400 (I-2)', () => {
+  // task-7b-fix-rulings.md I-2 / task-7b-review.md I-2: RFC 7230 §3.3.3
+  // item 3 — when `chunked` appears in Transfer-Encoding but is not the
+  // FINAL token, the message length cannot be determined by any means this
+  // shim implements, and it MUST be refused. Before this, both spellings
+  // below fell through `_is_chunked` (correctly False — chunked is not
+  // what this shim should decode as chunked framing) straight to
+  // Content-Length, which a Transfer-Encoding-bearing request is
+  // RFC-forbidden from also carrying reliably, and forwarded ZERO bytes —
+  // the exact silent-empty-body symptom this whole wave exists to kill,
+  // reached by a spelling the I4 join fix did not close.
+  it('refuses Transfer-Encoding naming chunked but not final, single line', async () => {
+    const home = mkTmp('ccgpt-proxy-te-notfinal-oneline-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked, gzip',   // one line, chunked NOT last
+    ], Buffer.alloc(0));
+    expect(status).toBe(400);
+    const parsed = JSON.parse(body);
+    expect(parsed.error).toMatch(/^ccgpt-proxy:/);
+    expect(parsed.error).toMatch(/transfer-encoding/i);
+    expect(parsed.error).toMatch(/chunked/i);
+    expect(reached).toBe(false);
+  });
+
+  // Same shape, but the two tokens arrive as two separate header LINES —
+  // this is the row the I4 join fix newly REACHES (row 3 of the review's
+  // table): joining split lines made this spelling agree with the
+  // single-line one above, which was already answering 200 with an empty
+  // body before this round.
+  it('refuses Transfer-Encoding naming chunked but not final, split across two lines', async () => {
+    const home = mkTmp('ccgpt-proxy-te-notfinal-split-');
+    let reached = false;
+    await startPair(home, (_req, _body, res) => {
+      reached = true; res.writeHead(200); res.end('{}');
+    });
+    const { status, body } = await rawRequest(PROXY_PORT, 'POST', '/v1/models', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: chunked',
+      'Transfer-Encoding: gzip',            // second line — chunked (line 1) is NOT the final token
+    ], Buffer.alloc(0));
+    expect(status).toBe(400);
+    const parsed = JSON.parse(body);
+    expect(parsed.error).toMatch(/^ccgpt-proxy:/);
+    expect(parsed.error).toMatch(/transfer-encoding/i);
+    expect(parsed.error).toMatch(/chunked/i);
+    expect(reached).toBe(false);
+  });
+
+  // The regression control the ruling asks for by name: a Transfer-Encoding
+  // that never mentions "chunked" at all must keep falling through to
+  // Content-Length and forwarding normally — refusing this would be
+  // refusing a request this shim already handles correctly today, the
+  // over-refusal hazard every guard in this file is written against.
+  it('still forwards via Content-Length when Transfer-Encoding never mentions chunked (regression control)', async () => {
+    const home = mkTmp('ccgpt-proxy-te-nochunked-');
+    let seen: Buffer | null = null;
+    await startPair(home, (_req, body, res) => {
+      seen = body;
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    const payload = Buffer.from(JSON.stringify({ model: 'gpt-x', messages: [{ role: 'system', content: 'MID' }] }));
+    const { status } = await rawRequest(PROXY_PORT, 'POST', '/v1/messages', [
+      'Content-Type: application/json',
+      'Transfer-Encoding: gzip',            // names an encoding, but never "chunked"
+      `Content-Length: ${payload.length}`,
+    ], payload);
+    expect(status).toBe(200);
+    expect(seen).not.toBeNull();
+    const got = JSON.parse(seen!.toString('utf8'));
+    expect(got.messages[0].role).toBe('user');   // folded and forwarded, not refused
   });
 });

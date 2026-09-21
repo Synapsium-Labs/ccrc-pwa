@@ -330,8 +330,12 @@ def _rewrite_messages_body(body: bytes) -> bytes:
 def _joined_header(headers, name: str) -> str:
     """Read a header RFC 7230 §3.2.2 permits a sender to spell EITHER as one
     comma-separated line or as several repeated lines carrying the same
-    field name (`get_all`, `Content-Encoding`), so this returns every
-    occurrence joined with a comma. `headers.get(name)` — what both
+    field name — `Transfer-Encoding` and `Content-Encoding`, this file's two
+    callers, are both exactly this shape — by reading every occurrence via
+    `email.message.Message.get_all` (7b fix round 1, M-3: corrects a garbled
+    parenthetical the first draft of this docstring shipped with, that named
+    `get_all` and `Content-Encoding` side by side with nothing saying what
+    connected them) and joining them with a comma. `headers.get(name)` — what both
     `_is_chunked` and `_content_encoding` used before task-7b-rulings.md §1 —
     reads only the FIRST occurrence on an `http.client.HTTPMessage`; a
     request splitting `Transfer-Encoding: gzip, chunked` across two lines
@@ -354,11 +358,60 @@ def _is_chunked(headers) -> bool:
     task-7b-rulings.md §1/I4) — the same last-token check applied to a
     header split across repeated lines, not only the single-line spelling
     it was written against, so the two cases (one line, several lines) are
-    not two separate readings of this function's own contract."""
+    not two separate readings of this function's own contract.
+
+    `False` here does NOT mean "read Content-Length instead" is always
+    safe — `chunked` named but not last (`"chunked, gzip"`) also answers
+    `False`, and that condition has its own dedicated refusal,
+    `_chunked_named_but_not_final` below (task-7b-fix-rulings.md I-2), not
+    a silent fallthrough. This function only ever decides whether to
+    ACTUALLY DECODE chunked framing; it was never the place that decided
+    whether an absent decode is safe to treat as "no framing at all"."""
     te = _joined_header(headers, "Transfer-Encoding")
     if not te:
         return False
     return te.strip().split(",")[-1].strip().lower() == "chunked"
+
+
+def _chunked_named_but_not_final(headers) -> bool:
+    """True iff `Transfer-Encoding` names `chunked` among its tokens but NOT
+    as the final one — e.g. `"chunked, gzip"`, or `chunked`/`gzip` split
+    across two separate header lines in that order. RFC 7230 §3.3.3 item 3:
+    when chunked is present anywhere but is not the last encoding applied,
+    the message's length cannot be determined by ANY means this shim
+    implements, and a server receiving it MUST respond 400 (and close the
+    connection, which every refusal in this file already does via
+    `Connection: close`).
+
+    Before this (task-7b-fix-rulings.md I-2; durable anchor for the class of
+    hazard, not this specific spelling: spec §6.3, "the hazard is the
+    silent arm, not the encoding" — 7b fix round 1, M-4), that condition
+    fell through `_is_chunked` (`False`, correctly — `chunked` is not what
+    this shim should decode AS chunked-framed) straight to the
+    `Content-Length` branch below, which a request naming
+    `Transfer-Encoding` at all is RFC-forbidden from also carrying reliably
+    — measured, the shim forwards ZERO bytes, the exact silent-empty-body
+    symptom this whole wave exists to kill, reached by a spelling
+    `_is_chunked`'s own fix did not close (task-7b-review.md I-2:
+    `"gzip, chunked"` split across lines, chunked LAST, was the hole task-7b
+    closed; `"chunked, gzip"`, chunked NOT last, is this one — joining split
+    lines made the split spelling agree with the single-line one, which was
+    already wrong).
+
+    Deliberately narrow, matching the over-refusal hazard every refusal in
+    this file is written against: `Transfer-Encoding` ABSENT answers
+    `False` (nothing to name `chunked` about — falls through to
+    `Content-Length` exactly as always), and a `Transfer-Encoding` that
+    never mentions `chunked` at all — `"gzip"` alone, say — also answers
+    `False` and keeps falling through to `Content-Length` exactly as it
+    does today. Refusing either of those would be refusing a request this
+    shim already forwards correctly, which is the worse failure this
+    project's own convention names explicitly."""
+    te = _joined_header(headers, "Transfer-Encoding")
+    if not te:
+        return False
+    tokens = [t.strip().lower() for t in te.split(",")]
+    return "chunked" in tokens and tokens[-1] != "chunked"
 
 
 def _read_chunked_body(rfile) -> bytes:
@@ -456,21 +509,36 @@ def _read_request_body(headers, rfile) -> bytes:
     outright: RFC 7230 §3.3.3 item 3 treats a message that somehow declares
     both as chunked, and the two framings describe the body length in
     mutually exclusive ways, so there is nothing to reconcile between them.
-    Otherwise this is the original `Content-Length`-only read, unchanged.
+    `chunked` named but NOT last (`_chunked_named_but_not_final`, task-7b-
+    fix-rulings.md I-2) is checked second and refused outright, for the
+    same RFC 7230 §3.3.3 item 3 reason: that shape's length is undeterminable
+    by any means this shim implements, and forwarding it via `Content-Length`
+    (which a `Transfer-Encoding`-bearing request is RFC-forbidden from also
+    carrying reliably) is the silent-empty-body hazard measured in
+    task-7b-review.md I-2. Otherwise this is the original `Content-Length`-
+    only read, unchanged.
 
-    Can raise `ValueError` from EITHER of its two raisers (fix round 1,
-    M-1 — the docstring here used to name only the first): `_read_chunked_body`
-    on malformed or truncated chunk framing, and the `int()` parse below on
-    a `Content-Length` that is not a valid integer (e.g. `Content-Length:
-    abc`). `_relay` catches it at this function's own call site and answers
-    an explicit HTTP 400, for every path (see `_read_chunked_body`'s
-    docstring). The `int()` failure is wrapped with a `ccgpt-proxy:`-
-    prefixed message so it matches every other refusal in the file — a bare
-    `ValueError` from a stdlib call is otherwise the one refusal message in
-    the file that would not name the shim.
+    Can raise `ValueError` from any of its THREE raisers (task-7b-fix-
+    rulings.md I-2 adds the second; task 7a's own fix round 1, M-1 — the
+    docstring here used to name only the first, then only two):
+    `_read_chunked_body` on malformed or truncated chunk framing,
+    `_chunked_named_but_not_final` on `chunked` present but not final, and
+    the `int()` parse below on a `Content-Length` that is not a valid
+    integer (e.g. `Content-Length: abc`). `_relay` catches it at this
+    function's own call site and answers an explicit HTTP 400, for every
+    path (see `_read_chunked_body`'s docstring). The `int()` failure is
+    wrapped with a `ccgpt-proxy:`-prefixed message so it matches every
+    other refusal in the file — a bare `ValueError` from a stdlib call is
+    otherwise the one refusal message in the file that would not name the
+    shim.
     """
     if _is_chunked(headers):
         return _read_chunked_body(rfile)
+    if _chunked_named_but_not_final(headers):
+        raise ValueError(
+            "ccgpt-proxy: Transfer-Encoding names chunked but not as the final "
+            f"encoding, so the body length cannot be determined: {_joined_header(headers, 'Transfer-Encoding')!r}"
+        )
     try:
         length = int(headers.get("Content-Length") or 0)
     except ValueError as e:
@@ -645,52 +713,6 @@ HOP_BY_HOP = {
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
-    # I2 (task-7b-rulings.md §2): bounds a client-facing read that would
-    # otherwise block THIS THREAD forever — a chunked upload that stalls
-    # mid-chunk, is truncated with no terminator, or declares a huge size
-    # then withholds the bytes (three of the eight malformed framings the
-    # paired review measured; all three hang, they do not drop the
-    # connection). `socketserver.StreamRequestHandler.setup` — this class's
-    # own grandparent — applies this to the CLIENT socket via
-    # `self.connection.settimeout(self.timeout)` only `if self.timeout is
-    # not None`; unset (the default), a half-open connection is reaped only
-    # by TCP keepalive, on the order of hours, holding one
-    # `ThreadingHTTPServer` thread per stalled client for that whole time.
-    #
-    # No `handle_timeout` override is added alongside this (the ruling that
-    # scoped this task suggested one; measured against this box's own
-    # `http.server` source before writing this, not assumed): that hook is
-    # `socketserver.BaseServer`'s, for a `handle_request()`-style ACCEPT
-    # timeout, not a per-connection read timeout, and this server runs
-    # `serve_forever()` — `handle_request()` is never called. The read
-    # timeout below is already handled, one level down: a blocking
-    # `rfile.read()`/`rfile.readline()` inside `_relay` (called from
-    # `do_POST` etc., itself called from `BaseHTTPRequestHandler.
-    # handle_one_request`'s own `try` block) raises `TimeoutError` once the
-    # socket's `settimeout` fires; `handle_one_request`'s own `except
-    # TimeoutError` clause (stdlib, unmodified) logs it, sets
-    # `self.close_connection = True`, and returns — the connection is
-    # closed in `finish()` exactly as a dropped connection already is for
-    # every other transport-level failure in this file, with no second
-    # mechanism needed here to produce that outcome.
-    #
-    # 30s: comfortably above any real transfer time on loopback (this
-    # shim's only client) for even a large conversation body — bandwidth
-    # there is gigabytes/sec, so a multi-MB body still arrives in
-    # milliseconds when the client is actually sending — and nowhere near
-    # the unrelated 900s `urlopen` timeout on the UPSTREAM leg in `_relay`
-    # below, which bounds a completely different wait (Codex's own response
-    # latency, not this shim's client-facing socket).
-    #
-    # DELIBERATELY UNPINNED (task-7b-rulings.md, "Mutations required" §7):
-    # measured — removing this line leaves the full suite green (55/55) —
-    # and a case that proves this guard is not the one honest way to see
-    # that: it would have to actually stall a raw socket past the bound and
-    # watch the connection close, costing >=30s of real wall-clock in every
-    # run of this file, for one line. Judged not worth it; this comment and
-    # the manual verification in the task-7b report are the record instead.
-    timeout = 30
-
     def log_message(self, *args):
         pass
 
@@ -749,20 +771,106 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(payload)
 
     def _relay(self):
+        # I2 (task-7b-rulings.md §2) / 7b fix round 1, I-1 (task-7b-fix-
+        # rulings.md) — durable anchor: D-3155,
+        # docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md,
+        # which already names "the handler gains a socket timeout there"
+        # while holding the two chunk/decompress SIZE caps open (7b fix
+        # round 1, M-4: cited alongside the scratch rulings/review this
+        # round, not only them). Bounds ONLY the request-BODY read below,
+        # not the whole connection. The first shape of this guard was a class-level
+        # `Handler.timeout`, which `socketserver.StreamRequestHandler.setup`
+        # applies to the client socket for the WHOLE connection — reads
+        # AND the response write together — and the review measured what
+        # that costs: a genuinely wedged reader (draining below ~0.3 KB/s,
+        # once kernel send buffers fill) got its RESPONSE silently
+        # truncated by the same bound, undetectably at both ends. Neither
+        # `Content-Length` nor `Transfer-Encoding` survives `HOP_BY_HOP`
+        # below, so the response body is delimited by connection close —
+        # a short body then looks exactly like a complete one — and
+        # `log_message` is `pass`, so nothing prints either (measured:
+        # 1,982,645 of 134,217,909 expected bytes delivered, `hadError=
+        # false`, empty stderr). Scoped here instead — 30s armed only while
+        # `_read_request_body` is actually blocked reading from the client,
+        # disarmed the instant it returns, in EITHER outcome, before any
+        # response (including this method's own `_refuse` calls) is
+        # written — bounds the ORIGINAL I2 hazard exactly (30s with no
+        # request bytes arriving at all) and leaves the response leg, and
+        # the initial request-line/header read `handle_one_request` does
+        # before this method is ever called, exactly as unbounded as they
+        # were before any of this task's work.
+        #
+        # An unset timeout is not "reaped by TCP keepalive, on the order of
+        # hours" (7b fix round 1, M-1 — corrects an error in task-7b-
+        # rulings.md §2 that this comment's own first draft carried forward
+        # verbatim): measured, `SO_KEEPALIVE` on the accepted client socket
+        # is 0 — `socketserver` never sets it — so nothing reaps a
+        # half-open connection at all; without this guard the thread hangs
+        # indefinitely, which makes the guard MORE valuable than that
+        # sentence argued, not less.
+        #
+        # No `handle_timeout` override is added alongside this (measured
+        # against this box's own `/usr/lib/python3.12/socketserver.py`
+        # before writing this, not assumed, and independently re-verified
+        # by 7b's review): that hook is defined on `socketserver.
+        # BaseServer`, called ONLY from `handle_request()`, which
+        # `serve_forever()` (what `__main__` below runs) never calls —
+        # `_handle_request_noblock()` is called instead, and its own
+        # docstring says it "Ignores self.timeout." A blocking
+        # `rfile.read()`/`rfile.readline()` inside `_read_request_body`
+        # raises `TimeoutError` once `settimeout` below fires; that
+        # propagates up through this method (uncaught here — only
+        # `ValueError` is caught below) to `BaseHTTPRequestHandler.
+        # handle_one_request`'s own `except TimeoutError` clause (stdlib,
+        # unmodified), which sets `self.close_connection = True` and
+        # returns — the connection closes in `finish()` exactly as a
+        # dropped connection already does for every other transport-level
+        # failure in this file, with no second mechanism needed here.
+        # `handle_one_request` calls `self.log_error(...)` on that path,
+        # but it prints nothing (7b fix round 1, M-2 — the first draft of
+        # this comment said "logs it"): `log_error` calls `self.
+        # log_message`, overridden to `pass` above, deliberately, for a
+        # shim in a hot path — every timeout on this shim is silent, which
+        # is the operational half of the response-truncation hazard this
+        # scoping fixes.
+        #
+        # 30s: comfortably above any real transfer time on loopback (this
+        # shim's only client) for even a large conversation body — the
+        # review measured a 10 MB chunked body arriving complete over 40s
+        # of deliberately-paced wall clock without tripping this bound at
+        # all, confirming the rule is "30s with NO bytes arriving", not "30s
+        # to finish the upload" — and nowhere near the unrelated 900s
+        # `urlopen` timeout on the UPSTREAM leg in this same method, below,
+        # which bounds a completely different wait (Codex's own response
+        # latency, not this shim's client-facing socket).
+        #
+        # DELIBERATELY UNPINNED (task-7b-rulings.md, "Mutations required"
+        # §7; reaffirmed for the narrower scope by task-7b-fix-rulings.md's
+        # own mutation 1): measured, removing either `settimeout` call
+        # below leaves the full suite green. A case that proves the read
+        # leg's hang is bounded, or that the response leg is no longer
+        # bound by it, needs an actual wedged socket and real wall-clock —
+        # judged not worth the suite's runtime for either; this comment and
+        # the manual verification in the task-7b report(s) are the record.
+        self.connection.settimeout(30)
         try:
             body = _read_request_body(self.headers, self.rfile)
         except ValueError as e:
-            # Task 7a, §4: malformed/truncated chunked framing, OR (fix
-            # round 1, M-1) a non-numeric Content-Length — both raised by
-            # `_read_request_body`, not only the chunked one. The transport
-            # itself, not the parsed content, is what's wrong — there is no
-            # complete byte string to examine at all, so this is refused
-            # for EVERY path, not only `/messages` (the deliberate
-            # exception to the non-`/messages` passthrough guarantee below:
-            # framing that cannot be parsed cannot be forwarded anywhere,
-            # because there is no body to relay).
+            self.connection.settimeout(None)
+            # Task 7a, §4: malformed/truncated chunked framing, a
+            # non-numeric Content-Length (task 7a's own fix round 1, M-1),
+            # or (7b fix round 1, I-2) chunked named but not the final
+            # Transfer-Encoding — all three raised by `_read_request_body`,
+            # not only the chunked-framing one. The transport itself, not
+            # the parsed content, is what's wrong — there is no complete
+            # byte string to examine at all, so this is refused for EVERY
+            # path, not only `/messages` (the deliberate exception to the
+            # non-`/messages` passthrough guarantee below: framing that
+            # cannot be parsed cannot be forwarded anywhere, because there
+            # is no body to relay).
             self._refuse(400, str(e))
             return
+        self.connection.settimeout(None)
         path_only = self.path.split("?", 1)[0].rstrip("/")
         if path_only == LANE_PATH:
             # A body on this endpoint is unexpected but drained above so a
