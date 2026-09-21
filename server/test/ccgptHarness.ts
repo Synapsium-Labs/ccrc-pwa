@@ -69,7 +69,7 @@ export function pythonOrSkip(): string | null {
   return (cachedPython = exe && existsSync(exe) ? exe : null);
 }
 
-// Shared by `runPy` and `spawnPy` (ccgpt-proxy review round 1, C-1/I-1/I-2;
+// Shared by `runPy` and `spawnPy` (ccgpt-proxy review round 1, task-1 C-1/I-1/I-2;
 // round 2, finding 4): those three findings were one defect, not three — a
 // second, hand-rolled python-spawn site in ccgpt-proxy.test.ts reproduced
 // this containment BY HAND and got it wrong (`...env` spread LAST, no `cwd`,
@@ -214,13 +214,13 @@ export function runPy(
  *  Applies the identical HOME/cwd/PYTHONDONTWRITEBYTECODE containment via the
  *  shared `containedSpawnOptions` helper above, so the contract has one body
  *  instead of a second, independently-maintained copy (ccgpt-proxy review
- *  round 1, C-1/I-1/I-2; round 2, finding 4).
+ *  round 1, task-1 C-1/I-1/I-2; round 2, finding 4).
  *
  *  Returns the live child. Unlike `runPy`, this function does not wait for
  *  exit or collect output — the caller owns killing the child and awaiting
  *  its `'close'`, and reads `child.stdout`/`child.stderr` itself for
  *  whatever it needs. Swallowing the handle here would make every later
- *  caller re-spawn just to get it back (see ccgpt-proxy review round 1, M-2). */
+ *  caller re-spawn just to get it back (see ccgpt-proxy review round 1, task-1 M-2). */
 export function spawnPy(
   file: string,
   opts: { home: string; args?: string[]; env?: Record<string, string> },

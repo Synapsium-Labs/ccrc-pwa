@@ -77,7 +77,7 @@ application/json`, never `send_error`'s HTML body with the exception text
 folded into the status-line reason phrase. See `Handler._refuse`.
 
 Malformed or truncated `Transfer-Encoding: chunked` framing — and a
-non-numeric `Content-Length` on the non-chunked path (fix round 1, M-1) —
+non-numeric `Content-Length` on the non-chunked path (task-7a fix round 1, M-1) —
 is refused with an HTTP 400 too, for every path, not only `/messages`: this
 is a transport-framing failure, not a parsed-content one, so a body whose
 length cannot be trusted has no complete bytes to examine, refuse
@@ -130,7 +130,7 @@ def _required_port(name: str) -> int:
     """Like `_required_env`, but for a variable that must parse as a port
     number. Left unwrapped, a non-numeric value escaped as a bare
     `ValueError` traceback instead of the same named refusal every other
-    missing or invalid variable gets (fix round 1, M-3)."""
+    missing or invalid variable gets (task-3 fix round 1, M-3)."""
     raw = _required_env(name)
     try:
         return int(raw)
@@ -176,7 +176,7 @@ def _fold_midturn_system(data):
     explicit refusal instead of a fourth branch beside it.
 
     ABSENT or explicit `null` `messages` is NOT this arm and must not become
-    it (fix round 1, C-1): `data.get("messages")` returns `None` for both,
+    it (task-7a fix round 1, C-1): `data.get("messages")` returns `None` for both,
     and D-3151 arm 3's own census — the plan's and the deleted comment's —
     was always "present but not a list", never "absent". A body carrying
     only a top-level `system` and no `messages` at all is one this shim
@@ -271,7 +271,7 @@ def _fold_system(data):
 
     `messages` absent or `null` folds to `[]` before the branch above runs,
     so a request with only a top-level `system` and no history still gets
-    one leading `user` turn, not none (fix round 1, C-1: this sentence was
+    one leading `user` turn, not none (task-7a fix round 1, C-1: this sentence was
     briefly false between the parent commit and this fix — see
     `_fold_midturn_system`'s own docstring for the defect and the remedy;
     re-verified true again here, not merely re-asserted). A non-empty list
@@ -283,7 +283,7 @@ def _fold_system(data):
     (`_rewrite_messages_body`) has already run `_fold_midturn_system`,
     which returns `data` unmodified for an ABSENT or `null` `messages` and
     raises `_UnusableBody` for a PRESENT non-list `messages` (fix round 1,
-    C-1) — so `data.get("messages")` here is always either `None` or an
+    task-7a C-1) — so `data.get("messages")` here is always either `None` or an
     actual list by the time `msgs = data.get("messages") or []` runs,
     never a present-but-wrong-type value, and `not isinstance(msgs, list)`
     can never be True: defensive dead code from this call site, same shape
@@ -320,7 +320,7 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     `reasoning.effort` (task-8 fix round 1, I-1 — this line used to stop at
     "then re-encode" three steps early, 33 lines above the `_apply_effort`
     call this function actually makes), then re-encode. `ensure_ascii=False`
-    (fix round 1, M-5): the default would re-escape every non-ASCII byte the
+    (task-4 fix round 1, M-5): the default would re-escape every non-ASCII byte the
     client sent even when nothing needed folding, and a proxy that rewrites
     more of the wire than it must is a proxy whose diffs are harder to reason
     about — keep the forwarded body as close to what arrived as re-encoding
@@ -330,7 +330,7 @@ def _rewrite_messages_body(body: bytes) -> bytes:
     body cannot be turned into a JSON object at all: malformed JSON, a
     non-object top level (e.g. a bare array — carries no `messages` key and
     cannot be routed as an Anthropic request either), or JSON nested deep
-    enough that the decoder itself gives up (fix round 1, I-1:
+    enough that the decoder itself gives up (task-7a fix round 1, I-1:
     `RecursionError` is a `RuntimeError` subclass, not a `ValueError`, and
     used to escape this except arm entirely, dropping the connection with no
     HTTP response). Both arms used to `return body` unrewritten; Task 7a
@@ -393,7 +393,7 @@ def _effort_path() -> str:
 def _lane_effort_map() -> dict:
     """This lane's per-model effort defaults — the `byModel` object
     `effortFile()` materialises, `{"<model>": "<level>", ...}` — reloaded by
-    `(path, mtime)` in a SINGLE-SLOT cache (task-8-brief.md/task-8-
+    `(path, mtime)` in a SINGLE-SLOT cache (task-8-brief.md (commit e5318e97)/task-8-
     rulings.md §1): one key, one value, read and written as ONE tuple
     assignment (`_EFFORT_CACHE = (key, effort_map)`; see the module-level
     comment above this cache's declaration for why — task-8 fix round 1, M-3).
@@ -413,14 +413,14 @@ def _lane_effort_map() -> dict:
     mutation that deletes the cache-hit check outright (task-8 fix round 1
     review, mutation M7), is the ONLY one of 68 cases that reds — it is
     the sole pin for this cache existing at all, not merely a control on
-    the opposite direction (task-8 fix round 1 correction to task-8-rulings.md
+    the opposite direction (task-8 fix round 1 correction to task-8-rulings.md (commit 1a0196d5)
     §1, which called it "a control, not a pin").
 
-    `st_mtime_ns`, not `st_mtime` (task-8-rulings.md §2): an integer
+    `st_mtime_ns`, not `st_mtime` (task-8-rulings.md (commit e5318e97) §2): an integer
     nanosecond count compares exactly, with no float-precision surprise
     across a rewrite the test harness pins with `fs.utimesSync`.
 
-    A broken file must not break the lane (task-8-rulings.md §3): this is
+    A broken file must not break the lane (task-8-rulings.md (commit e5318e97) §3): this is
     ccrc's OWN config, not client input — every refusal Task 7a built
     answers a client that sent something unusable, and refusing a perfectly
     good client request because *our* config is broken would break the lane
@@ -468,7 +468,7 @@ def _lane_effort_map() -> dict:
         by_model = parsed.get("byModel") if isinstance(parsed, dict) else None
         effort_map = by_model if isinstance(by_model, dict) else {}
     except (OSError, ValueError):
-        # M-2: NOT cached — see docstring for why a failure must not latch.
+        # task-8 M-2: NOT cached — see docstring for why a failure must not latch.
         return {}
     _EFFORT_CACHE = (key, effort_map)
     return effort_map
@@ -478,12 +478,13 @@ def _apply_effort(data: dict) -> dict:
     """Resolve `reasoning.effort` and strip both client-side effort fields,
     IN PLACE, on an already-parsed `/messages` body. Called from
     `_rewrite_messages_body` alone, AFTER both system folds — task-8-
-    rulings.md §4: this must run only where the folds already run, a POST
+    rulings.md (commit e5318e97) §4: this must run only where the folds already run, a POST
     body on a path ending `/messages`, and nowhere else, and it introduces
     no new "cannot use this body" condition of its own — nothing here
     raises.
 
-    Precedence (task-8-brief.md, unchanged from production): an explicit
+    Precedence (task-8-brief.md, unchanged from production —
+    `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §6.2): an explicit
     client `output_config.effort` wins outright over the lane default; with
     none, `_lane_effort_map()`'s entry for THIS request's own `model`
     applies; with neither, nothing is set here and the provider's own
@@ -505,7 +506,7 @@ def _apply_effort(data: dict) -> dict:
 
     `output_config` and `thinking` are popped UNCONDITIONALLY — independent
     of whether either one actually carries a usable effort value at all
-    (task-8-rulings.md §5): a body carrying `thinking` and no `output_config`
+    (task-8-rulings.md (commit e5318e97) §5): a body carrying `thinking` and no `output_config`
     whatsoever must still come out with `thinking` gone, so a mutation that
     stops stripping `thinking` cannot hide behind the effort path.
 
@@ -521,7 +522,7 @@ def _apply_effort(data: dict) -> dict:
     Malformed client shapes (a non-dict `output_config`, a `model` that is
     not a string) are tolerated, never refused — this is the SAME body the
     two folds above already accepted; effort resolution adds no new refusal
-    surface (task-8-rulings.md §4).
+    surface (task-8-rulings.md (commit e5318e97) §4).
     """
     output_config = data.pop("output_config", None)
     data.pop("thinking", None)
@@ -549,7 +550,7 @@ def _joined_header(headers, name: str) -> str:
     parenthetical the first draft of this docstring shipped with, that named
     `get_all` and `Content-Encoding` side by side with nothing saying what
     connected them) and joining them with a comma. `headers.get(name)` — what both
-    `_is_chunked` and `_content_encoding` used before task-7b-rulings.md §1 —
+    `_is_chunked` and `_content_encoding` used before task-7b-rulings.md (commit 458ae3a7) §1 —
     reads only the FIRST occurrence on an `http.client.HTTPMessage`; a
     request splitting `Transfer-Encoding: gzip, chunked` across two lines
     (`Transfer-Encoding: gzip` then `Transfer-Encoding: chunked`) would then
@@ -568,7 +569,7 @@ def _is_chunked(headers) -> bool:
     encoding ahead of it (e.g. `gzip, chunked`) is still recognised while a
     value that merely mentions the word elsewhere is not. The value read is
     every `Transfer-Encoding` LINE joined first (`_joined_header`,
-    task-7b-rulings.md §1/I4) — the same last-token check applied to a
+    task-7b-rulings.md (commit 8bd10c1c) §1/I4) — the same last-token check applied to a
     header split across repeated lines, not only the single-line spelling
     it was written against, so the two cases (one line, several lines) are
     not two separate readings of this function's own contract.
@@ -576,7 +577,8 @@ def _is_chunked(headers) -> bool:
     `False` here does NOT mean "read Content-Length instead" is always
     safe — `chunked` named but not last (`"chunked, gzip"`) also answers
     `False`, and that condition has its own dedicated refusal,
-    `_chunked_named_but_not_final` below (task-7b-fix-rulings.md I-2), not
+    `_chunked_named_but_not_final` below (task-7b-fix-rulings.md I-2 — see
+    that function's own docstring; spec §6.3), not
     a silent fallthrough. This function only ever decides whether to
     ACTUALLY DECODE chunked framing; it was never the place that decided
     whether an absent decode is safe to treat as "no framing at all"."""
@@ -664,7 +666,7 @@ def _read_chunked_body(rfile) -> bytes:
     explicit shape now includes this one too.
 
     Both `readline()` calls below are bound at 65537 bytes (task-7b-
-    rulings.md §2/I2), matching the exact figure
+    rulings.md (commit 458ae3a7) §2/I2), matching the exact figure
     `BaseHTTPRequestHandler.handle_one_request` already uses for its own
     request-line read: an unbounded `readline()` blocks the calling thread
     growing an ever-larger buffer for as long as the client keeps sending
@@ -731,11 +733,11 @@ def _read_request_body(headers, rfile) -> bytes:
     by any means this shim implements, and forwarding it via `Content-Length`
     (which a `Transfer-Encoding`-bearing request is RFC-forbidden from also
     carrying reliably) is the silent-empty-body hazard measured in
-    task-7b-review.md I-2. Otherwise this is the original `Content-Length`-
+    task-7b-review.md (commit 8bd10c1c) I-2. Otherwise this is the original `Content-Length`-
     only read, unchanged.
 
     Can raise `ValueError` from any of its THREE raisers (task-7b-fix-
-    rulings.md I-2 adds the second; task 7a's own fix round 1, M-1 — the
+    rulings.md (commit 1ac3ec20) I-2 adds the second; task 7a's own fix round 1, M-1 — the
     docstring here used to name only the first, then only two):
     `_read_chunked_body` on malformed or truncated chunk framing,
     `_chunked_named_but_not_final` on `chunked` present but not final, and
@@ -769,7 +771,7 @@ def _content_encoding(headers) -> str:
     RFC 7231's Content-Coding section), the same contract `_is_chunked`
     above relies on for `Transfer-Encoding` — and, like it, every LINE
     named `Content-Encoding`
-    is joined first (`_joined_header`, task-7b-rulings.md §1/I4), not only
+    is joined first (`_joined_header`, task-7b-rulings.md (commit 458ae3a7) §1/I4), not only
     the first one `headers.get` alone would see, for the same reason: RFC
     7230 §3.2.2 permits a comma-list header to be split across repeated
     lines, and reading only the first would silently lose whatever a later
@@ -793,7 +795,7 @@ def _content_encoding(headers) -> str:
     return _joined_header(headers, "Content-Encoding").strip().lower()
 
 
-# M4 (task-7a-rulings.md §8): the encoding vocabulary this shim can
+# M4 (task-7a-rulings.md (commit ef4c4e6b) §8): the encoding vocabulary this shim can
 # decode/re-encode, enumerated ONCE — the repo's own "enumerated once and
 # derived" convention (project CLAUDE.md). Before this, "gzip"/"deflate"
 # were named three separate times with nothing forcing them to agree: the
@@ -871,7 +873,7 @@ def _decode_body(body: bytes, encoding: str) -> bytes:
     neither D-3151 nor Task 5's chunked-body work anticipated.
 
     ONE shared `except (OSError, EOFError, zlib.error)` covers BOTH codecs
-    (C1, task-7a-rulings.md §1) — measured directly, not assumed:
+    (C1, task-7a-rulings.md (commit ef4c4e6b) §1) — measured directly, not assumed:
     `gzip.decompress` raises `gzip.BadGzipFile` (an `OSError` subclass) for
     a structurally-bad header or a CRC/length mismatch, `EOFError` (NOT an
     `OSError` subclass) for data simply cut short before its own
@@ -923,7 +925,7 @@ LANE_PATH = "/ccgpt/lane"
 # durable anchor for the paragraph below, alongside the scratch rulings
 # citations `.superpowers/` carries but this PUBLIC repo does not ship.
 #
-# task-9 M-1 / task-9 fix round 1 I-2 (task-9-rulings.md §3,
+# task-9 M-1 / task-9 fix round 1 I-2 (task-9-rulings.md (commit 5a99aaf1) §3,
 # task-9-fix-rulings.md I-2): `"trailer"`, singular — corrected from
 # `"trailers"` (plural). The EIGHT-member set itself is not an RFC 7230
 # enumeration at all — §6.1 is purely declarative, naming no fixed list; its
@@ -984,7 +986,7 @@ class Handler(BaseHTTPRequestHandler):
         claimed content-encoding; 400: what you sent is malformed; 502: the
         upstream is unreachable).
 
-        Fix round 1, I-1: the upstream handler being never reached is an
+        task-7a Fix round 1, I-1: the upstream handler being never reached is an
         INVARIANT, but only at the BODY-REFUSAL call sites — the chunked/
         `_UnusableBody`/`_BadEncoding`/415 sites above `_relay`'s own
         `urlopen` call — because those are the ones this method's own
@@ -999,7 +1001,7 @@ class Handler(BaseHTTPRequestHandler):
         one. Every refusal in this file — Task 6's gzip/deflate decode
         failure and the upstream-unreachable 502 included — now calls this
         instead of `send_error`.
-        Fix round 1, M-3: a HEAD request gets headers describing the body
+        task-7a Fix round 1, M-3: a HEAD request gets headers describing the body
         (including its real `Content-Length`) but not the body bytes
         themselves, matching `send_error`'s own `self.command != 'HEAD'`
         behaviour — `_refuse` used to write the body unconditionally, a
@@ -1022,7 +1024,7 @@ class Handler(BaseHTTPRequestHandler):
         # docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md,
         # which already names "the handler gains a socket timeout there"
         # while holding the two chunk/decompress SIZE caps open (7b fix
-        # round 1, M-4: cited alongside the scratch rulings/review this
+        # round 1, task-7b M-4: cited alongside the scratch rulings/review this
         # round, not only them). Bounds ONLY the request-BODY read below,
         # not the whole connection. The first shape of this guard was a class-level
         # `Handler.timeout`, which `socketserver.StreamRequestHandler.setup`
@@ -1136,7 +1138,7 @@ class Handler(BaseHTTPRequestHandler):
         # used to name the system fold alone and under-describe the branch).
         #
         # Suffix match, not the exact literal `/v1/messages` (fix round 1,
-        # M-4): spec §6.4 speaks of
+        # task-3 M-4): spec §6.4 speaks of
         # "non-/messages paths", and nothing in this repo yet pins the
         # generated launcher's base URL to an empty path component — a
         # prefixed mount (e.g. a path-carrying `ANTHROPIC_BASE_URL`) must
@@ -1315,7 +1317,7 @@ class Handler(BaseHTTPRequestHandler):
     # client, the rest for the actual traffic. Without HEAD/OPTIONS here,
     # `BaseHTTPRequestHandler`'s own default answers a bare 501 for either,
     # which would make "everything else forwarded untouched" (module
-    # docstring) not literally true (fix round 1, M-5).
+    # docstring) not literally true (task-2 fix round 1, M-5).
     do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _relay
 
 
@@ -1325,7 +1327,7 @@ if __name__ == "__main__":
     except OSError as e:
         # Unwrapped, a bind failure (most commonly EADDRINUSE) is a bare
         # socketserver traceback with no ccrc-shaped message (fix round 1,
-        # M-4) — easy to miss in a unit's journal next to everything else a
+        # task-2 M-4) — easy to miss in a unit's journal next to everything else a
         # crashing process prints.
         sys.exit(f"ccgpt-proxy: failed to bind 127.0.0.1:{PROXY_PORT}: {e}")
     server.serve_forever()

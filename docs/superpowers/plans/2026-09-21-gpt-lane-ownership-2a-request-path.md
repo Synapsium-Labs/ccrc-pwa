@@ -919,9 +919,9 @@ grep -c '    def test_' "$OC/test_ccgpt_proxy.py"
 
 | Population | Before | After |
 |---|---|---|
-| OpenClaw `test_ccgpt_proxy.py` methods | _fill in_ | unchanged this wave |
-| ccrc `ccgpt-proxy.test.ts` cases | 0 | _fill in_ |
-| ccrc `ccgpt-usage.test.ts` cases | 0 | _fill in_ |
+| OpenClaw `test_ccgpt_proxy.py` methods | 101 | unchanged this wave (101, measured Task 12) |
+| ccrc `ccgpt-proxy.test.ts` cases | 0 | 83 |
+| ccrc `ccgpt-usage.test.ts` cases | 0 | 31 (29 through Task 11 + 2 from Task 12 item E's accept-side loopback cases) |
 
 **Nothing is deleted in the OpenClaw repository in this wave.** Its deletion is step 4 of the cutover, after a separately authorised rollout. Record the counts; do not act on them.
 
@@ -935,9 +935,9 @@ cd "$REPO" && grep -n 'codex lane' ccd/ccrc | head
 
 This plan ships **no login flow and no runtime** — only the request path — so the sentence is expected to remain true, and the correct outcome is **no change plus a recorded judgement**. If it has gone false, amend the prose and the test that pins it in the same commit. Do not leave it unexamined: a prose pin against prose is green while both lie.
 
-- [ ] **Step 1: Measure the counts and fill the table**
-- [ ] **Step 2: Record B and C's judgements in the commit body**
-- [ ] **Step 3: Commit**
+- [x] **Step 1: Measure the counts and fill the table**
+- [x] **Step 2: Record B and C's judgements in the commit body**
+- [x] **Step 3: Commit**
 
 ---
 
@@ -1082,7 +1082,7 @@ Numbers here were **issued** by `POST /api/ledger/deviations` and defined in the
   unconditional `msgs.insert(0, …)` can produce. Step 5 then demanded a mutation swapping the call
   order (`_fold_system` before `_fold_midturn_system`) and required the order assertions to go red.
 
-  Measurement (an independent agent, `task-4-commutativity.md`, ten varied bodies against the real
+  Measurement (an independent agent, `task-4-commutativity.md` — D-3152, this entry — ten varied bodies against the real
   shipped file) showed these two requirements are **mutually unsatisfiable**: an unconditional insert
   makes `_fold_midturn_system` (an in-place, whole-list role flip) and `_fold_system` (a front-insert)
   commute regardless of call order — 10/10 inputs byte-identical under both orderings. No order mutation

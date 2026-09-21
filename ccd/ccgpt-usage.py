@@ -30,14 +30,15 @@ round 1 (task-10-fix-rulings.md I-2), which is when the third was noticed:
      error, not lane one (task-10-brief.md) — see `_required_env`.
   3. The OAuth token directory is read from `lane.json`'s `authDir` field
      (`_token_dir` below), never re-derived from a naming convention. Fix
-     round 1's I-2: the reference computes `$HOME/.handoff/chatgpt-auth[-<id>]`
+     round 1's task-10 I-2: the reference computes `$HOME/.handoff/chatgpt-auth[-<id>]`
      itself, but spec §5.4 line 333 says `lane.json` "is the one thing
      `ccgpt`, the shim and the publisher read, so none of them re-derives a
      path from a naming convention" — this file used to violate that
      sentence in a file that already opens `lane.json` two functions away.
 
 **Five consumer-facing properties this file exists to keep** (task-10-brief.md's
-own table; each has its own test in `server/test/ccgpt-usage.test.ts` and its
+own table, carried into `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
+Task 10; each has its own test in `server/test/ccgpt-usage.test.ts` and its
 own mutation in that file's commit history):
 
   - Written with `json.dump`'s DEFAULT separators (`_publish`). *(Reason
@@ -63,20 +64,20 @@ own mutation in that file's commit history):
     failed poll (`_fetch_headers`) — the headers are read off the error
     response and published. A REDIRECT status is never this, however its
     headers are dressed — see `_fetch_headers`'s own docstring, fix round
-    1 C-1.
+    1 task-10 C-1.
   - The write is ATOMIC: tmp-then-rename (`_publish`, `os.replace`) — a
     reader never sees a half-written row.
 
 **The `CCGPT_USAGE_ENDPOINT` seam** (Task 1's decision, `_usage_endpoint`):
 production configuration surface, honoured ONLY when it names a loopback
-host. task-10-rulings.md §1 OVERRULES the plan's own draft text, which had
+host. task-10-rulings.md (commit af7cc0bc) §1 OVERRULES the plan's own draft text, which had
 asked for a non-loopback override to be silently "ignored" (i.e. fall
 through to the real endpoint) — that would make a test suite pointed
 somewhere unexpected capable of reaching the production Codex usage API. A
 non-loopback override is refused outright instead. Costs nothing in
 production, where the variable is unset and this check never fires.
 
-**That refusal is necessary but not sufficient (fix round 1, C-1).** The
+**That refusal is necessary but not sufficient (task-10 fix round 1, C-1).** The
 loopback check binds the FIRST hop only; `urlopen`'s default opener follows
 redirects, so a vetted loopback endpoint answering `3xx` could send this
 process anywhere, bearer token riding along, and a forged response from
@@ -84,7 +85,7 @@ that second hop would otherwise publish as a real measurement. `_fetch_headers`
 below builds its own opener that refuses every redirect outright — see its
 docstring.
 
-**The interpreter (fix round 1, M-3).** The reference selects the LiteLLM
+**The interpreter (task-10 fix round 1, M-3).** The reference selects the LiteLLM
 venv's own python (falling back to a bare `python3`) because the real
 `litellm` package it hard-imports is virtualenv-installed, not on the
 system interpreter. This file is a plain `#!/usr/bin/env python3` with the
@@ -108,11 +109,11 @@ import urllib.request
 
 # The real production endpoint. Never dialed by this wave's own test suite —
 # every case in server/test/ccgpt-usage.test.ts binds its own loopback server
-# on this suite's fixed port (task-10-fix-rulings.md M-1). What varies
-# between cases is not WHETHER a server is bound, but whether
+# on this suite's fixed port (task-10-fix-rulings.md M-1, commit f813102e).
+# What varies between cases is not WHETHER a server is bound, but whether
 # CCGPT_USAGE_ENDPOINT is pointed AT it: a case that expects the subject to
 # refuse before ever making a request binds a server anyway and asserts it
-# saw ZERO requests (M-7) — never merely that the subject exited non-zero —
+# saw ZERO requests (task-10 M-7) — never merely that the subject exited non-zero —
 # including the non-loopback-override case, whose bound server is
 # deliberately NOT what CCGPT_USAGE_ENDPOINT names: it exists solely to
 # prove the refusal doesn't reach THIS box's own mock either, not only the
@@ -131,7 +132,7 @@ DEFAULT_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 # set either) — task-10 does not need Task 11's own dedicated look-alike
 # case to get this right, since it is not testing a substring shortcut.
 # NOTE: this check binds the FIRST hop only — see the module docstring's own
-# fix-round-1 C-1 paragraph and `_fetch_headers`'s docstring for what closes
+# task-10 fix-round-1 C-1 paragraph and `_fetch_headers`'s docstring for what closes
 # the gap a hostname check alone cannot.
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
@@ -141,7 +142,9 @@ def _required_env(name: str) -> str:
 
     `CCGPT_ACCOUNT_ID` is the only caller of this today — the reference
     script's `${CCGPT_ACCOUNT_ID:-gpt}` "first lane" fallback is REMOVED
-    (task-10-brief.md's "one default that is removed"): an unnamed lane is
+    (task-10-brief.md's "one default that is removed", carried into
+    `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
+    Task 10): an unnamed lane is
     an error, not lane one, because a template unit
     (`ccgpt-usage@<id>.timer`) always names its instance, and a publisher
     that guesses a lane when it is not told one can silently publish the
@@ -175,7 +178,7 @@ def _usage_endpoint() -> str:
     """The endpoint this run will poll: the compiled-in default, or
     `CCGPT_USAGE_ENDPOINT` when it is set AND loopback.
 
-    task-10-rulings.md §1: a non-loopback override REFUSES outright (exits
+    task-10-rulings.md (commit af7cc0bc) §1: a non-loopback override REFUSES outright (exits
     non-zero, naming the variable and the value) rather than being silently
     ignored. The publisher sends a bearer token to whatever this function
     returns, so a non-loopback override is a credential-redirection hazard,
@@ -193,7 +196,7 @@ def _usage_endpoint() -> str:
     return override
 
 
-# M-4 (task-10-fix-rulings.md): every module-scope statement above this line
+# task-10 M-4 (task-10-fix-rulings.md, commit 4893935a): every module-scope statement above this line
 # validates ccrc's OWN configuration (env vars, the endpoint) and needs no
 # third-party package at all. The `litellm` import below is placed AFTER
 # these two assignments run, deliberately — with it at the top of the file
@@ -208,33 +211,35 @@ USAGE_ENDPOINT = _usage_endpoint()
 
 # HOME-following, exactly as the reference script's LIMITS_DIR was
 # (task-10-brief.md: "it already follows HOME, so the output assertions
-# port unchanged") — `os.path.expanduser` resolves against this process's
+# port unchanged" —
+# `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
+# Task 10 "Reference" line) — `os.path.expanduser` resolves against this process's
 # own `HOME`, the fixture HOME under test, never the operator's real one.
 LIMITS_DIR = os.path.join(os.path.expanduser("~"), ".cc-limits")
 
 # `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §5.4:
 # "lane manifest | `~/.ccrc/codex/<id>/lane.json` (generated, no secrets)".
-# M-5 (task-10-fix-rulings.md): named LANE_MANIFEST_PATH, not LANE_PATH —
+# task-10 M-5 (task-10-fix-rulings.md): named LANE_MANIFEST_PATH, not LANE_PATH —
 # `ccd/ccgpt-proxy.py`'s own `LANE_PATH` is a DIFFERENT thing, the HTTP
 # route `/ccgpt/lane` its shim answers on, and the two files sit side by
 # side in the same directory.
 LANE_MANIFEST_PATH = os.path.join(os.path.expanduser("~"), ".ccrc", "codex", ACCOUNT_ID, "lane.json")
 
-# Deferred past the two refusals above — see the M-4 comment on ACCOUNT_ID.
+# Deferred past the two refusals above — see the task-10 M-4 comment on ACCOUNT_ID.
 from litellm.llms.chatgpt.authenticator import Authenticator  # noqa: E402
 
 
 def _read_lane() -> dict:
     """Read and parse `~/.ccrc/codex/<id>/lane.json` once — the single read
     both `_probe_model` and `_token_dir` work from (task-10-fix-rulings.md
-    I-2: `_token_dir` used to re-derive its own path from a naming
+    I-2, commit 4893935a: `_token_dir` used to re-derive its own path from a naming
     convention in a file that already opens this same file two functions
     away — read once, here, instead).
 
     `lane.json` has no writer until Plan 2b, so this wave's behaviour for
     the file itself is: read it if present and well-formed, and if it is
     absent or not valid JSON, REFUSE naming the remedy that renders it
-    (task-10-rulings.md §4: `ccrc doctor --fix`, the real verb the design
+    (task-10-rulings.md (commit 4893935a) §4: `ccrc doctor --fix`, the real verb the design
     spec's `--fix` table names as what re-renders `lane.json`). Per-field
     validation (a present-but-wrong-shape `probeModel`/`authDir`) happens
     at each field's own reader below, with the identical refusal shape.
@@ -259,7 +264,9 @@ def _read_lane() -> dict:
 def _probe_model(lane: dict) -> str:
     """The model this poll probes with, read from `lane.json`'s
     `probeModel` field — never a hard-coded id (task-10-brief.md: "a model
-    frozen into a publisher is a second model policy").
+    frozen into a publisher is a second model policy" — carried into
+    `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
+    Task 10).
 
     task-10-rulings.md §4: the remedy names `ccrc doctor --fix`, not an
     invented verb (design spec §5.4/§12 — see `_read_lane`'s docstring for
@@ -305,9 +312,10 @@ def _token_dir(lane: dict) -> str:
 
 def _require_logged_in(token_dir: str) -> None:
     """The pre-check the reference bash wrapper made before ever invoking
-    Python — restored (task-10-fix-rulings.md I-3; the report's concern 4
+    Python — restored (task-10-fix-rulings.md I-3, commit 4893935a; the report's concern 4
     was judged NOT safe): existence only (`os.path.isfile`), never opening
-    or reading `auth.json`'s CONTENTS, which is squarely inside spec line
+    or reading `auth.json`'s CONTENTS, which is squarely inside
+    `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` line
     ~497's "existence and mode only" rather than an exception to it.
 
     The message names the TOKEN DIRECTORY, which only THIS publisher knows
@@ -315,7 +323,7 @@ def _require_logged_in(token_dir: str) -> None:
     `_token_dir` above) — `Authenticator` itself cannot name a directory it
     was never told. Without this check, a missing credential surfaces as an
     opaque traceback from inside `litellm` instead of a named refusal, and
-    that got WORSE once `_token_dir` started reading `authDir` (I-2): the
+    that got WORSE once `_token_dir` started reading `authDir` (task-10 I-2): the
     directory now moves whenever `lane.json` says it does, so a bare
     traceback would give an operator nothing to act on.
     """
@@ -339,7 +347,7 @@ def _num(headers, name: str, default: int = 0) -> int:
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Refuses every redirect outright (task-10-fix-rulings.md C-1):
+    """Refuses every redirect outright (task-10-fix-rulings.md C-1, commit 4893935a):
     `redirect_request` returning `None` makes CPython's own
     `HTTPRedirectHandler` raise `HTTPError` carrying the ORIGINAL response's
     status and headers, rather than following `Location` anywhere. Covers
@@ -367,7 +375,8 @@ _OPENER = urllib.request.build_opener(_NoRedirectHandler)
 
 # Redirect-class statuses are never a valid measurement, however their
 # headers are dressed (task-10-fix-rulings.md C-1's "widens the hazard"
-# note): with redirects refused, a 3xx becomes an ordinary `HTTPError`, and
+# note, commit 4893935a — see `_NoRedirectHandler`'s docstring above):
+# with redirects refused, a 3xx becomes an ordinary `HTTPError`, and
 # `_fetch_headers`'s broad "any HTTPError carrying the usage header is
 # valid" carve-out would otherwise publish a FIRST hop's own forged 3xx
 # response too, with no second hop needing to be followed at all. Excluded
@@ -388,7 +397,7 @@ def _fetch_headers(model: str, token: str):
     below its `account_id` read — a GET with neither `content-type` nor
     `accept`, so those two are not part of what is "matched" here) —
     `Authorization`, `originator`, `user-agent`, `session_id` — restored in
-    fix round 1 (C-2) after this file's port had dropped everything but
+    fix round 1 (task-10 C-2, D-3160) after this file's port had dropped everything but
     `Authorization`. `ccd/ccrc-models-probe` documents that block as "what
     the backend expects from a real Codex CLI caller"; dropping it risked
     the backend answering with no usage headers at all, which is exactly
@@ -524,7 +533,7 @@ def _publish(out: dict) -> None:
     `os.replace` succeeds over a target that is itself read-only, because
     replacing a directory entry is a permission the DIRECTORY grants, not
     the file being replaced — the deterministic discriminator
-    task-10-rulings.md §2 gives for pinning this property without a timing
+    task-10-rulings.md (commit af7cc0bc) §2 gives for pinning this property without a timing
     race (verified empirically before relying on it here: see the report).
     A direct `open(target, "w")`, by contrast, needs WRITE permission on
     the file itself and raises `PermissionError` against the same
@@ -544,7 +553,7 @@ def main() -> None:
     token_dir = _token_dir(lane)
     _require_logged_in(token_dir)
     # Unconditional, not setdefault: lane.json (via _token_dir) is now the
-    # SOLE source of truth for this directory (I-2), so nothing here should
+    # SOLE source of truth for this directory (task-10 I-2), so nothing here should
     # let an ambient CHATGPT_TOKEN_DIR silently win over what was just
     # computed and checked above.
     os.environ["CHATGPT_TOKEN_DIR"] = token_dir

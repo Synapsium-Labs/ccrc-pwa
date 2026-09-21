@@ -12,7 +12,7 @@ import { mkTmp } from './tmpHelpers';
 const PROXY_PORT = 45010;
 const UPSTREAM_PORT = 45011;
 
-// Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
+// task-2 Fix round 2, finding 1: C-2's identity check ("the answer's lane must equal
 // what THIS call expects") is necessary but not sufficient when "what this
 // call expects" is a hardcoded shared string — the re-review demonstrated
 // that a same-lane orphan left by an EARLIER run is then silently adopted (7
@@ -46,7 +46,7 @@ let proc: ChildProcess | null = null;
 let upstream: Server | null = null;
 
 afterEach(async () => {
-  // Fix round 1, C-2 part 3: await the child's own `'close'` after
+  // task-2 Fix round 1, C-2 part 3: await the child's own `'close'` after
   // signalling, rather than firing SIGKILL and moving on. A fire-and-forget
   // kill let the very next case's readiness poll start while this one's
   // child (and its port) were still alive for a few more milliseconds —
@@ -68,7 +68,7 @@ type SpawnOutcome = { kind: 'exited'; code: number | null } | { kind: 'still-ser
 
 /** Bounds a wait for a spawned child's exit against a fixed deadline,
  *  producing a DISCRIMINATED outcome instead of letting a stuck child turn
- *  into vitest's own `testTimeout` (fix round 1, I-3). This repo already
+ *  into vitest's own `testTimeout` (task-2 fix round 1, I-3). This repo already
  *  fights a load-flake class where a slow box sheds tests at exactly the
  *  deadline (`vitest.config.ts`), so a red that IS a timeout cannot tell "the
  *  guard is gone" from "the box is loaded" — and a loaded box would red the
@@ -109,7 +109,7 @@ function rawGet(port: number, path: string): Promise<{ status: number | undefine
  *  `node:net` socket — `fetch` cannot produce malformed chunk framing
  *  (bad hex size, negative size, missing CRLF, a short chunk), it can only
  *  produce well-formed chunked bodies (task-7a-rulings.md's interface
- *  note). Writes the request head, then the raw (possibly malformed) body
+ *  note, commit ef4c4e6b). Writes the request head, then the raw (possibly malformed) body
  *  bytes verbatim, then half-closes (`socket.end()`) — every framing this
  *  file sends either raises inside `_read_chunked_body` on bytes already
  *  in flight, or (the short-chunk case) needs the half-close's EOF to turn
@@ -149,11 +149,11 @@ function rawChunkedPost(port: number, path: string, rawBody: Buffer): Promise<{ 
   });
 }
 
-/** General-purpose raw-socket request (fix round 1: M-1's bad
- *  `Content-Length` and M-3's HEAD-suppression case both need a method
+/** General-purpose raw-socket request (task-7a fix round 1: M-1's bad
+ *  `Content-Length` and task-7a M-3's HEAD-suppression case both need a method
  *  and/or headers `rawChunkedPost` doesn't expose — an arbitrary method,
  *  arbitrary headers, and no forced `Transfer-Encoding: chunked`). Returns
- *  the parsed status line's headers too, not only the body, because M-3
+ *  the parsed status line's headers too, not only the body, because task-7a M-3
  *  needs to see `Content-Length` while asserting the body bytes are empty.
  *  Same "resolve on close, even with zero bytes" shape as `rawChunkedPost`
  *  — a dropped connection with no response parses to `status: null` rather
@@ -253,7 +253,7 @@ async function startPair(
 
   // Poll the lane endpoint rather than sleeping: a fixed sleep is a flake.
   //
-  // Fix round 1, C-2: this used to accept the first `r.ok`, full stop — a
+  // task-2 Fix round 1, C-2: this used to accept the first `r.ok`, full stop — a
   // port answering was treated as proof this child was alive and correct.
   // Measured by the reviewer: pre-bind an unrelated listener on 45010 and
   // the whole suite reports "4 passed" in under a second while every one of
@@ -305,7 +305,7 @@ function effortFilePath(home: string, lane: string): string {
  *  `~/.ccrc/models` first (`writeFileSync` does not create parent
  *  directories). When `mtimeSeconds` is given, the file's mtime is pinned
  *  EXACTLY via `fs.utimesSync` rather than left to whatever the write
- *  itself produces (task-8-rulings.md §2): a same-second rewrite may not
+ *  itself produces (task-8-rulings.md (commit e5318e97) §2): a same-second rewrite may not
  *  move mtime at all on some filesystems, and both halves of the cache case
  *  below depend on mtime being precisely what the test intends, not
  *  incidental to when it happened to run on a box carrying ~20 live
@@ -403,7 +403,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
       seen = body; seenPath = req.url;
       res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
     });
-    // Fix round 1, M-1: real non-ASCII bytes, not the pure-ASCII string this
+    // task-2 Fix round 1, M-1: real non-ASCII bytes, not the pure-ASCII string this
     // case originally sent under a "weird bytes" comment that measured
     // false. `é`/` `/`ü` each encode to 2 UTF-8 bytes, so a
     // json.loads/json.dumps round trip inside the shim (there isn't one on
@@ -418,7 +418,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(seenPath).toBe('/v1/models');
     expect(seen!.toString('utf8')).toBe(payloadText);   // byte-identical, not re-serialised
 
-    // Fix round 1, M-6: passthrough is bidirectional — the request direction
+    // task-2 Fix round 1, M-6: passthrough is bidirectional — the request direction
     // was covered above, but the upstream's own response body and headers
     // coming back unchanged is the other half and was previously asserted
     // only by status code.
@@ -427,7 +427,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
   });
 
   it('drops hop-by-hop headers from the forwarded request while end-to-end headers survive', async () => {
-    // Fix round 1, I-4: HOP_BY_HOP is a shipped guard with no test — deleting
+    // task-2 Fix round 1, I-4: HOP_BY_HOP is a shipped guard with no test — deleting
     // the whole set, or dropping just `accept-encoding` (the member Task 6's
     // gzip/deflate handling depends on), left the suite 4/4 green.
     //
@@ -524,7 +524,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(stdout.trim()).toBe(home);
   });
 
-  // Fix round 2, finding 5 — M-5 shipped code-only in round 1. HEAD/OPTIONS
+  // task-2 Fix round 2, finding 5 — M-5 shipped code-only in round 1. HEAD/OPTIONS
   // used to answer a bare 501 from `BaseHTTPRequestHandler`'s own default,
   // which made "everything else forwarded untouched" not literally true.
   it.each(['HEAD', 'OPTIONS'] as const)('forwards a %s request instead of answering a bare 501', async (method) => {
@@ -539,9 +539,9 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(seenMethod).toBe(method);
   });
 
-  // Fix round 2, finding 5 — M-4 shipped code-only in round 1: a bind
+  // task-2 Fix round 2, finding 5 — M-4 shipped code-only in round 1: a bind
   // failure now prints a named ccrc-shaped message instead of a bare
-  // socketserver traceback. Reproduced the same way C-2's foreign-listener
+  // socketserver traceback. Reproduced the same way task-2 C-2's foreign-listener
   // scenario is: pre-bind the port, then start a second shim on it.
   it('names the bind failure instead of a bare traceback when the port is already taken', async () => {
     const home1 = mkTmp('ccgpt-proxy-bindfail-holder-');
@@ -569,7 +569,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     // `afterEach` tears that one down as usual; the second already exited.
   });
 
-  // Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
+  // task-2 Fix round 1, M-3 (second half): only CCGPT_LITELLM_PORT's refusal was
   // pinned; the docstring's actual claim is that all three are required.
   it.each(['CCGPT_ACCOUNT_ID', 'CCGPT_PROXY_PORT', 'CCGPT_LITELLM_PORT'] as const)(
     'refuses to start when %s is unset, naming the missing variable',
@@ -595,7 +595,7 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     },
   );
 
-  // Fix round 1, M-3 (first half): a non-numeric port used to escape as a
+  // task-2 Fix round 1, M-3 (first half): a non-numeric port used to escape as a
   // bare `ValueError` traceback rather than the shim's own named refusal.
   it('refuses to start with a named message when CCGPT_PROXY_PORT is not a valid port number', async () => {
     const home = mkTmp('ccgpt-proxy-badport-');
@@ -647,7 +647,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(JSON.stringify(seen).includes('"role":"system"')).toBe(false);
   });
 
-  // Fix round 1, I-1: `json.loads` on a sufficiently deep-nested body raises
+  // task-3 Fix round 1, I-1: `json.loads` on a sufficiently deep-nested body raises
   // `RecursionError`, which is a `RuntimeError` subclass — neither
   // `TypeError` nor `ValueError` — so it used to escape
   // `_rewrite_messages_body`'s except arm entirely and kill the connection
@@ -743,7 +743,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
     expect(seen!.toString('utf8')).toBe(notJson);                 // byte-identical
   });
 
-  // Fix round 1, M-4: the rewrite predicate matched only the exact literal
+  // task-3 Fix round 1, M-4: the rewrite predicate matched only the exact literal
   // `/v1/messages`, narrower than spec §6.4's "non-/messages paths" wording
   // and the reference implementation's `endswith("/messages")`. Measured by
   // the reviewer: a prefixed mount (`/gpt/v1/messages`) forwarded
@@ -847,7 +847,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
     expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
   });
 
-  // Fix round 1, C-1 (Critical): `messages` ABSENT entirely — not the same
+  // task-7a Fix round 1, C-1 (Critical): `messages` ABSENT entirely — not the same
   // condition as `messages: []` above (a present, empty list) — used to be
   // swallowed by `_fold_midturn_system`'s `not isinstance(msgs, list)`
   // check (`data.get("messages")` returns `None` for an absent key) and
@@ -874,7 +874,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the top-level system door', () => {
     expect(seen.messages).toEqual([{ role: 'user', content: 'TOP LEVEL' }]);
   });
 
-  // The other half of C-1: an EXPLICIT `messages: null` is the same
+  // The other half of task-7a C-1: an EXPLICIT `messages: null` is the same
   // `data.get("messages") is None` condition as absent, and must fold
   // identically, not refuse.
   it('folds a body with a top-level system and an explicit null messages', async () => {
@@ -986,7 +986,7 @@ describe.skipIf(!PY)('ccgpt-proxy: chunked request bodies', () => {
     const got = JSON.parse(seen!.toString('utf8'));
     expect('system' in got).toBe(false);                        // it was rewritten, not just relayed
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
-    // M1 (task-7b-rulings.md §4): `expect(seenCL).toBe(String(seen!.length))`
+    // M1 (task-7b-rulings.md (commit 8bd10c1c) §4): `expect(seenCL).toBe(String(seen!.length))`
     // cannot fail — Node's HTTP server reads EXACTLY `Content-Length` body
     // bytes, so `seen.length` and the received `Content-Length` are equal
     // by construction whenever this line is even reached; the review
@@ -1083,7 +1083,7 @@ describe.skipIf(!PY)('ccgpt-proxy: malformed chunked framing is refused explicit
     expect(reached).toBe(false);
   });
 
-  // Fix round 1, M-1: `_read_request_body` raises `ValueError` from a
+  // task-7a Fix round 1, M-1: `_read_request_body` raises `ValueError` from a
   // SECOND site too, on the non-chunked path — `int(Content-Length)`. The
   // fix wraps it with a `ccgpt-proxy:`-prefixed message (it was the only
   // refusal in the file that didn't name the shim) and corrects the
@@ -1107,7 +1107,7 @@ describe.skipIf(!PY)('ccgpt-proxy: malformed chunked framing is refused explicit
     expect(reached).toBe(false);
   });
 
-  // Fix round 1, M-3: `_refuse` used to write the JSON body unconditionally,
+  // task-7a Fix round 1, M-3: `_refuse` used to write the JSON body unconditionally,
   // unlike `send_error` (which suppresses the body — but not the headers
   // describing it — for a HEAD request, per RFC 7231 §4.3.2). `do_HEAD =
   // _relay`, so a HEAD request can reach a refusal (malformed chunked
@@ -1279,7 +1279,7 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
     expect(upstreamHit).toBe(false);
   });
 
-  // C1 (tasks-5-6-review.md): the two cases above exercise
+  // C1 (tasks-5-6-review.md (commit ef4c4e6b)): the two cases above exercise
   // `gzip.BadGzipFile` (bad header) and `EOFError` (cut short) — both
   // `OSError`/`EOFError`. A THIRD shape neither reaches: a VALID gzip
   // header wrapping a CORRUPTED deflate payload, with the trailing
@@ -1318,7 +1318,7 @@ describe.skipIf(!PY)('ccgpt-proxy: gzip/deflate request bodies', () => {
     expect(upstreamHit).toBe(false);
   });
 
-  // Fix round 1, I-2: arm 1 (`_rewrite_messages_body`'s malformed-JSON
+  // task-7a Fix round 1, I-2: arm 1 (`_rewrite_messages_body`'s malformed-JSON
   // refusal) was previously pinned by ONLY the deep-nesting `RecursionError`
   // case — its rarest of three triggers. An ordinary truncated/malformed
   // JSON body had no case at all: mutating `except (TypeError, ValueError,
@@ -1453,14 +1453,14 @@ describe.skipIf(!PY)('ccgpt-proxy: an unimplemented content-encoding earns a 415
     expect(reached).toBe(false);
   });
 
-  // Fix round 1, M-4: nothing pinned the 415 guard to the `/messages`
+  // task-7a Fix round 1, M-4: nothing pinned the 415 guard to the `/messages`
   // path — measured correct today (probed at the wire by the review), but
   // hoisting the encoding check above the path-suffix check in `_relay`
   // left the whole suite green. Every other path is forwarded byte-for-byte
   // regardless of `Content-Encoding` (module docstring); this binds it for
   // an encoding this shim does not implement specifically, the case most
   // likely to tempt a future edit into checking it too early.
-  it('does not apply the 415 guard outside the /messages path (M-4)', async () => {
+  it('does not apply the 415 guard outside the /messages path (task-7a M-4)', async () => {
     if (!pythonOrSkip()) return;
     const home = mkTmp('ccgpt-proxy-415-scoped-');
     let seen: Buffer | null = null;
@@ -1480,7 +1480,7 @@ describe.skipIf(!PY)('ccgpt-proxy: an unimplemented content-encoding earns a 415
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: upstream unreachable answers the same refusal shape (502)', () => {
-  // Fix round 1, I-1: `_refuse`'s docstring used to claim, UNIVERSALLY,
+  // task-7a Fix round 1, I-1: `_refuse`'s docstring used to claim, UNIVERSALLY,
   // that reaching this method means upstream was never contacted — false
   // at the 502 call site, which fires AFTER `urlopen`, i.e. the request
   // body WAS already offered upstream by the time this refusal is chosen.
@@ -1508,7 +1508,7 @@ describe.skipIf(!PY)('ccgpt-proxy: upstream unreachable answers the same refusal
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned by nothing (Task 7b)', () => {
-  // task-7b-rulings.md §1/I4: `headers.get(name)` on an
+  // task-7b-rulings.md (commit 458ae3a7) §1/I4: `headers.get(name)` on an
   // `http.client.HTTPMessage` returns only the FIRST occurrence of a
   // header name; RFC 7230 §3.2.2 permits a comma-list header to be sent as
   // repeated lines instead of one line, and `fetch` never emits that shape
@@ -1542,7 +1542,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
   });
 
   // Same defect class, `_content_encoding`'s own single-line read
-  // (task-7b-rulings.md §1/I4, "same fix"). A split Content-Encoding
+  // (task-7b-rulings.md (commit 458ae3a7) §1/I4, "same fix"). A split Content-Encoding
   // cannot join back into a bare recognised codec token (joining always
   // inserts a comma), so the OBSERVABLE difference this fix makes is: a
   // get()-only read sees only 'identity' (the first line) and forwards the
@@ -1568,7 +1568,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     expect(reached).toBe(false);
   });
 
-  // M9 (task-7b-rulings.md §3): `_content_encoding` lower-cases before
+  // M9 (task-7b-rulings.md (commit 458ae3a7) §3): `_content_encoding` lower-cases before
   // comparing against `_CODECS`'s keys and the `''`/`identity` exemption.
   // Content-coding values are case-insensitive per RFC 7231's Content-Coding
   // section; without
@@ -1594,7 +1594,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     expect('system' in got).toBe(false);
   });
 
-  // M6 (task-7b-rulings.md §3): `_is_chunked` already reads the LAST
+  // M6 (task-7b-rulings.md (commit 458ae3a7) §3): `_is_chunked` already reads the LAST
   // comma-separated token (its own docstring cites RFC 7230 §3.3.1 for
   // it), but nothing exercises a Transfer-Encoding value where the first
   // token is something OTHER than "chunked" — every existing case sends
@@ -1602,7 +1602,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
   // token and a first-token mutation would not be visible. RFC 7230
   // §3.3.1's own worked example is exactly this shape: "gzip, chunked"
   // meaning the entity was gzip-compressed, THEN chunk-framed.
-  // M-5 (task-7b-fix-rulings.md): this fixture is deliberately NOT a
+  // task-7b M-5 (task-7b-fix-rulings.md): this fixture is deliberately NOT a
   // self-consistent HTTP message — the `Transfer-Encoding: gzip, chunked`
   // header names a `gzip` TRANSFER-coding layer this shim never applies
   // (or reverses; it isn't implemented at all), over a body that was
@@ -1638,7 +1638,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     expect(got.messages.every((m: any) => m.role !== 'system')).toBe(true);
   });
 
-  // M15 (task-7b-rulings.md §3): the chunk-extension strip
+  // M15 (task-7b-rulings.md (commit 458ae3a7) §3): the chunk-extension strip
   // (`size_line.split(b";", 1)[0]`) is correctness-verified already (the
   // paired review measured it working end to end) but pinned by nothing —
   // no case sends a chunk-size line carrying one. RFC 7230 §4.1.1 permits
@@ -1663,7 +1663,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
     expect(got.messages[0].role).toBe('user');
   });
 
-  // M11 (task-7b-rulings.md §3): the trailer-drain loop is
+  // M11 (task-7b-rulings.md (commit 458ae3a7) §3): the trailer-drain loop is
   // correctness-verified already (a well-formed trailer costs nothing to
   // skip draining — nothing else in `_relay` reads `rfile` again, and the
   // shim always answers `Connection: close`, so leftover unread bytes are
@@ -1697,7 +1697,7 @@ describe.skipIf(!PY)('ccgpt-proxy: header-read and chunk-framing guards pinned b
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: 7b fix round 1 — chunked named but not final earns 400 (I-2)', () => {
-  // task-7b-fix-rulings.md I-2 / task-7b-review.md I-2: RFC 7230 §3.3.3
+  // task-7b-fix-rulings.md (commit 1ac3ec20) I-2 / task-7b-review.md I-2: RFC 7230 §3.3.3
   // item 3 — when `chunked` appears in Transfer-Encoding but is not the
   // FINAL token, the message length cannot be determined by any means this
   // shim implements, and it MUST be refused. Before this, both spellings
@@ -1775,7 +1775,8 @@ describe.skipIf(!PY)('ccgpt-proxy: 7b fix round 1 — chunked named but not fina
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (Task 8)', () => {
-  // Case 1 (task-8-brief.md): an explicit client `output_config.effort`
+  // Case 1 (task-8-brief.md; `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §6.2):
+  // an explicit client `output_config.effort`
   // wins outright over the lane default, even when a default for this
   // exact model is on file.
   it('an explicit output_config.effort wins over the lane default', async () => {
@@ -1815,7 +1816,7 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
     expect(seen.reasoning).toEqual({ effort: 'low' });
   });
 
-  // C-1 (fix round 1, Critical): `output_config.effort: "auto"` must be
+  // C-1 (task-8 fix round 1, Critical): `output_config.effort: "auto"` must be
   // treated as ABSENT, not as an explicit choice — `auto` is a first-class
   // word in ccrc's own routing vocabulary meaning "the lane decides"
   // (`ccd/ccd`'s `ROUTE_EFFORTS`, its own exclusion from the spawn argv's
@@ -1827,7 +1828,7 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
   // `reasoning.effort` and forwarded, and Codex has no `auto` level, so the
   // live consequence is a provider 400 on every turn. Both halves of §12's
   // acceptance criterion, pinned as their own cases:
-  it('treats an explicit auto as absent and applies the lane default instead (C-1)', async () => {
+  it('treats an explicit auto as absent and applies the lane default instead (task-8 C-1)', async () => {
     const home = mkTmp('ccgpt-proxy-effort-auto-default-');
     let seen: any = null;
     const { lane } = await startPair(home, (_req, body, res) => {
@@ -1846,7 +1847,7 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
     expect(seen.reasoning).toEqual({ effort: 'low' });   // the lane default, never the literal 'auto'
   });
 
-  it('treats an explicit auto as absent and omits reasoning entirely when there is no lane default (C-1)', async () => {
+  it('treats an explicit auto as absent and omits reasoning entirely when there is no lane default (task-8 C-1)', async () => {
     const home = mkTmp('ccgpt-proxy-effort-auto-nodefault-');
     let seen: any = null;
     await startPair(home, (_req, body, res) => {
@@ -1866,11 +1867,11 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
     expect('output_config' in seen).toBe(false);
   });
 
-  // M-4 (fix round 1, Minor): a resolved level is set as `.effort` on an
+  // M-4 (task-8 fix round 1, Minor): a resolved level is set as `.effort` on an
   // EXISTING client-sent `reasoning` object, never by replacing it
   // wholesale — a sibling key (`reasoning.summary`, unreachable from Claude
   // Code today but not this shim's business to discard) must survive.
-  it('merges a resolved effort into an existing client-sent reasoning object rather than replacing it (M-4)', async () => {
+  it('merges a resolved effort into an existing client-sent reasoning object rather than replacing it (task-8 M-4)', async () => {
     const home = mkTmp('ccgpt-proxy-effort-merge-reasoning-');
     let seen: any = null;
     await startPair(home, (_req, body, res) => {
@@ -1911,7 +1912,7 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
     expect('thinking' in seen).toBe(false);
   });
 
-  // task-8-rulings.md §5: bind the `thinking` strip INDEPENDENTLY of the
+  // task-8-rulings.md (commit e5318e97) §5: bind the `thinking` strip INDEPENDENTLY of the
   // effort path — a body carrying `thinking` and no `output_config` at all
   // (and no lane default either) must still come out with `thinking` gone,
   // so a mutation that stops stripping `thinking` cannot hide behind
@@ -1937,7 +1938,7 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
     expect('reasoning' in seen).toBe(false);            // nothing to apply — provider default
   });
 
-  // Case 4, REPLACED per task-8-rulings.md §1 — the brief's own second half
+  // Case 4, REPLACED per task-8-rulings.md (commit e5318e97) §1 — the brief's own second half
   // ("rewriting identical bytes at the same mtime does not [re-read]") is
   // UNFALSIFIABLE: identical bytes produce an identical applied default
   // whether the cache re-read them or not, so that assertion passes under
@@ -1997,12 +1998,12 @@ describe.skipIf(!PY)('ccgpt-proxy: effort precedence and the single-slot cache (
   // not merely convenient: the materialiser (`effortFile`/`models-op.mjs`)
   // writes a FRESH TMP FILE — carrying a new mtime of its own — and renames
   // THAT over the target, so this shim never sees a same-mtime content
-  // change outside a test deliberately forcing one (task-8-fix-rulings.md
-  // M-7: `rename(2)` itself PRESERVES the renamed file's mtime — it is the
+  // change outside a test deliberately forcing one (task-8 M-7,
+  // task-8-fix-rulings.md, commit 1a0196d5: `rename(2)` itself PRESERVES the renamed file's mtime — it is the
   // freshness of the tmp file, not the rename call, that makes this sound;
   // said again, correctly this time, in a comment at the Python site).
   //
-  // FIX ROUND 1 CORRECTION (task-8-fix-rulings.md, "Where I was wrong"):
+  // FIX ROUND 1 CORRECTION (task-8-fix-rulings.md, commit 1a0196d5, "Where I was wrong"):
   // the original ruling called this case "a control, not a pin". The
   // review's own mutation (delete the cache-hit check entirely, so every
   // call re-reads) found this is the ONLY one of 68 cases that reds under
@@ -2094,13 +2095,13 @@ describe.skipIf(!PY)('ccgpt-proxy: the effort file itself — absent, malformed,
     expect(seen.reasoning).toEqual({ effort: 'xhigh' });
   });
 
-  // M-1 (fix round 1, Minor): the ruling's own §3 pin sentence named only
+  // M-1 (task-8 fix round 1, Minor): the ruling's own §3 pin sentence named only
   // "absent, malformed, valid" and omitted `unreadable`, which its OWN
   // prose arm required handling — the ruling's gap, not a gap in the work.
   // `chmod 000` denies even the owning user (this process) read access, so
   // `open()` raises `PermissionError`, an `OSError` subclass — the same
   // guard the malformed case exercises via `json.JSONDecodeError`.
-  it('falls through to the provider default when the effort file is unreadable (M-1)', async () => {
+  it('falls through to the provider default when the effort file is unreadable (task-8 M-1)', async () => {
     const home = mkTmp('ccgpt-proxy-effort-unreadable-');
     let seen: any = null;
     const { lane } = await startPair(home, (_req, body, res) => {
@@ -2121,7 +2122,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the effort file itself — absent, malformed,
     }
   });
 
-  // M-2 (fix round 1, Minor — a real caching bug the first round shipped):
+  // M-2 (task-8 fix round 1, Minor — a real caching bug the first round shipped):
   // a read/parse FAILURE must not be written into the cache slot. The
   // original implementation cached the empty map under the file's real
   // `(path, mtime)`, so a fix applied WITHOUT the file's mtime moving (a
@@ -2132,7 +2133,7 @@ describe.skipIf(!PY)('ccgpt-proxy: the effort file itself — absent, malformed,
   // successful read's cache WOULD stay stale under (case 4's control,
   // above) — the point of this case is that a FAILED read must not get
   // that same stickiness.
-  it('picks up a fixed effort file immediately, even at the same mtime as the failure it replaces (M-2)', async () => {
+  it('picks up a fixed effort file immediately, even at the same mtime as the failure it replaces (task-8 M-2)', async () => {
     const home = mkTmp('ccgpt-proxy-effort-fixed-samemtime-');
     let seen: any = null;
     const { lane } = await startPair(home, (_req, body, res) => {
@@ -2185,7 +2186,7 @@ describe.skipIf(!PY)('ccgpt-proxy: effort resolution is scoped to /messages, lik
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: SSE responses stream through incrementally, not buffered whole (Task 9 §1)', () => {
-  // task-9 fix round 1 I-1 (task-9-fix-rulings.md, task-9-review.md I-3).
+  // task-9 fix round 1 I-1 (task-9-fix-rulings.md (commit 5a99aaf1), task-9-review.md I-3).
   // `_relay` used to read the upstream response via `resp.read(8192)`,
   // which BLOCKS until 8 KB has accumulated or the stream ends — measured
   // (task-7b-review.md), an 18-byte SSE event written by upstream at t=0
@@ -2282,7 +2283,7 @@ describe.skipIf(!PY)('ccgpt-proxy: tools and tool_result content blocks forward 
     expect(seen.messages[1].content[0]).toEqual({ type: 'tool_result', tool_use_id: 'toolu_1', content: 'sunny, 21C' });
   });
 
-  // task-9 I-1 — MEASUREMENT, not a value judgment (task-9-rulings.md §2:
+  // task-9 I-1 — MEASUREMENT, not a value judgment (task-9-rulings.md (commit 26d24305) §2:
   // "do not assume it is a defect and do not 'fix' it on your own
   // judgement"). `_fold_system` merges a non-empty top-level `system` into
   // `messages[0]` when that message is already `role: "user"`; for a
@@ -2333,7 +2334,7 @@ describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded
   // forwards a correct length" above (`expect(seenTE).toBe('')`). Neither
   // is re-pinned here.
   //
-  // task-9 fix round 1 I-3 (task-9-fix-rulings.md, task-9-review.md I-1):
+  // task-9 fix round 1 I-3 (task-9-fix-rulings.md (commit 26d24305), task-9-review.md I-1):
   // the FIRST version of this comment claimed "`fetch` cannot even SEND the
   // five headers below — undici refuses to construct the request at all".
   // Measured false for three of five: `Proxy-Authorization`, `TE` and
@@ -2401,7 +2402,7 @@ describe.skipIf(!PY)('ccgpt-proxy: hop-by-hop headers dropped from the forwarded
 });
 
 describe.skipIf(!PY)('ccgpt-proxy: a non-2xx upstream response relays through read1 too (task-9 fix round 1 I-4)', () => {
-  // task-9 fix round 1 I-4 (task-9-fix-rulings.md, task-9-review.md I-4).
+  // task-9 fix round 1 I-4 (task-9-fix-rulings.md, task-9-review.md I-4, commit 5a99aaf1).
   // `_relay` catches `urllib.error.HTTPError` and assigns `resp = e`, so a
   // non-2xx upstream status streams through the SAME `resp.read1(8192)`
   // loop the 200 path uses — but `HTTPError` reaches `read1` by a DIFFERENT

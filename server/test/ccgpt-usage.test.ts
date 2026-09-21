@@ -7,7 +7,7 @@ import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptH
 import { mkTmp } from './tmpHelpers';
 
 // Probed once at module scope — same shape as ccgpt-harness.test.ts and
-// ccgpt-proxy.test.ts (task-10-rulings.md §5): a missing interpreter must be
+// ccgpt-proxy.test.ts (task-10-rulings.md (commit af7cc0bc) §5): a missing interpreter must be
 // a visible skip, not every case below quietly `return`ing and vitest
 // reporting a green suite for work that never ran.
 const PY = pythonOrSkip();
@@ -16,7 +16,8 @@ it('this box has a usable python3', () => {
   if (process.env.CI) expect(PY).toBeTruthy();
 });
 
-// task-10 fix round 3 (task-10-fix-rulings-3.md item 2, re-review V-3): the
+// task-10 fix round 3 (task-10-fix-rulings-3.md item 2, re-review V-3,
+// commit 467e9552): the
 // atomicity case's read-only-target discriminator holds only because
 // `euid !== 0` — root bypasses the file write bit entirely, so under root
 // the guard would prove nothing even though the subject still succeeds. It
@@ -31,7 +32,7 @@ it('this box has a usable python3', () => {
 const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
 
 // task-10 fix round 3 (task-10-fix-rulings-3.md item 1, fix round 2's own
-// concern 1): the M-4 case below needs `litellm` to be genuinely
+// concern 1, commit 467e9552): the task-10 M-4 case below needs `litellm` to be genuinely
 // UNIMPORTABLE under a fixture HOME with no `PYTHONPATH`, or it is
 // vacuous. On a box where `litellm` is installed SYSTEM-WIDE rather than
 // under this operator's user-site, overriding `HOME` hides nothing — the
@@ -39,7 +40,7 @@ const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
 // is still unset either way) without ever exercising the import ORDERING
 // it exists to pin, silently. Probed once, synchronously via `runPy` —
 // matching `PY`'s own memoised-sync shape — by actually running `import
-// litellm` under the SAME containment the real M-4 case uses, rather than
+// litellm` under the SAME containment the real task-10 M-4 case uses, rather than
 // trusting the design spec's claim about a box this one might not be.
 const NO_AMBIENT_LITELLM: boolean = (() => {
   if (!PY) return false;
@@ -50,7 +51,7 @@ const NO_AMBIENT_LITELLM: boolean = (() => {
   return r.status !== 0;
 })();
 
-it('this box hides litellm from a fixture HOME with no PYTHONPATH (M-4 precondition)', () => {
+it('this box hides litellm from a fixture HOME with no PYTHONPATH (task-10 M-4 precondition)', () => {
   // Unlike IS_ROOT above, this DOES hard-assert under CI: a public-repo CI
   // image is not expected to carry litellm at all (this suite's own stub
   // package exists precisely because the box it was written on doesn't
@@ -60,12 +61,12 @@ it('this box hides litellm from a fixture HOME with no PYTHONPATH (M-4 precondit
   if (process.env.CI) expect(NO_AMBIENT_LITELLM).toBe(true);
 });
 
-// task-10-rulings.md §5: "Ports: 45020 for this suite. 45010/45011 belong to
+// task-10-rulings.md (commit af7cc0bc) §5: "Ports: 45020 for this suite. 45010/45011 belong to
 // the proxy suite and the two cannot run at once." A fixed port, not an
 // OS-assigned one, matching the proxy suite's own convention.
 const USAGE_PORT = 45020;
 
-// Minted, never shared (task-10-rulings.md §5). Each case gets its own lane
+// Minted, never shared (task-10-rulings.md (commit 4893935a) §5). Each case gets its own lane
 // id, so two cases can never collide over a leftover row.
 let mintedIdCount = 0;
 function mintId(): string {
@@ -75,21 +76,21 @@ function mintId(): string {
 
 /** Plants `~/.ccrc/codex/<id>/lane.json` with `probeModel` and `authDir`
  *  fields — the two things this wave's ccgpt-usage.py reads from it
- *  (lane.json has no writer until Plan 2b, task-10-brief.md). By default
+ *  (lane.json has no writer until Plan 2b, task-10-brief.md (commit 4893935a)). By default
  *  also plants a stub `auth.json` (empty object; its CONTENTS are never
  *  read by the publisher, only its existence — task-10-fix-rulings.md I-3)
  *  at that `authDir`, so every case is "logged in" unless it opts out via
  *  `{ loggedIn: false }` (the I-3 refusal case).
  *
  *  Measured while writing the fix-round mutations: planting auth.json ONLY
- *  at the lane.json-declared authDir made mutation 4 (I-2 — re-deriving the
+ *  at the lane.json-declared authDir made mutation 4 (task-10 I-2 — re-deriving the
  *  token dir by a naming convention instead of reading lane.json) cascade
  *  into 9 of 14 cases, including all five of the brief's OWN property
  *  cases, because every one of them logs in through THIS helper and none of
- *  them is testing I-2 at all. So `loggedIn: true` now plants auth.json at
+ *  them is testing task-10 I-2 at all. So `loggedIn: true` now plants auth.json at
  *  BOTH the lane.json path and the legacy convention-derived path
  *  (`$HOME/.handoff/chatgpt-auth-<id>`) — every case using the default stays
- *  green regardless of which derivation `_token_dir` uses, and I-2 gets its
+ *  green regardless of which derivation `_token_dir` uses, and task-10 I-2 gets its
  *  OWN dedicated, narrowly-isolated case below instead (which plants auth.json
  *  at ONLY the lane.json path, deliberately, so it is the one thing that
  *  distinguishes the two derivations).
@@ -131,12 +132,13 @@ type CapturedRequest = { headers: IncomingHttpHeaders; body: unknown };
  *  stand-in for the real Codex usage endpoint that `CCGPT_USAGE_ENDPOINT`
  *  points the subject at.
  *
- *  `requests` is what closes task-10-fix-rulings.md M-7: every case below
+ *  `requests` is what closes task-10 M-7 (task-10-fix-rulings.md,
+ *  commit 4893935a): every case below
  *  that expects the publisher to refuse WITHOUT ever reaching the network
  *  now binds this and asserts `requests.length === 0` — "never contacted"
  *  measured, not merely argued from the refusal's exit code. It is also
- *  what C-2/C-3's capturing case needs to assert the request the publisher
- *  actually sent, and what the C-1 redirect cases need to assert a second
+ *  what task-10 C-2/C-3's capturing case needs to assert the request the publisher
+ *  actually sent, and what the task-10 C-1 redirect cases need to assert a second
  *  hop was never reached. */
 function startEndpoint(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
@@ -168,7 +170,7 @@ function startEndpoint(
 /** A 200 (or `status`) answering the full `x-codex-*` header set a real
  *  Codex `/responses` call carries — the happy-path shape every property
  *  case starts from unless it is deliberately varying one header.
- *  `x-codex-plan-type` (M-6, fix round 1) was dropped: nothing in this
+ *  `x-codex-plan-type` (M-6, task-10 fix round 1) was dropped: nothing in this
  *  publisher reads it, so sending it asserted nothing and cost a line. */
 function fullHeaders(status = 200): (req: IncomingMessage, res: ServerResponse) => void {
   return (req, res) => {
@@ -217,7 +219,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       const raw = readFileSync(limitsPath(home, id), 'utf8');
       expect(raw).toMatch(/": /);            // the separator ccd's grep tolerates, byte-for-byte with the reference
       expect(raw).not.toMatch(/":[^ ]/);     // the brief's own literal check
-      // task-10-rulings.md §3: the brief's negative regex over the WHOLE
+      // task-10-rulings.md (commit af7cc0bc) §3: the brief's negative regex over the WHOLE
       // document could false-positive on a string VALUE containing `":`.
       // Assert the structure directly too, so the property is pinned on
       // something a payload value can never fire spuriously.
@@ -340,7 +342,8 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   it.skipIf(IS_ROOT)('task-10: the write is atomic — a read-only existing row is still updated', async () => {
-    // task-10-fix-rulings.md I-5 / task-10-fix-rulings-3.md item 2: the
+    // task-10-fix-rulings.md I-5 / task-10-fix-rulings-3.md item 2
+    // (commit 467e9552): the
     // discriminator holds only because `euid !== 0` — root bypasses the
     // write bit entirely, so the direct-write mutation (Step 5, #5) would
     // go green under root with no signal that the guard proved nothing.
@@ -373,7 +376,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     // not by a coincidental network failure. Uses `runPyAsync`, not the
     // plain synchronous `runPy`, even though the FIXED code refuses before
     // any network attempt: measured while writing this fix round (see the
-    // I-3 case below), a mutation that removes the very refusal this case
+    // task-10 I-3 case below), a mutation that removes the very refusal this case
     // pins would make the subject proceed to the bound endpoint, and
     // `runPy`'s `spawnSync` deadlocks against a same-process server exactly
     // as D-3157 describes — turning a clean red into a timeout artefact.
@@ -388,7 +391,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(r.stderr).toMatch(/lane\.json/);
       expect(r.stderr).toMatch(/ccrc doctor --fix/);
       expect(existsSync(limitsPath(home, id))).toBe(false);
-      expect(requests.length).toBe(0); // task-10-fix-rulings.md M-7: never contacted, measured
+      expect(requests.length).toBe(0); // task-10 M-7 (task-10-fix-rulings.md, commit 4893935a): never contacted, measured
     } finally {
       await close();
     }
@@ -430,7 +433,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     // with the legacy convention ($HOME/.handoff/chatgpt-auth-<id>) this
     // file's OWN prior draft re-derived. If _token_dir ever regresses to
     // that convention instead of reading lane.json (task-10-fix-rulings.md
-    // I-2), the login check looks in the wrong place — nothing is planted
+    // I-2, commit 4893935a), the login check looks in the wrong place — nothing is planted
     // there — and refuses even though a real, valid credential sits exactly
     // where lane.json said it would.
     const home = mkTmp('ccgpt-usage-authdir-');
@@ -478,17 +481,17 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   it.skipIf(!NO_AMBIENT_LITELLM)('task-10 fix round 2 (M-4): refuses on unset CCGPT_ACCOUNT_ID even with no litellm importable — never an ImportError', async () => {
-    // task-10-fix-rulings-2.md M-1: fix round 1 moved the `from litellm...`
+    // task-10 M-1 (task-10-fix-rulings-2.md, commit f813102e): fix round 1 moved the `from litellm...`
     // import past the CCGPT_ACCOUNT_ID/CCGPT_USAGE_ENDPOINT refusals so an
     // unset id on a box with no litellm still gets the named refusal rather
     // than a raw ImportError — but every OTHER case in this file puts the
     // stub package on PYTHONPATH, so that ordering was never exercised:
-    // reverting it left 15/15 green (re-review, V-2).
+    // reverting it left 15/15 green (re-review, task-10 V-2).
     //
     // This case constructs the actual absence rather than merely asserting
     // it cannot be constructed: deliberately NO `PYTHONPATH` (so the litellm
     // stub is not on `sys.path`) and NO `CCGPT_ACCOUNT_ID`. Gated on
-    // `NO_AMBIENT_LITELLM` (task-10-fix-rulings-3.md item 1): without that
+    // `NO_AMBIENT_LITELLM` (task-10-fix-rulings-3.md item 1, commit 467e9552): without that
     // gate, a box where `litellm` is importable even under a fixture HOME
     // (installed somewhere `HOME`-independent) would make this case pass
     // vacuously — the refusal still fires because `CCGPT_ACCOUNT_ID` is
@@ -513,7 +516,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   it('task-10: refuses a non-loopback CCGPT_USAGE_ENDPOINT rather than falling through to it', async () => {
-    // task-10-rulings.md §1: the plan's draft text asked for this override
+    // task-10-rulings.md (commit af7cc0bc) §1: the plan's draft text asked for this override
     // to be "ignored" when non-loopback, which would mean falling through
     // to the real production endpoint — this suite would then make a live
     // call to the Codex usage API. Overruled: refuse instead, loudly.
@@ -611,19 +614,19 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   it('task-10 fix round 1 (C-2/C-3): sends the Codex-CLI header block and the lane\'s own probeModel', async () => {
-    // C-2: captures the outgoing request and asserts the constant header
+    // task-10 C-2: captures the outgoing request and asserts the constant header
     // block (originator/user-agent/session_id) this repo's own
     // ccd/ccrc-models-probe documents as what the backend expects, plus
     // Authorization — and asserts ChatGPT-Account-Id is deliberately ABSENT
     // (see ccd/ccgpt-usage.py's own docstring for why it is dropped, not
-    // merely missing by omission). task-10-fix-rulings-3.md item 3
+    // merely missing by omission). task-10-fix-rulings-3.md (commit 4893935a) item 3
     // (re-review V-1): the three Codex-CLI header VALUES are asserted
     // exactly, not merely their presence — `ccd/ccrc-models-probe` ships
     // these as fixed literals the backend is documented to expect from "a
     // real Codex CLI caller", so a silently changed value is the same class
-    // of failure C-2 closed (the backend answers with no usage headers and
+    // of failure task-10 C-2 closed (the backend answers with no usage headers and
     // nothing says why).
-    // C-3: asserts body.model equals the PLANTED probeModel, with two
+    // task-10 C-3: asserts body.model equals the PLANTED probeModel, with two
     // different planted values (below) so the match cannot be coincidental
     // — the reviewer's own mutation (hard-coding the model) left the old
     // suite green at 10/10 because nothing checked this.
@@ -670,7 +673,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   // -------------------------------------------------------------------
   // Task 11 — the pinned default endpoint, and the seam's own guard.
   //
-  // task-10's review (task-10-review.md, "SECOND JOB") measured
+  // task-10's review (task-10-review.md (commit fa59cdbe), "SECOND JOB") measured
   // `_is_loopback` correctly refusing eleven look-alike spellings, but the
   // shipped suite (through fix round 3) pinned only one of them — the
   // `http://example.invalid/usage` case above. A measurement taken once by
@@ -682,7 +685,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   // is this task's whole scope (task-11-rulings.md §1).
 
   it('task-11: the compiled-in default endpoint is the production URL (import-only, no network)', () => {
-    // task-11-rulings.md §3: importing the module runs `_usage_endpoint()`
+    // task-11-rulings.md (commit fa59cdbe) §3: importing the module runs `_usage_endpoint()`
     // at module scope and then STOPS — `main()` sits behind
     // `if __name__ == "__main__"`, so importing the file opens no socket
     // and needs no mock server. `CCGPT_USAGE_ENDPOINT` is deliberately
@@ -729,7 +732,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   });
 
   // The eleven look-alike spellings task-10's review measured refused
-  // (task-10-review.md's "SECOND JOB" section), pinned as a table rather
+  // (task-10-review.md (commit fa59cdbe)'s "SECOND JOB" section), pinned as a table rather
   // than resting on that one-time measurement. The genuinely-loopback
   // spellings the same review measured ACCEPTED (`LOCALHOST`, `[::1]`,
   // bare `127.0.0.1`) are exercised elsewhere in this file already — every
@@ -754,7 +757,7 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
     const home = mkTmp('ccgpt-usage-lookalike-');
     const id = mintId();
     plantLane(home, id);
-    // A real loopback server IS bound (never pointed at) — the same M-7
+    // A real loopback server IS bound (never pointed at) — the same task-11 M-7
     // discipline the existing non-loopback case above uses: proves the
     // refusal reached neither the (unreachable-by-design) host the
     // override names nor this suite's own mock.
@@ -766,9 +769,79 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(r.stderr).toMatch(/CCGPT_USAGE_ENDPOINT/);
       expect(r.stderr).toMatch(/loopback/);
       expect(existsSync(limitsPath(home, id))).toBe(false);
-      expect(requests.length).toBe(0); // task-10-fix-rulings.md M-7: never contacted, measured
+      expect(requests.length).toBe(0); // task-10 M-7 (task-10-fix-rulings.md, commit 4893935a): never contacted, measured
     } finally {
       await close();
+    }
+  });
+
+  // task-12 E: Task 11 pinned the loopback allowlist eleven ways on the
+  // REFUSAL side and once on the accept side (bare `127.0.0.1`, exercised
+  // implicitly by every happy-path case above via `startEndpoint`).
+  // `_LOOPBACK_HOSTS` is `{"127.0.0.1", "localhost", "::1"}` — deleting
+  // `localhost` or `::1` from that set reds nothing in the suite as it
+  // stood, so a legitimate loopback spelling could silently start being
+  // refused with no test noticing. These two cases mirror the existing
+  // happy-path shape (bind a real mock, point `CCGPT_USAGE_ENDPOINT` at a
+  // loopback spelling, assert the row gets written) for the two spellings
+  // that were accept-side-unpinned.
+  it('task-12: accepts a non-numeric loopback spelling — localhost', async () => {
+    const home = mkTmp('ccgpt-usage-loopback-localhost-');
+    const id = mintId();
+    plantLane(home, id);
+    // Bound on 127.0.0.1 only, like every other happy-path case — `localhost`
+    // resolves to `::1` first in this environment (confirmed: `::1
+    // localhost` precedes `127.0.0.1 localhost` in /etc/hosts), but
+    // `socket.create_connection` (under `urlopen`) falls through to the
+    // NEXT address `getaddrinfo` returns when the first refuses the
+    // connection, so the request still lands here. What this case pins is
+    // `_is_loopback` treating the HOSTNAME `localhost` as loopback at all —
+    // deleting it from `_LOOPBACK_HOSTS` reds this with the SAME refusal
+    // shape the look-alike table above asserts, not a connection error.
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    const endpoint = url.replace('127.0.0.1', 'localhost');
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, endpoint) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).toBe(0);
+      expect(requests.length).toBe(1);
+      const row = readRow(home, id);
+      expect(row).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
+    }
+  });
+
+  it('task-12: accepts a non-numeric loopback spelling — ::1', async () => {
+    const home = mkTmp('ccgpt-usage-loopback-ipv6-');
+    const id = mintId();
+    plantLane(home, id);
+    // `startEndpoint` binds 127.0.0.1 only (module-scoped, shared with
+    // every other case in this file), so `::1` needs its own bind on the
+    // IPv6 loopback interface specifically — the property under test is
+    // whether `_is_loopback` accepts the HOSTNAME `::1`, which a server
+    // reachable only over IPv4 could not exercise.
+    const requests: CapturedRequest[] = [];
+    const server: Server = createServer((req, res) => {
+      requests.push({ headers: req.headers, body: null });
+      fullHeaders()(req, res);
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.on('error', reject);
+      server.listen(USAGE_PORT, '::1', () => resolve());
+    });
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), {
+        home,
+        env: publisherEnv(id, `http://[::1]:${USAGE_PORT}`),
+      });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).toBe(0);
+      expect(requests.length).toBe(1);
+      const row = readRow(home, id);
+      expect(row).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     }
   });
 });
