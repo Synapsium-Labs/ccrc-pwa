@@ -83,19 +83,20 @@ export function generateWrapperBody(account, upstreamId) {
     bad(`cannot write a wrapper for an account whose id ${JSON.stringify(id)} is not a legal id.`,
       'Rename it to match ^[a-z][a-z0-9-]{0,31}$ — it becomes a filename under ~/.local/bin.');
   }
-  // The ONE kind ccrc owns. `upstream` is the Claude Code binary and
-  // `external` is somebody else's launcher; writing either is data loss, so
-  // this function cannot be talked into producing text for them at all.
-  if (account.execKind !== 'generated') {
+  // Generated and Codex are ccrc-owned launchers. `upstream` is the Claude
+  // Code binary and `external` is somebody else's launcher, so writing either
+  // risks data loss.
+  if (account.execKind !== 'generated' && account.execKind !== 'codex') {
     bad(`account "${id}" has exec.kind ${JSON.stringify(account.execKind)}, and ccrc writes a `
-      + 'wrapper only for "generated".',
+      + 'wrapper only for "generated" and "codex".',
       `Leave $HOME/.local/bin/${id} alone — ccrc never writes an upstream or external account.`);
   }
-  if (typeof upstreamId !== 'string' || !ID_RE.test(upstreamId)) {
+  if (account.execKind !== 'codex' && (typeof upstreamId !== 'string' || !ID_RE.test(upstreamId))) {
     bad(`the roster's upstream account id ${JSON.stringify(upstreamId)} is not a legal id, so `
       + `"${id}"'s wrapper has nothing to exec.`,
       'Fix the id of the account whose exec.kind is "upstream" in ~/.ccrc/accounts.json.');
   }
+  const target = account.execKind === 'codex' ? 'ccgpt' : upstreamId;
   const suffix = account.configDirSuffix;
   // `SUFFIX_SAFE_RE`'s character class allows ".", so it accepts ".." exactly
   // as happily as it accepts ".claude" — a safe CHARACTER SET and a safe
@@ -145,5 +146,5 @@ export function generateWrapperBody(account, upstreamId) {
     + '# Generated from ~/.ccrc/accounts.json. Do not edit — `ccrc wrappers` rewrites it.\n'
     + `export CLAUDE_CONFIG_DIR="$HOME/${suffix}"\n`
     + secretsLine
-    + `exec "$HOME/.local/bin/${upstreamId}" "$@"\n`;
+    + `exec "$HOME/.local/bin/${target}" "$@"\n`;
 }

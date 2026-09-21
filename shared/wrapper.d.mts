@@ -8,10 +8,11 @@ export class WrapperInvalid extends Error {
 }
 
 /**
- * The finished, UNMARKED text of one generated account's wrapper — the
+ * The finished, UNMARKED text of one ccrc-owned account's launcher — the
  * caller runs it through `markGenerated` (`shared/mark.mjs`) to stamp
  * ownership. See `shared/wrapper.mjs` for the emitted shape, the refusal
- * rules (ccrc writes a wrapper only for `execKind: 'generated'`), and why it
+ * rules (ccrc writes a launcher only for `execKind: 'generated'` or `'codex'`,
+ * while `upstream` and `external` remain refused), and why it
  * refuses rather than escapes.
  *
  * @throws {WrapperInvalid}

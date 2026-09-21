@@ -2064,10 +2064,11 @@ _check_disk() {
 #
 # ── WHAT IT COMPARES, AND WHAT IT REFUSES TO DO ──────────────────────────
 # `~/.ccrc/accounts.json` (the roster — the source of truth, hand-owned) vs.
-# `~/.local/bin/<id>` (the wrappers — hand-made on each box; nothing in this
-# repository generates one yet). It REPORTS disagreement and resolves none of
-# it, which is `ccrc-adopt`'s own bias rule (that file's header, "the direction
-# of every uncertain call") applied to a tool that cannot write either side.
+# `~/.local/bin/<id>` (the wrappers — generated and Codex launchers are ccrc-
+# owned; external launchers remain hand-made). It REPORTS disagreement and
+# resolves none of it, which is `ccrc-adopt`'s own bias rule (that file's header,
+# "the direction of every uncertain call") applied to a tool that cannot write
+# either side.
 #
 # ── PATHS ONLY. THE SECRETS FILE IS NEVER OPENED ─────────────────────────
 # The wrapper's secrets line names a path; this check compares that path with
@@ -2217,10 +2218,10 @@ _dr_wr_note() {
   local p="$WRAPPER_BIN_DIR/$id"
   case "$dir" in
     a-only)
-      # This is the generated-account path (`wr_expect` is built from
-      # `generated` ids only, above): absent and a dangling symlink are
-      # exactly what `ccrc wrappers` writes — its `absent` decision-table arm
-      # writes, and `mv -f` over a dangling symlink replaces it — so those
+      # This is the ccrc-owned-wrapper path (`wr_expect` is built from
+      # `generated` and `codex` ids only, above): absent and a dangling symlink
+      # are exactly what `ccrc wrappers` writes — its `absent` decision-table
+      # arm writes, and `mv -f` over a dangling symlink replaces it — so those
       # findings go to `wr_absent`, not `wr_hard`.
       if _dr_wr_present "$id" wr_absent; then
         if ! _wrap_is_script "$p"; then
@@ -2294,7 +2295,7 @@ _check_wrappers() {
   #
   # A2-NEW (this task): `wr_upstream` is a FOURTH bucket, not a second name for
   # `wr_absent` — see the `upstream)` case arm below for why an absent upstream
-  # binary is not the same operator instruction as an absent generated wrapper.
+  # binary is not the same operator instruction as an absent ccrc-owned wrapper.
   local -a wr_hard=() wr_soft=() wr_absent=() wr_upstream=()
 
   if [ ! -e "$roster" ]; then
@@ -2406,7 +2407,7 @@ _check_wrappers() {
   local -a wr_ids=()
   local id suffix kind secrets _wr_rest _wr_line _wr_i
   local -a _wr_f=()
-  local n_up=0 n_gen=0 n_ext=0 upstream_id=""
+  local n_up=0 n_gen=0 n_ext=0 n_codex=0 upstream_id=""
   while IFS= read -r _wr_line; do
     _wr_f=(); _wr_rest="$_wr_line"
     for _wr_i in 1 2 3; do
@@ -2441,12 +2442,13 @@ _check_wrappers() {
       upstream)  n_up=$((n_up + 1)); [ -n "$upstream_id" ] || upstream_id="$id" ;;
       generated) n_gen=$((n_gen + 1)) ;;
       external)  n_ext=$((n_ext + 1)) ;;
+      codex)     n_codex=$((n_codex + 1)) ;;
     esac
   done <<< "$tsv"
 
   if [ ! -d "$bin" ]; then
     _dr_fail wrappers "no \$HOME/.local/bin at all, so the roster's ${#wr_ids[@]} accounts have nowhere to live" \
-      "run: ccrc wrappers — it creates \$HOME/.local/bin and writes every generated account's wrapper (an upstream or external account still needs installing by hand)"
+      "run: ccrc wrappers — it creates \$HOME/.local/bin and writes every generated and Codex account's wrapper (an upstream or external account still needs installing by hand)"
     return 1
   fi
 
@@ -2492,8 +2494,8 @@ _check_wrappers() {
 
   # ── both directions, reported ──────────────────────────────────────────
   # The roster ids that MUST be a CLAUDE_CONFIG_DIR-setting script on disk:
-  # `generated`, and ONLY generated — it is ccrc's own shape, the one thing
-  # here that is written against a contract this repository states.
+  # `generated` and `codex` — ccrc's own shape, the one thing here that is
+  # written against a contract this repository states.
   #
   # `upstream` is excluded because a 300 MB ELF is its normal shape, and
   # `external` because its shape is nobody's business: it may be compiled, and
@@ -2505,7 +2507,7 @@ _check_wrappers() {
   # thing ccd needs — an executable of that name — in the loop below.
   local -a wr_expect=()
   for id in ${wr_ids[@]+"${wr_ids[@]}"}; do
-    case "${wr_kind[$id]}" in generated) wr_expect+=("$id") ;; esac
+    case "${wr_kind[$id]}" in generated|codex) wr_expect+=("$id") ;; esac
   done
   _wrap_set_diff _dr_wr_note wr_expect wr_seen
 
@@ -2523,7 +2525,7 @@ _check_wrappers() {
         # `wr_upstream`, NOT `wr_hard` and NOT `wr_absent` (A2-NEW): an absent
         # upstream binary is a fresh box that has never had Claude Code
         # installed on it at all — `ccrc wrappers` never writes this account
-        # either way (D-71: GENERATED wrappers only), so it is absent-class
+        # either way (D-71: ccrc-owned launchers only), so it is absent-class
         # same as `wr_absent`'s reasoning, but the ROSTER-SYNC remedy
         # ("make \$HOME/.ccrc/accounts.json and the wrapper agree") is
         # actively wrong for it — there is no wrapper to write or roster
@@ -2555,7 +2557,7 @@ _check_wrappers() {
         # installs on anyone's behalf, absent or present-but-wrong alike.
         _dr_wr_present "$id" wr_hard || true
         ;;
-      generated)
+      generated|codex)
         # Absent from disk, or not a wrapper at all: already reported, in the
         # words the measurement earned, by the set difference above.
         _dr_wr_has "$id" ${wr_seen[@]+"${wr_seen[@]}"} || continue
@@ -2613,13 +2615,13 @@ _check_wrappers() {
           local wr_sz=""
           wr_sz="$(_plat_size -L -- "$bin/$id" 2>/dev/null)" || wr_sz=""
           if [[ "$wr_sz" =~ ^[0-9]+$ ]] && [ "$wr_sz" -gt "$WRAPPER_OVERSIZE_BYTES" ]; then
-            wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated shape, and never read")
+            wr_hard+=("$id's \$HOME/.local/bin/$id is over 1 MiB — too big to be the generated wrapper shape, and never read")
             continue
           fi
         fi
         IFS=$'\t' read -r ok target wsuffix wsecrets < <(_wrap_parse_shape "$bin/$id")
         if [ "$ok" != ok ]; then
-          wr_hard+=("$id is declared generated but \$HOME/.local/bin/$id is not the generated shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
+          wr_hard+=("$id is declared ${wr_kind[$id]} but \$HOME/.local/bin/$id is not the generated wrapper shape (a shebang, an export, an optional secrets guard, an exec — and nothing else)")
           continue
         fi
         if [ -z "${wr_suffix[$id]}" ]; then
@@ -2637,7 +2639,11 @@ _check_wrappers() {
         elif [ "$wsecrets" != "${wr_secrets[$id]}" ]; then
           wr_hard+=("$id sources $wsecrets but the roster declares ${wr_secrets[$id]}")
         fi
-        if [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
+        if [ "${wr_kind[$id]}" = codex ]; then
+          if [ "$target" != ccgpt ]; then
+            wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not ccgpt — a Codex lane's launcher hands off to the common GPT-lane launcher")
+          fi
+        elif [ -n "$upstream_id" ] && [ "$target" != "$upstream_id" ]; then
           wr_hard+=("$id's wrapper execs \$HOME/.local/bin/$target, not the roster's upstream account $upstream_id")
         fi
         ;;
@@ -2688,7 +2694,7 @@ _check_wrappers() {
   if [ "${#wr_absent[@]}" -gt 0 ]; then
     _dr_fail wrappers \
       "$(_dr_join ${wr_absent[@]+"${wr_absent[@]}"})" \
-      "run: ccrc wrappers — nothing exists on disk for it to refuse; it creates \$HOME/.local/bin and writes every generated account's wrapper"
+      "run: ccrc wrappers — nothing exists on disk for it to refuse; it creates \$HOME/.local/bin and writes every generated and Codex account's wrapper"
     rc=1
   fi
   if [ "${#wr_hard[@]}" -gt 0 ]; then
@@ -2706,7 +2712,7 @@ _check_wrappers() {
   if [ "$rc" -ne 0 ]; then
     return "$rc"
   fi
-  _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external)"
+  _dr_pass wrappers "${#wr_ids[@]} accounts in \$HOME/.ccrc/accounts.json match \$HOME/.local/bin ($n_up upstream, $n_gen generated, $n_ext external, $n_codex Codex)"
 }
 
 # ── skills — every rostered home carries the SHIPPED skills ────────────────

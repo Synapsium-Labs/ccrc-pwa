@@ -2853,7 +2853,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     // agree, which is what doctor judges two steps later.
     const { home, r } = converged;
     expect(r.stdout).toMatch(
-      /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external \(upstream and external are never written\); 0 written, /m);
+      /^summary: 1 account\(s\) in .*\/\.ccrc\/accounts\.json — 0 generated, 1 upstream, 0 external, 0 codex \(upstream and external are never written\); 0 written, /m);
     expect(r.stdout).toMatch(/^install: wrappers: converged /m);
     // Nothing but the five executables `_inst_bins` installs (graphify Task 10
     // adds `ccd-graph-sweep`) and R3's one SYMLINK — no wrapper, no temp file,

@@ -139,7 +139,22 @@ export type ExecSpec =
     kind: 'generated'; secretsFile?: string; provider: ProviderId;
     baseUrl?: string; models?: ApiKeyModels;
   }
-  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string };
+  | { kind: 'external'; secretsFile?: string; provider?: ProviderId; baseUrl?: string }
+  /** A ChatGPT/Codex subscription lane ccrc OWNS end to end: it writes the
+   *  launcher, installs the runtime, renders the LiteLLM config, publishes the
+   *  usage and removes all of it. Distinct from `external` — whose contract is
+   *  "ccrc records this launcher and never writes it" — and from `generated`,
+   *  whose contract is one wrapper in front of an API credential.
+   *
+   *  The three extra fields are TOPOLOGY: two loopback ports and the directory
+   *  holding the lane's OAuth. None can be derived, none may be defaulted (the
+   *  fallbacks in the shim this replaces are how one lane bound another lane's
+   *  ports and spent another account's subscription), and none may appear as a
+   *  real value in this public tree — they live in `~/.ccrc/accounts.json`. */
+  | {
+    kind: 'codex'; secretsFile?: string; provider: 'openai';
+    proxyPort: number; litellmPort: number; authDir: string;
+  };
 
 /** One account, as validated by `parseRoster`. */
 export interface AccountDef {
@@ -398,7 +413,10 @@ const LABEL_UNSAFE_RE = /[\u0000-\u001f\u007f]/;
  *  a caller that never went through this parser). */
 const SECRETS_SAFE_RE = /^[A-Za-z0-9._/-]+$/;
 
-const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external']);
+const EXEC_KINDS: ReadonlySet<string> = new Set(['upstream', 'generated', 'external', 'codex']);
+/** Dotless GPT-lane commands also fit the account-id grammar. Reserve these two
+ *  names here, before wrapper convergence can reach its self-exec lock. */
+const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccgpt', 'ccgpt-runtime']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
   ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool'],
@@ -420,6 +438,12 @@ const EXEC_KEYS_EXTERNAL: ReadonlySet<string> =
   new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'baseUrl']);
 const EXEC_KEYS_GENERATED: ReadonlySet<string> =
   new Set([...EXEC_KEYS_EXTERNAL, 'models']);
+/** NOT in the containment chain above. A codex lane takes neither `baseUrl`
+ *  (its upstream is its own LiteLLM, on `litellmPort` — a second spelling is a
+ *  second thing to disagree) nor `models` (the class registry owns model
+ *  policy), and it takes three fields no other kind has. */
+const EXEC_KEYS_CODEX: ReadonlySet<string> =
+  new Set([...EXEC_KEYS_UPSTREAM, 'provider', 'proxyPort', 'litellmPort', 'authDir']);
 /** Keyed so the call site is a lookup rather than a chain of ternaries, and so
  *  a fourth `ExecSpec` kind would be a compile error here before it was a
  *  silent fall-through to the wrong set. */
@@ -427,6 +451,7 @@ const EXEC_KEYS: Readonly<Record<ExecSpec['kind'], ReadonlySet<string>>> = {
   upstream: EXEC_KEYS_UPSTREAM,
   external: EXEC_KEYS_EXTERNAL,
   generated: EXEC_KEYS_GENERATED,
+  codex: EXEC_KEYS_CODEX,
 };
 
 /** Named in every remedy below, since `parseRoster` itself never sees a
@@ -535,6 +560,72 @@ function parseModels(raw: unknown, id: string, provider: ProviderId): ApiKeyMode
   };
 }
 
+/** The unprivileged TCP range. A lane's tiers are started by a user systemd
+ *  manager or a plain `nohup`, neither of which can bind below 1024, so a
+ *  privileged port is not a preference here — it is a lane that cannot start,
+ *  and saying so at parse time is the difference between one refusal and a
+ *  tier that flaps on `Restart=always`. */
+const PORT_MIN = 1024;
+const PORT_MAX = 65535;
+
+function parseLanePort(raw: unknown, id: string, field: 'proxyPort' | 'litellmPort'): number {
+  if (typeof raw !== 'number' || !Number.isInteger(raw)) {
+    throw new RosterError(
+      `account "${id}" has a missing or invalid exec.${field}: it must be a whole number.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to a free TCP port between ` +
+        `${PORT_MIN} and ${PORT_MAX}. It cannot be defaulted: two lanes sharing a port send one ` +
+        "account's traffic through the other account's subscription.",
+    );
+  }
+  if (raw < PORT_MIN || raw > PORT_MAX) {
+    throw new RosterError(
+      `account "${id}" has an exec.${field} of ${raw}, which is out of range.`,
+      `Set exec.${field} for account "${id}" in ${ROSTER_PATH} to a free TCP port between ` +
+        `${PORT_MIN} and ${PORT_MAX} — below ${PORT_MIN} needs privileges this lane never has.`,
+    );
+  }
+  return raw;
+}
+
+/** `exec.authDir` — the directory holding a codex lane's OAuth. Gated exactly
+ *  as `exec.secretsFile` is (same charset, same four path refusals), plus one
+ *  rule of its own: it may not sit under `~/.ccrc`. `_uninst_purge` empties
+ *  that tree except `memory`, and this credential is one ccrc never obtained —
+ *  a refusal here makes "uninstall cannot destroy it" structural rather than
+ *  documented. The test compares against `.ccrc/` WITH the separator, so a
+ *  sibling like `.ccrc-backups` is untouched. */
+function parseAuthDir(raw: unknown, id: string): string {
+  if (typeof raw !== 'string') {
+    throw new RosterError(
+      `account "${id}" has a missing or non-string exec.authDir.`,
+      `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to the directory holding that ` +
+        'lane\'s ChatGPT OAuth, as a path relative to $HOME (e.g. ' +
+        `".local/share/ccrc/codex/${id}"). ccrc records the path and never reads what is in it.`,
+    );
+  }
+  if (
+    raw === '' || raw === '.' || raw.startsWith('./') || raw.includes('/./')
+    || raw.startsWith('/') || raw.endsWith('/') || raw.includes('..') || !SECRETS_SAFE_RE.test(raw)
+  ) {
+    throw new RosterError(
+      `account "${id}" has an invalid exec.authDir ${JSON.stringify(raw)}.`,
+      `Set exec.authDir for account "${id}" in ${ROSTER_PATH} to a path relative to $HOME using ` +
+        'only letters, digits, ".", "-", "_" and "/" — never absolute, never containing "..", ' +
+        'never ending in "/".',
+    );
+  }
+  if (raw === '.ccrc' || raw.startsWith('.ccrc/')) {
+    throw new RosterError(
+      `account "${id}" has an exec.authDir under $HOME/.ccrc (${JSON.stringify(raw)}).`,
+      `Move account "${id}"'s OAuth directory outside $HOME/.ccrc (e.g. ` +
+        `".local/share/ccrc/codex/${id}") and set exec.authDir in ${ROSTER_PATH} to the new ` +
+        'path. `ccrc uninstall --purge` empties $HOME/.ccrc, and a credential ccrc never ' +
+        'obtained must not be destroyable by ccrc.',
+    );
+  }
+  return raw;
+}
+
 /**
  * @param assumedProvider collects the ids of `generated` accounts that named no
  *   provider, so `parseRoster` can warn ONCE for the whole file instead of once
@@ -549,15 +640,15 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
     throw new RosterError(
       `account "${id}" has a missing or invalid "exec".`,
       `Set "exec" for account "${id}" in ${ROSTER_PATH} to an object with a "kind" of ` +
-        '"upstream", "generated" or "external".',
+        '"upstream", "generated", "external" or "codex".',
     );
   }
   const kind = raw['kind'];
   if (typeof kind !== 'string' || !EXEC_KINDS.has(kind)) {
     throw new RosterError(
       `account "${id}" has an invalid exec.kind ${JSON.stringify(kind)}: it must be ` +
-        '"upstream", "generated" or "external".',
-      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated" or "external".`,
+        '"upstream", "generated", "external" or "codex".',
+      `Set exec.kind for account "${id}" in ${ROSTER_PATH} to "upstream", "generated", "external" or "codex".`,
     );
   }
   warnUnknownKeys(raw, EXEC_KEYS[kind as ExecSpec['kind']], `on account "${id}"'s exec`);
@@ -596,6 +687,38 @@ function parseExec(raw: unknown, id: string, assumedProvider: string[]): ExecSpe
   const withSecrets = secretsFile !== undefined ? { secretsFile } : {};
 
   if (kind === 'upstream') return { kind: 'upstream', ...withSecrets };
+
+  if (kind === 'codex') {
+    const proxyPort = parseLanePort(raw['proxyPort'], id, 'proxyPort');
+    const litellmPort = parseLanePort(raw['litellmPort'], id, 'litellmPort');
+    if (proxyPort === litellmPort) {
+      throw new RosterError(
+        `account "${id}"'s exec.proxyPort and exec.litellmPort are both ${proxyPort}.`,
+        `Give account "${id}" two different ports in ${ROSTER_PATH}: the shim Claude Code talks ` +
+          'to and the LiteLLM behind it are two listeners.',
+      );
+    }
+    const providerRaw = raw['provider'];
+    if (providerRaw !== 'openai') {
+      throw new RosterError(
+        providerRaw === undefined
+          ? `account "${id}" has exec.kind "codex" and no exec.provider.`
+          : `account "${id}" has exec.provider ${JSON.stringify(providerRaw)}, and exec.kind ` +
+            '"codex" accepts only "openai".',
+        `Set exec.provider for account "${id}" in ${ROSTER_PATH} to "openai". The kind names a ` +
+          'ChatGPT/Codex subscription lane, so the provider is not a choice — it is the one fact ' +
+          'the kind already asserts, spelled where every other kind spells it.',
+      );
+    }
+    return {
+      kind: 'codex',
+      provider: 'openai',
+      proxyPort,
+      litellmPort,
+      authDir: parseAuthDir(raw['authDir'], id),
+      ...withSecrets,
+    };
+  }
 
   // `provider`. Refused if present and unknown, on both remaining kinds; the
   // DEFAULT applies to `generated` only, because absent on `external` is the
@@ -690,6 +813,13 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
         'letter and contain only lowercase letters, digits and hyphens (max 32 characters).',
       `Rename the "id" of ${where} in ${ROSTER_PATH} to match ^[a-z][a-z0-9-]{0,31}$ — ` +
         'no spaces, no uppercase letters.',
+    );
+  }
+
+  if (GPT_TOOLCHAIN_ACCOUNT_IDS.has(id)) {
+    throw new RosterError(
+      `account id "${id}" collides with the GPT-lane toolchain executable of the same name.`,
+      `Choose another account ID in ${ROSTER_PATH}; "${id}" is reserved for the GPT-lane toolchain.`,
     );
   }
 
@@ -990,6 +1120,28 @@ export function parseRoster(json: unknown): Roster {
       );
     }
     seenDirs.set(a.configDirSuffix, a.id);
+  }
+
+  // THE SAME SHAPE AS `seenDirs`, and for the same reason: a collision is a
+  // fact about two entries, so it cannot be seen from inside either one.
+  // Both fields of every codex lane go into ONE map, because the hazard is a
+  // port serving two purposes, not a field colliding with its own name — a
+  // lane whose shim port is another lane's LiteLLM port is just as wrong.
+  const seenPorts = new Map<number, string>();
+  for (const a of drafts) {
+    if (a.exec.kind !== 'codex') continue;
+    for (const port of [a.exec.proxyPort, a.exec.litellmPort]) {
+      const owner = seenPorts.get(port);
+      if (owner !== undefined && owner !== a.id) {
+        throw new RosterError(
+          `accounts "${owner}" and "${a.id}" both use port ${port}.`,
+          `Give each codex lane in ${ROSTER_PATH} its own two ports. Two lanes on one port send ` +
+            "one account's requests through the other account's OAuth, and the box cannot tell " +
+            'you which turn went where afterwards.',
+        );
+      }
+      seenPorts.set(port, a.id);
+    }
   }
 
   const upstreams = drafts.filter((a) => a.exec.kind === 'upstream');

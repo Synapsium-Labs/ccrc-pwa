@@ -418,6 +418,64 @@ const FORBIDDEN: ForbiddenClass[] = [
       'subdomain.duckdns.org', 'www.duckdns.org', '<sub>.duckdns.org', '<name>.duckdns.org'],
   },
   {
+    name: 'email address',
+    // Added before the GPT-lane sources arrive: an address matches as one
+    // bounded token, case-insensitively. `*` belongs to the local-part
+    // vocabulary because hostile-input fixtures use it literally.
+    pattern: /(?<![-A-Za-z0-9._%+*@])[-A-Za-z0-9._%+*]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}(?![-A-Za-z0-9_@%+*]|\.[A-Za-z0-9-])/gi,
+    why: 'an email address outside the documented placeholder vocabulary names a real person or account',
+    allowed: (token) => {
+      // Classification is case-blind so a casing change cannot evade a fixed
+      // exception. These remain exact tokens, never file or domain allowlists.
+      const normalized = token.toLowerCase();
+      const domain = normalized.slice(normalized.lastIndexOf('@') + 1);
+      return normalized === 'noreply@anthropic.com'
+        || normalized === 'git@github.com'
+        // Hostile-input test syntax and third-party package metadata,
+        // respectively: exact unavoidable tokens, not domain exemptions.
+        || new Set([
+          ['*', '@evil.com'].join(''),
+          ['8080', '@evil.com'].join(''),
+          ['pass', '@evil.com'].join(''),
+          'i@izs.me',
+        ]).has(normalized)
+        // Systemd template instances are syntax, not email addresses. This
+        // deliberately classifies only its unit suffix grammar, not arbitrary
+        // @-bearing filenames or dotted suffixes.
+        || /\.(?:service|timer|slice|socket|target|scope|path|mount|device|swap|automount)$/.test(domain)
+        || domain === 'localhost'
+        || /@(?:[a-z0-9-]+\.)*example\.(?:com|org|net)$/.test(normalized)
+        || /@[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:example|invalid|test|localhost)$/.test(normalized);
+    },
+    // Constructed so this public test never carries a contiguous plausible
+    // personal address; runtime liveness still exercises lower, mixed, plus,
+    // and dotted local-part forms under non-reserved domains.
+    catches: [
+      ['person', '@', 'acme', '.', 'pro'].join(''),
+      ['Person', '@', 'Acme', '.', 'Pro'].join(''),
+      ['first.last', '+tag', '@', 'team', '.', 'engineering'].join(''),
+      ['first.last', '+tag', '@', 'team', '.', 'engineering'].join('').toUpperCase(),
+    ],
+    passes: [
+      'you@example.com', 'you@sub.example.com',
+      'you@example.org', 'you@sub.example.org',
+      'you@example.net', 'you@sub.example.net',
+      'you@host.example', 'you@nested.host.example',
+      'you@host.invalid', 'you@nested.host.invalid',
+      'you@host.test', 'you@nested.host.test',
+      'you@host.localhost', 'you@nested.host.localhost', 'you@localhost',
+      'noreply@anthropic.com', 'git@github.com',
+      ['*', '@evil.com'].join(''), ['8080', '@evil.com'].join(''),
+      ['pass', '@evil.com'].join(''), 'i@izs.me',
+      'ccrc-agent@worker.service', 'ccrc-agent@worker.timer',
+      'ccrc-agent@worker.slice', 'ccrc-agent@worker.socket',
+      'ccrc-agent@worker.target', 'ccrc-agent@worker.scope',
+      'ccrc-agent@worker.path', 'ccrc-agent@worker.mount',
+      'ccrc-agent@worker.device', 'ccrc-agent@worker.swap',
+      'ccrc-agent@worker.automount', '<your-email>', 'user@host',
+    ],
+  },
+  {
     name: 'operator residue',
     // The six concrete tokens of OPERATOR_RESIDUE (base64-argued above),
     // case-insensitive: the handle has appeared in repo slugs and the org
@@ -463,6 +521,12 @@ function scoresOn(cls: ForbiddenClass, token: string): number {
 }
 
 describe('the corpus this walks', () => {
+  it('registers exactly eight forbidden classes', () => {
+    // A loop-generated describe disappears with a deleted row, so this is the
+    // permanent registration pin for each class the ratchet claims to carry.
+    expect(FORBIDDEN).toHaveLength(8);
+  });
+
   it('actually walked the tree — a scan over an empty list passes everything', () => {
     // The single-definition idiom: a moved root or a broken `git ls-files`
     // must turn THIS red rather than silently disarm every class below.

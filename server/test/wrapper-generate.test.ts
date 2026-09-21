@@ -4,6 +4,9 @@ import { generateWrapperBody, WrapperInvalid } from '../../shared/wrapper.mjs';
 const CLAUDE2 = { id: 'claude2', configDirSuffix: '.claude-personal', execKind: 'generated',
   secretsFile: '.cc-secrets/claude2-oauth.env' };
 const NOSECRETS = { id: 'plain', configDirSuffix: '.claude-plain', execKind: 'generated' };
+const CODEX = { id: 'codex-a', configDirSuffix: '.claude-codex-a', execKind: 'codex',
+  secretsFile: '.cc-secrets/codex-a.env' };
+const INVALID_UPSTREAM_ID = 'not a legal id';
 
 describe('generateWrapperBody', () => {
   it('writes the three-line shape when the account has a secrets file', () => {
@@ -27,6 +30,25 @@ describe('generateWrapperBody', () => {
     // Not "an empty guard line" — an absent one. A `[ -r "$HOME/" ]` line
     // would parse as a secrets guard naming $HOME itself.
     expect(text).not.toContain('[ -r');
+  });
+
+  it('writes a codex launcher in the generated grammar with the common ccgpt target', () => {
+    expect(generateWrapperBody(CODEX, 'claude')).toBe(
+      '#!/usr/bin/env bash\n'
+      + '# Generated from ~/.ccrc/accounts.json. Do not edit — `ccrc wrappers` rewrites it.\n'
+      + 'export CLAUDE_CONFIG_DIR="$HOME/.claude-codex-a"\n'
+      + '[ -r "$HOME/.cc-secrets/codex-a.env" ] && . "$HOME/.cc-secrets/codex-a.env"\n'
+      + 'exec "$HOME/.local/bin/ccgpt" "$@"\n',
+    );
+  });
+
+  it('ignores an irrelevant invalid upstream id for a codex account', () => {
+    expect(generateWrapperBody(CODEX, INVALID_UPSTREAM_ID))
+      .toContain('exec "$HOME/.local/bin/ccgpt" "$@"');
+  });
+
+  it('continues to refuse an invalid upstream id for a generated account', () => {
+    expect(() => generateWrapperBody(NOSECRETS, INVALID_UPSTREAM_ID)).toThrow(WrapperInvalid);
   });
 
   // PINNED HERE AND NOT IN THE ROUND-TRIP TEST, deliberately. Task 3 measured
@@ -59,10 +81,16 @@ describe('generateWrapperBody', () => {
     }
   });
 
-  it('refuses to write anything for an account ccrc does not own', () => {
+  it('refuses upstream and external accounts and provides the established remedy', () => {
     for (const execKind of ['upstream', 'external']) {
-      expect(() => generateWrapperBody({ ...NOSECRETS, execKind }, 'claude'))
-        .toThrow(WrapperInvalid);
+      try {
+        generateWrapperBody({ ...NOSECRETS, execKind }, 'claude');
+        expect.unreachable('should have thrown');
+      } catch (e) {
+        expect(e).toBeInstanceOf(WrapperInvalid);
+        expect((e as { remedy?: unknown }).remedy)
+          .toBe('Leave $HOME/.local/bin/plain alone — ccrc never writes an upstream or external account.');
+      }
     }
   });
 
