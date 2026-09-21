@@ -666,4 +666,109 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       await ep2.close();
     }
   });
+
+  // -------------------------------------------------------------------
+  // Task 11 — the pinned default endpoint, and the seam's own guard.
+  //
+  // task-10's review (task-10-review.md, "SECOND JOB") measured
+  // `_is_loopback` correctly refusing eleven look-alike spellings, but the
+  // shipped suite (through fix round 3) pinned only one of them — the
+  // `http://example.invalid/usage` case above. A measurement taken once by
+  // a reviewer who is gone is not a mechanism: a later "simplification" of
+  // the check to a substring test would red some of the spellings below
+  // (whichever carry the literal text `127.0.0.1`), pass the rest, and
+  // look like a clean refactor while leaking a bearer token off-box.
+  // Pinning the table — and the compiled-in default nothing else asserts —
+  // is this task's whole scope (task-11-rulings.md §1).
+
+  it('task-11: the compiled-in default endpoint is the production URL (import-only, no network)', () => {
+    // task-11-rulings.md §3: importing the module runs `_usage_endpoint()`
+    // at module scope and then STOPS — `main()` sits behind
+    // `if __name__ == "__main__"`, so importing the file opens no socket
+    // and needs no mock server. `CCGPT_USAGE_ENDPOINT` is deliberately
+    // absent from env below (not merely empty), so `_usage_endpoint()`
+    // resolves to `DEFAULT_USAGE_ENDPOINT` unchanged. The filename has a
+    // hyphen and cannot be imported by module name, so the runner script
+    // below uses `importlib.util.spec_from_file_location` (rulings' own
+    // instruction) and prints both resolved constants as JSON. Plain
+    // synchronous `runPy` is safe here — no mock server is bound at all,
+    // matching the NO_AMBIENT_LITELLM precondition probe above, the file's
+    // other no-server case.
+    const home = mkTmp('ccgpt-usage-default-');
+    const id = mintId();
+    const runner = join(home, 'import-default-endpoint.py');
+    writeFileSync(runner, [
+      'import importlib.util',
+      'import json',
+      'import sys',
+      '',
+      'spec = importlib.util.spec_from_file_location("ccgpt_usage_under_test", sys.argv[1])',
+      'module = importlib.util.module_from_spec(spec)',
+      'spec.loader.exec_module(module)',
+      'print(json.dumps({',
+      '    "default": module.DEFAULT_USAGE_ENDPOINT,',
+      '    "resolved": module.USAGE_ENDPOINT,',
+      '}))',
+      '',
+    ].join('\n'));
+    const r = runPy(runner, {
+      home,
+      args: [ccgptFile('ccgpt-usage.py')],
+      // CCGPT_USAGE_ENDPOINT deliberately omitted — never set at all, not
+      // merely empty, so os.environ.get(...) sees a true absence.
+      env: { PYTHONPATH: PYSTUB_DIR, CCGPT_ACCOUNT_ID: id },
+    });
+    expect(r.timedOut).toBe(false);
+    expect(r.status).toBe(0);
+    const parsed = JSON.parse(r.stdout);
+    // Pin the VALUE (task-11-rulings.md §3), not merely the presence of a
+    // literal in source — this is the resolved runtime constant, read back
+    // off the imported module.
+    expect(parsed.default).toBe('https://chatgpt.com/backend-api/codex/responses');
+    expect(parsed.resolved).toBe(parsed.default);
+  });
+
+  // The eleven look-alike spellings task-10's review measured refused
+  // (task-10-review.md's "SECOND JOB" section), pinned as a table rather
+  // than resting on that one-time measurement. The genuinely-loopback
+  // spellings the same review measured ACCEPTED (`LOCALHOST`, `[::1]`,
+  // bare `127.0.0.1`) are exercised elsewhere in this file already — every
+  // happy-path case above points CCGPT_USAGE_ENDPOINT at a bound
+  // `127.0.0.1` mock and succeeds — and acceptance is out of this table's
+  // scope, which is refusal only.
+  const LOOKALIKE_LOOPBACK_ENDPOINTS: Array<{ label: string; url: string }> = [
+    { label: 'prefix lookalike', url: 'https://127.0.0.1.evil.test/usage' },
+    { label: 'userinfo', url: 'http://127.0.0.1@evil.test/usage' },
+    { label: 'userinfo, localhost spelling', url: 'http://localhost@evil.test/usage' },
+    { label: 'suffix lookalike', url: 'http://localhost.evil.test/usage' },
+    { label: 'userinfo + port + prefix', url: 'https://127.0.0.1.evil.test:443@evil.test/usage' },
+    { label: 'adjacent-character', url: 'http://127.0.0.1x.test/usage' },
+    { label: 'IPv4-as-integer', url: 'http://2130706433/usage' },
+    { label: 'IPv4 shorthand', url: 'http://127.1/usage' },
+    { label: 'IPv4-mapped IPv6', url: 'http://[::ffff:127.0.0.1]/usage' },
+    { label: 'trailing dot', url: 'http://127.0.0.1./usage' },
+    { label: 'uppercase suffix lookalike', url: 'http://LOCALHOST.EVIL.TEST/usage' },
+  ];
+
+  it.each(LOOKALIKE_LOOPBACK_ENDPOINTS)('task-11: refuses look-alike loopback host — $label ($url)', async ({ url }) => {
+    const home = mkTmp('ccgpt-usage-lookalike-');
+    const id = mintId();
+    plantLane(home, id);
+    // A real loopback server IS bound (never pointed at) — the same M-7
+    // discipline the existing non-loopback case above uses: proves the
+    // refusal reached neither the (unreachable-by-design) host the
+    // override names nor this suite's own mock.
+    const { close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/CCGPT_USAGE_ENDPOINT/);
+      expect(r.stderr).toMatch(/loopback/);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
+      expect(requests.length).toBe(0); // task-10-fix-rulings.md M-7: never contacted, measured
+    } finally {
+      await close();
+    }
+  });
 });
