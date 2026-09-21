@@ -48,6 +48,42 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _fold_midturn_system(data):
+    """Every messages[*] with role 'system' becomes 'user', IN PLACE.
+
+    The beta that produces these entries exists because position carries
+    meaning, so this never hoists. Both content shapes convert: the sender
+    draws no distinction between a plain string and a content-block list, and
+    the string arm survives today only because a layer below happens to hoist
+    it. Codex refuses either, and the entry is replayed with the history, so
+    one unfolded injection fails every later turn.
+    """
+    msgs = data.get("messages")
+    if not isinstance(msgs, list):
+        return data
+    for m in msgs:
+        if isinstance(m, dict) and m.get("role") == "system":
+            m["role"] = "user"
+    return data
+
+
+def _rewrite_messages_body(body: bytes) -> bytes:
+    """The `/v1/messages` rewrite path: fold mid-conversation `system` turns,
+    then re-encode. A body that is not a JSON object — malformed, or a
+    non-object top level — has nothing safe to fold into, so it is forwarded
+    exactly as received rather than turning a passthrough path into a new way
+    for this shim to break a request the fold was never going to touch.
+    """
+    try:
+        data = json.loads(body)
+    except (TypeError, ValueError):
+        return body
+    if not isinstance(data, dict):
+        return body
+    data = _fold_midturn_system(data)
+    return json.dumps(data).encode("utf-8")
+
+
 def _required_port(name: str) -> int:
     """Like `_required_env`, but for a variable that must parse as a port
     number. Left unwrapped, a non-numeric value escaped as a bare
@@ -103,8 +139,13 @@ class Handler(BaseHTTPRequestHandler):
             # verb with headers) doesn't leave bytes on the wire.
             self._lane()
             return
-        # Every other path, including /v1/messages, is forwarded exactly as
-        # received for now — Task 3 is what makes /v1/messages different.
+        # Every other path is forwarded exactly as received, except
+        # /v1/messages: that one body is JSON, and Codex refuses a
+        # mid-conversation `role: "system"` entry inside its `messages` —
+        # _fold_midturn_system converts each one to `user`, in place, before
+        # the request ever leaves this shim.
+        if body and path_only == "/v1/messages":
+            body = _rewrite_messages_body(body)
         req = urllib.request.Request(UPSTREAM + self.path, data=body or None, method=self.command)
         for key, value in self.headers.items():
             if key.lower() not in HOP_BY_HOP:

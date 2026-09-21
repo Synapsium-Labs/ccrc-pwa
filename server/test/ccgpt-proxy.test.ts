@@ -489,3 +489,31 @@ describe.skipIf(!PY)('ccgpt-proxy: identity and passthrough', () => {
     expect(stderr).not.toMatch(/Traceback/);
   });
 });
+
+describe.skipIf(!PY)('ccgpt-proxy: the mid-conversation system door', () => {
+  it('converts a mid-conversation system turn to user, in place, both content shapes', async () => {
+    if (!pythonOrSkip()) return;
+    const home = mkTmp('ccgpt-proxy-mid-');
+    let seen: any = null;
+    await startPair(home, (_req, body, res) => {
+      seen = JSON.parse(body.toString('utf8'));
+      res.writeHead(200, { 'content-type': 'application/json' }); res.end('{"ok":true}');
+    });
+    await fetch(`http://127.0.0.1:${PROXY_PORT}/v1/messages`, {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: 'gpt-x', messages: [
+          { role: 'user', content: 'first' },
+          { role: 'system', content: 'a plain string instruction' },
+          { role: 'assistant', content: 'ok' },
+          { role: 'system', content: [{ type: 'text', text: 'a block instruction' }] },
+        ],
+      }),
+    });
+    expect(seen.messages.map((m: any) => m.role)).toEqual(['user', 'user', 'assistant', 'user']);
+    expect(seen.messages[1].content).toBe('a plain string instruction');          // content untouched
+    expect(seen.messages[3].content).toEqual([{ type: 'text', text: 'a block instruction' }]);
+    expect(JSON.stringify(seen).includes('"role": "system"')).toBe(false);
+    expect(JSON.stringify(seen).includes('"role":"system"')).toBe(false);
+  });
+});
