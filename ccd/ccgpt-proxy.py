@@ -48,9 +48,21 @@ def _required_env(name: str) -> str:
     return value
 
 
+def _required_port(name: str) -> int:
+    """Like `_required_env`, but for a variable that must parse as a port
+    number. Left unwrapped, a non-numeric value escaped as a bare
+    `ValueError` traceback instead of the same named refusal every other
+    missing or invalid variable gets (fix round 1, M-3)."""
+    raw = _required_env(name)
+    try:
+        return int(raw)
+    except ValueError:
+        sys.exit(f"ccgpt-proxy: refusing to start — {name} is not a valid port number: {raw!r}")
+
+
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
-PROXY_PORT = int(_required_env("CCGPT_PROXY_PORT"))
-LITELLM_PORT = int(_required_env("CCGPT_LITELLM_PORT"))
+PROXY_PORT = _required_port("CCGPT_PROXY_PORT")
+LITELLM_PORT = _required_port("CCGPT_LITELLM_PORT")
 UPSTREAM = f"http://127.0.0.1:{LITELLM_PORT}"
 
 LANE_PATH = "/ccgpt/lane"
@@ -124,8 +136,22 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             resp.close()
 
-    do_GET = do_POST = do_PUT = do_PATCH = do_DELETE = _relay
+    # Every verb Claude Code or ccgpt itself might issue is forwarded — GET
+    # and HEAD for probes/health checks, OPTIONS for a preflight-shaped
+    # client, the rest for the actual traffic. Without HEAD/OPTIONS here,
+    # `BaseHTTPRequestHandler`'s own default answers a bare 501 for either,
+    # which would make "everything else forwarded untouched" (module
+    # docstring) not literally true (fix round 1, M-5).
+    do_GET = do_HEAD = do_POST = do_PUT = do_PATCH = do_DELETE = do_OPTIONS = _relay
 
 
 if __name__ == "__main__":
-    ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), Handler).serve_forever()
+    try:
+        server = ThreadingHTTPServer(("127.0.0.1", PROXY_PORT), Handler)
+    except OSError as e:
+        # Unwrapped, a bind failure (most commonly EADDRINUSE) is a bare
+        # socketserver traceback with no ccrc-shaped message (fix round 1,
+        # M-4) — easy to miss in a unit's journal next to everything else a
+        # crashing process prints.
+        sys.exit(f"ccgpt-proxy: failed to bind 127.0.0.1:{PROXY_PORT}: {e}")
+    server.serve_forever()

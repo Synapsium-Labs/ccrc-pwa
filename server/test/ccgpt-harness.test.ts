@@ -1,6 +1,6 @@
 // server/test/ccgpt-harness.test.ts
 import { describe, it, expect } from 'vitest';
-import { pythonOrSkip, runPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
+import { pythonOrSkip, runPy, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
 import { mkTmp } from './tmpHelpers';
 import { writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -126,5 +126,32 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
   // confusing spawn error inside whichever later case ran first.
   it('ccgptFile throws naming the path for a shipped file that does not exist', () => {
     expect(() => ccgptFile('does-not-exist-ccgpt-probe.py')).toThrow(/does-not-exist-ccgpt-probe\.py/);
+  });
+
+  // ccgpt-proxy review round 1, C-1/I-1/I-2 + Question 2's rider: a second,
+  // hand-rolled python-spawn site (ccgpt-proxy.test.ts's original `startPair`)
+  // reproduced this containment BY HAND and dropped the fixture HOME the
+  // moment a caller spread `...process.env`. `spawnPy` shares `runPy`'s own
+  // `containedEnv` helper rather than re-deriving it, so these two cases pin
+  // that the shared body actually holds for the long-lived spawn path too —
+  // "a single body that nothing pins is a single unpinned body."
+  describe('spawnPy shares runPy\'s containment (not a second, hand-rolled body)', () => {
+    it('cannot be talked out of the fixture HOME by the realistic opts.env call shape', async () => {
+      const home = mkTmp('ccgpt-harness-spawnpy-closed-');
+      const f = join(home, 'probe.py');
+      writeFileSync(f, 'import os\nprint(os.environ["HOME"])\n');
+      const { child } = spawnPy(f, { home, env: { ...process.env, PYTHONPATH: PYSTUB_DIR } });
+      let stdout = '';
+      child.stdout?.on('data', (c) => { stdout += c.toString(); });
+      await new Promise<void>((r) => child.once('close', () => r()));
+      expect(stdout.trim()).toBe(home);
+    });
+
+    it('refuses an opts.env that deliberately sets a different HOME', () => {
+      const home = mkTmp('ccgpt-harness-spawnpy-refuse-');
+      const f = join(home, 'probe.py');
+      writeFileSync(f, 'print("unreached")\n');
+      expect(() => spawnPy(f, { home, env: { HOME: '/etc' } })).toThrow(/HOME/);
+    });
   });
 });
