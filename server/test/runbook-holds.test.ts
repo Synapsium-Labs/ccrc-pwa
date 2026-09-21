@@ -407,7 +407,7 @@ describe('step 12 (the release round-trip) quotes what the release verbs actuall
   });
 
   it("`ccrc update`'s verified line is derived from _upd_fetch's template", () => {
-    // D-3141..D-3143 (Tasks 8-12, centralised-update-management part B): the
+    // D-3141 (Tasks 9-13, centralised-update-management part B): the
     // provenance bundle is now verified between the transport checksum and
     // the per-file MANIFEST, and the success line says so — re-measured by
     // content against the current source, not retyped from memory.

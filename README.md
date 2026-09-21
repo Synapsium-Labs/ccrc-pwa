@@ -446,8 +446,8 @@ it cannot be promoted; D-3130 says why there is no linear-history rule), which r
 still gets that read-back, and one more `--latest`, when latest names another tag. Never a build — a
 rebuild would be a different `build.json`, a different digest, bytes nobody ran. Demotion is `gh
 release edit <tag> --prerelease` by hand, and moves no box by itself: a node keeps what it runs until
-someone runs `ccrc update`. The per-box version floor that also refuses a step backwards (design §9)
-ships in part B of this wave, not in this PR.
+someone runs `ccrc update` — and that update refuses a step backwards on its own, below the per-box
+version floor (design §9), unless `--downgrade` is typed.
 
 **Install from a release.** `bash install.sh --release [vX.Y.Z]` (default: the newest stable release —
 `latest/download` never serves a prerelease, so a `dev` build needs its tag) downloads the
