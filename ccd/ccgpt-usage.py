@@ -14,9 +14,9 @@ figure would mislead a reader).
 
 Ported from the production publisher this repository does not ship
 (task-10-brief.md) as part of Plan 2a of the gpt-lane-ownership migration
-(`docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §10). Two
-things changed from that reference, both load-bearing and both described in
-that spec section:
+(`docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §10).
+**Three** things changed from that reference — corrected from "two" in fix
+round 1 (task-10-fix-rulings.md I-2), which is when the third was noticed:
 
   1. The probe **model** is read from `~/.ccrc/codex/<id>/lane.json`
      (`_probe_model` below), never hard-coded — a model frozen into a
@@ -28,15 +28,28 @@ that spec section:
   2. `CCGPT_ACCOUNT_ID`'s fallback to "the first lane" (the reference
      script's `${CCGPT_ACCOUNT_ID:-gpt}`) is REMOVED. An unnamed lane is an
      error, not lane one (task-10-brief.md) — see `_required_env`.
+  3. The OAuth token directory is read from `lane.json`'s `authDir` field
+     (`_token_dir` below), never re-derived from a naming convention. Fix
+     round 1's I-2: the reference computes `$HOME/.handoff/chatgpt-auth[-<id>]`
+     itself, but spec §5.4 line 333 says `lane.json` "is the one thing
+     `ccgpt`, the shim and the publisher read, so none of them re-derives a
+     path from a naming convention" — this file used to violate that
+     sentence in a file that already opens `lane.json` two functions away.
 
 **Five consumer-facing properties this file exists to keep** (task-10-brief.md's
 own table; each has its own test in `server/test/ccgpt-usage.test.ts` and its
 own mutation in that file's commit history):
 
-  - Written with `json.dump`'s DEFAULT separators (`_publish`) — `ccd`'s
-    `_limit_json_num` greps with a pattern that tolerates whitespace after
-    the colon *because* this producer writes `": "`. A compact writer makes
-    `ccd` read the lane as entirely unknown.
+  - Written with `json.dump`'s DEFAULT separators (`_publish`). *(Reason
+    corrected in fix round 1, D-3159 — see that entry and
+    `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §10's
+    own correction: no shipped reader distinguishes a compact row from a
+    spaced one today, since both `ccd`'s `_limit_json_num`/`_limit_has_key`
+    match with `[[:space:]]*`, zero or more. The property is KEPT anyway —
+    it matches the reference producer byte-for-byte and holds this file
+    stable for a stricter future reader — but "a compact writer makes `ccd`
+    read the lane as entirely unknown" was never true and is not repeated
+    here.)*
   - `fiveResetAt`/`sevenResetAt` are emitted on EVERY poll, `null` included
     (`_build_row`) — `_limit_has_key` asks whether the keys exist at all;
     that presence is the only thing separating this row from the compact
@@ -48,7 +61,9 @@ own mutation in that file's commit history):
     5h window at all". Two readers share one rule and must not drift.
   - A 429 carrying the rate-limit headers IS a valid measurement, not a
     failed poll (`_fetch_headers`) — the headers are read off the error
-    response and published.
+    response and published. A REDIRECT status is never this, however its
+    headers are dressed — see `_fetch_headers`'s own docstring, fix round
+    1 C-1.
   - The write is ATOMIC: tmp-then-rename (`_publish`, `os.replace`) — a
     reader never sees a half-written row.
 
@@ -58,9 +73,28 @@ host. task-10-rulings.md §1 OVERRULES the plan's own draft text, which had
 asked for a non-loopback override to be silently "ignored" (i.e. fall
 through to the real endpoint) — that would make a test suite pointed
 somewhere unexpected capable of reaching the production Codex usage API. A
-non-loopback override is refused outright instead: loud, and impossible for
-any test in this wave to reach the network by accident. Costs nothing in
+non-loopback override is refused outright instead. Costs nothing in
 production, where the variable is unset and this check never fires.
+
+**That refusal is necessary but not sufficient (fix round 1, C-1).** The
+loopback check binds the FIRST hop only; `urlopen`'s default opener follows
+redirects, so a vetted loopback endpoint answering `3xx` could send this
+process anywhere, bearer token riding along, and a forged response from
+that second hop would otherwise publish as a real measurement. `_fetch_headers`
+below builds its own opener that refuses every redirect outright — see its
+docstring.
+
+**The interpreter (fix round 1, M-3).** The reference selects the LiteLLM
+venv's own python (falling back to a bare `python3`) because the real
+`litellm` package it hard-imports is virtualenv-installed, not on the
+system interpreter. This file is a plain `#!/usr/bin/env python3` with the
+same hard top-level import, and the spec measures this box's ambient
+`python3` as carrying no `litellm` at all (design spec, "measured: this
+box's ambient python3 has no litellm"). Solving that is deferred to wave 3,
+which is expected to point the systemd unit's own `ExecStart` at the venv
+interpreter directly rather than teaching this file to search for one —
+recorded here so the next reader does not mistake the bare shebang for an
+oversight.
 """
 import json
 import os
@@ -70,15 +104,20 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-from litellm.llms.chatgpt.authenticator import Authenticator
-
 
 # The real production endpoint. Never dialed by this wave's own test suite —
-# every case in server/test/ccgpt-usage.test.ts points CCGPT_USAGE_ENDPOINT
-# at a loopback server it binds itself (task-10-rulings.md §1's hard
-# constraint). Task 11 (separate task, not this file's) pins this constant
-# as the compiled-in default and hardens the loopback check against
-# look-alike hosts.
+# every case in server/test/ccgpt-usage.test.ts binds its own loopback server
+# on this suite's fixed port (task-10-fix-rulings.md M-1, corrected from a
+# first draft that claimed this without exception — it does not, see M-7
+# below). A case that expects the subject to refuse before ever making a
+# request asserts the bound server saw ZERO requests, not merely that the
+# subject exited non-zero (M-7) — including the non-loopback-override case,
+# whose bound server is deliberately NOT what CCGPT_USAGE_ENDPOINT points at:
+# it exists solely to prove the refusal doesn't reach THIS box's own mock
+# either, not only the (unreachable-by-design) host named in the override.
+# Task 11 (separate task, not this file's) pins this constant as the
+# compiled-in default and hardens the loopback check against look-alike
+# hosts.
 DEFAULT_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 
 # Deliberately a small, exact set — not a substring/prefix test. task-11's
@@ -89,6 +128,9 @@ DEFAULT_USAGE_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
 # (`urlsplit` gives such a value no `.hostname` at all, which is not in this
 # set either) — task-10 does not need Task 11's own dedicated look-alike
 # case to get this right, since it is not testing a substring shortcut.
+# NOTE: this check binds the FIRST hop only — see the module docstring's own
+# fix-round-1 C-1 paragraph and `_fetch_headers`'s docstring for what closes
+# the gap a hostname check alone cannot.
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
 
 
@@ -116,7 +158,9 @@ def _is_loopback(url: str) -> bool:
     see the module-level comment on `_LOOPBACK_HOSTS` for why that
     distinction is the whole point of Task 11's own mutation. `urlsplit`
     never performs DNS resolution, so this check is a pure string parse: it
-    cannot itself cause a network access, whatever it decides.
+    cannot itself cause a network access, whatever it decides. It says
+    nothing about where a REDIRECT from this URL might point — that is
+    `_fetch_headers`'s `_NoRedirectHandler`'s job, not this function's.
     """
     try:
         host = urllib.parse.urlsplit(url).hostname
@@ -147,6 +191,16 @@ def _usage_endpoint() -> str:
     return override
 
 
+# M-4 (task-10-fix-rulings.md): every module-scope statement above this line
+# validates ccrc's OWN configuration (env vars, the endpoint) and needs no
+# third-party package at all. The `litellm` import below is placed AFTER
+# these two assignments run, deliberately — with it at the top of the file
+# (its original position), an unset CCGPT_ACCOUNT_ID on a box with no
+# `litellm` installed surfaced as a raw `ImportError` instead of this file's
+# own named refusal, because Python evaluates top-to-bottom regardless of
+# what a later line would have done. The reference avoided this by checking
+# env vars in BASH before ever invoking python at all; this file has no bash
+# prelude, so the ordering has to be expressed in python instead.
 ACCOUNT_ID = _required_env("CCGPT_ACCOUNT_ID")
 USAGE_ENDPOINT = _usage_endpoint()
 
@@ -158,66 +212,113 @@ LIMITS_DIR = os.path.join(os.path.expanduser("~"), ".cc-limits")
 
 # `docs/superpowers/specs/2026-09-20-gpt-lane-ownership-design.md` §5.4:
 # "lane manifest | `~/.ccrc/codex/<id>/lane.json` (generated, no secrets)".
-LANE_PATH = os.path.join(os.path.expanduser("~"), ".ccrc", "codex", ACCOUNT_ID, "lane.json")
+# M-5 (task-10-fix-rulings.md): named LANE_MANIFEST_PATH, not LANE_PATH —
+# `ccd/ccgpt-proxy.py`'s own `LANE_PATH` is a DIFFERENT thing, the HTTP
+# route `/ccgpt/lane` its shim answers on, and the two files sit side by
+# side in the same directory.
+LANE_MANIFEST_PATH = os.path.join(os.path.expanduser("~"), ".ccrc", "codex", ACCOUNT_ID, "lane.json")
+
+# Deferred past the two refusals above — see the M-4 comment on ACCOUNT_ID.
+from litellm.llms.chatgpt.authenticator import Authenticator  # noqa: E402
 
 
-def _probe_model() -> str:
-    """The model this poll probes with, read from `lane.json`'s
-    `probeModel` field — never a hard-coded id (task-10-brief.md: "a model
-    frozen into a publisher is a second model policy").
+def _read_lane() -> dict:
+    """Read and parse `~/.ccrc/codex/<id>/lane.json` once — the single read
+    both `_probe_model` and `_token_dir` work from (task-10-fix-rulings.md
+    I-2: `_token_dir` used to re-derive its own path from a naming
+    convention in a file that already opens this same file two functions
+    away — read once, here, instead).
 
-    `lane.json` has no writer until Plan 2b (task-10-brief.md), so this
-    wave's behaviour is exactly what the brief asks for: read it if
-    present, and if it is absent, unreadable or carries no usable
-    `probeModel`, REFUSE naming a remedy an operator can actually type.
-
-    task-10-rulings.md §4: the remedy names `ccrc doctor --fix`, not an
-    invented verb. Per the design spec (§5.4, "written by the same
-    materialiser that writes the lane's model files,
-    `deploy/models-op.mjs`, atomically tmp-then-rename") and §12's `--fix`
-    table ("`--fix` may: … regenerate a marker-verified launcher, re-render
-    `lane.json` and the LiteLLM config …"), `ccrc doctor --fix` is the one
-    user-facing verb that actually re-renders this file — `deploy/models-op.mjs`
-    is a deploy-time module, not something an operator invokes directly, so
-    naming the materialiser itself (as the rulings' fallback instructs when
-    no real verb exists) would hand back a command that fails when typed.
-    `ccrc doctor --fix` is real and does the job, so it is named directly.
+    `lane.json` has no writer until Plan 2b, so this wave's behaviour for
+    the file itself is: read it if present and well-formed, and if it is
+    absent or not valid JSON, REFUSE naming the remedy that renders it
+    (task-10-rulings.md §4: `ccrc doctor --fix`, the real verb the design
+    spec's `--fix` table names as what re-renders `lane.json`). Per-field
+    validation (a present-but-wrong-shape `probeModel`/`authDir`) happens
+    at each field's own reader below, with the identical refusal shape.
     """
     try:
-        with open(LANE_PATH, "r") as f:
+        with open(LANE_MANIFEST_PATH, "r") as f:
             raw = f.read()
     except OSError:
         sys.exit(
-            f"ccgpt-usage: refusing to publish — {LANE_PATH} does not exist; "
+            f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} does not exist; "
             "run `ccrc doctor --fix` to render it"
         )
     try:
         lane = json.loads(raw)
     except ValueError as e:
-        sys.exit(f"ccgpt-usage: refusing to publish — {LANE_PATH} is not valid JSON: {e}")
-    model = lane.get("probeModel") if isinstance(lane, dict) else None
+        sys.exit(f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} is not valid JSON: {e}")
+    if not isinstance(lane, dict):
+        sys.exit(f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} is not a JSON object")
+    return lane
+
+
+def _probe_model(lane: dict) -> str:
+    """The model this poll probes with, read from `lane.json`'s
+    `probeModel` field — never a hard-coded id (task-10-brief.md: "a model
+    frozen into a publisher is a second model policy").
+
+    task-10-rulings.md §4: the remedy names `ccrc doctor --fix`, not an
+    invented verb (design spec §5.4/§12 — see `_read_lane`'s docstring for
+    the full citation).
+    """
+    model = lane.get("probeModel")
     if not isinstance(model, str) or not model:
         sys.exit(
-            f"ccgpt-usage: refusing to publish — {LANE_PATH} carries no usable "
+            f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} carries no usable "
             "probeModel; run `ccrc doctor --fix` to render it"
         )
     return model
 
 
-def _token_dir() -> str:
-    """Where this lane's ChatGPT OAuth credential lives, HOME-relative and
-    keyed by the (now mandatory, never defaulted — see `_required_env`)
-    lane id. `CHATGPT_TOKEN_DIR`, when the caller already set it, wins
-    outright; nothing here overrides an explicit value. The reference
-    script special-cased the bare id `gpt` to carry no suffix at all (a
-    relic of the single-lane era); that special case is dropped along with
-    the "first lane" default it served — every lane, `gpt` included, now
-    gets the same `-<id>` suffix, consistent with "an unnamed lane is an
-    error, not lane one" applying to every lane equally.
+def _token_dir(lane: dict) -> str:
+    """This lane's OAuth token directory, read from `lane.json`'s `authDir`
+    field — never re-derived from a naming convention
+    (task-10-fix-rulings.md I-2; spec §5.4 line 333: `lane.json` "is the
+    one thing `ccgpt`, the shim and the publisher read, so none of them
+    re-derives a path from a naming convention"). The first draft of this
+    file computed `$HOME/.handoff/chatgpt-auth-<id>` itself instead — a
+    real behaviour change from the reference too, since the reference's
+    `""`-suffix special case for the bare lane id `gpt` was dropped along
+    with the "first lane" default it served, and the review measured that
+    one live lane's token directory would silently move to a directory
+    that does not exist. Reading `authDir` here removes the spec violation
+    and the silent move at once.
+
+    `authDir` is validated `$HOME`-relative by the roster (spec §4.1: no
+    leading `/`, no `..`), so joining it onto `os.path.expanduser("~")`
+    reproduces the directory the roster itself named. No environment-variable
+    override, unlike the dropped derivation's `CHATGPT_TOKEN_DIR` fallback —
+    the same "one source of truth" reasoning `probeModel` has always had.
     """
-    return os.environ.get("CHATGPT_TOKEN_DIR") or os.path.join(
-        os.path.expanduser("~"), ".handoff", f"chatgpt-auth-{ACCOUNT_ID}"
-    )
+    auth_dir = lane.get("authDir")
+    if not isinstance(auth_dir, str) or not auth_dir:
+        sys.exit(
+            f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} carries no usable "
+            "authDir; run `ccrc doctor --fix` to render it"
+        )
+    return os.path.join(os.path.expanduser("~"), auth_dir)
+
+
+def _require_logged_in(token_dir: str) -> None:
+    """The pre-check the reference bash wrapper made before ever invoking
+    Python — restored (task-10-fix-rulings.md I-3; the report's concern 4
+    was judged NOT safe): existence only (`os.path.isfile`), never opening
+    or reading `auth.json`'s CONTENTS, which is squarely inside spec line
+    ~497's "existence and mode only" rather than an exception to it.
+
+    The message names the TOKEN DIRECTORY, which only THIS publisher knows
+    because only this publisher computed it (from `lane.json`'s `authDir`,
+    `_token_dir` above) — `Authenticator` itself cannot name a directory it
+    was never told. Without this check, a missing credential surfaces as an
+    opaque traceback from inside `litellm` instead of a named refusal, and
+    that got WORSE once `_token_dir` started reading `authDir` (I-2): the
+    directory now moves whenever `lane.json` says it does, so a bare
+    traceback would give an operator nothing to act on.
+    """
+    if not os.path.isfile(os.path.join(token_dir, "auth.json")):
+        sys.exit(f"ccgpt-usage: refusing to publish — lane {ACCOUNT_ID} is not logged in ({token_dir})")
 
 
 def _num(headers, name: str, default: int = 0) -> int:
@@ -235,18 +336,83 @@ def _num(headers, name: str, default: int = 0) -> int:
         return default
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Refuses every redirect outright (task-10-fix-rulings.md C-1):
+    `redirect_request` returning `None` makes CPython's own
+    `HTTPRedirectHandler` raise `HTTPError` carrying the ORIGINAL response's
+    status and headers, rather than following `Location` anywhere. Covers
+    every redirect status this handler's parent class recognises (301, 302,
+    303, 307 today) through the one method they all funnel through — not a
+    per-status override.
+
+    This publisher's endpoint has no legitimate reason to redirect at all.
+    `urlopen`'s DEFAULT opener follows redirects, and the review measured
+    the consequence directly: a loopback mock answering `302` sent the
+    child to an arbitrary second host, `Authorization: Bearer …` riding
+    along verbatim, and that host's forged `x-codex-*` headers were
+    published as a real measurement. Re-validating each hop's loopback-ness
+    and stripping `Authorization` across a host change was considered and
+    rejected — refusing outright is simpler, and there is no legitimate
+    redirect this endpoint should ever send for that extra machinery to
+    preserve.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler)
+
+# Redirect-class statuses are never a valid measurement, however their
+# headers are dressed (task-10-fix-rulings.md C-1's "widens the hazard"
+# note): with redirects refused, a 3xx becomes an ordinary `HTTPError`, and
+# `_fetch_headers`'s broad "any HTTPError carrying the usage header is
+# valid" carve-out would otherwise publish a FIRST hop's own forged 3xx
+# response too, with no second hop needing to be followed at all. Excluded
+# outright, whatever the headers claim.
+_REDIRECT_STATUSES = {301, 302, 303, 307, 308}
+
+
 def _fetch_headers(model: str, token: str):
     """Make one minimal probe request and return the response headers —
     from a normal 200, or from a 429 that still carries the usage headers
     (task-10 property 4).
 
+    Sent through `_OPENER`, whose `_NoRedirectHandler` refuses every
+    redirect (task-10-fix-rulings.md C-1) — see that class's own docstring.
+    Sends the same five-header block the reference does, restored in fix
+    round 1 (C-2): `Authorization`, `content-type`, `accept`, plus
+    `originator`/`user-agent`/`session_id`, which `ccd/ccrc-models-probe`
+    (this repository's own in-tree reference) documents as "what the
+    backend expects from a real Codex CLI caller" — dropping them risked
+    the backend answering with no usage headers at all, which is exactly
+    the "ccd reads the lane as unknown" condition this file exists to
+    remove.
+
+    The reference sends a SIXTH header, `ChatGPT-Account-Id`, derived by
+    reading `auth.json`'s own `account_id` field. That is dropped here,
+    deliberately, and stays dropped: spec line ~497 forbids reading OAuth
+    file CONTENTS anywhere in ccrc ("existence and mode only"), so this
+    publisher cannot derive it that way. Sourcing it from `lane.json`
+    instead was considered and rejected — `lane.json`'s own `id` is ccrc's
+    OWN lane name (e.g. `"codex-a"`), not the ChatGPT backend's per-workspace
+    account identifier, so sending it under this header would be sending
+    the WRONG value, not merely an absent one. A token scoped to a single
+    ChatGPT workspace authenticates fully without this header; a token
+    valid across multiple workspaces cannot be disambiguated by this
+    publisher today, and neither the spec nor the plan resolves that case —
+    recorded here, and in the fix round's report, rather than decided
+    silently.
+
     Any OTHER failure — no usage header at all (auth failure, a 5xx, a
-    malformed response) — re-raises: a probe that learned nothing must not
-    publish a number. This is the reference script's own documented
-    incident: letting an HTTPError with usage headers escape uncaught once
-    froze a lane's row at `seven=97` (one point under `ccd`'s swap ceiling)
-    for twelve hours, because the poll that would have corrected it kept
-    dying instead of publishing the 100% it actually measured.
+    malformed response), or any redirect status regardless of its headers
+    (`_REDIRECT_STATUSES`) — re-raises: a probe that learned nothing must
+    not publish a number. The non-redirect half of this rule is the
+    reference script's own documented incident: letting an HTTPError with
+    usage headers escape uncaught once froze a lane's row at `seven=97`
+    (one point under `ccd`'s swap ceiling) for twelve hours, because the
+    poll that would have corrected it kept dying instead of publishing the
+    100% it actually measured.
     """
     body = json.dumps({
         "model": model,
@@ -259,15 +425,18 @@ def _fetch_headers(model: str, token: str):
         "Authorization": f"Bearer {token}",
         "content-type": "application/json",
         "accept": "text/event-stream",
+        "originator": "codex_cli_rs",
+        "user-agent": "codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown",
+        "session_id": "00000000-0000-0000-0000-000000000000",
     }
     req = urllib.request.Request(USAGE_ENDPOINT, data=body, headers=headers)
     try:
-        resp = urllib.request.urlopen(req, timeout=30)
+        resp = _OPENER.open(req, timeout=30)
         h = resp.headers
         resp.close()
     except urllib.error.HTTPError as e:
         h = e.headers
-        if h.get("x-codex-primary-used-percent") is None:
+        if e.code in _REDIRECT_STATUSES or h.get("x-codex-primary-used-percent") is None:
             raise
         e.close()
     return h
@@ -336,10 +505,13 @@ def _build_row(headers) -> dict:
 def _publish(out: dict) -> None:
     """Write `out` to `~/.cc-limits/<ACCOUNT_ID>.json` — atomically
     (task-10 property 5: tmp-then-rename via `os.replace`, never a direct
-    `open(target, "w")`) and with `json.dump`'s DEFAULT separators
-    (task-10 property 1: never `separators=(',', ':')` — `ccd`'s
-    `_limit_json_num` greps with a pattern that tolerates whitespace after
-    the colon *because* this producer writes `": "`).
+    `open(target, "w")`) and with `json.dump`'s DEFAULT separators. *(The
+    reason stated here used to be "so `ccd`'s `_limit_json_num` can read the
+    row" — measurably false, D-3159, fix round 1: that grep tolerates
+    whitespace after the colon with `[[:space:]]*`, zero OR MORE, so a
+    compact row reads identically. The property is kept — it matches the
+    reference producer byte-for-byte and holds this file stable for a
+    stricter future reader — the false reason is simply not repeated here.)*
 
     `os.replace` succeeds over a target that is itself read-only, because
     replacing a directory entry is a permission the DIRECTORY grants, not
@@ -359,8 +531,15 @@ def _publish(out: dict) -> None:
 
 
 def main() -> None:
-    model = _probe_model()
-    os.environ.setdefault("CHATGPT_TOKEN_DIR", _token_dir())
+    lane = _read_lane()
+    model = _probe_model(lane)
+    token_dir = _token_dir(lane)
+    _require_logged_in(token_dir)
+    # Unconditional, not setdefault: lane.json (via _token_dir) is now the
+    # SOLE source of truth for this directory (I-2), so nothing here should
+    # let an ambient CHATGPT_TOKEN_DIR silently win over what was just
+    # computed and checked above.
+    os.environ["CHATGPT_TOKEN_DIR"] = token_dir
     # Authenticator refreshes the access token if it has expired. Stubbed in
     # every test in this wave (server/test/fixtures/pystub, Task 1) to
     # return a fixed non-secret string — this file never sees, stores or

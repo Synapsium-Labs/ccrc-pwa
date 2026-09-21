@@ -140,10 +140,44 @@ function containedSpawnOptions(
   };
 }
 
+/** The discriminated result of running a python file to completion — shared
+ *  by `runPy` and `runPyAsync` (task-10-fix-rulings.md's D-3157 hoist).
+ *  Extracted here because there was nothing to "share" before: `runPy` used
+ *  to write this same object literal inline in its own signature, and the
+ *  Task 10 review caught that its report claimed a type existed to share
+ *  when none did. `timedOut` has a DIFFERENT derivation in the two
+ *  functions — `runPy`'s comes from `spawnSync`'s own `err.code ===
+ *  'ETIMEDOUT'`; `runPyAsync`'s comes from that function's OWN `setTimeout`
+ *  + `SIGKILL`, since `spawnPy` enforces no deadline of its own — so the
+ *  shape `{status: null, signal: 'SIGKILL', timedOut: true}` can only ever
+ *  come from `runPyAsync`, never from `runPy`. Same TYPE, different
+ *  inhabitants; callers should not assume the two are interchangeable
+ *  evidence of "how" a subject was killed, only "whether". */
+export type PyOutcome = {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  timedOut: boolean;
+  stdout: string;
+  stderr: string;
+};
+
+/** Runs a python file to completion and reports how it ended.
+ *
+ *  CANNOT serve a subject that must talk to a mock server living in THIS
+ *  SAME test process (task-10-fix-rulings.md, D-3157): `runPy` drives its
+ *  child through `spawnSync`, which blocks the WHOLE Node event loop until
+ *  the child exits — a `node:http` server in this process can never accept
+ *  or answer a connection while `spawnSync` is blocking on it, so the two
+ *  deadlock until this function's own `timeoutMs` kills the child. Measured
+ *  directly: `ccgpt-usage.py`'s own suite, written to this exact shape
+ *  first, timed out on every case whose mock server had to answer
+ *  mid-flight. Use `runPyAsync` below for those cases instead; `runPy`
+ *  stays correct and simpler for the many cases that need no server at
+ *  all, or whose subject refuses before ever reaching one. */
 export function runPy(
   file: string,
   opts: { home: string; args?: string[]; env?: Record<string, string>; stdin?: string; timeoutMs?: number },
-): { status: number | null; signal: NodeJS.Signals | null; timedOut: boolean; stdout: string; stderr: string } {
+): PyOutcome {
   const py = pythonOrSkip();
   if (!py) throw new Error('runPy called with no python3 — guard with pythonOrSkip() first');
   const { cwd, env } = containedSpawnOptions(opts.home, opts.env, 'runPy');
@@ -200,4 +234,50 @@ export function spawnPy(
     stdio: ['ignore', 'pipe', 'pipe'],
   });
   return { child };
+}
+
+/** The async sibling `runPy` cannot be, for a one-shot subject that must
+ *  talk to a mock server living in the SAME test process — see `runPy`'s
+ *  own docstring for the deadlock this exists to avoid (task-10-fix-rulings.md
+ *  D-3157). Drives the child through `spawnPy`'s async spawn (so the event
+ *  loop stays free to answer the mock) and resolves once it exits, with the
+ *  same `PyOutcome` shape `runPy` returns — a caller can treat the two as
+ *  interchangeable RESULTS even though they are not interchangeable
+ *  MECHANISMS (see `PyOutcome`'s own docstring on `timedOut`'s two
+ *  derivations).
+ *
+ *  Same opts shape as `runPy` MINUS `stdin` — deliberately, not an
+ *  oversight: `spawnPy`'s child stdio is `['ignore', 'pipe', 'pipe']`, and
+ *  wiring a real stdin pipe through is a separate, testable change nothing
+ *  in this wave's callers need (no subject driven through `runPyAsync`
+ *  reads stdin). Add it, with its own containment case in
+ *  `ccgpt-harness.test.ts`, when a caller actually needs it — folding it in
+ *  silently here would be exactly the kind of untested surface this file's
+ *  own containment discipline exists to prevent.
+ *
+ *  Enforces its OWN timeout via `setTimeout` + `SIGKILL`, unlike `spawnPy`
+ *  itself (which sets no deadline): a one-shot script that never exits is a
+ *  case that should fail loudly with a `timedOut` result, not hang the
+ *  whole suite. */
+export function runPyAsync(
+  file: string,
+  opts: { home: string; args?: string[]; env?: Record<string, string>; timeoutMs?: number },
+): Promise<PyOutcome> {
+  return new Promise((resolve, reject) => {
+    const { child } = spawnPy(file, { home: opts.home, args: opts.args, env: opts.env });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      child.kill('SIGKILL');
+    }, opts.timeoutMs ?? 20_000);
+    child.stdout?.on('data', (c) => { stdout += c.toString(); });
+    child.stderr?.on('data', (c) => { stderr += c.toString(); });
+    child.once('error', (err) => { clearTimeout(timer); reject(err); });
+    child.once('close', (code, signal) => {
+      clearTimeout(timer);
+      resolve({ status: code, signal: signal ?? null, timedOut, stdout, stderr });
+    });
+  });
 }

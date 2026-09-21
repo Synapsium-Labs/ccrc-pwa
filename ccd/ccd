@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=1838c05617db34000ae02286b5210bf7cdc0353f54e62be8e04add71274ec2b8
+# ccrc:generated 1 sha256=29a792f9452fa33e002cf7bdc7be7f92999c9d7bf18f4eaee9713bb2198c4306
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -15659,13 +15659,14 @@ _dispatch_swap() {   # id target — run `ccd swap` in ITS OWN transient systemd
 }
 
 _limit_json_num() {   # file key -> that key's number, or "" when absent, null or non-numeric.
-  # Whitespace after the colon is NOT optional to tolerate: the Anthropic accounts'
-  # telemetry is printf'd compact by statusline-command.sh, but gpt.json is written by
-  # Python's json.dump (infra/handoff/ccgpt-usage), whose default separators put a space
-  # after every colon — `{"five": null, "seven": 0, ...}`. A pattern demanding a digit
-  # straight after the colon matched nothing there, so ccd read the one account it can't
-  # get telemetry for any other way as entirely unknown, and the rollover rule below
-  # could never fire on it.
+  # [[:space:]]* — ZERO or more, tolerant on purpose: the Anthropic accounts'
+  # telemetry is printf'd compact by statusline-command.sh, while gpt-lane rows are
+  # written by Python's json.dump (ccd/ccgpt-usage.py), whose default separators put a
+  # space after every colon — `{"five": null, "seven": 0, ...}`. (task-10-fix-rulings.md
+  # D-3159, corrected 2026-09-21: this comment used to claim a compact writer would make
+  # ccd read the lane as entirely unknown — measurably false, since this same zero-or-more
+  # pattern matches a compact row identically. The producer keeps the spaced style anyway,
+  # for a stricter future reader; this grep does not require it.)
   grep -oE "\"$2\"[[:space:]]*:[[:space:]]*[0-9]+" "$1" | head -1 | grep -oE '[0-9]+$'
 }
 

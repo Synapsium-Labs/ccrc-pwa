@@ -169,9 +169,14 @@ from litellm.llms.chatgpt.authenticator import Authenticator
 token_dir = os.environ["CHATGPT_TOKEN_DIR"]
 account_id = json.load(open(os.path.join(token_dir, "auth.json"))).get("account_id", "")
 token = Authenticator().get_access_token()
-# The header block is `ccgpt-usage`'s, verbatim (read-only reference; never
-# run it): originator/user-agent/session_id are what the backend expects from
-# a real Codex CLI caller, alongside Authorization and ChatGPT-Account-Id.
+# The Authorization/originator/user-agent/session_id headers below match
+# ccd/ccgpt-usage.py's own request (task-10-fix-rulings.md C-2, which
+# restored them there too) — what the backend expects from a real Codex CLI
+# caller. NOT a verbatim match, though: ccd/ccgpt-usage.py deliberately does
+# NOT send ChatGPT-Account-Id (see its own docstring for why — spec line
+# ~497 forbids reading auth.json's contents, which is how this arm derives
+# `account_id` below), so read ccd/ccgpt-usage.py directly for what it
+# actually sends rather than treating this comment as its mirror.
 headers = {
     "Authorization": f"Bearer {token}",
     "originator": "codex_cli_rs",

@@ -1,6 +1,6 @@
 // server/test/ccgpt-harness.test.ts
 import { describe, it, expect } from 'vitest';
-import { pythonOrSkip, runPy, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
+import { pythonOrSkip, runPy, runPyAsync, spawnPy, ccgptFile, PYSTUB_DIR } from './ccgptHarness';
 import { mkTmp } from './tmpHelpers';
 import { writeFileSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
@@ -197,6 +197,69 @@ describe.skipIf(!PY)('the ccgpt python harness', () => {
           e.isDirectory() ? walk(join(dir, e.name)) : [e.name]);
       const names = walk(PYSTUB_DIR);
       expect(names.some((n) => n === '__pycache__' || n.endsWith('.pyc'))).toBe(false);
+    });
+  });
+
+  // task-10-fix-rulings.md's D-3157 hoist: `runPyAsync` used to live only in
+  // `ccgpt-usage.test.ts`, with no containment case of its own — the review's
+  // argument for hoisting it here is exactly that a local copy inherits
+  // nothing from this table. These five mirror `runPy`'s own cases above
+  // (and `spawnPy`'s, which `runPyAsync` is built on) but exercise
+  // `runPyAsync` DIRECTLY rather than inferring its behaviour from either.
+  describe('runPyAsync shares runPy\'s containment (not a second, hand-rolled body)', () => {
+    it('cannot be talked out of the fixture HOME by the realistic opts.env call shape', async () => {
+      const home = mkTmp('ccgpt-harness-runpyasync-closed-');
+      const f = join(home, 'probe.py');
+      writeFileSync(f, 'import os\nprint(os.environ["HOME"])\n');
+      const r = await runPyAsync(f, { home, env: { ...process.env, PYTHONPATH: PYSTUB_DIR } });
+      expect(r.stdout.trim()).toBe(home);
+    });
+
+    it('refuses an opts.env that deliberately sets a different HOME', async () => {
+      const home = mkTmp('ccgpt-harness-runpyasync-refuse-');
+      const f = join(home, 'probe.py');
+      writeFileSync(f, 'print("unreached")\n');
+      // The throw happens inside containedSpawnOptions, called synchronously
+      // in runPyAsync's own Promise executor — the Promise constructor turns
+      // a synchronous throw there into a REJECTION, not a synchronous throw
+      // from the outer call, so this is `.rejects`, not `expect(() => ...)`.
+      await expect(runPyAsync(f, { home, env: { HOME: '/etc' } })).rejects.toThrow(/HOME/);
+    });
+
+    it('runPyAsync refuses a non-fixture opts.home, naming the offending value', async () => {
+      await expect(runPyAsync('/does-not-matter.py', { home: '/etc' })).rejects.toThrow(/\/etc/);
+    });
+
+    it('runs the child with the fixture HOME as its cwd, not the repo', async () => {
+      const home = mkTmp('ccgpt-harness-runpyasync-cwd-');
+      const f = join(home, 'cwd.py');
+      writeFileSync(f, 'import os\nprint(os.getcwd())\n');
+      const r = await runPyAsync(f, { home });
+      expect(r.stdout.trim()).toBe(home);
+    });
+
+    it('never leaves a .pyc behind after importing the stub', async () => {
+      const home = mkTmp('ccgpt-harness-runpyasync-pyc-');
+      const f = join(home, 'imp.py');
+      writeFileSync(f,
+        'from litellm.llms.chatgpt.authenticator import Authenticator\n' +
+        'Authenticator().get_access_token()\n');
+      await runPyAsync(f, { home, env: { PYTHONPATH: PYSTUB_DIR } });
+      const walk = (dir: string): string[] =>
+        readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+          e.isDirectory() ? walk(join(dir, e.name)) : [e.name]);
+      const names = walk(PYSTUB_DIR);
+      expect(names.some((n) => n === '__pycache__' || n.endsWith('.pyc'))).toBe(false);
+    });
+
+    it('distinguishes a timeout from a clean exit via its OWN SIGKILL timer, not spawnSync\'s ETIMEDOUT', async () => {
+      const home = mkTmp('ccgpt-harness-runpyasync-timeout-');
+      const f = join(home, 'sleepy.py');
+      writeFileSync(f, 'import time,sys\nprint("before")\nsys.stdout.flush()\ntime.sleep(5)\n');
+      const r = await runPyAsync(f, { home, timeoutMs: 50 });
+      expect(r.timedOut).toBe(true);
+      expect(r.status).toBe(null);
+      expect(r.signal).toBe('SIGKILL');
     });
   });
 });
