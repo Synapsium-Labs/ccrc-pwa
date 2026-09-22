@@ -2095,6 +2095,44 @@ describe('ccrc doctor: services knows about the telemetry keepalive timer', () =
   });
 });
 
+describe('ccrc doctor: services knows about the temp-dir reaper timer', () => {
+  // `ccd-tmp-sweep.timer` joins `known` — the DIRECT design, not the effect
+  // one — because the reaper writes no artifact a check could read back: its
+  // only output is a journal line. A stopped reaper is silent until `/` fills,
+  // which is how /tmp/claude-1000 reached 138G on the fleet host.
+  itLinux('warns — with its OWN consequence — when the reaper timer is installed and stopped', () => {
+    const home = healthy('ccrc-doctor-services-tmp-sweep-timer-');
+    writeUnitFile(home, 'ccd-tmp-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-tmp-sweep.timer'), 'inactive\n');
+    const lines = runDoctor(home).stdout.split('\n');
+    const i = lines.findIndex((l) => l.startsWith('WARN services: '));
+    expect(i, lines.join('\n')).toBeGreaterThan(-1);
+    expect(lines[i]).toContain('ccd-tmp-sweep.timer is installed but inactive');
+    expect(lines[i]).toContain('per-uid temp dir');
+    expect(lines[i]).not.toContain('memory cap');
+    expect(lines[i]).not.toContain('the job it fires is not running');
+    expect(lines[i + 1]).toMatch(/^ {2}remedy: systemctl --user enable --now ccd-tmp-sweep\.timer$/);
+    // A stopped reaper is not a failed box: WARN, and rc stays 0.
+    expect(runDoctor(home).code).toBe(0);
+  });
+
+  itLinux('names it in the PASS line when it is installed and running', () => {
+    const home = healthy('ccrc-doctor-services-tmp-sweep-timer-ok-');
+    writeUnitFile(home, 'ccd-tmp-sweep.timer');
+    writeFileSync(join(home, 'fixture-unit-ccd-tmp-sweep.timer'), 'active\n');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).toContain('ccd-tmp-sweep.timer is active');
+  });
+
+  it('a box without the unit is never asked about it — no count moves', () => {
+    const home = healthy('ccrc-doctor-services-tmp-sweep-timer-absent-');
+    const line = lineFor(runDoctor(home).stdout, 'services') ?? '';
+    expect(line).toMatch(/^PASS services: /);
+    expect(line).not.toContain('ccd-tmp-sweep');
+  });
+});
+
 describe('ccrc doctor: services knows about the models catalogue timer', () => {
   // D-2190/D-2191: `ccrc-models.timer` already ships (deploy/systemd/ccrc-models.timer)
   // but `_check_services`'s `known` array never named it, so a dead
