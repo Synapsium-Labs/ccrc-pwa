@@ -12499,11 +12499,19 @@ _uninst_units() {
   # that loop. A template unit is never itself enabled; only an INSTANCE
   # (`ccgpt-usage@<lane>.timer`) is, and nothing in this plan (or in
   # `_inst_enable`) ever enables one on any role — Plan 3's job, when a lane
-  # is adopted. `systemctl --user disable --now ccgpt-usage@.timer` would have
-  # nothing to disable, and that loop tolerates a failing disable BY DESIGN
-  # (removal must continue under a wedged systemd), so a bare template name
-  # in it would print a spurious "failed (continuing …)" line on EVERY
-  # uninstall, forever, for a call that was never going to succeed. Sweeping
+  # is adopted.
+  #
+  # MEASURED, not guessed: `systemctl --user disable ccgpt-usage@.timer`
+  # against a never-enabled unit returns 0 SILENTLY — "nothing to disable" is
+  # not a systemd failure, and a first draft of this comment claimed
+  # otherwise. What DOES fail is the `--now` half: `--now` runs its stop only
+  # after a successful disable, and the manager refuses a bare template name
+  # for any runtime operation at all ("is neither a valid invocation ID nor
+  # unit name"), so `disable --now ccgpt-usage@.timer` fails at the stop, not
+  # the disable — and that loop tolerates a failing call BY DESIGN (removal
+  # must continue under a wedged systemd), so a bare template name in it
+  # would print a spurious "failed (continuing …)" line on EVERY uninstall,
+  # forever, for a call that was always going to fail that one way. Sweeping
   # a template's INSTANCES is a separate, open question this task does not
   # answer: removing the template does not remove
   # `timers.target.wants/ccgpt-usage@<id>.timer` symlinks, and that belongs to
@@ -12527,7 +12535,7 @@ _uninst_units() {
     systemctl --user daemon-reload \
       || echo "uninstall: units: daemon-reload failed — systemd may still list units whose files are gone until the next reload" >&2
   fi
-  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape)"
+  echo "uninstall: units: stopped, disabled and removed (incl. both drop-ins and the slice escape); the ccgpt-usage@ template pair was only ever removed, never disabled — nothing on this box enables the bare template"
 }
 
 # THE TREE'S OWN installer, in `--remove` mode — never the INSTALLED copy at
@@ -12733,14 +12741,14 @@ _uninst_tree_bins() {
   # `ccd-usage-sweep.py`, which `_inst_bins` installs as two files and which
   # must therefore be removed as two. Plan 2b-1 Task 4 adds the GPT-lane's
   # two placed executables, `ccgpt-proxy.py` and `ccgpt-usage.py` — Task 2
-  # narrowed `_inst_bins` to exactly these two (`ccgpt` and `ccgpt-runtime`
-  # are not in the tree; `_inst_atomic` dies on a missing source, so nothing
-  # places them and this census names none), and `_uninst_units` above
-  # gained the usage publisher's unit pair in the same plan — the same
-  # orphan this rule already exists to prevent, for a binary planted on
-  # both `_inst_bins` arms regardless of role. (`graphify`, below, keeps its
-  # own rule and its own paragraph: it is the one name in this census that
-  # is not ccrc's own binary.)
+  # narrowed `_inst_bins` to exactly these two: the lane's launcher and
+  # runtime binaries are not in the tree yet, `_inst_atomic` dies on a
+  # missing source, so nothing places them and this census names none of
+  # them either — and `_uninst_units` above gained the usage publisher's
+  # unit pair in the same plan — the same orphan this rule already exists to
+  # prevent, for a binary planted on both `_inst_bins` arms regardless of
+  # role. (`graphify`, below, keeps its own rule and its own paragraph: it is
+  # the one name in this census that is not ccrc's own binary.)
   #
   # THE ORDINALS ARE GONE, and that is the fix, not an omission. This census
   # was hand-kept and was caught stale THREE times (D-1347; again at the

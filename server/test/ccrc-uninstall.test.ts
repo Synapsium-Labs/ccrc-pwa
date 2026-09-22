@@ -612,17 +612,25 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
   });
 
   // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
-  // `_inst_bins` to these — `ccgpt` and `ccgpt-runtime` are not in the tree,
-  // `_inst_atomic` dies on a missing source, so nothing places them and this
-  // census names none) and the usage-window publisher's TEMPLATE unit pair
-  // (Task 3, role-gated `fleet`/`both` — planted directly here since
-  // `plantInstalledBox` fixes a role-agnostic footprint). A template unit is
-  // never itself enabled — only an INSTANCE is, and nothing in this plan
-  // creates one (Plan 3's job) — so removal must be a bare `rm -f`, never a
-  // `systemctl --user disable --now` naming the template: that loop tolerates
-  // failure by design, and a disable with nothing to disable would print a
-  // spurious "failed (continuing …)" line on every uninstall.
-  it('uninstall removes the two GPT-lane executables and the usage unit pair, and never tries to disable the bare template', () => {
+  // `_inst_bins` to these — the lane's launcher and runtime binaries are not
+  // in the tree yet, `_inst_atomic` dies on a missing source, so nothing
+  // places them and this census names none of them either) and the
+  // usage-window publisher's TEMPLATE unit pair (Task 3, systemd arm only —
+  // `_inst_units`' Darwin branch never installs it, so there is nothing for
+  // the Darwin arm of `_uninst_units` to remove; hence `itLinux` below,
+  // matching every other systemd-argv assertion in this file). A template
+  // unit is never itself enabled — only an INSTANCE is, and nothing in this
+  // plan creates one (Plan 3's job) — so removal must be a bare `rm -f`,
+  // never `systemctl --user disable --now` naming the bare template.
+  // MEASURED, not guessed: a plain `disable` on a never-enabled unit returns
+  // 0 SILENTLY — "nothing to disable" is not a systemd failure. What DOES
+  // fail is `--now`'s stop half: the manager refuses a bare template name
+  // for any runtime operation at all, so `disable --now ccgpt-usage@.timer`
+  // fails at the stop, not the disable — and that loop tolerates a failing
+  // call by design, so a bare template name in it would print a spurious
+  // "failed (continuing …)" line on every uninstall, for a call that was
+  // always going to fail that one way.
+  itLinux('uninstall removes the two GPT-lane executables and the usage unit pair, and never tries to disable the bare template', () => {
     const home = mkTmp('ccrc-uninst-ccgpt-');
     plantInstalledBox(home);
     const bin = join(home, '.local', 'bin');
@@ -638,10 +646,13 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     }
     expect(existsSync(join(units, 'ccgpt-usage@.service')), 'the template .service survived').toBe(false);
     expect(existsSync(join(units, 'ccgpt-usage@.timer')), 'the template .timer survived').toBe(false);
-    if (process.platform !== 'darwin') {
-      const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
-      expect(calls, 'a bare template name was passed to disable --now').not.toMatch(/ccgpt-usage@/);
-    }
+    const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+    // The BARE TEMPLATE only (a literal dot right after `@`) — never an
+    // INSTANCE (`ccgpt-usage@codex-a.timer`), which Plan 3 will legitimately
+    // enable and disable one day; a broader match would red that future case
+    // with this assertion naming the wrong cause.
+    expect(calls, 'a bare template name (ccgpt-usage@.timer/.service), not an instance, reached a systemctl verb')
+      .not.toMatch(/ccgpt-usage@\.(service|timer)\b/);
     expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
       .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
     expect(r.stdout, 'the bin census does not name ccgpt-usage.py')
