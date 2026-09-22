@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1075,6 +1075,31 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(r.code).toBe(1);
     expect(r.stderr).toMatch(/^ccrc: rsync is required to place the tree — sudo apt install rsync$/m);
     expect(existsSync(placed(home)), 'a half-made $HOME/ccrc was left behind').toBe(false);
+  });
+
+  it('replaces a file whose size and mtime are unchanged but whose content is not', () => {
+    // The release tarball is reproducible (`build-release.sh`: `--mtime=@0`),
+    // so every file `ccrc update` extracts — and therefore every file it placed
+    // last time — has mtime 0. rsync's default quick check compares size and
+    // mtime only, so a changed file that kept its size was SKIPPED. v0.0.11 hit
+    // exactly that: dist-pwa/index.html and sw.js are fixed-size templates
+    // around equal-length content hashes, so the new bundle landed, --delete
+    // removed the old one, and the old index.html kept pointing at it — a
+    // black screen on any load the service worker did not answer.
+    const home = freshBox('ccrc-install-same-size-');
+    expect(runInstall(home).code).toBe(0);
+    const rel = 'server/dist-pwa/index.html';
+    const before = read(placed(home, ...rel.split('/')));
+    const after = before.replace(/./, c => (c === 'X' ? 'Y' : 'X'));
+    expect(after.length).toBe(before.length);
+    expect(after).not.toBe(before);
+    writeFileSync(treeFile(home, rel), after);
+    utimesSync(treeFile(home, rel), 0, 0);
+    utimesSync(placed(home, ...rel.split('/')), 0, 0);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(placed(home, ...rel.split('/')))).toBe(after);
+    expect(read(join(home, 'rsync-argv'))).toContain('--checksum');
   });
 
   it('a second run keeps the runtime deps the first one installed', () => {

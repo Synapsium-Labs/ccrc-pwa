@@ -9587,7 +9587,17 @@ _inst_tree() {   # place the shipped tree at ~/ccrc — the layout every sibling
     # rsync does not delete what it was told to ignore, so the runtime deps
     # installed below survive every later `--delete` run instead of being
     # destroyed and refetched.
-    rsync -a --delete \
+    #
+    # `--checksum` is not optional either. The release tarball is reproducible
+    # (`build-release.sh`: `--mtime=@0`), so `ccrc update` hands this rsync a
+    # tree where every mtime is 0 — and the tree it placed last time has the
+    # same. rsync's default quick check (size + mtime) then SKIPS any changed
+    # file that kept its size. v0.0.11 shipped that way: dist-pwa/index.html
+    # and sw.js wrap equal-length content hashes, so both were skipped while
+    # the new bundle landed and `--delete` removed the old one — index.html
+    # pointed at a file that no longer existed, and every load the service
+    # worker did not answer was a black screen.
+    rsync -a --delete --checksum \
       --exclude node_modules --exclude .git --exclude '*.env' --exclude ccrc-mail.token \
       "$src/server" "$src/agent" "$src/shared" "$src/deploy" "$src/ccd" "$dest/" \
       || _ccrc_die "placing the tree at $dest failed"
