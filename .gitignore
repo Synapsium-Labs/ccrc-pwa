@@ -62,3 +62,11 @@ server/src/__boot_control_mutant__.ts
 # tsc's incremental cache — machine-local, and the committed copy had gone stale
 # (29 of its 62 recorded roots no longer existed).
 *.tsbuildinfo
+
+# python bytecode caches, produced by server/test's ccgpt python harness (and
+# by hand-running any subject under server/test/fixtures/pystub/ outside it).
+# UNANCHORED (D-196 convention, not a new one): a .pyc embeds the absolute
+# source path of the machine that compiled it, so a committed one publishes
+# the operator's real home directory in a repo that is public.
+__pycache__/
+*.pyc

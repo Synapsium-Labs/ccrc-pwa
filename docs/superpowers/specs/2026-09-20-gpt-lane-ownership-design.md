@@ -520,10 +520,13 @@ What the publisher keeps, because its consumers already depend on it:
   `pwa/src/fleet/SwapSheet.tsx` reads the same. Folding one into the other changes what the fleet believes
   about a lane's capacity.
 - **The write is atomic**, tmp-then-rename into `~/.cc-limits/<id>.json`.
-- **The publisher stays Python, and keeps `json.dump`'s default separators.** `ccd`'s `_limit_json_num` reads
-  the row with a `grep -oE` that tolerates whitespace after the colon *because* this producer writes `": "`,
-  and its comment records what a compact writer cost: ccd read the one account it cannot get telemetry for
-  any other way as entirely unknown. Reimplementing the publisher in bash or node changes that silently.
+- **The publisher stays Python, and keeps `json.dump`'s default separators.** *(Reason corrected 2026-09-21,
+  D-3159 — the sentence this replaces was measurably false.)* No shipped reader distinguishes the two
+  spellings today: both `_limit_json_num` and `_limit_has_key` match with `[[:space:]]*`, zero or more, so a
+  compact row reads key-for-key identically, and `server/src/limits.ts` parses JSON and is separator-agnostic
+  by construction. The historical defect ccd's own comment records ran the other way — a compact *pattern*
+  against a spaced *file*. The rule is kept because it holds the producer stable for a stricter future reader
+  and matches the reference byte-for-byte, not because anything would break today.
 - **`fiveResetAt` and `sevenResetAt` are emitted on every poll, null included.** `_limit_has_key` asks
   whether the keys are *present*, whatever their value, and that presence is the only thing separating this
   publisher's row from the compact three-key 429 exclusion `ccd` writes itself — `_codex_lane_status` reads
