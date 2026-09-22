@@ -2346,6 +2346,15 @@ const UNIT_FILES: Array<[string, string]> = [
   // that is supposed to run them hourly.
   ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
   ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
+  // Plan 2b-1 Task 3: the per-lane usage-window publisher's TEMPLATE pair,
+  // ROLE-GATED on the same `!= server` terms as the four pairs above it — a
+  // server box holds no account lanes and no wrapper HOMEs, so a per-lane
+  // Codex template there could never be instantiated. Installed here and
+  // enabled nowhere: no per-instance `enable` call exists yet, on any role —
+  // see the dedicated "enables no instance" test below. Enabling an instance
+  // per adopted lane is Plan 3's.
+  ['ccgpt-usage@.service', 'deploy/systemd/ccgpt-usage@.service'],
+  ['ccgpt-usage@.timer', 'deploy/systemd/ccgpt-usage@.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2398,6 +2407,48 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
         .toEqual(readFileSync(placed(home, ...src.split('/'))));
       expect(statSync(p).mode & 0o777, `${dest} has the wrong mode`).toBe(0o644);
     }
+  });
+
+  itLinux('places the ccgpt-usage unit pair on a fleet box and enables no instance (Plan 2b-1 Task 3)', () => {
+    // A separate install from the shared `units` one above — that one is role
+    // `both`, and the census test just above already proves the pair lands
+    // there byte for byte. This one uses `--role fleet`, the role a Codex
+    // lane actually runs under, and is the test the scope boundary is about:
+    // "installing the `@.service`/`@.timer` files is 2b-1; enabling or
+    // starting an instance per lane is Plan 3's." A rostered lane with no
+    // session has no processes, so install places the templates and enables
+    // NOTHING — no `ccgpt-usage@<id>.timer` instance, on any role.
+    const home = freshBox('ccrc-install-ccgpt-usage-fleet-');
+    // `--role fleet` reads the agent's URL and token from a tty when
+    // `~/.ccrc/agent.env` is absent; a box that already carries one (every
+    // re-install, and the one this test is about) skips that prompt.
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'agent.env'),
+      'CCRC_SERVER_URL=http://127.0.0.1:7788\nCCRC_AGENT_TOKEN=fixture-not-a-real-token\n');
+    const r = runInstall(home, ['install', '--role', 'fleet']);
+    expect(r.code, r.stderr).toBe(0);
+    const svc = unitDir(home, 'ccgpt-usage@.service');
+    const timer = unitDir(home, 'ccgpt-usage@.timer');
+    expect(existsSync(svc), 'ccgpt-usage@.service never reached ~/.config/systemd/user').toBe(true);
+    expect(existsSync(timer), 'ccgpt-usage@.timer never reached ~/.config/systemd/user').toBe(true);
+    expect(readFileSync(svc)).toEqual(readFileSync(placed(home, 'deploy', 'systemd', 'ccgpt-usage@.service')));
+    expect(readFileSync(timer)).toEqual(readFileSync(placed(home, 'deploy', 'systemd', 'ccgpt-usage@.timer')));
+    expect(statSync(svc).mode & 0o777).toBe(0o644);
+    expect(statSync(timer).mode & 0o777).toBe(0o644);
+    // "No instance is enabled" in real systemd terms is an ABSENT symlink
+    // under `timers.target.wants/`, named for the instance (e.g.
+    // `ccgpt-usage@codex-a.timer`) — checked here in case a future fixture
+    // ever starts modelling that directory. Today it does not: the fixture
+    // `systemctl` stub (this file's own `plant('systemctl', …)`) never writes
+    // one on ANY `enable` call, real or not, so this assertion is vacuously
+    // true either way and the argv census right after it is the one that
+    // actually detects an added enable call (proven in Step 6 below).
+    const wants = join(home, '.config', 'systemd', 'user', 'timers.target.wants');
+    const enabled = existsSync(wants) ? readdirSync(wants) : [];
+    expect(enabled.filter((f) => f.startsWith('ccgpt-usage@'))).toEqual([]);
+    // The real guard: no `systemctl … enable …` argv this run made ever named
+    // a ccgpt-usage unit, instance or template.
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
   });
 
   it('the installed ccrc.service reads ccrc.env first, then exposure.env, both optional', () => {
@@ -3759,10 +3810,15 @@ describe('ccrc install --role: the refusals and the default', () => {
     // graphify Task 10 (O3/O6b): the sweep pair is role-gated OUT on server —
     // it runs no per-tree AST sweep — while every unit this verb shipped
     // before this task still lands unchanged. C5: the models pair joins the
-    // same gate — a server box has no lanes to refresh.
+    // same gate — a server box has no lanes to refresh. Plan 2b-1 Task 3: the
+    // ccgpt-usage template pair joins it too, for the same reason as the
+    // account-health probe — a server box holds no account lanes and no
+    // wrapper HOMEs, so a per-lane Codex template there could never be
+    // instantiated.
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
-        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')) continue;
+        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
+        || dest.startsWith('ccgpt-usage@.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -3773,6 +3829,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccgpt-usage@.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccgpt-usage@.timer'))).toBe(false);
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -3785,6 +3843,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

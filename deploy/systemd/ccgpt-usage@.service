@@ -1,0 +1,9 @@
+[Unit]
+Description=ccrc GPT-lane usage window publisher for %i
+After=network-online.target
+[Service]
+Type=oneshot
+Environment=CCGPT_ACCOUNT_ID=%i
+ExecStart=%h/.local/bin/ccgpt-usage.py
+# The publisher reads ~/.ccrc/codex/%i/lane.json for everything else, so no
+# path is re-derived here from a naming convention (spec §5.4).

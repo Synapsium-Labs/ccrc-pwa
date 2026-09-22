@@ -10357,6 +10357,16 @@ _inst_units() {
     # left the timer enabled and orphaned.
     _inst_atomic "$tree/deploy/systemd/ccrc-models.service" "$dir/ccrc-models.service" 644
     _inst_atomic "$tree/deploy/systemd/ccrc-models.timer" "$dir/ccrc-models.timer" 644
+    # Plan 2b-1 Task 3: the per-lane GPT-usage-window publisher's TEMPLATE
+    # pair, role-gated on the same terms as the four pairs above it — a
+    # server box holds no account lanes and no wrapper HOMEs, so a per-lane
+    # Codex template there could never be instantiated. This is placement
+    # ONLY: nothing below (`_inst_enable`) ever enables an INSTANCE of this
+    # template, on any role — a rostered lane with no session has no
+    # processes to poll, so arming one per lane is deliberately left to the
+    # step that adopts that lane (Plan 3), not to this install.
+    _inst_atomic "$tree/deploy/systemd/ccgpt-usage@.service" "$dir/ccgpt-usage@.service" 644
+    _inst_atomic "$tree/deploy/systemd/ccgpt-usage@.timer" "$dir/ccgpt-usage@.timer" 644
   fi
   _inst_atomic "$tree/deploy/systemd/claude-session@.service.d/limits.conf" \
     "$dir/claude-session@.service.d/limits.conf" 644
