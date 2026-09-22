@@ -120,6 +120,10 @@ export const TREE_FILES = [
   // engine Task 6 landed, and `_inst_bins` places both under this name each.
   'ccd/ccd-usage-sweep',
   'ccd/ccd-usage-sweep.py',
+  // The per-uid temp-dir reaper, shipped by `_inst_bins` on the same
+  // non-Darwin, every-ROLE arm; without it `_inst_atomic` dies naming a source
+  // the fixture tree does not carry.
+  'ccd/ccd-tmp-sweep',
   // account-pool-membership wave 1, Task 4 fix round 1 (F1): the leased-
   // projection puller, shipped by `_inst_bins` on the same non-Darwin, every-
   // ROLE arm as the four above. Without this row `_inst_atomic` dies naming a
