@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ccrc:generated 1 sha256=29a792f9452fa33e002cf7bdc7be7f92999c9d7bf18f4eaee9713bb2198c4306
+# ccrc:generated 1 sha256=4827318c7159a933a4f54931d9063c7bca52ef26f6ca3460bc1d89cd8b06d4cc
 # ccd — durable, multi-account, self-healing Claude Code session manager for the fleet box.
 # One tmux session per (wrapper, project): `<wrapper> [--remote-control <id>] --resume|--session-id <uuid>`.
 # The RC flag is CONDITIONAL on the box AND the row, not on this file: `_rc_enabled`
@@ -6779,7 +6779,7 @@ cmd_ws_add() {   # [--no-rc] [--surface <word>] [--actor <text>] project [slug] 
   #
   # THE CLASS IS DERIVED FROM `ROUTE_COORDINATOR_ROW`, never respelled: the row
   # is the one place spec §3's default is written down, and a second literal
-  # `fable` here would be a second place to change it.
+  # class word here is a second place the 2026-09-22 move would have had to find.
   local cls strict=1
   cls=$(_route_argv_class "${lc_route[@]}")
   if [[ -z "$cls" ]] && (( ! norc )); then
@@ -17633,7 +17633,25 @@ _route_bytes() {   # value -> its length in BYTES (controller ruling S1-R2).
 # the promise only a pre-mint refusal can make. That parity is MEASURED, not
 # asked for: `ccd-route-argv.test.ts`'s last describe slices both bodies out of
 # this file and reds when either side drifts, in wording or in arms.
-ROUTE_COORDINATOR_ROW="class=fable effort=ultracode subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
+# THE CLASS IS `opus`, AND THAT IS AN OPERATOR INSTRUCTION (2026-09-22), not a
+# measurement: `fable` is NEVER reached without an explicit human choice, so it
+# may not be anybody's default — and this row IS the default, the one a session
+# gets when nobody typed anything. The explicit paths are untouched and still
+# write it: `--route class=fable` at the mint, `ccd route --set class=fable`,
+# the PWA picker's Fable row, the coordinator door's route POST. What changed is
+# that no path reaches it on its own any more (the other half is
+# `shared/routing-ladder.ts`'s `MAIN_CLASS_CEILING`, which stops ESCALATION on
+# the rung below it, for a main loop exactly as for a subagent).
+#
+# NO VERSION IS PINNED HERE OR ANYWHERE IN THIS TREE. `opus` is the bare family
+# alias; the harness resolves it to that family's newest (Claude Code 2.1.280
+# answers `claude-opus-5-5`, released 2026-09-22). A row naming a dated id would
+# be the one thing that has to be re-edited on every release — see
+# `settings-aliases.test.ts`, which reds on exactly that.
+#
+# The other three fields are unchanged: an operator spawn still orchestrates at
+# `ultracode` with `sonnet` subagents and workflows on.
+ROUTE_COORDINATOR_ROW="class=opus effort=ultracode subagent=sonnet workflow=on"   # spec §3's coordinator row: the default for an OPERATOR spawn (§4)
 
 _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the byte count (never the bytes)
   # BEFORE ANY SIDE EFFECT. Every caller runs this above its first write — above

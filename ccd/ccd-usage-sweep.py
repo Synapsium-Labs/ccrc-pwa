@@ -38,9 +38,31 @@ import argparse, json, os, sys, time
 # (input, output, cache_read, cache_write). None = not published for that
 # FIELD within a priced class. A class with NO ROW here at all (e.g. "other")
 # is UNPRICED, not free — see api_usd().
+#
+# A ROW IS A CLASS, NOT A MODEL ID, so a family's release re-prices its row
+# rather than adding one. `opus` was Opus 5's card (5.00/25.00/0.50/6.25) and
+# is Opus 5.5's since 2026-09-22 (the release date; the bare `opus` alias every
+# lane runs resolves there, so the whole class re-priced at once and no window
+# mixes the two beyond that day). Opus 5.5 is cheaper per token than the model
+# it replaced — 4.00 in, 20.00 out, 0.20 cache read, all three operator-supplied
+# from the release's published card. CACHE WRITE IS DERIVED, NOT PUBLISHED AT
+# LAUNCH: 1.25 × input, the ratio every other row here already carries (5.00 ->
+# 6.25, 2.00 -> 2.50, 1.00 -> 1.25). Stated rather than left `None` because what
+# this table feeds is a RATIO — the per-account Fable share, fable apiUsd over
+# all priced apiUsd — where a hole in the denominator is not neutral: it would
+# silently inflate every account's share against the placement ceiling. Replace
+# 5.00 with the published figure when there is one.
+#
+# THE OTHER THREE ROWS ARE UNCHANGED AND STILL SOURCED. sonnet (Sonnet 5) and
+# haiku (Haiku 4.5) are their families' current cards. `fable` is the one row
+# that is already a blend — the sweep classifies Fable 5 and Fable 5.1 into one
+# class (the only split the 30-day scan supports, spec §2) and they share
+# 10.00/50.00; their cache-read rates differ (Fable 5.1 reads cheaper than Fable
+# 5), so the blended 1.00 here is not re-derivable from either alone and is left
+# where the scan put it.
 PROXY_RATES_USD_PER_MTOK = {
     "fable":  (10.0, 50.0, 1.00, None),
-    "opus":   (5.0,  25.0, 0.50, 6.25),
+    "opus":   (4.0,  20.0, 0.20, 5.00),
     "sonnet": (2.0,  10.0, 0.20, 2.50),
     "haiku":  (1.0,   5.0, 0.10, 1.25),
 }
