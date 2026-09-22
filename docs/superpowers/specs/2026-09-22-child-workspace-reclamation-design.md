@@ -133,6 +133,12 @@ per-session temp root, the pane, the unit and the registry row. It keeps the att
 lifecycle journal and the transcripts. It is `ws-reap`'s destruction with a different consent model and a
 different ladder in front of it — not `ws-reap` with a flag, for the reasons in §5.5.
 
+**The word is already taken in code, so code does not use it bare.** `POST /api/runs/:id/reclaim`, its
+refusal-code type and the PWA's resume sheet all mean *reassigning a dead coordinator's claim* — nothing is
+destroyed. The ccd surfaces keep this spec's names (`ws-reclaim`, `reclaim-pause`, the journal act
+`reclaim`), because ccd's vocabulary has no such collision; every TypeScript identifier, file, CSS class and
+test file this programme adds says `childReclaim` instead, so a grep for one feature never returns the other.
+
 ---
 
 ## 5. The design
@@ -204,7 +210,11 @@ instead of an assumption.
 
 `childSpent` returns **three** values — `spent`, `unspent`, `unmeasured` — never a boolean.
 
-- Fast path: the registry's PR number, and `.prhistory`. Either naming a PR answers `spent`.
+- Fast path: the registry's PR number, and `.prhistory`. Either naming a PR answers `spent`. The two are
+  not equal evidence, and only one direction of the first is used: the registry's PR number is read through
+  the collapsing reader, which folds an absent file and an unreadable one into the same null. So a PR number
+  **present** is evidence of spent, and a null is evidence of nothing. `.prhistory` is read through its
+  measured reader and tells absent from unreadable.
 - Slow path: when the fast path says no, a **live** `ccd pr-state --session <id>` runs at the moment of the
   question. Nothing in this system learns of a PR by push or webhook — every PR fact comes from a `gh` call
   something triggered, and the only untriggered one is the sweep, whose idle cadence is measured in minutes
@@ -272,7 +282,7 @@ nothing is destroyed.
 | 6 | no in-progress git operation in the tree | `tree-busy` | retryable, bounded |
 | 7 | the branch is checked out in no other worktree | `branch-elsewhere` | terminal |
 | 8 | the tree reads, after a permission normalisation pass | `tree-unreadable` | **terminal** |
-| 9 | no nested foreign checkout holds unpushed commits | `containment-unproven` | **terminal** |
+| 9 | no nested checkout of a **different repository** is dirty or holds commits unreachable from its own upstream | `containment-unproven` | **terminal** |
 | 10 | the recomputed fingerprint equals `--expect` | `state-changed` | retryable |
 
 Rungs 8 and 9 are the two places this design **refuses rather than proceeds**, and they are a deliberate
@@ -352,7 +362,7 @@ reclaim can never un-close a run — the child is reclaimed when all of:
 - the workspace is a child (the registry verdict names a run id; `unreadable` defers), **and**
 - no sibling run is open, re-read **inside the coordination mutex** immediately before the argv is composed,
   with an unreadable sibling list counting as *ineligible* rather than as "none", **and**
-- the close is `final`, **or** the child is `spent`.
+- the close is `final`, **or** the child is `spent`, **or** this close retires the program.
 
 The mutex is available here and only here. It is not exported and the watcher holds no handle on it, so
 **the sweep cannot take it** — which is the second reason the `--expect` token exists rather than a nicety:
@@ -366,7 +376,21 @@ would reclaim a live, held, mid-program workspace: the 2026-09-10 harm through a
 has finished with this child" and "this child has no open run this instant" are different facts, and only
 the first authorises destruction. An abandon (`state:'failed'`) counts as finished.
 
-The act is: `ws-audit --reclaim` → token → `ws-reclaim`. Any failure is recorded and left to the sweep.
+**A close that retires the program counts as finished too**, and this was found while planning rather than
+designing. A non-final close with no open sibling drops the program's open-run count to zero, and the
+server retires it on the spot; nothing in the HTTP API reactivates a retired program. The hold that close
+writes claims the child for a wave that can never be opened, and a hold defers reclaim for ever. So for a
+child, and only for a child, that close releases rather than holds, and the child is reclaimed.
+
+**Close decides; it does not wait.** The eligibility above is decided inside the mutex, and the act —
+`ws-audit --reclaim` → token → `ws-reclaim` — runs on the session's own queue immediately *after* close has
+answered. That ordering is measured, not chosen: the coordinator's API client gives up after a flat
+30 seconds, while `ws-reap`'s own remote budget is 240, and a close that the caller saw time out but the
+server committed is worse than one that answered `queued`. The act re-reads the sibling list and the
+presence signals itself before composing the argv, outside the mutex. That leaves close on exactly the
+footing the sweep has always been on: the server's checks narrow the window, and the re-proof on the box,
+inside the lock, is what ends it. Any failure is recorded and left to the sweep. **One executor serves both
+triggers**, so presence, the ceiling and the feed row behave identically however a reclaim was started.
 
 **On the sweep.** The close path cannot cover every case, and the cases it misses are real: dispatch has two
 shipped arms that mint a child and then fail to bind it, leaving a run `planned` with no session and a
@@ -375,11 +399,18 @@ marked workspace named by no run row. A predicate written over run rows can neve
 So the sweep's subject is **the marker**, which already holds the minting run id. A child is eligible when:
 
 - no open run names it (unreadable ⇒ ineligible), and
-- its minting run is terminal or absent from the coordination database, and
+- its minting run exists, and is either terminal or bound to a **different** session — which is how the
+  orphans above are reached: their run was re-dispatched and names the child that did get bound — and
+  is not a `planned` run whose dispatch started less than one spawn-stall interval ago, and
 - no hold, no presence signal, no in-flight dispatch window, and
 - `reclaim-paused` is absent, and
 - every one of the above held on the **previous** pass too — the 2026-08-11 policy's twice-observed rule,
   kept verbatim.
+
+**A minting run absent from the database makes a child ineligible**, not eligible. The first draft of this
+section said the opposite, and it fails open in the one case that matters: a lost or rebuilt coordination
+database makes *every* child's run absent at once, the live ones included. Absence is logged and
+skipped; the orphans that motivated it are reached through the bullet above instead.
 
 The lane runs on a pass that already reads the registry, so it costs one predicate rather than a new timer;
 the plan names which pass, under the constraint that it must not race the write routes.
@@ -403,7 +434,11 @@ reclamation the same expiry is fail-open, and what compensates is the population
 there), the twice-observed rule, and ccd's independent tmux rung.
 
 The defer is **bounded**: after a ceiling of **15 minutes** of continuous deferral the reclaim proceeds, and
-the feed row says how long it waited and why. Unbounded would be worse than absent: the PWA's terminal
+the feed row says how long it waited and why. Proceeding past a defer ccd measures on the box takes a flag,
+`--defer-expired`, on both the audit and the verb. It skips rungs 5 and 6 and nothing else, and it is an
+input to the fingerprint, so a token minted without it cannot be spent with it. It is not an override of a
+safety rung: rungs 5 and 6 measure presence, not containment, and the pin phase still takes the in-progress
+operation heads. Unbounded would be worse than absent: the PWA's terminal
 drawer opens a real `tmux attach`, so a phone that locks with the drawer open would wedge a child forever,
 and the only exit would be a human detaching from a sub-workspace — rule 4 inverted by its own safeguard.
 
@@ -438,13 +473,20 @@ a design that assumed a feed row would have delivered none while promising all.
 
 **A chip on the closed run's row**, reading the lifecycle mirror rather than the registry row that no longer
 exists: reclaimed, pending, deferred, paused, or refused with the sentence. Refusal sentences come from a
-lookup keyed by the refusal token, never respelled at the surface.
+lookup keyed by the refusal token, never respelled at the surface — **and the lookup is the server's**. The
+PWA-reachable refusal words and the server's audit sentences are held disjoint by a test today, and several
+of this verb's tokens share names with the audit's. So the server composes the sentence and ships it with
+the status; the PWA renders what it is given and maps no token itself. A reclaimed child's row stops
+offering to open its session, which no longer exists.
 
 **No child ever appears in the reap or archive sheets.** Both are gated on a workspace being archived, which
 a child never is.
 
 **One fleet-level attention item** collects children under a terminal refusal, with each one's sentence.
-It is a *report*, not a tap: nothing waits on it, and ignoring it costs disk rather than correctness.
+It is a *report*, not a tap: nothing waits on it, and ignoring it costs disk rather than correctness. It
+lives in the reclaim row of the Runs screen's banner, beside the pause toggle, carried on the coordination
+frame and derived from the lifecycle mirror so a restart does not lose it. It is **not** a divergence
+pattern: nothing in the PWA reads divergences today, so one there would be a report nobody receives.
 
 ---
 
@@ -555,11 +597,13 @@ unbindable — without any destructive verb existing yet.
 |---|---|---|---|
 | 1 | agent | `--child <runId>` on ws-add behind its capability token; the marker; child-only `TMPDIR`; the measured prerequisite and the pre-policy count | a dispatched child carries the marker and its temp root; an older ccd composes the identical old argv |
 | 2 | server | the registry field through the measured reader; the three-valued spent verdict; the two 409s; the unbind on dispatch | **rule 3 enforced**: a second bind on a PR-bearing child refuses, an unreadable marker refuses, a research child still hands over |
-| 3 | both | `ws-audit --reclaim` and the token; `ws-reclaim` and its ladder; its own tail arm and breadcrumb; close's fourth act | **rules 1 and 2**: a child is gone after its final close, its temp root with it, its work in the attic |
-| 4 | both | the sweep lane; `reclaim-pause` and its route and toggle; the attention item; delivery cancellation | **rule 4**: an orphaned child is reclaimed with no human act; the switch stops it from a phone |
+| 3 | both | `ws-audit --reclaim` and the token; `ws-reclaim` and its ladder; its own tail arm and breadcrumb; close's fourth act; delivery cancellation after a successful reclaim | **rules 1 and 2**: a child is gone after its final close, its temp root with it, its work in the attic |
+| 4 | both | the sweep lane; `reclaim-pause` and its route and toggle; the attention item | **rule 4**: an orphaned child is reclaimed with no human act; the switch stops it from a phone |
 | 5 | pwa | the run-row chip and its sentences | the operator can read what became of a child |
 
-Wave 3 is the only wave that destroys anything, and it is the one to review hardest.
+Wave 3 is the only wave that destroys anything, and it is the one to review hardest. Delivery cancellation
+rides with it rather than with the sweep, because §5.6 makes it part of the act: shipping reclaim-on-close
+without it would run the slug-recycling hazard at the new, higher rate for as long as wave 4 took to land.
 
 ---
 
