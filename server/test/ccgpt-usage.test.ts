@@ -1,8 +1,10 @@
 // server/test/ccgpt-usage.test.ts
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { createServer, type IncomingMessage, type IncomingHttpHeaders, type ServerResponse, type Server } from 'node:http';
 import { writeFileSync, mkdirSync, chmodSync, readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import os from 'node:os';
 import { pythonOrSkip, runPy, runPyAsync, ccgptFile, PYSTUB_DIR } from './ccgptHarness.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -88,6 +90,10 @@ const HAS_IPV6_LOOPBACK = Object.values(os.networkInterfaces()).some(
 // OS-assigned one, matching the proxy suite's own convention.
 const USAGE_PORT = 45020;
 
+/** lane.json's one writer (spec §5.4), resolved from this file's path the way
+ *  `ccgptFile` resolves the publisher — see the task-6 case below. */
+const MODELS_OP = fileURLToPath(new URL('../../deploy/models-op.mjs', import.meta.url));
+
 // Minted, never shared (task-10-rulings.md (commit 4893935a) §5). Each case gets its own lane
 // id, so two cases can never collide over a leftover row.
 let mintedIdCount = 0;
@@ -98,7 +104,9 @@ function mintId(): string {
 
 /** Plants `~/.ccrc/codex/<id>/lane.json` with `probeModel` and `authDir`
  *  fields — the two things this wave's ccgpt-usage.py reads from it
- *  (lane.json has no writer until Plan 2b, task-10-brief.md (commit 4893935a)). By default
+ *  (lane.json had no writer until Plan 2b, task-10-brief.md (commit 4893935a);
+ *  it has one now, `deploy/models-op.mjs`, and the task-6 case below reads
+ *  what that writer produced instead of calling this helper). By default
  *  also plants a stub `auth.json` (empty object; its CONTENTS are never
  *  read by the publisher, only its existence — task-10-fix-rulings.md I-3)
  *  at that `authDir`, so every case is "logged in" unless it opts out via
@@ -689,6 +697,74 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect((ep2.requests[0].body as { model?: unknown }).model).toBe(model2);
     } finally {
       await ep2.close();
+    }
+  });
+
+  // -------------------------------------------------------------------
+  // Task 6 of the 2b1 plan — D-3158's real gap. Every case above reads a
+  // lane.json `plantLane` wrote BY HAND, and so did the reader's own pins:
+  // a fixture and a reader written together agree with each other, and would
+  // agree just as well with a producer that spelled the key differently or
+  // put the wrong value in it. This case plants nothing: the REAL materialiser
+  // (`deploy/models-op.mjs`, the one writer spec §5.4 names) renders lane.json
+  // from a codex-kind roster row and a class registry, and the REAL publisher
+  // reads it — so the two agree through the writer, or this reds.
+  //
+  // The materialiser runs through `spawnSync`, deliberately, and BEFORE the
+  // endpoint is bound: it opens no socket, so blocking the event loop there
+  // can starve nothing. The publisher runs through `runPyAsync` (D-3157), and
+  // that holds under a mutation too — a producer that dropped or renamed
+  // `probeModel` makes the publisher REFUSE, and a refusal needs no answer from
+  // the mock, so this case reds on its assertions rather than on a deadlock.
+  it('task-6 (D-3158): publishes from a lane.json the REAL materialiser wrote, not a hand-planted one', async () => {
+    const home = mkTmp('ccgpt-usage-materialised-');
+    const id = mintId();
+    // Shares nothing with any naming convention: a publisher that re-derived
+    // the token directory instead of reading the manifest finds no auth.json.
+    const authDir = `.${id}-oauth-fixture`;
+    const roster = join(home, '.ccrc', 'accounts.json');
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(roster, `${JSON.stringify({
+      version: 1,
+      accounts: [
+        { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+          exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
+        { id, label: id, configDirSuffix: `.claude-${id}`,
+          exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir },
+          homeAble: false, telemetry: 'codex' },
+      ],
+    }, null, 2)}\n`);
+    // `init` plants the seed; `set-class` then moves haiku onto an id the seed
+    // does not carry, so the value can only have come from the registry this
+    // lane has NOW — the one an operator's reclassification leaves behind.
+    for (const argv of [
+      ['init', '--file', roster, '--id', id, '--probe', 'codex'],
+      ['set-class', '--file', roster, '--id', id, '--class', 'haiku', '--model', 'gpt-x-mini'],
+    ]) {
+      const m = spawnSync(process.execPath, [MODELS_OP, ...argv],
+        { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
+      expect(m.status, `models-op ${argv[0]}: ${m.stdout}${m.stderr}`).toBe(0);
+    }
+    expect(existsSync(join(home, '.ccrc', 'codex', id, 'lane.json'))).toBe(true);
+    // The oracle is the registry FILE, not a literal; the next line is the
+    // control that it holds the reclassified id rather than the seed's.
+    const registry = JSON.parse(readFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), 'utf8'));
+    const probeModel = (registry as { classes: { haiku: unknown } }).classes.haiku;
+    expect(probeModel).toBe('gpt-x-mini');
+    // Logged in ONLY where the roster's authDir says — existence, never
+    // contents (the stub Authenticator reads nothing).
+    mkdirSync(join(home, authDir), { recursive: true });
+    writeFileSync(join(home, authDir, 'auth.json'), '{}');
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect((requests[0].body as { model?: unknown }).model).toBe(probeModel);
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
     }
   });
 

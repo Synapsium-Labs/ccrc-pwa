@@ -975,6 +975,11 @@ describe('materialise', () => {
       settings: `${home}/.claude-gpt/settings.json`,
       classes: `${home}/.ccrc/models/gpt.classes.tsv`,
       effort: `${home}/.ccrc/models/gpt.effort.json`,
+      // `null` DELIBERATELY: this fixture's `gpt` is `exec: { kind: 'external' }`
+      // — the shape a Codex lane has on a box that has not cut over — and only
+      // an `exec.kind: 'codex'` row gets spec §5.4's `lane.json`. The key is
+      // present on every answer, so an exact pin here is where dropping it reds.
+      lane: null,
     });
     expect(fs.existsSync(path.join(home, '.ccrc', 'models', 'gpt.classes.tsv'))).toBe(true);
     // The catalogue this run just wrote (init ran before it existed, so init's
@@ -1094,6 +1099,128 @@ describe('materialise', () => {
       }
     }
   });
+});
+
+// Spec §5.4: `~/.ccrc/codex/<id>/lane.json`, "the one thing `ccgpt`, the shim
+// and the publisher read, so none of them re-derives a path from a naming
+// convention". Written by `materialise`, beside the TSV and the effort file,
+// through the same tmp + rename loop — so every accepted mutation re-renders it
+// (rule 3), which `ccrc-models.test.ts` drives through the verb. The consumer
+// half — the real publisher reading what this writer wrote — is
+// `ccgpt-usage.test.ts`'s (D-3158).
+describe('lane.json (spec §5.4) — the codex lane manifest', () => {
+  // A codex-KIND row: the one kind whose `exec` carries `authDir` and the two
+  // ports. Fixture values only — the public port pair the other codex-row
+  // fixtures use, an auth dir that names nothing real.
+  const CODEX_LANE = {
+    id: 'codex-a', label: 'codex-a', configDirSuffix: '.claude-codex-a',
+    exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir: '.codex-a-auth' },
+    homeAble: false, telemetry: 'codex',
+  };
+  const laneDir = (): string => path.join(home, '.ccrc', 'codex', 'codex-a');
+  const lanePath = (): string => path.join(laneDir(), 'lane.json');
+  const laneOf = (): Record<string, unknown> => JSON.parse(fs.readFileSync(lanePath(), 'utf8'));
+  /** Moves the registry's haiku class onto `model` directly on disk — the
+   *  operator's reclassification, which `init`'s seed never carries — so a
+   *  writer that read `SEEDS` instead of the registry cannot pass. */
+  const reclassifyHaiku = (model: string): void => {
+    const reg = registryOf('codex-a');
+    (reg['classes'] as Record<string, unknown>)['haiku'] = model;
+    fs.writeFileSync(regPath('codex-a'), JSON.stringify(reg));
+  };
+
+  beforeEach(() => { seed({ ...ROSTER, accounts: [...ROSTER.accounts, CODEX_LANE] }); });
+
+  // Umask forced to 022 for the reason the TSV/effort 0600 pin above gives: a
+  // dropped `{ mode: 0o600 }` under a strict runner umask would land 0600 by
+  // coincidence. `op`'s `spawnSync` child inherits it.
+  it('writes the §5.4 payload at 0600, probeModel read off the registry\'s haiku class', () => {
+    const prevUmask = process.umask(0o022);
+    try {
+      expect(op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex').code).toBe(0);
+      reclassifyHaiku('gpt-x-mini');
+      const r = op('materialise', '--file', rosterPath(), '--id', 'codex-a');
+      expect(r.code).toBe(0);
+      expect((r.body['wrote'] as Record<string, unknown>)['lane']).toBe(lanePath());
+      const text = fs.readFileSync(lanePath(), 'utf8');
+      expect(text.endsWith('}\n')).toBe(true);
+      expect(text).toContain('\n  "units": {');
+      // The registry file is the oracle for `probeModel`, not a literal; the
+      // line after is the control that the oracle holds the reclassified id.
+      expect(JSON.parse(text)).toEqual({
+        id: 'codex-a',
+        configDir: '.claude-codex-a',
+        authDir: '.codex-a-auth',
+        proxyPort: 45010,
+        litellmPort: 45011,
+        probeModel: classesOf('codex-a')['haiku'],
+        units: { litellm: 'ccgpt-codex-a-litellm.service', shim: 'ccgpt-codex-a-shim.service' },
+      });
+      expect(classesOf('codex-a')['haiku']).toBe('gpt-x-mini');
+      expect(fs.statSync(lanePath()).mode & 0o777).toBe(0o600);
+    } finally {
+      process.umask(prevUmask);
+    }
+  });
+
+  it('with haiku unassigned, OMITS probeModel rather than choosing another class', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    expect(Object.prototype.hasOwnProperty.call(laneOf(), 'probeModel')).toBe(true);
+    // A mutation re-renders the file whole, so the key `init` wrote is GONE,
+    // not left behind — the publisher then refuses it by name, with a remedy.
+    const r = op('set-class', '--file', rosterPath(), '--id', 'codex-a', '--class', 'haiku', '--model', 'none');
+    expect(r.code).toBe(0);
+    expect(classesOf('codex-a')['haiku']).toBeNull();
+    const lane = laneOf();
+    expect(Object.prototype.hasOwnProperty.call(lane, 'probeModel')).toBe(false);
+    expect(lane['id']).toBe('codex-a');
+    expect(lane['authDir']).toBe('.codex-a-auth');
+  });
+
+  it('on a lane that is not exec.kind codex, writes no manifest and answers lane: null', () => {
+    // `gpt` is `external` carrying a CODEX registry — today's live Codex lanes
+    // exactly. It has no auth dir or ports to write, and nothing may guess them.
+    op('init', '--file', rosterPath(), '--id', 'gpt', '--probe', 'codex');
+    const r = op('materialise', '--file', rosterPath(), '--id', 'gpt');
+    expect(r.code).toBe(0);
+    expect((r.body['wrote'] as Record<string, unknown>)['lane']).toBeNull();
+    expect(fs.existsSync(path.join(home, '.ccrc', 'codex'))).toBe(false);
+  });
+
+  // The existing tmp-leftover case's shape, aimed at the third file.
+  it('a failed lane.json write unlinks its own tmp, run repeatedly', () => {
+    op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+    fs.rmSync(lanePath(), { force: true });
+    // A directory at the manifest's destination: `renameSync(tmp, lane.json)`
+    // fails (EISDIR) every run, AFTER the tmp exists.
+    fs.mkdirSync(lanePath());
+    for (let i = 0; i < 3; i += 1) {
+      const r = op('materialise', '--file', rosterPath(), '--id', 'codex-a');
+      expect(r.code, `run ${i}: ${JSON.stringify(r.body)}`).toBe(1);
+      expect(r.body['error']).toBe('materialise-failed');
+      // Control: the failure is the manifest's rename, not an earlier step
+      // that never reached the tmp this case counts.
+      expect(String(r.body['detail'])).toContain('lane.json');
+    }
+    const leftovers = fs.readdirSync(laneDir()).filter((n) => n.includes('.tmp'));
+    expect(leftovers, `stray tmp files after 3 failing runs: ${JSON.stringify(leftovers)}`).toEqual([]);
+  });
+
+  // The tmp-leftover case above is satisfied by a writer that makes no tmp at
+  // all, so it cannot tell tmp + rename from an in-place write. This can:
+  // replacing a directory entry is the DIRECTORY's permission, so a rename
+  // lands over a read-only lane.json, and an in-place `writeFileSync` is
+  // refused EACCES. Root ignores the file's write bit, so the discriminator
+  // proves nothing there — a visible skip, not a false red.
+  it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+    'replaces an existing lane.json by rename — a read-only one is still re-rendered', () => {
+      op('init', '--file', rosterPath(), '--id', 'codex-a', '--probe', 'codex');
+      fs.chmodSync(lanePath(), 0o444);
+      reclassifyHaiku('gpt-x-mini');
+      const r = op('materialise', '--file', rosterPath(), '--id', 'codex-a');
+      expect(r.code, JSON.stringify(r.body)).toBe(0);
+      expect(laneOf()['probeModel']).toBe('gpt-x-mini');
+    });
 });
 
 // minor: the check-only/`--commit true` two-phase protocol (Task 10 fix
