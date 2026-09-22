@@ -548,4 +548,39 @@ git fetch origin main && cd server && ./node_modules/.bin/vitest run test/deviat
 
 ## Deviations found
 
-_(None yet. Numbers are API-issued — `POST /api/ledger/deviations` — and defined in the same act. D-3150–D-3163 are already defined in Plan 2a; never reuse or guess one.)_
+**D-3164 — `ccgpt-usage@.service` ships an `ExecStart` that cannot import `litellm`, and the
+remedy is deferred to the plan that defines the runtime.**
+
+`ccd/ccgpt-usage.py:229` does `from litellm.llms.chatgpt.authenticator import Authenticator`.
+Its shebang is `#!/usr/bin/env python3`, so the interpreter comes from whatever PATH systemd's
+user manager supplies — and `litellm` lives in a venv, not in system site-packages, on the
+fleet host. As written, an armed instance would `ImportError`.
+
+The remedy is NOT a `Environment=PATH=…` line. Measured: this tree's established idiom for
+"python that can import litellm" is `ccd/ccrc-models-probe:159-161`, which derives the venv
+interpreter from the `litellm` console script's own real path —
+
+```bash
+venv_py="$(dirname "$(readlink -f "$(command -v litellm)" 2>/dev/null)")/python"
+[ -x "$venv_py" ] || venv_py="python3"
+```
+
+— and whose comment records that this is "`ccgpt-usage`'s own preamble, verbatim in intent".
+`%h/.local/bin` holds the `litellm` console script, not a `python`, so a PATH line would not
+make `env python3` resolve the venv. `ccrc-models.service:7`'s PATH line solves a different
+problem: its `ExecStart` is `ccrc`, a bash script that needs to FIND the `litellm` binary.
+
+**Why it is recorded rather than fixed here.** Plan 2b-2 builds the lane's isolated LiteLLM
+runtime, which is precisely where "which interpreter has litellm" is answered. Writing an
+interpreter resolution now would hard-code an assumption that deliverable is about to define,
+and would have to be rewritten by the task that defines it.
+
+**Why it is safe to ship.** Nothing in Plan 2b-1 enables, starts or `daemon-reload`s an
+instance of this template — the guard for that is an argv census over the recorded `systemctl`
+calls, measured red under mutation. The unit is an inert file until Plan 3 arms a lane.
+
+**Binding on the plan that arms it:** `ExecStart` must resolve the venv interpreter before any
+instance is enabled. The service file carries this as a comment so the reader who arms it
+cannot miss it. Found by the Task 3 review.
+
+_(Numbers are API-issued — `POST /api/ledger/deviations` — and defined in the same act. D-3150–D-3163 are already defined in Plan 2a; never reuse or guess one.)_

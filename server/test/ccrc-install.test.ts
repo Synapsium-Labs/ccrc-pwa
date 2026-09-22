@@ -2392,7 +2392,11 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(units.r.stdout).toMatch(/^install: services: /m);
   });
 
-  it('installs ten unit files and two drop-ins, byte for byte, at 644', () => {
+  // The count is DERIVED from `UNIT_FILES` itself, not hand-written: fix
+  // round 1 (Finding 4) measured the title stuck at "ten" while the census
+  // had grown to fourteen, the exact staleness this avoids repeating. The
+  // last two entries of `UNIT_FILES` are always the two drop-ins.
+  it(`installs ${UNIT_FILES.length - 2} unit files and two drop-ins, byte for byte, at 644`, () => {
     // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
@@ -2435,19 +2439,16 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
     expect(readFileSync(timer)).toEqual(readFileSync(placed(home, 'deploy', 'systemd', 'ccgpt-usage@.timer')));
     expect(statSync(svc).mode & 0o777).toBe(0o644);
     expect(statSync(timer).mode & 0o777).toBe(0o644);
-    // "No instance is enabled" in real systemd terms is an ABSENT symlink
-    // under `timers.target.wants/`, named for the instance (e.g.
-    // `ccgpt-usage@codex-a.timer`) — checked here in case a future fixture
-    // ever starts modelling that directory. Today it does not: the fixture
-    // `systemctl` stub (this file's own `plant('systemctl', …)`) never writes
-    // one on ANY `enable` call, real or not, so this assertion is vacuously
-    // true either way and the argv census right after it is the one that
-    // actually detects an added enable call (proven in Step 6 below).
-    const wants = join(home, '.config', 'systemd', 'user', 'timers.target.wants');
-    const enabled = existsSync(wants) ? readdirSync(wants) : [];
-    expect(enabled.filter((f) => f.startsWith('ccgpt-usage@'))).toEqual([]);
-    // The real guard: no `systemctl … enable …` argv this run made ever named
-    // a ccgpt-usage unit, instance or template.
+    // "No instance is enabled": the sole guard is an argv census over
+    // `systemctlCalls`, not a `timers.target.wants/` directory read (review
+    // fix round 1, Finding 2 — confirmed vacuous BY CONSTRUCTION, not merely
+    // under one mutation: this file's own `systemctl` stub's `enable)` arm is
+    // `exit 0` with no filesystem write, and `timers.target.wants` appears
+    // nowhere in `ccd/ccrc` or `installTreeFixture.ts` — only a deleted copy
+    // of this test ever read it — so `existsSync(wants)` could never turn
+    // true and no mutation of the subject could make that assertion fail.
+    // No `systemctl … enable …` argv this run made ever named a ccgpt-usage
+    // unit, instance or template — proven to bind under mutation, Step 6.
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccgpt-usage');
   });
 
