@@ -410,3 +410,132 @@ describe('statusline-command.sh writes the per-session usage sidecar (routing sp
     expect(usageFile(home, 'demo-a.json')).toMatchObject({ effort: null, cost: null, model: 'claude-opus-5' });
   });
 });
+
+/** A limits-only payload. `resets_at` is not decoration here: it is what
+ *  IDENTIFIES the window a reading belongs to, and the guard under test reads
+ *  nothing else to tell an older reading from a newer one. */
+function limitsPayload(five: number, seven: number, fiveReset: number | null = 1_800_000_000,
+  sevenReset: number | null = 1_800_600_000): string {
+  return JSON.stringify({
+    model: { display_name: 'Opus 5' },
+    workspace: { current_dir: '/nonexistent-for-this-test' },
+    rate_limits: {
+      five_hour: { used_percentage: five, resets_at: fiveReset },
+      seven_day: { used_percentage: seven, resets_at: sevenReset },
+    },
+  });
+}
+
+/** Plants the row a previous session would have left. Written by hand rather
+ *  than by a first run so `ts` is a value a test can assert stayed put — the
+ *  point of the guard is that a dropped reading re-stamps nothing. */
+function seedRow(home: string, row: Record<string, unknown>): void {
+  mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+  writeFileSync(path.join(home, '.cc-limits', 'zeta.json'), `${JSON.stringify(row)}\n`);
+}
+
+const FRESH_ROW = { five: 41, seven: 63, ts: 1, fiveResetAt: 1_800_000_000, sevenResetAt: 1_800_600_000 };
+
+// `runUsage` is just `run` with a payload argument (its own describe block
+// names it for the sidecar because that is what it was added for); the limits
+// row is written on the same path, and with no `~/.cc-sessions` in these
+// fixtures no sidecar is written at all.
+describe('statusline-command.sh keeps the account row monotonic within a window (many writers, one row)', () => {
+  // THE DEFECT THIS FILE'S SECOND REASON FOR EXISTING. `rate_limits` is this
+  // SESSION's last API response, so an idle session republishes a snapshot of
+  // whenever it last ran — with a fresh `ts`, because `ts` is the writer's
+  // clock. Twenty sessions on one account are twenty writers of one row.
+  // Measured on the live box, one account, one window: 0, 22, 0, 30, 27 within
+  // eight seconds, every one of them stamped fresh. Delete the guard and this
+  // case goes red, because 9 lands on top of 41.
+  it('a session republishing an OLDER reading for the same window neither lowers the row nor re-stamps ts', () => {
+    const home = seed('ccrc-statusline-stale-'); seedRow(home, FRESH_ROW);
+    const r = runUsage(home, limitsPayload(9, 60));
+    expect(r.code).toBe(0);
+    // The status BAR still renders the session's own numbers — the guard is
+    // about the shared row, not about what this pane prints.
+    expect(plain(r.out)).toContain('5h');
+    expect(limitsRow(home, 'zeta')).toEqual(FRESH_ROW);
+  });
+
+  it('a reading BEHIND on the 7d window alone is dropped, even with the 5h window level', () => {
+    const home = seed('ccrc-statusline-stale7d-'); seedRow(home, FRESH_ROW);
+    expect(runUsage(home, limitsPayload(41, 60)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual(FRESH_ROW);
+  });
+
+  it('a HIGHER reading lands, carrying a fresh ts', () => {
+    const home = seed('ccrc-statusline-higher-');
+    seedRow(home, { ...FRESH_ROW, five: 10, seven: 20 });
+    const before = Math.floor(Date.now() / 1000);
+    expect(runUsage(home, limitsPayload(41, 63)).code).toBe(0);
+    const row = limitsRow(home, 'zeta') as Record<string, number>;
+    expect(row).toMatchObject({ five: 41, seven: 63, fiveResetAt: 1_800_000_000, sevenResetAt: 1_800_600_000 });
+    expect(row['ts']).toBeGreaterThanOrEqual(before);
+  });
+
+  // The account whose usage has not moved since the last render is the COMMON
+  // case, and `ccd-telemetry-keepalive` exists precisely to keep its `ts`
+  // advancing. A guard that dropped an equal reading would age every idle
+  // account out on purpose.
+  it('an EQUAL reading still lands, so an idle account keeps reading fresh', () => {
+    const home = seed('ccrc-statusline-equal-'); seedRow(home, FRESH_ROW);
+    const before = Math.floor(Date.now() / 1000);
+    expect(runUsage(home, limitsPayload(41, 63)).code).toBe(0);
+    expect((limitsRow(home, 'zeta') as Record<string, number>)['ts']).toBeGreaterThanOrEqual(before);
+  });
+
+  // The one case a bare "never let it fall" rule would wedge: at a rollover the
+  // true reading IS lower than the row, and its `resets_at` is what says so.
+  it('a 5h window that has ROLLED OVER lets the row fall to the new window', () => {
+    const home = seed('ccrc-statusline-rollover-');
+    seedRow(home, { ...FRESH_ROW, five: 90 });
+    expect(runUsage(home, limitsPayload(2, 63, 1_800_018_000)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 2, fiveResetAt: 1_800_018_000 });
+  });
+
+  // The MIRROR of the case above, and the one a same-window rule alone cannot
+  // see: after a rollover the row holds the new window's low reading, and a
+  // session that has not noticed the rollover republishes the old window's
+  // high one. The two are incomparable by value — what says which is older is
+  // that the payload's `resets_at` has gone backwards. Its 7d numbers are
+  // deliberately LEVEL with the row, so nothing but the rewound 5h window can
+  // carry this case.
+  it('a session that has not noticed the ROLLOVER cannot drag the row back into the window that ended', () => {
+    const home = seed('ccrc-statusline-rewound-');
+    seedRow(home, { five: 2, seven: 64, ts: 1, fiveResetAt: 1_800_018_000, sevenResetAt: 1_800_600_000 });
+    expect(runUsage(home, limitsPayload(90, 64, 1_800_000_000)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toEqual({
+      five: 2, seven: 64, ts: 1, fiveResetAt: 1_800_018_000, sevenResetAt: 1_800_600_000,
+    });
+  });
+
+  it.each([
+    ['a row written before resets_at existed', { five: 90, seven: 90, ts: 1 }],
+    ['a row nothing can parse', null],
+  ] as const)('publishes when the comparison is undecidable: %s', (_label, row) => {
+    const home = seed('ccrc-statusline-undecidable-');
+    if (row === null) {
+      mkdirSync(path.join(home, '.cc-limits'), { recursive: true });
+      writeFileSync(path.join(home, '.cc-limits', 'zeta.json'), 'not json at all\n');
+    } else seedRow(home, row);
+    // Fail-OPEN, deliberately: the guard replaces an unconditional write, and a
+    // row it cannot reason about must not cost the account its telemetry
+    // forever — `projectHome` ranks an unmeasured account below every measured
+    // one, so a wedged row is the more expensive silence.
+    expect(runUsage(home, limitsPayload(41, 63)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
+  });
+
+  // The other half of "many writers, one row": the staging path used to be one
+  // fixed `.{acct}.tmp` shared by every session on the account, so two renders
+  // landing together truncated and wrote the same file. A directory parked at
+  // that exact path is how a test can see which name the script reaches for —
+  // with the shared name the redirection fails and no row is ever written.
+  it('stages through a per-process temp file, not one path every session shares', () => {
+    const home = seed('ccrc-statusline-tmp-');
+    mkdirSync(path.join(home, '.cc-limits', '.zeta.tmp'), { recursive: true });
+    expect(runUsage(home, limitsPayload(41, 63)).code).toBe(0);
+    expect(limitsRow(home, 'zeta')).toMatchObject({ five: 41, seven: 63 });
+  });
+});

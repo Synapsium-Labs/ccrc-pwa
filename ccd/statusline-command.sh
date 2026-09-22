@@ -224,8 +224,40 @@ fi
 
 # ── Side-effect: publish this account's limit telemetry for `ccd` auto-swap ──
 #    Limits are account-scoped, so any session's report is valid for the whole
-#    account; last writer wins. Consumed by `ccd supervise` and by the server's
-#    `projectHome` (server/src/limits.ts).
+#    account — but NOT last-writer-wins, and that is the whole of the guard
+#    below. Consumed by `ccd supervise` and by the server's `projectHome`
+#    (server/src/limits.ts).
+#
+#    WHY LAST-WRITER-WINS WAS WRONG. `rate_limits` is whatever THIS session's
+#    last API response said; a session that has been idle since the window
+#    opened carries a snapshot of that moment, and every render republishes it
+#    — with a FRESH `ts`, because `ts` is this writer's clock, not the
+#    measurement's. EVERY session on an account is a writer of that one row (a
+#    dozen of them on the box this was measured on), so the row alternated
+#    between every session's private snapshot at render cadence. Measured live,
+#    one account, one window (identical `resets_at` throughout): `five` came
+#    back 0, 22, 0, 30 within six seconds, each stamped fresh, while the high
+#    readings climbed 21 → 30 over six minutes and the low ones never moved
+#    at all — which is what says which of them were snapshots. The two
+#    PWA surfaces that poll this (the accounts strip and the accounts screen)
+#    therefore disagreed permanently — they sample the same flapping row at
+#    different offsets — and `projectHome` scored placements off whichever
+#    snapshot happened to be on disk.
+#
+#    THE RULE, in the only vocabulary available: `resets_at` names the window
+#    a reading belongs to, and inside one window used% only ever climbs,
+#    because the window accumulates until it rolls. So a payload is provably
+#    OLDER than the row on disk in exactly two shapes — its `resets_at` has
+#    gone BACKWARDS (it predates a rollover the row already recorded), or the
+#    two agree on the window and its usage is LOWER. Either way it is dropped
+#    WHOLE rather than merged: the values and the `ts` on disk stay those of
+#    the freshest reading anyone published, instead of an old reading wearing a
+#    fresh timestamp. A rollover itself is not a regression — the row falls to
+#    the new window's reading exactly as it always did, because the two windows
+#    are never compared by value. Anything undecidable — no `resets_at` on
+#    either side, an unparseable row, no `jq` verdict at all — publishes, which
+#    is the behaviour this guard replaces, so a box whose payload never carried
+#    `resets_at` is no worse off than it was.
 #
 #    Two gates, and they answer different questions. `$acct_id` non-empty means
 #    the roster recognises this config dir at all. `CCRC_MEASURED` membership
@@ -246,9 +278,39 @@ if [ "$measured" = 1 ] && [ -n "${five_int:-}" ]; then
   # resets_at are unix-epoch seconds when each window rolls over (may be absent).
   five_reset=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at // "null"' 2>/dev/null)
   seven_reset=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // "null"' 2>/dev/null)
-  printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s}\n' \
-    "$five_int" "${seven_int:-0}" "$(date +%s)" "${five_reset:-null}" "${seven_reset:-null}" \
-    > "$HOME/.cc-limits/.$acct_id.tmp" && mv -f "$HOME/.cc-limits/.$acct_id.tmp" "$HOME/.cc-limits/$acct_id.json"
+  acct_row="$HOME/.cc-limits/$acct_id.json"
+  # One `jq` against the row on disk, and only when there IS one — the verdict
+  # is a word, never a number this shell then has to re-decide. Any failure
+  # (absent row, unparseable row, a `resets_at` that is not a number and so
+  # not `--argjson`-able) leaves `acct_verdict` empty, which publishes.
+  acct_verdict=""
+  if [ -f "$acct_row" ]; then
+    acct_verdict=$(jq -r \
+      --argjson f "$five_int" --argjson s "${seven_int:-0}" \
+      --argjson fr "${five_reset:-null}" --argjson sr "${seven_reset:-null}" '
+        # TWO shapes of "this reading is older", and the row needs both. A
+        # window that has ROLLED since the row was written leaves the two
+        # readings incomparable by value — the stale one is the one whose
+        # `resets_at` has gone backwards — while inside ONE window the
+        # `resets_at` match and the values decide.
+        def rewound($newReset; $oldReset):
+          $newReset != null and $oldReset != null and $newReset < $oldReset;
+        def undercuts($new; $old; $newReset; $oldReset):
+          $newReset != null and $oldReset != null and $newReset == $oldReset and $new < $old;
+        if rewound($fr; .fiveResetAt) or rewound($sr; .sevenResetAt) then "behind"
+        elif undercuts($f; (.five // 0); $fr; .fiveResetAt)
+          or undercuts($s; (.seven // 0); $sr; .sevenResetAt) then "behind"
+        else "publish" end' "$acct_row" 2>/dev/null) || acct_verdict=""
+  fi
+  if [ "$acct_verdict" != "behind" ]; then
+    # `$$`-unique, like the usage sidecar's own tmp: the fixed `.{acct}.tmp`
+    # this replaces was ONE path shared by every session on the account, so two
+    # renders landing together truncated and wrote the same file at once.
+    acct_tmp="$HOME/.cc-limits/.$acct_id.$$.tmp"
+    printf '{"five":%s,"seven":%s,"ts":%s,"fiveResetAt":%s,"sevenResetAt":%s}\n' \
+      "$five_int" "${seven_int:-0}" "$(date +%s)" "${five_reset:-null}" "${seven_reset:-null}" \
+      > "$acct_tmp" && mv -f "$acct_tmp" "$acct_row" || rm -f "$acct_tmp" 2>/dev/null
+  fi
 fi
 
 # ── Side-effect 2: the per-session usage sidecar (routing spec 2026-09-14 §6) ──
