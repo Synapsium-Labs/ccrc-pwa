@@ -26,17 +26,26 @@
 // name spelled with `$$` is a per-process staging name, and a path with a `/`
 // below the census directory is a drop-in inside a subdirectory.
 //
-// HOW A WORD IS READ. Whole-line comments are stripped first — commenting a
-// line out is the commonest way to disable it, and a commented-out removal must
-// not count as a removal. Backslash continuations are joined. A command is
-// recognised by its name standing as a word outside quotes (start of line,
-// whitespace, or one of `;&|{(!` before it), and its operands are read as shell
-// words (double-quoted, bare, or concatenated), up to the first unquoted
-// operator or redirection. A variable resolves through THE ENCLOSING FUNCTION'S
-// OWN assignments only — the union of every value that function gives it — and
-// `${ARR[n]}` / `${ARR[@]}` through the single file-scope `ARR=(…)` declaration.
-// `$HOME` is never substituted: it is the literal root of the bin census's
-// directory. There is deliberately no file-scope scalar fallback. Measured
+// HOW A WORD IS READ. Comments are cut first, by one quote-aware pass per line
+// (`scanLine`): an unquoted trailing comment goes, and a whole-line comment
+// becomes a BLANK line — commenting a line out is the commonest way to
+// disable it, and a commented-out removal must not count as a removal.
+// Backslash continuations are then joined, and a join never crosses a second
+// newline, so a continuation into a comment or a blank line ends the command
+// exactly where bash ends it. A command is recognised by its name standing as a
+// word outside quotes (start of line, whitespace, or one of `;&|{(!` before
+// it), and its operands are read as shell words (double-quoted, bare, or
+// concatenated), up to the first unquoted operator or redirection. A variable
+// resolves through THE ENCLOSING FUNCTION'S OWN assignments only — the union of
+// every value that function gives it, counting a `name=` only where it stands
+// outside quotes — and `${ARR[n]}` through the single file-scope `ARR=(…)`
+// declaration. `${ARR[@]}` is read as N names only when it IS the whole word
+// (or `${ARR[@]/#/prefix}`); inside a larger word, or in an assignment value,
+// it THROWS, because bash prefixes only the first element there and an
+// assignment joins them into one string. `$HOME` is never substituted: it is
+// the literal root of the bin census's directory. The unit census's directory
+// has two spellings, both read: `$BOX_UNIT_DIR` and its non-Darwin value, taken
+// from that global's own assignment in `ccd/ccrc`. There is deliberately no file-scope scalar fallback. Measured
 // before it was deleted: it changed no result on the tree as it stands; it let
 // one function's locals resolve inside another, which turned three real defects
 // green; and it caught one spelling — a unit named through a file-scope global —
@@ -68,7 +77,9 @@
 //   - Bodies. Placements are read from `_inst_bins` and `_inst_graphify_engine`
 //     (bins) and `_inst_units` (units); removals from `_uninst_tree_bins` and
 //     the systemd arm of `_uninst_units`. A placement made in any other function
-//     — another install step, or a helper these call — is not read.
+//     — another install step, or a helper these call — is not read, and a
+//     placement into any directory but the two census directories is not this
+//     census's subject.
 //   - Verbs. A placement is an `_inst_atomic` destination, or an `ln -s`
 //     destination inside `_inst_graphify_engine` (and nowhere else). A removal
 //     is an operand of `rm -f`, that exact flag word: `rm -rf` and `rm -fv` are
@@ -97,6 +108,29 @@
 //     out of scope (that arm's names are computed by `_svc_label` at run time),
 //     and so is the literal target `_uninst_tree_bins` checks the graphify link
 //     against before removing it.
+//   - The disable census reads literal `systemctl --user … disable --now` calls
+//     only. `ccd/ccrc`'s `_svc_disable_now` helper and a separate stop-then-
+//     disable are not read, and a system-manager `systemctl disable` (no
+//     `--user`) is not a user-unit disable, so it does not count.
+//   - Paths are not normalised: `$bin/./x`, `$bin//x`, `~/…` and a destination
+//     whose variable is bound to the empty string are not read as names.
+//   - `ln` is read in one form: its flags as one leading word containing `s`
+//     (`-sfn`). `ln -f -s` and `ln --symbolic` are not read.
+//   - A variable's values are a union over the whole function, not the value
+//     it holds at the line that uses it: a removal through a variable that is
+//     reassigned counts every value it was ever given.
+//   - Brace expansion (`name.{timer,service}`) is read literally, and a loop
+//     over a word-split variable (`for u in $list`) is read as one word.
+//   - The disable loop is tracked as a flat stack of `for … do` / `done`
+//     lines: a multi-line `while` nested inside it ends it early for this
+//     reader.
+//   - `arrayElements` reads the raw text between the parentheses: quoted
+//     elements, comments and multi-line declarations are not understood.
+//   - Every placed non-template unit is required in the `disable --now` loop. A
+//     unit that must deliberately NOT be stopped (a slice) would red that case
+//     — none exists; it would need its own rule when one does.
+//   - Commands inside `echo` arguments and heredoc bodies are read as commands,
+//     and a string or heredoc spanning lines is not modelled.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -109,18 +143,39 @@ const CCRC = readFileSync(CCRC_PATH, 'utf8');
 /** The bin census's directory, as `ccd/ccrc` spells it. `$HOME` is never
  *  substituted, so this stays a literal root. */
 const BIN_DIR = '$HOME/.local/bin';
-/** The unit census's directory: what `_inst_units` and `_uninst_units` both
- *  bind `dir` to (`bindsExactlyOnce` proves it). It is a file-scope global,
- *  and file-scope scalars are not resolved, so it stays a literal root too —
- *  which also keeps the Darwin `~/Library/LaunchAgents` value out. */
+/** The unit census's directory as `_inst_units` and `_uninst_units` bind `dir`
+ *  to it (`bindsExactlyOnce` proves it): a file-scope global, and file-scope
+ *  scalars are not resolved, so it stays a literal root. `unitDirs` adds its
+ *  second spelling. */
 const UNIT_DIR = '$BOX_UNIT_DIR';
+
+/**
+ * The unit census's directory in BOTH spellings `ccd/ccrc` can use: the global,
+ * and that global's non-Darwin value, READ from its own assignment — never
+ * typed here. A unit placed or removed at the expanded path is the same file,
+ * and a census keyed on one spelling would neither count nor refuse it. The
+ * Darwin value stays out, as the Darwin arms do (header).
+ */
+function unitDirs(): string[] {
+  const m = [...CCRC.matchAll(/^if \[ "\$CCD_OS" = darwin \]; then\n  BOX_UNIT_DIR="[^"]*"\nelse\n  BOX_UNIT_DIR="([^"]*)"\nfi$/gm)];
+  if (m.length !== 1) {
+    throw new Error(
+      'install-census.test.ts: expected exactly one `if [ "$CCD_OS" = darwin ]; then BOX_UNIT_DIR=… else '
+      + `BOX_UNIT_DIR="…" fi\` block in ${CCRC_PATH}, found ${m.length} — this extractor has gone stale.`,
+    );
+  }
+  return [UNIT_DIR, m[0]![1]!];
+}
 
 type Local = Map<string, Set<string>>;
 
 // ── reading `ccd/ccrc` ────────────────────────────────────────────────────
 
 /** One top-level function's body: `name() {` to the first `}` in column 0,
- *  with WHOLE-LINE COMMENTS STRIPPED before anything reads it. */
+ *  with COMMENTS CUT before anything reads it — each line through `scanLine`,
+ *  so an unquoted trailing comment goes, and a whole-line comment becomes a
+ *  BLANK line rather than vanishing: removing the line would let a backslash
+ *  continuation above it run on into the lines below, where bash ends it. */
 function fnBody(name: string): string {
   const sig = `\n${name}() {`;
   const count = CCRC.split(sig).length - 1;
@@ -134,12 +189,39 @@ function fnBody(name: string): string {
   const i = CCRC.indexOf(sig);
   const j = CCRC.indexOf('\n}\n', i + sig.length);
   if (j < 0) throw new Error(`install-census.test.ts: \`${name}\` has no closing brace in column 0 — extractor stale`);
-  return CCRC.slice(i + sig.length, j).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+  return CCRC.slice(i + sig.length, j).split('\n').map((l) => scanLine(l).code).join('\n');
 }
 
-/** Continuation lines joined, so a `rm -f … \` spanning six lines is one line. */
+/** Continuation lines joined, so a `rm -f … \` spanning six lines is one line.
+ *  A join eats only the indentation after the newline, never a second newline:
+ *  a continuation into a blank line (a blank one, or a comment `fnBody` cut to
+ *  its indentation) ends the command there, exactly as bash ends it. */
 function logicalLines(body: string): string[] {
-  return body.replace(/\\\n\s*/g, ' ').split('\n');
+  return body.replace(/\\\n[ \t]*/g, ' ').split('\n');
+}
+
+/**
+ * THE ONE QUOTE-AWARE PASS over a line. It tracks single- and double-quote
+ * state and returns (a) the line with an UNQUOTED trailing comment cut — a `#`
+ * at the start or after whitespace, outside quotes — and (b) for each offset
+ * of what is left, whether it sits outside quotes. `fnBody` uses (a); command
+ * recognition and `assignments` use (b), so a diagnostic `echo "dir=$dir"` is
+ * not a second binding. One line at a time: a string spanning lines, a heredoc
+ * body and an `echo`'s arguments are not modelled (header).
+ */
+function scanLine(line: string): { code: string; outside: boolean[] } {
+  const outside: boolean[] = [];
+  let dq = false;
+  let sq = false;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    const top = !dq && !sq;
+    if (top && c === '#' && (i === 0 || /\s/.test(line[i - 1]!))) return { code: line.slice(0, i), outside };
+    outside.push(top);
+    if (sq) { if (c === "'") sq = false; continue; }
+    if (c === '\\') { outside.push(top); i++; } else if (c === '"') dq = !dq; else if (c === "'" && !dq) sq = true;
+  }
+  return { code: line, outside };
 }
 
 /**
@@ -148,20 +230,24 @@ function logicalLines(body: string): string[] {
  * twice in `_inst_units` (`ccrc.service`, then `ccrc-agent.service` under the
  * fleet gate) and BOTH are placements. Quoted and bare forms both.
  *
- * A TEXT SCAN, NOT A PARSE: a `name=value` inside a string or a `$(…)` counts
- * too, and a quoted value is cut at its first inner quote. Harmless for the
- * names this file resolves — and the two whose extra values would matter, `bin`
- * and `dir`, are refused unless bound exactly once (`bindsExactlyOnce`).
+ * A TEXT SCAN, NOT A PARSE, with one guard: a `name=` counts only where it
+ * stands OUTSIDE quotes (`scanLine`), so `echo "dir=$dir"` is no binding. A
+ * `name=value` inside a `$(…)` still counts, and a quoted value is cut at its
+ * first inner quote — harmless for the names this file resolves, and `bin` and
+ * `dir`, whose extra values would matter, must be bound exactly once.
  */
 function assignments(body: string): Local {
   const out: Local = new Map();
-  for (const m of body.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|([^\s;"'|&()]+))/g)) {
-    const value = m[2] !== undefined ? m[2] : m[3];
-    if (value === undefined) continue;
-    const name = m[1]!;
-    let set = out.get(name);
-    if (set === undefined) { set = new Set(); out.set(name, set); }
-    set.add(value);
+  for (const line of logicalLines(body)) {
+    const { outside } = scanLine(line);
+    for (const m of line.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|([^\s;"'|&()]+))/g)) {
+      const name = m[1]!;
+      const value = m[2] !== undefined ? m[2] : m[3];
+      if (value === undefined || !outside[m.index! + m[0].indexOf(name)]) continue;
+      let set = out.get(name);
+      if (set === undefined) { set = new Set(); out.set(name, set); }
+      set.add(value);
+    }
   }
   return out;
 }
@@ -169,6 +255,12 @@ function assignments(body: string): Local {
 /** The elements of the one file-scope `NAME=(a b c)` declaration. */
 function arrayElements(name: string): string[] {
   const all = [...CCRC.matchAll(new RegExp(`^${name}=\\(([^)]*)\\)`, 'gm'))];
+  if (all.length === 0) {
+    throw new Error(
+      `install-census.test.ts: \${${name}[…]} is not a file-scope array — this census resolves only `
+      + 'file-scope `NAME=(…)` arrays. Spell the elements literally.',
+    );
+  }
   if (all.length !== 1) {
     throw new Error(
       `install-census.test.ts: expected exactly one \`${name}=(…)\` declaration in ${CCRC_PATH}, `
@@ -196,13 +288,18 @@ function bindsExactlyOnce(fn: string, local: Local, name: string, value: string)
   }
 }
 
-const REF = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:\[([0-9]+|@)\])?\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+const REF = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:\[([0-9]+)\])?\}|([A-Za-z_][A-Za-z0-9_]*))/g;
 const MAX_DEPTH = 4;
 
 /**
  * Every concrete string a shell word may denote. `$name` and `${name}` resolve
  * through `local` (the enclosing function's own assignments); `${ARR[n]}` and
- * `${ARR[@]}` through `arrayElements`. `$HOME`, an unbound name, and anything
+ * `${ARR[@]}` through `arrayElements` — `${ARR[@]}` ONLY when it is the whole
+ * word (or `${ARR[@]/#/prefix}`): inside a larger word bash prefixes only the
+ * first element, and in an assignment it joins them into one string, so
+ * either THROWS rather than being read as a set.
+ *
+ * `$HOME`, an unbound name, and anything
  * past `MAX_DEPTH` are KEPT AS WRITTEN — so `census` sees the `$` and refuses —
  * with `${name}` normalised to `$name` where that means the same thing, so a
  * brace spelling cannot step outside a prefix match.
@@ -213,6 +310,15 @@ const MAX_DEPTH = 4;
  * both resolvable from `ccd/ccrc`'s own text.
  */
 function resolveWord(word: string, local: Local, depth = 0): Set<string> {
+  if (/\$\{[A-Za-z_][A-Za-z0-9_]*\[@\]/.test(word)) {
+    const whole = depth === 0 ? /^\$\{([A-Za-z_][A-Za-z0-9_]*)\[@\](?:\/#\/([^}]*))?\}$/.exec(word) : null;
+    if (whole === null) {
+      throw new Error(`install-census.test.ts: "${word}" expands \${…[@]} ${depth === 0
+        ? 'inside a larger word: bash prefixes only the first element; index each element or use ${ARR[@]/#/prefix}'
+        : 'in an assignment value: bash joins the elements into one string there; index each element'}`);
+    }
+    return new Set(arrayElements(whole[1]!).flatMap((el) => [...resolveWord((whole[2] ?? '') + el, local, depth + 1)]));
+  }
   let outs = [''];
   let last = 0;
   for (const m of word.matchAll(REF)) {
@@ -222,9 +328,8 @@ function resolveWord(word: string, local: Local, depth = 0): Set<string> {
     const index = m[2];
     let alts: string[];
     if (index !== undefined) {
-      const els = arrayElements(name);
-      if (index === '@') alts = els;
-      else { const el = els[Number(index)]; alts = el === undefined ? [m[0]] : [el]; }
+      const el = arrayElements(name)[Number(index)];
+      alts = el === undefined ? [m[0]] : [el];
     } else {
       const values = name === 'HOME' || depth >= MAX_DEPTH ? undefined : local.get(name);
       if (values === undefined) {
@@ -239,23 +344,9 @@ function resolveWord(word: string, local: Local, depth = 0): Set<string> {
   return new Set(outs.map((o) => o + tail));
 }
 
-/** Whether offset `at` in `line` sits outside every quote. */
-function outsideQuotes(line: string, at: number): boolean {
-  let dq = false;
-  let sq = false;
-  for (let i = 0; i < at; i++) {
-    const c = line[i]!;
-    if (sq) { if (c === "'") sq = false; continue; }
-    if (c === '\\') { i++; continue; }
-    if (c === '"') dq = !dq;
-    else if (c === "'" && !dq) sq = true;
-  }
-  return !dq && !sq;
-}
-
 /** The argument text of a simple command starting at `from`: up to its first
- *  unquoted operator, redirection or comment. A redirection's fd digit
- *  (`2>/dev/null`) is dropped with it. */
+ *  unquoted operator or redirection (comments are already cut, by `fnBody`).
+ *  A redirection's fd digit (`2>/dev/null`) is dropped with it. */
 function argText(line: string, from: number): string {
   let dq = false;
   let sq = false;
@@ -268,7 +359,6 @@ function argText(line: string, from: number): string {
     if (c === '"') { dq = true; continue; }
     if (c === "'") { sq = true; continue; }
     if (';&|<>)'.includes(c)) break;
-    if (c === '#' && /\s/.test(line[i - 1] ?? ' ')) break;
   }
   return line.slice(from, i).replace(/\s\d+$/, '');
 }
@@ -285,9 +375,10 @@ function calls(body: string, cmd: string): string[][] {
   const re = new RegExp(`(?:^|[\\s;&|{(!])${cmd}(?=\\s|$)`, 'g');
   const out: string[][] = [];
   for (const line of logicalLines(body)) {
+    const { outside } = scanLine(line);
     for (const m of line.matchAll(re)) {
       const end = m.index! + m[0].length;
-      if (!outsideQuotes(line, end - cmd.length)) continue;
+      if (!outside[end - cmd.length]) continue;
       out.push(shellWords(argText(line, end)));
     }
   }
@@ -305,7 +396,8 @@ function operands(args: string[]): string[] {
 }
 
 /**
- * The names under `dir` that `words` denote.
+ * The names under any of `dirs` that `words` denote (`dir` below is whichever
+ * of them the resolution starts with).
  *
  * Every word is resolved, and every resolution is either a name or a decision
  * stated here — never a silent drop:
@@ -328,8 +420,7 @@ function operands(args: string[]): string[] {
  *     subject — `_uninst_tree_bins`' `~/.ccrc` files, the graphify link's
  *     target inside the venv.
  */
-function census(fn: string, kind: 'placement' | 'removal', words: string[], dir: string, local: Local): Set<string> {
-  const prefix = `${dir}/`;
+function census(fn: string, kind: 'placement' | 'removal', words: string[], dirs: string[], local: Local): Set<string> {
   const out = new Set<string>();
   const refuse = (word: string, why: string): never => {
     throw new Error(
@@ -339,7 +430,8 @@ function census(fn: string, kind: 'placement' | 'removal', words: string[], dir:
   };
   for (const word of words) {
     for (const p of resolveWord(word, local)) {
-      if (!p.startsWith(prefix)) {
+      const prefix = dirs.map((d) => `${d}/`).find((pre) => p.startsWith(pre));
+      if (prefix === undefined) {
         if (kind === 'placement' && p.startsWith('$') && !p.startsWith('$HOME/')) {
           refuse(word, `it resolves to "${p}", which starts with a variable ${fn} does not bind, so where it lands is unknown`);
         }
@@ -386,7 +478,7 @@ function placedBins(): Set<string> {
   const body = fnBody(fn);
   const local = assignments(body);
   bindsExactlyOnce(fn, local, 'bin', BIN_DIR);
-  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), BIN_DIR, local);
+  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), [BIN_DIR], local);
 }
 
 /**
@@ -419,7 +511,7 @@ function placedLinkBins(): Set<string> {
     }
     return ops[1]!;
   });
-  return census(fn, 'placement', links, BIN_DIR, assignments(body));
+  return census(fn, 'placement', links, [BIN_DIR], assignments(body));
 }
 
 /** Every name an `rm -f` operand in `_uninst_tree_bins` removes from
@@ -427,7 +519,7 @@ function placedLinkBins(): Set<string> {
 function removedBins(): Set<string> {
   const fn = '_uninst_tree_bins';
   const body = fnBody(fn);
-  return census(fn, 'removal', rmFOperands(body), BIN_DIR, assignments(body));
+  return census(fn, 'removal', rmFOperands(body), [BIN_DIR], assignments(body));
 }
 
 /**
@@ -448,7 +540,7 @@ function placedUnits(): Set<string> {
   }
   const local = assignments(body);
   bindsExactlyOnce(fn, local, 'dir', UNIT_DIR);
-  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), UNIT_DIR, local);
+  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), unitDirs(), local);
 }
 
 /** `_uninst_units`' body with its Darwin arm cut out (header: Darwin). */
@@ -475,7 +567,7 @@ function removedUnits(): Set<string> {
   const body = uninstUnitsSystemdArm();
   const local = assignments(body);
   bindsExactlyOnce(fn, local, 'dir', UNIT_DIR);
-  return census(fn, 'removal', rmFOperands(body), UNIT_DIR, local);
+  return census(fn, 'removal', rmFOperands(body), unitDirs(), local);
 }
 
 /**
@@ -506,12 +598,14 @@ function disabledUnits(): Set<string> {
     const head = /^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.*?)\s*;\s*do\s*$/.exec(line);
     if (head !== null) { loops.push({ name: head[1]!, list: head[2]! }); continue; }
     if (/^\s*done\b/.test(line)) { loops.pop(); continue; }
+    const { outside } = scanLine(line);
     for (const m of line.matchAll(/(?:^|[\s;&|{(!])systemctl(?=\s)/g)) {
       const end = m.index! + m[0].length;
-      if (!outsideQuotes(line, end - 'systemctl'.length)) continue;
+      if (!outside[end - 'systemctl'.length]) continue;
       const args = shellWords(argText(line, end));
       const at = args.indexOf('disable');
-      if (at < 0 || !args.includes('--now')) continue;
+      // `--user`: a system-manager disable is not a user-unit disable.
+      if (at < 0 || !args.includes('--now') || !args.includes('--user')) continue;
       for (const op of args.slice(at + 1).filter((a) => !a.startsWith('-'))) {
         const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(op);
         const loop = v === null ? undefined : [...loops].reverse().find((l) => l.name === v[1]);
@@ -567,7 +661,9 @@ describe('ccd/ccrc: the install census and the uninstall census cannot drift apa
 
     expect([...placed].filter((n) => !removed.has(n)).sort(),
       `these are placed into ${BIN_DIR} (by ${PLACED_BINS_READ}) and no \`rm -f\` operand in `
-      + '_uninst_tree_bins names them. Add them to its `rm -f`.')
+      + '_uninst_tree_bins that this census can RESOLVE names them — an operand it cannot resolve '
+      + '(a file-scope global, a `${x:?}` modifier) is not read as a removal. Add them to its '
+      + '`rm -f`, spelled literally.')
       .toEqual([]);
 
     // Anchors, after the comparison: a count floor can be met by names that
@@ -608,7 +704,9 @@ describe('ccd/ccrc: the install census and the uninstall census cannot drift apa
 
     expect([...placed].filter((n) => !removed.has(n)).sort(),
       'these are `_inst_atomic` destinations in _inst_units\' systemd arm and no `rm -f` operand in '
-      + '_uninst_units\' systemd arm names them. Add them to that `rm -f`.')
+      + '_uninst_units\' systemd arm that this census can RESOLVE names them — an operand it cannot '
+      + 'resolve (a file-scope global, a `${x:?}` modifier) is not read as a removal. Add them to '
+      + 'that `rm -f`, spelled literally.')
       .toEqual([]);
 
     // THE ROW WHERE NEITHER SIDE IS A LITERAL, anchored to the array
