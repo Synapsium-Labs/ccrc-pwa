@@ -1,6 +1,6 @@
 # Child-workspace reclamation — the fleet closes the loop it has never closed
 
-**Status:** approved by the operator 2026-09-22. Ticket CCR-15 ("Reclamation policy: the fleet can act on
+**Status:** design approved by the operator 2026-09-22; written spec accepted the same day. Ticket CCR-15 ("Reclamation policy: the fleet can act on
 idle and finished workspaces"). Supersedes nothing; **narrows** two standing rulings and **satisfies** a
 third that has been open since 2026-08-11. Implementation rides five waves, agent-first.
 
@@ -179,10 +179,20 @@ Two honesty constraints, both load-bearing:
   into `$HOME` for the ~20 sessions that are *not* children and have no collector — a larger, quieter leak
   on a population rule 2 never named. Fleet-wide containment is a good idea and it is **a different spec**.
 - **One measured prerequisite, measured before it is relied on.** Whether the Claude Code harness
-  scratchpad follows `TMPDIR` is a claim about another program, not about this tree. Wave 1 spawns one
-  child with `TMPDIR` set and reads where the scratchpad lands. If it does not follow, the scratchpad is
-  reported in the residue probe below and collected by a later, session-keyed mechanism — **never** by
-  deleting a directory keyed on the workspace path, which two live sessions can share.
+  scratchpad follows `TMPDIR` is a claim about another program, not about this tree. `ccd-tmp-sweep`
+  (#168, merged the day this spec was written) states its root as `${TMPDIR:-/tmp}/claude-<uid>/`, which
+  is the same claim; neither it nor this spec has measured it. Wave 1 spawns one child with `TMPDIR` set
+  and reads where the scratchpad lands. If it does not follow, the child's scratchpad stays under
+  `/tmp/claude-<uid>/` and `ccd-tmp-sweep` already collects it by session id — **never** by deleting a
+  directory keyed on the workspace path, which two live sessions can share.
+
+**Two collectors, disjoint roots.** `ccd-tmp-sweep` refuses any root that does not resolve strictly inside
+`/tmp` or its own `TMPDIR`, and as a systemd user unit its `TMPDIR` is the box default. A child's temp root
+under `$HOME/.cc-tmp/<id>` is therefore invisible to it, and is collected only by reclaim, at once rather
+than after the sweep's seven-day horizon. The roots never overlap, so the 2026-08-11 policy's warning
+about two collectors on one filesystem does not apply. The price is stated: a child that hits a terminal
+refusal (§5.5) keeps its temp root, which the hourly sweep would otherwise have collected once the session
+died. That child is itself uncollected and already on the attention item, so nothing new goes unreported.
 
 **The residue probe.** After a reclaim, the lane measures what the child left outside the worktree and its
 temp root and records the total. Rule 2's claim is thereby *bounded and observable*: containment covers
@@ -576,7 +586,7 @@ The repo's own rules apply unchanged and are restated only where this design add
 
 ## Appendix A — measured anchors
 
-Values measured in this tree at `origin/main` `46aca9fe`, each with the site that holds it. They are here so
+Values measured in this tree at `origin/main` `46aca9fe`, and re-measured unchanged after merging `d759c914`, each with the site that holds it. They are here so
 the plans can cite a number and the reader can re-measure it; **a number without its tree goes stale
 silently**, so re-measure before relying on any of them.
 
