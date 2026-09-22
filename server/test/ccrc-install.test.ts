@@ -1682,14 +1682,21 @@ describe('ccrc install: the executables and files it installs', () => {
     expect(mode(bin)).toBe(0o755);
   });
 
-  it('places the four GPT-lane executables on PATH, 755 (Plan 2b-1 Task 2) — both platform arms', () => {
-    // Unlike the three darwin-gated cases above, these are NOT gated: `ccgpt`
-    // and `ccgpt-runtime` are commands an operator types, and the two `.py`
-    // files are their dependencies rather than timer-only tools (spec §7.3
-    // makes the `nohup` fallback a supported path) — the systemd-only
-    // artifact is the timer unit, `_inst_units`' business, not this one's.
+  it('places the two GPT-lane executables that exist today on PATH, 755 (Plan 2b-1 Task 2) — both platform arms', () => {
+    // Unlike the three darwin-gated cases above, these are NOT gated: the
+    // two `.py` files are NOT timer-only tools reserved to the systemd arm.
+    // `ccgpt-proxy.py` is the engine `ccgpt` execs, and `ccgpt-usage.py` is
+    // placed here so an operator can run it by hand — its TIMER
+    // (`ccgpt-usage@.timer`) is systemd-only, but the binary itself is not.
+    //
+    // Fix round 1, Finding 1: `ccgpt` and `ccgpt-runtime` are NOT placed by
+    // `_inst_bins` yet — they don't exist in the tree (`git ls-files ccd/`
+    // has no such names) until Plan 2b-2 writes them, and `_inst_atomic`
+    // dies on a missing source by design. This test covers only the two
+    // names that exist; Plan 2b-2 extends it to four in the same commit
+    // that adds the real files.
     const { home } = installed;
-    for (const name of ['ccgpt', 'ccgpt-runtime', 'ccgpt-proxy.py', 'ccgpt-usage.py']) {
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
       const bin = join(home, '.local', 'bin', name);
       expect(readFileSync(bin), `${name} was not placed`).toEqual(readFileSync(placed(home, 'ccd', name)));
       expect(mode(bin), `${name} mode`).toBe(0o755);
@@ -2895,11 +2902,12 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .toEqual(process.platform === 'darwin'
         // `ccd-account-auth` is on BOTH arms — unlike cap-scopes (cgroup-bound)
         // and the three timer-bound ones, macOS is a supported box for it. The
-        // four GPT-lane files (Plan 2b-1 Task 2) join it here for the same
-        // reason: `ccgpt`/`ccgpt-runtime` are operator-typed commands and the
-        // two `.py` files are their dependencies, not timer-bound tools.
-        ? ['ccd', 'ccd-account-auth', 'ccgpt', 'ccgpt-proxy.py', 'ccgpt-runtime', 'ccgpt-usage.py',
-           'ccrc', 'graphify']
+        // two GPT-lane files that exist today (Plan 2b-1 Task 2) join it here
+        // for the same reason: `ccgpt-proxy.py` is the engine `ccgpt` execs
+        // and `ccgpt-usage.py` is placed for hand-running, neither timer-bound
+        // to this arm. `ccgpt`/`ccgpt-runtime` are NOT here — they don't
+        // exist in the tree until Plan 2b-2 (fix round 1, Finding 1).
+        ? ['ccd', 'ccd-account-auth', 'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']
         // account-pool-membership wave 1, Task 4 fix round 1 (F1): `ccd-pool-sync`
         // joins the non-Darwin list on the timer-bound names' own terms. THIS
         // ASSERTION IS THE MUTATION SITE for that line in `_inst_bins`: it is
@@ -2907,7 +2915,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // `ccd-pool-sync.timer` enabled against a 203/EXEC.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
            'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
-           'ccgpt', 'ccgpt-proxy.py', 'ccgpt-runtime', 'ccgpt-usage.py', 'ccrc', 'graphify']);
+           'ccgpt-proxy.py', 'ccgpt-usage.py', 'ccrc', 'graphify']);
   });
 
   it('_inst_bins\' own closing line names every executable it placed', () => {
@@ -2928,14 +2936,16 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
     // carry is gone. A `.py` file is exempt only when a non-`.py` SIBLING
     // execs it and that sibling's own name in the echo covers it — named
     // explicitly, not by suffix, so a `.py` with no such sibling is caught
-    // rather than silently waved through:
+    // rather than silently waved through. Fix round 1, Finding 4: the
+    // reviewer mutated this list both ways — dropping `ccd-usage-sweep.py`
+    // reds, dropping `ccgpt-proxy.py` stayed GREEN, because the echo names
+    // `ccgpt-proxy.py` explicitly regardless (it is not a timer-only
+    // artifact), so it bound nothing and is gone. One entry survives:
     const PY_SIDECARS_COVERED_BY_SIBLING = [
       'ccd-usage-sweep.py', // engine carried by ccd-usage-sweep's own name
-      'ccgpt-proxy.py',     // engine ccgpt execs
     ];
-    // `ccgpt-usage.py` has NO such sibling — its only runner is the systemd
-    // timer `ccgpt-usage@.timer` — so it is deliberately NOT in that list and
-    // must fall through to (and satisfy) the echo requirement below.
+    // `ccgpt-usage.py` (and `ccgpt-proxy.py`, above) have NO such sibling —
+    // each must be named explicitly in the echo below on its own.
     const { home, r } = converged;
     const line = r.stdout.split('\n').find((l) => l.startsWith('install: bins:'));
     expect(line, 'no `install: bins:` line in the transcript at all').toBeDefined();
@@ -2943,8 +2953,15 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
       .filter((b) => !FIXTURE_BINS.includes(b) && b !== 'graphify'
         && !PY_SIDECARS_COVERED_BY_SIBLING.includes(b))
       .sort();
+    // Fix round 1, Finding 5: the floor is the DARWIN-ARM minimum (`ccd`,
+    // `ccd-account-auth`, `ccgpt-proxy.py`, `ccgpt-usage.py`, `ccrc`) — the
+    // smaller of the two platforms, so it holds on both. Like
+    // `gen-wrappers.test.ts`'s `TOOLCHAIN_EXECUTABLES` floor, this is a
+    // RATCHET: it only ever needs to rise as names are added, never fall,
+    // and a fall here means the derivation lost members rather than that
+    // fewer names shipped.
     expect(placed.length, 'the bin directory listed nothing — the derivation, not the echo, is broken')
-      .toBeGreaterThanOrEqual(3);
+      .toBeGreaterThanOrEqual(5);
     // C-I (fix wave B, item 14): `.toContain(b)` is SUBSTRING containment on
     // `line`, one whole string — `ccd` and `ccd-usage-sweep` are each a
     // PREFIX of another name this same census carries (`ccd-account-auth`,
