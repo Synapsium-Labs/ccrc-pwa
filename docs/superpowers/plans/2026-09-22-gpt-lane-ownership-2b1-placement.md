@@ -583,4 +583,82 @@ calls, measured red under mutation. The unit is an inert file until Plan 3 arms 
 instance is enabled. The service file carries this as a comment so the reader who arms it
 cannot miss it. Found by the Task 3 review.
 
+- **D-3165 — Task 2 places TWO executables, not the plan's four; the plan's four would have aborted every
+  real install.** The plan had `_inst_bins` place `ccgpt`, `ccgpt-runtime`, `ccgpt-proxy.py` and
+  `ccgpt-usage.py`. Measured: `ccd/ccgpt` and `ccd/ccgpt-runtime` do not exist in the tree (Plan 2b-2 writes
+  them), `_inst_atomic`'s first act is `[ -f "$src" ] || _ccrc_die`, and `_inst_tree` runs immediately
+  before `_inst_bins` — so `ccrc install` / `ccrc update` would have died with the box's tree already
+  replaced. The suite was green only because Task 1 planted both names as `TREE_STUBS`: the fixture stub is
+  what hid it. The plan's own "one risk" sentence ("proves the spine places a file at that path, not a
+  working launcher") understated it by a category. Shipped in `56cfdafe`: only the two `.py` files are
+  placed; `ccgpt` and `ccgpt-runtime` join `_inst_bins`, both echoes, both census arrays and both uninstall
+  censuses in Plan 2b-2, IN THE SAME COMMIT that writes the files. Invariant: every commit on `main` must be
+  installable. Also shipped: the echo line's derived guard lost its blanket `.py` filter for a named
+  exemption list, because `ccgpt-usage.py` has no non-`.py` sibling to carry it. Found by the Task 2 review.
+
+- **D-3166 — Task 3's timer anchors on `OnActiveSec=`, the pair is role-gated, and the plan's "enables
+  nothing" assertion was vacuous by construction.** The plan specified `OnBootSec=2min`; both sibling timers
+  use `OnActiveSec=` for a stated reason (a unit first armed on a box up for days), which binds harder for a
+  lane armed at adoption — shipped `OnActiveSec=5min` (`22e40836`). The plan was silent on role; every
+  account-bearing pair in `_inst_units` is gated `!= server`, and so is this one, tested in both directions.
+  The plan's `timers.target.wants` readdir assertion could not fail: the fixture's `systemctl` stub answers
+  `enable` with `exit 0` and writes no symlink, so it was deleted (`1b1d9fcc`) and the argv census over the
+  recorded `systemctl` calls is the guard. The plan's literal `Unit=ccgpt-usage@%i.service` was omitted: the
+  timer's default target carries the instance (`man 5 systemd.timer`; shipped precedent
+  `mdadm-last-resort@.timer`). The plan's scope boundary — install the templates, enable no instance —
+  SURVIVED review unchanged. Found by the Task 3 implementer and review.
+
+- **D-3167 — Task 4 updates THREE copies of the bin census, and removes the template pair by `rm -f` only.**
+  The plan named `_uninst_tree_bins`' `rm -f` census alone; the function also carries a prose paragraph
+  naming each binary and an `echo "uninstall: tree: …"` summary that `ccrc-uninstall.test.ts` matches by
+  binary name, so all three moved (`ddb96faa`, `441415d7`). The `ccgpt-usage@` template pair is removed by
+  `rm -f` and deliberately kept OUT of `_uninst_units`' `disable --now` loop. The first comment gave a false
+  mechanism ("nothing to disable"); measured on systemd 255, `disable` of a never-enabled unit returns 0
+  silently — the failure is `--now`'s stop, which the manager refuses for a bare template name — and the
+  shipped comment says so. Sweeping template INSTANCES was left to Plan 3, which writes the `enable`.
+  Found by the Task 4 review.
+
+- **D-3168 — Task 5's census guard resolves variables and fails on any word it cannot read ("no silent
+  drops"), where the plan said to follow `gen-wrappers.test.ts` and "not invent a second parsing idiom".**
+  `server/test/install-census.test.ts` extracts both censuses from `ccd/ccrc`'s own text, like its
+  precedent, but must also resolve `$role_unit`, `${BOX_UNIT_NAMES[n]}` and the graphify symlink's second
+  placement source — so it carries a small resolver (ruled by the review a justified extension of the
+  idiom, not a second one). It does NOT inherit the precedent's `.filter(n => !n.includes('.'))`, which
+  would drop all three `.py` names from both sides. After three adversarial review rounds it installs one
+  principle — every word under a scope prefix resolves to a name or FAILS the suite by name — and its header
+  lists the shapes it declares out of scope. Its regression control is a 177-row mutation union whose
+  verdicts at `d7cc9559` were reproduced by an independent verifier with zero disagreements.
+  Commits `5895add7`, `e5f0afd1`, `fbfb4eac`, `d7cc9559`.
+
+- **D-3169 — Task 6 derives `probeModel` from the lane's class registry, writes `lane.json` 0600 in a 0700
+  directory, and gates it on `exec.kind === 'codex'` — three departures from the plan's text.** The plan said
+  to derive `probeModel` "from the `codex` class entry's existing `probe` field"; `SEEDS.codex.probe` is the
+  string `'codex'`, a probe KIND, and would have put a non-existent model in every usage poll's `body.model`.
+  Shipped: the registry's `haiku` class, omitted (not null) when unassigned. The plan said 0644; the house
+  rule (`models-op.mjs`'s `writeRegistry` comment) is 0600 for any file another process reads. The plan was
+  silent on the gate; today's live Codex lanes are `external` rows with no `authDir` or ports, and the writer
+  reads the roster raw, so only a `codex`-kind row gets a manifest — pinned against a LIVE-SHAPED external
+  row, because a fixture with the wrong shape let a telemetry- or provider-based gate pass all 240 cases.
+  The plan's Step 1 verb (`litellm --account`) never reaches the materialiser. Commits `6345fcd3`,
+  `b945daee`. Found by controller pre-flight and the Task 6 review.
+
+- **D-3170 — Task 7's premise was wrong in shape: `deploy.sh` ships whole trees, and the real gap was its own
+  placement census.** The plan asked for a test that `deploy.sh`'s "pushed pathspec" includes the new files.
+  `deploy.sh` has no pathspec: it `rsync --delete`s whole directories, so the files already reached the box.
+  What it lacked was PLACEMENT — its own `install_atomic … .local/bin/<X>` and `_unit_atomic …` lists, a
+  third hand-kept census of the class this plan exists to end. Shipped (`23711f34`): the two `.py` bins and
+  the unit pair placed, NOTHING added to its enable chain, and the test in `install-census.test.ts` (not
+  `deploy-coordinates.test.ts`) as a derived install-subset-of-deploy case over the union of `deploy.sh`'s
+  lanes, red first on exactly the four GPT-lane names. The reverse direction is deliberately not asserted:
+  `deploy.sh` also places `ccrc-api` and `ccrc-models-probe`, which `ccrc install` never places — a
+  pre-existing divergence between the two installers, outside this plan.
+
+- **D-3171 — the Global Constraints' "`ccd/ccd` and `ccd/ccrc` are GENERATED and must be re-stamped" is false
+  for `ccd/ccrc`.** Measured: `ccd/ccrc` carries no provenance marker (`grep -c '^# ccrc:generated' ccd/ccrc`
+  → 0); only `ccd/ccd` does, and `ownership.test.ts` reads only `ccd/ccd`. Tasks 2, 3 and 4 each carried a
+  "re-stamp `ccd/ccrc`" step; running `markGenerated` on it would have inserted a provenance line into a
+  hand-maintained file that nothing scans. No task re-stamped it; each still ran `ownership.test.ts`. The
+  sentence was inherited from the repository's `CLAUDE.md`, which says the same and is equally wrong about
+  `ccd/ccrc`. Correcting it there is owed separately, outside this plan's cut; it is NOT done here.
+
 _(Numbers are API-issued — `POST /api/ledger/deviations` — and defined in the same act. D-3150–D-3163 are already defined in Plan 2a; never reuse or guess one.)_
