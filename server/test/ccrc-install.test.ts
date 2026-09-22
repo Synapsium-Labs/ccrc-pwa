@@ -690,7 +690,21 @@ function pathWithout(home: string, missing: string): string {
     // is not decoration — `ccd`'s platform detection prefers bash's own
     // `$OSTYPE` precisely so a PATH without `uname` cannot silently answer
     // "linux", and this list is where that PATH gets built.
-    ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname'] : [])]) {
+    //
+    // `uuidgen` and `tr` join the darwin arm for the same trap the entries
+    // above document, in the one shape this list had not yet seen: a new
+    // dependency that is INVISIBLE ON LINUX. `_inst_node_id` (the W1 part B
+    // seed-once identity, `ccd/ccrc:9506`) calls `_plat_uuid`, whose linux arm
+    // is `cat /proc/sys/kernel/random/uuid` — a read, no binary at all — and
+    // whose darwin arm is `uuidgen | tr 'A-F' 'a-f'`, two of them. So the
+    // fixture stayed green on every linux leg while the macos leg died at the
+    // new step with `uuidgen: command not found` / `tr: command not found` and
+    // then `ccrc: could not mint a node id`, before either test's own subject
+    // was reached: measured on run 35598474369, where `says GIT IS ABSENT when
+    // git is absent` lost its stamp line and `refuses without rsync` never got
+    // to print its refusal. The verb itself is correct there — it names its
+    // cause and changes nothing — so the gap is this PATH, not the spine.
+    ...(process.platform === 'darwin' ? ['launchctl', 'plutil', 'uname', 'uuidgen', 'tr'] : [])]) {
     if (b === missing || existsSync(join(d, b))) continue;
     symlinkSync(realPath(b), join(d, b));
   }
