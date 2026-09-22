@@ -611,6 +611,43 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
       .toMatch(/uninstall: tree: .*ccd-pool-sync.* removed from \$HOME\/\.local\/bin/);
   });
 
+  // Plan 2b-1 Task 4: the GPT-lane's TWO placed executables (Task 2 narrowed
+  // `_inst_bins` to these — `ccgpt` and `ccgpt-runtime` are not in the tree,
+  // `_inst_atomic` dies on a missing source, so nothing places them and this
+  // census names none) and the usage-window publisher's TEMPLATE unit pair
+  // (Task 3, role-gated `fleet`/`both` — planted directly here since
+  // `plantInstalledBox` fixes a role-agnostic footprint). A template unit is
+  // never itself enabled — only an INSTANCE is, and nothing in this plan
+  // creates one (Plan 3's job) — so removal must be a bare `rm -f`, never a
+  // `systemctl --user disable --now` naming the template: that loop tolerates
+  // failure by design, and a disable with nothing to disable would print a
+  // spurious "failed (continuing …)" line on every uninstall.
+  it('uninstall removes the two GPT-lane executables and the usage unit pair, and never tries to disable the bare template', () => {
+    const home = mkTmp('ccrc-uninst-ccgpt-');
+    plantInstalledBox(home);
+    const bin = join(home, '.local', 'bin');
+    writeFileSync(join(bin, 'ccgpt-proxy.py'), '#!/usr/bin/env python3\n# fixture proxy\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'ccgpt-usage.py'), '#!/usr/bin/env python3\n# fixture usage\n', { mode: 0o755 });
+    const units = join(home, '.config', 'systemd', 'user');
+    writeFileSync(join(units, 'ccgpt-usage@.service'), '[Unit]\nDescription=fixture ccgpt-usage@.service\n');
+    writeFileSync(join(units, 'ccgpt-usage@.timer'), '[Unit]\nDescription=fixture ccgpt-usage@.timer\n');
+    const r = runVerb(home, 'uninstall', ['--force']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    for (const name of ['ccgpt-proxy.py', 'ccgpt-usage.py']) {
+      expect(existsSync(join(bin, name)), `${name} survived uninstall`).toBe(false);
+    }
+    expect(existsSync(join(units, 'ccgpt-usage@.service')), 'the template .service survived').toBe(false);
+    expect(existsSync(join(units, 'ccgpt-usage@.timer')), 'the template .timer survived').toBe(false);
+    if (process.platform !== 'darwin') {
+      const calls = readFileSync(join(home, 'systemctl-calls'), 'utf8');
+      expect(calls, 'a bare template name was passed to disable --now').not.toMatch(/ccgpt-usage@/);
+    }
+    expect(r.stdout, 'the bin census does not name ccgpt-proxy.py')
+      .toMatch(/uninstall: tree: .*ccgpt-proxy\.py.* removed from \$HOME\/\.local\/bin/);
+    expect(r.stdout, 'the bin census does not name ccgpt-usage.py')
+      .toMatch(/uninstall: tree: .*ccgpt-usage\.py.* removed from \$HOME\/\.local\/bin/);
+  });
+
   // The other half of D-1347, and the half that makes the removal safe: the
   // install REFUSES to touch a `graphify` it did not write (`ccrc did not
   // write it — left in place`), so the uninstall may not remove one either.
