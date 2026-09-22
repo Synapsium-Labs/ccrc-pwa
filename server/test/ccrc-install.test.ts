@@ -2394,9 +2394,17 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
 
   // The count is DERIVED from `UNIT_FILES` itself, not hand-written: fix
   // round 1 (Finding 4) measured the title stuck at "ten" while the census
-  // had grown to fourteen, the exact staleness this avoids repeating. The
-  // last two entries of `UNIT_FILES` are always the two drop-ins.
-  it(`installs ${UNIT_FILES.length - 2} unit files and two drop-ins, byte for byte, at 644`, () => {
+  // had grown to fourteen, the exact staleness this avoids repeating.
+  //
+  // Split by SUFFIX, not by position. `UNIT_FILES.length - 2` was the first
+  // spelling and it is a hand-maintained constant wearing a derivation's
+  // clothes: it is correct only while the two drop-ins are the last two rows,
+  // so appending a unit file below them silently makes the title wrong by one
+  // — the same defect, one wave later and harder to see. Every drop-in is a
+  // `.conf`; no unit file is.
+  const dropIns = UNIT_FILES.filter(([dest]) => dest.endsWith('.conf'));
+  const unitFiles = UNIT_FILES.filter(([dest]) => !dest.endsWith('.conf'));
+  it(`installs ${unitFiles.length} unit files and ${dropIns.length} drop-ins, byte for byte, at 644`, () => {
     // `deploy.sh:402-417`'s copy set, plus graphify Task 10's role-gated
     // sweep pair (the default install here is role `both`, so both land).
     // Byte equality rather than existence,
