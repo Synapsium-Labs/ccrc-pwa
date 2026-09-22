@@ -9890,6 +9890,15 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
     # the name too, so the orphan scan in `_inst_wrappers` cannot report it.
     _inst_atomic "$tree/ccd/ccd-telemetry-keepalive" "$bin/ccd-telemetry-keepalive" 755
   fi
+  # Plan 2b-1 Task 2: the GPT-lane common executables. Both arms, not just
+  # the systemd one — `ccgpt` and `ccgpt-runtime` are commands an operator
+  # types and the two `.py` files are their dependencies, not timer-only
+  # tools (spec §7.3 makes the nohup fallback supported). The systemd-only
+  # artifact is `ccgpt-usage@.timer`, and that is `_inst_units`' business.
+  _inst_atomic "$tree/ccd/ccgpt"           "$bin/ccgpt"           755
+  _inst_atomic "$tree/ccd/ccgpt-runtime"   "$bin/ccgpt-runtime"   755
+  _inst_atomic "$tree/ccd/ccgpt-proxy.py"  "$bin/ccgpt-proxy.py"  755
+  _inst_atomic "$tree/ccd/ccgpt-usage.py"  "$bin/ccgpt-usage.py"  755
   # The generated launcher is staged under a name `_inst_atomic`'s own sweep
   # matches (`<dest>.tmp.*`), so a run killed between these two lines leaves
   # nothing the next run does not remove.
@@ -9898,9 +9907,9 @@ _inst_bins() {   # what has to be ON PATH: ccrc's own executables, and the launc
   _inst_atomic "$gen" "$bin/ccrc" 755
   rm -f -- "$gen"
   if [ "$CCD_OS" = darwin ]; then
-    echo "install: bins: ccd, ccd-account-auth and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep and no ccd-pool-sync — their timers are systemd-only)"
+    echo "install: bins: ccd, ccd-account-auth, ccgpt, ccgpt-runtime, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher in \$HOME/.local/bin (no ccd-cap-scopes — it caps cgroup scopes, and macOS has none; no ccd-graph-sweep, no ccd-account-health, no ccd-telemetry-keepalive, no ccd-usage-sweep and no ccd-pool-sync — their timers are systemd-only)"
   else
-    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-pool-sync and the ccrc launcher in \$HOME/.local/bin"
+    echo "install: bins: ccd, ccd-account-auth, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-usage-sweep, ccd-pool-sync, ccgpt, ccgpt-runtime, ccgpt-proxy.py, ccgpt-usage.py and the ccrc launcher in \$HOME/.local/bin"
   fi
 }
 
