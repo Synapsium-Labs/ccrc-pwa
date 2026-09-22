@@ -1,5 +1,6 @@
-// `ccd/ccrc`'s install censuses against its own uninstall censuses — DERIVED
-// FROM THE SOURCE ON BOTH SIDES, never from a list typed here.
+// `ccd/ccrc`'s install censuses against its own uninstall censuses, and
+// against the fallback installer's placement census in `deploy/deploy.sh` —
+// DERIVED FROM THE SOURCE ON EVERY SIDE, never from a list typed here.
 //
 // WHY THIS FILE EXISTS. `_uninst_tree_bins` and `_uninst_units` are hand-kept
 // `rm -f` lists describing what `_inst_bins`, `_inst_graphify_engine` and
@@ -13,6 +14,18 @@
 // It is not the first guard in server/test/ to compare two source-derived
 // lists: `gen-wrappers.test.ts`'s D-93 case compares `_inst_bins`' placements
 // against `TOOLCHAIN_EXECUTABLES`. It is the first over the UNINSTALL censuses.
+//
+// AND AGAINST `deploy/deploy.sh`, THE FALLBACK. `ccrc rollout` is the deploy
+// path and `deploy.sh` the fallback, and it keeps a THIRD hand-kept placement
+// census: `install_atomic … .local/bin/<name>` for binaries, and a
+// `_unit_atomic … ~/.config/systemd/user/<unit>` chain for unit files. It
+// ships by whole-directory `rsync`, so a name `ccrc install` grew still reached
+// the box's `~/ccrc` tree, was never PLACED, and the fallback deploy exited 0
+// — the four GPT-lane names, until Plan 2b-1 Task 7. The last describe below
+// compares ONE WAY, install ⊆ deploy, and that is a decision, not an
+// oversight: `deploy.sh` also places `ccrc-api` and `ccrc-models-probe`, which
+// `ccrc install` places nowhere — a PRE-EXISTING divergence between the two
+// installers, known and outside this guard, which the reverse would red on.
 //
 // THE RULE IS NO SILENT DROPS. Every word this file reads that lands in a census
 // directory either resolves to a name or FAILS THE SUITE, naming the word and the
@@ -132,6 +145,56 @@
 //     — none exists; it would need its own rule when one does.
 //   - Commands inside `echo` arguments and heredoc bodies are read as commands,
 //     and a string or heredoc spanning lines is not modelled.
+//
+// READING `deploy/deploy.sh`. The same machinery — `scanLine`, `calls`,
+// `argAt`, `census` and its normalisation — and where that file's shape makes
+// a rule above inapplicable, the rule it gets instead:
+//   - Remote scripts. Its unit chain and its enables live inside single-quoted
+//     assignments (`AGENT_BUILD_CMD='…'` and its siblings) that span lines and
+//     are run on the box by ssh. Read a line at a time, as above, such a string
+//     is code on every line but its first — and on NONE of them when that first
+//     line ends in `\`, because the join carries the open quote along. So an
+//     assignment whose single quote is still open at the end of its line is
+//     UNWRAPPED: its `NAME='` goes, and its lines up to the next `'` are read as
+//     code, which on the box they are. The rest of the closing line is the
+//     assignment's local tail (the server lane's health URL) and is not read,
+//     and a remote command passed inline as a double-quoted ssh argument is not
+//     unwrapped.
+//   - No silent drops, AT THE VERB. Those limits could lose a call without a
+//     word, so every mention of `install_atomic` and `_unit_atomic` (their
+//     definitions aside) and of the word `enable` in the file's code, comments
+//     cut, must be one this reader reads as a call, or the suite fails with
+//     both counts. Measured when written: every `enable` in the file's code is
+//     a `systemctl` operand.
+//   - Resolution: NONE. Its placements sit at the top level of its two lanes,
+//     not in functions (the launcher's, inside the helper both lanes call, is
+//     spelled literally), so the enclosing-function rule has no function to
+//     read, and the no-scalar-fallback rule above forbids reading file scope.
+//     Every destination is taken as spelled: a `$` in one under a census
+//     directory throws through `census`, and an array reference throws before
+//     `resolveWord` could look it up in `ccd/ccrc`, the one file it reads
+//     arrays from.
+//   - Directories, typed as `BIN_DIR` is. `install_atomic`'s destination is
+//     HOME-relative by its own contract (`.local/bin`, and `~/.local/bin`, the
+//     same directory as the box's shell would spell it); `_unit_atomic`'s is
+//     expanded on the box (`~/.config/systemd/user`, and
+//     `$HOME/.config/systemd/user`, the spelling its `\x2d` drop-ins use).
+//     Only `.local/bin`, `~/.config/…` and `$HOME/.config/…` are in use.
+//   - Lanes. The file is read WHOLE — both lanes and every helper, called or
+//     not — which is the Gates rule above: its two lanes ARE its role gate, and
+//     each side of the comparison is the union over roles. Measured: the
+//     launcher is placed only inside that helper and `ccrc.service` only in the
+//     server lane, so a reading of the agent lane alone reds on both. The union
+//     cannot see a ROLE mismatch: a unit `ccrc install` places only on the fleet
+//     role and `deploy.sh` only in its server lane would pass.
+//   - graphify. `_inst_graphify_engine` is not on the install side of this
+//     comparison, by function rather than by name: `deploy.sh` never builds the
+//     venv that function's link points into — it leaves the whole engine step
+//     to `ccrc install`, and runs its graphify skill installer only where
+//     `~/.ccrc/graphify.pin` already exists — so a fallback that placed the
+//     link would place a dangling one.
+//   - Enables: every operand after `enable` in a `systemctl` call, `--user` or
+//     not; one carrying a `$` throws.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -140,6 +203,8 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC_PATH = path.resolve(here, '..', '..', 'ccd', 'ccrc');
 const CCRC = readFileSync(CCRC_PATH, 'utf8');
+const DEPLOY_PATH = path.resolve(here, '..', '..', 'deploy', 'deploy.sh');
+const DEPLOY = readFileSync(DEPLOY_PATH, 'utf8');
 
 /** The bin census's directory, as `ccd/ccrc` spells it. `$HOME` is never
  *  substituted, so this stays a literal root. */
@@ -626,6 +691,103 @@ function disabledUnits(): Set<string> {
  *  scheme, not a list. */
 const isTemplate = (unit: string): boolean => /@\.[A-Za-z]+$/.test(unit);
 
+// ── reading `deploy/deploy.sh` (header: READING deploy.sh) ───────────────
+
+/** How a refusal names deploy.sh. */
+const DEPLOY_WHERE = 'deploy/deploy.sh';
+/** Where `install_atomic` and `_unit_atomic` land a name, in every spelling
+ *  each accepts (header: Directories). */
+const DEPLOY_BIN_DIRS = ['.local/bin', '~/.local/bin'];
+const DEPLOY_UNIT_DIRS = ['~/.config/systemd/user', '$HOME/.config/systemd/user'];
+
+/**
+ * deploy.sh's code as one script: every line through `scanLine`, which cuts
+ * comments as `fnBody` does, and every single-quoted assignment still open at
+ * the end of its line UNWRAPPED — its `NAME='` removed and its lines, up to
+ * the next `'`, read as the code the box runs. A single-quoted string cannot
+ * contain `'`, so the next one is its close, however many lines on.
+ */
+function deployCode(): string {
+  const out: string[] = [];
+  let open = false;
+  for (const raw of DEPLOY.split('\n')) {
+    if (open) {
+      const close = raw.indexOf("'");
+      if (close >= 0) open = false;
+      out.push(scanLine(close < 0 ? raw : raw.slice(0, close)).code);
+      continue;
+    }
+    const { code } = scanLine(raw);
+    const m = /^(\s*)[A-Za-z_][A-Za-z0-9_]*='([^']*)$/.exec(code);
+    if (m === null) { out.push(code); continue; }
+    open = true;
+    out.push(scanLine(m[1]! + m[2]!).code);
+  }
+  if (open) {
+    throw new Error(`install-census.test.ts: a single-quoted assignment in ${DEPLOY_PATH} never closes — this reader has gone stale`);
+  }
+  return out.join('\n');
+}
+
+/**
+ * THE NO-SILENT-DROPS RULE, AT THE VERB (header). The mentions of `word` in
+ * deploy.sh's code — comments cut a line at a time, nothing unwrapped and
+ * nothing dropped, `word()` definitions aside — must number exactly `read`,
+ * what this reader took out of `deployCode`. A mention it did not read is a
+ * call inside a string it does not unwrap, or past a remote script's close.
+ */
+function everyMentionRead(word: string, read: number, as: string): void {
+  const code = DEPLOY.split('\n').map((l) => scanLine(l).code).join('\n');
+  const said = [...code.matchAll(new RegExp(`(?<![A-Za-z0-9_-])${word}(?![A-Za-z0-9_(-])`, 'g'))].length;
+  if (said !== read) {
+    throw new Error(
+      `install-census.test.ts: ${DEPLOY_PATH} names \`${word}\` ${said} time(s) outside comments and definitions, `
+      + `and this reader reads ${read} ${as}. A mention it does not read — inside a string it does not unwrap, `
+      + 'or after a remote script\'s closing quote — would lose what it places or enables without a word. '
+      + 'Teach this reader, or move the call where it reads.',
+    );
+  }
+}
+
+/** Every name the destination argument of a `cmd` call in deploy.sh lands in
+ *  one of `dirs` — through `census`, resolving nothing (header: Resolution). */
+function deployPlaced(cmd: 'install_atomic' | '_unit_atomic', dirs: string[]): Set<string> {
+  const all = calls(deployCode(), cmd);
+  everyMentionRead(cmd, all.length, 'call(s) of it');
+  const dests = argAt(DEPLOY_WHERE, cmd, all, 1);
+  const array = dests.find((d) => /\$\{[A-Za-z_][A-Za-z0-9_]*\[/.test(d));
+  if (array !== undefined) {
+    throw new Error(
+      `install-census.test.ts: unresolvable placement "${array}" in ${DEPLOY_WHERE}: an array reference, and `
+      + 'this reader resolves nothing in that file (`resolveWord` would read the array out of ccd/ccrc). '
+      + 'Spell it literally.',
+    );
+  }
+  return census(DEPLOY_WHERE, 'placement', dests, dirs, new Map());
+}
+
+/** Every operand after `enable` in a `systemctl` call in deploy.sh, `--user`
+ *  or not. Each must be a literal unit name, or this throws: an operand it
+ *  cannot read could be a template. */
+function deployEnabled(): Set<string> {
+  const all = calls(deployCode(), 'systemctl').filter((args) => args.includes('enable'));
+  everyMentionRead('enable', all.reduce((n, args) => n + args.filter((a) => a === 'enable').length, 0),
+    '`systemctl … enable` call(s)');
+  const out = new Set<string>();
+  for (const args of all) {
+    for (const op of args.slice(args.indexOf('enable') + 1).filter((a) => !a.startsWith('-'))) {
+      if (op === '' || op.includes('$')) {
+        throw new Error(
+          `install-census.test.ts: unresolvable enable operand "${op}" in ${DEPLOY_WHERE}: this reader resolves `
+          + 'nothing there, and an operand it cannot read could be a template. Spell it literally.',
+        );
+      }
+      out.add(op);
+    }
+  }
+  return out;
+}
+
 // ── the floors ────────────────────────────────────────────────────────────
 //
 // A FLOOR GUARDS AGAINST AN EXTRACTOR THAT MATCHES NOTHING, or next to nothing
@@ -644,6 +806,10 @@ const isTemplate = (unit: string): boolean => /@\.[A-Za-z]+$/.test(unit);
 // other cause too, because it is the only other one a count can detect.
 const BIN_FLOOR = 5;
 const UNIT_FLOOR = 8;
+// deploy.sh's placement extractors reuse those two (measured after Plan 2b-1
+// Task 7: 14 binaries under `.local/bin`, 19 unit files), and its enables take
+// a third, 4 against the 9 it makes.
+const ENABLE_FLOOR = 4;
 
 const PLACED_BINS_READ = "_inst_bins' `_inst_atomic` destinations and _inst_graphify_engine's `ln -s` destinations";
 
@@ -778,6 +944,71 @@ describe('ccd/ccrc: the install census and the uninstall census cannot drift apa
     expect([...disabled].filter(isTemplate).sort(),
       'these template units (`name@.suffix`) are `systemctl … disable --now` operands in '
       + '_uninst_units\' systemd arm. Remove them from that call: a template is removed by `rm -f` only.')
+      .toEqual([]);
+  });
+});
+
+describe('deploy/deploy.sh, the fallback installer, places everything `ccrc install` places', () => {
+  // ONE WAY, install ⊆ deploy (header: AND AGAINST deploy.sh). Both floors in
+  // each case: it filters the PLACED set, so an empty one would pass on its
+  // own however deploy.sh reads, and an empty deploy side would red every name
+  // for a reason that is this file's, not deploy.sh's.
+  it('every binary _inst_bins places, deploy.sh places too', () => {
+    const placed = placedBins();
+    const deployed = deployPlaced('install_atomic', DEPLOY_BIN_DIRS);
+    expect(placed.size,
+      'the _inst_bins extractor found too few placed binaries — it has gone stale, unless the function it reads really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+    expect(deployed.size,
+      'the deploy.sh `install_atomic` extractor found too few binaries under .local/bin — it has gone stale, unless deploy.sh really lost most of them')
+      .toBeGreaterThan(BIN_FLOOR);
+
+    expect([...placed].filter((n) => !deployed.has(n)).sort(),
+      `these are placed into ${BIN_DIR} by _inst_bins' \`_inst_atomic\` destinations and no \`install_atomic\` `
+      + `destination in ${DEPLOY_WHERE} places them under .local/bin, so a fallback deploy ships them into ~/ccrc `
+      + 'and never onto PATH. Add `install_atomic ccd/<name> .local/bin/<name> 755` to its agent lane. '
+      + '(_inst_graphify_engine\'s link is not compared — header: READING deploy.sh.)')
+      .toEqual([]);
+  });
+
+  it('every systemd unit file _inst_units places, deploy.sh places too', () => {
+    const placed = placedUnits();
+    const deployed = deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS);
+    expect(placed.size,
+      'the _inst_units extractor found too few placed unit files — it has gone stale, unless the function it reads really lost most of them')
+      .toBeGreaterThan(UNIT_FLOOR);
+    expect(deployed.size,
+      'the deploy.sh `_unit_atomic` extractor found too few unit files — it has gone stale, unless deploy.sh really lost most of them')
+      .toBeGreaterThan(UNIT_FLOOR);
+
+    expect([...placed].filter((u) => !deployed.has(u)).sort(),
+      'these are `_inst_atomic` destinations in _inst_units\' systemd arm and no `_unit_atomic` destination in '
+      + `${DEPLOY_WHERE} places them, in either lane's remote build command, so a fallback deploy ships them into `
+      + '~/ccrc and systemd never sees them. Add `_unit_atomic ~/ccrc/deploy/systemd/<unit> '
+      + '~/.config/systemd/user/<unit>` to the chain of the lane that runs the unit.')
+      .toEqual([]);
+  });
+
+  it('deploy.sh enables no template unit, and no instance of a template either installer places', () => {
+    // A bare template cannot be enabled, and an INSTANCE is not a deploy's to
+    // arm: a session's is `ccd`'s, and a GPT lane's is the step that adopts the
+    // lane (Plan 3). `ccrc install`'s `_inst_enable` arms neither. The families
+    // are DERIVED from the templates the two installers place, not typed, so
+    // this binds `ccgpt-usage@` and `claude-session@` alike.
+    const enabled = deployEnabled();
+    expect(enabled.size,
+      'the `systemctl … enable` extractor over deploy.sh found too few units — it has gone stale, unless deploy.sh really stopped enabling most of them')
+      .toBeGreaterThan(ENABLE_FLOOR);
+    const templates = [...placedUnits(), ...deployPlaced('_unit_atomic', DEPLOY_UNIT_DIRS)].filter(isTemplate);
+    expect(templates.length,
+      'neither installer places a template unit, so the instance half of this case would check nothing — an extractor has gone stale')
+      .toBeGreaterThan(0);
+    const families = [...new Set(templates.map((t) => t.slice(0, t.indexOf('@') + 1)))];
+
+    expect([...enabled].filter((u) => isTemplate(u) || families.some((f) => u.startsWith(f))).sort(),
+      `these \`systemctl … enable\` operands in ${DEPLOY_WHERE} are a template unit (\`name@.suffix\`) or an `
+      + `instance of one an installer places (${families.join(', ')}). Remove them from the enable chain: a template `
+      + 'is placed and never enabled, and its instances are armed per session or per lane, not by a deploy.')
       .toEqual([]);
   });
 });
