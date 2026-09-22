@@ -1099,6 +1099,17 @@ describe('ccrc install: the fixture tree', () => {
     writeFileSync(treeFile(home, 'deploy/accounts.default.json'), 'clobbered');
     expect(read(join(REPO, 'deploy', 'accounts.default.json'))).toBe(DEFAULT_SEED);
   });
+
+  it('the fixture tree carries the four GPT-lane common executables', () => {
+    const home = mkTmp('ccrc-tree-ccgpt-');
+    const root = installFixtureTree(home);
+    for (const rel of ['ccd/ccgpt', 'ccd/ccgpt-runtime', 'ccd/ccgpt-proxy.py', 'ccd/ccgpt-usage.py']) {
+      const p = join(root, rel);
+      expect(existsSync(p), `${rel} missing from the fixture tree`).toBe(true);
+      // 0o111 — every one of these is exec'd or placed 755 by `_inst_bins`.
+      expect(statSync(p).mode & 0o111, `${rel} is not executable`).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe('ccrc install: a fresh box', () => {

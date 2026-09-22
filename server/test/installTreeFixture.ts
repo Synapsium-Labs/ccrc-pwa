@@ -43,6 +43,13 @@ export const TREE_FILES = [
   'ccd/ccrc-doctor-checks',
   'ccd/ccrc-wrapper-shape',
   'ccd/ccrc-adopt',
+  // Plan 2b-1 Task 1: the GPT-lane common executables. The two `.py` files
+  // ship today (Plan 2a) and are copied from the repository; `ccgpt` and
+  // `ccgpt-runtime` do not exist until Plan 2b-2, so they are TREE_STUBS
+  // below. `_inst_bins` places all four, so a tree missing any one makes a
+  // placement assertion fail for a fixture reason rather than a real one.
+  'ccd/ccgpt-proxy.py',
+  'ccd/ccgpt-usage.py',
   // The generators, reached as `$CCRC_HERE/../deploy/<name>.mjs` — the same
   // "one directory up from this script" resolution `cmd_wrappers` uses, true
   // in a checkout and at `~/ccrc/deploy` on a deployed box.
@@ -200,6 +207,12 @@ export const TREE_STUBS: Record<string, string> = {
   // same reason the two above are — a fleet box cannot run an agent it never
   // built — and deleted by the one test that wants that refusal.
   'agent/dist/agent/src/index.js': '// fixture: stands in for the built agent\n',
+  // Plan 2b-1 Task 1, removed by Plan 2b-2 when the real files land: stubs so
+  // `_inst_bins` can place four names before two of them are written. Each is
+  // a valid no-op script, because `installFixtureTree` preserves mode and
+  // `cmd_install` may exec what it places.
+  'ccd/ccgpt': '#!/usr/bin/env bash\n# fixture stub — Plan 2b-2 writes the real launcher\nexit 0\n',
+  'ccd/ccgpt-runtime': '#!/usr/bin/env bash\n# fixture stub — Plan 2b-2 writes the real runtime builder\nexit 0\n',
 };
 
 /** Builds a fixture tree out of `TREE_FILES` + `TREE_STUBS`, preserving each
@@ -222,6 +235,11 @@ export function installFixtureTree(home: string, sub = 'checkout'): string {
     const dest = join(root, rel);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, body);
+    // Every stub under `ccd/` stands in for a shipped executable `_inst_bins`
+    // places (or execs) — the repo's real files there are 0755, so a stub
+    // needs the same mode or a placement/exec assertion fails for a fixture
+    // reason rather than a real one.
+    if (rel.startsWith('ccd/')) chmodSync(dest, 0o755);
   }
   return root;
 }
