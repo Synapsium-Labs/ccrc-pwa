@@ -45,7 +45,7 @@ import { readHookState } from './hookstate.js';
 import { listProjects, type CcdResult } from './lifecycle.js';
 import { projectReadiness } from './readiness.js';
 import { sessionCommands } from './commands.js';
-import { CLIP_NAME_RE, clipPath, isSafeSessionId, stageUpload } from './clip.js';
+import { CLIP_MIME, CLIP_NAME_RE, clipPath, clipStem, isSafeSessionId, stageUpload } from './clip.js';
 import type { SpawnPty } from './pty.js';
 import type { PushService } from './push.js';
 import type { NotifyLog } from './notifylog.js';
@@ -67,7 +67,8 @@ import {
   ChallengeStore, relyingPartyProblem, userHandleFor, verifyAssertion, verifyRegistration,
 } from './auth/webauthn.js';
 import {
-  ASK_OPERATOR_PRINCIPAL, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES, PANE_HISTORY_LINES,
+  ASK_OPERATOR_PRINCIPAL, CLIP_EXT_ALT, FLEET_PROTO, FLEET_PROTO_MIN, HOLD_ROUTE_REASON_MAX_BYTES,
+  PANE_HISTORY_LINES,
   type AccountsResponse, type AccountUsage, type AuthStatus, type CoordStatus, type Divergence,
   type FleetHealth, type FleetMsg,
   type FleetSession,
@@ -151,13 +152,11 @@ export const POOL_LEASE_MS = poolLease.value;
 
 /** Post-downscale ceiling for one attachment. */
 const MAX_UPLOAD_BYTES = 12 * 1024 * 1024;
+/** The upload gate's extension test, built ONCE from `CLIP_EXTS`. Module scope
+ *  because the route runs per request; no `g` flag, so it carries no lastIndex. */
+const UPLOAD_EXT_RE = new RegExp(`\\.(${CLIP_EXT_ALT})$`, 'i');
 /** Ceiling on attachments per prompt — a sanity bound, not a UX limit. */
 const MAX_ATTACHMENTS = 4;
-
-/** Content-Type for the clip route, keyed by the (real) extension `clipName` wrote. */
-const CLIP_MIME: Record<string, string> = {
-  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', webp: 'image/webp',
-};
 
 /**
  * Which `AuthStatus` fields an UNAUTHENTICATED caller may see on the exempt
@@ -2817,8 +2816,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return runCcdOr502(reply, CCD_ARGV.stopPair(originalWrapper, rec.project, surface));
   });
 
-  // Image upload: stage the bytes under ~/.cc-clips/<id>/ and return the path.
-  // Nothing is typed into the session — the prompt route injects it at send.
+  // Attachment upload: stage the bytes under ~/.cc-clips/<id>/ and return the
+  // path. Nothing is typed into the session — the prompt route injects it at
+  // send. Images and documents take the SAME lane: the server has no decoder
+  // for either, and a document's whole point is that it arrives byte-identical.
   app.post('/api/sessions/:id/upload', async (req, reply) => {
     const { id } = req.params as { id: string };
     // Both gates run BEFORE req.file(). Replying without consuming the multipart
@@ -2834,7 +2835,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     }
     const part = await req.file();
     if (!part) return reply.code(400).send({ ok: false, error: 'bad-request' });
-    const m = /\.(png|jpe?g|webp)$/i.exec(part.filename ?? '');
+    const filename = part.filename ?? '';
+    // The EXTENSION decides, never the part's Content-Type: a client picks that
+    // and a phone's is routinely wrong or absent for documents (a .md arrives as
+    // text/markdown, text/plain or '' depending on the OS). The extension is also
+    // what the stored name, the clip route's MIME table and CLIP_PATH_RE all key
+    // on, so gating on anything else would admit a file the rest cannot serve.
+    const m = UPLOAD_EXT_RE.exec(filename);
     if (!m) {
       part.file.resume();   // drain the rejected stream so the request finishes cleanly
       return reply.code(415).send({ ok: false, error: 'unsupported-type' });
@@ -2843,7 +2850,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (data.byteLength > MAX_UPLOAD_BYTES) {
       return reply.code(413).send({ ok: false, error: 'too-large' });
     }
-    const clip = await stageUpload(deps.io, deps.cfg, id, data, m[1]!.toLowerCase());
+    // `now` and `rand` keep their defaults — the stem is the only thing this
+    // call has to say, and it is what makes four staged documents tellable
+    // apart once they are four paths in one prompt.
+    const clip = await stageUpload(
+      deps.io, deps.cfg, id, data, m[1]!.toLowerCase(), undefined, undefined, clipStem(filename),
+    );
     return { ok: true, clip };
   });
 
@@ -2883,6 +2895,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
     return reply
       .type(CLIP_MIME[ext] ?? 'application/octet-stream')
+      // These are bytes a client uploaded, served back from the app's OWN
+      // origin. `CLIP_MIME` names no script type and never should, but that is
+      // only half of it: without `nosniff` a browser may decide for itself that
+      // a `text/plain` clip is really HTML and run it here. Cheap before
+      // documents were admitted, load-bearing now that the store holds text the
+      // user wrote.
+      .header('x-content-type-options', 'nosniff')
       .header('cache-control', 'private, max-age=31536000, immutable')
       .send(Buffer.from(r.dataB64, 'base64'));
   });
