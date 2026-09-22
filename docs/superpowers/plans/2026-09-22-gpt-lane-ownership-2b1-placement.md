@@ -548,8 +548,8 @@ git fetch origin main && cd server && ./node_modules/.bin/vitest run test/deviat
 
 ## Deviations found
 
-**D-3164 — `ccgpt-usage@.service` ships an `ExecStart` that cannot import `litellm`, and the
-remedy is deferred to the plan that defines the runtime.**
+- **D-3164 — `ccgpt-usage@.service` ships an `ExecStart` that cannot import `litellm`, and the
+  remedy is deferred to the plan that defines the runtime.**
 
 `ccd/ccgpt-usage.py:229` does `from litellm.llms.chatgpt.authenticator import Authenticator`.
 Its shebang is `#!/usr/bin/env python3`, so the interpreter comes from whatever PATH systemd's
