@@ -1,46 +1,102 @@
-// `ccd/ccrc`'s install census against its own uninstall census — DERIVED FROM
-// THE SOURCE ON BOTH SIDES, never from a list typed here.
+// `ccd/ccrc`'s install censuses against its own uninstall censuses — DERIVED
+// FROM THE SOURCE ON BOTH SIDES, never from a list typed here.
 //
 // WHY THIS FILE EXISTS. `_uninst_tree_bins` and `_uninst_units` are hand-kept
-// `rm -f` lists describing what `_inst_bins` and `_inst_units` place. That pair
-// of lists has been caught stale three separate times (D-1347, where the
-// install grew `graphify` and the removal did not; D-2594, where `main` added
-// `ccd-telemetry-keepalive`; and the routing slice, where the usage sweep's two
-// names landed in one list and not the prose that counted them). Every one of
-// those was found by a human reading two paragraphs side by side. A binary
-// whose units an uninstall removes and whose file it leaves behind is an orphan
-// on `$PATH` for ever — and a unit file left behind under a removed binary is a
-// 203/EXEC failure every interval, for ever. This file is the machine that
-// compares the two lists, in BOTH directions, so neither can grow without the
-// other.
+// `rm -f` lists describing what `_inst_bins`, `_inst_graphify_engine` and
+// `_inst_units` place. D-1347 is the shape this file closes: the install grew a
+// name (`graphify`) and the removal list did not, and nothing noticed. Two later
+// incidents usually counted with it are a DIFFERENT shape — D-2594 and the
+// routing slice were the PROSE paragraph that counts the list going stale while
+// the `rm -f` itself was right. This file reads commands, not prose, and does
+// not catch that shape.
 //
-// THE SHAPE IS `gen-wrappers.test.ts:86-112`'s, deliberately — the same
-// `_inst_atomic … "$bin/<name>"` idiom, so this repository has ONE way of
-// reading a placement out of `ccd/ccrc` rather than two. Its doc comment
-// explains why a second, independent derivation matters at all: deriving both
-// sides of a comparison from ONE source makes the comparison tautological in
-// the direction that matters, which is measured, not hypothetical. Here the two
-// sides really are independent — `_inst_*` and `_uninst_*` are different
-// functions with different text — so the comparison has content.
+// It is not the first guard in server/test/ to compare two source-derived
+// lists: `gen-wrappers.test.ts`'s D-93 case compares `_inst_bins`' placements
+// against `TOOLCHAIN_EXECUTABLES`. It is the first over the UNINSTALL censuses.
 //
-// WHAT IS NOT INHERITED FROM THAT PRECEDENT: its
-// `.filter((n) => !n.includes('.'))`. That filter is correct THERE and would be
-// a silent hole HERE. `gen-wrappers.mjs`'s `ID_RE` can never match a dotted
-// name, so its orphan scan settles `ccd-usage-sweep.py` before the Set it
-// checks is consulted; dropping dotted names costs that suite nothing. This
-// file's whole subject is the uninstall census, and three of the names that
-// census MUST carry are dotted — `ccd-usage-sweep.py`, `ccgpt-proxy.py` and
-// `ccgpt-usage.py`. Inheriting the filter would drop all three from both sides
-// at once, which is a VACUOUS pass on exactly the names the GPT-lane plan
-// added. The filter is absent on purpose; do not add it back.
+// THE RULE IS NO SILENT DROPS. Every word this file reads that lands in a census
+// directory either resolves to a name or FAILS THE SUITE, naming the word and the
+// function. A name the extractor cannot read would otherwise vanish from BOTH
+// sides at once, and a comparison of two sets missing the same name is green.
+// So a placement or removal whose NAME comes from a `for` loop variable
+// (`"$bin/$n"`, `"$dir/$u"`) THROWS rather than being evaluated: this file is
+// not a bash interpreter, and a loud refusal ("spell it literally, or teach
+// this extractor") is the right trade against growing one. Two exclusions are
+// rules rather than accidents, stated where they apply in `census` below: a
+// name spelled with `$$` is a per-process staging name, and a path with a `/`
+// below the census directory is a drop-in inside a subdirectory.
 //
-// NO NAME OF THE SUBJECT IS TYPED IN THIS FILE. A third hand-kept copy of the
-// census is the defect this guard exists to delete, so every name compared
-// below is read out of `ccd/ccrc`. The two `ccd`/`ccrc` anchors and the two
-// `BOX_UNIT_NAMES` anchors are ANTI-VACUITY CONTROLS, not a census: the first
-// pair is the tool and its launcher, the only two placements under no platform
-// or role gate at all, and the second pair is read out of the array `ccd/ccrc`
-// itself declares.
+// HOW A WORD IS READ. Whole-line comments are stripped first — commenting a
+// line out is the commonest way to disable it, and a commented-out removal must
+// not count as a removal. Backslash continuations are joined. A command is
+// recognised by its name standing as a word outside quotes (start of line,
+// whitespace, or one of `;&|{(!` before it), and its operands are read as shell
+// words (double-quoted, bare, or concatenated), up to the first unquoted
+// operator or redirection. A variable resolves through THE ENCLOSING FUNCTION'S
+// OWN assignments only — the union of every value that function gives it — and
+// `${ARR[n]}` / `${ARR[@]}` through the single file-scope `ARR=(…)` declaration.
+// `$HOME` is never substituted: it is the literal root of the bin census's
+// directory. There is deliberately no file-scope scalar fallback. Measured
+// before it was deleted: it changed no result on the tree as it stands; it let
+// one function's locals resolve inside another, which turned three real defects
+// green; and it caught one spelling — a unit named through a file-scope global —
+// which the no-silent-drops rule now refuses loudly instead.
+//
+// THE SHAPE IS `gen-wrappers.test.ts:86-112`'s, EXTENDED, AND NO LONGER
+// BYTE-IDENTICAL. That precedent reads `_inst_bins` with one regex over literal
+// `"$bin/<name>"` spellings, which is right for it: it needs only the names
+// spelled that way today. This file must RESOLVE — a destination written
+// `"${bin}/x"`, `"$dst"`, bare, or across a line continuation is still a
+// placement — so it takes the destination argument of each `_inst_atomic` call
+// and resolves it. What is deliberately NOT inherited is that precedent's
+// `.filter((n) => !n.includes('.'))`: correct THERE (`gen-wrappers.mjs`'s
+// `ID_RE` never matches a dotted name), a blind spot HERE. Three of the names
+// this census must carry are dotted (`ccd-usage-sweep.py`, `ccgpt-proxy.py`,
+// `ccgpt-usage.py`), and the filter would drop all three from both sides at
+// once — a green that says nothing about exactly the names the GPT-lane plan
+// added. Do not add it back.
+//
+// NO NAME OF THE SUBJECT IS TYPED IN THIS FILE'S CODE AS A CENSUS. Comments
+// name some, to explain. The code types two, `ccd` and `ccrc`, as anti-vacuity
+// anchors — the tool and its launcher, which the install places on every
+// platform and every role — and reads the `BOX_UNIT_NAMES` anchors out of the
+// array `ccd/ccrc` declares. A third hand-kept copy of the census is the defect
+// this guard exists to delete.
+//
+// STATED SCOPE — what this file does NOT read. Each is a declared limit, not a
+// hidden one:
+//   - Bodies. Placements are read from `_inst_bins` and `_inst_graphify_engine`
+//     (bins) and `_inst_units` (units); removals from `_uninst_tree_bins` and
+//     the systemd arm of `_uninst_units`. A placement made in any other function
+//     — another install step, or a helper these call — is not read.
+//   - Verbs. A placement is an `_inst_atomic` destination, or an `ln -s`
+//     destination inside `_inst_graphify_engine` (and nowhere else). A removal
+//     is an operand of `rm -f`, that exact flag word: `rm -rf` and `rm -fv` are
+//     not read. `cp`, `install -m`, `mv`, `printf >` and redirection are not
+//     read — so a link that reaches its final name by `mv` is not either.
+//   - Quoting. Single quotes are read as if they were double quotes. Measured
+//     when this was written: every one of the 69 `rm -f` lines in `ccd/ccrc`
+//     double-quotes its operands, and none spells `rm -fv`.
+//   - File-scope globals. With no scalar fallback, a word that STARTS with an
+//     unresolved variable cannot be placed in a directory. On the placement
+//     side that THROWS, because every placement those bodies make lands in a
+//     census directory. On the removal side it is read as outside the census,
+//     because `_uninst_tree_bins` legitimately removes four such words
+//     (`$BOX_INSTALLED_FILE` and the node's three files) under `~/.ccrc`: so a
+//     STALE removal spelled through a global is invisible to direction 2, and
+//     a real placement whose only removal is spelled that way reds direction 1.
+//   - Gates. Platform and role conditions are ignored on both sides: each
+//     census is the union over every platform and role, as uninstall is.
+//   - Directories. Drop-in directories (removed by `rm -rf`) and the files
+//     inside them are excluded by the `/` rule, so a new drop-in directory that
+//     is placed and never removed is not caught.
+//   - Slicing. A function body ends at its first column-0 `}`. A column-0 `}`
+//     inside a function is already forbidden in writing, for this same reason,
+//     by the paragraph above `_inst_shim` in `ccd/ccrc`.
+//   - Darwin. `_inst_units_darwin`'s plist and `_uninst_units`' Darwin arm are
+//     out of scope (that arm's names are computed by `_svc_label` at run time),
+//     and so is the literal target `_uninst_tree_bins` checks the graphify link
+//     against before removing it.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -50,21 +106,21 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const CCRC_PATH = path.resolve(here, '..', '..', 'ccd', 'ccrc');
 const CCRC = readFileSync(CCRC_PATH, 'utf8');
 
-/** The directory every name in the BIN census lives in, written the way
- *  `ccd/ccrc` writes it. Never expanded: `$HOME` is the fixture-independent
- *  root of the only path this census is scoped to, so it stays a literal and
- *  `resolveWord` below refuses to substitute it. */
-const BIN_PREFIX = '$HOME/.local/bin/';
-/** The unit directory, as `_inst_units` and `_uninst_units` both spell it.
- *  Both bind `dir="$BOX_UNIT_DIR"`, which `assertBindsUnitDir` proves — so
- *  `$dir/` is a sound scope token and needs no expansion either (expanding it
- *  would drag in the Darwin `~/Library/LaunchAgents` arm, which is not this
- *  census's subject). */
-const UNIT_PREFIX = '$dir/';
+/** The bin census's directory, as `ccd/ccrc` spells it. `$HOME` is never
+ *  substituted, so this stays a literal root. */
+const BIN_DIR = '$HOME/.local/bin';
+/** The unit census's directory: what `_inst_units` and `_uninst_units` both
+ *  bind `dir` to (`bindsExactlyOnce` proves it). It is a file-scope global,
+ *  and file-scope scalars are not resolved, so it stays a literal root too —
+ *  which also keeps the Darwin `~/Library/LaunchAgents` value out. */
+const UNIT_DIR = '$BOX_UNIT_DIR';
+
+type Local = Map<string, Set<string>>;
 
 // ── reading `ccd/ccrc` ────────────────────────────────────────────────────
 
-/** One top-level bash function's body: `name() {` to the `}` in column 0. */
+/** One top-level function's body: `name() {` to the first `}` in column 0,
+ *  with WHOLE-LINE COMMENTS STRIPPED before anything reads it. */
 function fnBody(name: string): string {
   const sig = `\n${name}() {`;
   const count = CCRC.split(sig).length - 1;
@@ -78,28 +134,31 @@ function fnBody(name: string): string {
   const i = CCRC.indexOf(sig);
   const j = CCRC.indexOf('\n}\n', i + sig.length);
   if (j < 0) throw new Error(`install-census.test.ts: \`${name}\` has no closing brace in column 0 — extractor stale`);
-  return CCRC.slice(i + sig.length, j);
+  return CCRC.slice(i + sig.length, j).split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
 }
 
-/** Continuation lines joined, so a `rm -f … \` spanning six lines is one
- *  command to every scan below. */
+/** Continuation lines joined, so a `rm -f … \` spanning six lines is one line. */
 function logicalLines(body: string): string[] {
   return body.replace(/\\\n\s*/g, ' ').split('\n');
 }
 
 /**
- * Every value a bash name is assigned in a stretch of text. A MULTIMAP, not a
- * map: `role_unit` is assigned twice in `_inst_units` (`ccrc.service`, then
- * `ccrc-agent.service` under the fleet gate) and BOTH are placements, so a
- * resolver that kept only the last one would lose whichever unit this box is
- * not. Quoted and bare forms both, because `role_unit=ccrc.service` is bare.
+ * Every value each name is assigned in a function body. A MULTIMAP — the union
+ * of every value, whatever gate it sits under — because `role_unit` is assigned
+ * twice in `_inst_units` (`ccrc.service`, then `ccrc-agent.service` under the
+ * fleet gate) and BOTH are placements. Quoted and bare forms both.
+ *
+ * A TEXT SCAN, NOT A PARSE: a `name=value` inside a string or a `$(…)` counts
+ * too, and a quoted value is cut at its first inner quote. Harmless for the
+ * names this file resolves — and the two whose extra values would matter, `bin`
+ * and `dir`, are refused unless bound exactly once (`bindsExactlyOnce`).
  */
-function assignments(text: string): Map<string, Set<string>> {
-  const out = new Map<string, Set<string>>();
-  for (const m of text.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|([^\s;"'|&()]+))/g)) {
-    const name = m[1]!;
+function assignments(body: string): Local {
+  const out: Local = new Map();
+  for (const m of body.matchAll(/(?:^|\s)([A-Za-z_][A-Za-z0-9_]*)=(?:"([^"]*)"|([^\s;"'|&()]+))/g)) {
     const value = m[2] !== undefined ? m[2] : m[3];
     if (value === undefined) continue;
+    const name = m[1]!;
     let set = out.get(name);
     if (set === undefined) { set = new Set(); out.set(name, set); }
     set.add(value);
@@ -107,13 +166,7 @@ function assignments(text: string): Map<string, Set<string>> {
   return out;
 }
 
-/** File-scope assignments, the fallback for a name a function body does not
- *  bind itself (`$BOX_INSTALLED_FILE` and friends). Anything that resolves
- *  outside the two prefixes above is discarded by the prefix filters, so a
- *  spurious binding costs nothing. */
-const FILE_ASSIGNS = (() => assignments(CCRC))();
-
-/** One `NAME=(a b c)` array declaration, read out of `ccd/ccrc`. */
+/** The elements of the one file-scope `NAME=(a b c)` declaration. */
 function arrayElements(name: string): string[] {
   const all = [...CCRC.matchAll(new RegExp(`^${name}=\\(([^)]*)\\)`, 'gm'))];
   if (all.length !== 1) {
@@ -126,199 +179,266 @@ function arrayElements(name: string): string[] {
 }
 
 /**
- * Every concrete string a quoted bash word may denote, substituting `$var` and
- * `${ARR[n]}` through the enclosing function's own assignments (then file
- * scope). `$HOME` is never substituted — see `BIN_PREFIX`.
- *
- * THIS IS THE ROW WHERE NEITHER SIDE IS A LITERAL. `_inst_units` writes
- * `"$dir/$role_unit"` and `_uninst_units` writes `"$dir/${BOX_UNIT_NAMES[0]}"`
- * and `[1]`; they are the same two units spelled two different ways, and both
- * spellings are resolvable from `ccd/ccrc`'s own text. Resolving them is what
- * lets this file compare them WITHOUT typing `ccrc.service` anywhere.
+ * A binding this file scopes a census by must have EXACTLY ONE value. `.has()`
+ * alone would pass a function that also rebinds `bin` or `dir` under some gate
+ * — which sends every placement under that gate to a directory the uninstall
+ * never touches, while the census still reads them as the one it does.
  */
-function resolveWord(word: string, local: Map<string, Set<string>>, depth = 0): Set<string> {
-  if (depth > 4) return new Set([word]);
-  const arr = /\$\{([A-Za-z_][A-Za-z0-9_]*)\[([0-9]+)\]\}/.exec(word);
-  if (arr !== null) {
-    const el = arrayElements(arr[1]!)[Number(arr[2]!)];
-    if (el === undefined) return new Set([word]);
-    return resolveWord(word.slice(0, arr.index) + el + word.slice(arr.index + arr[0].length), local, depth + 1);
-  }
-  const v = /\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/.exec(word);
-  if (v === null) return new Set([word]);
-  const name = v[1]!;
-  const head = word.slice(0, v.index);
-  const tail = word.slice(v.index + v[0].length);
-  if (name === 'HOME') {
-    // Left standing, and the rest of the word resolved around it.
-    return new Set([...resolveWord(tail, local, depth + 1)].map((r) => `${head}$HOME${r}`));
-  }
-  const values = local.get(name) ?? FILE_ASSIGNS.get(name);
-  if (values === undefined) return new Set([word]); // unresolved: the prefix filters drop it
-  const out = new Set<string>();
-  for (const value of values) {
-    for (const r of resolveWord(head + value + tail, local, depth + 1)) out.add(r);
-  }
-  return out;
-}
-
-/**
- * The leaf name of a path under `prefix`, or `null`.
- *
- * REJECTS A REMAINDER CONTAINING `/`, which is the whole of the "and to file
- * names" scoping rule: `_inst_units` places
- * `"$dir/claude-session@.service.d/limits.conf"`, a drop-in FILE inside a
- * drop-in DIRECTORY that `_uninst_units` removes with `rm -rf`, not by name.
- * Comparing it against the `rm -f` census would be comparing two different
- * kinds of thing. Rejects a remainder containing `$` for the same reason in the
- * other direction: an unresolved variable is not a name, and silently treating
- * one as a name would put a nonsense entry on one side of a set comparison.
- */
-function leafUnder(p: string, prefix: string): string | null {
-  if (!p.startsWith(prefix)) return null;
-  const rest = p.slice(prefix.length);
-  if (rest === '' || rest.includes('/') || rest.includes('$')) return null;
-  return rest;
-}
-
-/**
- * Every path an `rm -f` in this body names, resolved.
- *
- * SCOPED TO `rm -f`, NOT `rm -rf`, and that is a decision with two subjects.
- * `_uninst_tree_bins` removes `$BOX_TREE_DIR` and `_uninst_units` removes
- * `claude-session@.service.d` and `$slice` with `rm -rf` — directories, which
- * no install step PLACES as a file, so a blunt scan would put three phantom
- * entries in the removal census and red the `removed ⊆ placed` direction
- * against rows that were never wrong.
- */
-function rmFPaths(body: string, local: Map<string, Set<string>>): Set<string> {
-  const out = new Set<string>();
-  for (const line of logicalLines(body)) {
-    if (!/\brm\s+-f\s/.test(line)) continue;
-    // Everything after `||` is the `_ccrc_die` message, which quotes paths it
-    // does not remove.
-    for (const w of line.split('||')[0]!.matchAll(/"([^"]*)"/g)) {
-      for (const c of resolveWord(w[1]!, local)) out.add(c);
-    }
-  }
-  return out;
-}
-
-// ── the four censuses ─────────────────────────────────────────────────────
-
-/**
- * Every `$bin/<name>` `_inst_atomic` places, read out of `_inst_bins`' body —
- * `gen-wrappers.test.ts`'s regex, unchanged, WITHOUT its dotted-name filter
- * (this file's header says why).
- *
- * SCOPED BY `$bin/`, and the binding is proved rather than assumed: the
- * assertion below fails loudly if `_inst_bins` ever points `bin` somewhere
- * else, because then the names this returns would no longer be the names
- * `_uninst_tree_bins`' `$HOME/.local/bin/…` list is about.
- */
-function placedBins(): Set<string> {
-  const body = fnBody('_inst_bins');
-  const bound = assignments(body).get('bin');
-  if (bound === undefined || !bound.has(BIN_PREFIX.replace(/\/$/, ''))) {
+function bindsExactlyOnce(fn: string, local: Local, name: string, value: string): void {
+  const bound = local.get(name);
+  if (bound === undefined || bound.size !== 1 || !bound.has(value)) {
     throw new Error(
-      `install-census.test.ts: _inst_bins no longer binds \`bin="${BIN_PREFIX.replace(/\/$/, '')}"\` `
-      + `(it binds ${bound === undefined ? 'nothing this scan can see' : [...bound].join(', ')}). `
-      + 'The `$bin/` scoping below is therefore unproven — re-derive it before trusting this suite.',
+      `install-census.test.ts: ${fn} must bind \`${name}="${value}"\` and nothing else, and it binds `
+      + `${bound === undefined ? 'nothing this scan can see' : [...bound].map((v) => `"${v}"`).join(', ')}. `
+      + `The census this file reads out of ${fn} is scoped by that binding, so it is unproven — `
+      + 're-derive it before trusting this suite.',
     );
   }
-  return new Set(
-    [...body.matchAll(/_inst_atomic\s+"[^"]*"\s+"\$bin\/([^"]+)"/g)].map((m) => m[1]!),
-  );
 }
 
+const REF = /\$(?:\{([A-Za-z_][A-Za-z0-9_]*)(?:\[([0-9]+|@)\])?\}|([A-Za-z_][A-Za-z0-9_]*))/g;
+const MAX_DEPTH = 4;
+
 /**
- * The one name in `$HOME/.local/bin` that arrives as a SYMLINK rather than an
- * `_inst_atomic` copy: `_inst_graphify_engine`'s link into the pinned venv.
+ * Every concrete string a shell word may denote. `$name` and `${name}` resolve
+ * through `local` (the enclosing function's own assignments); `${ARR[n]}` and
+ * `${ARR[@]}` through `arrayElements`. `$HOME`, an unbound name, and anything
+ * past `MAX_DEPTH` are KEPT AS WRITTEN — so `census` sees the `$` and refuses —
+ * with `${name}` normalised to `$name` where that means the same thing, so a
+ * brace spelling cannot step outside a prefix match.
  *
- * WHY A SECOND PLACEMENT SOURCE RATHER THAN AN EXEMPTION. `_uninst_tree_bins`
- * removes that link, so a removal census that sees it and a placement census
- * that does not would red the `removed ⊆ placed` direction on a row that is
- * entirely correct. The brief allowed either a named exemption or this; this is
- * strictly stronger and costs three lines. An exemption protects one direction
- * only — it would still have to assert separately that the exempted name IS
- * removed, and it would be BLIND to a second symlinked placement arriving
- * later. Deriving gives both for free: `graphify` is an ordinary member of the
- * placed set, so direction 1 already asserts the uninstall removes it, and a
- * second `ln -s` into that directory joins the census the day it is written.
- *
- * Scoped to `ln -s` commands and to the `$HOME/.local/bin/` prefix — which is
- * what keeps `$HOME/.local/bin/.graphify.tmp.$$`, the staging name that
- * function also spells, out of a census of installed executables (it is an
- * `rm`'d temp file, and its `$$` leaves it unresolved anyway).
+ * THIS IS HOW THE ROW WHERE NEITHER SIDE IS A LITERAL IS READ. `_inst_units`
+ * writes `"$dir/$role_unit"` and `_uninst_units` writes
+ * `"$dir/${BOX_UNIT_NAMES[0]}"` and `[1]`: the same two units, spelled two ways,
+ * both resolvable from `ccd/ccrc`'s own text.
  */
-function placedLinkBins(): Set<string> {
-  const body = fnBody('_inst_graphify_engine');
-  const local = assignments(body);
-  const out = new Set<string>();
-  for (const line of logicalLines(body)) {
-    if (!/\bln\s+-s/.test(line)) continue;
-    for (const w of line.matchAll(/"([^"]*)"/g)) {
-      for (const c of resolveWord(w[1]!, local)) {
-        const n = leafUnder(c, BIN_PREFIX);
-        if (n !== null) out.add(n);
+function resolveWord(word: string, local: Local, depth = 0): Set<string> {
+  let outs = [''];
+  let last = 0;
+  for (const m of word.matchAll(REF)) {
+    const lit = word.slice(last, m.index!);
+    last = m.index! + m[0].length;
+    const name = (m[1] ?? m[3])!;
+    const index = m[2];
+    let alts: string[];
+    if (index !== undefined) {
+      const els = arrayElements(name);
+      if (index === '@') alts = els;
+      else { const el = els[Number(index)]; alts = el === undefined ? [m[0]] : [el]; }
+    } else {
+      const values = name === 'HOME' || depth >= MAX_DEPTH ? undefined : local.get(name);
+      if (values === undefined) {
+        alts = [/[A-Za-z0-9_]/.test(word.charAt(last)) ? m[0] : `$${name}`];
+      } else {
+        alts = [...values].flatMap((v) => [...resolveWord(v, local, depth + 1)]);
       }
     }
+    outs = outs.flatMap((o) => alts.map((a) => o + lit + a));
+  }
+  const tail = word.slice(last);
+  return new Set(outs.map((o) => o + tail));
+}
+
+/** Whether offset `at` in `line` sits outside every quote. */
+function outsideQuotes(line: string, at: number): boolean {
+  let dq = false;
+  let sq = false;
+  for (let i = 0; i < at; i++) {
+    const c = line[i]!;
+    if (sq) { if (c === "'") sq = false; continue; }
+    if (c === '\\') { i++; continue; }
+    if (c === '"') dq = !dq;
+    else if (c === "'" && !dq) sq = true;
+  }
+  return !dq && !sq;
+}
+
+/** The argument text of a simple command starting at `from`: up to its first
+ *  unquoted operator, redirection or comment. A redirection's fd digit
+ *  (`2>/dev/null`) is dropped with it. */
+function argText(line: string, from: number): string {
+  let dq = false;
+  let sq = false;
+  let i = from;
+  for (; i < line.length; i++) {
+    const c = line[i]!;
+    if (sq) { if (c === "'") sq = false; continue; }
+    if (c === '\\') { i++; continue; }
+    if (dq) { if (c === '"') dq = false; continue; }
+    if (c === '"') { dq = true; continue; }
+    if (c === "'") { sq = true; continue; }
+    if (';&|<>)'.includes(c)) break;
+    if (c === '#' && /\s/.test(line[i - 1] ?? ' ')) break;
+  }
+  return line.slice(from, i).replace(/\s\d+$/, '');
+}
+
+/** Shell words, quotes removed: double-quoted, single-quoted and bare runs,
+ *  concatenated where nothing separates them. */
+function shellWords(text: string): string[] {
+  return [...text.matchAll(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g)].map((m) => m[0].replace(/["']/g, ''));
+}
+
+/** The argument words of every call of `cmd` in `body` made at command
+ *  position, outside quotes. */
+function calls(body: string, cmd: string): string[][] {
+  const re = new RegExp(`(?:^|[\\s;&|{(!])${cmd}(?=\\s|$)`, 'g');
+  const out: string[][] = [];
+  for (const line of logicalLines(body)) {
+    for (const m of line.matchAll(re)) {
+      const end = m.index! + m[0].length;
+      if (!outsideQuotes(line, end - cmd.length)) continue;
+      out.push(shellWords(argText(line, end)));
+    }
   }
   return out;
 }
 
+/** Operands after the options, `--` ending them. */
+function operands(args: string[]): string[] {
+  let i = 0;
+  while (i < args.length && args[i]!.startsWith('-')) {
+    i++;
+    if (args[i - 1] === '--') break;
+  }
+  return args.slice(i);
+}
+
 /**
- * Every name `_uninst_tree_bins` removes from `$HOME/.local/bin`.
+ * The names under `dir` that `words` denote.
  *
- * SCOPED TO THAT PREFIX, which is what keeps `$BOX_INSTALLED_FILE` and the
- * `$BOX_NODE_ID_FILE`/`$BOX_CAPS_FILE`/`$BOX_FLOOR_FILE` triple out: they are
- * `~/.ccrc` install-state, removed by the same function and placed by nothing
- * in `_inst_bins`, so a blunt scan would red the `removed ⊆ placed` direction
- * on four rows that are not defects. They resolve (file scope) to paths under
- * `~/.ccrc` and fall outside the prefix.
- *
- * Variables are resolved, so `rm -f -- "$glink"` counts: the graphify link is
- * removed through a local, and a census that only read literals would miss it
- * and then red direction 1 against `placedLinkBins` above.
+ * Every word is resolved, and every resolution is either a name or a decision
+ * stated here — never a silent drop:
+ *   - under `dir/` with a leaf that still carries a `$`: THROWS. The leaf did
+ *     not resolve from the function's own text — a loop variable, an unbound
+ *     local, a command substitution.
+ *   - under `dir/` with a leaf spelled with `$$`: a PER-PROCESS STAGING NAME.
+ *     `$$` is the shell's PID, so the name cannot outlive the run that made it;
+ *     `_inst_graphify_engine` stages its link swap at
+ *     `$HOME/.local/bin/.graphify.tmp.$$` and `mv`s it onto the real name.
+ *     Excluded by THIS rule, and only this one.
+ *   - under `dir/` with a `/` left in the leaf: a file inside a subdirectory —
+ *     a drop-in, such as `claude-session@.service.d/limits.conf`, whose
+ *     directory the uninstall removes with `rm -rf`. Directories are out of
+ *     scope (header), and so are the files in them.
+ *   - not under `dir/`, but starting with an unresolved variable: nobody can
+ *     say where it lands. A PLACEMENT throws (every placement these bodies make
+ *     lands in a census directory); a REMOVAL is outside the census (header).
+ *   - otherwise, not under `dir/`: somewhere else, and not this census's
+ *     subject — `_uninst_tree_bins`' `~/.ccrc` files, the graphify link's
+ *     target inside the venv.
  */
-function removedBins(): Set<string> {
-  const body = fnBody('_uninst_tree_bins');
+function census(fn: string, kind: 'placement' | 'removal', words: string[], dir: string, local: Local): Set<string> {
+  const prefix = `${dir}/`;
   const out = new Set<string>();
-  for (const p of rmFPaths(body, assignments(body))) {
-    const n = leafUnder(p, BIN_PREFIX);
-    if (n !== null) out.add(n);
+  const refuse = (word: string, why: string): never => {
+    throw new Error(
+      `install-census.test.ts: unresolvable ${kind} "${word}" in ${fn}: ${why}. Spell it literally, or `
+      + 'teach this extractor — a name it cannot read would vanish from both sides of the comparison.',
+    );
+  };
+  for (const word of words) {
+    for (const p of resolveWord(word, local)) {
+      if (!p.startsWith(prefix)) {
+        if (kind === 'placement' && p.startsWith('$') && !p.startsWith('$HOME/')) {
+          refuse(word, `it resolves to "${p}", which starts with a variable ${fn} does not bind, so where it lands is unknown`);
+        }
+        continue;
+      }
+      const leaf = p.slice(prefix.length);
+      const unstaged = leaf.replaceAll('$$', '');
+      if (leaf === '' || unstaged.includes('$')) {
+        refuse(word, `it lands under ${prefix} but its name ("${leaf}") does not resolve from the assignments in ${fn}`);
+      }
+      if (unstaged !== leaf) continue; // `$$`: a per-process staging name
+      if (leaf.includes('/')) continue; // inside a subdirectory: a drop-in
+      out.add(leaf);
+    }
   }
   return out;
 }
 
-/** Both functions must bind `dir="$BOX_UNIT_DIR"` for `$dir/` to be a sound
- *  scope token on either side. */
-function assertBindsUnitDir(fn: string, body: string): void {
-  const bound = assignments(body).get('dir');
-  if (bound === undefined || !bound.has('$BOX_UNIT_DIR')) {
-    throw new Error(
-      `install-census.test.ts: ${fn} no longer binds \`dir="$BOX_UNIT_DIR"\` — the \`$dir/\` scoping `
-      + 'in this file is therefore unproven. Re-derive it; do NOT retype the unit census here.',
-    );
-  }
+/** The argument at `index` of each call — a destination, which must exist. */
+function argAt(fn: string, cmd: string, all: string[][], index: number): string[] {
+  return all.map((args) => {
+    const w = args[index];
+    if (w === undefined) {
+      throw new Error(
+        `install-census.test.ts: a \`${cmd}\` call in ${fn} has no argument ${index + 1} this extractor `
+        + `can read (it read: ${JSON.stringify(args)})`,
+      );
+    }
+    return w;
+  });
+}
+
+/** The operands of every `rm -f` in a body. */
+function rmFOperands(body: string): string[] {
+  return calls(body, 'rm').filter((args) => args[0] === '-f').flatMap(operands);
+}
+
+// ── the censuses ──────────────────────────────────────────────────────────
+
+/** Every name the destination argument of an `_inst_atomic` call in
+ *  `_inst_bins` places in `$HOME/.local/bin`. */
+function placedBins(): Set<string> {
+  const fn = '_inst_bins';
+  const body = fnBody(fn);
+  const local = assignments(body);
+  bindsExactlyOnce(fn, local, 'bin', BIN_DIR);
+  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), BIN_DIR, local);
 }
 
 /**
- * Every unit file `_inst_units` places — THE SYSTEMD ARM, which is the whole of
- * that function's body: its first line delegates Darwin away
- * (`if [ "$CCD_OS" = darwin ]; then _inst_units_darwin; return $?; fi`) to a
- * separate function this census does not read. Asserted, not assumed, because
- * an inline Darwin arm appearing here later would put launchd plist labels into
- * a systemd unit census.
+ * The names `_inst_graphify_engine` places in `$HOME/.local/bin` as SYMLINKS —
+ * the destination of each of its `ln -s` calls.
  *
- * The Darwin side is out of scope on both sides deliberately: `_uninst_units`'
- * Darwin arm removes `$(_svc_label "$u").plist`, a name computed by a shell
- * function at runtime, which no text scan can resolve and which is not what
- * `_inst_units` writes anyway.
+ * WHY A SECOND PLACEMENT SOURCE RATHER THAN AN EXEMPTION. `_uninst_tree_bins`
+ * removes the graphify link, so a removal census that sees it and a placement
+ * census that does not would red the `removed ⊆ placed` direction on a row
+ * that is correct. An exemption would protect one direction only, and would
+ * need its own assertion that the exempted name is removed. Read as a
+ * placement, `graphify` is an ordinary member of the placed set, so direction 1
+ * asserts its removal like any other name, and a second `ln -s` added INSIDE
+ * this function joins the census by itself. One added anywhere else is outside
+ * the bodies this file reads (header).
+ *
+ * Its other `ln -s` stages the swap at `.graphify.tmp.$$`, which `census`
+ * excludes by the `$$` rule — not by this function's scoping.
+ */
+function placedLinkBins(): Set<string> {
+  const fn = '_inst_graphify_engine';
+  const body = fnBody(fn);
+  const links = calls(body, 'ln').filter((args) => /^-[A-Za-z]*s/.test(args[0] ?? '')).map((args) => {
+    const ops = operands(args);
+    if (ops.length !== 2) {
+      throw new Error(
+        `install-census.test.ts: an \`ln -s\` in ${fn} has ${ops.length} operands, not TARGET and LINK — `
+        + `this extractor reads only that form (it read: ${JSON.stringify(args)})`,
+      );
+    }
+    return ops[1]!;
+  });
+  return census(fn, 'placement', links, BIN_DIR, assignments(body));
+}
+
+/** Every name an `rm -f` operand in `_uninst_tree_bins` removes from
+ *  `$HOME/.local/bin`. Variables resolve, so `rm -f -- "$glink"` counts. */
+function removedBins(): Set<string> {
+  const fn = '_uninst_tree_bins';
+  const body = fnBody(fn);
+  return census(fn, 'removal', rmFOperands(body), BIN_DIR, assignments(body));
+}
+
+/**
+ * Every unit file an `_inst_atomic` destination in `_inst_units` places — the
+ * systemd arm, which is the whole body: its first line delegates Darwin to
+ * `_inst_units_darwin` and returns. Asserted, not assumed: an inline Darwin arm
+ * appearing here later would put launchd names into a systemd census.
  */
 function placedUnits(): Set<string> {
-  const body = fnBody('_inst_units');
-  assertBindsUnitDir('_inst_units', body);
+  const fn = '_inst_units';
+  const body = fnBody(fn);
   if (!/if \[ "\$CCD_OS" = darwin \]; then _inst_units_darwin; return \$\?; fi/.test(body)) {
     throw new Error(
       'install-census.test.ts: _inst_units no longer delegates its Darwin arm to _inst_units_darwin '
@@ -327,20 +447,11 @@ function placedUnits(): Set<string> {
     );
   }
   const local = assignments(body);
-  const out = new Set<string>();
-  for (const line of logicalLines(body)) {
-    for (const m of line.matchAll(/_inst_atomic\s+"[^"]*"\s+"\$dir\/([^"]+)"/g)) {
-      for (const c of resolveWord(m[1]!, local)) {
-        const n = leafUnder(`${UNIT_PREFIX}${c}`, UNIT_PREFIX);
-        if (n !== null) out.add(n);
-      }
-    }
-  }
-  return out;
+  bindsExactlyOnce(fn, local, 'dir', UNIT_DIR);
+  return census(fn, 'placement', argAt(fn, '_inst_atomic', calls(body, '_inst_atomic'), 1), UNIT_DIR, local);
 }
 
-/** `_uninst_units`' body with its Darwin arm cut out — see `placedUnits` for
- *  why that arm is out of scope on both sides. */
+/** `_uninst_units`' body with its Darwin arm cut out (header: Darwin). */
 function uninstUnitsSystemdArm(): string {
   const body = fnBody('_uninst_units');
   const gate = '\n  if [ "$CCD_OS" = darwin ]; then\n';
@@ -358,140 +469,215 @@ function uninstUnitsSystemdArm(): string {
   return body.slice(0, i) + body.slice(end);
 }
 
-/**
- * Every unit file `_uninst_units` removes by name.
- *
- * SCOPED TO `rm -f` — `rm -rf -- "$dir/claude-session@.service.d" "$slice"`
- * removes the two drop-in DIRECTORIES, which `_inst_units` creates with `mkdir`
- * and fills with `limits.conf`; neither directory is a unit file and neither is
- * this census's subject.
- */
+/** Every unit file an `rm -f` operand in `_uninst_units`' systemd arm removes. */
 function removedUnits(): Set<string> {
+  const fn = '_uninst_units';
   const body = uninstUnitsSystemdArm();
-  assertBindsUnitDir('_uninst_units', body);
   const local = assignments(body);
+  bindsExactlyOnce(fn, local, 'dir', UNIT_DIR);
+  return census(fn, 'removal', rmFOperands(body), UNIT_DIR, local);
+}
+
+/**
+ * Every unit `_uninst_units`' systemd arm stops and disables — each operand of
+ * a `systemctl … disable --now` call. An operand that is the variable of an
+ * enclosing multi-line `for … in …; do` loop stands for that loop's words;
+ * anything else resolves through the function's assignments. Every word must
+ * resolve to a literal unit name, or this throws (no silent drops).
+ */
+function disabledUnits(): Set<string> {
+  const fn = '_uninst_units';
+  const body = uninstUnitsSystemdArm();
+  const local = assignments(body);
+  const loops: { name: string; list: string }[] = [];
   const out = new Set<string>();
+  const resolveAll = (word: string, from: string): void => {
+    for (const r of resolveWord(word, local)) {
+      if (r.includes('$') || r.includes('/') || r === '') {
+        throw new Error(
+          `install-census.test.ts: unresolvable disable operand "${word}" (${from}) in ${fn} resolves to `
+          + `"${r}". Spell it literally, or teach this extractor.`,
+        );
+      }
+      out.add(r);
+    }
+  };
   for (const line of logicalLines(body)) {
-    if (!/\brm\s+-f\s/.test(line)) continue;
-    for (const w of line.split('||')[0]!.matchAll(/"\$dir\/([^"]*)"/g)) {
-      for (const c of resolveWord(w[1]!, local)) {
-        const n = leafUnder(`${UNIT_PREFIX}${c}`, UNIT_PREFIX);
-        if (n !== null) out.add(n);
+    const head = /^\s*for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.*?)\s*;\s*do\s*$/.exec(line);
+    if (head !== null) { loops.push({ name: head[1]!, list: head[2]! }); continue; }
+    if (/^\s*done\b/.test(line)) { loops.pop(); continue; }
+    for (const m of line.matchAll(/(?:^|[\s;&|{(!])systemctl(?=\s)/g)) {
+      const end = m.index! + m[0].length;
+      if (!outsideQuotes(line, end - 'systemctl'.length)) continue;
+      const args = shellWords(argText(line, end));
+      const at = args.indexOf('disable');
+      if (at < 0 || !args.includes('--now')) continue;
+      for (const op of args.slice(at + 1).filter((a) => !a.startsWith('-'))) {
+        const v = /^\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?$/.exec(op);
+        const loop = v === null ? undefined : [...loops].reverse().find((l) => l.name === v[1]);
+        if (loop !== undefined) {
+          for (const w of shellWords(loop.list)) resolveAll(w, `a word of the loop over $${loop.name}`);
+        } else {
+          resolveAll(op, 'a direct operand');
+        }
       }
     }
   }
   return out;
 }
 
+/** systemd's template spelling, `name@.suffix` — a rule of the unit naming
+ *  scheme, not a list. */
+const isTemplate = (unit: string): boolean => /@\.[A-Za-z]+$/.test(unit);
+
 // ── the floors ────────────────────────────────────────────────────────────
 //
-// EVERY EXTRACTOR GETS ONE, and they are the point rather than decoration. A
-// set comparison's characteristic failure is an extractor that silently matches
-// nothing: `[...placed].filter((n) => !removed.has(n))` over an empty `placed`
-// is `[]`, so BOTH directions pass and the suite reports green while measuring
-// nothing at all. Each message below names the EXTRACTOR as the suspect, not
-// the subject — a floor that reds is a statement about this file, not about
-// `ccd/ccrc`.
+// A FLOOR GUARDS AGAINST AN EXTRACTOR THAT MATCHES NOTHING, or next to nothing
+// — the characteristic failure of a set comparison, where an empty side makes
+// both directions pass. It does NOT guard against a PARTIAL drop: an extractor
+// that lost a class of names from both sides at once would still clear it.
+// That is what the no-silent-drops rule is for, and the anchors, for the rows
+// where a resolver could lose a name from both sides.
 //
-// THE NUMBERS ARE DELIBERATELY BELOW TODAY'S COUNTS. A floor pinned AT the
-// current count is a ratchet that reds the day a binary or a unit is
-// legitimately retired — a false red, which this repository rates worse than an
-// unpinned claim. Each is instead set just under the smallest count a
-// STRUCTURALLY INTACT extractor could produce:
-//
-//   BIN_FLOOR = 5   `_inst_bins` places two names under no gate at all and at
-//                   least six more inside its `[ "$CCD_OS" != darwin ]` arm.
-//                   An extractor that stopped seeing inside that arm — the
-//                   likeliest scoping mistake, and where most of the census
-//                   lives — drops to 3, well under this. The brief's number.
-//   UNIT_FLOOR = 8  `_inst_units` places five unit files outside any role gate
-//                   (the role unit, the session template and the cap-scopes
-//                   pair) and the rest inside `[ "$INST_ROLE" != server ]` /
-//                   `= fleet` arms. An extractor blind to those arms reports 5,
-//                   under this floor; one that also lost the `$role_unit`
-//                   resolution reports 3.
+// The numbers are set well below the counts measured when they were chosen
+// (2026-09-22: 12 placed and 13 removed bins, 19 placed and 19 removed units,
+// 16 disabled) — 5 against 12, 8 against 16 and 19 — so retiring a few names is
+// not a false red. They are not derived from the functions' gate structure. Each
+// message names the EXTRACTOR as the first suspect — a floor that reds is far
+// more likely a statement about this file than about `ccd/ccrc` — and names the
+// other cause too, because it is the only other one a count can detect.
 const BIN_FLOOR = 5;
 const UNIT_FLOOR = 8;
 
+const PLACED_BINS_READ = "_inst_bins' `_inst_atomic` destinations and _inst_graphify_engine's `ln -s` destinations";
+
 describe('ccd/ccrc: the install census and the uninstall census cannot drift apart', () => {
   it('every binary the install spine places is removed by the uninstall census', () => {
-    const placed = new Set([...placedBins(), ...placedLinkBins()]);
-    const removed = removedBins();
     expect(placedBins().size,
-      'the _inst_bins extractor found too few placed binaries — it has gone stale, and a set '
-      + 'comparison over an empty set passes vacuously')
+      'the _inst_bins extractor found too few placed binaries — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
     expect(placedLinkBins().size,
-      'the _inst_graphify_engine link extractor found no symlinked placement — it has gone stale; '
-      + 'without it the removal census carries a name the placement census cannot explain')
+      'the _inst_graphify_engine link extractor found no symlinked placement — it has gone stale, unless that function really stopped placing one')
       .toBeGreaterThanOrEqual(1);
-    // The two names under no platform and no role gate: a count floor can be
-    // met by garbage, and these two cannot be absent from any intact reading.
-    expect(placed, 'the placement census lost `ccd` — the extractor is stale').toContain('ccd');
-    expect(placed, 'the placement census lost the `ccrc` launcher — the extractor is stale').toContain('ccrc');
+    const placed = new Set([...placedBins(), ...placedLinkBins()]);
+    const removed = removedBins();
     expect(removed.size,
-      'the _uninst_tree_bins extractor found too few removed binaries — it has gone stale')
+      'the _uninst_tree_bins extractor found too few removed binaries — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
 
     expect([...placed].filter((n) => !removed.has(n)).sort(),
-      'ccd/ccrc places these in $HOME/.local/bin and `ccrc uninstall` leaves them there — each is '
-      + 'an orphan on every session\'s PATH for ever. Add them to `_uninst_tree_bins`\' `rm -f`.')
+      `these are placed into ${BIN_DIR} (by ${PLACED_BINS_READ}) and no \`rm -f\` operand in `
+      + '_uninst_tree_bins names them. Add them to its `rm -f`.')
       .toEqual([]);
+
+    // Anchors, after the comparison: a count floor can be met by names that
+    // are not the census, and the tool and its launcher cannot be absent from
+    // any intact reading of an install that places both on every box.
+    for (const anchor of ['ccd', 'ccrc']) {
+      expect(placed,
+        `the placement census does not contain \`${anchor}\`: either this extractor no longer reads `
+        + `_inst_bins' placement of it, or _inst_bins no longer places it`)
+        .toContain(anchor);
+    }
   });
 
   it('the uninstall census removes nothing the install spine does not place', () => {
     const placed = new Set([...placedBins(), ...placedLinkBins()]);
     const removed = removedBins();
     expect(removed.size,
-      'the _uninst_tree_bins extractor found too few removed binaries — it has gone stale')
+      'the _uninst_tree_bins extractor found too few removed binaries — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(BIN_FLOOR);
 
     expect([...removed].filter((n) => !placed.has(n)).sort(),
-      '`_uninst_tree_bins` removes these from $HOME/.local/bin and nothing in ccd/ccrc places them '
-      + 'there — either the install spine lost a placement, or the uninstall names a file that was '
-      + 'never ccrc\'s to remove.')
+      `these are \`rm -f\` operands in _uninst_tree_bins under ${BIN_DIR} and no placement this file `
+      + `reads (${PLACED_BINS_READ}) names them. One of three: a placement was deleted from those `
+      + 'bodies, it moved somewhere this file does not read (header: STATED SCOPE), or the removal '
+      + 'is stale.')
       .toEqual([]);
   });
 
-  it('every unit file the install spine places is removed by the uninstall census', () => {
+  it('every systemd unit file the install spine places is removed by the uninstall census', () => {
     const placed = placedUnits();
     const removed = removedUnits();
     expect(placed.size,
-      'the _inst_units extractor found too few placed unit files — it has gone stale, and a set '
-      + 'comparison over an empty set passes vacuously')
+      'the _inst_units extractor found too few placed unit files — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(UNIT_FLOOR);
     expect(removed.size,
-      'the _uninst_units extractor found too few removed unit files — it has gone stale')
+      'the _uninst_units extractor found too few removed unit files — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(UNIT_FLOOR);
-    // The row where NEITHER side is a literal, asserted from `ccd/ccrc`'s own
-    // array: `_inst_units` spells these two `$role_unit` and `_uninst_units`
-    // spells them `${BOX_UNIT_NAMES[0]}`/`[1]`. If the resolver lost either
-    // spelling the two sets would still compare equal — both would simply be
-    // missing the pair — so the sets alone cannot pin this and these two
-    // assertions do.
-    for (const u of arrayElements('BOX_UNIT_NAMES')) {
-      expect(placed, `the placement census lost ${u} — $role_unit no longer resolves`).toContain(u);
-      expect(removed, `the removal census lost ${u} — \${BOX_UNIT_NAMES[n]} no longer resolves`).toContain(u);
-    }
 
     expect([...placed].filter((n) => !removed.has(n)).sort(),
-      '`_inst_units` writes these unit files and `_uninst_units` leaves them behind — an enabled '
-      + 'timer whose binary the same uninstall removed fails 203/EXEC every interval, for ever. '
-      + 'Add them to `_uninst_units`\' `rm -f` (and, unless they are template units, to its '
-      + '`disable --now` loop).')
+      'these are `_inst_atomic` destinations in _inst_units\' systemd arm and no `rm -f` operand in '
+      + '_uninst_units\' systemd arm names them. Add them to that `rm -f`.')
       .toEqual([]);
+
+    // THE ROW WHERE NEITHER SIDE IS A LITERAL, anchored to the array
+    // `ccd/ccrc` declares. The comparison above cannot pin it alone: if the
+    // resolver lost BOTH spellings (`$role_unit` here, `${BOX_UNIT_NAMES[n]}`
+    // in the removal) the two sets would compare equal, both simply missing
+    // the pair. After the comparison, so that a real orphan is reported as an
+    // orphan rather than as a resolver fault.
+    for (const u of arrayElements('BOX_UNIT_NAMES')) {
+      expect(placed,
+        `the placement census does not contain ${u} (a BOX_UNIT_NAMES element): either \`$role_unit\` `
+        + 'no longer resolves to it, or _inst_units no longer places it')
+        .toContain(u);
+    }
   });
 
-  it('the uninstall census removes no unit file the install spine does not place', () => {
+  it('the uninstall census removes no systemd unit file the install spine does not place', () => {
     const placed = placedUnits();
     const removed = removedUnits();
     expect(removed.size,
-      'the _uninst_units extractor found too few removed unit files — it has gone stale')
+      'the _uninst_units extractor found too few removed unit files — it has gone stale, unless the function it reads really lost most of them')
       .toBeGreaterThan(UNIT_FLOOR);
 
     expect([...removed].filter((n) => !placed.has(n)).sort(),
-      '`_uninst_units` removes these unit files and nothing in `_inst_units` writes them — either '
-      + 'the install spine lost a placement, or the uninstall names a unit that was never ccrc\'s.')
+      'these are `rm -f` operands in _uninst_units\' systemd arm and no `_inst_atomic` destination in '
+      + '_inst_units names them. One of three: a placement was deleted from _inst_units, it moved '
+      + 'somewhere this file does not read (header: STATED SCOPE), or the removal is stale.')
+      .toEqual([]);
+
+    for (const u of arrayElements('BOX_UNIT_NAMES')) {
+      expect(removed,
+        `the removal census does not contain ${u} (a BOX_UNIT_NAMES element): either `
+        + '`${BOX_UNIT_NAMES[n]}` no longer resolves to it, or _uninst_units no longer removes it')
+        .toContain(u);
+    }
+  });
+
+  it('every non-template systemd unit the install spine places is stopped and disabled by the uninstall', () => {
+    const placed = placedUnits();
+    const disabled = disabledUnits();
+    // Both floors: this case filters the PLACED set, so an empty one would
+    // make it pass on its own however the disable census reads.
+    expect(placed.size,
+      'the _inst_units extractor found too few placed unit files — it has gone stale, unless the function it reads really lost most of them')
+      .toBeGreaterThan(UNIT_FLOOR);
+    expect(disabled.size,
+      'the `disable --now` extractor over _uninst_units found too few units — it has gone stale, unless the function it reads really lost most of them')
+      .toBeGreaterThan(UNIT_FLOOR);
+
+    expect([...placed].filter((u) => !isTemplate(u) && !disabled.has(u)).sort(),
+      'these are non-template `_inst_atomic` destinations in _inst_units and no `systemctl … disable '
+      + '--now` operand in _uninst_units\' systemd arm names them. Add them to its `disable --now` loop.')
+      .toEqual([]);
+  });
+
+  it('no template unit is a `disable --now` operand in the uninstall', () => {
+    // A bare template name is never enabled, only its instances are, and
+    // systemd refuses it for any runtime operation — so `disable --now` on one
+    // fails at the `--now` stop, on every uninstall, for ever. `_uninst_units`
+    // removes its template pair by `rm -f` only, and says so; this is that
+    // ruling as a derived rule rather than one test's argv assertion.
+    const disabled = disabledUnits();
+    expect(disabled.size,
+      'the `disable --now` extractor over _uninst_units found too few units — it has gone stale, unless the function it reads really lost most of them')
+      .toBeGreaterThan(UNIT_FLOOR);
+
+    expect([...disabled].filter(isTemplate).sort(),
+      'these template units (`name@.suffix`) are `systemctl … disable --now` operands in '
+      + '_uninst_units\' systemd arm. Remove them from that call: a template is removed by `rm -f` only.')
       .toEqual([]);
   });
 });
