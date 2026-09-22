@@ -359,7 +359,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
-    for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+    for (const name of ['Opus 5.5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
     }
   });
@@ -392,7 +392,7 @@ describe('the routing record on the wire drives the pickers directly (routing sl
     expect(screen.queryByText('queued')).not.toBeInTheDocument();
 
     openModelSheet();
-    for (const name of ['Opus 5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
+    for (const name of ['Opus 5.5', 'Sonnet 5', 'Fable 5', 'Haiku 4.5', 'Default']) {
       expect(screen.getByRole('button', { name })).not.toHaveClass('opt--selected');
     }
   });

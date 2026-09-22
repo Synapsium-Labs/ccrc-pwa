@@ -93,16 +93,25 @@ export interface PickOption {
 }
 
 /** Model chooser rows. `current` is the pane statusline display name
- *  ("Opus 5 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
+ *  ("Opus 5.5 (1M context)", "GPT-5.6 Sol") — matched loosely so the 1M suffix
  *  doesn't defeat the highlight. `routing` (S6 Task 4) overrides `active` with
  *  the recorded intent when the session's `route` rides the wire — see
  *  `RoutingOverride`'s own docstring.
  *
  *  Labels are the family's CURRENT latest (the routing record's `class` value
  *  is the bare family alias, which the harness auto-resolves to the newest in
- *  that family — `opus` → Opus 5 on Anthropic API as of CC v2.1.219+). Bump a
- *  label when a family's newest name changes; the alias itself never needs
- *  touching. */
+ *  that family — `opus` → Opus 5.5 since 2026-09-22, read back off Claude Code
+ *  2.1.280's `latest_per_family`). Bump a label when a family's newest name
+ *  changes; the alias itself never needs touching.
+ *
+ *  A LABEL IS NOT A READBACK, AND ONLY THE LABEL MOVES WITH A RELEASE. The
+ *  third `row()` argument is matched as a lowercase SUBSTRING of the live
+ *  statusline, so the Anthropic rows carry the bare FAMILY word (`opus`,
+ *  `sonnet`, …) and already survive the family's version moving: "Opus 5.5
+ *  (1M context)" and "Opus 5" both contain `opus`. That is why 2026-09-22's
+ *  Opus 5.5 release is a one-word label edit here and nothing else — the
+ *  gpt lane's readbacks (`astra`, `sol`, …) are the same idea, the part of
+ *  those names that is not a version. */
 export function modelOptions(wrapper: string, current: string | null, routing?: RoutingOverride): PickOption[] {
   const c = (current ?? '').toLowerCase();
   const intended = routing?.intended ?? null;
@@ -134,7 +143,7 @@ export function modelOptions(wrapper: string, current: string | null, routing?: 
     ]);
   }
   return withDegraded([
-    row('Opus 5', 'opus', 'opus'),
+    row('Opus 5.5', 'opus', 'opus'),
     row('Sonnet 5', 'sonnet', 'sonnet'),
     row('Fable 5', 'fable', 'fable'),
     row('Haiku 4.5', 'haiku', 'haiku'),
