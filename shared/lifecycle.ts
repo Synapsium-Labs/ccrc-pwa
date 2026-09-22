@@ -30,6 +30,14 @@ export const LIFECYCLE: readonly LifecycleClass[] = [
   { name: 'graph-sweep-census', root: '~/.ccrc/graph-sweep.json', pattern: 'R',
     creators: ['ccd-graph-sweep'], collector: 'ccd-graph-sweep (last 10 passes kept)',
     bound: 'rolling', tier: 'bounded by pass count', ruling: null },
+  // Policy row #9: "a root we declare to agents in their own system prompt and
+  // then never collect". Session-bound (S), collected by age PLUS the absence of
+  // a live owner — the live-session, open-fd and newest-mtime checks the
+  // collector's own header states.
+  { name: 'claude-tmp-session-dirs', root: '${TMPDIR:-/tmp}/claude-<uid>/<project>/<session-uuid>/ + loose top-level entries', pattern: 'S',
+    creators: ['claude (Claude Code: scratchpad, background-task output)', 'agents writing into the root'],
+    collector: 'ccd-tmp-sweep (hourly; not live, not in use, nothing newer than CCD_TMP_SWEEP_MAX_AGE_DAYS=7)',
+    bound: 'session lifetime + 7 days', tier: '138G uncollected on the fleet host 2026-09-22; single task .output files 1-4G', ruling: null },
   { name: 'project-pool-tag', root: '~/.cc-sessions/pools/<project>', pattern: 'O',
     creators: ['ccd project-pool', 'operator shell'], collector: null,
     bound: 'until cleared', tier: '<64 bytes per tagged project, one file per project',

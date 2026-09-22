@@ -48,7 +48,7 @@ import { spawnSync } from 'node:child_process';
 import * as pty from 'node-pty';
 import {
   copyFileSync, mkdirSync, readFileSync, writeFileSync, existsSync, statSync,
-  chmodSync, readdirSync, rmSync, symlinkSync,
+  chmodSync, readdirSync, rmSync, symlinkSync, utimesSync,
 } from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -1077,6 +1077,31 @@ describe('ccrc install: the shipped tree lands at $HOME/ccrc', () => {
     expect(existsSync(placed(home)), 'a half-made $HOME/ccrc was left behind').toBe(false);
   });
 
+  it('replaces a file whose size and mtime are unchanged but whose content is not', () => {
+    // The release tarball is reproducible (`build-release.sh`: `--mtime=@0`),
+    // so every file `ccrc update` extracts — and therefore every file it placed
+    // last time — has mtime 0. rsync's default quick check compares size and
+    // mtime only, so a changed file that kept its size was SKIPPED. v0.0.11 hit
+    // exactly that: dist-pwa/index.html and sw.js are fixed-size templates
+    // around equal-length content hashes, so the new bundle landed, --delete
+    // removed the old one, and the old index.html kept pointing at it — a
+    // black screen on any load the service worker did not answer.
+    const home = freshBox('ccrc-install-same-size-');
+    expect(runInstall(home).code).toBe(0);
+    const rel = 'server/dist-pwa/index.html';
+    const before = read(placed(home, ...rel.split('/')));
+    const after = before.replace(/./, c => (c === 'X' ? 'Y' : 'X'));
+    expect(after.length).toBe(before.length);
+    expect(after).not.toBe(before);
+    writeFileSync(treeFile(home, rel), after);
+    utimesSync(treeFile(home, rel), 0, 0);
+    utimesSync(placed(home, ...rel.split('/')), 0, 0);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
+    expect(read(placed(home, ...rel.split('/')))).toBe(after);
+    expect(read(join(home, 'rsync-argv'))).toContain('--checksum');
+  });
+
   it('a second run keeps the runtime deps the first one installed', () => {
     // `--delete` with `--exclude node_modules` protects the excluded path on
     // the RECEIVER (rsync does not delete what it was told to ignore, absent
@@ -1682,6 +1707,17 @@ describe('ccrc install: the executables and files it installs', () => {
     const { home } = installed;
     const bin = join(home, '.local', 'bin', 'ccd-telemetry-keepalive');
     expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-telemetry-keepalive')));
+    expect(mode(bin)).toBe(0o755);
+  });
+
+  itLinux('ccd-tmp-sweep lands beside it too (the temp-dir reaper) — every role, but not Darwin', () => {
+    // Mirrors the `ccd-graph-sweep` case above: `_inst_bins` ships it on every
+    // role, on the same darwin carve-out (its only runner is a systemd timer
+    // and it reads /proc). Its UNIT and ENABLE are additionally role-gated
+    // (server skips both) — see the `--role server` describe.
+    const { home } = installed;
+    const bin = join(home, '.local', 'bin', 'ccd-tmp-sweep');
+    expect(readFileSync(bin)).toEqual(readFileSync(placed(home, 'ccd', 'ccd-tmp-sweep')));
     expect(mode(bin)).toBe(0o755);
   });
 
@@ -2328,6 +2364,10 @@ const UNIT_FILES: Array<[string, string]> = [
   // that is supposed to run them hourly.
   ['ccrc-models.service', 'deploy/systemd/ccrc-models.service'],
   ['ccrc-models.timer', 'deploy/systemd/ccrc-models.timer'],
+  // The temp-dir reaper: ROLE-GATED on the same terms — a server box runs no
+  // Claude Code sessions, so it has no /tmp/claude-<uid> to reap.
+  ['ccd-tmp-sweep.service', 'deploy/systemd/ccd-tmp-sweep.service'],
+  ['ccd-tmp-sweep.timer', 'deploy/systemd/ccd-tmp-sweep.timer'],
   ['claude-session@.service.d/limits.conf', 'deploy/systemd/claude-session@.service.d/limits.conf'],
   [`${SLICE_DIR}/limits.conf`, 'deploy/systemd/app-claude-session.slice.d/limits.conf'],
 ];
@@ -2464,6 +2504,9 @@ describeLinux('ccrc install: the units, and the one this box must not be given',
       // Routing slice 0 Task 7: another degrade-rather-than-die enable, on the
       // graph-sweep's own terms, for the usage-accounting sweep's timer.
       '--user enable --now ccd-usage-sweep.timer',
+      // The temp-dir reaper's timer, on the same gate and the same
+      // degrade-rather-than-die idiom as the two sweeps above it.
+      '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       // spec 2026-09-07 §C: a FOURTH enable, role-gated exactly as the sweep's
       // and degrading rather than dying for the same reason.
@@ -2891,7 +2934,7 @@ describe('ccrc install: linger, the account dirs, the hooks and the wrappers', (
         // an exact set, so deleting the install reds here rather than leaving
         // `ccd-pool-sync.timer` enabled against a 203/EXEC.
         : ['ccd', 'ccd-account-auth', 'ccd-account-health', 'ccd-cap-scopes', 'ccd-graph-sweep',
-           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
+           'ccd-pool-sync', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep', 'ccd-usage-sweep', 'ccd-usage-sweep.py',
            'ccrc', 'graphify']);
   });
 
@@ -3613,6 +3656,8 @@ describe('ccrc install --role: the fleet lane (Stage 4, Task 5)', () => {
     expect(argv).toContain('--user enable --now ccd-graph-sweep.timer');
     // C5: fleet is not server, so the models timer enables here too.
     expect(argv).toContain('--user enable --now ccrc-models.timer');
+    // Fleet is the role that runs sessions, so the temp-dir reaper arms here.
+    expect(argv).toContain('--user enable --now ccd-tmp-sweep.timer');
     // Ruling T4-R1: and the pool-sync timer, which enables on THIS ROLE ONLY
     // — the role whose install wrote the `~/.ccrc/agent.env` the binary
     // refuses without. `--role both` and `--role server` below assert the
@@ -3697,6 +3742,7 @@ describe('ccrc install --role: the refusals and the default', () => {
       // above proves gets no agent.env.
       '--user enable --now ccd-graph-sweep.timer',
       '--user enable --now ccd-usage-sweep.timer',
+      '--user enable --now ccd-tmp-sweep.timer',
       '--user enable --now ccd-account-health.timer',
       '--user enable --now ccd-telemetry-keepalive.timer',
       '--user enable --now ccrc-models.timer',
@@ -3719,7 +3765,8 @@ describe('ccrc install --role: the refusals and the default', () => {
     // same gate — a server box has no lanes to refresh.
     for (const [dest] of UNIT_FILES) {
       if (dest.startsWith('ccd-graph-sweep.') || dest.startsWith('ccd-account-health.')
-        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')) continue;
+        || dest.startsWith('ccd-telemetry-keepalive.') || dest.startsWith('ccrc-models.')
+        || dest.startsWith('ccd-tmp-sweep.')) continue;
       expect(existsSync(unitDir(home, ...dest.split('/'))), dest).toBe(true);
     }
     expect(existsSync(unitDir(home, 'ccd-graph-sweep.service'))).toBe(false);
@@ -3730,6 +3777,9 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(existsSync(unitDir(home, 'ccd-telemetry-keepalive.timer'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.service'))).toBe(false);
     expect(existsSync(unitDir(home, 'ccrc-models.timer'))).toBe(false);
+    // The temp-dir reaper: a server box runs no sessions, so no temp dir to reap.
+    expect(existsSync(unitDir(home, 'ccd-tmp-sweep.service'))).toBe(false);
+    expect(existsSync(unitDir(home, 'ccd-tmp-sweep.timer'))).toBe(false);
     // Ruling T4-R1: the pool-sync pair is gated OUT here too — but on a
     // NARROWER gate than the four pairs above it. Those are `!= server`;
     // this one is `= fleet`, because `both` gets no agent.env either. A
@@ -3742,6 +3792,7 @@ describe('ccrc install --role: the refusals and the default', () => {
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-account-health');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-telemetry-keepalive');
     expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccrc-models');
+    expect(systemctlCalls(home).map((c) => c.argv).join('\n')).not.toContain('ccd-tmp-sweep');
     expect(read(dotCcrc(home, 'ccrc.env'))).toMatch(/^CCRC_ROLE=server$/m);
     expect(r.stdout).toMatch(/^install: gate: /m);
   });

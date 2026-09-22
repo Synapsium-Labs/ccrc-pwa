@@ -560,6 +560,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // defect the whole stage exists to close.
       'systemd/ccd-pool-sync.service',
       'systemd/ccd-pool-sync.timer',
+      // The per-uid temp-dir reaper's pair (/tmp/claude-<uid>, 138G on the
+      // fleet host 2026-09-22), shipped the same way.
+      'systemd/ccd-tmp-sweep.service',
+      'systemd/ccd-tmp-sweep.timer',
     ]) {
       expect(existsSync(path.join(deployDir, f)), `${f} is not in the repo`).toBe(true);
     }
@@ -573,6 +577,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'the telemetry keepalive executable is not in the repo').toBe(true);
     expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccrc-models-probe')),
       'the model catalogue probe is not in the repo').toBe(true);
+    expect(existsSync(path.join(deployDir, '..', 'ccd', 'ccd-tmp-sweep')),
+      'the temp-dir reaper is not in the repo').toBe(true);
 
     // Fix round 1, Finding 1 (Important, plan-mandated): measured on the
     // fleet host, read-only — every `systemd --user` unit's process carries a
@@ -629,6 +635,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // the same way.
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.service ~/.config/systemd/user/ccd-pool-sync.service',
       '_unit_atomic ~/ccrc/deploy/systemd/ccd-pool-sync.timer ~/.config/systemd/user/ccd-pool-sync.timer',
+      // The temp-dir reaper's pair, installed the same way.
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.service ~/.config/systemd/user/ccd-tmp-sweep.service',
+      '_unit_atomic ~/ccrc/deploy/systemd/ccd-tmp-sweep.timer ~/.config/systemd/user/ccd-tmp-sweep.timer',
     ]) {
       const at = buildLinks.findIndex((l) => l.includes(needle));
       expect(at, `AGENT_BUILD_CMD does not install: ${needle}`).toBeGreaterThan(-1);
@@ -670,6 +679,10 @@ describe('the verification is actually wired into the deploy, and can observe a 
     // a machine's job. The assertions below ARE the census.
     const poolSyncTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-pool-sync.timer'));
     expect(poolSyncTimerAt, 'the pool-sync timer is never enabled').toBeGreaterThan(reloadAt);
+    // The temp-dir reaper's timer, needing the same daemon-reload to have
+    // already picked up the unit AGENT_BUILD_CMD installed.
+    const tmpSweepTimerAt = restartLinks.findIndex((l) => l.includes('enable --now ccd-tmp-sweep.timer'));
+    expect(tmpSweepTimerAt, 'the tmp-sweep timer is never enabled').toBeGreaterThan(reloadAt);
 
     // And structurally: the build ssh runs, THEN stamp_build, THEN the
     // restart ssh — three sequential top-level statements under
@@ -691,6 +704,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
     expect(deploySh).toContain('install_atomic ccd/ccrc-models-probe .local/bin/ccrc-models-probe 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-account-auth .local/bin/ccd-account-auth 755');
     expect(deploySh).toContain('install_atomic ccd/ccd-pool-sync .local/bin/ccd-pool-sync 755');
+    expect(deploySh).toContain('install_atomic ccd/ccd-tmp-sweep .local/bin/ccd-tmp-sweep 755');
     expect(deploySh).toContain('install_atomic ccd/tmux.conf .tmux.conf 644');
     expect(deploySh).toContain('install_atomic ccd/statusline-command.sh .claude/statusline-command.sh 755');
   });
@@ -875,7 +889,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       ['app-claude\\x2dsession.slice.d/limits.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'limits.conf')],
       ['app-claude\\x2dsession.slice.d/zz-no-memoryhigh.conf', join(src, 'deploy', 'systemd', 'app-claude-session.slice.d', 'zz-no-memoryhigh.conf')],
       ['ccrc-agent.service.d/protect.conf', join(src, 'deploy', 'systemd', 'ccrc-agent.service.d', 'protect.conf')],
-      ...['ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive']
+      ...['ccd-cap-scopes', 'ccd-graph-sweep', 'ccd-account-health', 'ccd-telemetry-keepalive', 'ccd-tmp-sweep']
         .flatMap((n) => ['service', 'timer'].map((ext) =>
           [`${n}.${ext}`, join(src, 'deploy', 'systemd', `${n}.${ext}`)] as [string, string])),
     ];
