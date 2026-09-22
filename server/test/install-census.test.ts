@@ -112,8 +112,9 @@
 //     only. `ccd/ccrc`'s `_svc_disable_now` helper and a separate stop-then-
 //     disable are not read, and a system-manager `systemctl disable` (no
 //     `--user`) is not a user-unit disable, so it does not count.
-//   - Paths are not normalised: `$bin/./x`, `$bin//x`, `~/…` and a destination
-//     whose variable is bound to the empty string are not read as names.
+//   - Paths are normalised (`/./` and repeated `/` collapse, on both sides, so
+//     `$bin/./x` is `x`), but `~/…` and a destination whose variable is bound
+//     to the empty string are not read as names.
 //   - `ln` is read in one form: its flags as one leading word containing `s`
 //     (`-sfn`). `ln -f -s` and `ln --symbolic` are not read.
 //   - A variable's values are a union over the whole function, not the value
@@ -429,7 +430,8 @@ function census(fn: string, kind: 'placement' | 'removal', words: string[], dirs
     );
   };
   for (const word of words) {
-    for (const p of resolveWord(word, local)) {
+    for (const raw of resolveWord(word, local)) {
+      const p = path.posix.normalize(raw); // `$bin/./x`, `$bin//x`: the same file, on both sides
       const prefix = dirs.map((d) => `${d}/`).find((pre) => p.startsWith(pre));
       if (prefix === undefined) {
         if (kind === 'placement' && p.startsWith('$') && !p.startsWith('$HOME/')) {
