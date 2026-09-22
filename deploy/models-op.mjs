@@ -37,7 +37,14 @@
 // 3: it is a REAP, not a mutation, and re-validating or materialising a
 // registry it is about to delete would be pointless — worse, it would refuse to
 // reap a registry that no longer parses, which is exactly the file this verb
-// exists to clean up. It still obeys rule 1.
+// exists to clean up. It still obeys rule 1. It reaps the four MODEL files —
+// registry, catalogue, TSV, effort map — and DELIBERATELY not `lane.json`,
+// though this file generates that too: the manifest carries the roster's lane
+// topology (auth dir, ports), which belongs to the ACCOUNT, not the registry.
+// Its owner is the codex arm of account removal (`_acct_remove`, spec §9,
+// Plan 2b-2) — and that owner must reap it, because an id removed and later
+// re-added would otherwise inherit the old lane's authDir and ports until its
+// next mutation: one lane spending another account's OAuth.
 //
 // It borrows two idioms `main` already uses for a node helper `ccrc` shells out
 // to, and cites them: `deploy/gen-accounts.mjs`'s "the remedy reaches stderr
@@ -286,10 +293,14 @@ function writeRegistry(id, registry) {
  *  an operator may reclassify afterwards. Not `registry.probe`, either: that is
  *  the probe KIND (`'codex'`), and the publisher puts `probeModel` in its
  *  request's `body.model`. With haiku unassigned the key is OMITTED rather than
- *  filled from another class: the publisher already refuses a manifest with
- *  no `probeModel` by name, with its remedy, and choosing a fallback here would
- *  be a second model policy (spec §10: "derived from that lane's own catalogue
- *  and class registry"). */
+ *  filled from another class, because choosing a fallback here would be a
+ *  second model policy (spec §10: "derived from that lane's own catalogue and
+ *  class registry"). What that costs, stated rather than hidden: such a lane
+ *  publishes no usage — the publisher refuses a manifest with no `probeModel`
+ *  — and no RE-RENDER cures it, since every re-render reads the same null.
+ *  Only assigning haiku does, which is why the publisher's refusal names
+ *  `set-class haiku`, and why a mutation that leaves haiku null on such a lane
+ *  answers with that remedy too (`HAIKU_UNASSIGNED_REMEDY`). */
 function laneManifest(account, registry) {
   if (!isObj(account.exec) || account.exec.kind !== 'codex') return null;
   const { id } = account;
@@ -304,6 +315,17 @@ function laneManifest(account, registry) {
     units: { litellm: `ccgpt-${id}-litellm.service`, shim: `ccgpt-${id}-shim.service` },
   };
 }
+
+/** The answer a MUTATION gives when it leaves a codex-kind lane's haiku class
+ *  null — `set-class haiku none`, or `set-class <other> <haiku's model>` under
+ *  one-model-one-class, which moves haiku to null with nothing but
+ *  `moved: ['haiku']` to show for it. Either way the lane has just stopped
+ *  publishing usage (`laneManifest` above), and a bare `ok` would let the
+ *  operator find out from a stale limits row instead. */
+const HAIKU_UNASSIGNED_REMEDY = (id) =>
+  `account "${id}" routes haiku to nothing, so its lane.json carries no probeModel and its `
+  + 'usage publisher refuses to publish until haiku is assigned. Run '
+  + `'ccrc models ${id} set-class haiku <modelId>'.`;
 
 /** §6.1 + §6.4 + §7's TSV, from a lane's registry and its catalogue — and, on
  *  a codex-kind lane, §5.4's `lane.json` (`laneManifest` above). Returns the
@@ -366,7 +388,12 @@ function materialise(account, registry, catalogue) {
       mkdirSync(path.dirname(settings), { recursive: true });
       mergeSettingsEnv(settings, block);
     }
-    if (lane !== null) mkdirSync(path.dirname(lane), { recursive: true });
+    // 0700, and at CREATION, because this writer is the only thing that makes
+    // `~/.ccrc/codex/<id>/` and a later `mkdirSync` with a mode never tightens
+    // a directory that already exists: Plan 2b-2 puts the lane's gateway key
+    // (`runtime.env`, spec §5.4) in this same directory and could not fix its
+    // mode by creating it again.
+    if (lane !== null) mkdirSync(path.dirname(lane), { recursive: true, mode: 0o700 });
     // Every generated file lands tmp + rename: ccd reads the TSV on every spawn
     // (Plan 2), `ccgpt-proxy` re-reads the effort file whenever its mtime
     // moves, and the usage publisher reads `lane.json` on every poll, so a
@@ -592,7 +619,7 @@ function main(argv) {
   if (pairs.err !== undefined) return refuse(2, 'bad-argv', pairs.err);
   const a = pairs.got;
 
-  // C6: at op entry, before any of the four per-account paths are built and
+  // C6: at op entry, before any of the five per-account paths are built and
   // before the roster is even read — `rm`'s own unlink loop runs before the
   // no-such-account gate (an orphan is the expected case there), which used
   // to mean it ran before ANY id validation. A `..`-bearing id built a path
@@ -649,8 +676,10 @@ function main(argv) {
 
   if (opName === 'rm') {
     // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the four
-    // generated files this design owns and clears exactly the eight settings
-    // keys `modelEnvBlock` can write — nothing else in that file. It runs BEFORE
+    // model-registry files this design owns and clears exactly the eight settings
+    // keys `modelEnvBlock` can write — nothing else in that file. NOT
+    // `lane.json`, which `materialise` also writes: it is the account's, and the
+    // file header names its owner and why that owner must reap it. It runs BEFORE
     // the no-such-account and anthropic-lane gates below, and never routes the
     // registry or catalogue through their validators: `rm -f` semantics apply
     // to each of the four files on its own, so a broken (unparseable)
@@ -1061,7 +1090,14 @@ function main(argv) {
   if (w !== null) return refuse(1, w[0], w[1]);
   const mat = materialise(account, validated, catalogue);
   if (mat.err !== undefined) return refuse(1, mat.err[0], mat.err[1]);
-  out({ ok: true, op: opName, ...extra, ...describe(account, validated, catalogue) });
+  const answer = { ok: true, op: opName, ...extra, ...describe(account, validated, catalogue) };
+  // Keyed on the manifest having been WRITTEN — the same gate `laneManifest`
+  // applies — so a lane with no lane.json, whose haiku nothing publishes from,
+  // is never told its publication stopped.
+  if (mat.wrote.lane !== null && validated.classes.haiku === null) {
+    answer.remedy = HAIKU_UNASSIGNED_REMEDY(a.id);
+  }
+  out(answer);
   return 0;
 }
 

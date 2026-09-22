@@ -154,6 +154,47 @@ function readRow(home: string, id: string): Record<string, unknown> {
   return JSON.parse(readFileSync(limitsPath(home, id), 'utf8'));
 }
 
+/** Task 6: renders `~/.ccrc/codex/<id>/lane.json` with the REAL writer
+ *  (`deploy/models-op.mjs`), never by hand — a codex-kind roster row, `init
+ *  codex`, then each of `mutations` (the argv after `--id`) — and plants
+ *  `auth.json` ONLY at the roster's `authDir`, a path that shares nothing with
+ *  any naming convention, so a publisher that re-derived its token directory
+ *  instead of reading the manifest finds nothing there.
+ *
+ *  Synchronous (`spawnSync`), so a caller runs it BEFORE binding its endpoint:
+ *  the materialiser opens no socket, so blocking the event loop here starves
+ *  nothing (D-3157 is about a mock that must answer mid-run). */
+function materialiseLane(home: string, id: string, mutations: string[][]): void {
+  const authDir = `.${id}-oauth-fixture`;
+  const roster = join(home, '.ccrc', 'accounts.json');
+  mkdirSync(join(home, '.ccrc'), { recursive: true });
+  writeFileSync(roster, `${JSON.stringify({
+    version: 1,
+    accounts: [
+      { id: 'claude', label: 'claude', configDirSuffix: '.claude',
+        exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
+      { id, label: id, configDirSuffix: `.claude-${id}`,
+        exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir },
+        homeAble: false, telemetry: 'codex' },
+    ],
+  }, null, 2)}\n`);
+  for (const [verb, ...rest] of [['init', '--probe', 'codex'], ...mutations]) {
+    const m = spawnSync(process.execPath, [MODELS_OP, verb!, '--file', roster, '--id', id, ...rest],
+      { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
+    expect(m.status, `models-op ${verb}: ${m.stdout}${m.stderr}`).toBe(0);
+  }
+  // Existence, never contents — the stub Authenticator reads nothing.
+  mkdirSync(join(home, authDir), { recursive: true });
+  writeFileSync(join(home, authDir, 'auth.json'), '{}');
+}
+
+/** The registry FILE's haiku class — the oracle a materialised lane.json's
+ *  `probeModel` is checked against, rather than a literal. */
+function haikuOf(home: string, id: string): unknown {
+  const registry = JSON.parse(readFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), 'utf8'));
+  return (registry as { classes: { haiku: unknown } }).classes.haiku;
+}
+
 type CapturedRequest = { headers: IncomingHttpHeaders; body: unknown };
 
 /** Binds a one-shot HTTP server on the fixed usage port, records every
@@ -719,42 +760,15 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
   it('task-6 (D-3158): publishes from a lane.json the REAL materialiser wrote, not a hand-planted one', async () => {
     const home = mkTmp('ccgpt-usage-materialised-');
     const id = mintId();
-    // Shares nothing with any naming convention: a publisher that re-derived
-    // the token directory instead of reading the manifest finds no auth.json.
-    const authDir = `.${id}-oauth-fixture`;
-    const roster = join(home, '.ccrc', 'accounts.json');
-    mkdirSync(join(home, '.ccrc'), { recursive: true });
-    writeFileSync(roster, `${JSON.stringify({
-      version: 1,
-      accounts: [
-        { id: 'claude', label: 'claude', configDirSuffix: '.claude',
-          exec: { kind: 'upstream' }, homeAble: true, telemetry: 'anthropic' },
-        { id, label: id, configDirSuffix: `.claude-${id}`,
-          exec: { kind: 'codex', provider: 'openai', proxyPort: 45010, litellmPort: 45011, authDir },
-          homeAble: false, telemetry: 'codex' },
-      ],
-    }, null, 2)}\n`);
     // `init` plants the seed; `set-class` then moves haiku onto an id the seed
     // does not carry, so the value can only have come from the registry this
     // lane has NOW — the one an operator's reclassification leaves behind.
-    for (const argv of [
-      ['init', '--file', roster, '--id', id, '--probe', 'codex'],
-      ['set-class', '--file', roster, '--id', id, '--class', 'haiku', '--model', 'gpt-x-mini'],
-    ]) {
-      const m = spawnSync(process.execPath, [MODELS_OP, ...argv],
-        { cwd: home, env: { ...process.env, HOME: home }, encoding: 'utf8' });
-      expect(m.status, `models-op ${argv[0]}: ${m.stdout}${m.stderr}`).toBe(0);
-    }
+    materialiseLane(home, id, [['set-class', '--class', 'haiku', '--model', 'gpt-x-mini']]);
     expect(existsSync(join(home, '.ccrc', 'codex', id, 'lane.json'))).toBe(true);
     // The oracle is the registry FILE, not a literal; the next line is the
     // control that it holds the reclassified id rather than the seed's.
-    const registry = JSON.parse(readFileSync(join(home, '.ccrc', 'models', `${id}.classes.json`), 'utf8'));
-    const probeModel = (registry as { classes: { haiku: unknown } }).classes.haiku;
+    const probeModel = haikuOf(home, id);
     expect(probeModel).toBe('gpt-x-mini');
-    // Logged in ONLY where the roster's authDir says — existence, never
-    // contents (the stub Authenticator reads nothing).
-    mkdirSync(join(home, authDir), { recursive: true });
-    writeFileSync(join(home, authDir, 'auth.json'), '{}');
     const { url, close, requests } = await startEndpoint(fullHeaders());
     try {
       const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
@@ -763,6 +777,34 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(requests.length).toBe(1);
       expect((requests[0].body as { model?: unknown }).model).toBe(probeModel);
       expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
+    }
+  });
+
+  // The writer's OTHER output, through the same two real programs: haiku
+  // unassigned, so lane.json carries no `probeModel` at all (the writer omits
+  // it rather than choosing a fallback). The refusal must name the act that
+  // cures it. `ccrc doctor --fix` did not — no doctor arm renders lane.json,
+  // and a re-render would read the same null — so this pins the remedy the
+  // publisher now names, and that the old one is gone. A mutation that let the
+  // publisher proceed would reach a mock that answers, so `runPyAsync` keeps
+  // that red an assertion rather than a deadlock (D-3157).
+  it('task-6 fix round 1 (T2): refuses a materialised lane.json with haiku unassigned, naming set-class haiku', async () => {
+    const home = mkTmp('ccgpt-usage-materialised-nohaiku-');
+    const id = mintId();
+    materialiseLane(home, id, [['set-class', '--class', 'haiku', '--model', 'none']]);
+    expect(haikuOf(home, id)).toBeNull();
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status).not.toBe(0);
+      expect(r.stderr).toMatch(/carries no usable probeModel/);
+      expect(r.stderr).toContain(`ccrc models ${id} set-class haiku <modelId>`);
+      expect(r.stderr).not.toMatch(/doctor --fix/);
+      expect(requests.length).toBe(0);
+      expect(existsSync(limitsPath(home, id))).toBe(false);
     } finally {
       await close();
     }

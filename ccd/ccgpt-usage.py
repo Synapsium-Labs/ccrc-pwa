@@ -268,15 +268,21 @@ def _probe_model(lane: dict) -> str:
     `docs/superpowers/plans/2026-09-21-gpt-lane-ownership-2a-request-path.md`'s
     Task 10).
 
-    task-10-rulings.md §4: the remedy names `ccrc doctor --fix`, not an
-    invented verb (design spec §5.4/§12 — see `_read_lane`'s docstring for
-    the full citation).
+    The remedy names `ccrc models <id> set-class haiku <modelId>`, not
+    `ccrc doctor --fix` (Plan 2b-1 Task 6 fix round 1, T2): the manifest's
+    writer (`deploy/models-op.mjs`'s `laneManifest`) takes `probeModel` from
+    the lane's haiku class and OMITS it when that class is unassigned, so a
+    re-render — doctor's or any other — reproduces the same manifest, and
+    assigning haiku is the one act that cures it (that verb re-renders
+    lane.json as it goes). The ABSENT-file refusal in `_read_lane` keeps its
+    own remedy.
     """
     model = lane.get("probeModel")
     if not isinstance(model, str) or not model:
         sys.exit(
             f"ccgpt-usage: refusing to publish — {LANE_MANIFEST_PATH} carries no usable "
-            "probeModel; run `ccrc doctor --fix` to render it"
+            f"probeModel; run `ccrc models {ACCOUNT_ID} set-class haiku <modelId>` "
+            "to assign this lane's haiku class"
         )
     return model
 
