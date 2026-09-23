@@ -210,7 +210,13 @@ the workspace's child marker before the first launch. A box whose `ccd`
 predates the `child-argv-v1` capability cannot parse that flag, so the
 server omits it and journals `child-omitted:no-child-argv-cap` on the run —
 on EVERY fresh dispatch to that box, not only when you asked for something,
-unlike the two `route-omitted` events. It is not an error and asks nothing
+unlike the two `route-omitted` events. The same event also records a
+dispatch the server could not measure: it held no capability list for the
+box — the local-mode boot window, a failed local caps probe unmeasured
+until the server restarts, or a remote ready frame with no usable list.
+`ccd caps` on the box tells the two apart: a list naming `child-argv-v1`
+puts the remedy on the server (reconnect the agent, or restart it), not on
+a ccd deploy. It is not an error and asks nothing
 of you: that workspace is simply not a child, exactly like every workspace
 minted before the token existed, and nothing will ever reclaim it as one. A
 resumed workspace mints nothing and never carries the row.
