@@ -58,6 +58,7 @@ function realPath(name: string): string {
 const BASH = realPath('bash');
 const RSYNC = realPath('rsync');
 const REAL_NODE = realPath('node');
+const REAL_MV = realPath('mv');
 
 interface Result { code: number; stdout: string; stderr: string }
 
@@ -253,6 +254,27 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     + 'printf \'%s\\n\' "$PWD" >> "$HOME/npm-cwd"\nmkdir -p node_modules\nexit 0\n');
   plant('rsync',
     `#!/bin/sh\nprintf '%s\\n' "$*" >> "$HOME/rsync-argv"\nexec ${RSYNC} "$@"\n`);
+  // Task 1 (design §10, "update.json is written at every phase … by rename"):
+  // a RECORDING mv. When the destination is `~/.ccrc/update.json` it appends
+  // the SOURCE file's one line to `$HOME/update-json-writes` before the real
+  // rename runs, so every recorded line is a report that arrived BY RENAME —
+  // a write that bypassed `mv` (a `cp`, a `>` straight onto the name) is
+  // invisible here and the enumeration below reds. Builtins only (`read`,
+  // `printf`): `pathWithoutJq` runs this file on a PATH with no `cat`. Every
+  // other mv — the FULL flavour's whole install spine — passes straight
+  // through to the real binary, resolved at plant time.
+  plant('mv', [
+    '#!/bin/sh',
+    'src=""; dst=""',
+    'for a in "$@"; do src="$dst"; dst="$a"; done',
+    'case "$dst" in',
+    '  */.ccrc/update.json)',
+    '    if [ -f "$src" ]; then',
+    '      while IFS= read -r l || [ -n "$l" ]; do printf \'%s\\n\' "$l"; done < "$src" >> "$HOME/update-json-writes"',
+    '    fi ;;',
+    'esac',
+    `exec ${REAL_MV} "$@"`,
+  ].join('\n') + '\n');
   // graphify Task 2: the FULL-flavour happy-path test re-runs the real
   // `cmd_install` spine (`ccrc update` execs the staged tree's own `ccrc
   // install`), which now includes `_inst_graphify_engine` — a real
@@ -716,6 +738,15 @@ describe('ccrc update: fetch + verify, then back up, then install, then report',
     expect(readFileSync(join(home, '.ccrc', 'installed'), 'utf8')).toBe('newsha0000000000000000000000000000000000\n');
     expect(r.stdout).toMatch(/^update: build: v1\.0\.0 \(oldsha[0-9a-f]*\) -> v2\.0\.0 \(newsha[0-9a-f]*\)$/m);
     expect(r.stderr).not.toMatch(/the staged install \(which ends with doctor\) exited/);
+    // Task 1 (design §10): the report's last word is `done` — the box MOVED
+    // — and its detail says whose the FAIL lines are. Exit 3 is unchanged.
+    // The em dash in the shipped sentence reaches the report as `-`
+    // (`_upd_json_str` spells the file's three non-ASCII characters in ASCII
+    // before its printable-ASCII filter).
+    const rep = JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+    expect(rep['phase']).toBe('done');
+    expect(rep['target']).toBe('v2.0.0');
+    expect(rep['detail']).toBe('doctor exited 1 - the box moved; its health is ccrc doctor\'s');
   });
 
   it('a spine that DIED mid-way still exits 1 with the backup named — and leaves NO completed-install record (D-3114)', () => {
@@ -1777,5 +1808,280 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     const r = runUpdate(home, ['--check']);
     expect(r.stdout).toMatch(/^check: box=v3\.0\.0 sha=\S+ target=v2\.0\.0 state=behind$/m);
     expect(r.stderr).not.toMatch(/floor/);
+  });
+});
+
+// ── update.json (design 2026-09-20 §10) — the node's report ───────────────
+/** Every report `_upd_phase` placed, in order: the recording `mv` in
+ *  `updateEnv` appends the staged file's line each time its destination is
+ *  `~/.ccrc/update.json`, so each entry here arrived by rename. */
+const reportWrites = (home: string): Array<Record<string, unknown>> =>
+  (existsSync(join(home, 'update-json-writes'))
+    ? readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '')
+      .map((l) => JSON.parse(l) as Record<string, unknown>)
+    : []);
+const lastReport = (home: string): Record<string, unknown> =>
+  JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+/** The seven keys, in the writer's order (D-3237 adds `pid`). */
+const REPORT_KEYS = ['target', 'phase', 'startedAt', 'updatedAt', 'detail', 'from', 'pid'];
+/** The report's clock: unix SECONDS (`date +%s` on `_upd_phase`'s `now=`
+ *  line) — the unit W2's `reportFrom` reads, converting once to ms and
+ *  nulling anything above `REPORT_TIME_MAX_S` (a 13-digit ms stamp). Ten
+ *  digits until the year 2286. */
+const REPORT_TIME = /^\d{10}$/;
+
+describe('ccrc update: update.json at every phase, and --from (design §10)', () => {
+  // Spec §6's UpdatePhase minus `unknown` — which is the READER's word for a
+  // token outside the vocabulary and which no writer ever writes. Task 15
+  // swaps this literal for W2's `UPDATE_PHASES` once W2 has merged.
+  const WRITTEN_PHASES = ['queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
+    'restarting', 'checking', 'restoring', 'done', 'reverted', 'failed'];
+  // Phases a LATER task wires. Each task deletes its own member in the commit
+  // that writes it; Task 6 deletes the literal, and the union assertion below
+  // becomes total.
+  const PENDING = new Set<string>([
+    'queued',     // Task 3 — `--detach` writes it before the spawn
+    'checking',   // Task 5 — the health gate
+    'restoring',  // Task 6 — `_upd_restore`
+    'reverted',   // Task 6 — `_upd_restore`'s last word
+  ]);
+  const phases = (home: string): string[] => reportWrites(home).map((w) => String(w['phase']));
+  const plantFloor = (home: string, v: string): void => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), `${v}\n`);
+  };
+
+  it('a moving run, a converged no-op and a refusal together write every wired phase, each by rename, seven keys in order (§18 "update.json at every phase")', () => {
+    // 1. A run that moves the box (STUB flavour: update's own logic).
+    const moved = freshUpdateBox('ccrc-update-json-moved-');
+    plantOldBox(moved, { version: 'v1.0.0' });
+    packRelease(moved, stubTree(moved, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    let r = runUpdate(moved);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(phases(moved)).toEqual(['resolving', 'fetching', 'verifying', 'backing-up', 'installing', 'restarting', 'done']);
+
+    // 2. The converged no-op (the "already there" gate's three shas agree).
+    const same = freshUpdateBox('ccrc-update-json-same-');
+    plantOldBox(same, { version: 'v2.0.0' });
+    writeFileSync(join(same, '.ccrc', 'build.json'),
+      shippedStamp('v2.0.0', 'newsha0000000000000000000000000000000000'));
+    writeFileSync(join(same, '.ccrc', 'installed'), 'newsha0000000000000000000000000000000000\n');
+    packRelease(same, stubTree(same, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    r = runUpdate(same);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(phases(same)).toEqual(['resolving', 'fetching', 'verifying', 'done']);
+    expect(lastReport(same)['detail']).toBe('already converged at v2.0.0');
+
+    // 3. A refusal after the lock: a die is a `failed` report.
+    const refused = freshUpdateBox('ccrc-update-json-refused-');
+    plantOldBox(refused, { version: 'v1.0.0' });
+    packRelease(refused, stubTree(refused, { version: 'v2.0.0' }), { tag: 'v2.0.0', bundle: false });
+    r = runUpdate(refused);
+    expect(r.code).toBe(1);
+    expect(phases(refused)).toEqual(['resolving', 'fetching', 'verifying', 'failed']);
+
+    const written = new Set([...phases(moved), ...phases(same), ...phases(refused)]);
+    expect(written.has('unknown'), 'a writer wrote the reader\'s word').toBe(false);
+    for (const p of PENDING) expect(written.has(p), `${p} is written but still listed PENDING`).toBe(false);
+    expect([...new Set([...written, ...PENDING])].sort()).toEqual([...WRITTEN_PHASES].sort());
+
+    for (const home of [moved, same, refused]) {
+      const raw = readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '');
+      for (const l of raw) expect(Object.keys(JSON.parse(l) as object)).toEqual(REPORT_KEYS);
+      // The file on disk IS the last rename, and no staged copy is left beside it.
+      expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(`${raw[raw.length - 1]}\n`);
+      expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
+    }
+  });
+
+  it('the report names the target once resolved, carries ONE startedAt and a non-decreasing updatedAt in unix seconds, `from` cli by default, and the run\'s pid', () => {
+    const home = freshUpdateBox('ccrc-update-json-fields-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    // The test's own clock around the spawn, in seconds: the report's times
+    // are THIS instant in THIS unit, not merely ten digits.
+    const t0 = Math.floor(Date.now() / 1000);
+    const r = runUpdate(home);
+    const t1 = Math.ceil(Date.now() / 1000);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    const w = reportWrites(home);
+    expect(w.length).toBe(7);
+    // latest/download: nothing names a tag until SHA256SUMS has been read.
+    expect(w[0]!['phase']).toBe('resolving');
+    expect(w[0]!['target']).toBeNull();
+    for (const x of w.slice(1)) expect(x['target']).toBe('v2.0.0');
+    expect(new Set(w.map((x) => x['startedAt'])).size).toBe(1);
+    expect(new Set(w.map((x) => x['pid'])).size).toBe(1);
+    let prev = 0;
+    for (const x of w) {
+      expect(String(x['startedAt'])).toMatch(REPORT_TIME);
+      expect(String(x['updatedAt'])).toMatch(REPORT_TIME);
+      expect(Number(x['startedAt'])).toBeGreaterThanOrEqual(t0);
+      expect(Number(x['updatedAt'])).toBeLessThanOrEqual(t1);
+      expect(Number(x['updatedAt'])).toBeGreaterThanOrEqual(Math.max(prev, Number(x['startedAt'])));
+      prev = Number(x['updatedAt']);
+      expect(x['from']).toBe('cli');
+      expect(Number.isInteger(x['pid'])).toBe(true);
+      expect(x['detail']).toBeNull();   // no phase of a clean run carries one
+    }
+  });
+
+  it('--from <word> and --from=<word> reach `from`; --to names the target from the first phase on', () => {
+    const home = freshUpdateBox('ccrc-update-json-from-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    let r = runUpdate(home, ['--to', 'v2.0.0', '--from', 'pwa']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    let w = reportWrites(home);
+    expect(w.length).toBeGreaterThan(0);
+    for (const x of w) { expect(x['from']).toBe('pwa'); expect(x['target']).toBe('v2.0.0'); }
+    const eq = freshUpdateBox('ccrc-update-json-from-eq-');
+    plantOldBox(eq, { version: 'v1.0.0' });
+    packRelease(eq, stubTree(eq, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    r = runUpdate(eq, ['--from=rollout']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    w = reportWrites(eq);
+    for (const x of w) expect(x['from']).toBe('rollout');
+  });
+
+  const BAD_FROM: Array<[string[], RegExp]> = [
+    [['--from', 'operator'], /^ccrc: --from expects one of cli pwa restore rollback watchdog rollout \(got: operator\)$/m],
+    [['--from=CLI'], /^ccrc: --from expects one of cli pwa restore rollback watchdog rollout \(got: CLI\)$/m],
+    [['--from'], /^ccrc: --from needs a value: one of cli pwa restore rollback watchdog rollout$/m],
+  ];
+  it.each(BAD_FROM)('%s is a usage error: exit 2, usage printed, nothing fetched, nothing reported (D-3228)', (args, msg) => {
+    const home = freshUpdateBox('ccrc-update-json-badfrom-');
+    const r = runUpdate(home, args);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(msg);
+    expect(r.stderr).toMatch(/usage: ccrc \{/);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('--check and --from are exclusive — D-3139\'s shape: exit 2, nothing fetched, nothing reported', () => {
+    const home = freshUpdateBox('ccrc-update-json-check-from-');
+    const r = runUpdate(home, ['--check', '--from', 'pwa']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: update: --check and --from are exclusive — --check measures and writes nothing, --from attributes a run that moves this box; pick one$/m);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before the refusal').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('a verdict on the RELEASE is reported `provenance: …` — the absent bundle and the failing one; a verifier that could not RUN is not (spec §8, D-3239)', () => {
+    const detailOf = (home: string): string => {
+      const rep = lastReport(home);
+      expect(rep['phase']).toBe('failed');
+      const d = String(rep['detail']);
+      expect(d.length).toBeLessThanOrEqual(200);
+      expect(d).toMatch(/^[ -~]*$/);
+      return d;
+    };
+    const absent = freshUpdateBox('ccrc-update-json-prov-absent-');
+    plantOldBox(absent, { version: 'v1.0.0' });
+    packRelease(absent, stubTree(absent, { version: 'v2.0.0' }), { tag: 'v2.0.0', bundle: false });
+    expect(runUpdate(absent).code).toBe(1);
+    expect(detailOf(absent)).toMatch(/^provenance: the release ships no provenance bundle /);
+
+    const failing = freshUpdateBox('ccrc-update-json-prov-fail-');
+    plantOldBox(failing, { version: 'v1.0.0' });
+    packRelease(failing, stubTree(failing, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(failing, 'fixture-verify-exit'), '1\n');
+    expect(runUpdate(failing).code).toBe(1);
+    expect(detailOf(failing)).toMatch(/^provenance: provenance verification FAILED for ccrc-v2\.0\.0\.tar\.gz /);
+
+    // A node fault, not a verdict: W2's sweep must NOT turn it into this
+    // node's refusal of a good release.
+    const norun = freshUpdateBox('ccrc-update-json-prov-norun-');
+    plantOldBox(norun, { version: 'v1.0.0' });
+    packRelease(norun, stubTree(norun, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    writeFileSync(join(norun, 'fixture-verify-exit'), '127\n');
+    expect(runUpdate(norun).code).toBe(1);
+    const d = detailOf(norun);
+    expect(d).toMatch(/^could not RUN the installed verifier /);
+    expect(d).not.toMatch(/^provenance:/);
+  });
+
+  it('a detail is printable ASCII, at most 200 characters, cut BEFORE it is escaped: a die naming a hostile URL arrives exactly', () => {
+    // CCRC_RELEASE_BASE_URL is the one knob that puts arbitrary bytes into a
+    // die sentence: `_upd_resolve`'s "download failed: <url>/SHA256SUMS …".
+    // Position by position: "download failed: " (17) + "local://" (8) +
+    // `é` — two UTF-8 bytes, two `?` — + `"` + `q` + `\` = 30, then 170 of
+    // the 300 x's reach the 200-character cut, which runs before the two
+    // escapes, so no escape is ever split.
+    const home = freshUpdateBox('ccrc-update-json-detail-');
+    const r = runUpdate(home, [], { CCRC_RELEASE_BASE_URL: `local://é"q\\${'x'.repeat(300)}` });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/download failed: local:\/\//);
+    const rep = lastReport(home);
+    expect(rep['phase']).toBe('failed');
+    expect(rep['detail']).toBe(`download failed: local://??"q\\${'x'.repeat(170)}`);
+  });
+
+  it('a report that cannot be written is a WARN line per phase and the update still completes — a directory squatting on the name is refused, never moved INTO', () => {
+    const home = freshUpdateBox('ccrc-update-json-unwritable-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    mkdirSync(join(home, '.ccrc', 'update.json'), { recursive: true });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: WARN: could not write ~\/\.ccrc\/update\.json \(phase resolving\) — the console will not see this phase; the update continues$/m);
+    expect(r.stdout).toMatch(/^update: WARN: could not write ~\/\.ccrc\/update\.json \(phase done\) — /m);
+    expect(existsSync(join(home, 'staged-ccrc-argv')), 'the update stopped for its report').toBe(true);
+    expect(readdirSync(join(home, '.ccrc', 'update.json'))).toEqual([]);
+    expect(readdirSync(join(home, '.ccrc')).filter((f) => f.startsWith('update.json.'))).toEqual([]);
+  });
+
+  it('--from restore|rollback|watchdog go below the floor with a WARN naming the caller, and the floor stays; --from pwa is refused by W1\'s sentence (spec §9)', () => {
+    for (const from of ['restore', 'rollback', 'watchdog']) {
+      const home = freshUpdateBox(`ccrc-update-json-floor-${from}-`);
+      plantOldBox(home, { version: 'v3.0.0' });
+      plantFloor(home, 'v3.0.0');
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      const r = runUpdate(home, ['--to', 'v2.0.0', '--from', from]);
+      expect(r.code, `${from} — stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+      expect(r.stdout).toMatch(new RegExp(`^update: WARN: v2\\.0\\.0 is below this box's floor v3\\.0\\.0 \\(resolved by --to v2\\.0\\.0\\) — proceeding because this run is --from ${from}; the floor stays v3\\.0\\.0$`, 'm'));
+      expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
+      expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+    }
+    const pwa = freshUpdateBox('ccrc-update-json-floor-pwa-');
+    plantOldBox(pwa, { version: 'v3.0.0' });
+    plantFloor(pwa, 'v3.0.0');
+    packRelease(pwa, stubTree(pwa, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(pwa, ['--to', 'v2.0.0', '--from', 'pwa']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/v2\.0\.0 \(resolved by --to v2\.0\.0\) is below this box's floor v3\.0\.0 .* ccrc update --to v2\.0\.0 --downgrade/);
+    expect(existsSync(join(pwa, 'ccrc-backups'))).toBe(false);
+    expect(lastReport(pwa)['phase']).toBe('failed');
+  });
+
+  it('_ccrc_die reports `failed` only once the run is reporting, only from the run\'s own shell, with the prefix in front (the one hook)', () => {
+    // `ccrc-install.test.ts:4133`'s idiom: the ONE-LINE definition extracted
+    // from the shipped file and run alone, `_upd_phase` shadowed by a recorder.
+    const src = readFileSync(join(REPO, 'ccd', 'ccrc'), 'utf8');
+    const progLine = /^PROG=.*$/m.exec(src);
+    const dieLine = /^_ccrc_die\(\) \{.*\}$/m.exec(src);
+    expect(progLine, 'ccd/ccrc has no PROG=').not.toBeNull();
+    expect(dieLine, 'ccd/ccrc has no one-line _ccrc_die').not.toBeNull();
+    const home = mkTmp('ccrc-update-die-hook-');
+    const rec = join(home, 'phase-calls');
+    const run = (body: string): Result => {
+      const p = spawnSync(BASH, ['-c', [
+        'set -uo pipefail', progLine![0], dieLine![0],
+        `_upd_phase() { printf '%s|%s\\n' "$1" "$2" >> '${rec}'; }`,
+        'UPD_FAIL_PREFIX=""', body,
+      ].join('\n')], { encoding: 'utf8' });
+      return { code: p.status ?? -1, stdout: p.stdout ?? '', stderr: p.stderr ?? '' };
+    };
+    let r = run('UPD_REPORTING=0; _ccrc_die before the lock');
+    expect(r.code).toBe(1);
+    expect(existsSync(rec), 'a die before the run reports wrote a report').toBe(false);
+    r = run('UPD_REPORTING=1; x="$(_ccrc_die inside a command substitution)"; echo "survived:$?"');
+    expect(r.stdout).toMatch(/^survived:1$/m);
+    expect(existsSync(rec), 'a subshell\'s die reported the RUN as failed').toBe(false);
+    r = run('UPD_REPORTING=1; UPD_FAIL_PREFIX="provenance: "; _ccrc_die the release failed');
+    expect(r.code).toBe(1);
+    expect(r.stderr).toBe('ccrc: the release failed\n');
+    expect(readFileSync(rec, 'utf8')).toBe('failed|provenance: the release failed\n');
   });
 });

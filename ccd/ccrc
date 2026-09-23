@@ -1143,6 +1143,20 @@ BOX_FLOOR_FILE="$HOME/.ccrc/floor"
 # this install can do, never what a design intends.
 CCRC_CAP_WORDS=(verify node-id floor)
 
+# ── THE NODE'S REPORT (design 2026-09-20 §10) ─────────────────────────────
+# `~/.ccrc/update.json` — what THIS box says about its own update: one JSON
+# line, rewritten by temp-and-rename at every phase boundary of `cmd_update`
+# (`_upd_phase`). The server's inventory sweep reads it (§8); on the box only
+# the lock's refusal sentence and the watchdog read it back.
+BOX_UPDATE_JSON="$HOME/.ccrc/update.json"
+# Who started a run that moves this box — the closed vocabulary `--from`
+# accepts (plan D-3228), declared ONCE: `cli` a hand-typed run
+# (the default), `pwa` the console's detached spawn, `restore` the automatic
+# restore's arm-2 child, `rollback` `ccrc rollback`, `watchdog` the
+# server-role watchdog's rollback, `rollout` `cmd_rollout`'s per-box run.
+# Every sentence that lists it expands this array.
+UPD_FROM_WORDS=(cli pwa restore rollback watchdog rollout)
+
 # ── THE EXPOSURE FILE, WHICH `expose` WRITES AND THE SERVER UNIT READS ────
 # `~/.ccrc/exposure.env` — stage 3b, spec D3. Exposure keys (CCRC_ORIGIN,
 # CCRC_RP_ID, the DuckDNS trio) get their OWN EnvironmentFile because ccrc.env
@@ -1404,6 +1418,15 @@ UPD_BACKUP_DIR=""
 UPD_URL_DIR=""    # _upd_resolve: the release's URL space (latest/ or download/<tag>/)
 UPD_TARNAME=""    # _upd_resolve: the tarball SHA256SUMS names
 UPD_PROVENANCE=""    # _upd_fetch: verified|unsigned, once PROVENANCE settles
+# The report's state (design §10), at file scope for the same `set -u`
+# reason. NONE is exported: a child `ccrc` — the staged spine, a restore
+# child — is a different run and keeps its own.
+UPD_FROM="cli"          # --from's word; `from` in every report
+UPD_REPORTING=0         # 1 once cmd_update is past its refusals: from then on a _ccrc_die is a `failed` report
+UPD_REPORT_TARGET=""    # the tag a report names: --to at parse, UPD_VERSION once resolved
+UPD_REPORT_STARTED=""   # unix seconds (date +%s) of this process's first report
+UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
+UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
 
 # `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
 # scope for the `set -u` reason UPD_* above are: they carry state built in
@@ -1545,7 +1568,12 @@ already running).
             provenance bundle; the installed tree's verifier checks it
             before extraction. --allow-unsigned admits a release with NO
             bundle (never one that fails), and the box records the install
-            as unsigned (ccrc version says so). Per box; across a fleet,
+            as unsigned (ccrc version says so). Every run that moves this
+            box reports each phase to ~/.ccrc/update.json, which the console
+            reads; [--from <who>] names who started it
+            (${UPD_FROM_WORDS[*]}; default cli), and restore, rollback and
+            watchdog may go below the floor, which stays.
+            Per box; across a fleet,
             'ccrc rollout' runs it in order
   rollout   move BOTH boxes of a fleet to one published release, in order,
             from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
@@ -1604,7 +1632,14 @@ EOF
 # ── diagnostic helpers (stderr; the RESULT of a verb goes to stdout) ───────
 # `_ccrc_die` — a bare refusal: this run cannot continue. Always exits 1 —
 # never 2, which is reserved for a USAGE error (see `_ccrc_usage_die` below).
-_ccrc_die() { echo "$PROG: $*" >&2; exit 1; }
+# Inside a `cmd_update` past its refusals (UPD_REPORTING=1) the same die is
+# also the run's `failed` report (design §10): the ONE hook, so no die site
+# carries a report call of its own. `$BASHPID = $$` because a die inside a
+# command substitution ends only that subshell, not the run, and must not
+# report a failure the run never had. ONE LINE ON PURPOSE —
+# `ccrc-install.test.ts` extracts this definition by `^_ccrc_die\(\) \{.*\}$`
+# and runs it alone under `set -u` (hence `${UPD_FAIL_PREFIX:-}`).
+_ccrc_die() { echo "$PROG: $*" >&2; [ "${UPD_REPORTING:-0}" = 1 ] && [ "$BASHPID" = "$$" ] && _upd_phase failed "${UPD_FAIL_PREFIX:-}$*"; exit 1; }
 # The one place "unknown argument" is spelled, so the unknown-verb and
 # unknown-top-level-flag paths below cannot drift onto two different
 # messages for what is, to an operator, the same mistake.
@@ -11303,7 +11338,7 @@ _inst_installed() {
 # unreachable server is a box that cannot compare; both skip the comparison
 # SILENTLY — a diagnostic that is not available is not a finding.
 cmd_update() {
-  local to="" check=0 force=0 downgrade=0 allow_unsigned=0
+  local to="" check=0 force=0 downgrade=0 allow_unsigned=0 from="" from_set=0
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -11315,6 +11350,10 @@ cmd_update() {
       --force) force=1 ;;
       --downgrade) downgrade=1 ;;
       --allow-unsigned) allow_unsigned=1 ;;
+      --from)
+        [ $# -ge 2 ] || { echo "$PROG: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
+        from="$2"; from_set=1; shift ;;
+      --from=*) from="${1#--from=}"; from_set=1 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
@@ -11324,6 +11363,20 @@ cmd_update() {
     usage >&2
     exit 2
   fi
+  # `--from` is a closed vocabulary (plan D-3228): the word
+  # lands in update.json's `from`, where free text would be attribution
+  # nobody can enumerate.
+  if [ "$from_set" -eq 1 ]; then
+    local w known=0
+    for w in "${UPD_FROM_WORDS[@]}"; do [ "$w" = "$from" ] && known=1; done
+    if [ "$known" -eq 0 ]; then
+      echo "$PROG: --from expects one of ${UPD_FROM_WORDS[*]} (got: $from)" >&2
+      usage >&2
+      exit 2
+    fi
+  fi
+  UPD_FROM="${from:-cli}"
+  UPD_REPORT_TARGET="$to"
   # `--check` MEASURES and writes nothing; `--force`, `--downgrade` and
   # `--allow-unsigned` each commit this box to an act the check arm never
   # reaches (D-3139) — the same "silently drop the flag you also typed" trap
@@ -11340,6 +11393,12 @@ cmd_update() {
   fi
   if [ "$check" -eq 1 ] && [ "$allow_unsigned" -eq 1 ]; then
     echo "$PROG: update: --check and --allow-unsigned are exclusive — --check measures and writes nothing, --allow-unsigned admits an unsigned install; pick one" >&2
+    exit 2
+  fi
+  # And `--from` (design §10): it attributes a run that MOVES this box, which
+  # --check never does — the same trap, the same refusal.
+  if [ "$check" -eq 1 ] && [ "$from_set" -eq 1 ]; then
+    echo "$PROG: update: --check and --from are exclusive — --check measures and writes nothing, --from attributes a run that moves this box; pick one" >&2
     exit 2
   fi
 
@@ -11370,6 +11429,11 @@ cmd_update() {
       *)          echo "this box: unversioned ($sha) · $label: $UPD_VERSION — a release install would be the first on this box"; return 1 ;;
     esac
   fi
+
+  # FROM HERE ON THIS RUN REPORTS (design §10): every phase boundary below
+  # writes ~/.ccrc/update.json, and `_ccrc_die` makes every refusal a
+  # `failed` report. --check returned above, having written nothing.
+  UPD_REPORTING=1
 
   # BY NAME, BEFORE ANYTHING RUNS — `cmd_install`'s own probe discipline: a
   # missing tool three steps in would arrive as that step "failing", and two
@@ -11412,16 +11476,25 @@ cmd_update() {
   esac
 
   _upd_fleet_warn
+  _upd_phase resolving
   _upd_resolve "$to"
-  _upd_floor_check "$to" "$downgrade"
+  UPD_REPORT_TARGET="$UPD_VERSION"
+  # The floor names HOW the target was resolved (W1's sentence), computed
+  # here so the check keys on the resolved version whichever path chose it.
+  local via="latest/download"
+  [ -n "$to" ] && via="--to $to"
+  _upd_floor_check "$via" "$downgrade" "$UPD_FROM"
+  _upd_phase fetching
   _upd_fetch "$allow_unsigned"
   # THE GATE (design §5): the no-op path costs one verified download and no
   # write — no backup, no restart, no sweep. Two operators told to ship the
   # same release no longer restart the fleet twice.
   if [ "$force" -eq 0 ] && _upd_converged; then
     echo "update: this box already runs $UPD_VERSION (${BOX_BUILD[0]}) and that install completed — nothing to do (pass --force to reinstall)"
+    _upd_phase done "already converged at $UPD_VERSION"
     return 0
   fi
+  _upd_phase backing-up
   _upd_backup
 
   # THE RECORDED ROLE (spec §5): `ccrc.env`'s CCRC_ROLE, written by
@@ -11437,6 +11510,7 @@ cmd_update() {
   fi
   case "$role" in server|fleet|both) ;; *) role="" ;; esac
 
+  _upd_phase installing
   echo "update: installing $UPD_VERSION from the verified staged tree${role:+ (recorded role: $role)}"
   # The completed-install record is written LAST by the spine (`_inst_installed`).
   # Cleared here, right before the staged install, its presence afterwards
@@ -11482,9 +11556,14 @@ cmd_update() {
     fi
   fi
 
+  _upd_phase restarting
   _upd_sweep
   _upd_report "$old_desc" "$old_version"
-  [ "$doctor_failed" -eq 0 ] || exit 3
+  if [ "$doctor_failed" -eq 1 ]; then
+    _upd_phase done "doctor exited $inst_rc — the box moved; its health is ccrc doctor's"
+    exit 3
+  fi
+  _upd_phase done
 }
 
 # One warning, or silence — never a refusal and never a guess. Address
@@ -11504,6 +11583,63 @@ _upd_fleet_warn() {
   fi
   return 0
 }
+
+# ── _upd_phase <phase> [detail] — the node reports (design 2026-09-20 §10) ─
+# One JSON line, keys in a fixed order — target, phase, startedAt, updatedAt,
+# detail, from, pid (plan D-3237) — staged beside the file and
+# placed by `mv -f`, so a reader (the inventory sweep, the watchdog, the
+# lock's refusal) sees the previous report or this one, never half of
+# either. Times are unix SECONDS (`date +%s`, the same on GNU and BSD) — the
+# unit the server's inventory reads, converting once to ms and refusing a
+# value above eleven digits (a ms stamp) as null; so a `now` that is not
+# seconds-shaped writes nothing, and a preset `startedAt` that is not falls
+# to `now`. NEVER FAILS THE UPDATE: a report the console cannot read is a lost phase,
+# not a reason to leave a box half-moved — every failure is one WARN line and
+# rc 0, and it never calls `_ccrc_die` (which calls it). A directory at the
+# name is refused rather than moved INTO, which `mv` would do silently.
+_upd_phase() {
+  local phase="$1" detail="${2:-}" now target="null" det tmp
+  now="$(date +%s 2>/dev/null)"
+  [[ "$now" =~ ^[1-9][0-9]{0,10}$ ]] || now=""
+  [[ "$UPD_REPORT_STARTED" =~ ^[1-9][0-9]{0,10}$ ]] || UPD_REPORT_STARTED="$now"
+  [[ "$UPD_REPORT_TARGET" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] && target="\"$UPD_REPORT_TARGET\""
+  det="$(_upd_json_str "$detail")"
+  tmp="$BOX_UPDATE_JSON.tmp.$$"
+  if [ -n "$now" ] \
+     && { [ -d "${BOX_UPDATE_JSON%/*}" ] || mkdir -p "${BOX_UPDATE_JSON%/*}"; } 2>/dev/null \
+     && [ ! -d "$BOX_UPDATE_JSON" ] \
+     && { printf '{"target":%s,"phase":"%s","startedAt":%s,"updatedAt":%s,"detail":%s,"from":"%s","pid":%s}\n' \
+            "$target" "$phase" "$UPD_REPORT_STARTED" "$now" "$det" "$UPD_FROM" "${UPD_REPORT_PID:-$$}" > "$tmp"; } 2>/dev/null \
+     && chmod 644 "$tmp" 2>/dev/null \
+     && mv -f -- "$tmp" "$BOX_UPDATE_JSON" 2>/dev/null; then
+    return 0
+  fi
+  rm -f -- "$tmp" 2>/dev/null
+  echo "update: WARN: could not write ~/.ccrc/update.json (phase $phase) — the console will not see this phase; the update continues"
+  return 0
+}
+
+# `_upd_json_str <s>` — the JSON value for a report's detail: `null` for
+# empty, else a quoted string of at most 200 printable-ASCII characters
+# (spec §8's bound, which W2's reader applies too — the writer never relies
+# on it). This file's sentences use three non-ASCII characters; they are
+# spelled in ASCII first, so a die reaches the console as words, not `???`
+# (plan D-3249).
+# Every other byte outside 0x20-0x7E becomes `?` under LC_ALL=C, the cut runs
+# BEFORE the two escapes so no escape is ever split, and the body is a
+# SUBSHELL so its LC_ALL can never leak into the caller.
+_upd_json_str() (
+  s="${1:-}"
+  [ -n "$s" ] || { printf 'null'; exit 0; }
+  s="${s//—/-}"; s="${s//…/...}"; s="${s//→/->}"
+  LC_ALL=C
+  s="${s//[! -~]/?}"
+  s="${s:0:200}"
+  bs='\' q='"'
+  s="${s//"$bs"/"$bs$bs"}"
+  s="${s//"$q"/"$bs$q"}"
+  printf '"%s"' "$s"
+)
 
 # ── _upd_resolve / _upd_fetch — SHA256SUMS first, then the tarball ────────
 # Split (release/rollout design §5-6) so `--check` and `rollout` can learn
@@ -11567,6 +11703,7 @@ _upd_fetch() {
   echo "update: fetching $UPD_URL_DIR/$UPD_TARNAME …"
   curl -fsSL -o "$UPD_STAGE/$UPD_TARNAME" "$UPD_URL_DIR/$UPD_TARNAME" \
     || _ccrc_die "download failed: $UPD_URL_DIR/$UPD_TARNAME — nothing on this box was changed"
+  _upd_phase verifying
   # Verify BEFORE extracting: a tarball that fails its checksum never puts a
   # file on disk, let alone runs one (install.sh's rule, same words).
   ( cd "$UPD_STAGE" && _plat_sha256_check SHA256SUMS >/dev/null 2>&1 ) \
@@ -11602,7 +11739,11 @@ _upd_fetch() {
     # means the verifier never RAN to a verdict at all, which is not the
     # same fact and must not close the same escape hatch for the wrong
     # reason.
+    # A VERDICT ON THE RELEASE (spec §8, plan D-3239): W2's sweep turns a
+    # "provenance: " failure into this node's refusal of this tag; the
+    # could-not-run die below is a node fault and carries no prefix.
     if [ "$vrc" -eq 1 ]; then
+      UPD_FAIL_PREFIX="provenance: "
       _ccrc_die "provenance verification FAILED for $UPD_TARNAME (read verify-provenance's line above) — refusing to extract or install; --allow-unsigned does not apply to a bundle that FAILS, only to one that is absent; nothing on this box was changed"
     elif [ "$vrc" -ne 0 ]; then
       _ccrc_die "could not RUN the installed verifier ($verifier exited $vrc) — this is not a verdict on the bundle; nothing on this box was changed"
@@ -11618,6 +11759,7 @@ _upd_fetch() {
       echo "update: WARN: $UPD_URL_DIR/$UPD_TARNAME.sigstore.json is absent (the release host answered an HTTP error — curl exit 22) — proceeding on the transport checksum alone because --allow-unsigned was typed; this install will be recorded as unsigned"
       UPD_PROVENANCE=unsigned
     else
+      UPD_FAIL_PREFIX="provenance: "
       _ccrc_die "the release ships no provenance bundle ($UPD_URL_DIR/$UPD_TARNAME.sigstore.json answered an HTTP error — curl exit 22) — refusing; a release older than provenance, or a fork without the attest step, installs only with --allow-unsigned (recorded on the box as unsigned); nothing on this box was changed"
     fi
   else
@@ -11673,16 +11815,16 @@ _upd_converged() {
   [ "$rec" = "${box[0]}" ]
 }
 
-# ── _upd_floor_check <to> <downgrade> — never below the floor by accident ─
+# ── _upd_floor_check <via> <downgrade> <from> — never below the floor by accident ─
 # (design 2026-09-20 §9, decision 8). Checked against the RESOLVED version,
 # whichever way it was resolved — `--to`, or `latest/download` — because a
 # promotion's `--latest` can point latest/download at an OLDER commit's tag by
 # a routine act, and a box on a newer build would otherwise walk down on its
 # next bare `ccrc update`. Moving down is a typed act: --downgrade. A floor
 # file that is not a tag is refused by name, never read as "no floor".
+# --from restore|rollback|watchdog is the other way below it (spec §9).
 _upd_floor_check() {
-  local to="$1" downgrade="$2" floor="" via="latest/download"
-  [ -n "$to" ] && via="--to $to"
+  local via="$1" downgrade="$2" from="${3:-cli}" floor=""
   [ -f "$BOX_FLOOR_FILE" ] || return 0
   # UNREADABLE (the open itself fails, e.g. permissions) is a different
   # condition from MALFORMED (readable but empty or not vX.Y.Z) and must not
@@ -11698,6 +11840,14 @@ _upd_floor_check() {
     echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because --downgrade was typed; the floor stays $floor"
     return 0
   fi
+  # A RESTORE, A ROLLBACK OR THE WATCHDOG'S ROLLBACK (spec §9): each returns to
+  # a known-good tag, which is below the floor by construction — the floor
+  # the failed update just raised. The floor file itself is never lowered.
+  case "$from" in
+    restore|rollback|watchdog)
+      echo "update: WARN: $UPD_VERSION is below this box's floor $floor (resolved by $via) — proceeding because this run is --from $from; the floor stays $floor"
+      return 0 ;;
+  esac
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of) — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
