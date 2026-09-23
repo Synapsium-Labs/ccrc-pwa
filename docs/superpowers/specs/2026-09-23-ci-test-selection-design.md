@@ -1,7 +1,8 @@
 # CI test selection — design
 
 **Date:** 2026-09-23. **Status:** approved section by section in dialogue with the operator (§2 lists the rulings);
-this document is the written form for review before a plan is cut. **Builds on:**
+this document is the written form for review before a plan is cut. §15 records the refinements measured while the
+plan was being written; the sections they touch say so. **Builds on:**
 `2026-09-18-release-rollout-design.md` and `2026-09-20-centralised-update-management-design.md` (the release channel
 and the `stable` promotion this design gates). Every `file:line` below was measured at `origin/main` `3a8a93a5`; a
 line number is a snapshot, the identifier beside it is the anchor. Numbers marked *measured* come from a read-only
@@ -59,7 +60,7 @@ what the mode runs, and every other job reads its output.
 |---|---|---|
 | `pull_request` | `selected` | Server tests chosen by §6, sharded on Linux (§7); `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` in full, as today; `test-macos` on the same selection, advisory. |
 | `push` to `main` (a merge) | `refresh` | Linux only: re-trace the tests the merge affected and update the map (§5.4). No agent, pwa, build or macOS legs. |
-| `schedule`, daily | `full` | Every leg in full, Linux and macOS, sharded; plus a separate traced full run that rebuilds the map from scratch (§5.3). Skipped when `main`'s head already carries a green `full-suite` check (§8). |
+| `schedule`, daily | `full` | Every leg in full, Linux and macOS, sharded; plus a separate traced full run that rebuilds the map from scratch (§5.3). When `main`'s head already carries a green `full-suite` check (§8), the selector-driven legs are skipped (§15.4). |
 | `workflow_dispatch` | input `mode`, default `full` | The manual escape hatch. |
 | `workflow_call` | input `mode` | How `release-stable.yml` runs the full suite (§8). |
 
@@ -120,10 +121,11 @@ checks"; the matrix expansion order is documented in the workflow syntax referen
 ### 5.1 What is traced
 
 Each server test file runs in **its own** vitest process under
-`strace -f -ff -y -qq` (per-process output files; file descriptors printed as their paths), restricted to the
-file-shaped syscalls: `openat`, `openat2`, `open`, `newfstatat`, `statx`, `access`, `faccessat2`, `readlinkat`,
-`getdents64`, `execve`, `execveat`, `chdir`, `fchdir`. One process per file makes attribution exact. Per-process
-output removes the split `<unfinished …>` / `<… resumed>` lines, and `-y` removes fd-to-path bookkeeping — the two
+`strace -f -ff -y -qq` (per-thread output files; file descriptors printed as their paths), restricted to the
+file-shaped syscalls: `openat`, `openat2`, `open`, `newfstatat`, `statx`, `access`, `faccessat2`, `readlink`,
+`readlinkat`, `getdents64`, `execve`, `execveat`, plus `clone`/`clone3` to rebuild thread groups (§15.1). `chdir` is
+not needed: `-y` prints the current directory on every `*at` call. One vitest process per file makes attribution
+exact. Per-thread output removes the split `<unfinished …>` / `<… resumed>` lines, and `-y` removes fd-to-path bookkeeping — the two
 defects the prototype's post-processor had (it dropped successful opens and misattributed a reused fd, *measured*).
 
 ### 5.2 What is recorded
@@ -147,11 +149,15 @@ Per test file, **repository paths only** (anything outside the checkout, and `no
   `read`, and the same pin names them.
 - **`unknown` exists because a test that dies early reads less.** Its record would be too small, which is the one
   direction that is unsafe.
-- **vitest's own startup is subtracted.** A trivial baseline test file is traced with the same invocation. What it
-  records — the config, `package.json`, `tsconfig.json`, the `server/test/` listing the include glob makes — is removed
-  from every test's record. Without that, every test would "list `server/test/`" and any added test file would
-  select everything. The subtracted files are all full-run triggers (§6.3) anyway, so nothing they guard is lost; the
-  baseline set is written into the map so the subtraction is visible.
+- **vitest's own startup is subtracted, per process side** (§15.1). A trivial baseline test file is traced with the
+  same invocation, and each trace is split into the vitest main process and everything else (the worker running the
+  test, and its children). The baseline's main-process record — the config, `package.json`, `tsconfig.json`, the
+  `server/test/` listing the include glob makes — is removed from every test's main-process record, and its
+  worker-side record from every worker-side record. Without that, every test would "list `server/test/`" and any added
+  test file would select everything. Splitting by side is what keeps a test's OWN listing of `server/test/` (a census,
+  such as `single-definition`'s) from being erased with vitest's. The baseline's `read` and `probed` files are full-run
+  triggers (§6.3); its `listed` directories are not. The baseline is written into the map so the subtraction is
+  visible.
 
 ### 5.3 The daily rebuild
 
@@ -170,7 +176,9 @@ test files are, by §6.2, selected and so traced.
 
 Carrying the old entries is sound for the same reason selection is (§9): a test that read none of the changed paths
 executed identically, so its record is unchanged. If there is no map yet, or a full-run trigger fired, the refresh
-traces everything. A refresh's test failures show red on the `main` commit — they are either a real semantic merge
+traces everything. A test the refresh meant to trace but got no record for — its trace shard crashed or was
+cancelled — is written `unknown`, never carried: carrying is sound only for tests that read none of the changed paths
+(§15.3). A refresh's test failures show red on the `main` commit — they are either a real semantic merge
 conflict among the affected tests, or a timing test perturbed by tracing — and mark those tests `unknown`. They gate
 nothing.
 
@@ -205,9 +213,12 @@ modified and deleted, which §5.2's table needs.
 - the map is missing, unreadable, of an unknown format version, or its commit is not in the checkout;
 - the changed set touches any `package.json` or `package-lock.json`, any `vitest.config.*`, any `tsconfig*.json`,
   anything under `.github/` (the pipeline, the selector and the tracer live there), or `shared/package.json`'s module
-  marker (already covered by the `package.json` rule — named because `CLAUDE.md` calls it load-bearing);
+  marker (already covered by the `package.json` rule — named because `CLAUDE.md` calls it load-bearing), a symlink,
+  or any path in the map baseline's `read` or `probed` (the files every test's startup reads);
 - the selector itself hits any internal error. It then **emits mode `full` with the reason** — it never answers
-  "nothing". Only if the `select` job dies outright does `test (server)` go red (§4.2) — loud, never silent.
+  "nothing". Only if the `select` job dies outright does `test (server)` go red (§4.2) — loud, never silent. Two
+  conditions deliberately make it die rather than fall back, because "full" would run the wrong thing too: a live test
+  path containing whitespace (shard lists are space-joined), and a live test list that is empty or unreadable (§15.5).
 
 ### 6.4 The reason table
 
@@ -246,7 +257,8 @@ variable. Literal include patterns match exactly (*measured*). The same config s
   - **Found** — from the daily run, a manual full run, or an earlier gate: the existing `promote` job runs at once. The
     usual path, if the operator promotes the commit the daily run tested.
   - **Not found** — a second job calls `ci.yml` with `mode: full` (`uses: ./.github/workflows/ci.yml`), and `promote`
-    runs only if it succeeded.
+    runs only if it succeeded AND its `full-suite` job reported `verdict: green` — a called run that succeeded without
+    ever reaching `full-suite` must not promote (§15.4).
 - **Why the gate is in the workflow and not in the `stable` ruleset.** GitHub does not let checks from `schedule` or
   `workflow_dispatch` runs satisfy a ruleset's required status check — only `push`, `pull_request` and a few other
   events count (GitHub's "Troubleshooting required status checks"). A ruleset gate would therefore refuse the daily
@@ -362,3 +374,28 @@ server runtime across the last 100 merged PRs.
 
 Several of these files are read as text by server tests, so the change's own verification is the full suite, sharded,
 before merge — not a list of the suites it obviously touches.
+
+## 15. Refinements measured while writing the plan
+
+Found by running the plan's code against real traces and the real history of this repository on 2026-09-23. Each
+tightens the design above in the direction of safety or of the saving it exists for; none reverses a ruling.
+
+1. **Traces are split by process side, and a process is a thread group.** `strace -ff` writes one file per THREAD,
+   not per process: the baseline's `getdents64` of `server/test` was measured on a threadpool thread's file, not the
+   vitest main pid's. The runner records the main pid (a `sh -c 'echo $$ …; exec vitest …'` wrapper), and the parser
+   rebuilds its thread group from `clone`/`clone3` lines carrying `CLONE_THREAD`; everything else is the worker side.
+   Measured: vitest's glob lands on the main side; `worker-skill`'s walk of `ccd/worker-skill` and `single-definition`'s
+   census of `server/test` land on the worker side, so the census survives subtraction.
+2. **Why the baseline's directory listings are not full-run triggers.** 29 of the last 60 merged PRs added or deleted a
+   file under `server/test`. With the listing as a trigger, half of all PRs would run the full suite; with the split of
+   item 1, dropping the trigger loses nothing, because a test that lists `server/test` itself keeps that listing.
+3. **A refresh never carries an entry it meant to replace** — see §5.4.
+4. **Two stricter behaviours in the pipeline.** On a scheduled day whose head already has a green `full-suite`, the
+   selector-driven legs (server shards, typecheck, macOS shards, traces, `full-suite`) are skipped, while the required
+   `test (agent)`, `test (pwa)`, `build-pwa` and `probe-macos` still run (about four runner-minutes): they cannot read
+   the selector's answer without a `needs:` that §4.2 forbids. And `promote` requires the called run's `verdict` output,
+   not only its success (§8).
+5. **Two inputs fail loudly instead of falling back** — see §6.3.
+6. **Syscalls added:** `readlink` (Node's `fs.realpathSync.native` of a missing path emits only `readlink`, measured),
+   recorded like `access`; `EINVAL` from `readlink` means the path exists and records a read. Traced runs set
+   `UV_USE_IO_URING=0` so libuv performs every file operation as a visible syscall.
