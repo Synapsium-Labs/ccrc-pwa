@@ -442,7 +442,8 @@ export type SweepOutcome =
   | { label: string; result: 'node-id-collision'; nodeId: string; lease: LeaseAction['kind']; refused: boolean }
   | { label: string; result: 'unreachable'; nodeId: string }
   | { label: string; result: 'refused'; why: string }
-  /** C1 (final fix wave): this connection's own measurement+apply threw —
+  /** C1 (final fix wave; D-3217 records this arm in the plan's own Interfaces
+   *  block, which had fallen behind it): this connection's own measurement+apply threw —
    *  `coord.db` is a synchronous `node:sqlite` handle, and a lock or
    *  corruption throws mid-transaction. Isolated per connection so a throw
    *  on one row still lets the OTHER row's measurement run and still lets

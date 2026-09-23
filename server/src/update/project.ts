@@ -53,7 +53,8 @@ export function resolveInputFor(store: Omit<ProjectStore, 'resolveNode' | 'nodes
 }
 
 /** `code` is the fs errno (`EACCES`, `EROFS`, …) when the failure carries one — `null` for a thrown value
- *  that isn't a `NodeJS.ErrnoException` (fix round 1, finding 1). It is the STABLE half of the failure:
+ *  that isn't a `NodeJS.ErrnoException` (fix round 1, finding 1; D-3217 records this field in the plan's
+ *  own Interfaces block, which had fallen behind it). It is the STABLE half of the failure:
  *  `detail` embeds `e.message`, which for a `writeFile`/`rename` failure includes the tmp path — and that
  *  path embeds `process.pid` and `Date.now()` (below), so two failures of the SAME underlying condition
  *  never produce the same `detail` string. A caller that wants to dedupe repeated warnings compares on
