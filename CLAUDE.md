@@ -140,7 +140,7 @@ load-bearing: without it tsc emits CommonJS into `dist/shared/` and the server d
   = interfaces + failure contracts, declared BY THE CONSUMER; L3 adapters — **an adapter may not narrow a
   distinction it received** (highest-yield rule); L4 delivery owns fastify/sockets/timers but is NOT allowed to
   DECIDE; L5 = `index.ts` only. No account-name list in ANY shipped source file. **No overloaded null at a seam** — two conditions a caller handles differently must not
-  collapse to the same value; that's a defect, not style.
+  collapse to the same value; that's a defect, not style. The server runs `Fastify({ logger: false })`, so `req.log.*` is a silent no-op — a server log line is `console.warn('ccrc-server: …')`, never `req.log`.
 - **Single-source-of-truth values are enumerated once and derived:** runtime lists come from the type
   (`PR_REASONS = Object.keys(PR_REASON_MAP)`), not hand-maintained. `server/test/single-definition.test.ts`
   text-scans four roots and fails the build on a 2nd copy. **The account roster is runtime DATA** since Stage 2a
