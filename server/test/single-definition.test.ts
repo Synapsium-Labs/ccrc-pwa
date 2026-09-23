@@ -20,7 +20,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   AUTH_VERDICTS, PR_REASONS, isPrReason, LIFECYCLE_ACTS, LC_ACT_UNKNOWN,
-  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS,
+  ASK_STATES, isAskState, ASK_REFUSE_CODES, isAskRefuseCode, ROUTE_WRITABLE_FIELDS, UPDATE_CHANNELS, UPDATE_STATES, UPDATE_PHASES, INSTALL_STATES, PROVENANCE_STATES, AUTO_MODES, NOTIFY_MODES, REQUEST_KINDS, STAMP_READS, NODE_ROLES, NODE_OSES,
 } from '../../shared/api.js';
 import { PROVIDER_IDS } from '../../shared/providers.js';
 import { DEFAULT_TEST_ROSTER } from './helpers.js';
@@ -3299,4 +3299,133 @@ describe('the pane read is declared once, in L0', () => {
     expect(src, 'server.ts still defines its own PANE_HISTORY_LINES').not.toMatch(/const PANE_HISTORY_LINES\s*=/);
     expect(src, 'server.ts uses the constant without importing it').toMatch(/PANE_HISTORY_LINES/);
   });
+});
+
+// ── Design 2026-09-20 §6: the update control plane's vocabularies ──────────
+// APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites
+// this file by line (its census carries a `server/test/single-definition.
+// test.ts` entry), so an insert above a cited line moves the census.
+describe('the update control plane — one definition per vocabulary and wire type (design 2026-09-20 §6)', () => {
+  // The `RunState` shape (`Build 7 nouns`): one declaring file, and it is
+  // shared/api.ts. A local, un-exported redeclaration counts too — it is the
+  // same second copy with one fewer keyword.
+  const TYPES = [
+    'UpdateChannel', 'UpdateState', 'BusyUpdateState', 'SettledUpdateState', 'UpdatePhase', 'InstallState',
+    'ProvenanceState', 'AutoMode', 'NotifyMode', 'RequestKind', 'StampRead', 'NodeRole', 'NodeOs',
+    'CatalogueErrorReason', 'ReleaseRefusalWire', 'ReleaseWire', 'NodeRequestWire', 'NodeReportWire',
+    'NodeUpdateWire', 'NodeWire', 'UpdateIntentWire', 'CatalogueState', 'UpdatesView', 'UpdateRouteError',
+    'UpdateRouteRefusal', 'IntentWriteAnswer', 'AckAnswer',
+  ] as const;
+  // The DECLARATION shape, not the bare keyword: `type <Name> [<…>] =` or
+  // `interface <Name>`, `export`/`declare` optional. The bare `(?:type|
+  // interface)\s+<Name>\b` form also matches an inline-type import specifier
+  // that happens to open its line (`  type UpdateChannel,` inside a multi-line
+  // `import { … }`), which is exactly how store.ts, update/inventory.ts and
+  // update/routes.ts import these names in later tasks — every such file would
+  // score as a second holder. `Build 7 nouns`' `export type RunState\b` avoids
+  // it by requiring `export`; this scan keeps `export` optional (a local
+  // un-exported copy is still a copy), so it requires the `=` instead.
+  const DEF_OF = (name: string): RegExp =>
+    new RegExp(`^\\s*(?:export\\s+)?(?:declare\\s+)?(?:type\\s+${name}\\b\\s*(?:<[^>\\n]*>)?\\s*=|interface\\s+${name}\\b)`, 'm');
+  for (const name of TYPES) {
+    it(`declares ${name} exactly once, in shared/api.ts`, () => {
+      const DEF = DEF_OF(name);
+      // Controls, per name, so a later loosening of DEF_OF reds every case:
+      // an import specifier is not a declaration; an un-exported one is.
+      expect(DEF.test(`import {\n  type ${name},\n} from '../../../shared/api.js';`), 'import specifier').toBe(false);
+      expect(DEF.test(`type ${name} = 'a';`), 'un-exported local declaration').toBe(true);
+      expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel)).toEqual(['shared/api.ts']);
+    });
+  }
+
+  const VALUES = [
+    'UPDATE_CHANNELS', 'UPDATE_STATES', 'BUSY_UPDATE_STATES', 'SETTLED_UPDATE_STATES', 'UPDATE_PHASES',
+    'IN_FLIGHT_UPDATE_PHASES', 'INSTALL_STATES', 'PROVENANCE_STATES', 'AUTO_MODES', 'NOTIFY_MODES',
+    'REQUEST_KINDS', 'STAMP_READS', 'NODE_ROLES', 'NODE_OSES', 'RELEASE_TAG', 'CAP_WORD', 'MAX_CAP_WORDS',
+    'FLEET_SCOPE',   // ruling R4: shared/api.ts only — store.ts (Task 6) and resolve.ts/project.ts (Task 12) import it
+  ] as const;
+  const GUARDS = [
+    'isUpdateChannel', 'isUpdateState', 'isUpdatePhase', 'isInstallState', 'isProvenanceState', 'isAutoMode',
+    'isNotifyMode', 'isRequestKind', 'isStampRead', 'isNodeRole', 'isNodeOs', 'isReleaseTag', 'validCapWords',
+  ] as const;
+  it('defines every array, pattern and guard exactly once, in shared/api.ts', () => {
+    for (const name of VALUES) {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?(?:const|let|var)\\s+${name}\\b`, 'm');
+      expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+    for (const name of GUARDS) {
+      const DEF = new RegExp(`^\\s*(?:export\\s+)?function\\s+${name}\\b`, 'm');
+      expect(ALL.filter((f) => DEF.test(readFileSync(f, 'utf8'))).map(rel), name).toEqual(['shared/api.ts']);
+    }
+  });
+
+  it('StampRead is DERIVED from its array — a hand-written union restates ReadFailure\'s pair', () => {
+    // `'absent' | 'unreadable'` spelled in shared/api.ts would make it a second
+    // holder in "one absent/unreadable read vocabulary" above, and this file
+    // cannot import ReadFailure (peers-claims-l0.test.ts pins its three type
+    // imports). So the union comes from STAMP_READS, and update-states.test.ts
+    // holds its failure half equal to ReadFailure at compile time.
+    const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
+    expect(api).toMatch(/^export const STAMP_READS = \['ok', 'absent', 'unreadable', 'malformed'\] as const;$/m);
+    expect(api).toMatch(/^export type StampRead = \(typeof STAMP_READS\)\[number\];$/m);
+  });
+
+  it('spells the tag shape once — every other reader calls isReleaseTag', () => {
+    // The literal regex SOURCE, however delimited. `shared/semver.ts` checks
+    // its precondition structurally and is held to agree with isReleaseTag by
+    // `update-semver.test.ts`, so it is not a holder here either.
+    const SHAPE_TEXT = 'v[0-9]+\\.[0-9]+\\.[0-9]+';
+    const holders = ALL.filter((f) => readFileSync(f, 'utf8').includes(SHAPE_TEXT)).map(rel);
+    expect(holders).toEqual(['shared/api.ts']);
+  });
+
+  // THE SQL-TUPLE SCANS — the `TERMINAL_ITEM_STATES` shape. Store code that
+  // needs one of these sets in a `WHERE` builds it from the array by `.join`
+  // (the `TERMINAL_DELIVERY_SQL` idiom), so the shipped source holds no
+  // literal tuple at all; a hand-written `IN ('pending','applying','unknown')`
+  // is a second definition of busy that nothing forces to agree.
+  //
+  // THE FINGERPRINT: a parenthesised list of TWO OR MORE quoted words, every
+  // one of them a member, in any order — a copy from memory is as likely in
+  // any order. Two or more, because a single `('stable')` states no set; a
+  // whole list, because the §6 seed row `('*', 'stable', NULL, 'off',
+  // 'channel', 0, 'migration')` carries members beside non-members and is not
+  // a copy of any vocabulary (asserted below, since Task 3 ships it).
+  // KNOWN WIDTH: a tuple of another vocabulary made only of words it shares
+  // with one of these (`('done','failed')` is RunState's and UpdatePhase's)
+  // also scores. Measured zero holders for every vocabulary at d759c914; if
+  // such a tuple ever lands legitimately it is a hand-typed SQL list of THAT
+  // vocabulary, which its own scan should be refusing.
+  const esc = (w: string): string => w.replace(/[-]/g, '\\-');
+  const tupleOf = (members: readonly string[]): RegExp => {
+    const alt = `(?:${members.map(esc).join('|')})`;
+    return new RegExp(`\\(\\s*['"]${alt}['"]\\s*(?:,\\s*['"]${alt}['"]\\s*)+\\)`);
+  };
+  const SQL_VOCABS: ReadonlyArray<readonly [string, readonly string[]]> = [
+    ['UpdateChannel', UPDATE_CHANNELS], ['UpdateState', UPDATE_STATES], ['UpdatePhase', UPDATE_PHASES],
+    ['InstallState', INSTALL_STATES], ['ProvenanceState', PROVENANCE_STATES], ['AutoMode', AUTO_MODES],
+    ['NotifyMode', NOTIFY_MODES], ['RequestKind', REQUEST_KINDS], ['StampRead', STAMP_READS],
+    ['NodeRole', NODE_ROLES], ['NodeOs', NODE_OSES],
+  ];
+
+  it('the tuple fingerprint catches a copy in any order and leaves non-copies alone', () => {
+    const busy = tupleOf(UPDATE_STATES);
+    expect(busy.test("WHERE updateState IN ('pending','applying','unknown')")).toBe(true);
+    expect(busy.test("WHERE updateState IN ( 'unknown', \"pending\" )")).toBe(true);
+    expect(busy.test("WHERE updateState IN ('idle')"), 'one word is not a set').toBe(false);
+    expect(busy.test("WHERE updateState IN ('idle', 'paused')"), 'a non-member breaks the list').toBe(false);
+    expect(busy.test("['pending', 'applying', 'unknown'] as const"), 'a TS array is the definition').toBe(false);
+    const seed = "INSERT INTO update_intent VALUES ('*', 'stable', NULL, 'off', 'channel', 0, 'migration');";
+    expect(tupleOf(AUTO_MODES).test(seed), 'the §6 seed row is not an AutoMode tuple').toBe(false);
+    expect(tupleOf(NOTIFY_MODES).test(seed), 'the §6 seed row is not a NotifyMode tuple').toBe(false);
+    expect(tupleOf(UPDATE_CHANNELS).test(seed), 'the §6 seed row is not an UpdateChannel tuple').toBe(false);
+    expect(tupleOf(UPDATE_PHASES).test("('backing-up', 'installing')"), 'hyphenated members').toBe(true);
+  });
+
+  for (const [name, members] of SQL_VOCABS) {
+    it(`no source hand-types an SQL tuple of ${name}`, () => {
+      const TUPLE = tupleOf(members);
+      expect(ALL.filter((f) => TUPLE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
+    });
+  }
 });

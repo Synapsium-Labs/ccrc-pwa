@@ -8136,3 +8136,262 @@ export type PaneHistoryReply =
  * import this file; `server/test/reader-min-cols.test.ts` holds the two equal.
  */
 export const READER_MIN_COLS = 120;
+
+/* ---------------------------------------------------------------------------
+ * CENTRALISED UPDATE MANAGEMENT — the control plane's vocabularies and wire
+ * (design 2026-09-20 §6, §8, §12; W2 plan Task 1).
+ *
+ * AT THE END OF THE FILE, deliberately, and not beside `BuildAgreement` where
+ * the topic would put it: `README.md` cites this file BY LINE
+ * (`lcRefusalWord`'s purge refusals), and `session-hook.test.ts`'s citation
+ * audit reds on any line inserted above them — measured, a ten-line insert
+ * after `BuildAgreement` reds two of its cases. An append moves no cited line.
+ *
+ * Every vocabulary below is ONE union, ONE runtime array checked against it
+ * with `as const satisfies` (a member the union lacks is a compile error), and
+ * ONE guard that casts the constant, never the input — `isRunState`'s idiom.
+ * `server/test/update-states.test.ts` holds each array equal to its union in
+ * the other direction and each guard equal to its array. SQL that needs a set
+ * builds it from the array by `.join`; `single-definition.test.ts` refuses a
+ * hand-typed SQL tuple of any of these words.
+ * ------------------------------------------------------------------------- */
+
+/** A release channel (decision 2): `dev` is every merge, `stable` a promotion
+ *  of an existing release. No we-do-not-know member, on purpose: a channel
+ *  token this build cannot name reads `null` (the ClaimState stance, §6) and
+ *  the resolver resolves NOTHING for that node — never the fleet default,
+ *  which would be fail-open. */
+export type UpdateChannel = 'stable' | 'dev';
+export const UPDATE_CHANNELS = ['stable', 'dev'] as const satisfies readonly UpdateChannel[];
+/** Use THIS, never `UPDATE_CHANNELS.includes(x as UpdateChannel)` — `isRunState`'s rule. */
+export function isUpdateChannel(v: unknown): v is UpdateChannel {
+  return typeof v === 'string' && (UPDATE_CHANNELS as readonly string[]).includes(v);
+}
+
+/** A node's LEASE state (`nodes.updateState`, §6). `unknown` is the designated
+ *  we-do-not-know member: never written by a settled path, it is what a token
+ *  from a newer build reads as — and it counts as BUSY below. */
+export type UpdateState = 'idle' | 'pending' | 'applying' | 'reverted' | 'failed' | 'unknown';
+export const UPDATE_STATES = ['idle', 'pending', 'applying', 'reverted', 'failed', 'unknown'] as const satisfies
+  readonly UpdateState[];
+/** Use THIS, never `UPDATE_STATES.includes(x as UpdateState)` — `isRunState`'s rule. */
+export function isUpdateState(v: unknown): v is UpdateState {
+  return typeof v === 'string' && (UPDATE_STATES as readonly string[]).includes(v);
+}
+/** BUSY = a lease is held, or might be: nothing may be dispatched to the node.
+ *  `unknown` is here for the reason `RunState`'s `unknown` is ACTIVE for the
+ *  cap (`ACTIVE_RUN_STATES`): a node whose state cannot be read must not be
+ *  dispatched to, and §10's deadline turns a stale `unknown` into `failed`.
+ *  SETTLED = the complement; a dispatch acquires only from one of these.
+ *  Every `UpdateState` is in exactly one list (`update-states.test.ts`). */
+export const BUSY_UPDATE_STATES = ['pending', 'applying', 'unknown'] as const satisfies readonly UpdateState[];
+export const SETTLED_UPDATE_STATES = ['idle', 'reverted', 'failed'] as const satisfies readonly UpdateState[];
+export type BusyUpdateState = (typeof BUSY_UPDATE_STATES)[number];
+export type SettledUpdateState = (typeof SETTLED_UPDATE_STATES)[number];
+
+/** The phase a node's own updater REPORTS in `~/.ccrc/update.json` (§8). `unknown`
+ *  is what a phase token outside this list reads as — distinct from a NULL
+ *  `reportedPhase`, which means there is no report file at all. */
+export type UpdatePhase = 'queued' | 'resolving' | 'fetching' | 'verifying' | 'backing-up' | 'installing'
+  | 'restarting' | 'checking' | 'restoring' | 'done' | 'reverted' | 'failed' | 'unknown';
+export const UPDATE_PHASES = [
+  'queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
+  'restarting', 'checking', 'restoring', 'done', 'reverted', 'failed', 'unknown',
+] as const satisfies readonly UpdatePhase[];
+/** Use THIS, never `UPDATE_PHASES.includes(x as UpdatePhase)` — `isRunState`'s rule. */
+export function isUpdatePhase(v: unknown): v is UpdatePhase {
+  return typeof v === 'string' && (UPDATE_PHASES as readonly string[]).includes(v);
+}
+/** §8's phase table, first row: every phase here derives `updateState =
+ *  'applying'`. The other four (`done`, `reverted`, `failed`, `unknown`) each
+ *  have a row of their own and are deliberately NOT a list — each is decided
+ *  by name. */
+export const IN_FLIGHT_UPDATE_PHASES = [
+  'queued', 'resolving', 'fetching', 'verifying', 'backing-up', 'installing',
+  'restarting', 'checking', 'restoring',
+] as const satisfies readonly UpdatePhase[];
+
+/** Whether the node's completed-install marker names its stamp (§8, `~/.ccrc/installed`
+ *  line 1). `unknown` = the stamp could not be read, so nothing can be compared. */
+export type InstallState = 'complete' | 'incomplete' | 'unknown';
+export const INSTALL_STATES = ['complete', 'incomplete', 'unknown'] as const satisfies readonly InstallState[];
+/** Use THIS, never `INSTALL_STATES.includes(x as InstallState)` — `isRunState`'s rule. */
+export function isInstallState(v: unknown): v is InstallState {
+  return typeof v === 'string' && (INSTALL_STATES as readonly string[]).includes(v);
+}
+
+/** A MEASUREMENT of the node's marker line 2 (§8), and the only word on the
+ *  wire ever spelled "verified" (§13) — `ReleaseWire.bundleListed` is a claim
+ *  about a filename, not this. */
+export type ProvenanceState = 'verified' | 'unverified' | 'unknown';
+export const PROVENANCE_STATES = ['verified', 'unverified', 'unknown'] as const satisfies
+  readonly ProvenanceState[];
+/** Use THIS, never `PROVENANCE_STATES.includes(x as ProvenanceState)` — `isRunState`'s rule. */
+export function isProvenanceState(v: unknown): v is ProvenanceState {
+  return typeof v === 'string' && (PROVENANCE_STATES as readonly string[]).includes(v);
+}
+
+/** Unattended updating, per intent scope (§6 `update_intent.auto`). No
+ *  we-do-not-know member: an out-of-vocabulary token READS as `off` — the
+ *  direction in which nothing moves unattended. */
+export type AutoMode = 'off' | 'stable' | 'channel';
+export const AUTO_MODES = ['off', 'stable', 'channel'] as const satisfies readonly AutoMode[];
+/** Use THIS, never `AUTO_MODES.includes(x as AutoMode)` — `isRunState`'s rule. */
+export function isAutoMode(v: unknown): v is AutoMode {
+  return typeof v === 'string' && (AUTO_MODES as readonly string[]).includes(v);
+}
+
+/** Which releases the operator is told about (§6 `update_intent.notify`, read
+ *  by W3). An out-of-vocabulary token READS as `channel` — the operator hears
+ *  of more, never of nothing. */
+export type NotifyMode = 'channel' | 'stable' | 'off';
+export const NOTIFY_MODES = ['channel', 'stable', 'off'] as const satisfies readonly NotifyMode[];
+/** Use THIS, never `NOTIFY_MODES.includes(x as NotifyMode)` — `isRunState`'s rule. */
+export function isNotifyMode(v: unknown): v is NotifyMode {
+  return typeof v === 'string' && (NOTIFY_MODES as readonly string[]).includes(v);
+}
+
+/** What an operator request asks a node to do (§6 request columns; written by
+ *  W4's `requestNode`). */
+export type RequestKind = 'update' | 'rollback';
+export const REQUEST_KINDS = ['update', 'rollback'] as const satisfies readonly RequestKind[];
+/** Use THIS, never `REQUEST_KINDS.includes(x as RequestKind)` — `isRunState`'s rule. */
+export function isRequestKind(v: unknown): v is RequestKind {
+  return typeof v === 'string' && (REQUEST_KINDS as readonly string[]).includes(v);
+}
+
+/** How the read of a node's `~/.ccrc/build.json` went (§6 `nodes.stampRead`,
+ *  §8). `ok` with a NULL `currentVersion` is an unversioned build (a
+ *  `deploy.sh` push); `unreadable` is NEVER "unversioned" (D-1396's lesson at
+ *  a new seam). A token outside the list reads `unreadable`.
+ *
+ *  ITS TWO FAILURE WORDS ARE `ReadFailure`'s (`shared/agent-protocol.ts`),
+ *  widened by `ok` and `malformed`. This file cannot import that type (its
+ *  three type-only imports are pinned, `peers-claims-l0.test.ts`), so the
+ *  union is DERIVED from the array rather than restated beside it, and
+ *  `update-states.test.ts` holds `Exclude<StampRead, 'ok' | 'malformed'>`
+ *  EQUAL to `ReadFailure` at compile time: a third read-failure word added
+ *  there is a type error here until this list names it too. */
+export const STAMP_READS = ['ok', 'absent', 'unreadable', 'malformed'] as const;
+export type StampRead = (typeof STAMP_READS)[number];
+/** Use THIS, never `STAMP_READS.includes(x as StampRead)` — `isRunState`'s rule. */
+export function isStampRead(v: unknown): v is StampRead {
+  return typeof v === 'string' && (STAMP_READS as readonly string[]).includes(v);
+}
+
+/** A node's role (§6 `nodes.role`): the bash spine's `CCRC_ROLE` words. A
+ *  token outside the list reads `null` on the wire. */
+export type NodeRole = 'server' | 'fleet' | 'both';
+export const NODE_ROLES = ['server', 'fleet', 'both'] as const satisfies readonly NodeRole[];
+/** Use THIS, never `NODE_ROLES.includes(x as NodeRole)` — `isRunState`'s rule. */
+export function isNodeRole(v: unknown): v is NodeRole {
+  return typeof v === 'string' && (NODE_ROLES as readonly string[]).includes(v);
+}
+
+/** A node's OS, from `~/.ccrc/ccrc-caps` line 1 (`os linux|darwin`, §8).
+ *  `unknown` = no caps file, or one that failed validation. */
+export type NodeOs = 'linux' | 'darwin' | 'unknown';
+export const NODE_OSES = ['linux', 'darwin', 'unknown'] as const satisfies readonly NodeOs[];
+/** Use THIS, never `NODE_OSES.includes(x as NodeOs)` — `isRunState`'s rule. */
+export function isNodeOs(v: unknown): v is NodeOs {
+  return typeof v === 'string' && (NODE_OSES as readonly string[]).includes(v);
+}
+
+/** The canonical form of a version everywhere (decision 2): the TAG, `vX.Y.Z`.
+ *  No flags — a `g` would make `.test` stateful through `lastIndex`. JS `$`
+ *  without `m` matches only at the end of the input, so `'v0.0.9\n'` is
+ *  refused. `deploy/release-main.sh`'s `SHAPE` is the bash twin, held equal
+ *  by `update-states.test.ts`. */
+export const RELEASE_TAG = /^v[0-9]+\.[0-9]+\.[0-9]+$/;
+/** The ONE tag-shape guard: the routes, the resolver, the inventory's
+ *  validators and the agent all call this, never the regex. */
+export function isReleaseTag(v: unknown): v is string {
+  return typeof v === 'string' && RELEASE_TAG.test(v);
+}
+
+/** One word of `~/.ccrc/ccrc-caps` or of `AgentReady.ops` (§8, decision 13) —
+ *  pool-epoch's NAME grammar. */
+export const CAP_WORD = /^[a-z][a-z0-9-]{0,31}$/;
+export const MAX_CAP_WORDS = 32;
+/** The ONE validator for a caps or ops word list. `null` = REFUSED: an element
+ *  that is not a string matching `CAP_WORD`, more than `MAX_CAP_WORDS`
+ *  elements, or not an array at all. `[]` = a valid EMPTY list. The two are
+ *  kept apart here so a caller can say which it saw; §8's storage rule then
+ *  writes both as `''` — one bad word drops the whole file, never just that
+ *  word. */
+export function validCapWords(words: readonly unknown[]): string[] | null {
+  if (!Array.isArray(words) || words.length > MAX_CAP_WORDS) return null;
+  const out: string[] = [];
+  for (const w of words) {
+    if (typeof w !== 'string' || !CAP_WORD.test(w)) return null;
+    out.push(w);
+  }
+  return out;
+}
+
+/** Why the last catalogue poll did not land (§7). `http-<status>` carries the
+ *  status the listing answered with. */
+export type CatalogueErrorReason = 'no-egress' | 'rate-limited' | `http-${number}` | 'malformed' | 'no-release-source';
+
+/** One node's refusal of one release, rolled up for DISPLAY (`node_release_refusals`).
+ *  `by` is the refusing node's id. Never a predicate: eligibility reads the
+ *  table for THIS node (decision 16), not this roll-up. */
+export interface ReleaseRefusalWire { by: string; at: number }
+/** One row of the release catalogue (§6 `releases`, §12). `channel` is `null`
+ *  for a token this build cannot name (the ClaimState stance, §6). */
+export interface ReleaseWire {
+  tag: string; version: string; channel: UpdateChannel | null; publishedAt: number; commitSha: string | null;
+  bundleListed: boolean; yanked: boolean;
+  refused: ReleaseRefusalWire[];
+  notes: string | null;
+}
+/** An operator request standing on a node (§6 request columns). */
+export interface NodeRequestWire { tag: string; kind: RequestKind; at: number }
+/** The node's own report, validated (§8). Times are epoch ms on the wire;
+ *  `~/.ccrc/update.json` carries unix SECONDS, converted once by the reader. */
+export interface NodeReportWire {
+  phase: UpdatePhase; target: string | null; startedAt: number | null; updatedAt: number | null;
+  detail: string | null;
+}
+/** The lease (§6 lease columns). `target` outlives `state` returning to `idle`. */
+export interface NodeUpdateWire { state: UpdateState; target: string | null; startedAt: number | null; detail: string | null }
+/** One node of the inventory (§6 `nodes`, §12). `agentOps` NULL = no agent by
+ *  construction (the server's own row); `[]` = an agent too old to say. */
+export interface NodeWire {
+  nodeId: string; role: NodeRole | null; label: string; os: NodeOs;
+  current: BuildInfo | null; stampRead: StampRead; installState: InstallState; provenance: ProvenanceState;
+  caps: string[]; agentOps: string[] | null; highestVersion: string | null; previousVersion: string | null;
+  measuredAt: number | null; reachable: boolean; unreachableSince: number | null;
+  channel: UpdateChannel | null; desiredTag: string | null; resolveDetail: string | null;
+  request: NodeRequestWire | null;
+  report: NodeReportWire | null;
+  update: NodeUpdateWire;
+}
+/** One intent row (§6 `update_intent`); `scope` is `FLEET_SCOPE` or a node id. */
+export interface UpdateIntentWire {
+  scope: string; channel: UpdateChannel | null; pinnedTag: string | null; auto: AutoMode; notify: NotifyMode;
+  setAt: number; setBy: string;
+}
+/** The fleet-default intent scope (§6 `update_intent.scope`, the migration's
+ *  seed row). Declared HERE and nowhere else: the store (`coord/store.ts`) and
+ *  the L1 resolver (`update/resolve.ts`, which may import only `shared/`) both
+ *  import it, so the scope the store writes and the scope the resolver falls
+ *  back to cannot be two spellings. */
+export const FLEET_SCOPE = '*';
+/** The poller's own state (§7). `{lastOkAt: null, lastError: null}` = never
+ *  checked since this process started — never "up to date". */
+export interface CatalogueState { lastOkAt: number | null; lastError: { at: number; reason: string } | null }
+/** `GET /api/updates` (§12). */
+export interface UpdatesView { catalogue: CatalogueState; releases: ReleaseWire[]; nodes: NodeWire[]; intent: UpdateIntentWire[] }
+
+/** Every refusal word an update route answers with (§12). */
+export type UpdateRouteError =
+  | 'unauthenticated' | 'not-configured' | 'bad-tag' | 'bad-request' | 'unknown-scope' | 'unknown-node'
+  | 'superseded' | 'busy' | 'auto-needs-rollback-gate' | 'rate-limited' | 'no-channel'
+  | 'journal-unreadable' | 'journal-unwritable';
+export interface UpdateRouteRefusal {
+  ok: false; error: UpdateRouteError;
+  field?: string; nodes?: string[]; detail?: string; retryAfterS?: number;
+}
+export interface IntentWriteAnswer { ok: true; intent: UpdateIntentWire; epoch: number }
+export interface AckAnswer { ok: true; node: NodeWire }
