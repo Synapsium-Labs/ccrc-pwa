@@ -1139,13 +1139,21 @@ BOX_INSTALLED_FILE="$HOME/.ccrc/installed"
 BOX_NODE_ID_FILE="$HOME/.ccrc/node-id"
 BOX_CAPS_FILE="$HOME/.ccrc/ccrc-caps"
 BOX_FLOOR_FILE="$HOME/.ccrc/floor"
-# W1's words. Each wave's spine ADDS its own here, so the file records what
-# this install can do, never what a design intends.
-CCRC_CAP_WORDS=(verify node-id floor)
+# The words, by wave (design 2026-09-20 §9). Each wave's spine ADDS its own,
+# so the file records what this install can do, never what a design intends:
+#   W1 — verify (`_upd_fetch` runs verify-provenance.mjs), node-id
+#        (`_inst_node_id`), floor (`_upd_floor_check`);
+#   W4 — update-json (`_upd_phase` reports every phase, and `--from` is
+#        accepted), update-gate (`_upd_gate`, exit 4, `--no-gate`), rollback
+#        (`ccrc rollback`); and, Linux only, detach — below.
+# ccrc-install.test.ts pins every word to the machinery it names, so a word
+# cannot ship ahead of its code.
+CCRC_CAP_WORDS=(verify node-id floor update-json update-gate rollback)
 
-# W4 (Task 12): the words only a LINUX install can do. Empty until Task 13
-# fills it; declared here so the one reader below exists before any word does.
-CCRC_CAP_WORDS_LINUX=()
+# The words only a LINUX install can do: detach (W4). `--detach` hands the run
+# to a transient unit (`_svc_run_detached`), and `_upd_detach_os_check`
+# refuses it on Darwin (decision 17), so a Darwin install never claims it.
+CCRC_CAP_WORDS_LINUX=(detach)
 
 # ── _ccrc_cap_words — what THIS ccrc can do on THIS os, one word per line ──
 # The ONE list: `_inst_caps` writes it into ~/.ccrc/ccrc-caps (after the `os`

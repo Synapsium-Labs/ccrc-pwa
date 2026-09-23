@@ -4045,6 +4045,15 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
   };
   const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n$/;
 
+  // Each wave's spine ADDS its own words (design 2026-09-20 §9): W1's three,
+  // then W4's four — `detach` on Linux only (decision 17: `--detach` refuses
+  // on Darwin), so a Linux install writes seven words and a Darwin one six.
+  // LITERALS, not a read of ccd/ccrc's arrays: a pin derived from the list
+  // it pins could never red on the list being wrong.
+  const CAPS_W4_ALL = ['verify', 'node-id', 'floor', 'update-json', 'update-gate', 'rollback'];
+  const CAPS_W4_LINUX = [...CAPS_W4_ALL, 'detach'];
+  const CAPS_HERE = process.platform === 'darwin' ? CAPS_W4_ALL : CAPS_W4_LINUX;
+
   it('node-id: minted once as a lowercase uuid, kept byte-identical by a second run', () => {
     const home = freshBox('ccrc-install-nodeid-');
     gitInit(treeRoot(home));
@@ -4070,13 +4079,82 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     expect(readFileSync(join(home, '.ccrc', 'node-id'), 'utf8')).toBe('not-a-uuid\n');
   });
 
-  it('ccrc-caps: line 1 is the os, then W1\'s three words, nothing else (§18 "_inst_caps writes each wave\'s words")', () => {
+  it('ccrc-caps: line 1 is the os, then each wave\'s words — W1\'s three, W4\'s four, detach on Linux only (§18 "_inst_caps writes each wave\'s words")', () => {
     const home = freshBox('ccrc-install-caps-');
     gitInit(treeRoot(home));
-    expect(runInstall(home).code).toBe(0);
+    const r = runInstall(home);
+    expect(r.code, r.stderr).toBe(0);
     const os = process.platform === 'darwin' ? 'darwin' : 'linux';
-    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\n${CAPS_HERE.join('\n')}\n`);
     expect(statSync(join(home, '.ccrc', 'ccrc-caps')).mode & 0o777).toBe(0o644);
+    // The transcript names the same words, in the same order, as the file.
+    expect(r.stdout).toMatch(new RegExp(`^install: caps: ${CAPS_HERE.join(' ')} \\(os ${os}; `, 'm'));
+  });
+
+  it('ccrc-caps: seven words on Linux, six on Darwin, whichever box runs this suite — both arms of the real _inst_caps', () => {
+    // A real install reaches only the host's own arm. The other is reached by
+    // running the real `_inst_caps` and `_ccrc_cap_words` out of ccd/ccrc with
+    // CCD_OS set — the extraction harness the `_inst_installed` cases below
+    // use — so a word moved between the two arrays reds on either platform.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const pick = (re: RegExp, what: string): string => {
+      const m = re.exec(src);
+      expect(m, `ccd/ccrc has no ${what}`).not.toBeNull();
+      return m![0];
+    };
+    const harness = [
+      pick(/^PROG=.*$/m, 'PROG='),
+      pick(/^_ccrc_die\(\) \{.*\}$/m, '_ccrc_die'),
+      pick(/^CCRC_CAP_WORDS=\(.*\)$/m, 'CCRC_CAP_WORDS=(…)'),
+      pick(/^CCRC_CAP_WORDS_LINUX=\(.*\)$/m, 'CCRC_CAP_WORDS_LINUX=(…)'),
+      pick(/^_ccrc_cap_words\(\) \{[\s\S]*?\n\}/m, '_ccrc_cap_words'),
+      pick(/^_inst_caps\(\) \{[\s\S]*?\n\}/m, '_inst_caps'),
+    ];
+    for (const [os, words] of [['linux', CAPS_W4_LINUX], ['darwin', CAPS_W4_ALL]] as const) {
+      const home = mkTmp(`ccrc-inst-caps-arm-${os}-`);
+      const caps = join(home, '.ccrc', 'ccrc-caps');
+      const p = spawnSync('bash', ['-c', [
+        'set -uo pipefail', ...harness, `CCD_OS=${os}`, `BOX_CAPS_FILE=${JSON.stringify(caps)}`, '_inst_caps',
+      ].join('\n')], { encoding: 'utf8' });
+      expect(p.status, `${os}: ${p.stderr}`).toBe(0);
+      expect(readFileSync(caps, 'utf8'), os).toBe(`os ${os}\n${words.join('\n')}\n`);
+      expect(p.stdout, os).toBe(`install: caps: ${words.join(' ')} (os ${os}; ${caps} — what this install's ccrc can do, read by the server)\n`);
+    }
+  });
+
+  it('every cap word names machinery THIS ccrc ships — a word is a capability, never an intention (design §9)', () => {
+    // The server dispatches on these words (no `update-gate` → auto-apply
+    // refused; no `detach` → a detached apply refused; no `rollback` → the
+    // rollback control refused), so a word listed before its code lands is a
+    // node that says yes and then fails. A PRESENCE pin, stated as one: each
+    // word's own describe proves the behaviour; this proves the word and its
+    // machinery ship in the same tree. The words are read from the arrays so
+    // that a NEW word with no entry here reds too.
+    const src = read(join(REPO, 'ccd', 'ccrc'));
+    const BACKING: Record<string, RegExp[]> = {
+      verify: [/^_upd_fetch\(\) \{/m, /\/deploy\/verify-provenance\.mjs"/],
+      'node-id': [/^_inst_node_id\(\) \{/m],
+      floor: [/^_upd_floor_check\(\) \{/m],
+      'update-json': [/^_upd_phase\(\) \{/m],
+      'update-gate': [/^_upd_gate\(\) \{/m, /^\s*--no-gate\) no_gate=1 ;;$/m],
+      rollback: [/^cmd_rollback\(\) \{/m, /^\s*rollback\)\s+cmd_rollback "\$@" ;;$/m],
+      detach: [/^_upd_detach\(\) \{/m, /^\s*--detach\) detach=1 ;;$/m],
+    };
+    const arr = (name: string): string[] => {
+      const m = new RegExp(`^${name}=\\((.*)\\)$`, 'm').exec(src);
+      expect(m, `ccd/ccrc has no ${name}=(…)`).not.toBeNull();
+      return m![1]!.split(/\s+/).filter(Boolean);
+    };
+    const words = [...arr('CCRC_CAP_WORDS'), ...arr('CCRC_CAP_WORDS_LINUX')];
+    expect(words).toEqual(CAPS_W4_LINUX);
+    for (const w of words) {
+      expect(BACKING[w], `cap word '${w}' has no entry here — name the machinery it promises`).toBeDefined();
+      for (const re of BACKING[w]!) expect(src, `cap word '${w}': ccd/ccrc has no ${re}`).toMatch(re);
+    }
+    // …and `detach` sits in the Linux-only array BECAUSE the verb refuses it
+    // on Darwin (Task 3's `_upd_detach_os_check`): the two statements agree.
+    expect(arr('CCRC_CAP_WORDS')).not.toContain('detach');
+    expect(src).toMatch(/_ccrc_die "--detach is Linux-only \(decision 17\)"/);
   });
 
   it('floor: written by the LAST step from the stamped tag; only ever raised (§18 "the floor never lowers")', () => {
@@ -4160,7 +4238,7 @@ describe('ccrc install: the node\'s three files (design 2026-09-20 §3, §9)', (
     writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os plan9\nverify\n');
     expect(runInstall(home).code).toBe(0);
     const os = process.platform === 'darwin' ? 'darwin' : 'linux';
-    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\nverify\nnode-id\nfloor\n`);
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe(`os ${os}\n${CAPS_HERE.join('\n')}\n`);
   });
 
   it('floor: a malformed ~/.ccrc/floor is left untouched, never treated as absent (D-3136)', () => {

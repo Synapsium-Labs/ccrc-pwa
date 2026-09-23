@@ -779,9 +779,12 @@ const localUrls = (home: string): string[] => (existsSync(join(home, 'curl-argv'
  *  test reads. */
 const checkLine = (s: string): string => s.split('\n').find((l) => l.startsWith('check: ')) ?? '';
 
-/** The words THIS ccrc can do (`_ccrc_cap_words`), as `--check` joins them.
- *  W1's three; Task 13 adds this wave's and moves this one literal. */
-const CAPS_NOW = 'verify,node-id,floor';
+/** The words THIS ccrc can do (`_ccrc_cap_words`), as `--check` joins them:
+ *  W1's three and W4's four, `detach` on Linux only (decision 17). A literal,
+ *  not a read of ccd/ccrc — a pin derived from the list it pins cannot red. */
+const CAPS_NOW = process.platform === 'darwin'
+  ? 'verify,node-id,floor,update-json,update-gate,rollback'
+  : 'verify,node-id,floor,update-json,update-gate,rollback,detach';
 /** The machine line as key → value. Values never contain a space or `=`
  *  (caps= joins its words with commas), so one split per field is exact. */
 const parseCheck = (s: string): Record<string, string> =>
