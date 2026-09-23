@@ -18,7 +18,7 @@ import { openCoordDb } from './coord/db.js';
 import { CoordStore } from './coord/store.js';
 import { PoolEdgeLog, defaultPoolEdgeLogPath } from './coord/pooledgelog.js';
 import { readLocalCcdCaps } from './localcaps.js';
-import { createCataloguePoller } from './update/catalogue.js';
+import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -87,6 +87,12 @@ if (cfg.releaseSource.ok === false) {
   console.warn(`ccrc-server: no release source (${cfg.releaseSource.why}: ${where}) — the update ` +
     'catalogue will not poll. Set BOTH CCRC_RELEASE_OWNER and CCRC_RELEASE_REPO in ~/.ccrc/ccrc.env, or run the ' +
     'server from an installed tree whose ccd/ccrc carries its release-source lines.');
+}
+// D-3209: validated once, beside the release-source check above — a bad
+// `apiUrl` is just as fatal to the catalogue lane as a missing owner/repo.
+const releaseApiUrlProblem = apiBaseProblem(cfg.releaseApiUrl);
+if (releaseApiUrlProblem !== null) {
+  console.warn(`ccrc-server: ${releaseApiUrlProblem} — the update catalogue will not poll.`);
 }
 
 // ONE queue, above the mode branch, so both modes and both consumers get the

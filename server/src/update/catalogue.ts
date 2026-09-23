@@ -1,4 +1,5 @@
 import { isReleaseTag, type CatalogueErrorReason, type CatalogueState } from '../../../shared/api.js';
+import { BASE_URL_OK } from '../../../shared/base-url.js';
 import type { ReleaseSourceRead } from '../config.js';
 import type { ApplyReleaseListingResult, ListingCoverage, ReleaseListingRow } from '../coord/store.js';
 import { openPoolReadDeadline } from '../pools.js';
@@ -35,6 +36,12 @@ export const RELEASES_PER_PAGE = 30;
 export const CATALOGUE_TIMEOUT_MS = 10_000;
 export const NOTES_CAP_BYTES = 4096;
 export const NOTES_MARKER = '…';
+/** D-3209: a hostile or oversized listing must never reach `JSON.parse` or
+ *  the store. A `content-length` over this cap refuses the request without
+ *  reading the body; otherwise the body is read as a stream with a running
+ *  byte count that stops — and cancels the reader — at the same cap. About
+ *  sixty times the largest page GitHub returns for thirty releases. */
+export const CATALOGUE_BODY_MAX_BYTES = 8 * 1024 * 1024;
 
 /** GitHub's REST API refuses a request with no User-Agent; say who asks
  *  rather than send the runtime's default. */
@@ -49,6 +56,20 @@ export interface CatalogueStore {
 }
 
 export interface CatalogueDeps { source: ReleaseSourceRead; apiUrl: string; store: CatalogueStore; timeoutMs?: number }
+
+/** D-3209: validated ONCE when the poller is created, never per poll. `null`
+ *  = fine. Delegates to `shared/base-url.ts`'s `BASE_URL_OK` — the SAME gate
+ *  (parses, empty query/fragment, `https:` anywhere or `http:` only to its
+ *  closed loopback set) an existing endpoint decision already declares once;
+ *  re-spelling the loopback set here would be a second copy of a decision
+ *  `single-definition.test.ts` polices ("the loopback SET … is the other
+ *  value a second copy would be spelled from"). A refused base answers every
+ *  poll `no-release-source` with no request — the same reason a missing
+ *  release source reports, since a bad base is just as unusable. */
+export function apiBaseProblem(apiUrl: string): string | null {
+  const verdict = BASE_URL_OK(apiUrl);
+  return verdict.ok ? null : `apiUrl refused (${verdict.reason}): ${apiUrl}`;
+}
 
 export interface CataloguePoller {
   /** Single-flight: a poll during a poll returns the in-flight promise. Resolves
@@ -98,7 +119,7 @@ function parseReleaseElement(el: unknown): ReleaseListingRow | null {
   if (typeof prerelease !== 'boolean') return null;
   if (typeof published !== 'string') return null;
   const publishedAt = Date.parse(published);
-  if (!Number.isFinite(publishedAt)) return null;
+  if (!Number.isFinite(publishedAt) || publishedAt < 0) return null;
   if (!Array.isArray(assets)) return null;
   const url = assetNamed(assets, `ccrc-${tag}.tar.gz`)?.browser_download_url;
   if (typeof url !== 'string' || url.length > DOWNLOAD_URL_MAX || !DOWNLOAD_URL.test(url)) return null;
@@ -120,21 +141,66 @@ function parseReleaseElement(el: unknown): ReleaseListingRow | null {
  *  a skipped element on a full page must not make the page look like the
  *  whole catalogue (D-3185). A skipped element is NOT in `rows`,
  *  so the store reads a known release skipped here as absent and yanks it
- *  until a poll parses it again (D-3206). */
+ *  until a poll parses it again (D-3206). D-3209: a later element repeating a
+ *  tag already parsed is also skipped — GitHub's own listing is ordered
+ *  newest-first, so the FIRST occurrence is kept — so the parser never hands
+ *  the store a listing carrying the same tag twice, which `applyReleaseListing`
+ *  would otherwise refuse whole. */
 export function parseReleaseListing(body: unknown): ParsedListing | null {
   if (!Array.isArray(body)) return null;
   const rows: ReleaseListingRow[] = [];
+  const seenTags = new Set<string>();
   let skipped = 0;
   for (const el of body) {
     const row = parseReleaseElement(el);
-    if (row === null) skipped += 1;
-    else rows.push(row);
+    if (row === null || seenTags.has(row.tag)) { skipped += 1; continue; }
+    seenTags.add(row.tag);
+    rows.push(row);
   }
   return { rows, skipped, coverage: body.length < RELEASES_PER_PAGE ? 'complete' : 'newest-page' };
 }
 
+/** The IIFE's raw answer, read inside the deadline race. `'over-cap'` (D-3209)
+ *  is the sibling of the race's own `null` (no egress) — a distinct reason
+ *  the poll reads as 'malformed', never conflated with a timeout. */
+type RawAnswer = { status: number; etag: string | null; text: string } | 'over-cap';
+
+/** D-3209: reads `res`'s body under `CATALOGUE_BODY_MAX_BYTES`. A declared
+ *  `content-length` over the cap refuses without reading a byte; otherwise the
+ *  body is read as a stream with a running count that stops — cancelling the
+ *  reader — the moment the count crosses the cap. `null` = over cap either
+ *  way; the caller reads that as 'malformed', never as a partial body. */
+async function readCappedBody(res: Response): Promise<string | null> {
+  const declared = res.headers.get('content-length');
+  if (declared !== null) {
+    const n = Number(declared);
+    if (Number.isFinite(n) && n > CATALOGUE_BODY_MAX_BYTES) {
+      await res.body?.cancel().catch(() => { /* the socket is being dropped either way */ });
+      return null;
+    }
+  }
+  const reader = res.body?.getReader();
+  if (!reader) return res.text();   // no stream available (e.g. a body-less fetch polyfill)
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > CATALOGUE_BODY_MAX_BYTES) {
+      await reader.cancel().catch(() => { /* the socket is being dropped either way */ });
+      return null;
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map((c) => Buffer.from(c))).toString('utf8');
+}
+
 export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   const timeoutMs = deps.timeoutMs !== undefined && deps.timeoutMs > 0 ? deps.timeoutMs : CATALOGUE_TIMEOUT_MS;
+  /** D-3209: computed once, not per poll — an unusable base is a boot-time
+   *  fact, not a per-request one. */
+  const baseProblem = apiBaseProblem(deps.apiUrl);
   let lastOkAt: number | null = null;
   let lastError: { at: number; reason: CatalogueErrorReason } | null = null;
   /** The ETag of the last listing the store ACCEPTED — never of one it refused,
@@ -156,6 +222,9 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
   };
 
   async function pollOnce(now: number): Promise<CatalogueState> {
+    // D-3209: an unusable base is exactly as unusable as a missing release
+    // source — same reason, no request, `requestedAt` untouched.
+    if (baseProblem !== null) return failed(now, 'no-release-source');
     const source = deps.source;
     if (!source.ok) return failed(now, 'no-release-source');
     const url = `${deps.apiUrl}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`
@@ -166,20 +235,24 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     const deadline = openPoolReadDeadline(timeoutMs);
     if (deadline === null) return failed(now, 'no-egress');   // unreachable: timeoutMs > 0
     requestedAt = now;
-    let answer: { status: number; etag: string | null; text: string } | null;
+    let answer: RawAnswer | null;
     try {
       // The body is read INSIDE the race: `close()` aborts the controller, and
       // a body still streaming after it would be cut. A throw (refused, reset,
       // DNS) and the deadline both arrive as null — both are no egress.
-      answer = await deadline.race((async () => {
+      answer = await deadline.race((async (): Promise<RawAnswer> => {
         const res = await fetch(url, { headers, signal: deadline.signal });
-        const text = res.status === 200 ? await res.text() : '';
-        return { status: res.status, etag: res.headers.get('etag'), text };
+        if (res.status !== 200) return { status: res.status, etag: res.headers.get('etag'), text: '' };
+        // D-3209: capped and streamed — never a bare `res.text()`.
+        const text = await readCappedBody(res);
+        if (text === null) return 'over-cap';
+        return { status: 200, etag: res.headers.get('etag'), text };
       })());
     } finally {
       deadline.close();
     }
     if (answer === null) return failed(now, 'no-egress');
+    if (answer === 'over-cap') return failed(now, 'malformed');   // D-3209
     // A 304 is an answer only to a question that carried an ETag; unsolicited,
     // nothing was held to be "not modified".
     if (answer.status === 304) return sentEtag === null ? failed(now, httpReason(304)) : answered(now);
@@ -191,9 +264,22 @@ export function createCataloguePoller(deps: CatalogueDeps): CataloguePoller {
     } catch {
       return failed(now, 'malformed');
     }
+    // D-3209: the request's own `per_page` makes a longer raw array out of
+    // contract — refuse it rather than hand `Math.min(...)`/`tag NOT IN (…)`
+    // (one SQL parameter per row) an unbounded listing.
+    if (Array.isArray(body) && body.length > RELEASES_PER_PAGE) return failed(now, 'malformed');
     const parsed = parseReleaseListing(body);
     if (parsed === null) return failed(now, 'malformed');
-    const applied = deps.store.applyReleaseListing(parsed.rows, now, parsed.coverage);
+    let applied: ApplyReleaseListingResult;
+    try {
+      // D-3209: a throw from the store (e.g. a still-oversized listing that
+      // slips past the length gate above) must set `lastError`, never reject
+      // `pollOnce` — a rejection is exactly what left `lastOkAt` reading
+      // "up to date" after a failed poll before this fix.
+      applied = deps.store.applyReleaseListing(parsed.rows, now, parsed.coverage);
+    } catch {
+      return failed(now, 'malformed');
+    }
     if (!applied.ok) return failed(now, 'malformed');
     etag = answer.etag;
     return answered(now);

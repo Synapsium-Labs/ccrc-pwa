@@ -21,7 +21,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore, type ListingCoverage, type ReleaseListingRow } from '../src/coord/store.js';
 import type { ReleaseSourceRead } from '../src/config.js';
 import {
-  NOTES_CAP_BYTES, NOTES_MARKER, RELEASES_PER_PAGE, capNotes, createCataloguePoller, parseReleaseListing,
+  CATALOGUE_BODY_MAX_BYTES, NOTES_CAP_BYTES, NOTES_MARKER, RELEASES_PER_PAGE,
+  apiBaseProblem, capNotes, createCataloguePoller, parseReleaseListing,
   type CatalogueStore, type CataloguePoller,
 } from '../src/update/catalogue.js';
 import { Bus } from '../src/bus.js';
@@ -140,6 +141,55 @@ describe('parseReleaseListing — one GitHub element, one row (design §7)', () 
     expect(p.coverage).toBe('newest-page');
     expect(parseReleaseListing([])!.coverage).toBe('complete');
   });
+
+  // D-3209 (fix round 1, finding 4): the parser and the store must not
+  // disagree on what a whole listing looks like — a pre-epoch element and a
+  // duplicate tag are both things the store would otherwise refuse whole.
+  it('D-3209: an element published before the epoch is skipped', () => {
+    const p = parseReleaseListing([
+      rel('v0.0.1', '1969-12-31T23:59:59Z'),
+      rel('v0.0.2', '2026-09-20T10:00:00Z'),
+    ]);
+    expect(p!.rows.map((r) => r.tag)).toEqual(['v0.0.2']);
+    expect(p!.skipped).toBe(1);
+  });
+
+  it('D-3209: a duplicate tag keeps the FIRST occurrence and skips the rest', () => {
+    const first = rel('v0.0.1', '2026-09-02T00:00:00Z');
+    const second = rel('v0.0.1', '2026-09-01T00:00:00Z', {
+      assets: [{ name: 'ccrc-v0.0.1.tar.gz', browser_download_url: 'https://example.invalid/other.tar.gz' }],
+    });
+    const p = parseReleaseListing([first, second, rel('v0.0.2', '2026-09-03T00:00:00Z')]);
+    expect(p!.rows.map((r) => [r.tag, r.tarballUrl])).toEqual([
+      ['v0.0.1', 'https://example.invalid/releases/download/v0.0.1/ccrc-v0.0.1.tar.gz'],
+      ['v0.0.2', 'https://example.invalid/releases/download/v0.0.2/ccrc-v0.0.2.tar.gz'],
+    ]);
+    expect(p!.skipped).toBe(1);
+  });
+});
+
+describe('apiBaseProblem — validated once, at poller creation (D-3209, fix round 1 finding 3)', () => {
+  it('a table of bases: https anywhere is fine; http only to a loopback host', () => {
+    const cases: [string, boolean][] = [
+      ['https://api.github.com', true],
+      ['https://example.invalid', true],
+      ['http://127.0.0.1:4000', true],
+      ['http://[::1]:4000', true],
+      ['http://localhost:4000', true],
+      ['http://LOCALHOST:4000', true],
+      ['http://example.invalid', false],
+      ['http://api.github.com', false],
+      ['https://api.github.com/?x=1', false],
+      ['https://api.github.com/#frag', false],
+      ['not a url at all', false],
+      ['ftp://127.0.0.1', false],
+    ];
+    for (const [url, ok] of cases) {
+      const problem = apiBaseProblem(url);
+      if (ok) expect(problem, url).toBeNull();
+      else expect(problem, url).not.toBeNull();
+    }
+  });
 });
 
 describe('capNotes — plain text, 4096 UTF-8 bytes, then the marker (§7, §18 "notes are capped and plain")', () => {
@@ -168,7 +218,18 @@ describe('capNotes — plain text, 4096 UTF-8 bytes, then the marker (§7, §18 
 });
 
 describe('the poller against a loopback fixture (design §7 Pins)', () => {
-  type Answer = { status: number; etag?: string; body?: unknown } | 'hang';
+  type Answer = {
+    status: number; etag?: string; body?: unknown;
+    /** D-3209 fixtures: extra/override response headers, e.g. a declared
+     *  `content-length` that lies about the actual body. */
+    headers?: Record<string, string>;
+    /** D-3209 fixtures: when set, ignores `body`, JSON.stringifies this and
+     *  writes it in 64 KiB pieces via multiple `.write()` calls with NO
+     *  `content-length` header — real chunked transfer-encoding, so the
+     *  streamed-cap case reads genuine bytes off the wire rather than one
+     *  buffered `.end()` call (which Node would auto-length). */
+    chunkedBody?: unknown;
+  } | 'hang';
   let server: Server;
   let base: string;
   let seen: { method: string; url: string; headers: IncomingMessage['headers'] }[];
@@ -182,8 +243,19 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       seen.push({ method: req.method ?? '', url: req.url ?? '', headers: req.headers });
       const a = script.shift() ?? { status: 500, body: 'fixture: no answer scripted' };
       if (a === 'hang') return;   // never answered — the deadline's case
-      const headers: Record<string, string> = { 'content-type': 'application/json' };
+      const headers: Record<string, string> = { 'content-type': 'application/json', ...(a.headers ?? {}) };
       if (a.etag !== undefined) headers.etag = a.etag;
+      if (a.chunkedBody !== undefined) {
+        // Real chunked transfer-encoding: no content-length, written in 64
+        // KiB pieces so the reader's running count actually crosses the cap
+        // mid-stream rather than in one buffered `.end()` call.
+        res.writeHead(a.status, headers);
+        const text = JSON.stringify(a.chunkedBody);
+        const CHUNK = 65_536;
+        for (let i = 0; i < text.length; i += CHUNK) res.write(text.slice(i, i + CHUNK));
+        res.end();
+        return;
+      }
       res.writeHead(a.status, headers);
       res.end(a.body === undefined ? '' : typeof a.body === 'string' ? a.body : JSON.stringify(a.body));
     });
@@ -451,6 +523,75 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
     s.lastError!.reason = 'edited';
     s.lastOkAt = 99;
     expect(p.state()).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'http-500' } });
+  });
+
+  // D-3209 (fix round 1, findings 1-3): a hostile or oversized listing must
+  // never reach JSON.parse or the store, and a bad apiUrl never sends a
+  // request at all.
+  it('D-3209: a declared content-length over the cap refuses without reading a byte', async () => {
+    const { port, calls } = fixture();
+    const p = poller(port);
+    script = [{
+      status: 200, etag: '"e1"',
+      headers: { 'content-length': String(CATALOGUE_BODY_MAX_BYTES + 1) },
+      body: '[]',
+    }];
+    expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'malformed' } });
+    expect(calls).toHaveLength(0);
+  });
+
+  it('D-3209: a streamed body over the cap with no content-length is malformed', async () => {
+    const { port } = fixture();
+    const p = poller(port);
+    // A real, VALID JSON payload — if the cap did not stop the read, this
+    // would parse and the single release would upsert cleanly (capNotes
+    // truncates the pathological `body`), so removing the guard genuinely
+    // changes the answer rather than failing to parse either way.
+    const paddedNotes = 'x'.repeat(CATALOGUE_BODY_MAX_BYTES + 200_000);
+    script = [{
+      status: 200, etag: '"e1"',
+      chunkedBody: [rel('v0.0.1', '2026-09-01T00:00:00Z', { body: paddedNotes })],
+    }];
+    const t0 = Date.now();
+    expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'malformed' } });
+    expect(Date.now() - t0).toBeLessThan(5000);
+  }, 10_000);
+
+  it('D-3209: a raw array longer than RELEASES_PER_PAGE is malformed, and nothing is written', async () => {
+    const { store, port, calls } = fixture();
+    const p = poller(port);
+    script = [{ status: 200, etag: '"e1"', body: page(RELEASES_PER_PAGE + 1) }];
+    expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'malformed' } });
+    expect(calls).toHaveLength(0);
+    expect(store.releases()).toEqual([]);
+  });
+
+  it('D-3209: a store that throws answers malformed rather than rejecting, and lastOkAt stays at its last success', async () => {
+    const { store } = fixture();
+    let calls = 0;
+    const throwingPort: CatalogueStore = {
+      applyReleaseListing(listing, now, coverage) {
+        calls += 1;
+        if (calls === 2) throw new Error('boom');
+        return store.applyReleaseListing(listing, now, coverage);
+      },
+    };
+    const p = poller(throwingPort);
+    script = [
+      { status: 200, etag: '"e1"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+      { status: 200, etag: '"e2"', body: [rel('v0.0.1', '2026-09-01T00:00:00Z')] },
+    ];
+    expect(await p.poll(1000)).toEqual({ lastOkAt: 1000, lastError: null });
+    await expect(p.poll(2000)).resolves.toEqual({ lastOkAt: 1000, lastError: { at: 2000, reason: 'malformed' } });
+  });
+
+  it('D-3209: a poller built on a bad apiUrl sends no request, ever', async () => {
+    const { port, calls } = fixture();
+    const p = poller(port, { apiUrl: 'http://example.invalid' });   // http, non-loopback
+    expect(await p.poll(1000)).toEqual({ lastOkAt: null, lastError: { at: 1000, reason: 'no-release-source' } });
+    expect(seen).toHaveLength(0);
+    expect(calls).toHaveLength(0);
+    expect(p.lastRequestAt()).toBeNull();
   });
 });
 

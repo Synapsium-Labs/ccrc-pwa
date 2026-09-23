@@ -805,12 +805,19 @@ export class FleetWatcher {
       // NEVER awaited, the caps refresh's reasoning further down: a GitHub
       // listing behind a 10 s deadline must not stall the dialog detector or
       // assembleFleet. `poll` records its own failures as `lastError` and does
-      // not reject; the `.catch` covers the one thing it does not catch — a
-      // throw from the store's writer — which must not become an unhandled
-      // rejection via start()'s `void this.tick()`.
+      // not reject — including a throw from the store's writer, caught inside
+      // `pollOnce` itself since D-3209 — so a rejection reaching here is a
+      // BUG in the poller, not an expected failure mode; the `.catch` still
+      // exists so it cannot become an unhandled rejection via start()'s
+      // `void this.tick()`, but it now logs instead of swallowing silently
+      // (D-3209: a silent `.catch(() => {})` here is exactly what let
+      // `catalogueState` read "up to date" after a failed poll).
       if (this.deps.catalogue && Date.now() - this.lastCatalogueAt >= UPDATE_CATALOGUE_MS) {
         this.lastCatalogueAt = Date.now();
-        void this.deps.catalogue.poll(Date.now()).catch(() => { /* one bad poll must not kill the tick */ });
+        void this.deps.catalogue.poll(Date.now()).catch((err: unknown) => {
+          console.warn('ccrc-server: the catalogue poller rejected — this is a bug, poll() should ' +
+            `never reject: ${err instanceof Error ? err.stack ?? err.message : String(err)}`);
+        });
       }
 
       // Read once, share with the two lanes that would otherwise each read it
