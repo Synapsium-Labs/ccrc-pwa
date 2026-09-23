@@ -18,7 +18,7 @@ removed on 2026-09-10 was not.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
-| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | **dispatched** 2026-09-23 to `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40) — the first child minted with a marker |
+| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **in review** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178 at `08e40675`; review run 144 on `ccrc-pwa-still-river` |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
@@ -39,10 +39,30 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138**. Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (review **144**). Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 2's wave-done (PR #178, `08e40675`); review 144 dispatched.**
+  - **The claim.** Tasks 1–7 through Step 5, plus the declared wave-1 prose item. Main had not moved, so no
+    merge was needed. The server accepted the claim; 8/8 items settled.
+  - **First full suite red** (`failure: unclear`). Load flakes, each green alone (`boot`, `ccrc-update`, a
+    `session-hook` p95), and the carried `tmp-sweep` case. Run with `TMPDIR=/tmp` as ruled.
+  - **Citation tax** paid in each of Tasks 1, 2 and 5's own commits. README's `shared/api.ts` anchors moved
+    by content; the census entry stayed at 1 and the sum at 195. Registry-read census 30/31/721 → 31/32/745.
+  - **Six departures numbered 3340 through 3345**, to be defined in the plan with the review's fix round:
+    - task4-first;
+    - anchors-measured-not-plan;
+    - mutation-row1-6-of-8;
+    - run-routes-stale-sentences;
+    - fresh-child-default-branch-prose;
+    - leftovers-60s-lane-remote-only.
+  - **Five items the worker left for a ruling**, held until the review reports:
+    1. a DANGLING-symlink `.child` reads as a proven ENOENT, so `none`, so a bind is permitted;
+    2. which exact SHA proves a same-project spent producer merged;
+    3. the wave-1 plan still says 13/13 at :1328;
+    4. two wording minors in SKILL.md and wave-lifecycle.md;
+    5. an unreachable `unbound:false` with no detail.
 - **2026-09-23 — wave 2 stalled on claims; ruled to proceed.**
   - **The stall.** At about 17:00 UTC run 138 had Task 4 and the carried prose done, and was blocked on
     Tasks 1, 2, 3, 5 and 6. run 128 (centralised-update-management W2, `warm-river`, PR #176) holds claims
