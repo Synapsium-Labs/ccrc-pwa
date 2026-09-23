@@ -32,8 +32,8 @@
 //
 // NEVER against a real $HOME; no live tmux/systemd/journal is ever reachable
 // (recorders and poisons only). No secret value is ever printed or asserted.
-import { describe, it, expect } from 'vitest';
-import { spawnSync } from 'node:child_process';
+import { describe, it, expect, afterEach } from 'vitest';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import {
@@ -200,7 +200,12 @@ function updateEnv(home: string): NodeJS.ProcessEnv {
     '  daemon-reload) exit 0 ;;',
     '  enable) [ "$2" = "--now" ] && [ -n "$3" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
     '  restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
-    '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }; exit 0 ;;',
+    '  try-restart) [ -n "$2" ] || { echo "fixture systemctl: unexpected argv: $*" >&2; exit 90; }',
+    // Task 2 (§18 "the lock closes before the sweep": "a lingering stub
+    // pins the lock"): a restart that leaves a process behind, holding
+    // whatever descriptor it was handed.
+    '    if [ -f "$HOME/fixture-sweep-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/sweep-linger-pid"; fi',
+    '    exit 0 ;;',
     '  is-active) echo active; exit 0 ;;',
     // The sweep's three list-units queries (Task 7): the unfiltered preflight
     // enumeration and the failed/active follow-ups, answered from per-state
@@ -482,6 +487,14 @@ function stubTree(home: string, opts: { version: string; installExit?: number })
   writeFileSync(join(tree, 'ccd', 'ccrc'),
     '#!/bin/sh\nprintf \'%s\\n\' "$0" "$@" > "$HOME/staged-ccrc-argv"\n'
     + 'printf \'%s\\n\' "${CCRC_UPDATE_VERIFIED:-unset}" > "$HOME/staged-ccrc-env"\n'
+    // Task 2: the lock's marker must never reach the spine (it would exempt
+    // a grandchild `ccrc update` from the lock), and a spine that leaves a
+    // process behind must not leave the lock held with it. The lingerer's
+    // own descriptors 0-2 go to /dev/null so the runner's pipes close when
+    // the run does; any OTHER descriptor it was handed — a lock fd — it keeps
+    // for 30 s.
+    + 'printf \'%s\\n\' "${CCRC_UPDATE_LOCK_HELD:-unset}" > "$HOME/staged-ccrc-lockenv"\n'
+    + 'if [ -f "$HOME/fixture-spine-linger" ]; then sleep 30 >/dev/null 2>&1 </dev/null & echo $! > "$HOME/spine-linger-pid"; fi\n'
     + `exit ${opts.installExit ?? 0}\n`, { mode: 0o755 });
   writeFileSync(join(tree, 'MARKER'), 'release payload\n');
   writeFileSync(join(tree, 'build.json'),
@@ -668,7 +681,11 @@ function pathWithoutJq(home: string): string {
   // tools are the fallback for what nothing here stubs). `tar`/`gzip`/`awk`
   // have no fixture stub in this suite — those three alone are real-tool
   // symlinks in the fallback directory.
-  for (const b of ['tar', 'gzip', 'awk']) symlinkSync(realPath(b), join(d, b));
+  // Task 2: `flock` and `mkdir` join because the lock (`_upd_lock`) is taken
+  // BEFORE the tool preflight — without them this PATH dies at the lock's
+  // own flock sentence (or at "cannot create ~/.ccrc"), never at jq's, and
+  // the D-3140 case below measures the wrong refusal.
+  for (const b of ['tar', 'gzip', 'awk', 'flock', 'mkdir']) symlinkSync(realPath(b), join(d, b));
   return `${join(home, '.local', 'bin')}:${d}`;
 }
 
@@ -2083,5 +2100,200 @@ describe('ccrc update: update.json at every phase, and --from (design §10)', ()
     expect(r.code).toBe(1);
     expect(r.stderr).toBe('ccrc: the release failed\n');
     expect(readFileSync(rec, 'utf8')).toBe('failed|provenance: the release failed\n');
+  });
+});
+
+describe('ccrc update: one update at a time (the lock)', () => {
+  const holders: ChildProcess[] = [];
+  const lingerers: string[] = [];   // pid files a lingering fixture process wrote
+  afterEach(() => {
+    for (const h of holders.splice(0)) h.kill('SIGKILL');
+    for (const f of lingerers.splice(0)) {
+      if (!existsSync(f)) continue;
+      // Guarded: `process.kill(0, …)` signals this whole process GROUP — the
+      // test runner included — so an empty or garbled pid file kills nothing.
+      const pid = Number(readFileSync(f, 'utf8').trim());
+      if (!Number.isInteger(pid) || pid <= 1) continue;
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+    }
+  });
+  const lockPath = (home: string): string => join(home, '.ccrc', 'update.lock');
+  /** A FRESH open and a non-blocking flock — the probe's own measurement. */
+  const lockFree = (home: string): boolean =>
+    spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lockPath(home)]).status === 0;
+  const waitUntil = (cond: () => boolean, what: string): void => {
+    const t0 = Date.now();
+    while (!cond()) {
+      if (Date.now() - t0 > 10_000) throw new Error(`timed out waiting for ${what}`);
+      spawnSync('sleep', ['0.05']);
+    }
+  };
+  /** A real holder: ONE process takes flock on the lock file and then
+   *  becomes `sleep` (exec keeps the pid and the descriptor), so the pid
+   *  killed is the pid holding it. Returns once a fresh probe fails. */
+  const holdLock = (home: string): ChildProcess => {
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    const h = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lockPath(home)], { stdio: 'ignore' });
+    holders.push(h);
+    waitUntil(() => !lockFree(home), 'the fixture holder to take the lock');
+    return h;
+  };
+  // A holder's report in the writer's own shape: unix SECONDS (rulings R1,
+  // R14 — Task 1's `REPORT_TIME`), the seven keys in order.
+  const HELD_REPORT = '{"target":"v9.9.9","phase":"installing","startedAt":1758585600,'
+    + '"updatedAt":1758585601,"detail":null,"from":"pwa","pid":4242}\n';
+  const stubBox = (prefix: string): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
+    return home;
+  };
+
+  it('a second run while the lock is held exits 1 naming the holder from update.json and touches NOTHING — update.json included; with the holder gone the identical run proceeds (§18 "one update at a time")', () => {
+    const home = stubBox('ccrc-update-lock-held-');
+    writeFileSync(join(home, '.ccrc', 'update.json'), HELD_REPORT);
+    const h = holdLock(home);
+    let r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(pid 4242, target v9\.9\.9\)$/m);
+    // A refused run reports nothing: the holder's report is the holder's.
+    expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(HELD_REPORT);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran under someone else\'s lock').toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    // THE CONTROL: the same box, the same argv, the holder gone.
+    h.kill('SIGKILL');
+    waitUntil(() => lockFree(home), 'the killed holder to let go');
+    r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(lastReport(home)['phase']).toBe('done');
+  });
+
+  it('the holder reads "unknown" for each field that is absent, not JSON, or of the wrong type or shape — each field judged on its own, nothing raw from the file printed', () => {
+    const cases: Array<[string, string | null, string]> = [
+      ['absent', null, 'pid unknown, target unknown'],
+      ['not-json', 'garbage {\n', 'pid unknown, target unknown'],
+      ['bad-fields', '{"pid":"4242; echo pwned","target":"latest; pwned"}\n', 'pid unknown, target unknown'],
+      // The field-alignment pins: a split that ran BEFORE the fields were
+      // typed let one field's value land in the other's slot.
+      ['pid-null', '{"pid":null,"target":"v9.9.9"}\n', 'pid unknown, target v9.9.9'],
+      ['pid-string', '{"pid":"4242 v1.2.3","target":"x"}\n', 'pid unknown, target unknown'],
+      ['target-newline', '{"pid":4242,"target":"v1.0.0\\nv2"}\n', 'pid 4242, target unknown'],
+    ];
+    for (const [name, body, holder] of cases) {
+      const home = freshUpdateBox(`ccrc-update-lock-holder-${name}-`);
+      mkdirSync(join(home, '.ccrc'), { recursive: true });
+      if (body !== null) writeFileSync(join(home, '.ccrc', 'update.json'), body);
+      holdLock(home);
+      const r = runUpdate(home);
+      expect(r.code, name).toBe(1);
+      expect(r.stderr.split('\n'), name)
+        .toContain(`ccrc: update: another update holds ~/.ccrc/update.lock (${holder})`);
+      expect(r.stderr, name).not.toMatch(/pwned/);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('a lock that cannot be MEASURED — the file there, not openable — is neither held nor free: the restore child refuses naming probe rc 3, and a plain run refuses to open it (ruling R16)', () => {
+    // Plan D-3250: rc 3 folded into "held" would exempt
+    // the child on no evidence. Skipped as root, the suite's idiom for a
+    // mode-000 fixture: root opens it.
+    const home = stubBox('ccrc-update-lock-unmeasured-');
+    writeFileSync(lockPath(home), '');
+    chmodSync(lockPath(home), 0o000);
+    let r = runUpdate(home, [], { CCRC_UPDATE_LOCK_HELD: String(process.pid) });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr.split('\n')).toContain(`ccrc: update: CCRC_UPDATE_LOCK_HELD names this run's parent (pid ${process.pid}) but ~/.ccrc/update.lock could not be measured (probe rc 3) — refusing; a restore child runs only under a lock it can see`);
+    expect(existsSync(join(home, 'curl-argv')), 'an unmeasured lock exempted the run').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+    // THE CONTROL: no marker, the same file — acquisition's own open fails,
+    // by its own sentence, and nothing is fetched either.
+    r = runUpdate(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: cannot open ~\/\.ccrc\/update\.lock — nothing on this box was changed$/m);
+    expect(existsSync(join(home, 'curl-argv'))).toBe(false);
+  });
+
+  it('a restore child — CCRC_UPDATE_LOCK_HELD naming its parent, the lock measured HELD — runs with no second acquire, and the marker reaches no grandchild', () => {
+    const home = stubBox('ccrc-update-lock-child-');
+    holdLock(home);   // the parent's descriptor, as the probe sees it: somebody holds the lock
+    // spawnSync runs bash directly (no shell between), so the run's $PPID IS this process.
+    const r = runUpdate(home, [], { CCRC_UPDATE_LOCK_HELD: String(process.pid) });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).not.toMatch(/another update holds|CCRC_UPDATE_LOCK_HELD/);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(true);
+    expect(readFileSync(join(home, 'staged-ccrc-lockenv'), 'utf8')).toBe('unset\n');
+  });
+
+  it('the same marker with NOBODY holding the lock is REFUSED — the env alone never exempts a run (§18 "the lock exemption is measured")', () => {
+    for (const planted of [false, true]) {   // no lock file at all; a lock file nobody holds
+      const home = stubBox(`ccrc-update-lock-forged-${planted ? 'file' : 'nofile'}-`);
+      if (planted) writeFileSync(lockPath(home), '');
+      const r = runUpdate(home, [], { CCRC_UPDATE_LOCK_HELD: String(process.pid) });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(new RegExp(`^ccrc: update: CCRC_UPDATE_LOCK_HELD names this run's parent \\(pid ${process.pid}\\) but nobody holds ~/\\.ccrc/update\\.lock — refusing; a restore child runs only under its parent's lock$`, 'm'));
+      expect(existsSync(join(home, 'curl-argv')), 'a forged marker reached the fetch').toBe(false);
+      expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+      expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    }
+  });
+
+  it('a marker naming ANOTHER pid is no exemption: with no holder the run acquires normally, with one it is refused like any third party', () => {
+    const free = stubBox('ccrc-update-lock-otherpid-free-');
+    let r = runUpdate(free, [], { CCRC_UPDATE_LOCK_HELD: '1' });
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(free, 'staged-ccrc-lockenv'), 'utf8')).toBe('unset\n');
+    const busy = stubBox('ccrc-update-lock-otherpid-busy-');
+    writeFileSync(join(busy, '.ccrc', 'update.json'), HELD_REPORT);
+    holdLock(busy);
+    r = runUpdate(busy, [], { CCRC_UPDATE_LOCK_HELD: '1' });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: update: another update holds ~\/\.ccrc\/update\.lock \(pid 4242, target v9\.9\.9\)$/m);
+  });
+
+  it('no flock on PATH is refused by name before anything else runs — macOS\'s sentence names brew', () => {
+    const home = freshUpdateBox('ccrc-update-lock-noflock-');
+    const empty = join(home, 'empty-bin');
+    mkdirSync(empty, { recursive: true });
+    const r = runUpdate(home, [], { PATH: empty });
+    expect(r.code).toBe(1);
+    if (process.platform === 'darwin') {
+      expect(r.stderr).toMatch(/^ccrc: flock is required by 'ccrc update' — it serialises updates and refuses rather than racing — and macOS does not ship it\. Install it: brew install flock\. Nothing on this box was changed$/m);
+    } else {
+      expect(r.stderr).toMatch(/^ccrc: flock \(util-linux\) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed$/m);
+    }
+    expect(r.stderr).not.toMatch(/curl is required/);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('the staged spine inherits no lock descriptor: a process it leaves behind does not pin the lock once the run has exited', () => {
+    const home = stubBox('ccrc-update-lock-spine-linger-');
+    writeFileSync(join(home, 'fixture-spine-linger'), '');
+    lingerers.push(join(home, 'spine-linger-pid'));
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(existsSync(join(home, 'spine-linger-pid')), 'the spine never lingered — the absence below would be vacuous').toBe(true);
+    // THE DISCRIMINATOR: a run that takes the lock and then dies at the
+    // preflight. Lock free → its own jq sentence; lock pinned → the lock's.
+    const second = runUpdate(home, [], { PATH: pathWithoutJq(home) });
+    expect(second.code).toBe(1);
+    expect(second.stderr).not.toMatch(/another update holds/);
+    expect(second.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH/m);
+  });
+
+  itLinux('the lock closes BEFORE the sweep: a restart that leaves a process behind does not pin it (§18 "the lock closes before the sweep")', () => {
+    const home = stubBox('ccrc-update-lock-sweep-linger-');
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-linger'), '');
+    lingerers.push(join(home, 'sweep-linger-pid'));
+    const r = runUpdate(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'systemctl-calls'), 'utf8')).toMatch(/^--user try-restart claude-session@\*$/m);
+    expect(existsSync(join(home, 'sweep-linger-pid')), 'the sweep never lingered — the absence below would be vacuous').toBe(true);
+    const second = runUpdate(home, [], { PATH: pathWithoutJq(home) });
+    expect(second.code).toBe(1);
+    expect(second.stderr).not.toMatch(/another update holds/);
+    expect(second.stderr).toMatch(/^ccrc: jq is required by 'ccrc update' but is not on PATH/m);
   });
 });

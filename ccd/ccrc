@@ -1149,6 +1149,11 @@ CCRC_CAP_WORDS=(verify node-id floor)
 # (`_upd_phase`). The server's inventory sweep reads it (§8); on the box only
 # the lock's refusal sentence and the watchdog read it back.
 BOX_UPDATE_JSON="$HOME/.ccrc/update.json"
+# `~/.ccrc/update.lock` — one `ccrc update` (or `ccrc rollback`) at a time
+# (design §10). Opened append-only and never written (plan
+# D-3230): the holder's pid and target are read from
+# update.json, never from the lock file's bytes.
+BOX_UPDATE_LOCK="$HOME/.ccrc/update.lock"
 # Who started a run that moves this box — the closed vocabulary `--from`
 # accepts (plan D-3228), declared ONCE: `cli` a hand-typed run
 # (the default), `pwa` the console's detached spawn, `restore` the automatic
@@ -1427,6 +1432,8 @@ UPD_REPORT_TARGET=""    # the tag a report names: --to at parse, UPD_VERSION onc
 UPD_REPORT_STARTED=""   # unix seconds (date +%s) of this process's first report
 UPD_REPORT_PID=""       # overrides a report's `pid` (empty = this process)
 UPD_FAIL_PREFIX=""      # "provenance: " for a die that is a verdict on the RELEASE (plan D-3239)
+UPD_LOCK_FD=""          # the descriptor _upd_lock holds; "" when not held, or when inherited
+UPD_LOCK_INHERITED=0    # 1 = a restore child under its parent's lock — measured by _upd_lock_probe, never assumed
 
 # `cmd_rollout`'s out-parameters (release/rollout design §4), declared at file
 # scope for the `set -u` reason UPD_* above are: they carry state built in
@@ -11430,6 +11437,12 @@ cmd_update() {
     esac
   fi
 
+  # ── ONE UPDATE AT A TIME (design §10) ───────────────────────────────────
+  # After every argument refusal (a usage error takes no lock) and on the
+  # install path only — --check returned above: it measures, it moves
+  # nothing. BEFORE UPD_REPORTING, so a run refused here reports nothing.
+  _upd_lock
+
   # FROM HERE ON THIS RUN REPORTS (design §10): every phase boundary below
   # writes ~/.ccrc/update.json, and `_ccrc_die` makes every refusal a
   # `failed` report. --check returned above, having written nothing.
@@ -11492,6 +11505,7 @@ cmd_update() {
   if [ "$force" -eq 0 ] && _upd_converged; then
     echo "update: this box already runs $UPD_VERSION (${BOX_BUILD[0]}) and that install completed — nothing to do (pass --force to reinstall)"
     _upd_phase done "already converged at $UPD_VERSION"
+    _upd_unlock
     return 0
   fi
   _upd_phase backing-up
@@ -11532,13 +11546,24 @@ cmd_update() {
   # a bundle that verify-provenance.mjs accepted puts it there. `env -u`
   # on the other arm, so an ambient export can never claim a verification
   # that did not happen.
-  local -a spine_env=(env -u CCRC_UPDATE_VERIFIED)
-  [ "$UPD_PROVENANCE" = verified ] && spine_env=(env CCRC_UPDATE_VERIFIED=1)
+  local -a spine_env=(env -u CCRC_UPDATE_VERIFIED -u CCRC_UPDATE_LOCK_HELD)
+  [ "$UPD_PROVENANCE" = verified ] && spine_env=(env -u CCRC_UPDATE_LOCK_HELD CCRC_UPDATE_VERIFIED=1)
+  local -a spine=(bash "$UPD_TREE/ccd/ccrc" install)
+  if [ -n "$role" ]; then spine+=(--role "$role"); fi
   local inst_rc=0
-  if [ -n "$role" ]; then
-    "${spine_env[@]}" bash "$UPD_TREE/ccd/ccrc" install --role "$role" || inst_rc=$?
+  # THE STAGED SPINE HOLDS NO LOCK DESCRIPTOR (design §10): anything it
+  # leaves running would pin the lock after this run exits. A subshell closes
+  # ITS copy and execs the spine. `{UPD_LOCK_FD}>&-` written on the command
+  # itself is not relied on: bash(1) says a `{varname}` redirection persists
+  # past the command (which would drop THIS run's lock mid-install), bash
+  # 5.2.21 measured scoping the close to the command, and the floor is 4.4 —
+  # the subshell means one thing on every version. An inherited run (arm 2's restore child) has no number to
+  # close and runs the spine bare. The marker is `env -u`'d as well as unset
+  # by `_upd_lock`: two guards, either one sufficient.
+  if [ -n "$UPD_LOCK_FD" ]; then
+    ( exec {UPD_LOCK_FD}>&-; exec "${spine_env[@]}" "${spine[@]}" ) || inst_rc=$?
   else
-    "${spine_env[@]}" bash "$UPD_TREE/ccd/ccrc" install || inst_rc=$?
+    "${spine_env[@]}" "${spine[@]}" || inst_rc=$?
   fi
   # ONE EXIT CODE CARRIED TWO FACTS (D-3114, measured on the first live
   # rollout): the staged install ends with doctor, so a box that MOVED and
@@ -11557,6 +11582,10 @@ cmd_update() {
   fi
 
   _upd_phase restarting
+  # Closed BEFORE the sweep (design §10): a try-restart must not hand the
+  # lock to anything it leaves running. The report and `done` below run
+  # unlocked — the spec's order; see the plan's Task 2 hazard.
+  _upd_unlock
   _upd_sweep
   _upd_report "$old_desc" "$old_version"
   if [ "$doctor_failed" -eq 1 ]; then
@@ -11640,6 +11669,108 @@ _upd_json_str() (
   s="${s//"$q"/"$bs$q"}"
   printf '"%s"' "$s"
 )
+
+# ── THE LOCK (design 2026-09-20 §10) — one update at a time ───────────────
+# flock(2) on ~/.ccrc/update.lock, taken by `cmd_update` after its argument
+# refusals (and after the --detach re-exec point, so a detached run inherits
+# no descriptor) and before anything is fetched or reported. A bash lock fd
+# is inherited by every child and pins the lock until the LAST inheritor
+# exits (measured 2026-09-13, the D-2605 lock design), so it is closed before
+# every spawn that could outlive the run: the staged spine runs in a subshell
+# that closes it first, and `_upd_unlock` runs before `_upd_sweep`.
+#
+# `_upd_lock_probe` → rc 0 nobody holds it, rc 1 somebody does, rc 2 `flock`
+# is not on PATH, rc 3 UNMEASURED (the file exists and could not be opened,
+# or flock failed for a reason other than contention) — never folded into
+# "held", which would grant the restore-child exemption on no evidence, nor
+# into "free" (plan D-3250). A FRESH open in a subshell: flock conflicts are per open file
+# description, so a successful `flock -n` there proves nobody holds it, and
+# the probe's own descriptor dies with the subshell. An absent file is a
+# lock nobody holds, answered without creating it.
+_upd_lock_probe() {
+  command -v flock >/dev/null 2>&1 || return 2
+  [ -e "$BOX_UPDATE_LOCK" ] || return 0
+  ( { exec {p}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null || exit 3
+    flock -n "$p"; r=$?
+    case "$r" in 0|1) exit "$r" ;; *) exit 3 ;; esac )
+}
+
+# `_upd_lock_holder` → "pid <n>, target <v>" off update.json. The file is
+# same-user-writable by every session on the box (spec §8), so each field is
+# shape-checked before it is printed and anything else reads "unknown" —
+# as do an absent, unreadable or non-JSON file and a box with no jq (the
+# lock is taken BEFORE the preflight that names jq). jq TYPES each field
+# before bash splits the line — the pid only when it is a JSON number, the
+# target only as a JSON string through @json (one line, quoted), `-` for
+# anything else — so the line is always two tokens and one field's value
+# can never land in the other's slot. rc 0.
+_upd_lock_holder() {
+  local out="" pid="unknown" target="unknown" a="" b=""
+  if [ -f "$BOX_UPDATE_JSON" ] && [ -r "$BOX_UPDATE_JSON" ] && command -v jq >/dev/null 2>&1; then
+    out="$(jq -r 'if type == "object" then "\(if (.pid | type) == "number" then .pid else "-" end) \(if (.target | type) == "string" then (.target | @json) else "-" end)" else empty end' "$BOX_UPDATE_JSON" 2>/dev/null)" || out=""
+  fi
+  read -r a b <<<"$out"
+  [[ "$a" =~ ^[0-9]+$ ]] && pid="$a"
+  [[ "$b" =~ ^\"(v[0-9]+\.[0-9]+\.[0-9]+)\"$ ]] && target="${BASH_REMATCH[1]}"
+  printf 'pid %s, target %s' "$pid" "$target"
+}
+
+# `_upd_lock` → rc 0 holding the lock (or legitimately inheriting it), or it
+# dies (exit 1) — BEFORE `cmd_update` sets UPD_REPORTING=1, so a refused run
+# writes nothing to update.json and cannot overwrite the holder's report.
+_upd_lock() {
+  # ONE ACQUISITION PER PROCESS — `_acct_marker_lock`'s rule: a second
+  # `exec {fd}>>` of the same path is a STRANGER to the first, and
+  # `cmd_rollback` takes the lock and then calls `cmd_update` in-process.
+  [ -n "$UPD_LOCK_FD" ] && return 0
+  [ "$UPD_LOCK_INHERITED" -eq 1 ] && return 0
+  if ! command -v flock >/dev/null 2>&1; then
+    if [ "$CCD_OS" = darwin ]; then
+      _ccrc_die "flock is required by 'ccrc update' — it serialises updates and refuses rather than racing — and macOS does not ship it. Install it: brew install flock. Nothing on this box was changed"
+    fi
+    _ccrc_die "flock (util-linux) is required by 'ccrc update' — it serialises updates and refuses rather than racing; nothing on this box was changed"
+  fi
+  # THE RESTORE CHILD'S EXEMPTION, DECIDED ON A MEASUREMENT (design §10).
+  # `_upd_restore`'s arm 2 runs `ccrc update` as a synchronous, reaped,
+  # direct child that inherits the parent's descriptor; it skips acquisition
+  # iff the marker names its OWN parent AND a fresh probe finds the lock
+  # held. The env alone never exempts: a marker with no holder is refused,
+  # whatever it says. No `/dev/fd … -ef` identity test — false on macOS.
+  # The marker is unset in every branch, before anything here can spawn.
+  if [ -n "${CCRC_UPDATE_LOCK_HELD:-}" ]; then
+    local held="$CCRC_UPDATE_LOCK_HELD" prc=0
+    unset CCRC_UPDATE_LOCK_HELD
+    if [ "$held" = "$PPID" ]; then
+      _upd_lock_probe || prc=$?
+      case "$prc" in
+        1) UPD_LOCK_INHERITED=1; return 0 ;;
+        0) _ccrc_die "update: CCRC_UPDATE_LOCK_HELD names this run's parent (pid $PPID) but nobody holds ~/.ccrc/update.lock — refusing; a restore child runs only under its parent's lock" ;;
+        *) _ccrc_die "update: CCRC_UPDATE_LOCK_HELD names this run's parent (pid $PPID) but ~/.ccrc/update.lock could not be measured (probe rc $prc) — refusing; a restore child runs only under a lock it can see" ;;
+      esac
+    fi
+  fi
+  { [ -d "${BOX_UPDATE_LOCK%/*}" ] || mkdir -p "${BOX_UPDATE_LOCK%/*}"; } 2>/dev/null \
+    || _ccrc_die "cannot create ~/.ccrc, so ~/.ccrc/update.lock cannot be taken — nothing on this box was changed"
+  # The COMPOUND form: a bare `exec {fd}>>… 2>/dev/null` leaks bash's own
+  # open-failure diagnostic (`ccd/ccd:4381-4410` records why).
+  { exec {UPD_LOCK_FD}>>"$BOX_UPDATE_LOCK"; } 2>/dev/null \
+    || { UPD_LOCK_FD=""; _ccrc_die "cannot open ~/.ccrc/update.lock — nothing on this box was changed"; }
+  if ! flock -n "$UPD_LOCK_FD"; then
+    { exec {UPD_LOCK_FD}>&-; } 2>/dev/null
+    UPD_LOCK_FD=""
+    _ccrc_die "update: another update holds ~/.ccrc/update.lock ($(_upd_lock_holder))"
+  fi
+  return 0
+}
+
+# `_upd_unlock` — closes THIS process's descriptor, which releases the lock
+# unless a child still holds a copy (why it runs BEFORE the sweep). A no-op
+# for an inherited lock: the parent closes its own.
+_upd_unlock() {
+  [ -n "$UPD_LOCK_FD" ] || return 0
+  { exec {UPD_LOCK_FD}>&-; } 2>/dev/null || true
+  UPD_LOCK_FD=""
+}
 
 # ── _upd_resolve / _upd_fetch — SHA256SUMS first, then the tarball ────────
 # Split (release/rollout design §5-6) so `--check` and `rollout` can learn
