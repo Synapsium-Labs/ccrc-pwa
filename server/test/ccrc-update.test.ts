@@ -3709,3 +3709,405 @@ describe('ccrc update: the automatic restore (arms 2 and 3)', () => {
     expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8').split('\n')[0]).toBe('v1.0.0');
   });
 });
+
+describe('ccrc rollback (design §11 — a verb, not a recipe)', () => {
+  // A rollback IS update's own path, run in-process under update's lock as
+  // `cmd_update --to <tag> --downgrade --from rollback|watchdog`
+  // (D-3236, D-3262), so
+  // every harness piece is this file's: the STUB flavour, the local://
+  // release space (a rollback target is a PINNED tag, so it lives under
+  // download/<tag>/, never latest/), the systemctl recorder, Task 1's
+  // update-json-writes recorder, Task 3's systemd-run recorder, Task 4's
+  // install-step knob and Task 5's /health knobs. The sweep cases are
+  // `itLinux` because KillMode is systemd's word; the Darwin siblings at the
+  // end assert the same outcomes in launchd's.
+  const PREV_SHA = 'a'.repeat(40);
+  const PREV = `v1.0.0\n${PREV_SHA}\n`;
+  const report = (home: string): Record<string, unknown> =>
+    JSON.parse(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')) as Record<string, unknown>;
+  const writtenPhases = (home: string): string[] => (existsSync(join(home, 'update-json-writes'))
+    ? readFileSync(join(home, 'update-json-writes'), 'utf8').split('\n').filter((l) => l !== '')
+      .map((l) => String((JSON.parse(l) as { phase: unknown }).phase))
+    : []);
+  const systemctlCalls = (home: string): string => (existsSync(join(home, 'systemctl-calls'))
+    ? readFileSync(join(home, 'systemctl-calls'), 'utf8') : '');
+  const sums = (home: string, tag: string): string =>
+    `local://${home}/releases/download/${tag}/SHA256SUMS`;
+  const pause = (ms: number): void => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+  /** The shape every real rollback starts from: a box on v2.0.0 whose install
+   *  completed (the record equals `plantOldBox`'s stamp sha), whose floor the
+   *  last update raised to v2.0.0, and a published v1.0.0 under
+   *  download/v1.0.0/. `previous` is planted only when a case names one. */
+  const rollbackBox = (prefix: string, opts: {
+    previous?: string; marker?: string; bundle?: boolean; installExit?: number;
+  } = {}): string => {
+    const home = freshUpdateBox(prefix);
+    plantOldBox(home, { version: 'v2.0.0' });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v2.0.0\n');
+    writeFileSync(join(home, '.ccrc', 'installed'),
+      opts.marker ?? 'oldsha0000000000000000000000000000000000\n');
+    if (opts.previous !== undefined) writeFileSync(join(home, '.ccrc', 'previous'), opts.previous);
+    packRelease(home, stubTree(home, { version: 'v1.0.0', installExit: opts.installExit }),
+      { tag: 'v1.0.0', latest: false, bundle: opts.bundle });
+    return home;
+  };
+
+  /** `runUpdate` with the verb swapped — the CHECKOUT's ccrc against the
+   *  fixture box. No address is set: `updateEnv` deletes CCRC_ADDR exactly as
+   *  for `runUpdate`, and the gate then probes `127.0.0.1:7788`, the one the
+   *  curl stub answers (Task 5, D-3255), so
+   *  `_upd_fleet_warn` stays as silent here as in every update case. The
+   *  zero-second gate window is Task 5's `updateEnv` default, restated so a
+   *  case here never waits 90 s if that default moves. No lock marker leaks
+   *  in from the runner. */
+  function runRollback(home: string, args: string[] = [],
+    extraEnv: NodeJS.ProcessEnv = {}): Result {
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    const env: NodeJS.ProcessEnv = {
+      ...updateEnv(home),
+      TMPDIR: join(home, 'tmp'),
+      CCRC_RELEASE_BASE_URL: `local://${home}/releases`,
+      CCRC_UPDATE_HEALTH_S: '0',
+      ...extraEnv,
+    };
+    delete env['CCRC_UPDATE_LOCK_HELD'];
+    replantDoctorStubs(home);
+    const r = spawnSync(BASH, [join(REPO, 'ccd', 'ccrc'), 'rollback', ...args],
+      { env, encoding: 'utf8' });
+    return { code: r.status ?? -1, stdout: r.stdout ?? '', stderr: r.stderr ?? '' };
+  }
+
+  it('the argument surface: -h is usage at exit 0; an unknown argument, a mis-shaped --to and a --from outside the vocabulary are exit 2 — before anything is fetched', () => {
+    const home = rollbackBox('ccrc-rollback-args-', { previous: PREV });
+    let r = runRollback(home, ['-h']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^ {2}rollback {2}return this box to an earlier published release/m);
+    r = runRollback(home, ['--bogus']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: unknown argument: --bogus/m);
+    r = runRollback(home, ['--to', 'latest']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: --to expects a release tag shaped vX\.Y\.Z \(got: latest\)$/m);
+    r = runRollback(home, ['--from', 'bogus']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: --from expects one of cli pwa restore rollback watchdog rollout \(got: bogus\)$/m);
+    r = runRollback(home, ['--from']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: --from needs a value: one of cli pwa restore rollback watchdog rollout$/m);
+    expect(existsSync(join(home, 'curl-argv')), 'a fetch ran before a usage refusal').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('no ~/.ccrc/previous: exit 1, "nothing to roll back to", naming --to — nothing fetched, no lock opened, no report written', () => {
+    const home = rollbackBox('ccrc-rollback-noprev-');
+    const r = runRollback(home);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: nothing to roll back to — ~\/\.ccrc\/previous is absent .*; name one: ccrc rollback --to vX\.Y\.Z$/m);
+    expect(existsSync(join(home, 'curl-argv')), 'a missing previous fell back to a fetch').toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('a previous that carries no tag, or cannot be read as one, refuses by name (exit 1) — never falls back to latest', () => {
+    const untagged = rollbackBox('ccrc-rollback-untagged-', { previous: `untagged\n${PREV_SHA}\n` });
+    let r = runRollback(untagged);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(
+      `ccrc: rollback: the build before the last update carried no release tag (previous: untagged ${PREV_SHA}) — name one: ccrc rollback --to vX.Y.Z`);
+    expect(existsSync(join(untagged, 'curl-argv'))).toBe(false);
+    const bad = rollbackBox('ccrc-rollback-badprev-', { previous: 'three\n' });
+    r = runRollback(bad);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: ~\/\.ccrc\/previous is unreadable or malformed \(line 1 must be a release tag vX\.Y\.Z or 'untagged'\)/m);
+    expect(existsSync(join(bad, 'curl-argv'))).toBe(false);
+  });
+
+  it('an unpublished tag is refused at exit 2 before the lock and before any backup — its SHA256SUMS is the ONE request (§18 "`rollback` refuses an unknown tag")', () => {
+    const home = rollbackBox('ccrc-rollback-unknown-', { previous: PREV });
+    const r = runRollback(home, ['--to', 'v7.7.7']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(2);
+    expect(r.stderr).toMatch(/^ccrc: rollback: v7\.7\.7 is not a published release \(its SHA256SUMS answered 404\) — nothing on this box was changed$/m);
+    expect(localUrls(home)).toEqual([sums(home, 'v7.7.7')]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.lock'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('a release host that cannot be asked is exit 1 — unmeasured, never read as "not published"', () => {
+    const home = rollbackBox('ccrc-rollback-unreachable-', { previous: PREV });
+    // Ahead of the combined curl stub `runRollback` re-plants on every call:
+    // curl's own "could not connect", which is not a 404.
+    mkdirSync(join(home, 'fail-bin'), { recursive: true });
+    writeFileSync(join(home, 'fail-bin', 'curl'),
+      '#!/bin/sh\necho "curl: (7) Failed to connect: fixture" >&2\nexit 7\n', { mode: 0o755 });
+    const r = runRollback(home, [], { PATH: `${join(home, 'fail-bin')}:${updateEnv(home)['PATH'] ?? ''}` });
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: could not ask the release host whether v1\.0\.0 exists \(curl failed, or the host answered neither 200 nor 404\) — nothing on this box was changed$/m);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  it('a release host answering 503 (or a 403 rate limit) is exit 1 too — curl -f\'s exit 22 is not a 404 until the status says so (Task 6, D-3261)', () => {
+    const home = rollbackBox('ccrc-rollback-host-5xx-', { previous: PREV });
+    writeFileSync(join(home, 'fixture-release-http'), '503\n');   // Task 6's knob on the combined curl
+    const r = runRollback(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: rollback: could not ask the release host whether v1\.0\.0 exists \(curl failed, or the host answered neither 200 nor 404\) — nothing on this box was changed$/m);
+    expect(r.stderr).not.toMatch(/is not a published release/);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  itLinux('bare `ccrc rollback` returns to previous: update\'s own path below the floor, previous kept, the floor kept, the gate, THEN the sweep behind its KillMode preflight (§18 "a standalone rollback sweeps behind the preflight")', () => {
+    const home = rollbackBox('ccrc-rollback-happy-', { previous: PREV });
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    writeFileSync(join(home, 'fixture-sweep-active'), UNIT_LINES);
+    const r = runRollback(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^rollback: returning this box to v1\.0\.0 \(named by ~\/\.ccrc\/previous; asked by --from cli\) — update's own path, as --from rollback --downgrade/m);
+    // Existence first, then update's own resolve → tarball → bundle.
+    expect(localUrls(home)).toEqual([
+      sums(home, 'v1.0.0'),
+      sums(home, 'v1.0.0'),
+      `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz`,
+      `local://${home}/releases/download/v1.0.0/ccrc-v1.0.0.tar.gz.sigstore.json`,
+    ]);
+    // Below the floor on purpose, and the floor is never lowered.
+    expect(r.stdout).toMatch(/^update: WARN: v1\.0\.0 is below this box's floor v2\.0\.0 \(resolved by --to v1\.0\.0\) — proceeding because .*; the floor stays v2\.0\.0$/m);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v2.0.0\n');
+    // A rollback is a return to a known tag, not a new baseline (Task 4).
+    expect(r.stdout).toMatch(/^update: previous: kept \(v1\.0\.0\)/m);
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(PREV);
+    expect(readFileSync(join(home, 'staged-ccrc-argv'), 'utf8').split('\n')[1]).toBe('install');
+    expect(r.stdout).toMatch(/^update: rollback: v2\.0\.0 -> v1\.0\.0 is a DOWNGRADE/m);
+    // The gate, then the sweep, then done — and no restore phase at all.
+    const phases = writtenPhases(home);
+    expect(phases).not.toContain('restoring');
+    expect(phases.indexOf('checking')).toBeGreaterThan(phases.indexOf('installing'));
+    expect(phases.indexOf('restarting')).toBeGreaterThan(phases.indexOf('checking'));
+    expect(phases[phases.length - 1]).toBe('done');
+    const rep = report(home);
+    expect(rep['target']).toBe('v1.0.0');
+    expect(rep['from']).toBe('rollback');
+    // The sweep ran, and ran BEHIND its preflight: every unit's KillMode read
+    // back before the one try-restart.
+    const calls = systemctlCalls(home).split('\n').filter((l) => l !== '');
+    const restartAt = calls.indexOf('--user try-restart claude-session@*');
+    expect(restartAt, 'a standalone rollback must end in the supervisor sweep').toBeGreaterThan(-1);
+    for (const u of ['alpha', 'beta', 'ccrc-update-preflight']) {
+      const at = calls.indexOf(`--user show -p KillMode claude-session@${u}.service`);
+      expect(at, `no KillMode preflight for ${u}`).toBeGreaterThan(-1);
+      expect(at).toBeLessThan(restartAt);
+    }
+    expect(r.stdout).toMatch(/^update: sweep: /m);
+    expect(r.stdout).not.toMatch(/DEGRADED/);
+    expect(existsSync(join(home, 'tmux-argv')), 'the sweep reached for tmux').toBe(false);
+  });
+
+  itLinux('with KillMode not process, the rollback\'s sweep is REFUSED — DEGRADED verbatim, no try-restart — and the rollback still exits 0 (R1 inherited, never re-argued)', () => {
+    const home = rollbackBox('ccrc-rollback-degraded-', { previous: PREV });
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    const r = runRollback(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stderr).toMatch(/sweep REFUSED — claude-session@alpha\.service resolves to KillMode=control-group/);
+    expect(r.stdout).toMatch(/^update: DEGRADED: the supervisor sweep did not run — every live claude-session@ supervisor keeps executing the PREVIOUS ccd until restarted/m);
+    expect(systemctlCalls(home)).not.toMatch(/try-restart/);
+    expect(report(home)['phase']).toBe('done');
+  });
+
+  itLinux('--allow-unsigned rides along ONLY when this box\'s own record says unsigned: an unverified box returns to a bundle-less release; a verified one refuses, with the provenance prefix (D-3263)', () => {
+    const unsigned = rollbackBox('ccrc-rollback-unsigned-', {
+      previous: PREV, bundle: false, marker: 'oldsha0000000000000000000000000000000000\nunsigned\n',
+    });
+    let r = runRollback(unsigned);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/^update: WARN: .*ccrc-v1\.0\.0\.tar\.gz\.sigstore\.json is absent \(the release host answered an HTTP error — curl exit 22\) — proceeding on the transport checksum alone because --allow-unsigned was typed/m);
+    expect(readFileSync(join(unsigned, 'staged-ccrc-env'), 'utf8')).toBe('unset\n');
+    const verified = rollbackBox('ccrc-rollback-verified-', { previous: PREV, bundle: false });
+    r = runRollback(verified);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/the release ships no provenance bundle .* installs only with --allow-unsigned/);
+    expect(existsSync(join(verified, 'staged-ccrc-argv'))).toBe(false);
+    expect(existsSync(join(verified, 'ccrc-backups'))).toBe(false);
+    const rep = report(verified);
+    expect(rep['phase']).toBe('failed');
+    expect(String(rep['detail'])).toMatch(/^provenance: the release ships no provenance bundle/);
+  });
+
+  itLinux('a rollback while an update holds the lock is refused with update\'s own sentence — the live report is byte-identical, nothing backed up', () => {
+    const home = rollbackBox('ccrc-rollback-locked-', { previous: PREV });
+    const lock = join(home, '.ccrc', 'update.lock');
+    writeFileSync(lock, '');
+    const live = '{"target":"v2.0.0","phase":"installing","startedAt":1,"updatedAt":1,'
+      + '"detail":null,"from":"cli","pid":4321}\n';
+    writeFileSync(join(home, '.ccrc', 'update.json'), live);
+    // Task 2's holder shape: ONE process takes the lock and becomes `sleep`,
+    // so the pid killed is the pid holding it (a plain `flock <file> sleep`
+    // hands the descriptor to a child that outlives a kill of `flock`).
+    const holder = spawn(BASH, ['-c', 'exec 9>>"$1" && flock 9 && exec sleep 30', '_', lock], { stdio: 'ignore' });
+    const lockFree = (): boolean =>
+      spawnSync(BASH, ['-c', 'exec 9>>"$1" && flock -n 9', '_', lock]).status === 0;
+    try {
+      for (let i = 0; i < 400 && lockFree(); i++) pause(25);
+      expect(lockFree(), 'the holder never took the lock').toBe(false);
+      const r = runRollback(home);
+      expect(r.code).toBe(1);
+      expect(r.stderr).toMatch(/another update holds ~\/\.ccrc\/update\.lock \(pid 4321, target v2\.0\.0\)/);
+      expect(readFileSync(join(home, '.ccrc', 'update.json'), 'utf8')).toBe(live);
+      // The existence question ran (it precedes the lock); nothing after it did.
+      expect(localUrls(home)).toEqual([sums(home, 'v1.0.0')]);
+      expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+      expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    } finally { holder.kill('SIGKILL'); }
+  });
+
+  for (const from of ['cli', 'watchdog'] as const) {
+    itLinux(`a --from ${from} rollback whose gate fails is NOT restored: failed 'rollback to <tag>: gate: …', exit 1, no restore phase, no sweep (D-3243)`, () => {
+      const home = rollbackBox(`ccrc-rollback-gate-${from}-`, { previous: PREV });
+      // A sweep that ran would leave a try-restart: make it possible, so its
+      // absence below is a measurement and not the preflight refusing.
+      plantKillModeDropIn(home);
+      writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+      // /health keeps answering the version rolled away from.
+      writeFileSync(join(home, 'fixture-health-pin'), 'v2.0.0\n');
+      const r = runRollback(home, ['--from', from]);
+      expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+      expect(r.stdout).toMatch(/^update: gate FAILED after \d+s — /m);
+      expect(r.stderr).toMatch(new RegExp(
+        `^ccrc: rollback: v1\\.0\\.0 was installed but failed its health gate \\(gate: .*\\) — no automatic restore runs for a --from ${from === 'watchdog' ? 'watchdog' : 'rollback'} run`, 'm'));
+      const rep = report(home);
+      expect(rep['phase']).toBe('failed');
+      expect(String(rep['detail'])).toMatch(/^rollback to v1\.0\.0: gate: /);
+      expect(rep['from']).toBe(from === 'watchdog' ? 'watchdog' : 'rollback');
+      const phases = writtenPhases(home);
+      expect(phases).not.toContain('restoring');
+      expect(phases).not.toContain('reverted');
+      expect(r.stdout).not.toMatch(/REVERTED|arm 2/);
+      expect(systemctlCalls(home)).not.toMatch(/try-restart/);
+      expect(systemctlCalls(home)).not.toMatch(/^--user restart /m);
+    });
+  }
+
+  itLinux('a rollback whose spine died after the tree, but whose gate passes, names `ccrc rollback --to` as the rerun — `update --force` would be refused by the floor (D-3264)', () => {
+    const home = rollbackBox('ccrc-rollback-spine-', { previous: PREV, installExit: 1 });
+    writeFileSync(join(home, 'fixture-install-step'), '_inst_skills\n');
+    plantKillModeDropIn(home);
+    writeFileSync(join(home, 'fixture-sweep-units'), UNIT_LINES);
+    const r = runRollback(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(1);
+    const out = `${r.stdout}\n${r.stderr}`;
+    expect(out).toMatch(/spine died at _inst_skills\) — rerun: ccrc rollback --to v1\.0\.0\b/);
+    expect(out).not.toMatch(/rerun: ccrc update --to v1\.0\.0 --force/);
+    expect(systemctlCalls(home)).not.toMatch(/try-restart/);
+    expect(report(home)['phase']).toBe('failed');
+  });
+
+  // PLATFORM-ONLY: --detach is Linux-only (decision 17) — a transient
+  // systemd --user unit has no launchd counterpart this wave ships; the
+  // macOS answer is the refusal case directly below.
+  itLinux('--detach resolves the target FIRST, asks its existence, then re-execs `rollback --to <tag> --from <who>` through systemd-run and returns — the default target reaches the detached argv (§11 pin)', () => {
+    const home = rollbackBox('ccrc-rollback-detach-', { previous: PREV });
+    const r = runRollback(home, ['--detach', '--from', 'pwa']);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, 'systemd-run-argv'), 'utf8').split('\n').filter((l) => l !== ''))
+      .toEqual([`--user --collect --quiet ${home}/.local/bin/ccrc rollback --to v1.0.0 --from pwa`]);
+    expect(r.stdout).toMatch(/^update: detached — 'rollback --to v1\.0\.0' runs as a transient systemd --user unit; its progress is ~\/\.ccrc\/update\.json$/m);
+    const rep = report(home);
+    expect(rep['phase']).toBe('queued');
+    expect(rep['target']).toBe('v1.0.0');
+    expect(rep['from']).toBe('pwa');
+    expect(localUrls(home)).toEqual([sums(home, 'v1.0.0')]);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    // An explicit --to reaches it the same way, whatever previous says.
+    const pinned = rollbackBox('ccrc-rollback-detach-to-', { previous: `v0.9.0\n${PREV_SHA}\n` });
+    const p = runRollback(pinned, ['--to=v1.0.0', '--detach']);
+    expect(p.code, `stderr: ${p.stderr}\nstdout: ${p.stdout}`).toBe(0);
+    expect(readFileSync(join(pinned, 'systemd-run-argv'), 'utf8').trim())
+      .toBe(`--user --collect --quiet ${pinned}/.local/bin/ccrc rollback --to v1.0.0 --from cli`);
+  });
+
+  itDarwin('--detach refuses on macOS by name before anything runs (decision 17)', () => {
+    const home = rollbackBox('ccrc-rollback-detach-darwin-', { previous: PREV });
+    const r = runRollback(home, ['--detach']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toMatch(/^ccrc: --detach is Linux-only \(decision 17\)$/m);
+    expect(existsSync(join(home, 'curl-argv'))).toBe(false);
+    expect(existsSync(join(home, '.ccrc', 'update.json'))).toBe(false);
+  });
+
+  itDarwin('on macOS the same rollback runs by hand: below the floor, previous kept, the launchd gate arm, then the Darwin sweep — and systemctl is never called', () => {
+    const home = rollbackBox('ccrc-rollback-darwin-', { previous: PREV });
+    // The gate's Darwin arm samples ccrc.service's job pid through `launchctl
+    // print`; the recording stub answers a stable pid only for a loaded job.
+    appendFileSync(join(home, 'launchctl-loaded'), 'app.ccrc.ccrc.plist\n');
+    const r = runRollback(home);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v2.0.0\n');
+    expect(readFileSync(join(home, '.ccrc', 'previous'), 'utf8')).toBe(PREV);
+    expect(report(home)['from']).toBe('rollback');
+    expect(report(home)['phase']).toBe('done');
+    expect(r.stdout).toMatch(/^update: sweep: /m);
+    expect(existsSync(join(home, 'systemctl-calls'))).toBe(false);
+  });
+
+  // CARRY (Task 2 review): `cmd_update`'s converged no-op path calls
+  // `_upd_unlock` before its own `return 0` (`ccd/ccrc`, just above the
+  // "already runs … nothing to do" line) — nothing in this file's OWN
+  // describe exercised it, because every earlier `runUpdate` case either
+  // never converges or reaches convergence with `UPD_FROM=cli`, never
+  // in-process under a caller that took the lock itself and expects it
+  // back. `cmd_rollback` is that caller (D-3236: it runs `cmd_update`
+  // IN-PROCESS, under the lock it took), so a rollback that lands on an
+  // already-current tag is the one path that can prove the converged arm
+  // still frees the lock it never re-acquires.
+  //
+  // A BLACK-BOX (separate-process) probe cannot pin this: `cmd_rollback`'s
+  // call to `cmd_update` is its own last statement, and the dispatch case
+  // is the script's last statement too, so the whole `ccrc` PROCESS exits
+  // (and the kernel drops the flock with it) within a few instructions of
+  // `_upd_unlock` either running or not — a second `runRollback` right
+  // behind the first stays green either way. This case instead runs
+  // `cmd_rollback` SOURCED, in the SAME shell that then probes the lock
+  // immediately after it returns — no process boundary between the
+  // (possibly-skipped) unlock and the probe, so a fresh `flock -n` on a
+  // NEW open file description (`_upd_lock_probe`'s own, per its "per open
+  // file description" comment) still contends with `UPD_LOCK_FD` if it
+  // was left open in THIS process. Mutation: delete the `_upd_unlock` call
+  // — this reds on `probe-inline=1` (held) instead of `probe-inline=0`.
+  itLinux('the converged no-op path frees the lock before it returns — probed in-process, in the same shell cmd_rollback ran in, with no process exit between (CARRY: Task 2 review)', () => {
+    const home = freshUpdateBox('ccrc-rollback-converged-');
+    plantOldBox(home, { version: 'v2.0.0' });
+    mkdirSync(join(home, '.ccrc'), { recursive: true });
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v2.0.0\n');
+    // The staged release's stamp sha is what stubTree writes: newsha…; the
+    // box's OWN running stamp and completed record must carry the SAME sha
+    // for `_upd_converged`'s three-way comparison to hold (the exact shape
+    // `ccrc update`'s own "already there" gate describe uses), reached here
+    // in-process through `cmd_rollback --to v2.0.0` — a rollback TO the tag
+    // already running, the one shape that can hit the no-op branch.
+    writeFileSync(join(home, '.ccrc', 'build.json'),
+      '{"sha":"newsha0000000000000000000000000000000000","ref":"release","builtAt":"2026-08-21T00:00:00Z","dirty":false,"version":"v2.0.0"}\n');
+    writeFileSync(join(home, '.ccrc', 'installed'), 'newsha0000000000000000000000000000000000\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    mkdirSync(join(home, 'tmp'), { recursive: true });
+    replantDoctorStubs(home);
+    const script = [
+      `export CCRC_RELEASE_BASE_URL="local://${home}/releases"`,
+      `export TMPDIR="${home}/tmp"`,
+      'export CCRC_UPDATE_HEALTH_S=0',
+      'cmd_rollback --to v2.0.0',
+      'echo "rc-inline=$?"',
+      '_upd_lock_probe; echo "probe-inline=$?"',
+    ].join('\n');
+    const r = sourcedCcrc(home, script);
+    expect(r.code, `stderr: ${r.stderr}\nstdout: ${r.stdout}`).toBe(0);
+    expect(r.stdout).toMatch(/rc-inline=0/);
+    expect(r.stdout).toMatch(/already runs v2\.0\.0/);
+    expect(existsSync(join(home, 'staged-ccrc-argv'))).toBe(false);
+    expect(r.stdout).toMatch(/probe-inline=0/);
+  });
+});

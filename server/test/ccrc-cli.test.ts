@@ -167,6 +167,12 @@ describe('ccrc: dispatch and usage', () => {
     // tree. Same split again: `server/test/ccrc-update.test.ts` owns what it
     // does, this line owns that an operator can find it.
     //
+    // `rollback` joined it in the centralised-update programme's wave 4
+    // (design 2026-09-20 §11) — a verb, not the recipe `_upd_report` used to
+    // print: update's own path, below the floor, under update's lock, then the
+    // gate and the sweep. Same split: `server/test/ccrc-update.test.ts` owns
+    // what it does, this line owns that an operator can find it.
+    //
     // `uninstall`, `backup` and `logs` joined it in stage 4 Task 8 (spec §7):
     // the exit ramp that leaves reinstall safe, update's backup step
     // standalone, and the role-aware journalctl passthrough. Same split:
@@ -178,11 +184,12 @@ describe('ccrc: dispatch and usage', () => {
     // `server/test/ccrc-expose.test.ts` owns what it does.
     const home = mkTmp('ccrc-cli-usage-verbs-');
     const r = runCcrcRaw(home, ['-h']);
-    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
+    expect(r.stdout).toMatch(/usage: ccrc \{doctor\|status\|adopt\|wrappers\|account\|memory\|models\|install\|update\|rollback\|rollout\|uninstall\|backup\|logs\|passwd\|expose\|version\}/);
     expect(r.stdout).toMatch(/^ {2}account {3}connect, check and remove the accounts/m);
     expect(r.stdout).toMatch(/^ {2}memory {4}census every \(home, project\) memory pair/m);
     expect(r.stdout).toMatch(/^ {2}models {4}the model-class registry/m);
     expect(r.stdout).toMatch(/^ {2}update {4}fetch a published release/m);
+    expect(r.stdout).toMatch(/^ {2}rollback {2}return this box to an earlier published release/m);
     expect(r.stdout).toMatch(/^ {2}uninstall {1}/m);
     expect(r.stdout).toMatch(/^ {2}backup {4}/m);
     expect(r.stdout).toMatch(/^ {2}logs {6}/m);

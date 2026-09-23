@@ -1521,7 +1521,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollout|uninstall|backup|logs|passwd|expose|version}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|install|update|rollback|rollout|uninstall|backup|logs|passwd|expose|version}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -1613,6 +1613,17 @@ already running).
             a failed gate exits 4; a doctor FAIL with the gate passed exits
             3; --no-gate skips it.
             Per box; across a fleet, 'ccrc rollout' runs it in order
+  rollback  return this box to an earlier published release: the build
+            before its last update (~/.ccrc/previous) by default, or
+            [--to vX.Y.Z]. The tag must be published — its SHA256SUMS is
+            asked first, exit 2 when it is not. Runs update's own path
+            under update's lock: verify, back up, re-install below the
+            floor if need be (the floor itself is never lowered), the
+            health gate, then the supervisor sweep behind its KillMode
+            preflight. A rollback whose gate fails is NOT restored — its
+            target was the known-good build. [--detach] (Linux) returns at
+            once and runs it as a transient systemd --user unit;
+            [--from <who>] names the caller (${UPD_FROM_WORDS[*]})
   rollout   move BOTH boxes of a fleet to one published release, in order,
             from this machine: reads ~/.ccrc/deploy.env (deploy.sh's
             coordinates), preflights each box's recorded CCRC_ROLE, pins the
@@ -11791,6 +11802,7 @@ cmd_update() {
     # spine's death when there was one, so the row says both why the tree
     # moved half-way and why the box was not trusted. `_upd_restore` writes
     # `restoring` and then `reverted`; nothing here writes `failed`.
+    _upd_rollback_no_restore "$gate_fail"
     _upd_restore "$role" "$gate_fail"
     _upd_unlock
     echo "$PROG: update: $UPD_VERSION was installed, but the box did not come back healthy on it ($UPD_GATE_WHY) — exit 4. The backup taken BEFORE the install is complete at $UPD_BACKUP_DIR" >&2
@@ -11805,7 +11817,7 @@ cmd_update() {
     _upd_unlock
     local measured="answers on $UPD_VERSION"
     [ "$no_gate" -eq 1 ] && measured="was not measured (--no-gate)"
-    echo "$PROG: update: the box moved and $measured, but its install never completed (spine died at $UPD_SPINE_DIED) — rerun: ccrc update --to $UPD_VERSION --force" >&2
+    echo "$PROG: update: the box moved and $measured, but its install never completed (spine died at $UPD_SPINE_DIED) — rerun: $(_upd_rerun_hint)" >&2
     exit 1
   fi
 
@@ -11828,6 +11840,145 @@ cmd_update() {
     exit 3
   fi
   _upd_phase done
+}
+
+# ── cmd_rollback — a verb, not a recipe (design 2026-09-20 §11) ───────────
+# `ccrc rollback [--to <tag>] [--detach] [--from <who>]`. The default target
+# is `~/.ccrc/previous` line 1 — the tag `cmd_update` recorded as running just
+# before its last staged install, which a restore, rollback or watchdog run
+# never rewrites. There is NO fallback to latest/download: a rollback that
+# guessed its target would be an update.
+#
+# UPDATE'S OWN PATH, IN-PROCESS — never a second one. The lock is taken here,
+# then `cmd_update --to <tag> --downgrade --from rollback|watchdog` runs the
+# verify, the backup, the staged spine, the gate and `_upd_sweep`: the sweep
+# behind its own mandatory KillMode=process preflight and DEGRADED sentence,
+# CALLED, never restated — R1 is inherited, never re-argued. A standalone
+# rollback needs that sweep, because a PRIOR update's sweep already moved the
+# supervisors onto the build this one replaces. `--downgrade` because a
+# rollback is by definition a move below the floor the last update raised;
+# the floor file itself is never lowered (`_inst_installed` only raises it) —
+# D-3236.
+#
+# WHO ASKED vs WHAT KIND OF RUN (D-3262). `--from
+# <who>` is the caller's attribution — cli by hand, pwa from the console,
+# watchdog from the server-role watchdog. The run `cmd_update` performs is
+# `--from rollback`, or `--from watchdog`, whoever asked, because that word is
+# what exempts the floor, keeps `previous` and withholds the automatic restore
+# on a failed gate (`_upd_rollback_no_restore`): a `--from cli` re-install
+# would record the tag being rolled AWAY from as `previous`, and restore over
+# the known-good target. The caller's word survives in the detached argv, in
+# a detached run's `queued` report and in this verb's own first line.
+#
+# EXISTENCE BEFORE ANYTHING (D-3244). A node has no
+# catalogue, so the release host is asked for the tag's SHA256SUMS: 404 is
+# exit 2 (the tag is not a release; nothing touched), any other failure exit
+# 1 (UNMEASURED — never read as "not published"). Before the lock, before
+# --detach, before any backup.
+#
+# `--allow-unsigned` rides along iff THIS box's completed-install record says
+# `unsigned` on line 2 (D-3263): a box
+# nobody verified may return to a release that ships no bundle; a verified box
+# never silently unsigns — its rollback to a pre-provenance release refuses
+# with `_upd_fetch`'s own sentence, and the by-hand remedy is `ccrc update
+# --to <tag> --downgrade --allow-unsigned`. A bundle that FAILS refuses either
+# way.
+cmd_rollback() {
+  local to="" detach=0 from="cli" via="--to" w ok=0 prc=0 erc=0
+  local -a extra=()
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -h|--help) usage; exit 0 ;;
+      --to)
+        [ $# -ge 2 ] || { echo "$PROG: rollback: --to needs a value: a release tag shaped vX.Y.Z" >&2; usage >&2; exit 2; }
+        to="$2"; shift ;;
+      --to=*) to="${1#--to=}" ;;
+      --detach) detach=1 ;;
+      --from)
+        [ $# -ge 2 ] || { echo "$PROG: rollback: --from needs a value: one of ${UPD_FROM_WORDS[*]}" >&2; usage >&2; exit 2; }
+        from="$2"; shift ;;
+      --from=*) from="${1#--from=}" ;;
+      *) _ccrc_usage_die "$1" ;;
+    esac
+    shift
+  done
+  if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$PROG: rollback: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2
+    usage >&2
+    exit 2
+  fi
+  for w in "${UPD_FROM_WORDS[@]}"; do [ "$w" = "$from" ] && ok=1; done
+  if [ "$ok" -ne 1 ]; then
+    echo "$PROG: rollback: --from expects one of ${UPD_FROM_WORDS[*]} (got: $from)" >&2
+    usage >&2
+    exit 2
+  fi
+  # Before the target is resolved and before any request: Task 3's ONE
+  # spelling of the refusal (`_upd_detach` repeats it as its step 0).
+  [ "$detach" -eq 1 ] && _upd_detach_os_check
+
+  if [ -z "$to" ]; then
+    _upd_read_previous || prc=$?
+    case "$prc" in
+      0) to="$UPD_PREV_TAG"; via="~/.ccrc/previous" ;;
+      1) _ccrc_die "rollback: nothing to roll back to — ~/.ccrc/previous is absent (no update has run on this box since W4); name one: ccrc rollback --to vX.Y.Z" ;;
+      2) _ccrc_die "rollback: the build before the last update carried no release tag (previous: untagged ${UPD_PREV_SHA:-unstamped}) — name one: ccrc rollback --to vX.Y.Z" ;;
+      *) _ccrc_die "rollback: ~/.ccrc/previous is unreadable or malformed (line 1 must be a release tag vX.Y.Z or 'untagged') — fix or remove it by hand, or name one: ccrc rollback --to vX.Y.Z" ;;
+    esac
+  fi
+
+  command -v curl >/dev/null 2>&1 \
+    || _ccrc_die "curl is required by 'ccrc rollback' but is not on PATH — nothing on this box was changed"
+  _upd_asset_listed "$to" SHA256SUMS || erc=$?
+  case "$erc" in
+    0) ;;
+    1) echo "$PROG: rollback: $to is not a published release (its SHA256SUMS answered 404) — nothing on this box was changed" >&2
+       exit 2 ;;
+    *) _ccrc_die "rollback: could not ask the release host whether $to exists (curl failed, or the host answered neither 200 nor 404) — nothing on this box was changed" ;;
+  esac
+
+  if [ "$detach" -eq 1 ]; then
+    _upd_detach rollback "$to" "$from"
+    return 0
+  fi
+
+  _upd_lock
+  local run_from=rollback
+  [ "$from" = watchdog ] && run_from=watchdog
+  # Asked BEFORE `cmd_update` removes the record (it clears it right before
+  # the staged spine), through Task 6's one reader of the record's line 2. An
+  # absent or one-line record reads verified: the safe direction, because it
+  # refuses a bundle-less target instead of admitting it.
+  _upd_marker_unsigned && extra+=(--allow-unsigned)
+  echo "rollback: returning this box to $to (named by $via; asked by --from $from) — update's own path, as --from $run_from --downgrade: below the floor if need be, and the floor itself is never lowered"
+  cmd_update --to "$to" --downgrade --from "$run_from" ${extra[@]+"${extra[@]}"}
+}
+
+# D-3243 — a --from rollback|watchdog run whose gate
+# fails is NOT restored. Its target IS the known-good build `_upd_restore`
+# would return to (arm 2 re-installs the tag `previous` names — for a bare
+# rollback, the very tag just installed), and arm 3 would copy back the tree
+# this rollback replaced. So: the report says so, the terminal says so, exit 1
+# — the gate's own FAILED line above is the evidence. Every other run returns
+# 0 here and its caller restores as before. ONE copy of the condition for
+# every gate-failure `_upd_restore` call in `cmd_update`; `$1` is the reason
+# that call hands `_upd_restore` as its second argument, byte for byte.
+_upd_rollback_no_restore() {   # <the reason _upd_restore would be given>
+  case "$UPD_FROM" in rollback|watchdog) ;; *) return 0 ;; esac
+  _upd_phase failed "rollback to $UPD_VERSION: $1"
+  echo "$PROG: rollback: $UPD_VERSION was installed but failed its health gate ($1) — no automatic restore runs for a --from $UPD_FROM run: its target IS the known-good build a restore would return to, and arm 3 would copy back the tree this rollback just replaced. Read 'ccrc doctor' and 'ccrc update --check' on this box" >&2
+  exit 1
+}
+
+# D-3264 — the command that finishes a
+# spine that died after the tree moved. `update --force` does not pass the
+# floor (M7), and a rollback's target is below it, so a rollback's remedy is
+# the rollback itself: the box reads `incomplete`, so it re-installs.
+_upd_rerun_hint() {
+  case "$UPD_FROM" in
+    rollback|watchdog) printf 'ccrc rollback --to %s' "$UPD_VERSION" ;;
+    *) printf 'ccrc update --to %s --force' "$UPD_VERSION" ;;
+  esac
 }
 
 # One warning, or silence — never a refusal and never a guess. Address
@@ -14017,6 +14168,7 @@ case "$VERB" in
   models)  cmd_models "$@" ;;
   install) cmd_install "$@" ;;
   update)  cmd_update "$@" ;;
+  rollback) cmd_rollback "$@" ;;
   rollout) cmd_rollout "$@" ;;
   uninstall) cmd_uninstall "$@" ;;
   backup)  cmd_backup "$@" ;;
