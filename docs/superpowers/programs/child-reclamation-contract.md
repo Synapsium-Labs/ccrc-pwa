@@ -410,7 +410,8 @@ leave a wave undispatchable pending a ruling below.
   and there is no breadcrumb, the reclaim ladder does not answer `probe-unmeasured`: it pins the branch tip
   and the stashes attributed to the branch into the attic, then runs the tail from the branch delete on
   (branch CAS delete → clips → temp root → unit/pane → registry purge), recording `worktree: absent` in the
-  tombstone. Nothing is unseeable — the tree is already gone. A child whose directory EXISTS but git has no
+  tombstone. Nothing is unseeable — the tree is already gone. The unit and pane step still runs FIRST, as on
+  every arm (spec §5.6); only the worktree removal is skipped. A child whose directory EXISTS but git has no
   worktree record answers the existing TERMINAL token `no-worktree-record` (reused, its existing sentence is
   true of a child), which joins the vocabulary and `CHILD_RECLAIM_TOKEN_KIND` as `terminal`.
 - **R20 — repeated failures back off.** The sweep keeps `consecutiveFailures` per child; after a `failed`
@@ -424,11 +425,18 @@ leave a wave undispatchable pending a ruling below.
   `childReclaimGeneration` in `childReclaim.ts`, created by wave 4, imported by wave 5.
 - **R22 — generation edges.** `childReclaimGeneration` answers `[]` when no `create` (outcome `done`) exists at
   or before `at` — no evidence, never another generation's rows. The closing bound is the first `create` with
-  outcome `done` after `at`. Time is `e.at ?? e.ingestedAt`. Wave 4 pins both edges.
+  outcome `done` after `at`. Wave 4 pins both edges.
+- **R22′ — the ingest time is never an event time (supersedes R22's last sentence).** `ingestedAt` is the
+  server's clock and D8 (`server/src/coord/schema.ts`) forbids reading it as an event time; R22 said
+  `e.at ?? e.ingestedAt`, which violated it. Only ccd's own `at` places an event in time. A `create` row
+  whose `at` is null cannot open or close a generation and is skipped as a boundary; events between
+  boundaries are included by the mirror's own id order, whatever their `at`. The attention list's failure
+  clock and its item timestamp read `at` alone: a row with a null `at` cannot be placed, so it neither
+  starts a failure clock nor appears on the list.
 - **R16′ — review-child edges.** An unreadable reviewed-run row defers (`marker-unreadable`); a reviewed run
   ABSENT from the database keeps the child (`review-report-live`) and wave 4 LOGS it like `minting-run-absent`;
-  wave 5's chip answers the review-kept sentence (never `pending`) for any review child whose reviewed run is
-  not terminal in the list, absent included.
+  wave 5's chip keeps the word `pending` but always with the review-kept sentence, never the plain pending
+  sentence, for any review child whose reviewed run is not terminal in the list, absent included.
 - **R9′ — the frozen boundary is `ccd/ccd:19131`** (the highest anchor into `ccd/ccd` in the two frozen
   compaction-card documents, bare `:<n>` forms included), measured at 507aefe9. Every plan states the same
   figure and the grep that finds it.

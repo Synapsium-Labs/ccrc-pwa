@@ -76,6 +76,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   README and the frozen compaction-card corpus cite by line) pays S6-R11 in the same task, and edit length
   above the frozen corpus's highest `ccd/ccd` anchor is a decision: prose there stays length-neutral, long
   comments go below it.
+- **A journal line with no `at` is invisible to the generation fence and the attention list** (contract §8
+  R22′, D8: the ingest time is never an event time). Two consequences are accepted, not fixed: a terminal
+  refusal journaled without `at` keeps its child out of the sweep but off the attention list, and a clockless
+  `create` cannot fence a recycled slug. ccd writes `at` from one clock read on every line, so both need a
+  corrupt or degraded journal; a reviewer who finds a real producer of clockless lines reopens this.
 - **Anchors in these plans are snapshots.** Two other programmes (centralised-update-management W2–W5,
   gpt-lane 2b/3) are live against the same files. Every plan locates code by content; its line numbers are
   not addresses. `ccd/ccd` edits re-stamp and pay the citation-corpus tax.
