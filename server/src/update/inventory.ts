@@ -250,10 +250,13 @@ function secondsToMs(v: unknown): number | null {
  *  guaranteed-non-NULL sentinel (fix round 1 re-review, N-4: NOT one no
  *  node's own `update.json` would ever produce — an unreadable, too-large or
  *  unparseable report produces this exact object too, through `reportFrom`)
- *  that differs from any report whose `phase` is IN the `UpdatePhase`
- *  vocabulary, so it both satisfies "never NULL for a report that exists"
- *  and differs from a real `done` report on the next sweep, keeping the
- *  changed-report gate open for re-evaluation. */
+ *  that differs from any report whose phase is NOT `unknown` (e.g. a real
+ *  `done`) — `'unknown'` is itself a member of the `UpdatePhase` vocabulary,
+ *  and is this sentinel's own phase, so it does not "differ from every report
+ *  in the vocabulary"; what distinguishes its USE is that it satisfies "never
+ *  NULL for a report that exists" while still differing from a real `done`
+ *  report on the next sweep, keeping the changed-report gate open for
+ *  re-evaluation. */
 const UNKNOWN_REPORT: NodeReport = { phase: 'unknown', target: null, startedAt: null, updatedAt: null, detail: null };
 
 /** update.json `{target, phase, startedAt, updatedAt, detail, from}` → the

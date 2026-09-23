@@ -14,7 +14,7 @@
 // field-by-field, spell the union across a type alias in another file). The
 // bar is "a reasonable person adding a fourth copy in the ordinary way is
 // stopped before review", not "unforgeable".
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeAll } from 'vitest';
 import { readFileSync, readdirSync, statSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -3516,10 +3516,19 @@ describe('the update ring — nothing under server/src/update holds the handle (
 // APPENDED, never inserted: `session-hook.test.ts`'s citation audit cites this
 // file by line (`:32-37`, `:1274`, `:1303`), so an insert above those moves them.
 describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
-  /** The eight basenames NODE_FILES declares (shared/agent-protocol.ts),
-   *  spelled here as plain strings for the two scans below — the same
-   *  tradeoff the QUOTED case already makes for three of them. */
-  const EIGHT_BASENAMES = ['build.json', 'installed', 'ccrc-caps', 'floor', 'previous', 'node-id', 'update.json', 'update-intent'];
+  /** F16 (fix round 1, dispatch E, m2): DERIVED from the import of
+   *  NODE_FILE_BASENAMES, never hand-typed — a hand-typed copy goes vacuous
+   *  SILENTLY the moment a NODE_FILES value is renamed (it would simply stop
+   *  matching anything, never redding the "declared once" case above, which
+   *  scans for a DIFFERENT literal). A DYNAMIC import, not a static
+   *  top-of-file one: this file's own lines above `EIGHT_BASENAMES` are
+   *  `session-hook.test.ts`'s citation anchors (`:32-37`, `:1274`, `:1303`),
+   *  and every edit in this describe stays END-OF-FILE only — a new
+   *  top-of-file import line would shift every one of them. */
+  let EIGHT_BASENAMES: readonly string[] = [];
+  beforeAll(async () => {
+    ({ NODE_FILE_BASENAMES: EIGHT_BASENAMES } = await import('../../shared/agent-protocol.js'));
+  });
 
   it('is declared in exactly one file, and that file is shared/agent-protocol.ts', () => {
     const holders = ALL.filter((f) => /^\s*export const NODE_FILES\b/m.test(readFileSync(f, 'utf8'))).map(rel);
@@ -3536,6 +3545,12 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
   const blankComments = (src: string): string =>
     src.split('\n').map((l) => (/^\s*(\*|\/\*|\/\/)/.test(l) ? '' : l)).join('\n');
 
+  // F16 (m2): hoisted to describe scope and shared by both the real case and
+  // its own CONTROL below — a REDECLARED copy in the CONTROL tested nothing
+  // about the case it claimed to control (measured: reverting the real
+  // case's regex to single-quote-only stayed green, CONTROL included).
+  const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
+
   it('the three names no older code spells are quoted nowhere else — every reader goes through NODE_FILES', () => {
     // `build.json`, `installed`, `floor` and `previous` are ordinary words older
     // code already spells (`config.ts`'s `buildInfoPath`, the agent's own stamp
@@ -3544,13 +3559,11 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
     // control plane, so a second quoted copy is a second definition. F16: a
     // BACKREFERENCE, not a fixed `'…'` — a double-quoted or backtick re-list
     // is the same second definition, and the un-widened regex missed both.
-    const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
     const holders = ALL.filter((f) => QUOTED.test(blankComments(readFileSync(f, 'utf8')))).map(rel);
     expect(holders).toEqual(['shared/agent-protocol.ts']);
   });
 
   it("CONTROL: the QUOTED case reads all three quote styles, not just single-quoted (F16)", () => {
-    const QUOTED = /(['"`])(?:ccrc-caps|update\.json|update-intent)\1/;
     expect(QUOTED.test('const x = "ccrc-caps";'), 'double-quoted went unseen').toBe(true);
     expect(QUOTED.test('const x = `update-intent`;'), 'backtick-quoted went unseen').toBe(true);
     expect(QUOTED.test("const x = 'update.json';"), 'single-quoted (the original case) regressed').toBe(true);
@@ -3576,6 +3589,10 @@ describe('one NODE_FILES — the ~/.ccrc node-file basenames', () => {
       .map((f) => f.path);
 
   it('no file in agent/src re-lists all eight basenames beside the NODE_FILE_BASENAMES import (F16)', () => {
+    // Anti-vacuity (F16, m2): the derived list really does carry all eight —
+    // a NODE_FILES shrink or a broken import would otherwise let this
+    // describe run over an empty or partial set and pass for the wrong reason.
+    expect(EIGHT_BASENAMES, 'NODE_FILE_BASENAMES did not import, or the vocabulary shrank').toHaveLength(8);
     const files = ALL.filter((f) => rel(f).startsWith('agent/src/'))
       .map((f) => ({ path: rel(f), src: readFileSync(f, 'utf8') }));
     expect(files.length, 'the agent/src scan is over nothing').toBeGreaterThan(3);

@@ -104,10 +104,13 @@ const ALL_VERBS = 'get|post|put|patch|delete|head|options|all';
  *  brace followed by a `)` and silently mis-read the object's extent. `method`
  *  may be a single-quoted/double-quoted string or an array of them; each
  *  method the call registers is emitted as its own entry sharing the call's
- *  `at`, so a `body.slice(at, next.at)` still spans the whole registration. */
+ *  `at`, so a `body.slice(at, next.at)` still spans the whole registration.
+ *  Fix round 1, dispatch E (F14, m1): `app\.route\(\s*\{` tolerates whitespace
+ *  between the call and its opening brace (`app.route( {`), which the bare
+ *  `app\.route\(\{` missed — measured, the residual stayed 20/20 green. */
 const routeCallsIn = (src: string): { key: string; at: number }[] => {
   const out: { key: string; at: number }[] = [];
-  const re = /app\.route\(\{/g;
+  const re = /app\.route\(\s*\{/g;
   let m: RegExpExecArray | null;
   while ((m = re.exec(src))) {
     const openBrace = m.index + m[0].length - 1;
@@ -137,11 +140,19 @@ const routeCallsIn = (src: string): { key: string; at: number }[] => {
 /** Every registration in one source file — every `app.<verb>('/path', ...)` for
  *  every fastify verb, plus every `app.route({...})` — keyed `VERB /path`, in
  *  source order. The shared extraction `lanesIn` and `REGISTERED` both build on,
- *  so a verb or shape invisible to one is invisible to the other. */
+ *  so a verb or shape invisible to one is invisible to the other. Fix round 1,
+ *  dispatch E (F14, m1): the path capture is QUOTE-AGNOSTIC
+ *  (`(['"\x60])([^'"\x60]+)\1`) — a single-quoted-only capture left
+ *  `app.put("/x", …)` and `` app.put(`/x`, …) `` both unseen, measured 20/20
+ *  green residuals. The backtick in the character class needs the `\x60`
+ *  escape (a literal backtick is unremarkable inside `[...]`, but this file's
+ *  own source is read back by OTHER regex-vs-template scans, so spelling it
+ *  as a raw backtick here would itself be a stray template delimiter to
+ *  anyone re-reading this literal). */
 const registrationsIn = (src: string): { key: string; at: number }[] => {
-  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\('([^']+)'`, 'g');
+  const verbRe = new RegExp(`app\\.(${ALL_VERBS})\\((['"\\x60])([^'"\\x60]+)\\2`, 'g');
   const verbHits = [...src.matchAll(verbRe)]
-    .map((mm) => ({ key: `${mm[1]!.toUpperCase()} ${mm[2]!}`, at: mm.index! }));
+    .map((mm) => ({ key: `${mm[1]!.toUpperCase()} ${mm[3]!}`, at: mm.index! }));
   return [...verbHits, ...routeCallsIn(src)].sort((a, b) => a.at - b.at);
 };
 
@@ -714,6 +725,33 @@ describe('the update surface: one dual-credential read, every other route sessio
 
     expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('DELETE /api/updates/x');
     expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain('PUT /api/updates/y');
+  });
+
+  // Fix round 1, dispatch E (F14, m1): three residual shapes review 134
+  // measured staying 20/20 green — a double-quoted path, a backtick-quoted
+  // path, and `app.route( {` with whitespace before the brace.
+  it('a route registered with a double-quoted or backtick-quoted path, or app.route( { with whitespace, is SEEN (F14, m1)', () => {
+    const anchor = "app.post('/api/updates/ack', async (req, reply) => {";
+    expect(UPDATE_SRC, 'the ack registration line moved — re-point this control at it').toContain(anchor);
+
+    const plantedDoubleQuoted = UPDATE_SRC.replace(anchor,
+      `app.put("/api/updates/z", async (req, reply) => { reply.code(200).send({ ok: true }); });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedDoubleQuoted).map((r) => r.key), 'a planted double-quoted app.put went unseen')
+      .toContain('PUT /api/updates/z');
+
+    const plantedBacktick = UPDATE_SRC.replace(anchor,
+      'app.put(`/api/updates/t`, async (req, reply) => { reply.code(200).send({ ok: true }); });\n\n  ' + anchor);
+    expect(registrationsIn(plantedBacktick).map((r) => r.key), 'a planted backtick-quoted app.put went unseen')
+      .toContain('PUT /api/updates/t');
+
+    const plantedSpacedRoute = UPDATE_SRC.replace(anchor,
+      `app.route( { method: 'PUT', url: '/api/updates/w', handler: async (req, reply) => { if (req) { reply.code(200).send({ ok: true }); } } });\n\n  ${anchor}`);
+    expect(registrationsIn(plantedSpacedRoute).map((r) => r.key), 'a planted app.route( { …with whitespace went unseen')
+      .toContain('PUT /api/updates/w');
+
+    for (const key of ['PUT /api/updates/z', 'PUT /api/updates/t', 'PUT /api/updates/w']) {
+      expect(registrationsIn(UPDATE_SRC).map((r) => r.key)).not.toContain(key);
+    }
   });
 
   it("CLAUDE.md's box-token bullet names every update route by its backticked verb and path", () => {
