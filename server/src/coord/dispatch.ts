@@ -7,7 +7,7 @@ import { cutShort } from '../lifecycle.js';
 import type { KeyedQueue } from '../inject/queue.js';
 import { fieldMeasured, measuredIdentity, readRegistry, readRegistryMeasured } from '../registry.js';
 import { readHookStateMeasured } from '../hookstate.js';
-import { CCD_ARGV, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
+import { CCD_ARGV, CHILD_ARGV_CAP, ROUTE_ARGV_CAP, ROUTE_CAP, capSupported, verbSupported, sweepDec } from '../ccdargv.js';
 import { sendPrompt } from '../inject/send.js';
 import { type AdvanceResult, type CoordStore } from './store.js';
 import {
@@ -456,8 +456,22 @@ export async function dispatchRun(
     if (routeFields !== null && !capSupported(deps.fleetState, ROUTE_ARGV_CAP)) {
       coord.recordRunEvent(id, 'coordinator', 'route-omitted:no-route-argv-cap');
     }
+    // THE CHILD (child-workspace reclamation, spec §5.1): every workspace this
+    // arm mints is a child of THIS run — review runs included, since they are
+    // dispatched through this same arm — so `--child <run.id>` is sent
+    // unconditionally, EXCEPT to a box that has not said it parses the flag.
+    // Gated on `CHILD_ARGV_CAP` with `capSupported` (no evidence REFUSES): an
+    // older `cmd_ws_add` would bind `--child` as the project and refuse the
+    // spawn outright (D-410, one flag to the left). Unlike `--route` there is
+    // no "the caller asked for nothing" arm, so a box without the token ALWAYS
+    // journals the omission — a workspace minted without the marker is simply
+    // not a child, and the run's own trail is where a reader learns why.
+    const child = capSupported(deps.fleetState, CHILD_ARGV_CAP) ? run.id : null;
+    if (child === null) {
+      coord.recordRunEvent(id, 'coordinator', 'child-omitted:no-child-argv-cap');
+    }
     const argv = CCD_ARGV.wsAddWorker(run.project, dispatchDec,
-      capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null);
+      capSupported(deps.fleetState, ROUTE_ARGV_CAP) ? routeFields : null, child);
     // BEFORE the call, never after: this is the only moment the run can say
     // "a dispatch is in flight" — the id does not exist yet, and a stamp
     // written once `runCcd` resolves would be null for the entire window it
