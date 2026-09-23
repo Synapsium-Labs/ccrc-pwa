@@ -133,6 +133,22 @@ const routeFlags = (r: RouteFields | null): string[] =>
   r === null ? [] : ROUTE_WRITABLE_FIELDS.flatMap((f) => (r[f] === undefined ? [] : ['--route', `${f}=${r[f]}`]));
 
 /**
+ * The `--child <runId>` pair for a dispatched spawn (child-workspace
+ * reclamation, spec §5.1). `null` contributes NOTHING — `routeFlags`' own
+ * contract, for the same reason: a box that does not advertise `child-argv-v1`
+ * must receive the argv it always did, byte for byte.
+ *
+ * A HELPER RATHER THAN AN INLINE TERNARY, and that is measured, not taste:
+ * `ccdargv-dec-parity.test.ts` derives which verbs carry a dec by walking each
+ * `argv([…])` literal in `CCD_ARGV` up to its first `])`, and an inline
+ * `[...(child === null ? [] : ['--child', String(child)]), …]` closes a `])`
+ * INSIDE the literal — so the walk stops short of `decFlags(`, `ws-add` drops
+ * out of the derived set, and that suite reds on a builder that still declares.
+ */
+const childFlags = (child: number | null): string[] =>
+  child === null ? [] : ['--child', String(child)];
+
+/**
  * The session's own device label as an `--actor` value.
  *
  * TWO CONDITIONS, TWO WORDS, TWO NAMESPACES. `null` means the gate measured no
@@ -348,8 +364,21 @@ export const CCD_ARGV = {
    * this builder shipped before this slice, token for token — the residual
    * `dispatch.ts`'s own call site states is which capability gates it.
    */
-  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null) =>
-                 argv(['ws-add', '--no-rc', ...routeFlags(route), p, ...decFlags(dec)]),
+  /**
+   * `child`, the minting run's id (child-workspace reclamation, spec §5.1): the
+   * BOX half of the two authorities that make a workspace a child. It goes
+   * IMMEDIATELY AFTER `--no-rc`, in the leading-flag group `cmd_ws_add`'s strip
+   * loop parses — never trailing after `decFlags`, for `route`'s reason above —
+   * and ahead of `--route`, so the two declarations the dispatch path makes
+   * about WHAT this spawn is (`--no-rc`, `--child`) sit together and the one
+   * about how it RUNS follows them. `null` — the default, and what dispatch
+   * passes to a box without `child-argv-v1` — composes this builder's previous
+   * argv token for token. A NUMBER, not a string: the run id is a SQLite rowid
+   * everywhere in the coordination store, and stringifying it here, once, means
+   * no caller can hand ccd a padded or signed spelling its grammar would refuse.
+   */
+  wsAddWorker: (p: string, dec: ActorFlags | null, route: RouteFields | null = null, child: number | null = null) =>
+                 argv(['ws-add', '--no-rc', ...childFlags(child), ...routeFlags(route), p, ...decFlags(dec)]),
   prStateSession: (id: string) => argv(['pr-state', '--session', id]),
   prStateProject: (p: string)  => argv(['pr-state', '--project', p]),
   prOpen:    (id: string, t: string, b64: string, draft: boolean) =>
