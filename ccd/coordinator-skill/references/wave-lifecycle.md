@@ -222,12 +222,18 @@ lane, which re-asks regardless of what the last frame said. A failed
 local caps probe does not retry itself — only a server restart re-probes
 it. An agent whose caps stay list-less past that 60 s lane needs its ccd
 or the agent process itself looked at. `ccd caps` run on the box tells
-the fifth cause, the old ccd, apart from all of these: a list already
-naming `child-argv-v1` means the box's ccd is fine and the fix is one of
-the remedies just given, never a ccd deploy; a list that omits it, or a
-`ccd caps` that fails outright, means the box's ccd predates the
-capability and a ccd deploy is the fix. It is not an error and asks nothing
-of you: that workspace is simply not a child, exactly like every workspace
+the old-ccd cause apart from all of these: a list already naming
+`child-argv-v1` means the box's ccd is fine and the fix is one of the
+remedies just given, never a ccd deploy. A `ccd caps` that fails outright
+is NOT evidence of an old ccd — the same top-level check that kills every
+other invocation on a broken box (a missing or unreadable
+`~/.ccrc/accounts.sh`, `ccd/ccd`'s own `die`) kills `ccd caps` before it
+ever reaches its capability list, so a failing `ccd caps` gets the "look
+at its ccd" remedy above, plus a server restart afterward on a local box
+to re-probe it. Only a list that omits `child-argv-v1` outright names the
+old-ccd cause, and a ccd deploy is its fix. The event itself is not an
+error and asks nothing of you: that workspace is simply not a child,
+exactly like every workspace
 minted before the token existed, and nothing will ever reclaim it as one. A
 resumed workspace mints nothing and never carries the row.
 
