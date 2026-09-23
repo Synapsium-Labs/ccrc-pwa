@@ -38,7 +38,7 @@ planning inputs and are not committed. Every plan re-measures what it relies on.
   spawn, so the first launch already sees it.
 - `_spawn_start` (the one spawn function every path uses) composes `TMPDIR=$HOME/.cc-tmp/<id>` into the
   claude launch environment beside the existing `genenv`/`resenv` precedent, **iff** `_reg_get "$id" child`
-  is non-empty, after `mkdir -p -m 0700` of that directory. Driven by the MARKER, never by ws-add's argv, so
+  is non-empty (superseded by §9 R24: judged with `_child_runid_valid`), after `mkdir -p -m 0700` of that directory. Driven by the MARKER, never by ws-add's argv, so
   every respawn (ensure, start, swap, supervisor restart, ws-restore) keeps it and a non-child never gets it.
 - `cmd_caps` echoes `child-argv-v1` in its capability-token block.
 - `_reg_purge` already globs `$REG/$id.*`; wave 1 adds a test proving `.child` is collected.
@@ -316,7 +316,7 @@ to build the ruled form. A plan keeps its one-line revert notes only where they 
 leave a wave undispatchable pending a ruling below.
 
 - **R1 — an unusable temp root spawns without TMPDIR (wave 1's rc 2): ACCEPTED.** §1 now reads: `_spawn_start`
-  composes `TMPDIR=$HOME/.cc-tmp/<id>` iff the marker is non-empty AND the leaf is, or was just made, a real
+  composes `TMPDIR=$HOME/.cc-tmp/<id>` iff the marker is non-empty (§9 R24: a valid run id) AND the leaf is, or was just made, a real
   directory (not a symlink) owned by this user with mode 0700; otherwise the session spawns WITHOUT `TMPDIR`
   and ccd warns on stderr. Wave 3's tail unlinks a symlink or regular-file leaf at exactly that path with
   `rm -f --`, never following it and never `-rf`.
@@ -443,3 +443,32 @@ leave a wave undispatchable pending a ruling below.
 - **R23 — the contract is committed** at `docs/superpowers/programs/child-reclamation-contract.md`. Every plan's
   header carries a `**Contract:**` line with that path, and every "contract §N" in a plan means that file.
   Committed CODE comments cite the spec, never the contract.
+
+## 9. Rulings, 2026-09-23 (from wave 1's reports and reviews) — binding; they AMEND sections 1–8
+
+- **R24 — the marker is judged, not merely present (D-3336).** `_child_tmpdir` answers "a child" only when
+  `_child_runid_valid "$(_reg_get "$id" child)"` holds. A marker that is present but is not a run id gets no
+  child temp root. Its scratch stays under the box's own TMPDIR, where `ccd-tmp-sweep` collects it, and wave 3's
+  rung 2 still defers its reclaim as unreadable. Every ccd reader of the marker speaks the one grammar of R2.
+  Shipped in wave 1 (#175).
+- **R25 — an orphaned child temp root has an owner, and it is wave 4 (D-3337).** A child disposed of by a
+  human verb (`ws-rm`, `ws-reap`, `ws-gc --prune`, `forget`) loses its marker and its registry row, but keeps
+  `$HOME/.cc-tmp/<id>`, which no marker-driven path can find again. Wave 4 collects such a leaf only when all
+  of these hold:
+  - its name is a session id no registry file names;
+  - the registry listed cleanly;
+  - it was observed on two consecutive passes;
+  - `reclaim-paused` is absent.
+
+  A link or file leaf is unlinked with `rm -f --`, never followed. A directory is removed without following
+  a link out of it. Until wave 4 deploys, the leak is accepted. Also accepted, from wave 1's deploy until
+  wave 3's: no child's temp root is collected by anything.
+- **R26 — R1 is check-once.** `_child_tmpdir` tests the leaf for a symlink once, before `mkdir`/`chmod`, and
+  does not test it again. A second test after the `chmod` would move the race window, not close it: TMPDIR is a
+  path, and a path can be swapped at any later moment under the fleet's single-user trust model. The defence
+  that holds is at removal: wave 3's tail re-judges the leaf when it removes it and never follows a link.
+- **R27 — the run-id census is a literal-absence pin (D-3339).** `ccd-ws-add-child.test.ts` reds on a verbatim
+  second copy of the pattern and on nothing else. It is accepted as exactly that and is not widened: a scan
+  that tried to recognise every spelling of a grammar would be a semantic pin, and no such scan is complete.
+  Every run-id parse that wave 3 adds calls `_child_runid_valid`, and wave 3's reviewers check this by
+  reading.

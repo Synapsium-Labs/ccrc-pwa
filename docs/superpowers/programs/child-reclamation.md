@@ -17,7 +17,7 @@ removed on 2026-09-10 was not.
 
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
-| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | — | **in scoped review** 2026-09-23 — `ccrc-pwa-keen-hollow` (run 131; Opus·high, Sonnet subagents, workflows off, compact 40); PR #175 at `4c23fa25`; review 135 (six minors), scoped review 136 on `ccrc-pwa-plain-ridge` |
+| 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **merged** `bbb5e714` 2026-09-23 (run 131 on `keen-hollow`; reviews 135, 136); rollout pending |
 | 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | — | planned |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
@@ -39,10 +39,20 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**).
+Run ids: wave 1 = **131** (reviews **135**, **136**). Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 1 accepted and merged (`bbb5e714`, #175).** Scoped review 136 over `31c11916..4c23fa25`:
+  the held-out panel, 30 agents, nine raw findings, none refuted, merged into six. None is a shipped-behaviour
+  defect. Two are false prose in the new `wave-lifecycle.md` sentence: its remedy does not fit the causes it
+  lists, and it misses the empty-list case. Four are plan text left stale: row 9's old title, two more copies
+  of the census over-claim, and the suite size. As committed before that round opened, the wave is accepted
+  and all six are carried into wave 2 as one declared item (see Carried constraints). Two rulings go with
+  them: the census over-claim is narrowed wherever the plan states it (plan:49, :843, :984, :1344); and prose
+  added under a ruled deviation gets no content pin, since the mutation doctrine binds guards and a prose pin
+  against prose is green while both lie. Required checks green on the PR; the macOS leg is non-required and
+  was still pending. Merged with `--admin`. Contract §9 (R24–R27) records wave 1's four rulings.
 - **2026-09-23 — the last fix round done; scoped review 136 dispatched.** Tip `4c23fa25`: two commits, `ccd/ccd`
   untouched; row 4 re-spelled and measured red on exactly its one case (17/18); the `child-omitted` sentence
   added; the census title narrowed; the count corrected. Touched suites and guards green; `suite: unrun`, as
@@ -52,7 +62,7 @@ Run ids: wave 1 = **131** (reviews **135**, **136**).
   was retried once and landed on `plain-ridge`. **An observed ccd defect, outside this programme's scope:**
   `_ws_slug_free` asks only the registry, never whether `ws/<slug>` exists as a branch, so a random pick can
   collide with any leftover branch. Measured the same hour: 27 of this repo's 33 `ws/*` branches have no
-  registry row.
+  registry row. The operator asked for it to be fixed: its own programme, `ws-slug-collision` (run 137).
 - **2026-09-23 — review run 135 on `31c11916`: six minors, no shipped-behaviour defect; one last fix round.**
   Six Opus lenses (the held-out panel plus the plan's three), 51 agents, none died, nothing unexamined;
   whole-branch points (a)–(e) hold; suites green but for the carried `tmp-sweep` case and a `boot.test.ts`
@@ -145,6 +155,19 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
   wave 1's report). Wave 4's plan gains that task before its dispatch. And from wave 1's deploy until
   wave 3's, NO child's temp root is collected, live or finished: they accumulate, still marked, and wave 3's
   reclaim and wave 4's sweep take them.
+- **Wave 1's six prose leftovers ride wave 2 as one declared item** (review 136). All of them are text, and none
+  is shipped behaviour:
+  - `ccd/coordinator-skill/references/wave-lifecycle.md` §2's `child-omitted` sentences get one remedy per cause:
+    - the local boot window and a remote list-less or EMPTY-list ready frame both clear within about a minute,
+      with no action (the watcher's 60 s caps lane);
+    - a failed local caps probe needs a server restart;
+    - an agent that stays list-less past that lane needs its ccd or agent looked at.
+
+    The rewrite must still agree with the next sentence, "not an error". D-3338's bullet in the wave-1 plan
+    says "two sentences" and matches the text.
+  - The wave-1 plan's census over-claim is narrowed wherever it is stated: :49, :843, :984 and :1344 (row 9's
+    old title). D-3339 says so.
+  - Task 2 Step 7's "13/13" becomes 18/18, and D-3336 names the five invalid-marker cases it added.
 - **Wave 3 inherits two readings from wave 1's review.** Every run-id parse wave 3 adds calls
   `_child_runid_valid` — the census only catches a verbatim second copy, so the reviewers check it by
   reading. And `_child_tmpdir` checks the leaf for a symlink once, before `chmod` (contract R1, check-once
@@ -159,8 +182,11 @@ Findings every wave's reviewers get, because each is easy to lose between waves:
 
 ## Next-wave brief
 
-**Wave 1.** Plan: `docs/superpowers/plans/2026-09-22-child-reclamation-wave1-marker-and-containment.md`.
-Dispatch fresh. AGENT-FIRST. The wave has two measurements the operator is waiting on and that later
-waves size from: where Claude Code's scratchpad lands when `TMPDIR` is set, and how many workspaces exist
-with no marker when the ccd ships (the pre-policy stock, which this programme never reclaims). Both are
-recorded in this file by the coordinator when the wave closes.
+**Wave 2.** Plan: `docs/superpowers/plans/2026-09-22-child-reclamation-wave2-spent-refusals.md`, Tasks 1–7,
+stopping at Task 7 Step 5 (PR open, wave-done sent); Steps 6–7 are the coordinator's. Dispatch fresh (rule 3),
+deploy class **server**, but the rollout keeps the default fleet-box-first order: the two skill files ship on
+the fleet box before the server can send either refusal. One more declared item: wave 1's six prose leftovers
+(Carried constraints). Claims: the centralised-update-management workers may hold `shared/api.ts` and
+`server/src/coord/schema.ts`; the claim protocol is the answer. Wave 1 is merged and, once rolled out, the
+`.child` marker is live, so Task 7 Step 7's measurement is real at wave 3's open: naming wave 2's own workspace
+as `sessionId` must answer `409 workspace-spent` with wave 2's PR, and leave no run row.
