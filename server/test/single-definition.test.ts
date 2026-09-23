@@ -764,7 +764,7 @@ describe('Build 7 nouns', () => {
       // because `coord.db` is also the DATABASE FILE's name and several
       // docstrings in this directory legitimately mention it as prose
       // (`token.ts`'s own `CoordDbUnmigratable` paragraph, for one).
-      const REACH = /\b(?:coord|store)\.db\s*[.,)]/;
+      // `REACH` itself is module-scope, just below this describe: the update ring at the end of this file reads it too.
       for (const f of coordFiles) {
         if (HANDLE_HOLDERS.has(path.basename(f))) continue;
         const src = readFileSync(f, 'utf8');
@@ -774,7 +774,7 @@ describe('Build 7 nouns', () => {
     });
   });
 });
-
+const REACH = /\b(?:coord|store)\.db\s*[.,)]/;
 // ── program-leverage wave 8 ────────────────────────────────────────────────
 //
 // A docstring that names its own callers is a SECOND COPY of a fact the code
@@ -3428,4 +3428,73 @@ describe('the update control plane — one definition per vocabulary and wire ty
       expect(ALL.filter((f) => TUPLE.test(readFileSync(f, 'utf8'))).map(rel)).toEqual([]);
     });
   }
+});
+
+// ── Design 2026-09-20 §6: the update ring ─────────────────────────────────
+// "W2 extends that describe to scan server/src/update with an EMPTY
+// allowlist" — and D-3187 leans on it: the resolver stays
+// L1 and the projection writer L3 BY THEIR IMPORTS, and no file there holds
+// the handle. The coord ring (`describe('the coord ring — …')` above)
+// allowlists five holders; this one allowlists NONE, so every read and write
+// the update modules make goes through a `CoordStore` method.
+// APPENDED, not nested inside the coord ring as the spec's sentence reads:
+// `session-hook.test.ts`'s citation audit cites this file by line, so an
+// insert above a cited line moves its census. It reads the coord ring's
+// `REACH` — module-scope, declared under that describe — not a copy.
+describe('the update ring — nothing under server/src/update holds the handle (design 2026-09-20 §6)', () => {
+  const updateDir = path.join(ccrcRoot, 'server/src/update');
+  /** Every file the ring is known to hold, appended by the task that
+   *  creates it (W2: catalogue.ts, inventory.ts, resolve.ts, project.ts,
+   *  routes.ts). A FLOOR, not a count: a new file raises it rather than
+   *  breaking it, and a listed file that is gone — a moved or renamed
+   *  directory — reds instead of disarming the scan. */
+  const UPDATE_RING_FILES: readonly string[] = [];
+  // A bare `import 'node:sqlite'` and a dynamic `import('node:sqlite')` count
+  // too — the coord ring's `from\s+'node:sqlite'` sees neither.
+  const IMPORTS_SQLITE = /(?:\bfrom\s+|\bimport\s*\(?\s*)'node:sqlite'/;
+  const IMPORTS_DB = /(?:\bfrom\s+|\bimport\s*\(?\s*)'(?:\.{1,2}\/)+(?:coord\/)?db\.js'/;
+  const IMPORTS_UPDATE = /\bfrom\s+'(?:\.\/|(?:\.\.\/)+)update\//;
+  /** Over `[name, source]` pairs, so the CONTROL below plants its shapes as
+   *  text — no fixture directory, and so no new import line in this file. */
+  const ringViolations = (files: readonly (readonly [string, string])[]): string[] =>
+    files.flatMap(([name, src]) => [
+      ...(IMPORTS_SQLITE.test(src) ? [`${name} imports node:sqlite`] : []),
+      ...(IMPORTS_DB.test(src) ? [`${name} imports a coord db module`] : []),
+      ...(REACH.test(src) ? [`${name} names a database handle on a coord/store receiver`] : []),
+    ]);
+  const onDisk = (dir: string): (readonly [string, string])[] =>
+    sources(dir).map((f) => [path.relative(dir, f), readFileSync(f, 'utf8')] as const);
+
+  it('covers the directory — absent means nothing expects it, present means every listed file is visited (never a skip)', () => {
+    if (!existsSync(updateDir)) {
+      expect(UPDATE_RING_FILES,
+        'files are listed for an update ring that is not on disk — was the directory moved?').toEqual([]);
+      const importers = sources(path.join(ccrcRoot, 'server/src'))
+        .filter((f) => IMPORTS_UPDATE.test(readFileSync(f, 'utf8'))).map(rel);
+      expect(importers, 'a server/src file imports from an update directory this scan cannot see').toEqual([]);
+      return;
+    }
+    const names = sources(updateDir).map((p) => path.relative(updateDir, p));
+    for (const f of UPDATE_RING_FILES) expect(names, `${f} is listed but not on disk`).toContain(f);
+    expect(names.length).toBeGreaterThanOrEqual(UPDATE_RING_FILES.length);
+  });
+
+  it('no file there imports node:sqlite or a coord db module, or reaches for a handle — an EMPTY allowlist', () => {
+    expect(existsSync(updateDir) ? ringViolations(onDisk(updateDir)) : []).toEqual([]);
+  });
+
+  it('CONTROL: each forbidden shape is caught on planted text, and a store import is not', () => {
+    expect(ringViolations([
+      ['a.ts', "import 'node:sqlite';\n"],
+      ['b.ts', "import type { DatabaseSync } from 'node:sqlite';\n"],
+      ['c.ts', "import { tx } from '../coord/db.js';\n"],
+      ['d.ts', 'export const n = (coord: { db: unknown }) => tx(coord.db, () => 1);\n'],
+      ['e.ts', "import type { CoordStore } from '../coord/store.js';\nexport const f = (s: CoordStore) => s.intents();\n"],
+    ]).sort()).toEqual([
+      'a.ts imports node:sqlite',
+      'b.ts imports node:sqlite',
+      'c.ts imports a coord db module',
+      'd.ts names a database handle on a coord/store receiver',
+    ]);
+  });
 });
