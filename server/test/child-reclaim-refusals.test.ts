@@ -21,6 +21,7 @@ import { mkTmp } from './tmpHelpers.js';
 import { unreadableField, degradedReadIO } from './ioDoubles.js';
 import { okRuns, okRun } from './coordReadHelpers.js';
 import { holdReason } from '../src/coord/rundefs.js';
+import { ACTOR_FLAGS_CAP, CCD_ARGV, sweepDec } from '../src/ccdargv.js';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const PROJECT = 'demo';
@@ -246,6 +247,39 @@ describe('POST /api/runs/:id/dispatch — a child spent since its open', () => {
     expect(w.coord.runEvents(id).map((e) => e.detail).join('\n')).not.toContain('session-unbound');
   });
 
+  it('the release spends THIS dispatch\'s own actor flags, not merely a call that reads ' +
+     'the right identifier (F2, round 2)', async () => {
+    // Fix round B review, F2: a SHADOWING mutant at the resume arm's call
+    // site — `{ const dispatchDec = null; return refuseSpentChild(…,
+    // dispatchDec); }` — still passes the identifier `dispatchDec` at that
+    // call and so still satisfies `unattended-actor.test.ts`'s structural
+    // token pin, but it silently changes WHAT `dispatchDec` names from the
+    // hoisted dec down to `null`. Only an argv-level assertion can see that:
+    // this fixture advertises `ACTOR_FLAGS_CAP` so `dispatchDec` is a REAL
+    // dec (never `null` here, since a fixture with no actor-flags support
+    // would make `sweepDec` return `null` for every call and could not tell
+    // the shadowing mutant apart from the real code either) and asserts the
+    // exact argv `CCD_ARGV.wsRelease` produces for it — `--surface`/`--actor`
+    // flags a `null` or a foreign `sweepDec(...)` could never reproduce.
+    const home = mkTmp('ccrc-child-dispatch-');
+    seed(home, CHILD, { child: '5' });
+    const { run, calls } = makeRunner(home);
+    const fleetState = { connected: true, downSince: null,
+      ccdVerbs: ['ws-release', 'ws-hold', 'pr-state', 'ensure', 'ws-add', ACTOR_FLAGS_CAP],
+      rosterFp: null, build: null };
+    const w = await openApp(home, run, { fleetState }); app = w.app;
+    const id = await openOn(app, 2);
+    spend(home, CHILD, 42);
+    const before = calls.length;
+    const res = await postDispatch(app, id);
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toEqual({ ok: false, refused: 'workspace-spent', pr: 42, unbound: true });
+    const after = calls.slice(before);
+    const dispatchDec = sweepDec(fleetState, `run:${id} dispatch`);
+    expect(dispatchDec, 'the fixture must actually exercise a real dec, or this pins nothing').not.toBeNull();
+    expect(after).toContainEqual(CCD_ARGV.wsRelease(CHILD, dispatchDec));
+  });
+
   it('a successful ws-release whose run left `planned` before clearSession answers unbound:false, ' +
      'naming the act that ran (F3+F6, D-3349)', async () => {
     const home = mkTmp('ccrc-child-dispatch-');
@@ -257,8 +291,8 @@ describe('POST /api/runs/:id/dispatch — a child spent since its open', () => {
       if (verb === 'ws-release') {
         // The race `clearSession`'s own guard exists to catch, reached
         // directly rather than through a second concurrent route call (which
-        // `coordMutex` would serialize away, review 144 whole-branch pass
-        // (b)): the run leaves `planned` between `runCcd` returning and
+        // `coordMutex` would serialize away — F6's own reachability
+        // argument): the run leaves `planned` between `runCcd` returning and
         // `clearSession`'s read.
         const adv = coord.advance(id, 'failed', 'operator');
         if (!adv.ok) throw new Error('fixture advance failed');

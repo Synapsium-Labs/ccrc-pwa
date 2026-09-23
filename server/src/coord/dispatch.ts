@@ -179,16 +179,16 @@ export type DispatchOutcome =
    *  CHANGE something: on `workspace-spent` the spent child's claim is
    *  released — or handed to a surviving sibling — and the run is unbound, and
    *  `unbound` says whether that happened. `true`: dispatch again and a fresh
-   *  child is minted. `false`: ALWAYS carries a `detail` (D-3349, F3+F6) —
-   *  either the fleet act never ran (a PERMANENT cause named in the text:
-   *  this box's ccd does not support the verb, the surviving run's claim
-   *  could not be written, or the other runs naming the workspace could not
-   *  be read) and the caller must STOP AND REPORT, or the act DID run
-   *  (`ws-release`, or the `ws-hold` hand-over, named) and `clearSession`
-   *  found the run no longer `planned` and bound — that `detail` is NOT
-   *  permanent: retry the same dispatch once, and if it repeats, stop and
-   *  report. `spent-unmeasured` never unbinds — unknown is not spent. `pr`
-   *  and `detail` distinguish by PRESENCE. */
+   *  child is minted. `false`: ALWAYS carries a `detail` (D-3349, F3+F6), one
+   *  of two kinds. PERMANENT — the fleet act never even ran because a gate
+   *  ahead of it refused first: this box's ccd does not support the verb, the
+   *  surviving run's claim could not be written, or the other runs naming the
+   *  workspace could not be read — the caller must STOP AND REPORT.
+   *  RETRYABLE — everything else: the act ran and FAILED (`<verb> failed: …`),
+   *  or the act ran, SUCCEEDED, and `clearSession` found the run no longer
+   *  `planned` and bound — either way retry the same dispatch once, and if it
+   *  repeats, stop and report. `spent-unmeasured` never unbinds — unknown is
+   *  not spent. `pr` and `detail` distinguish by PRESENCE. */
   | { ok: false; kind: 'childSpent'; code: 'workspace-spent' | 'spent-unmeasured'; pr?: number; detail?: string; unbound: boolean };
 
 /**
@@ -294,13 +294,19 @@ async function refuseSpentChild(
   const cleared = deps.coord.clearSession(run.id, pr);
   // F3 + F6 (D-3349): the fleet act above DID run — `argv[0]` names which,
   // `ws-release` or the hand-over's `ws-hold` — but `clearSession` guards on
-  // the run still being `planned` and bound, and a crash or a second dispatch
-  // winning a race can leave that no longer true. `unbound:false` here is NOT
-  // one of the three PERMANENT causes `keep` above reports (unsupported verb,
-  // invalid survivor hold, unrepresentable sibling): the act already ran, so
-  // this `detail` means retry the same dispatch once, and if it repeats, stop
-  // and report — never "nothing changed", which would be a lie about the act
-  // that just happened.
+  // the run still being `planned` and bound. Every run-writing ROUTE runs
+  // behind the same `coordMutex` (`routes.ts`), and a crash never reaches
+  // this `return` at all — so there is, today, no path through the routes
+  // that leaves `cleared.cleared` false here (F6's own reachability
+  // argument). The `detail` below exists to keep the answer honest if that
+  // ever stops being true — a future caller outside the mutex, a timer this
+  // file has not audited — rather than assert "impossible" about a guard
+  // whose whole point is to answer for a state it did not expect.
+  // `unbound:false` here is NOT one of the three PERMANENT causes `keep`
+  // above reports (unsupported verb, invalid survivor hold, unrepresentable
+  // sibling): the act already ran, so this `detail` means retry the same
+  // dispatch once, and if it repeats, stop and report — never "nothing
+  // changed", which would be a lie about the act that just happened.
   if (!cleared.cleared) {
     return { ok: false, kind: 'childSpent', code: 'workspace-spent', pr, unbound: false,
       detail: `${argv[0]} ran, but run ${run.id} was no longer planned and bound by the time it ` +

@@ -315,9 +315,10 @@ export interface SessionRecord {
    * will DEFER on one. Collapsing `unreadable` into either neighbour is a
    * fail-open in one of those two directions.
    *
-   *   `none`       — no marker: a proven ENOENT (a MEASURED absence) of a
-   *                  file the directory listing this record was built from
-   *                  does NOT name — the listing rung `held`, `substrate` and
+   *   `none`       — no marker: either a proven ENOENT (a MEASURED absence),
+   *                  or a failed (`unreadable`) read — either way, of a file
+   *                  the directory listing this record was built from does
+   *                  NOT name. The listing rung `held`, `substrate` and
    *                  `stranded` already apply. An agent older than the wire's
    *                  `absent` marker answers "unreadable" for every missing
    *                  file; without this rung every workspace on such a box
@@ -345,14 +346,21 @@ export interface SessionRecord {
    *                  eleven digits, ` 17`, text). Something wrote the file; a
    *                  malformed marker is not "no marker".
    *
-   * NO second-listing reconfirm, unlike `held`: nothing but `_reg_purge`
-   * removes a marker, and a purge removes `<id>.uuid` with it, which the
-   * identity reconfirm in `readRegistryMeasured` already retires the row for.
-   * A listed marker that reads back absent — the exact race this paragraph
-   * is about — now answers `unreadable` (F4/D-3348), not `none`, so even a
-   * purge landing in the gap between the listing and this read refuses the
-   * bind (retryably) rather than permitting it before the identity reconfirm
-   * has a chance to retire the row.
+   * NO second-listing reconfirm AT THIS LAYER, unlike `held`: nothing but
+   * `_reg_purge` removes a marker, and a purge removes `<id>.uuid` with it,
+   * which the identity reconfirm in `readRegistryMeasured` already retires
+   * the row for. A listed marker that reads back absent — the exact race
+   * this paragraph is about — now answers `unreadable` (F4/D-3348), not
+   * `none`, WHEN the rest of the record still resolves: `readSessionRecord`
+   * returns `found:true` with `child:unreadable`, and the caller (the bind
+   * gate) refuses, retryably. That is NOT the outcome for every ordering: if
+   * the same purge also carries off `<id>.uuid` — a full teardown, not
+   * merely the marker — the identity triple's own drop retires the WHOLE row
+   * first (`readSessionRecord` answers `found:false, reason:'absent'`
+   * without ever reaching this function), and `childBindGate`'s OWN second
+   * listing decides from there: once that later listing no longer names
+   * `<id>.child` either, the bind is permitted — correctly, because there is
+   * no longer a workspace here to protect.
    *
    * ATTRIBUTION, NOT AUTHENTICATION. Any process on the fleet box can write
    * this file (CLAUDE.md, "Identity on the fleet"). It is the box's half of
@@ -566,8 +574,10 @@ function childMarkOf(read: MeasuredRead, listed: boolean): ChildMark {
   // gone between the listing and this read — used to fall through to `none`,
   // permitting a bind on evidence that could not be read. Both failure
   // reasons now share the same listing rung: `listed` refuses (`unreadable`,
-  // retryable), and only a read that is BOTH absent AND unlisted answers
-  // `none`.
+  // retryable), and an UNLISTED read answers `none` whichever failure reason
+  // came back — a failed (`unreadable`) read of a file the listing never
+  // named at all is `none` too (`child-reclaim-mark.test.ts`'s own kept
+  // case), same as a proven absence of one.
   return listed ? { kind: 'unreadable' } : { kind: 'none' };
 }
 

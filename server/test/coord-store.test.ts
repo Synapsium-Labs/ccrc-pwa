@@ -3094,7 +3094,7 @@ describe('bindSession — the one writer of runs.sessionId, and the heir inherit
     // LAST in its SET list walked straight past it, measured green.
     const here = path.dirname(fileURLToPath(import.meta.url));
     const src = readFileSync(path.resolve(here, '../src/coord/store.ts'), 'utf8');
-    const writes = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/g)]
+    const writes = [...src.matchAll(/UPDATE runs SET([\s\S]*?)WHERE/gi)]
       .filter((m) => /\bsessionId\b/i.test(m[1]!));
     // child-reclamation wave 2: an UNBIND is not a re-bind. It binds no value
     // to the column, so it can hand a run to nobody and has no mail to move —

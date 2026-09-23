@@ -4898,7 +4898,7 @@ export class CoordStore {
    *  Since design 2026-09-14 §7.1 (D-2794) `TERMINAL_RUN_STATES` is L0's own
    *  pair (`shared/api.ts`) and does NOT call `'unknown'` terminal either, so
    *  the divergence this paragraph used to warn about is gone: this query now
-   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `close.ts`'s
+   *  names `TERMINAL_RUN_STATES_SQL` directly, agreeing with `rundefs.ts`'s
    *  `survivorOf` (built on `openRunsForSession`) on which run of a session is
    *  open, including on an `'unknown'` row.
    *
@@ -4906,7 +4906,7 @@ export class CoordStore {
    *  forbids two open runs naming one sessionId, and the coordinator protocol
    *  DELIBERATELY creates that state by opening wave N+1 before closing wave
    *  N. The newest run's claimant is the right answer there, and
-   *  `close.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
+   *  `rundefs.ts`'s `survivorOf` documents the same protocol-not-DB-enforced
    *  caveat. Pinned by a two-wave/two-claimant test, verified red under
    *  ASC (fix round 1, finding 2). */
   parentOfSession(childId: string): string | null {
