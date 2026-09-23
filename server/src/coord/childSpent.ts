@@ -127,10 +127,14 @@ export async function childSpent(deps: ChildSpentDeps, rec: SessionRecord): Prom
       ? 'pr-state answered no line for this session'
       : `pr-state answered ${failure.reason ?? 'unknown'}` };
   }
-  // D-3351: a line with no string `branch` cannot be compared to any row's
-  // `headRefName` at all — it is exactly as unplaced as a same-branch row this
-  // wave cannot place (below), so it is refused the same way rather than
-  // guessed into `unspent` by an `undefined === undefined` accident.
+  // D-3351: without this check, a line with no `branch` at all falls through
+  // to `phaseFor` and answers `unspent` — not by matching anything below, but
+  // by matching NOTHING: `r.headRefName === line.branch` answers `false` for
+  // every row with a string head, so they fall OUT of `sameBranch` rather than
+  // into it, and the same undefined `line.branch` makes `phaseFor`'s own
+  // `boundRow` conjunct fail identically, landing on `row === null` →
+  // `none`/`no-commits` → `unspent`. Refused here instead, before any of that
+  // runs, so a branchless line reads "not measured", not "no PR".
   if (typeof line.branch !== 'string') {
     return { kind: 'unmeasured', detail: 'pr-state named no branch for this session' };
   }

@@ -116,10 +116,14 @@ describe('the per-session call asks about one branch', () => {
   // `is_merged()` (which conjoins `bound`) and `pick()` (which filters by it) on
   // the ccd side; `boundRow()` and `isMergedRow()` on the server's. `line.rows`
   // now has TWO server-side readers — `phaseFor`'s `boundRow(line.rows, …)` and
-  // `childSpent`'s own same-branch scan (D-3347, fix round A) — and the
-  // superset argument still holds for both: `childSpent` conjoins
-  // `headRefName === line.branch` exactly as `boundRow` does, so neither reader
-  // ever needs a row this filter would have dropped.
+  // `childSpent`'s own scans (D-3347, fix round A; D-3351, fix round 2) — and
+  // the superset argument still holds for both: `childSpent`'s spent rung
+  // conjoins `headRefName === line.branch` exactly as `boundRow` does, so
+  // neither needs a row this filter would have dropped. Its `unplaceable` rung
+  // (D-3351) is different — it asks a narrower question with NO branch
+  // conjunct at all, whether any non-fork row's head cannot even be read — but
+  // `--head` narrowing can only SHRINK the row set, never grow it, so that rung
+  // needs nothing this filter would have dropped either.
   //
   // `--project` is a different question — every workspace of the repo at once,
   // from one call — and keeps the wide window; the second test is that guard.

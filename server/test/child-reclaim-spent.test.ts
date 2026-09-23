@@ -252,6 +252,44 @@ describe('childSpent — the live lookup', () => {
     expect(await verdict(h)).toEqual({ kind: 'spent', pr: 5, source: 'live' });
   });
 
+  // Review fr2-review 145 (fix round 1), M3: a `tip` KEY ABSENT (not merely
+  // `null`) must ALSO answer unmeasured — the check is `typeof line.tip !==
+  // 'string'`, not `line.tip === null`, and a mutant narrowing to the latter
+  // stayed green because every other case in this file sends `tip:null`
+  // explicitly.
+  it('(xii) a line whose tip KEY IS ABSENT (never sent, not merely null) → unmeasured', async () => {
+    const stdout = JSON.stringify({ id: ID, rows: [], baseShort: 'main', branch: BRANCH, ahead: 1, checkedAt: 1 });
+    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const v = await verdict(h);
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('tip');
+  });
+
+  // M3: `branch: null` (an explicit non-string, not merely an absent key) must
+  // ALSO answer unmeasured — the check is `typeof line.branch !== 'string'`,
+  // not `line.branch === undefined`; test (vii) above only deletes the key.
+  it('(xiii) a line whose branch is explicitly null (not merely an absent key) → unmeasured', async () => {
+    const stdout = JSON.stringify(
+      { id: ID, rows: [], baseShort: 'main', branch: null, ahead: 1, tip: 'f'.repeat(40), checkedAt: 1 });
+    const h = harness({ code: 0, stdout: `${stdout}\n`, stderr: '' });
+    const v = await verdict(h);
+    expect(v.kind).toBe('unmeasured');
+    expect(v.kind === 'unmeasured' ? v.detail : '').toContain('no branch');
+  });
+
+  // M3: pins the order the comment above (viii) claims — `unplaceable` is
+  // checked AFTER `sameRepo`, so a genuine same-repo same-branch row still
+  // wins even when an unplaceable non-fork row is ALSO present. A mutant that
+  // moved the `unplaceable` check above `sameRepo` would answer `unmeasured`
+  // here instead of `spent`.
+  it('(xiv) a genuine same-repo same-branch row PLUS an unplaceable non-fork row → spent — sameRepo wins, checked first', async () => {
+    const good = prRow('OPEN', { number: 42 });
+    const bad = prRow('OPEN', { number: 99 }) as Record<string, unknown>;
+    delete bad.headRefName;
+    const h = harness({ code: 0, stdout: `${fullLine([good, bad])}\n`, stderr: '' });
+    expect(await verdict(h)).toEqual({ kind: 'spent', pr: 42, source: 'live' });
+  });
+
   it('(vi) three same-repo same-branch rows → spent/live names the HIGHEST number, not the first or the last', async () => {
     // Neither the first row (7) nor the last row (8) is the highest (9) — a
     // mutant that picked `rows[0]` OR `rows[rows.length - 1]` instead of the
