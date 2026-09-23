@@ -849,6 +849,14 @@ describe('the poller against a loopback fixture (design §7 Pins)', () => {
       const releases = store.releases();
       const stableRow = releases.find((r) => r.tag === 'v0.0.1');
       expect(stableRow).toMatchObject({ tag: 'v0.0.1', channel: 'stable', yanked: false });
+      // The load-bearing half of 'single': the latest upsert must not yank
+      // ANY of the 30 dev releases the listing just wrote in the SAME poll.
+      // Mutation (measured by hand): passing 'complete' instead of 'single'
+      // for the latest upsert reds exactly this assertion — every dev
+      // release ends up yanked — while leaving every assertion above it
+      // (which look only at the stable row) green.
+      expect(releases.filter((r) => r.tag !== 'v0.0.1').every((r) => !r.yanked)).toBe(true);
+      expect(releases).toHaveLength(RELEASES_PER_PAGE + 1);
 
       const eligibility: EligibilityRow[] = releases.map((r) => ({
         tag: r.tag, channel: r.channel, bundleListed: r.bundleListed, yanked: r.yanked,
