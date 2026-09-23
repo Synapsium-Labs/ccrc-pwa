@@ -18,7 +18,7 @@ removed on 2026-09-10 was not.
 | # | scope | deploy class | PRs | state |
 |---|---|---|---|---|
 | 1 | `--child <runId>` on ws-add behind `child-argv-v1`; the `.child` marker; a child's `TMPDIR` under `~/.cc-tmp/<id>` on every spawn; the scratchpad measurement; the pre-policy count | **AGENT-FIRST** | #175 | **deployed** v0.0.19 (`bbb5e714`, 2026-09-23 15:46–15:51 UTC; run 131 on `keen-hollow`; reviews 135, 136) |
-| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **fix round** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178; review 144: 4 important + 12 minor |
+| 2 | the registry's three-way child reading; the three-valued spent verdict with a live measurement; `workspace-spent` and `spent-unmeasured` at open and at dispatch; dispatch clears a spent binding | server | #178 | **in scoped review** 2026-09-23 — `ccrc-pwa-plain-river` (run 138; Opus·high, Sonnet subagents, workflows off, compact 40); PR #178 at `76594fec` (merged main `a3a93b41` in); reviews 144, 145 (`ccrc-pwa-warm-ridge`) |
 | 3 | `ws-audit --reclaim` and its token; `ws-reclaim` with its own ladder, pin phase, tail arm and breadcrumb; the `reclaim` journal act; close's fourth act; delivery cancellation | **AGENT-FIRST** | — | planned |
 | 4 | the reclaim sweep over marked children; `ccd reclaim-pause` and its route and Runs-screen toggle; the attention list of unreclaimable children in the Runs banner | **AGENT-FIRST** | — | planned |
 | 5 | the closed run's reclaim chip and its sentences | server + pwa | — | planned |
@@ -39,10 +39,20 @@ reds on any tracked `D-` ref above the highest defined one, so an issued-but-und
 would turn every commit red. Every wave draws from this block. A worker never calls the allocator (worker
 clause 11): it names a departure in its wave-done mail and the coordinator assigns a number from the block.
 
-Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (review **144**). Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
+Run ids: wave 1 = **131** (reviews **135**, **136**); wave 2 = **138** (reviews **144**, **145**). Numbers defined so far: D-3330 … D-3339, all in the wave-1 plan.
 
 ## Decisions & deviations
 
+- **2026-09-23 — wave 2's fix round done (`76594fec`); scoped review 145; wave 3 pre-flight started.**
+  - **The round.** Every ruling applied, and each fix group got its own review. The R28 measurement passed on
+    the real read path: ccd lists `gh pr list --head <branch> --state all` with no base filter.
+  - **#177 merged in** from main, clean (no rebase; nothing touched `shared/api.ts`).
+  - **First full suite.** Red only on the carried `tmp-sweep` case and a `ccrc-doctor` case that was green
+    alone.
+  - **Review 145.** Scoped to the round (base = the merge commit). It adds an xhigh fail-shut lens on the two
+    changed reads.
+  - **Wave 3 pre-flight.** Started in parallel as a workflow, because R28's broader `spent` meets wave 3's
+    close-act eligibility. A no-PR child on a recycled slug must not be reclaimed as spent.
 - **2026-09-23 — review 144 on wave 2 (`08e40675`): four important, twelve minor; the last full fix round.**
   - **The panel.** Six lenses (the held-out panel plus the plan's three; the fail-shut lens at xhigh), 99
     agents, 25 survivors merged into 16 findings, 6 refuted. Whole-branch: nothing destroyed, wire additive
