@@ -1143,6 +1143,25 @@ BOX_FLOOR_FILE="$HOME/.ccrc/floor"
 # this install can do, never what a design intends.
 CCRC_CAP_WORDS=(verify node-id floor)
 
+# W4 (Task 12): the words only a LINUX install can do. Empty until Task 13
+# fills it; declared here so the one reader below exists before any word does.
+CCRC_CAP_WORDS_LINUX=()
+
+# ── _ccrc_cap_words — what THIS ccrc can do on THIS os, one word per line ──
+# The ONE list: `_inst_caps` writes it into ~/.ccrc/ccrc-caps (after the `os`
+# line) and `update --check` prints it as `caps=` (plan
+# D-3248). `--check` is answered by the RUNNING
+# ccrc, and rollout asks what THAT ccrc accepts (`--from`, `--no-gate`) — the
+# file can lag it (a spine that died before `_inst_caps`; D-3147's clear
+# before every staged install), so `--check` reads this function, never the
+# file. One function, so the two answers agree whenever the install completed.
+_ccrc_cap_words() {
+  printf '%s\n' "${CCRC_CAP_WORDS[@]}"
+  if [ "$CCD_OS" != darwin ] && [ "${#CCRC_CAP_WORDS_LINUX[@]}" -gt 0 ]; then
+    printf '%s\n' "${CCRC_CAP_WORDS_LINUX[@]}"
+  fi
+}
+
 # ── THE NODE'S REPORT (design 2026-09-20 §10) ─────────────────────────────
 # `~/.ccrc/update.json` — what THIS box says about its own update: one JSON
 # line, rewritten by temp-and-rename at every phase boundary of `cmd_update`
@@ -1623,7 +1642,9 @@ already running).
             stays. A box already running the target, whose install
             completed, is left alone (--force reinstalls). --check only
             compares this box with what is published (exit 0 current, 1
-            otherwise) and writes nothing. Every release since W1 ships a
+            otherwise) and writes nothing; its first line also carries caps=
+            (what this ccrc can do) and floor=, and a target below the floor
+            reads below-floor. Every release since W1 ships a
             provenance bundle; the installed tree's verifier checks it
             before extraction. --allow-unsigned admits a release with NO
             bundle (never one that fails), and the box records the install
@@ -1673,9 +1694,16 @@ already running).
             coordinates), preflights each box's recorded CCRC_ROLE, pins the
             version from SHA256SUMS once, runs 'ccrc update --to' over ssh on
             the fleet box then the server box (--server-first inverts), stops
-            at the first failure (a box's exit 3 is relayed, not a stop; its exit 4 stops), and re-measures both ('ccrc version',
-            /health). --check only prints where each box stands; --force
-            passes through; [--to vX.Y.Z] pins a tag. Exit 2 = nothing touched
+            at the first failure (a box's exit 3 is relayed, not a stop; its
+            exit 4 stops), and re-measures both ('ccrc version', /health).
+            --check only prints where each box stands; --force, --downgrade
+            and --allow-unsigned pass through to each box's update, and a
+            box below its floor refuses the whole rollout before anything
+            moves unless --downgrade was typed; [--to vX.Y.Z] pins a tag, or
+            [--channel stable|dev] pins the one tag each box's own
+            projection names ('ccrc channel' there; refused unless it reads
+            ok). A box whose ccrc lists update-json gets --from rollout.
+            Exit 2 = nothing touched
   watchdog  (server/both, Linux; run by ccrc-update-watchdog.timer every
             minute) re-measure a self-update whose ~/.ccrc/update.json has
             gone stale: a live updater is left alone, and recorded as
@@ -10263,13 +10291,16 @@ _inst_caps() {   # what THIS install's ccrc can do (design 2026-09-20 §9, decis
   # Words, never a version number: the server dispatches by what a node
   # SAYS it can do, and an install that predates a word does not have it.
   # Rewritten on every install so the file describes this tree, not a
-  # previous one; self-reported, not a security boundary.
-  local tmp="$BOX_CAPS_FILE.tmp.$$"
+  # previous one; self-reported, not a security boundary. The words come
+  # from `_ccrc_cap_words`, the same list `update --check` prints as caps=.
+  local tmp="$BOX_CAPS_FILE.tmp.$$" w
+  local -a cw=()
+  while IFS= read -r w; do cw+=("$w"); done < <(_ccrc_cap_words)
   mkdir -p "${BOX_CAPS_FILE%/*}" || _ccrc_die "cannot create ${BOX_CAPS_FILE%/*}"
-  { printf 'os %s\n' "$CCD_OS"; printf '%s\n' "${CCRC_CAP_WORDS[@]}"; } > "$tmp" \
+  { printf 'os %s\n' "$CCD_OS"; printf '%s\n' "${cw[@]}"; } > "$tmp" \
     && chmod 644 "$tmp" && mv -f -- "$tmp" "$BOX_CAPS_FILE" \
     || { rm -f -- "$tmp"; _ccrc_die "writing $BOX_CAPS_FILE failed"; }
-  echo "install: caps: ${CCRC_CAP_WORDS[*]} (os $CCD_OS; $BOX_CAPS_FILE — what this install's ccrc can do, read by the server)"
+  echo "install: caps: ${cw[*]} (os $CCD_OS; $BOX_CAPS_FILE — what this install's ccrc can do, read by the server)"
 }
 
 # ── _inst_units — the unit files, and the one this box's ROLE decides ─────
@@ -11696,13 +11727,34 @@ cmd_update() {
         state="current"
       fi
     fi
+    # M3 (W1 minor; plan D-3233): the check READS the floor
+    # and never refuses on it. A target strictly below a tag floor, on a box
+    # not already current on it, is `below-floor` — the one state `update`
+    # would refuse without --downgrade, and until now `--check` answered it
+    # `behind`, so rollout's preflight moved one box and then failed at the
+    # other. A current box keeps `current`: it has nothing to move.
+    local chk_floor chk_caps="" w
+    chk_floor="$(_upd_floor_word)"
+    if [ "$state" != current ] && [[ "$chk_floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] \
+       && _ver_newer "$chk_floor" "$UPD_VERSION"; then
+      state="below-floor"
+    fi
+    while IFS= read -r w; do chk_caps="$chk_caps${chk_caps:+,}$w"; done < <(_ccrc_cap_words)
     # Fixed-shape first line for `ccrc rollout` to parse; the sentence follows.
-    echo "check: box=$box sha=$sha target=$UPD_VERSION state=$state"
+    # caps= and floor= sit BEFORE state= (plan D-3232):
+    # rollout reads state as everything after the LAST `state=`, so a field
+    # appended after it would be swallowed into the state word on every newer
+    # box. An older rollout ignores both; this one tolerates their absence.
+    echo "check: box=$box sha=$sha target=$UPD_VERSION caps=$chk_caps floor=$chk_floor state=$state"
+    case "$chk_floor" in
+      unreadable|malformed) echo "this box's floor (~/.ccrc/floor) is $chk_floor — 'ccrc update' refuses until it is fixed by hand" ;;
+    esac
     [ -z "$UPD_TARGET_LINE" ] || printf '%s\n' "$UPD_TARGET_LINE"
     case "$state" in
       current)    echo "this box: $box ($sha) · $label: $UPD_VERSION — current"; return 0 ;;
       incomplete) echo "this box: $box ($sha) · $label: $UPD_VERSION — same version, but the install never completed (ccrc version explains); $again"; return 1 ;;
       behind)     echo "this box: $box ($sha) · $label: $UPD_VERSION — behind"; return 1 ;;
+      below-floor) echo "this box: $box ($sha) · $label: $UPD_VERSION — below this box's floor $chk_floor; update refuses it without --downgrade"; return 1 ;;
       *)          echo "this box: unversioned ($sha) · $label: $UPD_VERSION — a release install would be the first on this box"; return 1 ;;
     esac
   fi
@@ -13466,6 +13518,24 @@ _upd_floor_check() {
   _ccrc_die "$UPD_VERSION (resolved by $via) is below this box's floor $floor ($BOX_FLOOR_FILE: the highest version this box completed an install of) — moving down is a typed act: ccrc update --to $UPD_VERSION --downgrade. Nothing on this box was changed"
 }
 
+# ── _upd_floor_word — the floor as ONE word, for `update --check` (M3) ────
+# Reads ~/.ccrc/floor with EXACTLY `_upd_floor_check`'s four tests, in its
+# order, so a check line never answers a floor the install path would read
+# differently: not a regular file → `none` (the check's own
+# `[ -f ] || return 0`); present but unreadable → `unreadable`; not a tag
+# (a line with no newline included, as `read`'s `|| floor=""` makes it
+# there) → `malformed`; else the tag. Never dies: a measurement REPORTS a
+# bad floor, the install path refuses on it. Two words beyond `none`, never
+# folded into it — a present floor nobody could read is not "no floor"
+# (D-3136's principle; plan D-3232).
+_upd_floor_word() {
+  local floor=""
+  [ -f "$BOX_FLOOR_FILE" ] || { echo none; return 0; }
+  [ -r "$BOX_FLOOR_FILE" ] || { echo unreadable; return 0; }
+  IFS= read -r floor < "$BOX_FLOOR_FILE" || floor=""
+  if [[ "$floor" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then echo "$floor"; else echo malformed; fi
+}
+
 # Deploy's backup set (deploy.sh:363-369 agent lane, :788-792 server lane),
 # both lanes' union because a single box may be both, each entry guarded —
 # absence is the ordinary state of the role a box is not. coord.db goes
@@ -14035,6 +14105,77 @@ _rollout_role_why() {
   return 0
 }
 
+# ── _rollout_field <line> <key> — one ` key=value` field off a box's line ─
+# The value runs up to the next space; NOTHING at all when the line has no
+# ` <key>=` — an older box's check line has no caps=/floor= (D-3106's lesson:
+# the fleet a W4 rollout ships to is exactly a fleet one wave older), and a
+# missing field must read as absent, never as the text before it. `state`
+# keeps `${line##*state=}` at its call site: it is the trailing field.
+_rollout_field() {
+  local line="$1" key="$2" v
+  case "$line" in *" $key="*) ;; *) return 0 ;; esac
+  v="${line#* "$key"=}"
+  printf '%s' "${v%% *}"
+}
+
+# ── _rollout_channel <stable|dev> <single> — the tag the control plane ────
+# resolves, read off each box's OWN projection (plan
+# D-3234). rollout holds no session and calls
+# no HTTP route: it runs `ccrc channel` on each box over ssh — that box's own
+# reader, the one function that tells `ok` from stale/unreadable/malformed —
+# and takes its `desired-<ch>` field. One tag across the boxes is the pin;
+# two tags, no tag, a projection that is not ok|none, or a box too old to
+# print a channel line all refuse at exit 2 with nothing touched. A box
+# answering `none` names no target of its own, and that is NOT a free skip:
+# W2's resolver answers NULL for a converged node and for a box it declined
+# to move alike (rolledBack, noEligible over the tags it refused, a pin it
+# will not follow, noFloor), and the line does not say which. So its label
+# goes into `chan_none`, and Step 3b admits it only when its own check line
+# on the pinned tag reads `current`. Sets `cmd_rollout`'s locals `to` and
+# `chan_none` (bash locals are dynamically scoped: the assignments land in
+# the caller's frame), so the run proceeds exactly as `--to <that tag>`.
+_rollout_channel() {
+  local ch="$1" single="$2" i out line first st v tag="" tagfrom="" nonebox=""
+  local -a hosts=() names=()
+  if [ "$single" -eq 1 ]; then hosts=("$CCRC_BOX"); names=(box)
+  else hosts=("$CCRC_AGENT_BOX" "$CCRC_BOX"); names=(fleet server); fi
+  for i in "${!hosts[@]}"; do
+    : >"$ROLLOUT_ERRF"
+    out="$("${ROLLOUT_SSH[@]}" "${hosts[$i]}" 'ccrc channel' 2>>"$ROLLOUT_ERRF")" || :
+    [ -s "$ROLLOUT_ERRF" ] && sed "s/^/${names[$i]}: /" "$ROLLOUT_ERRF" >&2
+    line="$(printf '%s\n' "$out" | grep -m1 '^channel: ')" || line=""
+    if [ -z "$line" ]; then
+      first="${out%%$'\n'*}"
+      echo "$PROG: rollout: the ${names[$i]} box printed no channel line (got: ${first:-nothing}) — is ccrc new enough to know 'ccrc channel'? nothing was touched" >&2
+      exit 2
+    fi
+    st="$(_rollout_field "$line" state)"
+    case "$st" in
+      ok|none) ;;
+      *) echo "$PROG: rollout: the ${names[$i]} box's projection is ${st:-unstated} — 'ccrc channel' there says why; --channel follows only a projection that reads ok; nothing was touched" >&2
+         exit 2 ;;
+    esac
+    v="$(_rollout_field "$line" "desired-$ch")"
+    [ "$v" = none ] && { nonebox="$nonebox ${names[$i]}"; continue; }
+    if [[ ! "$v" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+      echo "$PROG: rollout: the ${names[$i]} box's channel line names desired-$ch=${v:-nothing}, not a release tag or none — nothing was touched" >&2
+      exit 2
+    fi
+    if [ -z "$tag" ]; then
+      tag="$v"; tagfrom="${names[$i]}"
+    elif [ "$v" != "$tag" ]; then
+      echo "$PROG: rollout: the boxes' projections name two $ch targets — $tagfrom: $tag, ${names[$i]}: $v — one rollout pins one version; nothing was touched" >&2
+      exit 2
+    fi
+  done
+  if [ -z "$tag" ]; then
+    echo "$PROG: rollout: the control plane resolves no $ch target for either box — nothing was touched" >&2
+    exit 2
+  fi
+  echo "rollout: channel $ch: the control plane resolves $tag (read from each box's own projection)"
+  to="$tag"; chan_none="$nonebox"
+}
+
 # ── cmd_rollout — one act, both boxes, in order (release/rollout design §4)
 # Runs on the deploying machine, needs no checkout. Coordinates are
 # deploy.sh's (`~/.ccrc/deploy.env`); the boxes' recorded roles are
@@ -14044,7 +14185,7 @@ _rollout_role_why() {
 # touched when box one fails; and the result is RE-MEASURED (`ccrc version`
 # on each box, `/health` on the server), never read off update's stdout.
 cmd_rollout() {
-  local to="" server_first=0 check=0 force=0
+  local to="" server_first=0 check=0 force=0 downgrade=0 allow_unsigned=0 channel="" chan_given=0 chan_none=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -14055,12 +14196,37 @@ cmd_rollout() {
       --server-first) server_first=1 ;;
       --check) check=1 ;;
       --force) force=1 ;;
+      --downgrade) downgrade=1 ;;
+      --allow-unsigned) allow_unsigned=1 ;;
+      --channel)
+        [ $# -ge 2 ] || { echo "$PROG: --channel needs a value: stable or dev" >&2; usage >&2; exit 2; }
+        channel="$2"; chan_given=1; shift ;;
+      --channel=*) channel="${1#--channel=}"; chan_given=1 ;;
       *) _ccrc_usage_die "$1" ;;
     esac
     shift
   done
   if [ -n "$to" ] && [[ ! "$to" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     echo "$PROG: --to expects a release tag shaped vX.Y.Z (got: $to)" >&2; usage >&2; exit 2
+  fi
+  # W4 (Task 12). `--channel` names a channel, `--to` a tag: one pin, never
+  # both. `--check` MEASURES and touches nothing, so a flag that only changes
+  # what an UPDATE does is refused beside it (the D-3139 shape `update`
+  # itself uses; `--check --force` stays R17's own ruling).
+  if [ "$chan_given" -eq 1 ]; then
+    case "$channel" in
+      stable|dev) ;;
+      *) echo "$PROG: rollout: --channel expects stable or dev (got: ${channel:-nothing})" >&2; usage >&2; exit 2 ;;
+    esac
+    [ -z "$to" ] || { echo "$PROG: rollout: --channel and --to are exclusive — --to names the tag, --channel asks each box's projection which one; pick one" >&2; exit 2; }
+  fi
+  if [ "$check" -eq 1 ] && [ "$downgrade" -eq 1 ]; then
+    echo "$PROG: rollout: --check and --downgrade are exclusive — --check measures and touches nothing, --downgrade moves a box below its floor; pick one" >&2
+    exit 2
+  fi
+  if [ "$check" -eq 1 ] && [ "$allow_unsigned" -eq 1 ]; then
+    echo "$PROG: rollout: --check and --allow-unsigned are exclusive — --check measures and touches nothing, --allow-unsigned admits an unsigned install; pick one" >&2
+    exit 2
   fi
   local t
   for t in ssh curl jq; do
@@ -14107,6 +14273,10 @@ cmd_rollout() {
       echo "$PROG: rollout: the server box (CCRC_BOX) records CCRC_ROLE=${srole:-nothing}, not 'server' — its update would install the wrong role (an absent role installs 'both': an agent unit on the server box); nothing was touched" >&2; exit 2; }
   fi
 
+  # Step 1b — `--channel`: the tag each box's OWN projection names, read
+  # BEFORE the pin, so the rest of this verb runs exactly as `--to <tag>`.
+  [ "$chan_given" -eq 0 ] || _rollout_channel "$channel" "$single"
+
   # Step 2 — pin the version: ONE SHA256SUMS read, the same read update makes.
   # Run in a command substitution so a failure inside _upd_resolve (which
   # calls _ccrc_die, exit 1) maps to THIS verb's exit-2 contract — nothing
@@ -14140,8 +14310,8 @@ cmd_rollout() {
   # (an operator needs to SEE a host-key warning, not have it swallowed),
   # and the check line is looked for ANYWHERE in stdout, first match wins.
   # The refusal now fires only when no `check: ` line exists at all.
-  local i out first line state box sha allcurrent=1
-  local -a states=()
+  local i out first line state box sha caps floor allcurrent=1
+  local -a states=() capss=() floors=()
   for i in "${!boxes[@]}"; do
     : >"$ROLLOUT_ERRF"
     out="$("${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --check --to $ROLLOUT_VERSION" 2>>"$ROLLOUT_ERRF")" || :
@@ -14155,8 +14325,14 @@ cmd_rollout() {
     box="${line#*box=}"; box="${box%% *}"
     sha="${line#*sha=}"; sha="${sha%% *}"
     state="${line##*state=}"
+    # W4's two fields (plan D-3232), each ABSENT on
+    # a box one wave older — which reads as "no words" and "no floor said",
+    # never as the text before it (`_rollout_field`).
+    caps="$(_rollout_field "$line" caps)"
+    floor="$(_rollout_field "$line" floor)"
     echo "rollout: ${labels[$i]}: $box (${sha:0:8}) → $ROLLOUT_VERSION [$state]"
-    states+=("$state")
+    [ -n "$caps" ] || echo "rollout: ${labels[$i]}: its check line lists no capabilities (a ccrc older than W4 prints no caps=) — it gets no --from rollout"
+    states+=("$state"); capss+=("$caps"); floors+=("$floor")
     [ "$state" = current ] || allcurrent=0
   done
   if [ "$check" -eq 1 ]; then
@@ -14178,12 +14354,51 @@ cmd_rollout() {
     return 0
   fi
 
+  # Step 3b — a box its own update would refuse is refused HERE, before
+  # EITHER box is touched (M3/M4): otherwise the first box moves and the
+  # second fails at its install — with --server-first, after the server
+  # already moved. A floor nobody could read or parse refuses whatever was
+  # typed (`update` dies on it even with --downgrade); a box whose projection
+  # resolved no `--channel` target is admitted only when it already runs the
+  # pinned tag (plan D-3234: `none` may be a
+  # rollback, a refused tag or a pin the control plane chose not to move —
+  # --force and --downgrade do not lift it); a box below its floor moves
+  # only when --downgrade was typed, and then --downgrade rides its update
+  # below.
+  for i in "${!boxes[@]}"; do
+    case "${floors[$i]}" in
+      unreadable|malformed)
+        echo "$PROG: rollout: the ${labels[$i]} box's ~/.ccrc/floor is ${floors[$i]} — its update would refuse; fix it on that box first ('ccrc update --check' there names it); nothing was touched" >&2
+        exit 2 ;;
+    esac
+    case " $chan_none " in
+      *" ${labels[$i]} "*)
+        if [ "${states[$i]}" != current ]; then
+          echo "$PROG: rollout: the ${labels[$i]} box's projection resolves no $channel target (desired-$channel none; its reason is on the console's update screen) and it is not already on $ROLLOUT_VERSION — nothing was touched" >&2
+          exit 2
+        fi ;;
+    esac
+    if [ "${states[$i]}" = below-floor ] && [ "$downgrade" -eq 0 ]; then
+      echo "$PROG: rollout: the ${labels[$i]} box's floor is ${floors[$i]:-unstated}, above $ROLLOUT_VERSION — pass --downgrade to move it down; nothing was touched" >&2
+      exit 2
+    fi
+  done
+
   # Steps 4–5 — each box in order; stop on the first failure.
-  local forceflag="" rc=0 untouched="" unhealthy=0
+  local forceflag="" flags="" rc=0 untouched="" unhealthy=0
   [ "$force" -eq 1 ] && forceflag=" --force"
   for i in "${!boxes[@]}"; do
-    echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$forceflag"
-    "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$forceflag" 2>&1 | sed "s/^/${labels[$i]}: /"
+    # Each box's argv, in a FIXED order: --force, --downgrade, --allow-unsigned
+    # only when typed (M4); --from rollout only when THAT box's caps name
+    # update-json — a box one wave older refuses `--from` as an unknown
+    # argument (exit 2), which would stop the rollout at a box that could
+    # have moved.
+    flags="$forceflag"
+    [ "$downgrade" -eq 1 ] && flags="$flags --downgrade"
+    [ "$allow_unsigned" -eq 1 ] && flags="$flags --allow-unsigned"
+    case ",${capss[$i]}," in *,update-json,*) flags="$flags --from rollout" ;; esac
+    echo "rollout: ${labels[$i]}: ccrc update --to $ROLLOUT_VERSION$flags"
+    "${ROLLOUT_SSH[@]}" "${boxes[$i]}" "ccrc update --to $ROLLOUT_VERSION$flags" 2>&1 | sed "s/^/${labels[$i]}: /"
     rc="${PIPESTATUS[0]}"
     # 3 from update (D-3114) = the box MOVED and its trailing doctor failed:
     # the box's health, not the rollout's — relay it, carry on, verify, and

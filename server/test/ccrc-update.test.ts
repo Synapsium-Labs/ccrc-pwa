@@ -779,6 +779,14 @@ const localUrls = (home: string): string[] => (existsSync(join(home, 'curl-argv'
  *  test reads. */
 const checkLine = (s: string): string => s.split('\n').find((l) => l.startsWith('check: ')) ?? '';
 
+/** The words THIS ccrc can do (`_ccrc_cap_words`), as `--check` joins them.
+ *  W1's three; Task 13 adds this wave's and moves this one literal. */
+const CAPS_NOW = 'verify,node-id,floor';
+/** The machine line as key → value. Values never contain a space or `=`
+ *  (caps= joins its words with commas), so one split per field is exact. */
+const parseCheck = (s: string): Record<string, string> =>
+  Object.fromEntries(checkLine(s).replace(/^check: /, '').split(' ').map((kv) => kv.split('=') as [string, string]));
+
 /** The backup directory THIS run announced — parsed from the transcript, not
  *  guessed from `ls`: the hooks installer inside a full run writes its own
  *  timestamped siblings into `~/ccrc-backups/`. */
@@ -1964,9 +1972,7 @@ describe('ccrc update: source pins', () => {
 });
 
 describe('ccrc update --check: what runs here vs what is published (spec §6)', () => {
-  const firstLine = (s: string): string => s.split('\n')[0] ?? '';
-  const parse = (s: string): Record<string, string> =>
-    Object.fromEntries(firstLine(s).replace(/^check: /, '').split(' ').map((kv) => kv.split('=') as [string, string]));
+  const parse = parseCheck;
 
   it('behind: an older version on the box, exit 1, SHA256SUMS fetched and nothing else, nothing written', () => {
     const home = freshUpdateBox('ccrc-update-check-behind-');
@@ -1975,7 +1981,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     const before = treeDigest(join(home, 'ccrc'));
     const r = runUpdate(home, ['--check']);
     expect(r.code).toBe(1);
-    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', state: 'behind' });
+    expect(parse(r.stdout)).toEqual({ box: 'v1.0.0', sha: 'oldsha0000000000000000000000000000000000', target: 'v2.0.0', caps: CAPS_NOW, floor: 'none', state: 'behind' });
     expect(r.stdout).toMatch(/^this box: v1\.0\.0 \(oldsha[0-9a-f]*\) · latest: v2\.0\.0 — behind$/m);
     expect(localUrls(home)).toEqual([`local://${home}/releases/latest/download/SHA256SUMS`]);
     expect(treeDigest(join(home, 'ccrc'))).toEqual(before);
@@ -2062,7 +2068,7 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     packRelease(home, stubTree(home, { version: 'v1.0.0' }), { tag: 'v1.0.0', latest: false });
     const r = runUpdate(home, ['--check', '--to', 'v1.0.0']);
     expect(r.code).toBe(1);
-    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', state: 'unversioned' });
+    expect(parse(r.stdout)).toEqual({ box: 'unversioned', sha: 'deploysha0000000000000000000000000000000', target: 'v1.0.0', caps: CAPS_NOW, floor: 'none', state: 'unversioned' });
     expect(r.stdout).toMatch(/^this box: unversioned \(deploysha[0-9a-f]*\) · target: v1\.0\.0 — a release install would be the first on this box$/m);
     expect(localUrls(home)).toEqual([`local://${home}/releases/download/v1.0.0/SHA256SUMS`]);
   });
@@ -2074,6 +2080,58 @@ describe('ccrc update --check: what runs here vs what is published (spec §6)', 
     const r = runUpdate(home, ['--check']);
     expect(r.code).toBe(1);
     expect(parse(r.stdout)).toMatchObject({ box: 'unversioned', sha: 'none', state: 'unversioned' });
+  });
+
+  // W4 Task 12 (plan D-3232): the two fields
+  // rollout reads sit BEFORE state=, because rollout takes state as
+  // everything after the LAST `state=`.
+  it('the machine line is box, sha, target, caps, floor, state — in that order, state last', () => {
+    const home = freshUpdateBox('ccrc-update-check-fields-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
+    expect(r.code, r.stderr).toBe(1);
+    expect(checkLine(r.stdout)).toBe(
+      `check: box=v1.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=none state=behind`);
+  });
+
+  // Plan D-3248: `--check` is answered by the
+  // running ccrc, so it prints `_ccrc_cap_words`, never the file.
+  it('caps= is what the RUNNING ccrc can do, never the file — a stale ~/.ccrc/ccrc-caps does not narrow it, and --check leaves it alone', () => {
+    const home = freshUpdateBox('ccrc-update-check-caps-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, '.ccrc', 'ccrc-caps'), 'os plan9\nverify\n');
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
+    expect(parse(r.stdout).caps).toBe(CAPS_NOW);
+    expect(readFileSync(join(home, '.ccrc', 'ccrc-caps'), 'utf8')).toBe('os plan9\nverify\n');
+  });
+
+  it('floor= answers what the install path would read — none, the tag, malformed — and --check never refuses on it', () => {
+    const cases: Array<[string | null, string]> = [[null, 'none'], ['v1.0.0', 'v1.0.0'], ['three', 'malformed']];
+    for (const [content, word] of cases) {
+      const home = freshUpdateBox(`ccrc-update-check-floorword-${word}-`);
+      plantOldBox(home, { version: 'v1.0.0' });
+      if (content !== null) writeFileSync(join(home, '.ccrc', 'floor'), `${content}\n`);
+      packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+      const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
+      expect(r.code, `${word}: ${r.stderr}`).toBe(1);
+      expect(parse(r.stdout)).toMatchObject({ floor: word, state: 'behind' });
+      expect(r.stderr, word).toBe('');
+      expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    }
+  });
+
+  it.skipIf(process.getuid?.() === 0)('an unreadable floor reads floor=unreadable — its own word, never folded into none or malformed', () => {
+    const home = freshUpdateBox('ccrc-update-check-floorword-unreadable-');
+    plantOldBox(home, { version: 'v1.0.0' });
+    writeFileSync(join(home, '.ccrc', 'floor'), 'v3.0.0\n');
+    chmodSync(join(home, '.ccrc', 'floor'), 0o000);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(parse(r.stdout)).toMatchObject({ floor: 'unreadable', state: 'behind' });
+    expect(r.stdout).toMatch(/^this box's floor \(~\/\.ccrc\/floor\) is unreadable — 'ccrc update' refuses until it is fixed by hand$/m);
   });
 });
 
@@ -2350,14 +2408,48 @@ describe('ccrc update: the floor, on every path (design §9, decision 8)', () =>
     expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
   });
 
-  it('--check is a measurement and never consults the floor', () => {
+  // M3 (W1 minor; plan D-3233). This case used to pin that
+  // --check never READ the floor — which is exactly why rollout's preflight
+  // could not see one. It reads it now, and still never refuses on it.
+  it('--check reads the floor and never refuses on it: a target below it answers state=below-floor, exit 1, nothing written (M3)', () => {
     const home = freshUpdateBox('ccrc-update-floor-check-');
     plantOldBox(home, { version: 'v3.0.0' });
     plantFloor(home, 'v3.0.0');
-    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0' });
-    const r = runUpdate(home, ['--check']);
-    expect(r.stdout).toMatch(/^check: box=v3\.0\.0 sha=\S+ target=v2\.0\.0 state=behind$/m);
-    expect(r.stderr).not.toMatch(/floor/);
+    packRelease(home, stubTree(home, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(home, ['--check', '--to', 'v2.0.0']);
+    expect(r.code).toBe(1);
+    expect(checkLine(r.stdout)).toBe(
+      `check: box=v3.0.0 sha=oldsha0000000000000000000000000000000000 target=v2.0.0 caps=${CAPS_NOW} floor=v3.0.0 state=below-floor`);
+    expect(r.stdout).toMatch(/^this box: v3\.0\.0 \(oldsha[0-9a-f]*\) · target: v2\.0\.0 — below this box's floor v3\.0\.0; update refuses it without --downgrade$/m);
+    // A measurement: the refusal's own voice is absent, nothing fetched past
+    // SHA256SUMS, nothing backed up, the floor untouched.
+    expect(r.stderr).not.toMatch(/is below this box's floor|floor is malformed|floor is unreadable/);
+    expect(localUrls(home)).toEqual([`local://${home}/releases/download/v2.0.0/SHA256SUMS`]);
+    expect(existsSync(join(home, 'ccrc-backups'))).toBe(false);
+    expect(readFileSync(join(home, '.ccrc', 'floor'), 'utf8')).toBe('v3.0.0\n');
+  });
+
+  it('below-floor is strict and covers every non-current state: floor == target reads behind; an unversioned box below the floor reads below-floor; a box already current stays current (M3)', () => {
+    const equal = freshUpdateBox('ccrc-update-floor-check-equal-');
+    plantOldBox(equal, { version: 'v1.0.0' });
+    plantFloor(equal, 'v2.0.0');
+    packRelease(equal, stubTree(equal, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    expect(parseCheck(runUpdate(equal, ['--check', '--to', 'v2.0.0']).stdout).state).toBe('behind');
+
+    const unversioned = freshUpdateBox('ccrc-update-floor-check-unversioned-');
+    plantOldBox(unversioned);
+    plantFloor(unversioned, 'v3.0.0');
+    packRelease(unversioned, stubTree(unversioned, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    expect(parseCheck(runUpdate(unversioned, ['--check', '--to', 'v2.0.0']).stdout)).toMatchObject({ box: 'unversioned', state: 'below-floor' });
+
+    const current = freshUpdateBox('ccrc-update-floor-check-current-');
+    plantOldBox(current, { version: 'v2.0.0' });
+    writeFileSync(join(current, '.ccrc', 'installed'), 'oldsha0000000000000000000000000000000000\n');
+    plantFloor(current, 'v3.0.0');
+    packRelease(current, stubTree(current, { version: 'v2.0.0' }), { tag: 'v2.0.0', latest: false });
+    const r = runUpdate(current, ['--check', '--to', 'v2.0.0']);
+    expect(r.code, r.stderr).toBe(0);
+    expect(parseCheck(r.stdout)).toMatchObject({ floor: 'v3.0.0', state: 'current' });
   });
 });
 
