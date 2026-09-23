@@ -25,6 +25,8 @@ import {
   isLifecycleOutcome,
   isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
   isWorkItemState,
+  // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
+  isReleaseTag, isUpdateChannel,
   LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
   // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
   // exactly one home — `shared/api.ts`, beside the body it labels. Its own
@@ -50,6 +52,7 @@ import {
   type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
   type RunSummary,
   type SetAccountPoolsRefuseCode,
+  type UpdateChannel,
   type WorkItemState,
 } from '../../../shared/api.js';
 
@@ -150,6 +153,68 @@ export type AdvanceResult =
 export type SetAccountPoolsResult =
   | { ok: true; epoch: number }
   | { ok: false; error: SetAccountPoolsRefuseCode; pools: readonly string[] };
+
+/** Design 2026-09-20 §7 (W2). One element of a release listing, in the shape
+ *  the catalogue poller (`update/catalogue.ts`) has already parsed and
+ *  defensively validated; `applyReleaseListing` re-checks what the TABLE needs
+ *  (a tag, a channel, an integer `publishedAt`, a non-empty `tarballUrl`) and
+ *  refuses the whole listing otherwise. `draft` is GitHub's own flag: a draft
+ *  is stored `yanked = 1`, never offered. */
+export interface ReleaseListingRow {
+  tag: string; channel: UpdateChannel; publishedAt: number; commitSha: string | null;
+  tarballUrl: string; bundleListed: boolean; notes: string | null; draft: boolean;
+}
+
+/** What the listing COVERS (D-3185). `complete` = the listing is
+ *  the whole catalogue (GitHub answered fewer elements than a page), so
+ *  every known row missing from it was yanked. `newest-page` = a full page:
+ *  only a known row published at or after the oldest LISTED one can have been
+ *  observed missing; an older row fell off the page, it was not yanked. */
+export type ListingCoverage = 'complete' | 'newest-page';
+
+/** `applyReleaseListing`'s answers. `yanked` counts rows THIS listing newly
+ *  marked absent; `unyanked` counts rows that were yanked and are listed again,
+ *  not as drafts. Every refusal is decided before the transaction opens, so a
+ *  refused listing writes nothing at all — not even its valid rows. */
+export type ApplyReleaseListingResult =
+  | { ok: true; upserted: number; yanked: number; unyanked: number }
+  | { ok: false; why: 'bad-tag'; tag: string }
+  | { ok: false; why: 'duplicate-tag'; tag: string }
+  | { ok: false; why: 'bad-row'; tag: string; field: 'channel' | 'publishedAt' | 'tarballUrl' }
+  | { ok: false; why: 'empty-listing'; known: number };
+
+/** One `releases` row on the way OUT. `channel` is `null` for a stored token
+ *  outside `UpdateChannel` — the ClaimState stance (`ClaimEndResult`, below):
+ *  no we-do-not-know member, so nothing, never the fleet default
+ *  (D-3181). `refused` is a DISPLAY roll-up of
+ *  `node_release_refusals` for live nodes — never an eligibility predicate;
+ *  the resolver asks `refusalsFor(nodeId)` about the one node it resolves. */
+export interface ReleaseRow {
+  tag: string; version: string; channel: UpdateChannel | null; publishedAt: number; commitSha: string | null;
+  tarballUrl: string; bundleListed: boolean; notes: string | null; yanked: boolean; observedAt: number;
+  notifiedAt: number | null;
+  refused: { by: string; at: number }[];
+}
+
+export interface RefusalRow { nodeId: string; tag: string; at: number; detail: string }
+
+/** `inserted: false` = this node had already refused this tag: its FIRST
+ *  verdict (time and detail) stands. */
+export type RefuseReleaseResult =
+  | { ok: true; inserted: boolean }
+  | { ok: false; why: 'bad-tag' }
+  | { ok: false; why: 'unknown-node' };
+
+export type ClearRefusalsResult =
+  | { ok: true; cleared: number }
+  | { ok: false; why: 'unknown-node' };
+
+/** The columns `releases()` reads, as SQLite hands them back. */
+interface RawReleaseRow {
+  tag: string; version: string; channel: string; publishedAt: number; commitSha: string | null;
+  tarballUrl: string; bundleListed: number; notes: string | null; yanked: number; observedAt: number;
+  notifiedAt: number | null;
+}
 
 /** The reclaim's three answers. `kind`, not `error`, because these are not
  *  `advance`'s arms and folding them into `AdvanceResult` would put two
@@ -5403,5 +5468,130 @@ export class CoordStore {
       for (const pool of pools) lines.push(`${subjectId} ${pool}`);
     }
     return bodyDigest(lines.join('\n'));
+  }
+
+  // ── update catalogue (design 2026-09-20 §6, §7; W2) ────────────────────
+  //
+  // `releases`' catalogue columns have ONE writer, `applyReleaseListing`
+  // (D-3180): the yank mark is a statement about the
+  // whole listing, which a per-row upsert cannot make without a second writer
+  // on the group. `notifiedAt` is W3's `markReleaseNotified`, and nothing here
+  // names it. A node's verdict on a release is a `node_release_refusals` row,
+  // keyed by node — never a column on `releases` (decision 16). Every
+  // signature below is ONE line: Task 7's writer-group scan walks back from
+  // each statement to its method the way `mail-hardening.test.ts`'s `SIG`
+  // does (the D-2338 precedent).
+
+  /** The one catalogue writer. Upserts every listed row and marks `yanked = 1`
+   *  every known, un-yanked row absent from the listing — all of them under
+   *  `complete`, only those inside the listed window under `newest-page`
+   *  (D-3185). NEVER deletes: a node may be running a yanked
+   *  release, and rollback may target one. An empty listing while rows are
+   *  known is refused rather than read as "everything was yanked". "Absent"
+   *  is absent from THIS argument: an element the poller could not parse is
+   *  not here, so its known row is marked too, and it unyanks on the next
+   *  poll that parses it (D-3206). */
+  applyReleaseListing(listing: readonly ReleaseListingRow[], now: number, coverage: ListingCoverage): ApplyReleaseListingResult {
+    const seen = new Set<string>();
+    for (const r of listing) {
+      if (!isReleaseTag(r.tag)) return { ok: false, why: 'bad-tag', tag: r.tag };
+      if (seen.has(r.tag)) return { ok: false, why: 'duplicate-tag', tag: r.tag };
+      if (!isUpdateChannel(r.channel)) return { ok: false, why: 'bad-row', tag: r.tag, field: 'channel' };
+      if (!Number.isSafeInteger(r.publishedAt) || r.publishedAt < 0) {
+        return { ok: false, why: 'bad-row', tag: r.tag, field: 'publishedAt' };
+      }
+      if (typeof r.tarballUrl !== 'string' || r.tarballUrl === '') {
+        return { ok: false, why: 'bad-row', tag: r.tag, field: 'tarballUrl' };
+      }
+      seen.add(r.tag);
+    }
+    if (listing.length === 0) {
+      const known = (this.db.prepare('SELECT COUNT(*) AS n FROM releases').get() as { n: number }).n;
+      return known > 0 ? { ok: false, why: 'empty-listing', known } : { ok: true, upserted: 0, yanked: 0, unyanked: 0 };
+    }
+    const since = coverage === 'complete' ? Number.MIN_SAFE_INTEGER : Math.min(...listing.map((r) => r.publishedAt));
+    const marks = listing.map(() => '?').join(', ');
+    return tx(this.db, (): ApplyReleaseListingResult => {
+      const wasYanked = new Set((this.db.prepare('SELECT tag FROM releases WHERE yanked = 1')
+        .all() as { tag: string }[]).map((r) => r.tag));
+      let unyanked = 0;
+      for (const r of listing) {
+        this.db.prepare(
+          'INSERT INTO releases (tag, version, channel, publishedAt, commitSha, tarballUrl, bundleListed, notes, ' +
+          'yanked, observedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(tag) DO UPDATE SET ' +
+          'version = excluded.version, channel = excluded.channel, publishedAt = excluded.publishedAt, ' +
+          'commitSha = excluded.commitSha, tarballUrl = excluded.tarballUrl, bundleListed = excluded.bundleListed, ' +
+          'notes = excluded.notes, yanked = excluded.yanked, observedAt = excluded.observedAt',
+        ).run(r.tag, r.tag, r.channel, r.publishedAt, r.commitSha, r.tarballUrl, r.bundleListed ? 1 : 0,
+          r.notes, r.draft ? 1 : 0, now);
+        if (wasYanked.has(r.tag) && !r.draft) unyanked += 1;
+      }
+      const res = this.db.prepare(
+        `UPDATE releases SET yanked = 1 WHERE yanked = 0 AND publishedAt >= ? AND tag NOT IN (${marks})`,
+      ).run(since, ...listing.map((r) => r.tag));
+      return { ok: true, upserted: listing.length, yanked: Number(res.changes), unyanked };
+    });
+  }
+
+  /** A node's verdict on a release (§8: a changed `failed` report whose detail
+   *  begins `provenance:`). The guard is the statement's own `WHERE EXISTS` —
+   *  a refusal for a node that is not a row is never written — and a second
+   *  verdict on the same (node, tag) keeps the first. */
+  refuseRelease(nodeId: string, tag: string, at: number, detail: string): RefuseReleaseResult {
+    if (!isReleaseTag(tag)) return { ok: false, why: 'bad-tag' };
+    const res = this.db.prepare(
+      'INSERT INTO node_release_refusals (nodeId, tag, at, detail) ' +
+      'SELECT ?, ?, ?, ? WHERE EXISTS (SELECT 1 FROM nodes WHERE nodeId = ?) ON CONFLICT DO NOTHING',
+    ).run(nodeId, tag, at, detail, nodeId);
+    if (Number(res.changes) > 0) return { ok: true, inserted: true };
+    return this.nodeRowExists(nodeId) ? { ok: true, inserted: false } : { ok: false, why: 'unknown-node' };
+  }
+
+  /** This node's verdicts, all of them — `ack` (Task 5's `ackNode`) is the
+   *  operator's door; this is the store's. Another node's rows are untouched. */
+  clearRefusals(nodeId: string): ClearRefusalsResult {
+    const res = this.db.prepare(
+      'DELETE FROM node_release_refusals WHERE nodeId = ? AND EXISTS (SELECT 1 FROM nodes WHERE nodeId = ?)',
+    ).run(nodeId, nodeId);
+    if (Number(res.changes) > 0) return { ok: true, cleared: Number(res.changes) };
+    return this.nodeRowExists(nodeId) ? { ok: true, cleared: 0 } : { ok: false, why: 'unknown-node' };
+  }
+
+  /** The catalogue, newest first. A superseded node's verdicts are left out of
+   *  the roll-up (§8: every reader excludes superseded rows); `refusalsFor`
+   *  still names them, keyed by the id they were written under. */
+  releases(): ReleaseRow[] {
+    const refused = new Map<string, { by: string; at: number }[]>();
+    const verdicts = this.db.prepare(
+      'SELECT nodeId, tag, at FROM node_release_refusals ' +
+      'WHERE nodeId NOT IN (SELECT nodeId FROM nodes WHERE supersededBy IS NOT NULL) ORDER BY at, nodeId',
+    ).all() as { nodeId: string; tag: string; at: number }[];
+    for (const v of verdicts) {
+      const cur = refused.get(v.tag);
+      if (cur === undefined) refused.set(v.tag, [{ by: v.nodeId, at: v.at }]);
+      else cur.push({ by: v.nodeId, at: v.at });
+    }
+    const rows = this.db.prepare(
+      'SELECT tag, version, channel, publishedAt, commitSha, tarballUrl, bundleListed, notes, yanked, observedAt, ' +
+      'notifiedAt FROM releases ORDER BY publishedAt DESC, tag',
+    ).all() as unknown as RawReleaseRow[];   // an interface has no index signature — `RunRowDb`'s cast (`:2121`)
+    return rows.map((r) => ({
+      tag: r.tag, version: r.version, channel: isUpdateChannel(r.channel) ? r.channel : null,
+      publishedAt: r.publishedAt, commitSha: r.commitSha, tarballUrl: r.tarballUrl,
+      bundleListed: r.bundleListed === 1, notes: r.notes, yanked: r.yanked === 1, observedAt: r.observedAt,
+      notifiedAt: r.notifiedAt, refused: refused.get(r.tag) ?? [],
+    }));
+  }
+
+  refusalsFor(nodeId: string): RefusalRow[] {
+    return this.db.prepare(
+      'SELECT nodeId, tag, at, detail FROM node_release_refusals WHERE nodeId = ? ORDER BY at, tag',
+    ).all(nodeId) as unknown as RefusalRow[];
+  }
+
+  /** Any `nodes` row with this id, superseded included — the read a
+   *  zero-change refusal write takes its `why` from, AFTER the write. */
+  private nodeRowExists(nodeId: string): boolean {
+    return this.db.prepare('SELECT 1 AS one FROM nodes WHERE nodeId = ?').get(nodeId) !== undefined;
   }
 }

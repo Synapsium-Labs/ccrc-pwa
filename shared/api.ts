@@ -8395,3 +8395,33 @@ export interface UpdateRouteRefusal {
 }
 export interface IntentWriteAnswer { ok: true; intent: UpdateIntentWire; epoch: number }
 export interface AckAnswer { ok: true; node: NodeWire }
+
+/** Design 2026-09-20 §6 (W2) — the TENTH refusal vocabulary
+ *  `mail-routes.test.ts`'s kebab-token scanner checks together and never
+ *  merges into a sibling, on the standing rule `SET_ACCOUNT_POOLS_REFUSE_CODES`
+ *  states (far above — this block sits at the END of the file with the rest
+ *  of the update control plane's L0, so no line README cites by number moves;
+ *  D-3188, D-3192): the update control plane's `CoordStore` writers
+ *  (`server/src/coord/store.ts`) refuse synchronously to an in-process caller
+ *  — the catalogue poller, the inventory sweep, a route — and nothing is
+ *  recorded or replayed. Store-local words: an update route that answers one
+ *  maps it onto `UpdateRouteError` (above) before any client sees it. ONE array
+ *  for the whole update store, appended to by each task that adds a writer
+ *  (W2 Tasks 4, 5 and 6 — no second store vocabulary beside it), so the
+ *  scanner admits a later member through the same guard and still rejects a typo.
+ *
+ *    bad-tag       — a tag that fails `isReleaseTag`, the one tag-shape guard.
+ *    duplicate-tag — one listing named a tag twice; the whole listing is refused.
+ *    bad-row       — a listed row the table cannot store: a channel outside
+ *                    `UpdateChannel`, a non-integer `publishedAt`, an empty
+ *                    `tarballUrl`. Refused before the transaction opens.
+ *    empty-listing — `[]` while releases are known: a transient answer must
+ *                    not yank the catalogue.
+ *    unknown-node  — no `nodes` row carries this id. */
+export const UPDATE_STORE_REFUSE_CODES = [
+  'bad-tag', 'duplicate-tag', 'bad-row', 'empty-listing', 'unknown-node',
+] as const;
+export type UpdateStoreRefuseCode = (typeof UPDATE_STORE_REFUSE_CODES)[number];
+export function isUpdateStoreRefuseCode(v: unknown): v is UpdateStoreRefuseCode {
+  return typeof v === 'string' && (UPDATE_STORE_REFUSE_CODES as readonly string[]).includes(v);
+}

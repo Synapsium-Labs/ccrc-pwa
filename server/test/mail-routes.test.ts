@@ -6,7 +6,7 @@ import { readFileSync, readdirSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { FastifyInstance } from 'fastify';
-import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode } from '../../shared/api.js';
+import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode } from '../../shared/api.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
@@ -706,6 +706,13 @@ describe('the rejection table is total, in both directions', () => {
                                   // parsed back off `coord.runEvents(id)` to derive
                                   // `lastDemotion` — same forensic-history family as
                                   // `session-rebound` above, never a `refused`/`error` code.
+      'newest-page',             // design 2026-09-20 §7 (W2 Task 4) — one of
+                                  // `ListingCoverage`'s two words (store.ts): what a
+                                  // release listing COVERS, passed by the catalogue
+                                  // poller to `applyReleaseListing`. A description of
+                                  // an input, never a refusal: nothing answers it,
+                                  // nothing switches on it over the wire. Its sibling
+                                  // `complete` is one word and never reaches this scan.
     ]);
     for (const m of sources().matchAll(/'([a-z]+(?:-[a-z]+)+)'/g)) {
       const tok = m[1]!;
@@ -772,8 +779,16 @@ describe('the rejection table is total, in both directions', () => {
         // exported guard rather than NOT_CODES, for the reason every union
         // above gives: an allowlist entry accepts one spelling for ever, a
         // guard accepts a member added later and still rejects a typo'd one.
-        || isSetAccountPoolsRefuseCode(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode or SetAccountPoolsRefuseCode`).toBe(true);
+        || isSetAccountPoolsRefuseCode(tok)
+        // DESIGN 2026-09-20 §6 (W2) — the TENTH union, checked together and
+        // never merged, on the standing rule `enter-ignored` above states. The
+        // update control plane's `CoordStore` writers refuse synchronously to
+        // an in-process caller (the catalogue poller, the inventory sweep, a
+        // route) — nothing is recorded, nothing replays — so their words are
+        // neither mail rejections nor run refusals. Admitted through their own
+        // exported guard, for the reason every union above gives.
+        || isUpdateStoreRefuseCode(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode or UpdateStoreRefuseCode`).toBe(true);
     }
   });
 });

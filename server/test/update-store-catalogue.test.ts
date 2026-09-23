@@ -1,0 +1,209 @@
+// Design 2026-09-20 §6/§7, W2 Task 4 — the release catalogue's ONE writer
+// (`applyReleaseListing`, D-3180) and a node's
+// refusal rows (decision 16). Store-level only: no poller, no GitHub, no
+// clock — every `now` is a literal so each case reads as the rule it pins.
+import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { openCoordDb } from '../src/coord/db.js';
+import { CoordStore, type ReleaseListingRow } from '../src/coord/store.js';
+import { mkTmp } from './tmpHelpers.js';
+
+const T0 = 1_790_000_000_000;
+const NODE_A = '0a0a0a0a-0a0a-4a0a-8a0a-0a0a0a0a0a0a';
+const NODE_B = '0b0b0b0b-0b0b-4b0b-8b0b-0b0b0b0b0b0b';
+const NODE_C = '0c0c0c0c-0c0c-4c0c-8c0c-0c0c0c0c0c0c';
+
+const fresh = (): CoordStore =>
+  new CoordStore(openCoordDb(path.join(mkTmp('update-store-catalogue-'), 'coord.db')));
+
+const url = (tag: string): string => `https://example.invalid/download/${tag}/ccrc-${tag}.tar.gz`;
+
+/** One listing element in the shape the poller (Task 10) hands over. */
+const rel = (tag: string, publishedAt: number, over: Partial<ReleaseListingRow> = {}): ReleaseListingRow => ({
+  tag, channel: 'stable', publishedAt, commitSha: null, tarballUrl: url(tag),
+  bundleListed: true, notes: null, draft: false, ...over,
+});
+
+/** A `nodes` row planted directly: Task 5's writers do not exist yet, and a
+ *  refusal's only precondition is that its node IS a row. */
+const plantNode = (store: CoordStore, nodeId: string, supersededBy: string | null = null): void => {
+  store.db.prepare(
+    'INSERT INTO nodes (nodeId, role, label, stampRead, installState, provenance, caps, os, reachable, supersededBy) ' +
+    "VALUES (?, 'fleet', 'fleet', 'ok', 'complete', 'verified', '', 'linux', 1, ?)",
+  ).run(nodeId, supersededBy);
+};
+
+const yankedOf = (store: CoordStore, tag: string): boolean | undefined =>
+  store.releases().find((r) => r.tag === tag)?.yanked;
+
+const refusalCount = (store: CoordStore): number =>
+  (store.db.prepare('SELECT COUNT(*) AS n FROM node_release_refusals').get() as { n: number }).n;
+
+describe('applyReleaseListing — the one writer of the catalogue columns', () => {
+  it('upserts every listed row: version is the tag, a draft is yanked, observedAt is this listing, newest first', () => {
+    const store = fresh();
+    const r = store.applyReleaseListing([
+      rel('v0.0.10', T0 + 2000, { channel: 'dev', commitSha: 'c'.repeat(40), notes: 'two fixes' }),
+      rel('v0.0.9', T0 + 1000, { bundleListed: false }),
+      rel('v0.0.11', T0 + 3000, { draft: true }),
+    ], T0 + 5000, 'complete');
+    expect(r).toEqual({ ok: true, upserted: 3, yanked: 0, unyanked: 0 });
+    expect(store.releases()).toEqual([
+      { tag: 'v0.0.11', version: 'v0.0.11', channel: 'stable', publishedAt: T0 + 3000, commitSha: null,
+        tarballUrl: url('v0.0.11'), bundleListed: true, notes: null, yanked: true, observedAt: T0 + 5000,
+        notifiedAt: null, refused: [] },
+      { tag: 'v0.0.10', version: 'v0.0.10', channel: 'dev', publishedAt: T0 + 2000, commitSha: 'c'.repeat(40),
+        tarballUrl: url('v0.0.10'), bundleListed: true, notes: 'two fixes', yanked: false, observedAt: T0 + 5000,
+        notifiedAt: null, refused: [] },
+      { tag: 'v0.0.9', version: 'v0.0.9', channel: 'stable', publishedAt: T0 + 1000, commitSha: null,
+        tarballUrl: url('v0.0.9'), bundleListed: false, notes: null, yanked: false, observedAt: T0 + 5000,
+        notifiedAt: null, refused: [] },
+    ]);
+  });
+
+  it('never touches notifiedAt — the notifier\'s column (W3) survives a re-listing', () => {
+    const store = fresh();
+    expect(store.applyReleaseListing([rel('v0.0.9', T0)], T0 + 1, 'complete').ok).toBe(true);
+    store.db.prepare('UPDATE releases SET notifiedAt = ? WHERE tag = ?').run(T0 + 2, 'v0.0.9');
+    expect(store.applyReleaseListing([rel('v0.0.9', T0, { notes: 'edited' })], T0 + 3, 'complete').ok).toBe(true);
+    expect(store.releases()[0]).toMatchObject({ notes: 'edited', observedAt: T0 + 3, notifiedAt: T0 + 2 });
+  });
+
+  it('a release that vanishes from a complete listing is yanked and KEPT, never deleted (§18 "a yanked release is kept")', () => {
+    const store = fresh();
+    store.applyReleaseListing([rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000)], T0 + 5000, 'complete');
+    expect(store.applyReleaseListing([rel('v0.0.10', T0 + 2000)], T0 + 6000, 'complete'))
+      .toEqual({ ok: true, upserted: 1, yanked: 1, unyanked: 0 });
+    // Still a row — a node may be running it — and its observedAt is the last
+    // listing that CONFIRMED it, not the one that missed it.
+    expect(store.releases().map((x) => x.tag)).toEqual(['v0.0.10', 'v0.0.9']);
+    expect(store.releases()[1]).toMatchObject({ tag: 'v0.0.9', yanked: true, observedAt: T0 + 5000 });
+    // The mark is idempotent: the same listing again yanks nothing more.
+    expect(store.applyReleaseListing([rel('v0.0.10', T0 + 2000)], T0 + 7000, 'complete'))
+      .toEqual({ ok: true, upserted: 1, yanked: 0, unyanked: 0 });
+  });
+
+  it('a yanked release listed again comes back, and so does a draft that is published', () => {
+    const store = fresh();
+    store.applyReleaseListing([rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000, { draft: true })], T0 + 5000, 'complete');
+    store.applyReleaseListing([rel('v0.0.10', T0 + 2000)], T0 + 6000, 'complete');
+    expect(yankedOf(store, 'v0.0.9')).toBe(true);
+    expect(store.applyReleaseListing([rel('v0.0.10', T0 + 2000), rel('v0.0.9', T0 + 1000)], T0 + 7000, 'complete'))
+      .toEqual({ ok: true, upserted: 2, yanked: 0, unyanked: 1 });
+    expect(yankedOf(store, 'v0.0.9')).toBe(false);
+  });
+
+  it('under newest-page only rows inside the listed window are yank candidates (D-3185)', () => {
+    const tags = Array.from({ length: 32 }, (_, i) => `v0.0.${i + 1}`);   // v0.0.1 is the oldest
+    const at = (tag: string): number => T0 + Number(tag.split('.')[2]) * 1000;
+    const seed = (s: CoordStore): void => {
+      expect(s.applyReleaseListing(tags.map((t) => rel(t, at(t))), T0, 'complete').ok).toBe(true);
+    };
+    // The next poll: GitHub's newest page of 30, with v0.0.20 deleted upstream,
+    // so the page now reaches down to v0.0.2 and v0.0.1 has fallen off it.
+    const page = tags.filter((t) => t !== 'v0.0.1' && t !== 'v0.0.20').map((t) => rel(t, at(t)));
+    expect(page).toHaveLength(30);
+
+    const windowed = fresh();
+    seed(windowed);
+    expect(windowed.applyReleaseListing(page, T0 + 1, 'newest-page'))
+      .toEqual({ ok: true, upserted: 30, yanked: 1, unyanked: 0 });
+    expect(yankedOf(windowed, 'v0.0.20')).toBe(true);    // deleted INSIDE the window: observed, marked
+    expect(yankedOf(windowed, 'v0.0.1')).toBe(false);    // older than the window: not observed, not marked
+
+    // The control: the SAME page read as complete yanks both — so the case
+    // above is green because of the coverage argument, not because v0.0.1
+    // was never a candidate.
+    const complete = fresh();
+    seed(complete);
+    expect(complete.applyReleaseListing(page, T0 + 1, 'complete'))
+      .toEqual({ ok: true, upserted: 30, yanked: 2, unyanked: 0 });
+    expect(yankedOf(complete, 'v0.0.1')).toBe(true);
+  });
+
+  it('an empty listing while releases are known is refused and writes nothing — a transient [] never yanks the catalogue', () => {
+    const store = fresh();
+    store.applyReleaseListing([rel('v0.0.10', T0 + 2), rel('v0.0.9', T0 + 1)], T0 + 5, 'complete');
+    expect(store.applyReleaseListing([], T0 + 6, 'complete')).toEqual({ ok: false, why: 'empty-listing', known: 2 });
+    expect(store.applyReleaseListing([], T0 + 6, 'newest-page')).toEqual({ ok: false, why: 'empty-listing', known: 2 });
+    expect(store.releases().map((r) => [r.tag, r.yanked, r.observedAt]))
+      .toEqual([['v0.0.10', false, T0 + 5], ['v0.0.9', false, T0 + 5]]);
+    // …and on an empty catalogue there is simply nothing to do.
+    expect(fresh().applyReleaseListing([], T0, 'complete')).toEqual({ ok: true, upserted: 0, yanked: 0, unyanked: 0 });
+  });
+
+  it('refuses a whole listing over one bad tag, a duplicate, or a row the table cannot store — before the transaction', () => {
+    const store = fresh();
+    expect(store.applyReleaseListing([rel('v0.0.9', T0), rel('0.0.10', T0 + 1)], T0 + 5, 'complete'))
+      .toEqual({ ok: false, why: 'bad-tag', tag: '0.0.10' });
+    expect(store.applyReleaseListing([rel('v0.0.9', T0), rel('v0.0.9', T0 + 1)], T0 + 5, 'complete'))
+      .toEqual({ ok: false, why: 'duplicate-tag', tag: 'v0.0.9' });
+    expect(store.applyReleaseListing([rel('v0.0.9', Number.NaN)], T0 + 5, 'complete'))
+      .toEqual({ ok: false, why: 'bad-row', tag: 'v0.0.9', field: 'publishedAt' });
+    expect(store.applyReleaseListing([rel('v0.0.9', T0, { tarballUrl: '' })], T0 + 5, 'complete'))
+      .toEqual({ ok: false, why: 'bad-row', tag: 'v0.0.9', field: 'tarballUrl' });
+    expect(store.applyReleaseListing([rel('v0.0.9', T0, { channel: 'nightly' as unknown as 'dev' })], T0 + 5, 'complete'))
+      .toEqual({ ok: false, why: 'bad-row', tag: 'v0.0.9', field: 'channel' });
+    // The valid FIRST row of each refused listing was not written either.
+    expect(store.releases()).toEqual([]);
+  });
+
+  it('a stored channel outside the vocabulary reads null, never the fleet default (D-3181)', () => {
+    const store = fresh();
+    store.applyReleaseListing([rel('v0.0.9', T0)], T0 + 1, 'complete');
+    store.db.prepare("UPDATE releases SET channel = 'nightly' WHERE tag = 'v0.0.9'").run();
+    expect(store.releases()[0]!.channel).toBeNull();
+  });
+});
+
+describe('node_release_refusals — a node\'s verdict on a release, never fleet-wide (decision 16)', () => {
+  it('one row per (node, tag); a second verdict keeps the first; another node and the catalogue row are untouched', () => {
+    const store = fresh();
+    plantNode(store, NODE_A);
+    plantNode(store, NODE_B);
+    store.applyReleaseListing([rel('v0.0.9', T0)], T0 + 1, 'complete');
+    expect(store.refuseRelease(NODE_A, 'v0.0.9', T0 + 10, 'provenance: signature does not verify'))
+      .toEqual({ ok: true, inserted: true });
+    expect(store.refuseRelease(NODE_A, 'v0.0.9', T0 + 20, 'provenance: a second attempt'))
+      .toEqual({ ok: true, inserted: false });
+    expect(store.refusalsFor(NODE_A))
+      .toEqual([{ nodeId: NODE_A, tag: 'v0.0.9', at: T0 + 10, detail: 'provenance: signature does not verify' }]);
+    // §18 "a provenance failure refuses the release FOR THAT NODE": node B's
+    // eligibility inputs are unchanged — no row of its own, the release not yanked.
+    expect(store.refusalsFor(NODE_B)).toEqual([]);
+    expect(store.releases()[0]).toMatchObject({ yanked: false, refused: [{ by: NODE_A, at: T0 + 10 }] });
+  });
+
+  it('refuses a bad tag and an unknown node, writing nothing', () => {
+    const store = fresh();
+    plantNode(store, NODE_A);
+    expect(store.refuseRelease(NODE_A, 'v0.0', T0, 'provenance: x')).toEqual({ ok: false, why: 'bad-tag' });
+    expect(store.refuseRelease(NODE_C, 'v0.0.9', T0, 'provenance: x')).toEqual({ ok: false, why: 'unknown-node' });
+    expect(refusalCount(store)).toBe(0);
+  });
+
+  it('clearRefusals clears this node\'s rows only, and says how many', () => {
+    const store = fresh();
+    plantNode(store, NODE_A);
+    plantNode(store, NODE_B);
+    store.refuseRelease(NODE_A, 'v0.0.9', T0, 'provenance: x');
+    store.refuseRelease(NODE_A, 'v0.0.10', T0 + 1, 'provenance: y');
+    store.refuseRelease(NODE_B, 'v0.0.9', T0 + 2, 'provenance: z');
+    expect(store.clearRefusals(NODE_A)).toEqual({ ok: true, cleared: 2 });
+    expect(store.refusalsFor(NODE_A)).toEqual([]);
+    expect(store.refusalsFor(NODE_B)).toHaveLength(1);
+    expect(store.clearRefusals(NODE_A)).toEqual({ ok: true, cleared: 0 });
+    expect(store.clearRefusals(NODE_C)).toEqual({ ok: false, why: 'unknown-node' });
+  });
+
+  it('the roll-up on releases() leaves out a superseded node\'s verdicts; refusalsFor still names them', () => {
+    const store = fresh();
+    plantNode(store, NODE_A);
+    plantNode(store, 'fleet', NODE_A);                 // a label row a node-id row replaced
+    store.applyReleaseListing([rel('v0.0.9', T0)], T0 + 1, 'complete');
+    store.refuseRelease('fleet', 'v0.0.9', T0 + 5, 'provenance: before the re-key');
+    store.refuseRelease(NODE_A, 'v0.0.9', T0 + 9, 'provenance: after it');
+    expect(store.releases()[0]!.refused).toEqual([{ by: NODE_A, at: T0 + 9 }]);
+    expect(store.refusalsFor('fleet')).toHaveLength(1);
+  });
+});
